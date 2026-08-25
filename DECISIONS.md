@@ -18762,3 +18762,138 @@ the user's on-device test (this environment cannot open app windows).
 - ADR-0268/0258 (P-FLEET.1) - job handles; a full-GUI member is also reachable as a firewall worker.
 - ADR-0206 - the single-instance lock this re-keys by profile.
 - ADR-0182 (P-SYSRES.1) - the admission sample the instance ceiling reuses.
+
+## ADR-0273 -- P-FLEET.L2: unlimited lanes under sustained pressure, lanes from a repo remote, and a minimized fleet HUD that tells the truth
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. `make demo-P-FLEET.L2` (7 checks) and `make demo-P-FLEET.L1` (rewritten
+check 2) are green; new/updated unit suites: fleet_resources (13), git_url (8), workspace (39),
+fleet_lanes (8).
+**Increment:** P-FLEET.L2. Amends ADR-0271 (P-FLEET.L1) on three points: the admission policy, the
+`FleetStatusData.resources` shape, and the minimized dock pill. Does NOT touch the P-FLEET.P* profile
+family (ADR-0272) or the P-FLEET.1 job surface (ADR-0270).
+
+### Context
+
+Four reports from real use, all reproduced in the code:
+
+1. **The guard refused work on machines that had room.** ADR-0271 admitted a lane only under an
+   INSTANTANEOUS 75% watermark AND a hard ceiling of `min(6, floor(cores/2))` (fleet_resources.ts:28,
+   50-58). Both are wrong for the same reason: they measure the wrong thing. A compile, an AST ingest,
+   or a browser opening forty tabs pegs a core for a second or two, and the user gets "system CPU at
+   82% (watermark 75%)" for a machine that is fine. Meanwhile a 4-core box was capped at two lanes
+   whatever its actual load. The ask was explicit: more lanes when CPU and memory allow it, and
+   "90%+ over 30 seconds since they may just have a burst".
+2. **The lane folder was a bare text input.** fleet_grid.ts prefilled the master cwd and made the user
+   hand-edit a path, even though `pickFolderDialog` (app.ts) already routes every other folder pick in
+   the app to the REAL Explorer / Finder / zenity dialog (ADR-0265), create-new-folder included.
+3. **There was no way to point a lane at a repo.** Cloning existed (`cloneRepo`, ADR-0214/0216) but
+   only behind the Settings "Clone" button, which sets the MASTER workspace and restarts the backend,
+   the opposite of what a lane wants. `hostTokenForUrl` also knew only github.com and gitlab.com, so
+   Azure DevOps and every self-hosted host fell through to no token at all.
+4. **The minimized dock flickered, and said nothing.** `renderStatus()` replaces
+   `#statusbar.innerHTML` on every repaint and re-adopts the trivia ticker plus the share and join
+   pills (app.ts:6371-6373), but nobody re-adopted the FLEET pill, so it vanished on every status
+   repaint and reappeared on the fleet's own 2.5s poll. That is the lower-right flicker, and it is
+   worst exactly when a lane is working (more repaints). Compounding it, `mountPill()` `append`ed
+   unconditionally: re-appending a CONNECTED node detaches and reinserts it, restarting the CSS pulse.
+   And the pill's whole payload was one boolean dot, "something is alive", so a minimized fleet could
+   not tell you WHICH lane was blocked on you.
+
+### Decision
+
+**1. Admission is sustained pressure over a rolling window; lanes are unlimited.**
+fleet_resources.ts is now pure window arithmetic: `pushSample` (trim + ring cap), `hotMs` (the
+unbroken streak ENDING at the newest reading), `laneAdmission` (refuse only when `hotMs >= 30_000` at
+`>= 90%`). The core-derived ceiling and `maxLanesFor` are deleted outright; no cap appears anywhere in
+the verdict. Load-bearing details:
+
+- A single hot reading is a SPIKE: a value with no duration, so `hotMs` is 0 and the lane starts.
+- A cool reading OR a NULL reading breaks the streak. A sampling gap can therefore never be counted as
+  load, which is ADR-0182's fail-open doctrine stated as arithmetic instead of a comment.
+- The window keeps TWICE the sustain span, because trimming to exactly 30s would make a just-crossed
+  30s streak read as 27s forever.
+- A backwards clock jump resets the history rather than inventing a streak.
+- Every refusal carries the measured percent AND the measured duration ("system memory has been at
+  94% for 34s"), because 8s and 34s are the same percent and opposite verdicts.
+
+**2. The manager MEASURES the window instead of sampling on demand.** "Sustained" cannot be read off
+one snapshot, so `FleetLaneManager` owns an unref'd 3s sampler that feeds `#history`, retires itself
+once nothing is live and no status has been polled for 20s, and restarts on the next spawn or status.
+The 2.5s dashboard poll rides those readings (2s minimum gap) rather than paying its own CPU window.
+
+**3. `FleetStatusData.resources` changes shape** (a contract change, hence this ADR):
+`{ watermarkPct, maxLanes }` becomes `{ pressurePct, sustainMs, cpuHotMs, memHotMs }`. Every consumer
+moved in the same increment: bridge.ts's FleetStatusView, `fleet_grid.paintHeadroom` (which now shows
+`94% 34s/30s` where a `4/4` cap used to be), and `fleet_extension.fleetResourcesLine` (the master
+agent now reads "lanes unlimited; a lane is refused only above 90% held 30s; mem has held the line 34s
+of 30s"). No UI hardcodes the numbers: the policy is echoed in the payload.
+
+**4. A lane can be spawned from a repo remote, and the folder comes from the OS dialog.** New pure
+`desktop/git_url.ts` (zero imports, so the RENDERER shares it with the server and with Electron main)
+parses the three spellings a clone button actually hands you, `https://host/...`,
+`ssh://git@host/...` and `git@host:...`, classifies the provider, and derives the credential names.
+The scp-like form demands a DOTTED host so a Windows drive path can never be shipped off to
+`git clone`, and an embedded `user:password@` is discarded rather than carried into a label or an
+error. `/api/fleet/spawn` accepts `{ repoUrl, pat }`, clones through the existing `cloneRepo` (now
+taking a `parentDir`, so the repo lands inside the folder the user picked) and spawns the lane on the
+result. An existing clone is REUSED, which is what makes "spawn a lane on this repo" idempotent.
+
+**5. Credentials are per HOST, in the OS-encrypted vault.** The vault ref is `git_pat_<host_slug>`
+(`gitCredRef`), injected back by Electron main as `LUCID_GIT_PAT_<HOST_SLUG>`, and `hostTokenForUrl`
+checks that name FIRST. Three consequences, all deliberate:
+
+- A self-hosted GitLab or Azure DevOps Server works, through its own saved token.
+- An unrecognized https host gets ONLY its own scoped token, never the generic `LUCID_GIT_PAT`.
+  Handing a general-purpose PAT to an arbitrary host is a credential leak dressed as convenience.
+- Azure DevOps joins the known providers (`AZURE_DEVOPS_EXT_PAT`, `AZURE_DEVOPS_PAT`,
+  `SYSTEM_ACCESSTOKEN`), riding the SAME HTTP Basic header `cloneArgv` already builds, so nothing is
+  embedded in the URL and nothing persists into `.git/config` (ADR-0214's rule, unchanged).
+
+An SSH remote is never asked for a token: the form hides the field, and `GIT_SSH_COMMAND` gains
+`BatchMode=yes` so an encrypted key or an unknown host key FAILS FAST with an ssh-specific hint
+instead of blocking forever on a passphrase prompt nobody can see.
+
+**6. The minimized pill is a real snapshot, and it stops flickering.** Two fixes and a feature:
+`mountFleetPill()` is exported and called from `renderStatus()` beside the share/join re-adoptions
+(the flicker's actual cause); `mountPill()` now guards with `contains` (re-appending a connected node
+restarts its animation); and `paintPill()` renders one colored dot PER lane state with its count,
+ordered needs-approval, awaiting-input, working, starting, done, error, stopped, each with a hover
+naming the lanes in that state. The markup is compared before it is written, so an identical repaint
+every 2.5s cannot stutter the pulse. The dots reuse the cards' own `lane-<status>` custom properties,
+so the minimized view and the open panel can never disagree about what amber means.
+
+### Consequences
+
+- A pegged machine can now be given more lanes for up to 30 seconds. That is the point: the user asked
+  for it, a box recovers from a burst, and 30s of held pressure still refuses.
+- With no ceiling a user CAN oversubscribe deliberately (twenty lanes on four cores). The guard stays a
+  UX guard, not a quota: it reports honestly and refuses only on evidence.
+- A token saved for a host reaches the SERVER env only on the next launch, so the freshly typed value
+  is also passed inline for the clone happening now (the ADR-0216 pattern).
+- Deleted, not deprecated: `FLEET_WATERMARK_PCT`, `maxLanesFor`, `watermarkPct`, `maxLanes`. Clean
+  cutover, no shims, no aliases.
+
+### Alternatives rejected
+
+- **Keep a ceiling, just raise it.** Any constant is a guess about a machine we can measure. The
+  measurement is cheap; the guess is not defensible.
+- **Average the window instead of requiring an unbroken streak.** A sawtooth between 20% and 100%
+  averages to 60% and feels terrible, and a mean lets one blind sample dilute real pressure.
+  "Unbroken, ending now" is what sustained means.
+- **One global git token (extend `LUCID_GIT_PAT` to every host).** Simplest, and a credential leak: a
+  typo'd hostname would send the user's PAT to a stranger.
+- **Clone in the renderer, or a second clone endpoint per lane.** `cloneRepo` already redacts, already
+  handles the Windows trailing-dot desync and partial-clone cleanup. Reusing it from
+  `/api/fleet/spawn` adds one branch instead of a second clone implementation.
+- **Debounce the status bar instead of re-adopting the pill.** The bar is the app's live surface; the
+  bug was that one pill was missing from the re-adoption list the ticker and share/join pills use.
+
+### See also
+
+- ADR-0271 (P-FLEET.L1) - the lanes, the dock, and the 75% guard this replaces.
+- ADR-0182 (P-SYSRES.1) - the sampler, and the fail-open-on-no-evidence doctrine.
+- ADR-0214 / ADR-0216 - headless clone auth and the vault-backed PAT this scopes per host.
+- ADR-0265 (P-FS.2) - the real OS folder dialog the spawn form now opens.
+- AGENTS.md invariant 11 - the spawn form's note is a BLOCK paragraph and its rows hold controls, never
+  bare prose beside inline tags.

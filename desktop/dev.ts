@@ -2573,12 +2573,26 @@ const server = Bun.serve({
       }
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
-      // P-FLEET.L1: the local lane fleet. Status is metadata (lanes + headroom); prompt streams the lane's
-      // turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on silence).
+      // P-FLEET.L1/L2: the local lane fleet. Status is metadata (lanes + pressure evidence); prompt streams
+      // the lane's turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on
+      // silence).
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
       if (p === "/api/fleet/spawn" && req.method === "POST") {
-        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown }>(req);
-        const r = await fleet.spawn({ cwd: String(b.cwd ?? ""), model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined });
+        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown }>(req);
+        // P-FLEET.L2: a lane can be spawned straight from a GitHub / GitLab / Azure DevOps remote. The clone
+        // lands INSIDE the folder the user picked in the OS dialog (or under ~/.omp/lucid-workspaces when
+        // they picked none) and an existing clone is reused, so re-spawning the same repo is idempotent.
+        // `pat` is the freshly-typed token: used only to spawn git, redacted out of any error, never logged,
+        // never persisted here (the vault copy is written by the renderer through main's safeStorage) and
+        // never forwarded to the agent.
+        const repoUrl = typeof b.repoUrl === "string" ? b.repoUrl.trim() : "";
+        let cwd = String(b.cwd ?? "");
+        if (repoUrl) {
+          const c = await cloneRepo(repoUrl, typeof b.pat === "string" && b.pat ? b.pat : undefined, cwd || undefined);
+          if (!c.ok || !c.path) return json({ ok: true, data: { ok: false, reason: c.error || "git clone failed" } });
+          cwd = c.path;
+        }
+        const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined });
         return json({ ok: true, data: r });
       }
       if (p === "/api/fleet/prompt" && req.method === "POST") {

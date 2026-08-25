@@ -115,14 +115,19 @@ export function fleetTable(rows: ReadonlyArray<LaneRow>): string {
   return out.join("\n");
 }
 
-/** 'resources: cpu 34%, mem 51% (cap 75%, max 4 lanes); master model: gpt-5' */
+/** 'resources: cpu 34%, mem 51% (lanes unlimited; refused only above 90% held 30s); master model: gpt-5'
+ *  When a metric IS currently over the line, the line says how long it has held, because that duration is
+ *  the whole verdict: 8s is a burst, 34s is a refusal. */
 export function fleetResourcesLine(resources: unknown, masterModel: string): string {
   const cpu = Math.round(num(prop(resources, "cpuPct")));
   const mem = Math.round(num(prop(resources, "memPct")));
-  const cap = Math.round(num(prop(resources, "watermarkPct")));
-  const max = Math.round(num(prop(resources, "maxLanes")));
+  const line = Math.round(num(prop(resources, "pressurePct")));
+  const sustainS = Math.round(num(prop(resources, "sustainMs")) / 1000);
+  const hot = (label: string, ms: number): string => (ms > 0 ? `; ${label} has held the line ${Math.round(ms / 1000)}s of ${sustainS}s` : "");
+  const pressure =
+    hot("cpu", num(prop(resources, "cpuHotMs"))) + hot("mem", num(prop(resources, "memHotMs")));
   const master = masterModel ? `; master model: ${masterModel}` : "";
-  return `resources: cpu ${cpu}%, mem ${mem}% (cap ${cap}%, max ${max} lane${max === 1 ? "" : "s"})${master}`;
+  return `resources: cpu ${cpu}%, mem ${mem}% (lanes unlimited; a lane is refused only above ${line}% held ${sustainS}s)${pressure}${master}`;
 }
 
 export default function fleetExtension(piRaw: unknown): void {

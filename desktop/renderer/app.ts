@@ -73,7 +73,8 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { initFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1: local engine lanes as a movable fleet grid
+import { initFleetGrid, mountFleetPill, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
@@ -6370,6 +6371,7 @@ function renderStatus(): void {
   mountTrivia(); // P-TRIV.1: re-adopt the persistent ticker after the innerHTML swap
   mountSharePill(); // P-REMOTE.11: re-adopt the minimized Share pill (it lives in the bar, right of the ticker)
   mountJoinPill(); // P-COLLAB.20: re-adopt the minimized Join pill (watching continues while minimized)
+  mountFleetPill(); // P-FLEET.L2: re-adopt the minimized Fleet pill - without this the innerHTML swap above dropped it every status repaint and the next 2.5s poll put it back, which is the lower-right flicker
 }
 
 // ───────────────────────── the Trivia Wire — P-TRIV.1 (ADR-0174) ─────────────────────────
@@ -10767,6 +10769,23 @@ function wire(): void {
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
     getMasterCwd: () => state.workspace?.current ?? "",
+    // P-FLEET.L2: the same real OS dialog every other folder pick in the app uses (Electron dialog ->
+    // local-backend Explorer/Finder/zenity -> in-app browser), so a lane folder can be browsed to or
+    // CREATED without typing a path.
+    pickFolder: (opts) => pickFolderDialog(opts ?? {}),
+    // P-FLEET.L2: a git token is stored per HOST in the OS-encrypted vault (ref git_pat_<host_slug>), which
+    // main.ts injects back as LUCID_GIT_PAT_<HOST_SLUG> at launch so workspace.ts hands it ONLY to that
+    // host. The plaintext goes renderer -> main's safeStorage and nowhere else; it never reaches the agent.
+    saveGitToken: async ({ host, token, label }) => {
+      if (!bridge.isElectron || !bridge.credStore) return { ok: false, error: "the encrypted vault needs the LUCID desktop app" };
+      const ref = gitCredRef(host);
+      if (!ref) return { ok: false, error: `unusable host "${host}"` };
+      const r = await bridge.credStore({ ref, kind: "apikey", secret: token, label });
+      if (r && "error" in r) return { ok: false, error: String(r.error) };
+      state.creds = await bridge.credList().catch(() => state.creds);
+      return { ok: true };
+    },
+    vaultAvailable: () => bridge.isElectron && !!bridge.credStore,
   });
   $("#ctFleet")?.addEventListener("click", () => toggleFleetGrid());
 

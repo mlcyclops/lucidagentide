@@ -3,13 +3,13 @@
 
 // harness/scripts/demo_pfleetl1.ts
 //
-// P-FLEET.L1: local lanes - N concurrent headless LUCID agents on one machine, capped by the 75%
-// headroom guard, streaming into the fleet grid, reporting to the master agent. This demo drives the
-// REAL FleetLaneManager against REAL fake-ACP subprocesses (the firewall's faithful stand-in) and
-// proves the load-bearing properties headlessly:
+// P-FLEET.L1 (guard evolved by P-FLEET.L2): local lanes - N concurrent headless LUCID agents on one
+// machine under the SUSTAINED-pressure guard, streaming into the fleet grid, reporting to the master
+// agent. This demo drives the REAL FleetLaneManager against REAL fake-ACP subprocesses (the firewall's
+// faithful stand-in) and proves the load-bearing properties headlessly:
 //   1. two lanes run turns CONCURRENTLY (the local fan-out);
 //   2. the lane model defaults to the MASTER's current model;
-//   3. admission refuses over the 75% watermark with the measured number, and at the lane ceiling;
+//   3. admission ignores a BURST and refuses only a HELD line, with the measured percent + duration;
 //   4. a permission ask lands needs-approval, an unanswered/denied ask stays fail-closed;
 //   5. cancel lands awaiting-input (never done); stopAll orphans nothing;
 //   6. the status payload is metadata only - lane reply text never rides in /api/fleet/status shapes.
@@ -32,9 +32,14 @@ function ok(msg: string): void {
 
 const healthy: SystemSnapshot = { cpuModel: "demo", cores: 8, speedMHz: 4000, cpuBusyPct: 12, memTotalMB: 16_000, memFreeMB: 11_000 };
 
-function mgr(snap: SystemSnapshot = healthy, mode?: string): FleetLaneManager {
+function mgr(snap: SystemSnapshot = healthy, mode?: string, now?: () => number): FleetLaneManager {
   if (mode) process.env.FAKE_ACP_MODE = mode; else delete process.env.FAKE_ACP_MODE;
-  return new FleetLaneManager({ argv: () => ({ cmd: "bun", args: [FAKE] }), masterModel: () => "orchestrator-model", sample: async () => snap });
+  return new FleetLaneManager({
+    argv: () => ({ cmd: "bun", args: [FAKE] }),
+    masterModel: () => "orchestrator-model",
+    sample: async () => snap,
+    ...(now ? { now } : {}),
+  });
 }
 
 const sleep = (ms: number) => { const w = Promise.withResolvers<void>(); setTimeout(w.resolve, ms); return w.promise; };
@@ -64,22 +69,33 @@ console.log("1) two lanes run concurrently, defaulting to the master's model");
   fleet.stopAll();
 }
 
-// 3. Admission: the 75% watermark and the lane ceiling refuse with measured numbers.
-console.log("2) admission refuses over the watermark and at the ceiling");
+// 3. Admission: a burst is free, a HELD line refuses with measured numbers, and there is no ceiling.
+console.log("2) admission ignores a burst and refuses only a held line");
 {
-  const hot = mgr({ ...healthy, memFreeMB: 2_000 }); // 87.5% used
-  const r = await hot.spawn({ cwd: process.cwd() });
-  if (r.ok) fail("must refuse over the memory watermark");
-  if (!/88%/.test(r.reason ?? "")) fail(`refusal must carry the measured number, got: ${r.reason}`);
-  ok(`memory refusal carries the number - "${r.reason}"`);
+  const pegged: SystemSnapshot = { ...healthy, cpuBusyPct: 99, memFreeMB: 900 }; // 100% cpu, ~94% memory
+  const burst = mgr(pegged);
+  const spike = await burst.spawn({ cwd: process.cwd() });
+  if (!spike.ok) fail(`a single pegged reading is a BURST and must still admit, got: ${spike.reason}`);
+  ok("a pegged instant never refuses - that was the old 75% watermark's mistake");
+  burst.stopAll();
 
-  const tiny = mgr({ ...healthy, cores: 2 }); // ceiling 1
-  const first = await tiny.spawn({ cwd: process.cwd() });
-  if (!first.ok) fail("first lane must fit under a ceiling of 1");
-  const second = await tiny.spawn({ cwd: process.cwd() });
-  if (second.ok) fail("must refuse at the lane ceiling");
-  if (!/1\/1/.test(second.reason ?? "")) fail(`ceiling refusal must count lanes, got: ${second.reason}`);
-  ok(`ceiling refusal counts lanes - "${second.reason}"`);
+  // Drive the pressure window with a fake clock: eight readings, 5s apart, all over the line.
+  let t = 5_000_000;
+  const held = mgr(pegged, undefined, () => t);
+  for (let i = 0; i < 8; i++) { await held.status(); t += 5_000; }
+  const r = await held.spawn({ cwd: process.cwd() });
+  if (r.ok) fail("30 unbroken seconds over the line must refuse");
+  if (!/9\d%/.test(r.reason ?? "")) fail(`refusal must carry the measured percent, got: ${r.reason}`);
+  if (!/at 9\d% for \d+s/.test(r.reason ?? "")) fail(`refusal must carry the measured DURATION beside the measured percent, got: ${r.reason}`);
+  ok(`held-line refusal carries percent and duration - "${r.reason}"`);
+  held.stopAll();
+
+  // No ceiling: a 2-core box was capped at ONE lane under P-FLEET.L1.
+  const tiny = mgr({ ...healthy, cores: 2 });
+  const lanes = [await tiny.spawn({ cwd: process.cwd() }), await tiny.spawn({ cwd: process.cwd() }), await tiny.spawn({ cwd: process.cwd() })];
+  if (lanes.some((l) => !l.ok)) fail(`lanes are unlimited; a core-derived ceiling must not exist: ${lanes.map((l) => l.reason ?? "").join(" ")}`);
+  if (tiny.liveLanes() !== 3) fail("three lanes must be live on a 2-core box");
+  ok("three lanes on two cores - the min(6, cores/2) ceiling is gone");
   tiny.stopAll();
 }
 
@@ -133,5 +149,5 @@ console.log("5) /api/fleet/status shapes carry metadata only");
   fleet.stopAll();
 }
 
-console.log("\ndemo_pfleetl1 OK - local lanes fan out concurrently under the 75% guard, glow for attention fail-closed, and report metadata to the fleet manager.");
+console.log("\ndemo_pfleetl1 OK - unlimited local lanes fan out concurrently under the sustained-pressure guard (a burst is free, a held line is not), glow for attention fail-closed, and report metadata to the fleet manager.");
 process.exit(0);

@@ -1,20 +1,31 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/fleet_grid.ts - P-FLEET.L1: the LUCID Fleet dashboard. Multiple headless engine lanes on
-// this machine, each rendered as a streaming, editable mini agent window inside one movable/resizable dock
+// desktop/renderer/fleet_grid.ts - P-FLEET.L1/L2: the LUCID Fleet dashboard. Multiple headless engine lanes
+// on this machine, each rendered as a streaming, editable mini agent window inside one movable/resizable dock
 // (the share/join dock geometry primitives under the fleet's own storage keys). The card FRAME is the status
 // surface: the LED + border carry the lane color, and ONLY the two states that need the user - awaiting-input
 // (amber) and needs-approval (red) - animate their glow. Self-contained: every engine call goes through the
 // injected bridge functions; no direct HTTP here. Closing or minimizing the panel never touches the lanes -
 // it is a viewport, not a lifecycle owner.
+//
+// P-FLEET.L2 adds three things:
+//   - the new-lane form opens the REAL OS folder dialog (Explorer / Finder / zenity, create-new included)
+//     and accepts a GitHub / GitLab / Azure DevOps https-or-ssh remote, with the token stored per HOST in
+//     the machine's encrypted vault;
+//   - the header reports SUSTAINED pressure (how long a metric has held the line) instead of a lane cap,
+//     because the fleet no longer has one;
+//   - MINIMIZED, the status-bar pill is a real snapshot: one colored dot per lane state with its count and
+//     a hover naming the lanes. It is re-adopted after every status-bar repaint and only repainted when the
+//     markup actually changes, which is what stops it flickering while a lane works.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
-import type { FleetStatusView, LaneEvent, LaneView, LucidBridge } from "./bridge.ts";
+import type { FleetStatusView, LaneEvent, LaneStatus, LaneView, LucidBridge } from "./bridge.ts";
+import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
@@ -28,12 +39,36 @@ export interface FleetGridDeps extends FleetFns {
   getModelOptions: () => { value: string; label?: string }[];
   /** The master agent's workspace folder - prefilled as a new lane's cwd. */
   getMasterCwd: () => string;
+  /** The REAL OS folder dialog (app.ts pickFolderDialog: Electron dialog, else the local backend's
+   *  Explorer/Finder/zenity, else the in-app browser). Resolves null on cancel - never re-prompt. */
+  pickFolder: (opts?: { title?: string; confirm?: string }) => Promise<string | null>;
+  /** Write a git token into the OS-encrypted vault under the ref for THIS host (git_url.gitCredRef).
+   *  The plaintext never leaves the renderer except into main's safeStorage. */
+  saveGitToken: (input: { host: string; token: string; label: string }) => Promise<{ ok: boolean; error?: string }>;
+  /** Is the OS vault reachable at all (desktop shell)? A plain browser build can only use a token for the
+   *  clone happening right now, so the form must say that rather than promise storage it cannot do. */
+  vaultAvailable: () => boolean;
 }
 
 const FLEET_DOCK_KEY = "lucid.fleetDock.v1";
 const FLEET_DOCK_OPEN_KEY = "lucid.fleetDock.open";
 const POLL_MS = 2500;
 const UP_ARROW = `<svg class="sd-up" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg>`;
+
+/** The MINIMIZED snapshot's dot order: what needs a human first, then what is running, then what has
+ *  settled. The dots reuse the cards' own `lane-<status>` classes, so the pill and the open panel can never
+ *  disagree about what amber means. */
+const PILL_ORDER: LaneStatus[] = ["needs-approval", "awaiting-input", "working", "starting", "done", "error", "stopped"];
+/** Hover wording per state, phrased as a count reads: "2 need approval", "1 waiting on you". */
+const STATUS_WORDS: Record<LaneStatus, string> = {
+  "needs-approval": "need approval",
+  "awaiting-input": "waiting on you",
+  working: "working",
+  starting: "starting",
+  done: "done",
+  error: "errored",
+  stopped: "stopped",
+};
 
 interface LaneTool { name: string; detail: string }
 interface LaneTurn { role: "user" | "assistant"; text: string; thinking?: string; tools?: LaneTool[]; error?: string }
@@ -93,7 +128,7 @@ export function openFleetGrid(): void {
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
-      <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|CPU and memory vs the spawn watermark (the tick). New lanes are refused above it."></span>
+      <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Lanes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local lane">${icon("plus", 12)} Lane</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (lanes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (lanes keep running)">${icon("close", 15)}</button>
@@ -205,7 +240,7 @@ function minimize(): void {
   dockState.minimized = true; persist();
   dock.hidden = true;
   if (!pill) {
-    pill = el(`<button id="fleetDockPill" class="share-dock-pill" title="LUCID Fleet - lanes keep running" aria-label="Restore the fleet panel">${icon("bolt", 12)}<span class="sd-live-dot"></span>${UP_ARROW}</button>`);
+    pill = el(`<button id="fleetDockPill" class="share-dock-pill" aria-label="Restore the fleet panel">${icon("bolt", 12)}<span class="fleet-pips" data-fleet-pips></span>${UP_ARROW}</button>`);
     pill.addEventListener("click", restore);
   }
   mountPill();
@@ -218,21 +253,60 @@ function restore(): void {
   dock.hidden = false;
 }
 function removePill(): void { pill?.remove(); pill = null; }
-/** The pill lives in the status bar (beside the share/join pills); its innerHTML gets swapped by status
- *  re-renders, so the poll re-adopts a detached pill. */
+/** The pill lives in the status bar, beside the share/join pills. `contains` first: re-appending an
+ *  ALREADY-connected node detaches and reinserts it, which restarts its CSS animation - the pill would
+ *  visibly blink every poll. */
 function mountPill(): void {
   if (!pill) return;
-  const sb = document.getElementById("statusbar");
-  (sb ?? document.body).append(pill);
+  const host = document.getElementById("statusbar") ?? document.body;
+  if (!host.contains(pill)) host.append(pill);
 }
+/** app.ts calls this straight after renderStatus() replaces the status bar's innerHTML, exactly as it
+ *  re-adopts the trivia ticker and the share/join pills. Without it the minimized fleet pill was wiped by
+ *  every status repaint and only came back on the next 2.5s poll: the lower-right flicker users saw while
+ *  a lane was working. */
+export function mountFleetPill(): void {
+  if (dockState?.minimized) mountPill();
+}
+
+/** Lane names grouped by state, for the minimized snapshot. */
+function lanesByStatus(): Map<LaneStatus, string[]> {
+  const by = new Map<LaneStatus, string[]>();
+  for (const r of runs.values()) {
+    const names = by.get(r.view.status) ?? [];
+    names.push(r.view.name || r.view.id);
+    by.set(r.view.status, names);
+  }
+  return by;
+}
+
+/** The minimized snapshot: one colored dot per state present, its lane COUNT beside it, and a hover that
+ *  names the lanes - enough to keep working in the main window and still know a lane is blocked on you.
+ *  The markup is compared before it is written, because an identical repaint every 2.5s is precisely what
+ *  made the pulse animation stutter. */
 function paintPill(): void {
   if (!pill) return;
+  const by = lanesByStatus();
+  const pips: string[] = [];
+  const lines: string[] = [];
   let working = false, attn = false;
-  for (const r of runs.values()) {
-    if (r.streaming || r.view.status === "working") working = true;
-    if (r.view.status === "needs-approval" || r.view.status === "awaiting-input") attn = true;
+  for (const st of PILL_ORDER) {
+    const names = by.get(st);
+    if (!names?.length) continue;
+    if (st === "needs-approval" || st === "awaiting-input") attn = true;
+    if (st === "working" || st === "starting") working = true;
+    const line = `${names.length} ${STATUS_WORDS[st]}: ${names.join(", ")}`;
+    pips.push(`<span class="fleet-pip lane-${st}" title="${esc(line)}"><i aria-hidden="true"></i><b>${names.length}</b></span>`);
+    lines.push(line);
   }
-  pill.querySelector(".sd-live-dot")?.classList.toggle("on", working);
+  const box = $("[data-fleet-pips]", pill) as HTMLElement | null;
+  if (box) {
+    const html = pips.join("") || `<span class="fleet-pip lane-idle" title="No lanes running"><i aria-hidden="true"></i><b>0</b></span>`;
+    if (box.innerHTML !== html) box.innerHTML = html;
+  }
+  const tip = lines.length ? lines.join(" \u00b7 ") : "no lanes running";
+  pill.title = `LUCID Fleet - ${tip}. Click to reopen; lanes keep running either way.`;
+  pill.classList.toggle("live", working);
   pill.classList.toggle("attn", attn);
 }
 
@@ -251,7 +325,7 @@ async function refresh(): Promise<void> {
   if (!deps) return;
   let st: FleetStatusView | null = null;
   try { st = await deps.fleetStatus(); } catch { st = null; }
-  if (pill && !pill.isConnected && dockState?.minimized) mountPill();
+  if (dockState?.minimized) mountPill();
   const hr = dock ? $("#fleetHeadroom", dock) : null;
   if (!st) { if (hr) hr.innerHTML = `<span class="fleet-hr-off">fleet offline</span>`; return; }
   const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
@@ -276,14 +350,25 @@ async function refresh(): Promise<void> {
   paintPill();
 }
 
+/** The header HUD. There is no cap to show any more, so the numbers that matter are the two live percents
+ *  and - when one of them is over the line - HOW LONG it has been over: `93% 12s/30s` is a burst you can
+ *  ignore, `93% 31s/30s` is the refusal. */
 function paintHeadroom(hr: HTMLElement, res: FleetResources, laneCount: number): void {
-  const bar = (lbl: string, v: number | null): string => {
-    if (v == null) return `<span class="fleet-hr-lbl">${lbl}</span><span class="fleet-hr-bar" style="--wm:${res.watermarkPct}%"></span><span class="fleet-hr-val">--</span>`;
+  const line = res.pressurePct;
+  const sustainS = Math.max(1, Math.round(res.sustainMs / 1000));
+  const bar = (lbl: string, v: number | null, held: number): string => {
+    const head = `<span class="fleet-hr-lbl">${lbl}</span>`;
+    if (v == null) return `${head}<span class="fleet-hr-bar" style="--wm:${line}%"></span><span class="fleet-hr-val">--</span>`;
     const p = Math.max(0, Math.min(100, Math.round(v)));
-    const c = p >= res.watermarkPct ? "var(--red)" : p >= res.watermarkPct - 15 ? "var(--amber)" : "var(--green)";
-    return `<span class="fleet-hr-lbl">${lbl}</span><span class="fleet-hr-bar" style="--wm:${res.watermarkPct}%"><span class="fleet-hr-fill" style="width:${p}%;background:${c}"></span></span><span class="fleet-hr-val">${p}%</span>`;
+    const over = held >= res.sustainMs;
+    const c = over ? "var(--red)" : p >= line ? "var(--amber)" : "var(--green)";
+    const hot = p >= line
+      ? `<span class="fleet-hr-hot${over ? " over" : ""}" title="${lbl} has held ${line}%+ for ${Math.round(held / 1000)}s. New lanes are refused at ${sustainS}s.">${Math.round(held / 1000)}s/${sustainS}s</span>`
+      : "";
+    return `${head}<span class="fleet-hr-bar" style="--wm:${line}%"><span class="fleet-hr-fill" style="width:${p}%;background:${c}"></span></span><span class="fleet-hr-val">${p}%</span>${hot}`;
   };
-  hr.innerHTML = bar("CPU", res.cpuPct) + bar("MEM", res.memPct) + `<span class="fleet-hr-lanes" title="Lanes running / cap">${laneCount}/${res.maxLanes}</span>`;
+  const lanes = `<span class="fleet-hr-lanes" title="Lanes running. There is no cap: a lane is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} lane${laneCount === 1 ? "" : "s"}</span>`;
+  hr.innerHTML = bar("CPU", res.cpuPct, res.cpuHotMs) + bar("MEM", res.memPct, res.memHotMs) + lanes;
 }
 
 function paintEmpty(): void {
@@ -484,19 +569,73 @@ function toggleSpawnForm(): void {
       <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-lane form" title="Close">${icon("close", 12)}</button>
     </div>
     <div class="fleet-spawn">
-      <label class="fleet-spawn-lbl">Folder</label>
-      <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" />
+      <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
+      <div class="fleet-spawn-row">
+        <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
+        <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
+      </div>
+      <label class="fleet-spawn-lbl">Repo URL <span class="fleet-spawn-opt">optional</span></label>
+      <input class="fleet-spawn-in" data-spawn-repo type="text" spellcheck="false" autocomplete="off" aria-label="A GitHub, GitLab or Azure DevOps repository URL to clone" placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git" />
+      <div class="fleet-spawn-note" data-spawn-repo-note hidden></div>
+      <div class="fleet-spawn-auth" data-spawn-auth hidden>
+        <input class="fleet-spawn-in" data-spawn-pat type="password" autocomplete="off" spellcheck="false" aria-label="Personal access token for this repository host" placeholder="Personal access token (private repos)" />
+        <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
+      </div>
       <label class="fleet-spawn-lbl">Name <span class="fleet-spawn-opt">optional</span></label>
-      <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="lane-${runs.size + 1}" spellcheck="false" />
+      <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="lane-${runs.size + 1}" spellcheck="false" aria-label="A name for this lane" />
       <label class="fleet-spawn-lbl">Model</label>
-      <select class="fleet-spawn-in" data-spawn-model>${opts}</select>
+      <select class="fleet-spawn-in" data-spawn-model aria-label="The model this lane runs">${opts}</select>
       <div class="fleet-spawn-err" data-spawn-err hidden></div>
       <div class="fleet-spawn-acts"><button class="btn-mini ok" data-spawn-go>${icon("bolt", 12)} Spawn</button></div>
     </div>
   </div>`);
   grid.prepend(form);
   paintEmpty();
+  paintRepoHint(form);
   ($("[data-spawn-cwd]", form) as HTMLInputElement | null)?.focus();
+}
+
+/** The REAL OS dialog (Explorer / Finder / zenity), where the user can also CREATE the folder. A cancel
+ *  resolves null and must leave whatever is already typed alone - never clear the field, never re-prompt. */
+async function browseSpawnFolder(): Promise<void> {
+  if (!dock || !deps) return;
+  const form = $(".fleet-spawn-card", dock) as HTMLElement | null; if (!form) return;
+  const picked = await deps.pickFolder({ title: "Choose or create the folder this lane works in", confirm: "Use this folder" }).catch(() => null);
+  if (!picked) return;
+  const input = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
+  if (input) input.value = picked;
+  paintRepoHint(form);
+}
+
+/** Live feedback under the repo field: what was recognized, where the clone will land, and which credential
+ *  that remote actually needs. An ssh remote HIDES the token row entirely - it authenticates with keys, and
+ *  asking for a PAT there would be a lie the user then debugs for twenty minutes. */
+function paintRepoHint(form: HTMLElement): void {
+  const raw = ($("[data-spawn-repo]", form) as HTMLInputElement | null)?.value.trim() ?? "";
+  const note = $("[data-spawn-repo-note]", form) as HTMLElement | null;
+  const auth = $("[data-spawn-auth]", form) as HTMLElement | null;
+  const lbl = $("[data-spawn-cwd-lbl]", form) as HTMLElement | null;
+  const remote = raw ? parseGitRemote(raw) : null;
+  if (lbl) lbl.textContent = remote ? "Clone into" : "Folder";
+  const hide = (): void => { if (note) { note.hidden = true; note.textContent = ""; } if (auth) auth.hidden = true; };
+  if (!raw) { hide(); return; }
+  if (!remote) {
+    if (auth) auth.hidden = true;
+    if (note) { note.hidden = false; note.className = "fleet-spawn-note bad"; note.textContent = "Not a repo URL. Paste an https:// link, or a git@host:org/repo remote."; }
+    return;
+  }
+  const parent = ($("[data-spawn-cwd]", form) as HTMLInputElement | null)?.value.trim() || "the shared LUCID workspaces folder";
+  if (note) {
+    note.hidden = false;
+    note.className = "fleet-spawn-note";
+    note.textContent = `${providerLabel(remote.provider)}: ${remote.owner ? `${remote.owner}/` : ""}${remote.repo} - clones into ${parent}, reusing it if already there. ${gitAuthHint(remote)}`;
+  }
+  if (auth) auth.hidden = remote.scheme !== "https";
+  const vault = deps?.vaultAvailable() === true;
+  const saveTxt = $("[data-spawn-save-txt]", form) as HTMLElement | null;
+  if (saveTxt) saveTxt.textContent = vault ? `Remember this token for ${remote.host}, encrypted by this machine` : "This build cannot store tokens - it will be used for this clone only";
+  const save = $("[data-spawn-save]", form) as HTMLInputElement | null;
+  if (save) { save.disabled = !vault; if (!vault) save.checked = false; }
 }
 
 async function submitSpawn(): Promise<void> {
@@ -505,16 +644,42 @@ async function submitSpawn(): Promise<void> {
   const cwd = ($("[data-spawn-cwd]", form) as HTMLInputElement | null)?.value.trim() ?? "";
   const name = ($("[data-spawn-name]", form) as HTMLInputElement | null)?.value.trim() ?? "";
   const model = ($("[data-spawn-model]", form) as HTMLSelectElement | null)?.value ?? "";
+  const repoRaw = ($("[data-spawn-repo]", form) as HTMLInputElement | null)?.value.trim() ?? "";
+  const patInput = $("[data-spawn-pat]", form) as HTMLInputElement | null;
+  const pat = patInput?.value ?? "";
+  const remember = ($("[data-spawn-save]", form) as HTMLInputElement | null)?.checked === true;
   const err = $("[data-spawn-err]", form) as HTMLElement | null;
-  if (!cwd) { if (err) { err.textContent = "Pick the folder the lane works in."; err.hidden = false; } return; }
+  const fail = (msg: string): void => { if (err) { err.textContent = msg; err.hidden = false; } };
+  const remote = repoRaw ? parseGitRemote(repoRaw) : null;
+  if (repoRaw && !remote) { fail("That is not a repo URL. Paste an https:// link, or a git@host:org/repo remote."); return; }
+  if (!repoRaw && !cwd) { fail("Pick the folder the lane works in, or paste a repo URL to clone."); return; }
   const go = $("[data-spawn-go]", form) as HTMLButtonElement | null;
-  if (go) go.disabled = true;
-  const r = await deps.fleetSpawn({ cwd, model: model || undefined, name: name || undefined })
-    .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
+  const goHtml = go?.innerHTML ?? "";
+  if (err) err.hidden = true;
+  // A clone can take minutes on a big repo, so the button says which phase we are in rather than just dying.
+  if (go) { go.disabled = true; go.innerHTML = remote ? `${icon("git", 12)} Cloning\u2026` : `${icon("bolt", 12)} Spawning\u2026`; }
+  // The token is vaulted BEFORE the clone (a slow clone must not be able to lose it) and always under the
+  // HOST it was typed for - never a global "git token" any other remote could reach for. Failing to STORE it
+  // is a warning, not a stop: the inline copy still authenticates this clone.
+  let warn = "";
+  if (remote && remote.scheme === "https" && pat && remember) {
+    const s = await deps.saveGitToken({ host: remote.host, token: pat, label: `${providerLabel(remote.provider)} token (${remote.host})` })
+      .catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    if (!s.ok) warn = `Token not saved (${s.error ?? "vault unavailable"}) - used for this clone only.`;
+  }
+  const r = await deps.fleetSpawn({
+    cwd,
+    model: model || undefined,
+    name: name || undefined,
+    ...(remote ? { repoUrl: repoRaw } : {}),
+    ...(remote && pat ? { pat } : {}),
+  }).catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
+  if (patInput) patInput.value = ""; // never leave the plaintext sitting in the DOM
   if (r?.ok) { form.remove(); paintEmpty(); await refresh(); return; }
-  if (go) go.disabled = false;
-  // The refusal reason carries the measured numbers (e.g. "cpu 82% > 75% watermark") - show it prominently.
-  if (err) { err.textContent = r?.reason || "The engine refused the lane."; err.hidden = false; }
+  if (go) { go.disabled = false; go.innerHTML = goHtml; }
+  // A refusal carries the measured numbers ("system CPU has been at 93% for 34s") or the redacted git
+  // failure - show it verbatim, it is the whole point of the guard.
+  fail([warn, r?.reason || "The engine refused the lane."].filter(Boolean).join(" "));
 }
 
 // ---------------------------------------------------------------- delegated events
@@ -526,6 +691,7 @@ function onClick(ev: Event): void {
   if (t.closest("[data-fleet-add]")) { toggleSpawnForm(); return; }
   if (t.closest("[data-spawn-go]")) { void submitSpawn(); return; }
   if (t.closest("[data-spawn-cancel]")) { toggleSpawnForm(); return; }
+  if (t.closest("[data-spawn-browse]")) { void browseSpawnFolder(); return; }
   const card = t.closest(".fleet-card[data-lane]") as HTMLElement | null; if (!card || !deps) return;
   const run = runs.get(card.dataset.lane ?? ""); if (!run) return;
   if (t.closest("[data-fleet-collapse]")) { run.collapsed = !run.collapsed; paintFrame(run); return; }
@@ -569,5 +735,12 @@ function onInput(ev: Event): void {
   if (t instanceof HTMLTextAreaElement && t.matches("[data-fleet-input]")) {
     t.style.height = "auto";
     t.style.height = `${Math.min(64, t.scrollHeight)}px`; // 1-2 rows, grows to a small cap
+    return;
+  }
+  // Typing a remote (or changing the destination) re-derives the provider, the clone path, and whether a
+  // token is even relevant, so the form never asks for the wrong credential.
+  if (t instanceof HTMLInputElement && (t.matches("[data-spawn-repo]") || t.matches("[data-spawn-cwd]"))) {
+    const form = t.closest(".fleet-spawn-card") as HTMLElement | null;
+    if (form) paintRepoHint(form);
   }
 }

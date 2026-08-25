@@ -3,15 +3,16 @@
 
 // desktop/fleet_lanes.ts
 //
-// P-FLEET.L1: local lanes - N concurrent headless LUCID agents on THIS machine, each its own gated omp
-// subprocess (same `-e` security gate as the master session, invariant 4), its own ACP session (own cwd,
-// own model), rendered as a mini window in the renderer's fleet grid and reported to the master agent via
-// the fleet_status tool.
+// P-FLEET.L1 / P-FLEET.L2: local lanes - N concurrent headless LUCID agents on THIS machine, each its own
+// gated omp subprocess (same `-e` security gate as the master session, invariant 4), its own ACP session
+// (own cwd, own model), rendered as a mini window in the renderer's fleet grid and reported to the master
+// agent via the fleet_status tool.
 //
 // Load-bearing decisions:
-//   - Admission is capped by the 75% headroom guard (fleet_resources.ts over system_profile's sample):
-//     the OS, the browser, and the user's other apps keep their headroom, and a refusal always carries
-//     the measured number.
+//   - Lane count is UNLIMITED (P-FLEET.L2). The only refusal is SUSTAINED machine pressure: CPU or memory
+//     at/above 90% unbroken for 30 seconds (fleet_resources.ts over a rolling window of system_profile
+//     samples). A spike is free; a refusal carries the measured percent AND how long it has held. The
+//     window is fed by this manager's own low-cost ticker, so "sustained" is measured, not guessed.
 //   - One turn at a time PER LANE (one ACP session per lane; overlapping prompts on one session would
 //     cross collectors - the ADR-0268 lesson). Parallelism is across lanes.
 //   - Permission asks are FAIL-CLOSED: every session/request_permission surfaces to the lane's mini
@@ -25,7 +26,7 @@ import { basename } from "node:path";
 import { statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { ACPClient } from "./acp.ts";
-import { laneAdmission, FLEET_WATERMARK_PCT, type LaneAdmission } from "./fleet_resources.ts";
+import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSample, type LaneAdmission, type PressureSample } from "./fleet_resources.ts";
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 
 /** Closed set. Everything the LED can show; no other values, ever. */
@@ -54,7 +55,18 @@ export type LaneEvent =
 
 export interface FleetStatusData {
   lanes: LaneView[];
-  resources: { cpuPct: number | null; memPct: number | null; watermarkPct: number; maxLanes: number };
+  /** Latest pressure evidence + the echoed policy. There is NO lane cap (P-FLEET.L2). */
+  resources: {
+    cpuPct: number | null;
+    memPct: number | null;
+    /** The pressure line, in percent. */
+    pressurePct: number;
+    /** How long pressure must hold before a lane is refused, in ms. */
+    sustainMs: number;
+    /** Unbroken ms at/above the line right now, per metric. 0 = clear or still just a burst. */
+    cpuHotMs: number;
+    memHotMs: number;
+  };
   masterModel: string;
 }
 
@@ -64,6 +76,14 @@ const LANE_TURN_TIMEOUT_MS = 600_000;
 const APPROVAL_TIMEOUT_MS = 600_000;
 /** ACP handshake bounds (P-KG-INGEST.5, ADR-0264: every request carries a clock). */
 const HANDSHAKE_MS = 30_000;
+/** Pressure-window cadence. Ten readings per sustain window is plenty of resolution to tell a burst
+ *  from a siege, and a two-point os.cpus() read costs nothing measurable. */
+const SAMPLE_MS = 3_000;
+/** Never two samples closer than this: the 2.5s status poll rides the ticker's readings, it doesn't
+ *  add its own. */
+const SAMPLE_MIN_GAP_MS = 2_000;
+/** Stop sampling once nothing is live and nobody has asked for status this long. Restarts on demand. */
+const SAMPLER_IDLE_MS = 20_000;
 
 export interface FleetLaneDeps {
   /** The gated omp argv for a lane (MUST carry the -e security gate; built by acp_backend). */
@@ -97,14 +117,18 @@ interface Lane {
 export class FleetLaneManager {
   readonly #lanes = new Map<string, Lane>();
   readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number };
-  /** Cached machine sample so a 2.5s status poll does not pay a 250ms CPU window every time. */
-  #lastSample: { at: number; snap: SystemSnapshot } | null = null;
+  /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
+   *  between ticks), trimmed by pushSample - never a full session's history. */
+  #history: PressureSample[] = [];
+  #sampler: ReturnType<typeof setInterval> | null = null;
+  #sampling = false;
+  #lastStatusAt = 0;
 
   constructor(deps: FleetLaneDeps) {
     this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), now: deps.now ?? Date.now };
   }
 
-  /** Spawn a lane: admission first (75% guard), then the gated omp + ACP handshake + model select. */
+  /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select. */
   async spawn(opts: { cwd: string; model?: string; name?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
     try {
@@ -221,7 +245,7 @@ export class FleetLaneManager {
     return { ok: true };
   }
 
-  /** Shutdown path: deny open asks, cancel live turns, stop every child. */
+  /** Shutdown path: deny open asks, cancel live turns, stop every child, stop sampling. */
   stopAll(): void {
     for (const lane of this.#lanes.values()) {
       if (lane.status === "stopped") continue;
@@ -230,26 +254,72 @@ export class FleetLaneManager {
       try { lane.client.stop(); } catch { /* dead */ }
       this.#setStatus(lane, "stopped");
     }
+    this.#stopSampler();
   }
 
   async status(): Promise<FleetStatusData> {
-    const a = await this.#admission(true);
+    this.#lastStatusAt = this.#deps.now();
+    const a = await this.#admission();
     return {
       lanes: [...this.#lanes.values()].map((l) => this.#view(l)),
-      resources: { cpuPct: a.cpuPct, memPct: a.memPct, watermarkPct: FLEET_WATERMARK_PCT, maxLanes: a.maxLanes },
+      resources: {
+        cpuPct: a.cpuPct,
+        memPct: a.memPct,
+        pressurePct: a.pressurePct,
+        sustainMs: a.sustainMs,
+        cpuHotMs: a.cpuHotMs,
+        memHotMs: a.memHotMs,
+      },
       masterModel: this.#deps.masterModel(),
     };
   }
 
+  /** How many lanes are actually carrying work right now (metadata; nothing gates on it). */
+  liveLanes(): number {
+    return [...this.#lanes.values()].filter((l) => l.status !== "stopped" && l.status !== "error").length;
+  }
+
   // ── internals ─────────────────────────────────────────────────────────────────────────────────────
 
-  async #admission(cachedOk = false): Promise<LaneAdmission> {
-    const now = this.#deps.now();
-    if (!cachedOk || !this.#lastSample || now - this.#lastSample.at > 2_000) {
-      this.#lastSample = { at: now, snap: await this.#deps.sample() };
+  /** The verdict over the freshest window we can cheaply have. Both callers (spawn + status) also keep
+   *  the sampler alive, so a fleet in use always has real history behind the next decision. */
+  async #admission(): Promise<LaneAdmission> {
+    this.#ensureSampler();
+    await this.#feed();
+    return laneAdmission(this.#history, FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS);
+  }
+
+  /** Take a reading into the window, unless one is already in flight or the last is too fresh. */
+  async #feed(): Promise<void> {
+    if (this.#sampling) return;
+    const last = this.#history.length ? this.#history[this.#history.length - 1]! : null;
+    if (last && this.#deps.now() - last.at < SAMPLE_MIN_GAP_MS) return;
+    this.#sampling = true;
+    try {
+      const snap = await this.#deps.sample();
+      this.#history = pushSample(this.#history, pressureOf(snap, this.#deps.now()));
+    } catch {
+      /* a failed sample contributes NOTHING: an absent reading breaks any hot streak (fails open). */
+    } finally {
+      this.#sampling = false;
     }
-    const live = [...this.#lanes.values()].filter((l) => l.status !== "stopped" && l.status !== "error").length;
-    return laneAdmission(this.#lastSample.snap, live);
+  }
+
+  /** Sustained pressure can only be MEASURED, so the window needs feeding even when nobody is watching
+   *  the dashboard. The ticker is unref'd (it never holds the process open) and retires itself once the
+   *  fleet is idle and unwatched; spawn/status bring it back. */
+  #ensureSampler(): void {
+    if (this.#sampler) return;
+    const t = setInterval(() => { void this.#tick(); }, SAMPLE_MS);
+    (t as unknown as { unref?: () => void }).unref?.();
+    this.#sampler = t;
+  }
+  #stopSampler(): void {
+    if (this.#sampler) { clearInterval(this.#sampler); this.#sampler = null; }
+  }
+  async #tick(): Promise<void> {
+    if (this.liveLanes() === 0 && this.#deps.now() - this.#lastStatusAt > SAMPLER_IDLE_MS) { this.#stopSampler(); return; }
+    await this.#feed();
   }
 
   async #setModel(lane: Lane, model: string): Promise<void> {

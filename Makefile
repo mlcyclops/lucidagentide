@@ -482,8 +482,12 @@ demo-P-FLEET.1: ## P-FLEET.1 (ADR-0268): async job handles through the agent-fir
 	$(BUN) run harness/scripts/demo_pfleet1.ts
 
 .PHONY: demo-P-FLEET.L1
-demo-P-FLEET.L1: ## P-FLEET.L1: local lanes - concurrent gated headless LUCID agents under the 75% headroom guard, fail-closed approvals (needs-approval glow), cancel/stop hygiene, metadata-only fleet status for the master agent
+demo-P-FLEET.L1: ## P-FLEET.L1 (guard evolved by P-FLEET.L2): local lanes - concurrent gated headless LUCID agents under the sustained-pressure guard (a burst is free, a held line is not), fail-closed approvals (needs-approval glow), cancel/stop hygiene, metadata-only fleet status for the master agent
 	$(BUN) run harness/scripts/demo_pfleetl1.ts
+
+.PHONY: demo-P-FLEET.L2
+demo-P-FLEET.L2: ## P-FLEET.L2 (ADR-0273): UNLIMITED lanes gated only by SUSTAINED pressure (90% held 30s - a burst never refuses, a blind sample never counts as load, no evidence fails open), lanes spawned from real GitHub/GitLab/Azure DevOps remotes via the OS folder dialog, per-HOST credentials in the OS-encrypted vault (scoped ref -> env round-trip, never offered cross-host, rides an Authorization header not the URL, redacted from errors), and the minimized status-bar snapshot (one colored dot + count per lane state, needs-approval first)
+	$(BUN) run harness/scripts/demo_pfleetl2.ts
 
 .PHONY: demo-P-MCP-GATE.1
 demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate — poisoned MCP result withheld, clean result delimited+labeled untrusted, LOCAL tool results untouched (source-scoped), fail-closed

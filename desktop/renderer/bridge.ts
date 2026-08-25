@@ -186,7 +186,17 @@ export type LaneEvent =
   | { type: "error"; message: string };
 export interface FleetStatusView {
   lanes: LaneView[];
-  resources: { cpuPct: number | null; memPct: number | null; watermarkPct: number; maxLanes: number };
+  /** P-FLEET.L2: sustained-pressure evidence. No lane cap - the fleet is unlimited; only CPU or memory
+   *  held at/above `pressurePct` for `sustainMs` refuses a new lane. `*HotMs` = unbroken ms above the
+   *  line right now (0 = clear, or still just a burst). */
+  resources: {
+    cpuPct: number | null;
+    memPct: number | null;
+    pressurePct: number;
+    sustainMs: number;
+    cpuHotMs: number;
+    memHotMs: number;
+  };
   masterModel: string;
 }
 // P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
@@ -717,9 +727,13 @@ export interface LucidBridge {
   // P-ACP.4: Stop the in-flight turn (interrupt reply + tool calls).
   cancelChat(): Promise<unknown>;
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
-  // P-FLEET.L1: local lanes - concurrent headless LUCID agents in the fleet grid dashboard.
+  // P-FLEET.L1/L2: local lanes - concurrent headless LUCID agents in the fleet grid dashboard.
   fleetStatus(): Promise<FleetStatusView | null>;
-  fleetSpawn(opts: { cwd: string; model?: string; name?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
+  /** `repoUrl` (P-FLEET.L2) clones a GitHub/GitLab/Azure DevOps remote into `cwd` (or the shared
+   *  workspaces root when cwd is blank) and runs the lane there; an existing clone is reused. `pat` is a
+   *  freshly-typed token used ONLY to spawn that git process - it is redacted from errors and never
+   *  persisted by the server (the encrypted copy is written separately through the OS vault). */
+  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
   fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   fleetAnswer(laneId: string, allow: boolean): Promise<{ ok: boolean } | null>;
   fleetCancel(laneId: string): Promise<{ ok: boolean } | null>;

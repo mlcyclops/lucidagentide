@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { load, save } from "./settings_store.ts";
+import { gitTokenEnvName, parseGitRemote } from "./git_url.ts";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -81,19 +82,30 @@ export function repoNameFromUrl(url: string): string {
  *  hosts get header injection — ssh/git@ URLs authenticate with keys, not tokens. This is the reliable,
  *  HEADLESS path the agent's shell got "for free" from Git Credential Manager; the Settings clone runs git
  *  with piped stdio and no tty, so a private repo would fail there unless GCM already had a cached credential.
- *  Exported for tests. */
+ *
+ *  P-FLEET.L2 adds the HOST-SCOPED vault token (`LUCID_GIT_PAT_<HOST_SLUG>`, injected by main.ts from the
+ *  OS-encrypted vault) as the FIRST choice. It wins because it is the most specific thing we know: the user
+ *  saved that token for that host. It is also the only token an unrecognized host ever gets - a self-hosted
+ *  GitLab or Azure DevOps Server works, and a random https host can never be handed the generic PAT, which
+ *  would be a credential leak dressed up as a convenience. Exported for tests. */
 export function hostTokenForUrl(url: string, env: Record<string, string | undefined> = process.env): string | null {
   if (!/^https:\/\//i.test(url)) return null;
-  let host = "";
-  try { host = new URL(url).host.toLowerCase(); } catch { return null; }
+  const remote = parseGitRemote(url);
+  const host = remote?.host ?? "";
+  if (!host) return null;
   const pick = (...names: string[]): string | null => {
     for (const n of names) { const v = env[n]; if (typeof v === "string" && v.trim()) return v.trim(); }
     return null;
   };
-  // LUCID_GIT_PAT is the vault-backed personal access token (ADR-0216) main injects at spawn - the host-agnostic
-  // fallback after any explicit CI-style env var. Ordered last so a workflow's own GITHUB_TOKEN still wins.
-  if (host === "github.com" || host.endsWith(".github.com")) return pick("GITHUB_TOKEN", "GH_TOKEN", "LUCID_GITHUB_TOKEN", "LUCID_GIT_PAT");
-  if (host === "gitlab.com" || host.endsWith(".gitlab.com")) return pick("GITLAB_TOKEN", "LUCID_GITLAB_TOKEN", "LUCID_GIT_PAT");
+  const scoped = pick(gitTokenEnvName(host));
+  if (scoped) return scoped;
+  // LUCID_GIT_PAT is the vault-backed host-agnostic personal access token (ADR-0216) main injects at spawn -
+  // the fallback after any explicit CI-style env var. Ordered last so a workflow's own GITHUB_TOKEN still wins.
+  if (remote?.provider === "github") return pick("GITHUB_TOKEN", "GH_TOKEN", "LUCID_GITHUB_TOKEN", "LUCID_GIT_PAT");
+  if (remote?.provider === "gitlab") return pick("GITLAB_TOKEN", "LUCID_GITLAB_TOKEN", "LUCID_GIT_PAT");
+  // Azure DevOps PATs ride the same HTTP Basic header (any username, PAT as the password). SYSTEM_ACCESSTOKEN
+  // is what a Pipelines run exports; AZURE_DEVOPS_EXT_PAT is what `az devops` reads.
+  if (remote?.provider === "azure") return pick("AZURE_DEVOPS_EXT_PAT", "AZURE_DEVOPS_PAT", "SYSTEM_ACCESSTOKEN", "LUCID_AZURE_DEVOPS_TOKEN", "LUCID_GIT_PAT");
   return null;
 }
 
@@ -126,26 +138,40 @@ function redact(text: string, token: string | null): string {
 }
 
 /** Turn raw git stderr into a short, actionable message. Auth failures on a private repo are the common case
- *  and look nothing like a bad URL, so we name the real fix (configure a token / sign in). */
-export function cloneErrorHint(stderr: string, hadToken: boolean): string {
+ *  and look nothing like a bad URL, so we name the real fix (configure a token / sign in). An SSH remote has
+ *  a DIFFERENT fix (a key, not a token), so it gets its own line - telling someone to set GITHUB_TOKEN for a
+ *  `git@` URL sends them to fix something git will never read. */
+export function cloneErrorHint(stderr: string, hadToken: boolean, ssh = false): string {
   const s = stderr.trim();
   const auth = /authentication failed|could not read (?:username|password)|terminal prompts disabled|invalid username or password|403|permission denied|repository not found|fatal: could not read/i.test(s);
+  const keyTrouble = ssh && /host key verification failed|permission denied \(publickey|no such identity|could not resolve hostname|passphrase|batch mode/i.test(s);
+  if (keyTrouble || (ssh && auth)) {
+    return `SSH authentication failed — this remote needs an ssh key this machine can use without a prompt. Add the key to your agent (ssh-add), or paste the https:// URL instead and use a personal access token. ${s}`.slice(0, 400);
+  }
   if (auth) {
     return hadToken
       ? `Authentication failed — the configured git token was rejected (check it has access to this private repo). ${s}`.slice(0, 400)
-      : `Authentication failed — this looks like a private repo. Set a GITHUB_TOKEN (or GH_TOKEN / GITLAB_TOKEN) with repo access, or clone via the agent (which uses your saved git credentials). ${s}`.slice(0, 400);
+      : `Authentication failed — this looks like a private repo. Paste a personal access token in the form (GitHub: repo · GitLab: read_repository · Azure DevOps: Code read), or clone via the agent (which uses your saved git credentials). ${s}`.slice(0, 400);
   }
   return s.slice(0, 400) || "git clone failed";
 }
 
-/** Clone a remote (GitHub/GitLab/…) under ~/.omp/lucid-workspaces and return its path. Runs git headlessly
- *  (piped stdio, no prompts), injecting a host token when available so PRIVATE repos work without an
- *  interactive credential prompt — closing the gap where the agent could clone a private repo but the
- *  Settings button couldn't. Partial/failed clones are cleaned up so a retry isn't blocked by leftovers. */
-export async function cloneRepo(url: string, tokenOverride?: string): Promise<{ ok: boolean; path?: string; error?: string }> {
+/** Where a clone lands when the caller names no parent: the shared workspaces root. */
+export const CLONE_ROOT = (): string => join(homedir(), ".omp", "lucid-workspaces");
+
+/** Clone a remote (GitHub / GitLab / Azure DevOps / …) and return its path. Runs git headlessly (piped
+ *  stdio, no prompts), injecting a host token when available so PRIVATE repos work without an interactive
+ *  credential prompt — closing the gap where the agent could clone a private repo but the Settings button
+ *  couldn't. Partial/failed clones are cleaned up so a retry isn't blocked by leftovers.
+ *
+ *  `parentDir` (P-FLEET.L2) is the folder the user picked in the OS dialog; the repo lands inside it as
+ *  `<parentDir>/<repo>`. Absent, it lands under CLONE_ROOT() as before. An already-cloned destination is
+ *  REUSED, which is what makes "spawn a lane on this repo" idempotent. */
+export async function cloneRepo(url: string, tokenOverride?: string, parentDir?: string): Promise<{ ok: boolean; path?: string; error?: string }> {
   url = String(url || "").trim();
   if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(url)) return { ok: false, error: "Enter an https:// or git@ repo URL." };
-  const dest = join(homedir(), ".omp", "lucid-workspaces", repoNameFromUrl(url));
+  const parent = (parentDir ?? "").trim() || CLONE_ROOT();
+  const dest = join(parent, repoNameFromUrl(url));
   if (existsSync(join(dest, ".git"))) return { ok: true, path: dest }; // already cloned → reuse
   // A prior clone that failed after creating the dir (or a Windows trailing-dot desync) leaves a non-empty,
   // .git-less folder that makes every future clone fail with "already exists and is not empty". Clear it.
@@ -153,17 +179,24 @@ export async function cloneRepo(url: string, tokenOverride?: string): Promise<{ 
   try { mkdirSync(dirname(dest), { recursive: true }); } catch { /* ignore */ }
 
   const token = resolveCloneToken(url, tokenOverride);
+  const ssh = !/^https?:\/\//i.test(url);
   // GIT_TERMINAL_PROMPT=0: never hang waiting on a username/password we can't answer (piped, no tty). GCM
   // still resolves cached credentials, so this preserves the agent's working path while adding token auth.
+  // GIT_SSH_COMMAND BatchMode=yes does the same job for an ssh remote: an encrypted key or an unknown host
+  // key FAILS with a message instead of blocking forever on a passphrase prompt nobody can see.
   const proc = Bun.spawn(["git", ...cloneArgv(url, dest, token)], {
     stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+      ...(ssh && !process.env.GIT_SSH_COMMAND ? { GIT_SSH_COMMAND: "ssh -o BatchMode=yes" } : {}),
+    },
   });
   const code = await proc.exited;
   if (code !== 0) {
     const stderr = redact(await new Response(proc.stderr).text(), token);
     try { if (existsSync(dest) && !existsSync(join(dest, ".git"))) rmSync(dest, { recursive: true, force: true }); } catch { /* best-effort */ }
-    return { ok: false, error: cloneErrorHint(stderr, token != null) };
+    return { ok: false, error: cloneErrorHint(stderr, token != null, ssh) };
   }
   return { ok: true, path: dest };
 }

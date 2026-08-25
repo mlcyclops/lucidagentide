@@ -3679,9 +3679,15 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-hr-lbl{color:var(--txt-4)}
 .fleet-hr-bar{position:relative;width:44px;height:5px;border-radius:3px;background:var(--bg-0);flex:none}
 .fleet-hr-fill{position:absolute;top:0;bottom:0;left:0;border-radius:3px;max-width:100%;transition:width .4s var(--ease)}
-.fleet-hr-bar::after{content:"";position:absolute;top:-1px;bottom:-1px;left:var(--wm,75%);width:1px;background:var(--txt-2);opacity:.8}
+.fleet-hr-bar::after{content:"";position:absolute;top:-1px;bottom:-1px;left:var(--wm,90%);width:1px;background:var(--txt-2);opacity:.8}
 .fleet-hr-val{min-width:26px}
-.fleet-hr-lanes{color:var(--txt-2);border:1px solid var(--line);border-radius:5px;padding:0 4px;background:var(--bg-1)}
+/* P-FLEET.L2: how long a metric has HELD the line. Amber while it is still a burst, red once it is the
+   refusal. Fixed width so a 9s -> 12s tick never shoves the lane count sideways every poll. */
+.fleet-hr-hot{min-width:44px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 45%,var(--line));
+  border-radius:5px;padding:0 3px;background:color-mix(in srgb,var(--amber) 10%,transparent);text-align:center}
+.fleet-hr-hot.over{color:var(--red);border-color:color-mix(in srgb,var(--red) 55%,var(--line));
+  background:color-mix(in srgb,var(--red) 12%,transparent)}
+.fleet-hr-lanes{color:var(--txt-2);border:1px solid var(--line);border-radius:5px;padding:0 4px;background:var(--bg-1);white-space:nowrap}
 .fleet-hr-off{color:var(--txt-4)}
 .fleet-add-btn{flex:none;white-space:nowrap}
 .fleet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;align-items:start}
@@ -3739,14 +3745,46 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-card.lane-stopped{--lane:var(--txt-4);opacity:.55}
 @keyframes fleetGlowAmber{0%,100%{box-shadow:0 0 0 0 rgba(232,178,60,0)}50%{box-shadow:0 0 14px 2px rgba(232,178,60,.4)}}
 @keyframes fleetGlowRed{0%,100%{box-shadow:0 0 2px 0 rgba(239,95,95,.3)}50%{box-shadow:0 0 18px 3px rgba(239,95,95,.6)}}
-/* the minimized status-bar pill inherits .share-dock-pill; attention states pulse it red */
+/* P-FLEET.L2 - the MINIMIZED snapshot. The pill inherits .share-dock-pill; inside it one dot per lane
+   state carries that state's color and its count, so a glance at the status bar answers "is anything
+   blocked on me?" without reopening the panel. Each pip owns its own hover naming the lanes.
+   The dot colors are taken from the SAME lane-<status> custom properties the cards use (--lane), so the
+   two surfaces can never drift apart. */
 #fleetDockPill.attn{border-color:var(--red);animation:fleetGlowRed 1.6s ease-in-out infinite}
+.fleet-pips{display:inline-flex;align-items:center;gap:6px;flex:none;white-space:nowrap}
+.fleet-pip{--lane:var(--txt-4);--lane-dim:rgba(82,90,112,.3);display:inline-flex;align-items:center;gap:3px;flex:none;cursor:pointer}
+.fleet-pip i{width:7px;height:7px;border-radius:50%;flex:none;background:var(--lane);box-shadow:0 0 6px var(--lane-dim)}
+.fleet-pip b{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--txt-2);font-variant-numeric:tabular-nums}
+.fleet-pip.lane-working{--lane:var(--cyan);--lane-dim:rgba(70,200,220,.45)}
+.fleet-pip.lane-working i{animation:hudpulse 2.2s ease-in-out infinite}
+.fleet-pip.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgba(232,178,60,.5)}
+.fleet-pip.lane-needs-approval{--lane:var(--red);--lane-dim:rgba(239,95,95,.6)}
+.fleet-pip.lane-needs-approval i{animation:fleetGlowRed 1.6s ease-in-out infinite}
+.fleet-pip.lane-done{--lane:var(--green);--lane-dim:rgba(70,210,126,.45)}
+.fleet-pip.lane-error{--lane:var(--red);--lane-dim:rgba(239,95,95,.4)}
+.fleet-pip.lane-stopped,.fleet-pip.lane-idle{opacity:.55}
+.fleet-pip.lane-needs-approval b,.fleet-pip.lane-awaiting-input b{color:var(--txt)}
 /* the + Lane form and the empty state */
 .fleet-spawn{display:flex;flex-direction:column;gap:5px;padding:8px 9px}
 .fleet-spawn-lbl{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-4);white-space:nowrap}
 .fleet-spawn-opt{font-weight:400;text-transform:none;letter-spacing:0;color:var(--txt-4)}
 .fleet-spawn-in{min-width:0;background:var(--bg-1);border:1px solid var(--line);border-radius:7px;color:var(--txt);font:inherit;font-size:11.5px;padding:5px 7px}
 .fleet-spawn-in:focus{outline:none;border-color:var(--accent)}
+/* path input + Browse button: a flex row of two CONTROLS (never prose), so the input takes the slack and
+   the button keeps its label on one line - invariant 11. */
+.fleet-spawn-row{display:flex;align-items:center;gap:6px;min-width:0}
+.fleet-spawn-row .fleet-spawn-in{flex:1 1 auto;min-width:0}
+.fleet-browse{flex:none;white-space:nowrap}
+/* P-FLEET.L2 repo feedback. This is PROSE, so it is a BLOCK paragraph - never a flex box, which would
+   shatter the sentence into stacked slivers (invariant 11). */
+.fleet-spawn-note{display:block;font-size:11px;line-height:1.45;color:var(--txt-3);word-break:break-word}
+.fleet-spawn-note.bad{color:var(--amber)}
+.fleet-spawn-auth{display:flex;flex-direction:column;gap:5px;min-width:0}
+/* checkbox + ONE text span: the only two children, so the label reads as a sentence beside its box. */
+.fleet-spawn-save{display:flex;align-items:center;gap:6px;min-width:0;font-size:11px;color:var(--txt-3);cursor:pointer}
+.fleet-spawn-save input{flex:none;accent-color:var(--accent);margin:0}
+.fleet-spawn-save span{min-width:0;line-height:1.4}
+.fleet-spawn-save input:disabled+span{color:var(--txt-4)}
 .fleet-spawn-err{font-size:11px;line-height:1.45;color:var(--red);background:var(--red-dim);border:1px solid rgba(239,95,95,.4);border-radius:7px;padding:5px 8px;word-break:break-word}
 .fleet-spawn-acts{display:flex;justify-content:flex-end;gap:6px}
 .fleet-empty{grid-column:1/-1;display:flex;align-items:center;gap:7px;min-width:0;color:var(--txt-3);font-size:12px;padding:10px 4px}
@@ -3755,5 +3793,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* without motion the states still read: border color + header tint stay; only the pulsing stops */
 @media (prefers-reduced-motion:reduce){
   .fleet-card.lane-awaiting-input,.fleet-card.lane-needs-approval,#fleetDockPill.attn,
-  .fleet-card.lane-working .fleet-led,.fleet-cursor{animation:none}
+  .fleet-card.lane-working .fleet-led,.fleet-cursor,
+  .fleet-pip.lane-working i,.fleet-pip.lane-needs-approval i{animation:none}
 }

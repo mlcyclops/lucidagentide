@@ -25,6 +25,7 @@ import { materializeLocalProviders, registerLocalProviderEgress } from "./local_
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
+import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 
 const DEFAULT_PORT = 5319;
 const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
@@ -297,12 +298,28 @@ function prepareFigmaToken(): Record<string, string> {
 // LUCID_GIT_PAT, so cloneRepo can clone a PRIVATE repo from the Settings "Clone" button without an interactive
 // credential prompt. The secret never reaches the renderer or the agent. (A freshly-entered PAT is also passed
 // inline on the first clone request; this covers subsequent sessions.) Best-effort — never blocks server start.
+//
+// P-FLEET.L2: the fleet's repo field saves a token PER HOST (vault ref `git_pat_<host_slug>`, minted by
+// git_url.gitCredRef). Every such ref is injected under its own name - `LUCID_GIT_PAT_GITHUB_COM`,
+// `LUCID_GIT_PAT_DEV_AZURE_COM`, `LUCID_GIT_PAT_GITLAB_MYCORP_COM` - which is what lets workspace.ts hand a
+// token ONLY to the host it was saved for, self-hosted GitLab/Azure DevOps Server included. Enumerating the
+// vault costs one directory read at launch; a ref we cannot decrypt is simply skipped.
 const GIT_PAT_REF = "git_pat";
 function prepareGitToken(): Record<string, string> {
+  const env: Record<string, string> = {};
   try {
-    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), GIT_PAT_REF);
-    return tok ? { LUCID_GIT_PAT: tok } : {};
-  } catch { return {}; }
+    const legacy = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), GIT_PAT_REF);
+    if (legacy) env.LUCID_GIT_PAT = legacy;
+  } catch { /* best-effort */ }
+  try {
+    for (const meta of listCredentials(VAULT_IO, CRED_DIR())) {
+      const name = gitEnvNameFromRef(meta.ref);
+      if (!name) continue;
+      const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), meta.ref);
+      if (tok) env[name] = tok;
+    }
+  } catch { /* best-effort */ }
+  return env;
 }
 // ADR-0221: read the embeddings endpoint's API key from the vault (ref = settings.embeddings.vaultRef) and expose
 // it to the dev child as LUCID_EMBEDDINGS_KEY, so the ApiEmbedder can authenticate a cloud endpoint (OpenAI/Azure)

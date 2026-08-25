@@ -1,10 +1,11 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-FLEET.L1: the lane manager against a REAL subprocess boundary (the faithful fake ACP agent the
-// firewall integration tests use). What matters: admission is guarded (75% + ceiling) with measured
-// reasons, the lane defaults to the MASTER's model, one turn at a time per lane, permission asks are
-// fail-closed and land needs-approval, and stop never orphans an ask.
+// P-FLEET.L1/L2: the lane manager against a REAL subprocess boundary (the faithful fake ACP agent the
+// firewall integration tests use). What matters: admission is guarded by SUSTAINED pressure (a burst never
+// refuses, thirty unbroken seconds does, and there is NO lane ceiling), the lane defaults to the MASTER's
+// model, one turn at a time per lane, permission asks are fail-closed and land needs-approval, and stop
+// never orphans an ask.
 
 import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -15,13 +16,16 @@ const FAKE = join(import.meta.dir, "..", "harness", "mcp", "testing", "fake_acp_
 const TIMEOUT = 20_000;
 
 const healthy: SystemSnapshot = { cpuModel: "t", cores: 8, speedMHz: 4000, cpuBusyPct: 10, memTotalMB: 16_000, memFreeMB: 12_000 };
+/** Pegged on BOTH metrics: 100% cpu, ~94% memory used. */
+const pegged: SystemSnapshot = { ...healthy, cpuBusyPct: 100, memTotalMB: 16_000, memFreeMB: 1_000 };
 
-function manager(opts: { snap?: SystemSnapshot; mode?: string } = {}): FleetLaneManager {
+function manager(opts: { snap?: SystemSnapshot; mode?: string; now?: () => number } = {}): FleetLaneManager {
   if (opts.mode) process.env.FAKE_ACP_MODE = opts.mode; else delete process.env.FAKE_ACP_MODE;
   return new FleetLaneManager({
     argv: () => ({ cmd: "bun", args: [FAKE] }),
     masterModel: () => "master-model-a",
     sample: async () => opts.snap ?? healthy,
+    ...(opts.now ? { now: opts.now } : {}),
   });
 }
 
@@ -38,14 +42,41 @@ test("spawn lands awaiting-input with the MASTER's model as the default", async 
   expect(r.lane!.name).toBe("desktop"); // basename(cwd) when unnamed
 }, TIMEOUT);
 
-test("admission refuses over the watermark with the measured number; a bad cwd never spawns", async () => {
-  live = manager({ snap: { ...healthy, memTotalMB: 16_000, memFreeMB: 2_000 } }); // 87% used
-  const r = await live.spawn({ cwd: import.meta.dir });
-  expect(r.ok).toBe(false);
-  expect(r.reason).toContain("88%"); // rounded measured number in the refusal
+test("a BURST never refuses a lane, even pegged - only a HELD line does; a bad cwd never spawns", async () => {
+  // One reading of 100% CPU / 94% memory is a compile finishing, not a machine in trouble.
+  live = manager({ snap: pegged });
+  const burst = await live.spawn({ cwd: import.meta.dir });
+  expect(burst.ok).toBe(true);
   const bad = await manager().spawn({ cwd: join(import.meta.dir, "nope-does-not-exist") });
   expect(bad.ok).toBe(false);
   expect(bad.reason).toContain("not a directory");
+}, TIMEOUT);
+
+test("thirty unbroken seconds over the line DOES refuse, carrying the percent and the duration", async () => {
+  // A fake clock drives the pressure window: each status() poll takes another pegged reading 5s later, so
+  // by the seventh the machine has provably held the line for 30s. Same shape as the real loop (the
+  // manager's own sampler plus the dashboard's 2.5s poll), without waiting half a minute for it.
+  let t = 1_000_000;
+  live = manager({ snap: pegged, now: () => t });
+  for (let i = 0; i < 8; i++) { await live.status(); t += 5_000; }
+  const r = await live.spawn({ cwd: import.meta.dir });
+  expect(r.ok).toBe(false);
+  expect(r.reason).toContain("94%");     // measured memory percent
+  expect(r.reason).toMatch(/at 94% for \d+s/); // measured duration beside it, not the policy number
+  expect(r.reason).toContain("not a burst");
+}, TIMEOUT);
+
+test("lanes are UNLIMITED: a healthy box spawns past the old min(6, cores/2) ceiling", async () => {
+  // cores: 2 capped this machine at ONE lane under P-FLEET.L1. Three concurrent lanes prove the ceiling is
+  // gone and that admission looks only at pressure.
+  live = manager({ snap: { ...healthy, cores: 2 } });
+  const spawned = await Promise.all([
+    live.spawn({ cwd: import.meta.dir, name: "l1" }),
+    live.spawn({ cwd: import.meta.dir, name: "l2" }),
+    live.spawn({ cwd: import.meta.dir, name: "l3" }),
+  ]);
+  expect(spawned.map((s) => s.ok)).toEqual([true, true, true]);
+  expect(live.liveLanes()).toBe(3);
 }, TIMEOUT);
 
 test("a prompt turn streams tokens, lands done, and counts the turn", async () => {
@@ -60,7 +91,9 @@ test("a prompt turn streams tokens, lands done, and counts the turn", async () =
   expect(st.lanes[0]!.status).toBe("done");
   expect(st.lanes[0]!.turns).toBe(1);
   expect(st.masterModel).toBe("master-model-a");
-  expect(st.resources.watermarkPct).toBe(75);
+  expect(st.resources.pressurePct).toBe(90);
+  expect(st.resources.sustainMs).toBe(30_000);
+  expect(st.resources.cpuHotMs).toBe(0); // a healthy box is never "holding" anything
 }, TIMEOUT);
 
 test("one turn at a time per lane - an overlapping prompt is refused, not crossed", async () => {
