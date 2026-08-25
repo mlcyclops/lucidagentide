@@ -60,7 +60,7 @@ test("cancel aborts the run; the result is marked cancelled", async () => {
   expect(importJobStatus(jobId)!.state).toBe("cancelled");
 });
 
-// ── P-KG-INGEST.5 (ADR-0252): Stop must always terminate, even when the run itself is wedged ──
+// ── P-KG-INGEST.5 (ADR-0264): Stop must always terminate, even when the run itself is wedged ──
 
 test("cancel marks the job stopping and stays running while it unwinds", () => {
   const jobId = jobIdOf(startImport({ run: wedged }));

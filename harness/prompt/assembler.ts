@@ -44,7 +44,7 @@ import type { TrustLabel } from "../contracts.ts";
  *  v9 (ADR-0146, P-CMD.1): added the slash-command policy to layer 3 — when the user asks to create a
  *      reusable "/" command (or a skill they can call), gather the specifics (ask refining questions when
  *      under-specified), then call `slash_command_create`; never embed a secret VALUE in a command body.
- *  v10 (ADR-0254, P-DATA.1): added the data-integration policy to layer 3 - when the user prompt-stuffs a
+ *  v10 (ADR-0266, P-DATA.1): added the data-integration policy to layer 3 - when the user prompt-stuffs a
  *      dataset (huge pastes, "keep this in the prompt"), explain context rot and route them to the right
  *      integration (native ingest, MCP for datastores, a real RAG pipeline, secure GraphQL/cloud vendor
  *      connections), with the custom-integration contract contact as the declared fallback. */
@@ -211,7 +211,7 @@ this as a skill I can call"). A slash command is a named, saved PROMPT the user 
   can fix it.
 </slash-commands>`;
 
-// P-DATA.1 (ADR-0254): steer the chat agent to intercept prompt-stuffed datasets and route the user to a
+// P-DATA.1 (ADR-0266): steer the chat agent to intercept prompt-stuffed datasets and route the user to a
 // real integration. Untrained users paste huge exports / tables / "here is my database" blobs straight into
 // chat, which rots the context (mid-prompt facts get ignored), re-bills tokens every turn, and moves data
 // outside any governed store. Frozen (layer 3, cached) so the guidance is byte-stable + always present.

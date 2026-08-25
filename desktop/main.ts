@@ -12,7 +12,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
@@ -20,8 +20,9 @@ import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
 import { createSplash, setSplashStatus } from "./splash.ts";
 import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
 import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDirWritable, type WriteProbe } from "./engine_boot.ts";
-import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0251): prefer the compiled engine binary
+import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
+import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 
@@ -43,7 +44,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let win: BrowserWindow | null = null;
 let dev: ChildProcess | null = null;
 let runtimeEnv: Record<string, string> = {};
-// P-WINBOOT.1 (ADR-0250): the engine child's exit + a bounded tail of its output, so a boot failure is
+// P-WINBOOT.1 (ADR-0259): the engine child's exit + a bounded tail of its output, so a boot failure is
 // diagnosed the instant it dies (see classifyEngineFailure) rather than after the full 30s health timeout.
 let engineExit: { code: number | null } | null = null;
 let engineTail = "";
@@ -74,6 +75,35 @@ function openEngineLog(): ((d: unknown) => void) {
     return (d) => { try { s.write(d as Buffer); } catch { /* never block the engine */ } };
   } catch { return () => { }; }
 }
+const appendEngineLog = (line: string): void => { try { appendFileSync(engineLogPath(), line); } catch { /* best-effort */ } };
+
+// ADR-0246 (P-GPUFIX.1): zombie-SID GPU-sandbox self-heal (electron/electron#51761). On machines
+// where an unresolvable AppContainer SID in the install dir's DACL kills every sandboxed GPU child
+// with 0xC0000022, the app used to die (FATAL after 9 retries) before the window showed. The
+// watchdog (pure core: gpu_watchdog.ts) relaunches with --disable-gpu-sandbox on the 2nd
+// pre-render fatal GPU death and persists a flag file in userData (which survives the NSIS
+// reinstall that re-inherits the zombie SID). ONLY the GPU sandbox is dropped; the renderer
+// sandbox is untouched. The switch must be appended at module load, before Chromium spawns the
+// GPU process at the first window.
+const gpuFlagPath = (): string => join(app.getPath("userData"), GPU_SANDBOX_FLAG_FILE);
+let gpuSandboxOff = app.commandLine.hasSwitch(GPU_SANDBOX_SWITCH); // the relaunch carries it in argv
+try {
+  if (!gpuSandboxOff && existsSync(gpuFlagPath())) { app.commandLine.appendSwitch(GPU_SANDBOX_SWITCH); gpuSandboxOff = true; }
+} catch { /* unreadable flag: sandbox stays on; the watchdog below re-heals if it bricks */ }
+let gpuDeaths = 0;
+let firstWindowRendered = false; // set in createWindow's ready-to-show
+app.on("child-process-gone", (_e, details) => {
+  const r = decideGpuAction(details, { deathsBefore: gpuDeaths, windowRendered: firstWindowRendered, sandboxOff: gpuSandboxOff });
+  gpuDeaths = r.deaths;
+  if (r.action === "ignore") return;
+  appendEngineLog(gpuDeathLogLine(details, r.deaths, r.action, new Date().toISOString()));
+  if (r.action !== "relaunch") return;
+  try { writeFileSync(gpuFlagPath(), `GPU sandbox disabled ${new Date().toISOString()} after ${r.deaths} GPU child deaths (zombie-SID mitigation, electron/electron#51761). Delete this file to re-enable the GPU sandbox.\n`); }
+  catch { /* the relaunch argv still carries the switch for this recovery */ }
+  try { dev?.kill(); } catch { /* best-effort */ }
+  app.relaunch({ args: relaunchArgs(process.argv.slice(1)) });
+  app.exit(0);
+});
 
 function startDevServer(): void {
   // findBun() prefers the bundled runtime in packaged builds, falling back to the
@@ -93,7 +123,7 @@ function startDevServer(): void {
   // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
   const gitEnv = prepareGitToken();
   const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
-  // P-WINBOOT.2 (ADR-0251): packaged builds spawn the COMPILED engine (bin/lucid-engine) - it embeds
+  // P-WINBOOT.2 (ADR-0260): packaged builds spawn the COMPILED engine (bin/lucid-engine) - it embeds
   // dev.ts so Bun never module-loads a .ts from a protected install dir (the P-WINBOOT.1 EPERM brick).
   // Dev runs, and any package cut before compile-engine existed, fall back to `bun run desktop/dev.ts`.
   const engineSpec = resolveEngineSpawn({ packaged: app.isPackaged, repoRoot: REPO, bun: findBun(), exists: existsSync, platform: process.platform });
@@ -112,12 +142,22 @@ function startDevServer(): void {
   const tee = openEngineLog();
   engineExit = null;
   engineTail = "";
-  // P-WINBOOT.1 (ADR-0250): keep a bounded tail of engine output + watch for an early exit, so a boot
+  // P-WINBOOT.1 (ADR-0259): keep a bounded tail of engine output + watch for an early exit, so a boot
   // failure (e.g. Bun's EPERM loading dev.ts from a Program Files install) is diagnosed the instant it
   // dies rather than after the full 30s health timeout.
   dev.stdout?.on("data", (d) => { process.stdout.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
   dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
   dev.on("exit", (code) => { engineExit = { code: code ?? null }; });
+  // ADR-0246: a spawn failure (missing/blocked bun exe) used to vanish - no "error" listener, so
+  // engine.log showed only the banner and the app just waited out the 30s health timeout. Tee it (and
+  // feed the ADR-0259 tail + exit flag, so waitForServer bails at once and the dialog names the cause).
+  dev.on("error", (err) => {
+    const line = `[engine] dev-server spawn failed: ${(err as Error)?.message ?? String(err)}\n`;
+    process.stderr.write(line);
+    tee(line);
+    engineTail = (engineTail + line).slice(-4000);
+    engineExit = { code: null };
+  });
 }
 // Returns true once the dev server answers /api/health, false if it never does within the window.
 // 30s headroom: the server's own init (DuckDB open + omp acp spawn) can outlast a slow first launch;
@@ -126,7 +166,7 @@ async function waitForServer(timeoutMs = 30000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try { if ((await fetch(`http://localhost:${PORT}/api/health`)).ok) return true; } catch { /* retry */ }
-    // P-WINBOOT.1 (ADR-0250): a dead engine will never answer - stop waiting the moment it exits.
+    // P-WINBOOT.1 (ADR-0259): a dead engine will never answer - stop waiting the moment it exits.
     if (engineExit) return false;
     await sleep(180);
   }
@@ -143,7 +183,7 @@ function createWindow(): void {
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false },
   });
-  win.once("ready-to-show", () => win!.show());
+  win.once("ready-to-show", () => { firstWindowRendered = true; win!.show(); }); // ADR-0246: past here a GPU death is not the boot brick
   // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
   // correction menu itself. Only intercept when there's a misspelled word (so we don't fight Monaco's own
   // context menu elsewhere); offer the dictionary suggestions + "Add to dictionary".
@@ -426,7 +466,7 @@ app.whenReady().then(async () => {
   // came up (e.g. no usable bun runtime), say so. The window keeps retrying via did-fail-load, so a
   // late start still recovers; this only fires when it genuinely failed to answer in time.
   if (!serverUp) {
-    // P-WINBOOT.1 (ADR-0250): classify the failure into an ACTIONABLE dialog. The dominant field case is
+    // P-WINBOOT.1 (ADR-0259): classify the failure into an ACTIONABLE dialog. The dominant field case is
     // a Program Files install where Bun's loader EPERMs on dev.ts; waitForServer already returned early on
     // the child's exit, so this fires immediately (not 30s later) and tells the user how to recover.
     const probe: WriteProbe = { write: (p, data) => writeFileSync(p, data), remove: (p) => rmSync(p, { force: true }) };

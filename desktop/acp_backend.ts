@@ -38,10 +38,14 @@ import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
+import { providerAuth, type ProviderAuth } from "./auth_status.ts";
+import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
+import { type PendingCall, type PendingView, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
@@ -245,9 +249,11 @@ export type ChatEvent =
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
-  // P-STALL.1 (ADR-0186): the provider has emitted NOTHING for waitedMs — the UI shows "still waiting"
-  // instead of a frozen pane. Repeats each silent 2-min mark; any real activity clears the silence.
-  | { type: "slow"; waitedMs: number }
+  // P-STALL.1 (ADR-0186) / P-STALL.2 (ADR-0263): the provider has emitted NOTHING for waitedMs — the UI
+  // shows "still waiting" instead of a frozen pane. Repeats each silent 2-min mark; any real activity
+  // clears the silence. `pending` names the OPEN tool calls / spawned subagent tasks the turn is still
+  // waiting on (longest-running first), so a long quiet stretch is legible instead of opaque.
+  | { type: "slow"; waitedMs: number; pending?: PendingView[] }
   // P-GOAL.1 (ADR-0046): /goal loop events — an iteration begins, the separate checker's verdict,
   // the loop met its condition, or it stopped (cap / no-progress).
   | { type: "goal-memory"; path: string }
@@ -320,7 +326,11 @@ class Backend {
   private loopHostCalls = new Map<string, number>();
   private permSeq = 0;
   private permPending = new Map<string, (optionId: string | null) => void>();
-  private pendingPerms = 0;             // while > 0 the turn's idle/stall clock is paused
+  private pendingPerms = 0;             // while > 0 the turn's slow-notice clock is paused
+  // P-STALL.2 (ADR-0263): the OPEN tool calls of the current turn (spawned subagent tasks included),
+  // keyed by toolCallId - snapshot rides on every { type:"slow" } notice so the user can SEE what a
+  // long-quiet turn is still waiting on. Cleared at turn boundaries + restart.
+  private openCalls = new Map<string, PendingCall>();
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
@@ -476,6 +486,7 @@ class Backend {
             // the personalization distiller learns from, and never persisted.
             case "agent_thought_chunk": if (u.content?.type === "text") this.emit({ type: "thinking", text: u.content.text }); break;
             case "tool_call": {
+              trackToolCall(this.openCalls, u, Date.now()); // P-STALL.2: this call is now awaited
               // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other")
               // whose rawInput carries { agent, context, tasks[] } (batch) or { agent, assignment } (flat).
               // Detect it and emit a distinct `subagent` event so the UI shows a delegation card instead
@@ -580,6 +591,7 @@ class Backend {
             // P-TOOLFAIL.2 (ADR-0163): also carry the COMMAND the call attempted + the full error
             // text, so the renderer's collapsed toolbox badge can expand into an honest per-action view.
             case "tool_call_update": {
+              settleToolCall(this.openCalls, u); // P-STALL.2: a terminal status closes the awaited call
               if (u.status === "failed" || u.status === "rejected") { this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break; }
               // P-IMG.1 (ADR-0208): surface image output from a tool result (a generated image, a rendered
               // chart, etc.). extractToolImages validates every block through the strict image-data-URL gate
@@ -770,6 +782,9 @@ class Backend {
     // via its own timeout).
     if (!this.sessioning) {
       this.sessioning = (async () => {
+        // P-MODEL.1: capture the persisted last-used model BEFORE session/new - syncModelEnv() below stamps
+        // omp's hardcoded default into the store the moment omp reports it, which would erase the real value.
+        const remembered = lastModel();
         const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS });
         this.sessionId = s?.sessionId ?? s?.id ?? null;
         if (Array.isArray(s?.configOptions)) this.configOptions = s.configOptions;
@@ -781,9 +796,38 @@ class Backend {
         // session init — which getConfig()/loadConfig() lean on — else the picker freezes on "updating…". The
         // prompt() clamp (before every turn) is the authoritative fail-closed guarantee; this is best-effort UI sync.
         if (this.asksageLocked()) void this.enforceAsksageLock().catch(() => ({ ok: false }));
+        // P-MODEL.1 (ADR-0250): otherwise never leave the fresh session on omp's hardcoded Opus default -
+        // open on the last-used model, else the best one the user's configured providers expose. Same
+        // fire-and-forget rationale as the lockdown above: a hung switch must not block session init.
+        else void this.applyStartupModel(remembered).catch(() => {});
       })().finally(() => { this.sessioning = null; });
     }
     await this.sessioning;
+  }
+
+  /** P-MODEL.1 (ADR-0250): apply the fresh-session model default. `remembered` is the last-used model
+   *  captured before syncModelEnv() stamped omp's default over it. Best-effort: a null resolution (nothing
+   *  configured, no options yet) leaves omp's default standing. */
+  private async applyStartupModel(remembered: string): Promise<void> {
+    const current = this.activeModel();
+    const auth = providerAuth();
+    // providerConfigured's exact test (renderer/provider_hub.ts), inlined: importing provider_hub would
+    // pull the DOM-typed bridge.ts into the server program.
+    const configured = (p: ProviderAuth) => !!(p.oauthActive || p.keySet || (p.fields ?? []).some((f) => f.set));
+    const pick = resolveStartupModel({
+      lastUsed: remembered,
+      current,
+      options: this.accessibleModels(),
+      // Gov-routed ids belong to the AskSage GATEWAY credential - providerForModel deliberately maps them
+      // to the underlying family provider (right for the budget pill, wrong here). Unknown providers
+      // (user-added local ones) count as configured: they are only listed because the user added them.
+      isConfigured: (value) => {
+        if (isAsksageRouted(value)) return auth.gateway.some(configured);
+        const prov = providerForModel(auth, value);
+        return prov ? configured(prov) : true;
+      },
+    });
+    if (pick && pick.value !== current) await this.setConfig("model", pick.value);
   }
 
   /** P-LOC.1: the omp-reported active model id (from the `model` config option), or "" if unknown. */
@@ -987,47 +1031,40 @@ class Backend {
     // Drop any parked permission (deny) but KEEP permissionMode — the user's Ask choice survives a respawn.
     for (const [, fn] of this.permPending) fn(null);
     this.permPending.clear(); this.pendingPerms = 0; this.askActive = false;
+    this.openCalls.clear(); // P-STALL.2: a respawn orphans any tracked calls
   }
 
-  // Max silence (no token/tool/usage event) before we treat a turn as stalled. omp's
-  // ACP request has no timeout, so without this a rate-limited / hung turn leaves the UI
-  // on "Thinking…" forever. Resets on every event, so a legitimately long turn is fine —
-  // only TOTAL silence for this long trips it.
-  // P-STALL.1 (ADR-0186): 10 min. Native providers stream tokens every few seconds so they almost never
-  // trip this; the headroom is for the NON-STREAMED AskSage gateway AND for provider OVERLOAD - at peak
-  // times Claude/Gemini/GPT can sit for several minutes before the first token, and killing the turn
-  // throws away the queue position (the user saw multiple models "time out" during one overload window).
-  // The SLOW notice below keeps the wait visible so patience never looks like a hang.
-  private static readonly IDLE_MS = 600_000;
-  // Emit a { type:"slow" } event at every silent multiple of this, so the UI can say "still waiting on
-  // the provider" instead of sitting frozen. Cleared by any real activity; paused with the idle clock
-  // while a permission is awaiting the user.
+  // P-STALL.2 (ADR-0263): there is NO time-based turn cutoff anymore. P-STALL.1's 10-minute silence
+  // kill was still murdering legitimately long work - an agent that fans tasks out to subagents can sit
+  // quiet far longer than any fixed clock while the work is genuinely running, and the kill threw it all
+  // away. The two real exits from a turn are now: the USER (Stop), and TRANSPORT DEATH (the omp child
+  // exiting rejects every in-flight request - see ACPClient.start; that is what the timer was actually
+  // guarding against, and it is event-driven, not a guess about how long work is allowed to take).
+  // Emit a { type:"slow" } event at every silent multiple of this, carrying the OPEN tool calls /
+  // spawned subagent tasks (turn_pending.ts), so a long quiet wait is visible and legible instead of a
+  // frozen pane. Cleared by any real activity; paused while a permission is awaiting the user.
   private static readonly SLOW_NOTICE_MS = 120_000;
 
   /** Run one turn, streaming events to onEvent; resolves after `done`. Captures the
    *  assistant reply so the personalization distiller can learn from the turn (P9.2).
-   *  A stall (no activity for IDLE_MS) ends the turn with a clear error instead of hanging. */
+   *  P-STALL.2 (ADR-0263): the turn waits as long as the work takes - no time cutoff. Stop ends it, and
+   *  a dead omp child rejects the in-flight request (ACPClient drains pending on exit). */
   async prompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void> {
     let assistant = "";
-    let stalled = false;
     let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
-    let idle: ReturnType<typeof setTimeout> | undefined;
-    let slow: ReturnType<typeof setTimeout> | undefined;
+    let slow: Timer | undefined;
     let silentSince = Date.now();
-    let onStall: (e: Error) => void = () => {};
-    // While a permission is awaiting the user (Ask mode), pause the idle/stall clock — a human
-    // deciding is not a stalled turn (askUser has its own fail-closed timeout).
-    // P-STALL.1 (ADR-0186): two clocks per silence stretch — a repeating SLOW notice (the UI shows
-    // "still waiting on the provider") and the honest hard stall at IDLE_MS. The notice goes through
-    // onEvent DIRECTLY (not the sink) so telling the user we're waiting never counts as activity.
+    // While a permission is awaiting the user (Ask mode), pause the slow-notice clock \u2014 a human
+    // deciding is not a silent provider (askUser has its own fail-closed timeout).
+    // P-STALL.1/P-STALL.2: a repeating SLOW notice per silence stretch, carrying the open tool calls /
+    // spawned subagent tasks the turn is waiting on. The notice goes through onEvent DIRECTLY (not the
+    // sink) so telling the user we're waiting never counts as activity.
     const arm = () => {
-      if (idle) clearTimeout(idle);
-      if (slow) clearTimeout(slow);
+      clearTimeout(slow);
       silentSince = Date.now();
       if (this.pendingPerms > 0) return;
-      idle = setTimeout(() => { stalled = true; onStall(new Error(`the model sent nothing for ${Math.round(Backend.IDLE_MS / 60_000)} minutes — the provider is likely overloaded or rate-limited right now. Try again in a bit, or switch models.`)); }, Backend.IDLE_MS);
       const notify = () => {
-        try { onEvent({ type: "slow", waitedMs: Date.now() - silentSince }); } catch { /* stream gone — the turn continues server-side */ }
+        try { onEvent({ type: "slow", waitedMs: Date.now() - silentSince, pending: pendingSnapshot(this.openCalls, Date.now()) }); } catch { /* stream gone \u2014 the turn continues server-side */ }
         slow = setTimeout(notify, Backend.SLOW_NOTICE_MS);
       };
       slow = setTimeout(notify, Backend.SLOW_NOTICE_MS);
@@ -1053,6 +1090,7 @@ class Backend {
       try { onEvent(e); } catch { enqueueErr++; }
     };
     this.listener = sink;
+    this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
     this.chatGate.begin(); // P-KG-INGEST.3: a chat turn is live → background extraction should yield to it
@@ -1084,31 +1122,29 @@ class Backend {
       // well-formed blocks (base64 data + image mime) are appended — the renderer already validated them.
       const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
       const promptContent = [{ type: "text" as const, text: body }, ...imageBlocks];
-      arm(); // start the idle clock now (covers a stall BEFORE the first token)
-      tSent = Date.now(); // P-EVAL.2: t_sent — the prompt is handed to the model
-      const stall = new Promise<never>((_, reject) => { onStall = reject; });
-      const promptRes = await Promise.race<any>([
-        this.acp!.request("session/prompt", { sessionId: this.sessionId, prompt: promptContent }),
-        stall,
-      ]);
+      arm(); // start the slow-notice clock now (covers silence BEFORE the first token)
+      tSent = Date.now(); // P-EVAL.2: t_sent \u2014 the prompt is handed to the model
+      // P-STALL.2 (ADR-0263): no Promise.race against a clock - the request runs until the work ends,
+      // Stop cancels it, or the omp child dies (ACPClient rejects every pending request on exit).
+      const promptRes = await this.acp!.request<{ stopReason?: unknown }>("session/prompt", { sessionId: this.sessionId, prompt: promptContent });
       // P-GOAL-DIAG.1 (ADR-0074): the omp turn's stopReason tells us WHY a maker turn ended (e.g. an
       // empty/early end on a thinking-heavy Claude turn) — invaluable for the model-specific loop bug.
       lastStopReason = promptRes?.stopReason ? String(promptRes.stopReason) : undefined;
       this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
-      errored = true; // P-EVAL.2: a stall/disconnect makes this turn's latency sample ok=false
-      failMsg = String((e as any)?.message ?? e);
-      this.turnDiag(`prompt.${lockBlocked ? "lockdown-blocked" : stalled ? "stalled" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${failMsg.slice(0, 80)}`);
+      errored = true; // P-EVAL.2: a disconnect/refusal makes this turn's latency sample ok=false
+      failMsg = e instanceof Error ? e.message : String(e);
+      this.turnDiag(`prompt.${lockBlocked ? "lockdown-blocked" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${failMsg.slice(0, 80)}`);
       // ADR-0217: a lockdown block is a deliberate refusal — surface it plainly (no fallback). A failure
       // AFTER some output streamed also prints inline. But a failure with NO output at all (e.g. an
       // overloaded gov model returning HTTP 429/5xx) is handled below by the no-response notice, which
       // names the provider + offers a fallback model — so don't ALSO print a bare "[agent unavailable]"
       // that would clobber that card (P-NORESP.1).
       if (lockBlocked) onEvent({ type: "token", text: `\n[blocked: ${failMsg}]` });
-      else if (sawOutput) onEvent({ type: "token", text: `\n[${stalled ? "stalled" : "agent unavailable"}: ${failMsg}]` });
+      else if (sawOutput) onEvent({ type: "token", text: `\n[agent unavailable: ${failMsg}]` });
     } finally {
-      if (idle) clearTimeout(idle);
-      if (slow) clearTimeout(slow);
+      clearTimeout(slow);
+      this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
       this.askActive = false;
       this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
       // Fail-closed: any permission still parked at turn's end (stall/disconnect) is denied.

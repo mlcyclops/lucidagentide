@@ -319,6 +319,38 @@ demo-P-ROLE.1: ## P-ROLE.1 (ADR-0088): role-based onboarding — closed role set
 demo-P-ROLE.1b: ## P-ROLE.1b (ADR-0089): first-run guided walkthrough — tailored per-role coachmark tour (opens on composer, closes on closer, no dangling targets), Back/Next/Skip card, replay-guard
 	$(BUN) run desktop/scripts/demo_p_role_1b.ts
 
+.PHONY: demo-P-AVATAR.1
+demo-P-AVATAR.1: ## P-AVATAR.1 (ADR-0251): the LUCID Agent role + immersive stage - closed role set grows by one behavioral role, bespoke no-rail tour, animated glyph, and the stylesheet hides both rails + inspector under .immersive
+	$(BUN) run desktop/scripts/demo_p_avatar_1.ts
+
+.PHONY: demo-P-MASCOT.1
+demo-P-MASCOT.1: ## P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja mascot - frame-grid integrity (dims + palette), state machine priorities (victory on landed work), working-activity rotation, and beat-timeline frame picks
+	$(BUN) run desktop/scripts/demo_p_mascot_1.ts
+
+.PHONY: demo-P-MASCOT.2
+demo-P-MASCOT.2: ## P-MASCOT.2: the prompt-bar parkour mini ninja - route order (run/climb/sneak/pause/drop/rest), lane geometry, the silent-drop clip contract, gravity easing, direction alternation
+	$(BUN) run desktop/scripts/demo_p_mascot_2.ts
+
+.PHONY: demo-P-AVATAR.4
+demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
+	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
+
+.PHONY: demo-P-AVATAR.5
+demo-P-AVATAR.5: ## P-AVATAR.5 (ADR-0251): voice tool approval - keyword-strict grammar (sentences never match), danger class demands the literal word after a spoken repeat-back, widening grants unreachable by voice, deny always easy
+	$(BUN) run desktop/scripts/demo_p_avatar_5.ts
+
+.PHONY: demo-P-AVATAR.6
+demo-P-AVATAR.6: ## P-AVATAR.6 (ADR-0251): the boot cinematic - real-signal stage lines, min-beat + hard-cap done gate (config-gated; voice/models never hold boot), ninja sprint choreography
+	$(BUN) run desktop/scripts/demo_p_avatar_6.ts
+
+.PHONY: demo-P-REMOTE.12
+demo-P-REMOTE.12: ## P-REMOTE.12 (ADR-0251): PWA push-to-talk - fail-closed PromptAudio validator (shape/mime/size/base64, both ends), audio-only guest prompts, additive frame compatibility
+	$(BUN) run desktop/scripts/demo_p_remote_12.ts
+
+.PHONY: demo-P-REMOTE.13
+demo-P-REMOTE.13: ## P-REMOTE.13 (ADR-0251): the invisible hourly reconnect - grace-window presentation (young flap = Live, real outage surfaces, terminal never masked); the 60-min cap + hourly re-verify stay
+	$(BUN) run desktop/scripts/demo_p_remote_13.ts
+
 .PHONY: demo-P-GOVCUI.1
 demo-P-GOVCUI.1: ## P-GOVCUI.1: first-run Government/CUI step - asks once if the user is a Government/GovCon user handling CUI; a "yes" walks a novice into the CUI-safe posture (AskSage gov gateway in LOCKDOWN) with the CIV routing endpoint PREFILLED + step-by-step token instructions. Pure core: decideGovOnboarding (ask/skip/auto-enable, exactly once; org-forced routing auto-enables) + planGovSetup (with a key -> CIV persisted + lockdown ON; no key -> endpoint prefilled but lockdown NEVER flipped, since a keyless lockdown leaves no gov model and the backend fail-closes)
 	$(BUN) run harness/scripts/demo_pgovcui1.ts
@@ -446,7 +478,7 @@ demo-P-AGENTFW.1: ## P-AGENTFW.1 (ADR-0147): agent-firewall MCP \u2014 scans bot
 	$(BUN) run harness/scripts/demo_pagentfw1.ts
 
 .PHONY: demo-P-FLEET.1
-demo-P-FLEET.1: ## P-FLEET.1 (ADR-0256): async job handles through the agent-firewall - dispatch/job_status/cancel + bounded-wait prompt over ONE gated path; fan-out across connections, serialization within one, fail-closed per job, deadline cleanup, idempotent retries
+demo-P-FLEET.1: ## P-FLEET.1 (ADR-0268): async job handles through the agent-firewall - dispatch/job_status/cancel + bounded-wait prompt over ONE gated path; fan-out across connections, serialization within one, fail-closed per job, deadline cleanup, idempotent retries
 	$(BUN) run harness/scripts/demo_pfleet1.ts
 
 .PHONY: demo-P-FLEET.L1
@@ -555,6 +587,10 @@ demo-P-SANDBOX.6: ## P-SANDBOX.6 (ADR-0172): the Windows AppContainer backend SE
 .PHONY: demo-P-SANDBOX.7
 demo-P-SANDBOX.7: ## P-SANDBOX.7 (ADR-0173): the native Windows AppContainer helper (bun-compiled TS+FFI). Parser fail-closes on malformed flags; main() refuses (non-zero) wherever it cannot contain (never a passthrough); LIVE on Windows a benign child runs but a networked child is BLOCKED (a no-capability AppContainer has no network); off-Windows it correctly refuses
 	$(BUN) run harness/scripts/demo_p_sandbox_7.ts
+
+.PHONY: demo-P-SANDBOX.7b
+demo-P-SANDBOX.7b: ## P-SANDBOX.7b (ADR-0174): mediated --loopback-only for the AppContainer helper - the empty-caps container has NO direct internet (verified live: curl → http_code=000) and a one-time ADMIN loopback exemption (--register-loopback via CheckNetIsolation) lets it reach ONLY the loopback proxy; the no-internet guarantee holds with or without the exemption; off-Windows every mode fail-closes
+	$(BUN) run harness/scripts/demo_p_sandbox_7b.ts
 
 .PHONY: build-appcontainer
 build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into dist/
@@ -730,19 +766,23 @@ demo-P-CHAT.B: ## P-CHAT.B (ADR-0189): inline tool-event chips - PURE fence-awar
 demo-P-CHAT.C: ## P-CHAT.C (ADR-0190): settled-turn "Generate engineering report" - PURE observed-turn->RunRecord adapter (buildRunRecord/renderTurnEvalReport) that maps a turn's tool calls + diffstats + tokens into evals.ts's RunRecord (reads/searches/bash are not files, repeated edits merge, the surplus is a re-edit, no AC/test signal stays needs_signal not faked) and renders the reused Model-Evaluation markdown. Pure keystone verified here; the run-footer CTA + /api/eval/report route are typechecked and QA-gated in-app
 	$(BUN) run harness/scripts/demo_pchatc.ts
 .PHONY: demo-P-STALL.1
-demo-P-STALL.1: ## P-STALL.1 (ADR-0186): patience for overloaded providers - the chat turn waits 10 min (was 5, message falsely said 2); a slow event at each silent 2-min mark keeps the wait visible (HUD phase + one toast naming the cap); the stall error derives its duration from the constant
+demo-P-STALL.1: ## P-STALL.1 (ADR-0186, evolved by ADR-0263): visible provider silence - a slow event at each quiet 2-min mark keeps the wait legible (HUD phase counts the silence honestly); the 10-min cap itself was removed by P-STALL.2
 	$(BUN) run desktop/scripts/demo_p_stall_1.ts
+.PHONY: demo-P-STALL.2
+demo-P-STALL.2: ## P-STALL.2 (ADR-0263): no turn cutoff, visible pending work - the 10-min silence kill is GONE (long subagent fan-outs outlive any fixed clock; a turn runs until the work ends or Stop), a dead omp child now rejects in-flight requests EVENT-DRIVEN (proven with a real child process), and every slow notice names the open tool calls / spawned subagent tasks with their elapsed time (turn_pending.ts -> { type:'slow', pending } -> HUD phase + toast)
+	$(BUN) run desktop/scripts/demo_p_stall_2.ts
 .PHONY: demo-P-WINBOOT.1
-demo-P-WINBOOT.1: ## P-WINBOOT.1 (ADR-0250): Windows installed-app startup hardening - a Program Files install (Bun EPERMs loading dev.ts from the protected tree) is diagnosed FAST + ACTIONABLY (reinstall per-user / run portable) instead of a 30s blank box; waitForServer bails on the engine's early exit; a failed write probe / EPERM signal / protected path all classify, while a dev run never blames the install location; and the nsis installer no longer lets a user reach Program Files (allowElevation + allowToChangeInstallationDirectory = false)
+demo-P-WINBOOT.1: ## P-WINBOOT.1 (ADR-0259): Windows installed-app startup hardening - a Program Files install (Bun EPERMs loading dev.ts from the protected tree) is diagnosed FAST + ACTIONABLY (reinstall per-user / run portable) instead of a 30s blank box; waitForServer bails on the engine's early exit; a failed write probe / EPERM signal / protected path all classify, while a dev run never blames the install location; and the installer posture (ADR-0262): assisted installer, per-user DEFAULT, per-machine (Program Files) allowed again - pinned as legal ONLY while build-desktop.yml carries the strict ADR-0261 boot gate (removing the gate turns this demo red)
 	$(BUN) run desktop/scripts/demo_p_winboot_1.ts
 .PHONY: demo-P-WINBOOT.2
-demo-P-WINBOOT.2: ## P-WINBOOT.2 (ADR-0251): the permanent fix - the engine ships as a `bun build --compile` binary (bin/lucid-engine) that EMBEDS dev.ts (Bun never module-loads a .ts from a protected install dir) with native addons the only --external (loaded via the OS loader, fine from Program Files) and the renderer PREBUILT (no runtime Bun.build of .ts); dev.ts derives its base dir from execPath when compiled, main.ts spawns the binary in packaged mode (fallback to `bun run dev.ts`), and the demo BUILDS + BOOTS the real binary proving /api/health + prebuilt /app.js serve with nothing .ts loaded off disk
+demo-P-WINBOOT.2: ## P-WINBOOT.2 (ADR-0260): the permanent fix - the engine ships as a `bun build --compile` binary (bin/lucid-engine) that EMBEDS dev.ts (Bun never module-loads a .ts from a protected install dir) with native addons the only --external (loaded via the OS loader, fine from Program Files) and the renderer PREBUILT (no runtime Bun.build of .ts); dev.ts derives its base dir from execPath when compiled, main.ts spawns the binary in packaged mode (fallback to `bun run dev.ts`), and the demo BUILDS + BOOTS the real binary proving /api/health + prebuilt /app.js serve with nothing .ts loaded off disk
 	$(BUN) run desktop/scripts/demo_p_winboot_2.ts
-
+.PHONY: demo-P-WINBOOT.2C
+demo-P-WINBOOT.2C: ## P-WINBOOT.2C (ADR-0261): the Program Files boot GATE - stages the packaged repo (or a source-built skeleton) into a Program Files-ACL location, denies the current user the specific write/delete rights (never generic W - that denies SYNCHRONIZE and EPERMs CreateProcess itself), PROVES the denial took, then requires the compiled bin/lucid-engine to answer /api/health and serve the prebuilt renderer bundle from the protected tree; wired STRICT into build-desktop.yml's Windows runner so the v1.12.0 brick class fails the build, never a user
+	$(BUN) run desktop/scripts/demo_p_winboot_2c.ts
 .PHONY: demo-P-KG-INGEST.5
-demo-P-KG-INGEST.5: ## P-KG-INGEST.5 (ADR-0252): the chat-history ingest can no longer hang and Stop always stops - ACP requests are bounded (timeout + signal) and drained when the omp child exits (an unanswered `initialize` used to freeze the import at 0/500 forever), cancel is checked per MESSAGE and reaches the extractor so an in-flight model call is interrupted rather than awaited, a wedged job is force-cancelled after a grace period so single-flight releases and the user can retry without restarting, and the pill reports a silent run as STALLED instead of rendering a healthy-looking bar
+demo-P-KG-INGEST.5: ## P-KG-INGEST.5 (ADR-0264): the chat-history ingest can no longer hang and Stop always stops - ACP requests are bounded (timeout + signal) and drained when the omp child exits (an unanswered `initialize` used to freeze the import at 0/500 forever), cancel is checked per MESSAGE and reaches the extractor so an in-flight model call is interrupted rather than awaited, a wedged job is force-cancelled after a grace period so single-flight releases and the user can retry without restarting, and the pill reports a silent run as STALLED instead of rendering a healthy-looking bar
 	$(BUN) run desktop/scripts/demo_p_kg_ingest_5.ts
-
 .PHONY: demo-P-EVAL.2
 demo-P-EVAL.2: ## P-EVAL.2 (ADR-0187): the API-latency CAPTURE + PERSISTENCE pipeline - the GUI-side sink turns t_sent/t_first_token/t_end into a LatencySample appended to an append-only JSONL (the GUI opens the observer DB read-only), the frozen migration 0011 creates api_latency + eval_metrics + the latency_rollup view, the single-writer ingest loads the JSONL idempotently, and readLatencyCalls round-trips the rows back into evals.ts's ApiLatencyCall (ok-only) so rollupLatency + render stay the P-EVAL.1 source of truth
 	$(BUN) run harness/scripts/demo_peval2.ts
@@ -833,6 +873,25 @@ demo-P-COLLAB.11: ## P-COLLAB.11 (ADR-0197): WebRTC signaling over the relay - t
 .PHONY: demo-P-COLLAB.9
 demo-P-COLLAB.9: ## P-COLLAB.9 (ADR-0195): the STANDALONE relay broker (tools/relay) - spawns `bun run tools/relay/serve.ts` as a separate process exactly like a jumpbox/systemd would, waits for /healthz, then connects a REAL host + REAL guest THROUGH the deployed process (hello->welcome->live event->bye), and confirms /healthz reflects the live room + peer counts (never content). Validates the deployable, not just the in-process library. Self-contained (no npm deps); deploy on an office server / Ubuntu 24 jumpbox / DGX Spark
 	$(BUN) run harness/scripts/demo_pcollab9.ts
+.PHONY: demo-P-GPUFIX.1
+demo-P-GPUFIX.1: ## P-GPUFIX.1 (ADR-0246): zombie-SID GPU-sandbox self-heal (electron/electron#51761) - on the 2nd fatal GPU child death BEFORE the first window renders, main.ts relaunches with --disable-gpu-sandbox (renderer sandbox intact) and persists a userData flag (survives the NSIS reinstall that re-inherits the zombie SID); a sandbox-off instance NEVER relaunches again (loop guard), post-render GPU crashes and normal lifecycle exits are ignored, the engine.log line self-diagnoses (0xC0000022 + the issue + the switch), and dev.on("error") tees a spawn failure into engine.log instead of swallowing it
+	$(BUN) run desktop/scripts/demo_p_gpufix_1.ts
+
 .PHONY: demo-P-COLLAB.6
 demo-P-COLLAB.6: ## P-COLLAB.6 (ADR-0193): enterprise/MDM governance for the embedded relay - fail-closed + absolute allowlisting. Unmanaged = the user's call; a managed allowServe:false FORBIDS hosting (startRelayServer THROWS, no listener); under management a LAN/0.0.0.0 bind is REFUSED unless it's on the absolute host:port allowlist (localhost always ok); allowedRelays whitelists which relay endpoints a user may connect to (malformed fails closed). The 'be the relay' toggle UI reads this + managedLocks.collab
 	$(BUN) run harness/scripts/demo_pcollab6.ts
+.PHONY: demo-P-TRAINER.1
+demo-P-TRAINER.1: ## P-TRAINER.1 (ADR-0252/0255): the pure interview engine over the WMO coverage map - a scripted extraction session opens with a SCENARIO probe, asks ONE question at a time (a second nextQuestion re-issues the pending one), chases deviation cues with capped five-whys followups before returning to the map, never re-asks L3-confirmed ground, and past the session cap it closes with a visible-progress recap instead of asking on
+	$(BUN) run harness/scripts/demo_p_trainer_1.ts
+.PHONY: demo-P-TRAINER.2
+demo-P-TRAINER.2: ## P-TRAINER.2 (ADR-0253/0254): migration 0012 applies to kb_graph.duckdb and the trainer contract holds - the 13-objective WMO coverage map installs with stable ids (re-install is a no-op), knowledge units are APPEND-ONLY (a correction mints a successor + tombstones the original; the live set excludes it), and every trainer_* lifecycle event is in the frozen EventName contract while a typo'd one raises (invariant #8)
+	$(BUN) run harness/scripts/demo_p_trainer_2.ts
+.PHONY: demo-P-TRAINER.3
+demo-P-TRAINER.3: ## P-TRAINER.3 (ADR-0254): the distiller is fail-closed at EVERY gate - a clean answer becomes an untrusted unit carrying its content_artifacts provenance; PII is redacted to typed placeholders BEFORE the model or the artifact store see the span (a raw SSN never lands anywhere) and a hard hit stores the unit QUARANTINED; a poisoned span mints NO unit; a DEAD scanner blocks capture (invariant #3), never passes
+	$(BUN) run harness/scripts/demo_p_trainer_3.ts
+.PHONY: demo-P-TRAINER.4
+demo-P-TRAINER.4: ## P-TRAINER.4 (ADR-0254): teach-back confirmation IS the promotion approval - confirming a recited unit records the EXISTING promotion_approve approval_events action and promotes through promoteFactGated (keystone #2 untouched) with the fact keeping its artifact provenance, while a quarantined-source unit is REFUSED the one-click confirm and promotes nothing (the standard quarantine-release flow is the only path)
+	$(BUN) run harness/scripts/demo_p_trainer_4.ts
+.PHONY: demo-P-TRAINER.5
+demo-P-TRAINER.5: ## P-TRAINER.5/.6 (ADR-0253/0255): the CLOSED flywheel + the extraction pack - one sitting runs extract (planner scenario) -> distill (fail-closed capture) -> teach back (confirm = promote, coverage visibly moves) -> a trainee quiz generated ONLY from confirmed units with source-unit citations -> a trainee miss re-opens the objective as an extraction target; then the signed lkgpack manifest carrying the coverage_map verifies, and a tampered coverage_map breaks the signature (refused)
+	$(BUN) run harness/scripts/demo_p_trainer_5.ts

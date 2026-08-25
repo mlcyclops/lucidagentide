@@ -76,7 +76,7 @@ test("cross-turn linking does NOT connect unrelated turns", async () => {
   expect(g.links.length).toBe(0); // no shared words → no cross-link, no false edges
 });
 
-// P-KG-INGEST.5 (ADR-0252): Stop must interrupt the extraction, not wait it out.
+// P-KG-INGEST.5 (ADR-0264): Stop must interrupt the extraction, not wait it out.
 test("modelExtractor forwards the abort signal to the model call", async () => {
   const ctl = new AbortController();
   let received: AbortSignal | undefined;

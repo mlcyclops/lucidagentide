@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_pfleet1.ts
 //
-// P-FLEET.1 (ADR-0256): async job handles through the Agent Firewall - the Chief-of-Staff fan-out.
+// P-FLEET.1 (ADR-0268): async job handles through the Agent Firewall - the Chief-of-Staff fan-out.
 // Runs the ADR's fifteen verification checks against the REAL scanner sidecar, in-process fake remotes
 // (fast, controllable), and the REAL AcpAgentClient stdio transport against the fake ACP subprocess
 // (the deadline check needs the genuine AcpTimeoutError path).

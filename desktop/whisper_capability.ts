@@ -11,7 +11,7 @@
 
 export type WhisperTier = "tiny" | "base" | "small" | "medium" | "large-turbo";
 
-/** Tiers smallest -> largest. `base` is the friendly "mini" default. */
+/** Tiers smallest -> largest. `tiny` is the default when no tier is picked (DEFAULT_WHISPER_TIER). */
 export const WHISPER_TIERS: readonly WhisperTier[] = ["tiny", "base", "small", "medium", "large-turbo"];
 
 export interface MachineSpecs {

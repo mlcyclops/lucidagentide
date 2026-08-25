@@ -3,7 +3,7 @@
 
 // harness/mcp/jobs.ts
 //
-// P-FLEET.1 (ADR-0256): the per-connection job table and its state machine - the thing that turns the
+// P-FLEET.1 (ADR-0268): the per-connection job table and its state machine - the thing that turns the
 // agent-firewall's blocking `prompt` round-trip into dispatch-and-collect handles, so a Chief-of-Staff
 // LUCID can fan work out to N worker connections and harvest them later.
 //

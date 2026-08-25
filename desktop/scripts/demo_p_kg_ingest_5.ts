@@ -3,7 +3,7 @@
 
 // desktop/scripts/demo_p_kg_ingest_5.ts
 //
-// Increment P-KG-INGEST.5 - the ingest can no longer hang, and Stop always works (ADR-0252).
+// Increment P-KG-INGEST.5 - the ingest can no longer hang, and Stop always works (ADR-0264).
 //
 // Reported symptom: "Importing chat history" sat at 0/500 messages, 0 facts, and pressing Stop stuck on
 // "Stopping...". Root cause: ACPClient.request() had NO timeout and never rejected when the omp child
@@ -33,7 +33,7 @@ import { existsSync, rmSync } from "node:fs";
 const fail = (msg: string): never => { console.error(`FAIL: ${msg}`); process.exit(1); };
 const ok = (msg: string): void => console.log(`   ${msg} \u2713`);
 
-console.log("== #ADR-0252 the ingest cannot hang, and Stop always stops ==");
+console.log("== #ADR-0264 the ingest cannot hang, and Stop always stops ==");
 
 // ── 1. a spawned-but-mute agent must not wait forever ────────────────────────────
 const mute = new ACPClient(process.execPath, ["-e", "process.stdin.resume(); setTimeout(() => {}, 60000);"], process.cwd());

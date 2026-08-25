@@ -6,7 +6,7 @@
 // or network.
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { installWhisper, removeWhisperModel, startWhisper, stopWhisper, whisperStatus, whisperInstallState, type WhisperRuntimeDeps } from "./whisper_runtime.ts";
+import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus, whisperInstallState, type WhisperRuntimeDeps } from "./whisper_runtime.ts";
 import type { MachineSpecs } from "./whisper_capability.ts";
 
 const MAC8: MachineSpecs = { arch: "arm64", platform: "darwin", totalRamGB: 8, cpuCores: 10, accel: "metal" };
@@ -43,7 +43,7 @@ describe("whisperStatus", () => {
     expect(s.binHint).toMatch(/LUCID_WHISPER_BIN|bundle/);
   });
 
-  // P-STT.6 (ADR-0255): offered flags + gray-out reasons + on-disk sizes + the clamped recommendation.
+  // P-STT.6 (ADR-0267): offered flags + gray-out reasons + on-disk sizes + the clamped recommendation.
   it("marks tiny/base/small offered and medium/large remove-only", () => {
     const s = whisperStatus(deps());
     expect(s.tiers.filter((t) => t.offered).map((t) => t.tier)).toEqual(["tiny", "base", "small"]);
@@ -69,7 +69,7 @@ describe("whisperStatus", () => {
   });
 });
 
-// P-STT.6 (ADR-0255): weights removal - the only path for reclaiming a legacy medium/large install.
+// P-STT.6 (ADR-0267): weights removal - the only path for reclaiming a legacy medium/large install.
 describe("removeWhisperModel", () => {
   it("deletes an installed model's file (any tier, offered or not)", () => {
     const removed: string[] = [];
@@ -198,11 +198,11 @@ describe("startWhisper", () => {
 });
 
 describe("installWhisper", () => {
-  it("downloads the recommended tier and reports it", async () => {
+  it("downloads the tiny default when no tier is picked", async () => {
     let dl = false;
     const r = await installWhisper(deps({ download: async () => { dl = true; return { ok: true, path: "x", bytes: 1 }; } }), undefined, () => {});
     expect(r.ok).toBe(true);
-    expect(r.tier).toBe("small"); // 8GB recommendation
+    expect(r.tier).toBe("tiny"); // DEFAULT_WHISPER_TIER, not the hardware recommendation
     expect(dl).toBe(true);
   });
   it("is a no-op when already installed", async () => {
@@ -260,5 +260,42 @@ describe("whisperInstallState (download progress)", () => {
     expect(r.ok).toBe(true);
     expect(fr).toEqual([0.5]);
     expect(whisperInstallState().phase).toBe("done");
+  });
+});
+
+// P-STT.6: the installed-app autostart gate - dictation works out of the box in the packaged build, but the
+// gate never fires in a dev run, never races a non-whisper engine, and never clobbers a user's REMOTE server.
+describe("shouldAutostartWhisper (installed-app autostart gate)", () => {
+  const view = (over: Partial<WhisperRuntimeDeps> = {}) => whisperStatus(deps(over));
+  const voice = { sttProvider: "whisper", sttUrl: "" };
+
+  it("status exposes the tiny default tier for the picker", () => {
+    expect(view().defaultTier).toBe("tiny");
+  });
+  it("autostarts in the packaged app: whisper STT, no custom url, capable, binary present", () => {
+    expect(shouldAutostartWhisper(view(), voice, true)).toBe(true);
+  });
+  it("never autostarts a dev run (packaged=false)", () => {
+    expect(shouldAutostartWhisper(view(), voice, false)).toBe(false);
+  });
+  it("never races a non-whisper STT engine", () => {
+    expect(shouldAutostartWhisper(view(), { sttProvider: "elevenlabs", sttUrl: "" }, true)).toBe(false);
+  });
+  it("loopback sttUrls stay managed; a REMOTE url is the user's own server (no clobber)", () => {
+    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://127.0.0.1:9111" }, true)).toBe(true);
+    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://localhost:9000" }, true)).toBe(true);
+    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://stt.example.com:9000" }, true)).toBe(false);
+  });
+  it("requires a resolved binary and capable hardware", () => {
+    expect(shouldAutostartWhisper(view({ resolveBin: () => null }), voice, true)).toBe(false);
+    expect(shouldAutostartWhisper(view({ specs: () => ({ ...MAC8, totalRamGB: 1 }) }), voice, true)).toBe(false);
+  });
+  it("skips when the managed server already runs", async () => {
+    let up = false;
+    const d = deps({ listModels: () => ["ggml-tiny.en.bin"], spawn: () => { up = true; return { pid: 1, kill: () => { up = false; } }; }, health: async () => up });
+    const r = await startWhisper(d, { port: 9126 });
+    expect(r.ok).toBe(true);
+    expect(r.tier).toBe("tiny"); // the no-pick default
+    expect(shouldAutostartWhisper(whisperStatus(d), voice, true)).toBe(false);
   });
 });

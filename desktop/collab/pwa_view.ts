@@ -187,6 +187,23 @@ export function renderControls(view: GuestView): string {
   return model + workspace;
 }
 
+// ---- P-REMOTE.13 (ADR-0251): the INVISIBLE hourly reconnect ----
+// Cloud Run hard-caps a WebSocket at 60 minutes; the hourly flap is a security FEATURE (every reconnect
+// re-presents a fresh identity token - ADR-0227) and the socket already buffers outbound frames across
+// it. What the user saw was the presentation: an instant amber "Reconnecting" the moment the cap hit.
+// The fix is a GRACE WINDOW: while a transient drop is younger than RECONNECT_GRACE_MS the banner keeps
+// saying Live - the flap is invisible unless it turns into a real outage. Fatal states are NEVER masked.
+export const RECONNECT_GRACE_MS = 7000;
+
+/** The status to PRESENT: masks a young transient reconnect as Live; everything else is statusLabel.
+ *  `flapAt` = when the current reconnecting phase began (0 = not flapping). Pure. */
+export function presentedStatus(view: GuestView, flapAt: number, now: number): { text: string; tone: "live" | "wait" | "ended" } {
+  if (view.phase === "reconnecting" && flapAt > 0 && now - flapAt < RECONNECT_GRACE_MS) {
+    return { text: view.readOnly ? "Live \u00b7 view only" : "Live \u00b7 you can drive", tone: "live" };
+  }
+  return statusLabel(view);
+}
+
 /** A short connection-status label + tone for the banner. */
 export function statusLabel(view: GuestView): { text: string; tone: "live" | "wait" | "ended" } {
   // P-REMOTE.8: a transient reconnect is a WAIT (amber), not an ended (red) state - and once the socket

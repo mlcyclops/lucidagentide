@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-WINBOOT.2 - the permanent fix for the Program Files brick (ADR-0251).
+// Increment P-WINBOOT.2 - the permanent fix for the Program Files brick (ADR-0260).
 //
 // P-WINBOOT.1 stopped new installs from reaching a protected dir and made the failure legible; the
 // ROOT cause remained (main.ts ran `bun run desktop/dev.ts`, and Bun EPERMs loading .ts from a
@@ -28,7 +28,7 @@ function assert(cond: unknown, msg: string): void {
 const DESKTOP = join(import.meta.dir, "..");
 const REPO = join(DESKTOP, "..");
 
-console.log("== #ADR-0251 P-WINBOOT.2: the compiled engine artifact ==\n");
+console.log("== #ADR-0260 P-WINBOOT.2: the compiled engine artifact ==\n");
 
 console.log("[1] the pure launch decisions");
 const winRepo = "C:\\Program Files\\LucidAgentIDE\\resources\\repo";

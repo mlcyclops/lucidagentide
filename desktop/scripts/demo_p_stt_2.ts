@@ -11,6 +11,7 @@
 import { whisperCapability } from "../whisper_capability.ts";
 import { looksLikeWhisperModel, planWhisperInstall, WHISPER_MODELS, whisperServeUrl, whisperServerArgs } from "../whisper_install.ts";
 import { downloadWhisperModel, resolveWhisperBin, type DownloadIO } from "../whisper_manager.ts";
+import { shouldAutostartWhisper, type WhisperStatusView } from "../whisper_runtime.ts";
 
 let failures = 0;
 function check(label: string, ok: boolean): void {
@@ -30,7 +31,9 @@ check("1GB box is NOT capable (fail-closed)", potato.capable === false && potato
 
 // (2) install/serve plan.
 const plan = planWhisperInstall(laptop);
-check("plan picks the recommended model with a real HF url", plan.ok && plan.model.tier === "small" && plan.model.url.startsWith("https://huggingface.co/"));
+check("plan with no pick defaults to tiny with a real HF url", plan.ok && plan.model.tier === "tiny" && plan.model.url.startsWith("https://huggingface.co/"));
+const planRec = planWhisperInstall(laptop, { tier: laptop.recommended ?? undefined });
+check("an explicit pick of the recommended model is honored", planRec.ok && planRec.model.tier === "small");
 check("serve URL is loopback with no /v1 (the STT backend appends it)", whisperServeUrl(9111) === "http://127.0.0.1:9111");
 check("spawn argv binds the model to loopback", JSON.stringify(whisperServerArgs("/m/ggml-small.en.bin", 9111)) === JSON.stringify(["-m", "/m/ggml-small.en.bin", "--host", "127.0.0.1", "--port", "9111"]));
 check("an incapable machine is refused a plan", planWhisperInstall(potato).ok === false);
@@ -61,6 +64,14 @@ const htmlIO: DownloadIO = { ...okIO, readHead: async () => new Uint8Array([0x3c
 const bad = await downloadWhisperModel(WHISPER_MODELS.base, "/m/x.bin", htmlIO);
 check("an HTML error page saved as .bin is rejected fail-closed", bad.ok === false);
 check("integrity floor rejects a truncated file", looksLikeWhisperModel(new Uint8Array([0]), 1024, 148).ok === false);
+
+// (5) P-STT.6: the installed-app autostart gate (pure). The packaged build autostarts the managed server so
+// dictation works out of the box; a dev run, a non-whisper engine, a REMOTE sttUrl, or a running server never do.
+const okView: WhisperStatusView = { capable: true, recommended: "small", defaultTier: "tiny", summary: "", binAvailable: true, binHint: "", running: false, port: 9111, activeTier: null, serveUrl: null, tiers: [], install: { active: false, tier: null, fraction: 0, phase: "idle" } };
+check("packaged + whisper STT + loopback url -> autostart", shouldAutostartWhisper(okView, { sttProvider: "whisper", sttUrl: "http://localhost:9000" }, true) === true);
+check("a dev run never autostarts", shouldAutostartWhisper(okView, { sttProvider: "whisper", sttUrl: "" }, false) === false);
+check("a user's REMOTE sttUrl is never clobbered", shouldAutostartWhisper(okView, { sttProvider: "whisper", sttUrl: "http://stt.corp.example:9000" }, true) === false);
+check("an already-running server is left alone", shouldAutostartWhisper({ ...okView, running: true }, { sttProvider: "whisper", sttUrl: "" }, true) === false);
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

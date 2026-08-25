@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/engine_boot.test.ts - P-WINBOOT.1 (ADR-0250): the pure engine-failure brain.
+// desktop/engine_boot.test.ts - P-WINBOOT.1 (ADR-0259): the pure engine-failure brain.
 
 import { describe, expect, test } from "bun:test";
 import {

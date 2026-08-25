@@ -1,9 +1,9 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/engine_launch.ts - P-WINBOOT.2 (ADR-0251): the permanent fix for the Program Files brick.
+// desktop/engine_launch.ts - P-WINBOOT.2 (ADR-0260): the permanent fix for the Program Files brick.
 //
-// P-WINBOOT.1 (ADR-0250) stopped NEW installs from reaching a protected dir and made the failure
+// P-WINBOOT.1 (ADR-0259) stopped NEW installs from reaching a protected dir and made the failure
 // legible. The root cause remained: main.ts ran `bun run desktop/dev.ts` from <resources>/repo, and
 // Bun's module loader EPERMs loading TypeScript out of an ACL-protected tree (Program Files). The
 // permanent fix ships the engine as a `bun build --compile` standalone binary (bin/lucid-engine):

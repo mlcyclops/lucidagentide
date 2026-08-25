@@ -10,6 +10,11 @@
 
 import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
+import { mountMascot, type MascotHandle } from "./mascot.ts"; // P-MASCOT.1: LUCID the ninja (tiny, static import)
+import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
+import { nextGap, readinessChecklist, resolveConversationModel, restoreModel, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
+import { approvalPrompt, matchApprovalUtterance, pickOption, type ApprovalOption } from "./voice_approval.ts"; // P-AVATAR.5: approve tool calls by voice
+import { mountBootCinematic } from "./boot_cinematic.ts"; // P-AVATAR.6: the hero opening over the config warm
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
@@ -43,7 +48,7 @@ import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannab
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
-import { TURN_PATIENCE_MS, slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1 (ADR-0186)
+import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
@@ -106,6 +111,7 @@ const state = {
   lastPreviewablePath: "" as string, // P-PREVIEW.2 (ADR-0096): the agent's most recent browser-previewable write
   sidebarCollapsed: false,
   inspectorRail: false,
+  immersive: false, // P-AVATAR.1 (ADR-0251): lucid-agent stage - rails hidden, stage layer on
   model: "claude-opus-4-8",
   security: null as SecuritySnapshot | null,
   memory: null as MemorySnapshot | null,
@@ -225,6 +231,8 @@ function buildShell(): void {
         <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
         <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
       </div>
+      <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
+      <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
         <button id="winMax" data-tip="Maximise">${icon("square", 13)}</button>
@@ -240,6 +248,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
+        <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
         <button class="rail-btn" id="railMarket" data-tip="Plugin Marketplace|Curated integrations ordered by community popularity - Excalidraw, Git, Remotely Save & more" data-tip-icon="market">${icon("market", 20)}</button>
@@ -265,6 +274,12 @@ function buildShell(): void {
 
       <main class="center">
         <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
+        <!-- P-AVATAR.1 (ADR-0251): the immersive stage layer. A neon ambient backdrop for the lucid-agent
+             role; the three.js face mounts into it in P-AVATAR.2a. Non-interactive, behind the thread. -->
+        <div class="agent-stage" id="agentStage" hidden aria-hidden="true">
+          <div class="agent-stage-glow"></div>
+          <div class="agent-stage-cap">LUCID Agent</div>
+        </div>
         <!-- ADR-0219: violet CUI banner - shown only when this session is in CUI mode under lockdown. -->
         <div class="cui-banner" id="cuiBanner" hidden data-tip="CUI session|Controlled Unclassified Information handling. Web search is disabled to prevent spillage. To search the web, open another chat session and switch it to Search mode." data-tip-side="bottom">
           ${icon("shield", 13)}<span><b>CUI MODE</b> - Controlled Unclassified Information - web search disabled (spillage risk)</span>
@@ -395,6 +410,13 @@ function buildShell(): void {
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
+
+      <!-- P-TRAINER.7 (ADR-0267): the immersive Trainer stage - a self-contained experience (extraction
+           stage + coverage HUD + lesson-based mini-game flyout) in a sandboxed iframe. Lazy-loaded on
+           first open; covers the main area while the rail + titlebar stay live. -->
+      <section id="trainerPanel" class="trainer-panel" hidden>
+        <iframe id="trainerFrame" class="trainer-frame" title="Lucid Trainer" sandbox="allow-scripts allow-same-origin" allow="autoplay" referrerpolicy="no-referrer"></iframe>
+      </section>
       ${agentBuilderPanelHtml()}
     </div>
 
@@ -1047,7 +1069,7 @@ function createReasoning(): ReasoningWin {
 // event. We render an inline approve/deny card; the choice is POSTed back to resolve the parked
 // request. Unanswered at turn's end ⇒ Denied (the backend already fail-closes server-side).
 const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|accept|yes/i.test(`${kind ?? ""} ${optionId ?? ""}`);
-function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { el: HTMLElement; finalize: () => void } {
+function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void } {
   let win: HTMLElement;
   if (e.egress) {
     // P-EGRESS.1 (ADR-0062): the agent wants to reach the internet. Docked above the composer. Subdued
@@ -1141,6 +1163,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
   const choose = (oid: string | null, label: string, ok: boolean) => {
     if (answered) return;
     answered = true;
+    onAnswered?.(); // P-AVATAR.5: a pending voice approval for this card is now moot
     win.removeAttribute("data-streaming");
     void bridge.respondPermission(e.id, oid);
     if (e.egress || e.exec) {
@@ -1165,7 +1188,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     const isDeny = (e.egress || e.exec) ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
     choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
   });
-  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false) };
+  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose };
 }
 /** P-EGRESS.1: the dock above the composer where egress approval cards sit (not inline in the chat). */
 function egressDock(): HTMLElement {
@@ -1602,8 +1625,9 @@ async function send(): Promise<void> {
     }
     else if (e.type === "permission") {
       setPhase("Needs approval"); paintHud();
-      const card = createPermissionCard(e);
+      const card = createPermissionCard(e, () => { if (voiceApproval?.id === e.id) voiceApproval = null; });
       permCards.push(card);
+      armVoiceApproval(e, card.respond); // P-AVATAR.5: hands-free sessions hear the request + can speak the verdict
       // P-EGRESS.1 / P-EXEC.1: egress + exec approvals dock directly above the prompt bar; normal tool
       // prompts stay inline.
       if (e.egress || e.exec) egressDock().appendChild(card.el);
@@ -1620,8 +1644,10 @@ async function send(): Promise<void> {
     // P-STALL.1 (ADR-0186): the provider is SILENT (overload/rate-limit) - keep the wait visible. The
     // phase line updates each notice; the next real token/tool event replaces it naturally.
     else if (e.type === "slow") {
-      setPhase(slowPhaseLabel(e.waitedMs)); paintHud();
-      if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, TURN_PATIENCE_MS); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
+      // P-STALL.2 (ADR-0263): no cutoff to warn about - the phase line counts the quiet and names how
+      // many tasks the turn is waiting on; the once-per-turn toast lists the longest-running ones.
+      setPhase(slowPhaseLabel(e.waitedMs, e.pending)); paintHud();
+      if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, e.pending); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
     // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
     // clear notice + a recommended fallback the user can switch to and retry.
@@ -1974,7 +2000,9 @@ function datasetsSection(list: string[] | null): string {
 // slow omp/AskSage fetch never blocks the whole page (the old renderSettings awaited
 // every fetch + 8s dataset/persona timeouts before painting anything). Heavy/optional
 // sections collapse to keep the panel short.
-const SET_OPEN = new Set<string>(["asksage"]); // collapsible sections open by default
+// Declutter (user call, 2026-08-01): every section starts collapsed; deep links (openSettingsToVoice
+// etc.) add their card id here before opening, so guided fixes still land expanded.
+const SET_OPEN = new Set<string>([]);
 
 function setCard(name: string, title: string, sub: string, body: string, collapsible: boolean): string {
   const subHtml = sub ? ` <span class="set-sub">${sub}</span>` : "";
@@ -2253,6 +2281,7 @@ function promptForRole(): Promise<void> {
     const finish = async (role: UserRole) => {
       state.userRole = role;
       applyRoleDefault(role);
+      syncImmersiveWithRole(role); // P-AVATAR.1: lucid-agent enters the stage right away
       ov.remove();
       await bridge.saveRole(role).catch(() => null);
       if (state.settingsOpen) fillSec("profile", secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }));
@@ -2268,6 +2297,211 @@ function promptForRole(): Promise<void> {
 }
 
 // Apply a role's CALM default surfacing (ADR-0088): the landing inspector tab. Cosmetic; ADR-0021's
+// ── P-AVATAR.1 (ADR-0251): the immersive lucid-agent stage ─────────────────────────────────────
+// The one BEHAVIORAL role: both rails (activity rail + sessions sidebar) and the inspector step aside
+// and the stage layer lights up behind the thread. Esc steps OUT without changing the role; the
+// titlebar Stage chip (visible only for the role) steps back in. Never touches the security gate.
+function setImmersive(on: boolean): void {
+  if (state.immersive === on) return;
+  state.immersive = on;
+  $("#app-inner")!.classList.toggle("immersive", on);
+  const stage = $("#agentStage") as HTMLElement | null;
+  if (stage) stage.hidden = !on;
+  if (on) document.addEventListener("keydown", immersiveEsc);
+  else document.removeEventListener("keydown", immersiveEsc);
+  // P-AVATAR.1b: the left rail peeks back in when the mouse nears the left edge (hysteresis: engage
+  // within 20px, tuck past 120px - no flicker at the boundary). Everything stays reachable on the stage.
+  if (on) document.addEventListener("mousemove", immersiveRailPeek);
+  else { document.removeEventListener("mousemove", immersiveRailPeek); $("#app-inner")!.classList.remove("rail-peek"); }
+  if (on) mountMascotStage(); else unmountMascotStage(); // P-MASCOT.1: the ninja rides the stage
+}
+
+// ── P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja on the stage ─────────────────────────────────
+let mascot: MascotHandle | null = null;
+let mascotPoll = 0;
+function mountMascotStage(): void {
+  if (mascot || !state.immersive) return;
+  const host = $("#agentStage") as HTMLElement | null;
+  if (!host) return;
+  mascot = mountMascot(host);
+  // The mascot mirrors what the agent is DOING via the existing voice/turn state - a cheap poll beats
+  // invasive hooks into speech/dictation internals (their state machines stay untouched).
+  mascotPoll = window.setInterval(() => {
+    mascot?.update({
+      speaking: !!document.querySelector("#ctSpeak:not([hidden])"),
+      listening: !!dictation,
+      working: state.streaming,
+    });
+  }, 250);
+}
+function unmountMascotStage(): void {
+  window.clearInterval(mascotPoll); mascotPoll = 0;
+  mascot?.dispose();
+  mascot = null;
+}
+function immersiveRailPeek(ev: MouseEvent): void {
+  const inner = $("#app-inner");
+  if (!inner) return;
+  if (ev.clientX <= 20) inner.classList.add("rail-peek");
+  else if (ev.clientX > 120) inner.classList.remove("rail-peek");
+}
+function immersiveEsc(ev: KeyboardEvent): void {
+  if (ev.key !== "Escape" || ev.defaultPrevented) return; // an overlay already consumed this Esc
+  // Overlays own Esc: while a modal / tour card / palette / Settings is up, Esc closes THAT, not the stage.
+  if (state.settingsOpen || document.querySelector(".modal-ov, .coach-card, .palette")) return;
+  setImmersive(false);
+  showToast({ title: "Stage parked", desc: "Click Stage in the titlebar to step back in.", timeout: 2600 });
+}
+/** The lucid-agent role drives the immersive layout; every other role restores the full IDE. */
+function syncImmersiveWithRole(role: UserRole | null): void {
+  const isAgent = role === "lucid-agent";
+  const chip = $("#tbStage") as HTMLElement | null;
+  if (chip) chip.hidden = !isAgent;
+  setImmersive(isAgent);
+  // P-MASCOT.2: the mini runner rides the prompt bar for the role in BOTH layouts (immersive or parked) -
+  // the composer exists in both, and he never intercepts pointer events.
+  if (isAgent && !miniRunner) { const wrap = document.querySelector(".composer-wrap") as HTMLElement | null; if (wrap) miniRunner = mountComposerRunner(wrap); }
+  else if (!isAgent && miniRunner) { miniRunner.dispose(); miniRunner = null; }
+  // P-AVATAR.4: entering the role starts the hands-free flow; leaving restores the user's world.
+  if (isAgent) void enterAgentFlow();
+  else void exitAgentFlow();
+}
+let miniRunner: RunnerHandle | null = null;
+
+// ---- P-AVATAR.5 (ADR-0251): voice tool approval - keyword-strict, fail-closed, card stays boss ----
+// Armed per permission event in hands-free sessions. The matcher lives in voice_approval.ts (pure,
+// heavily tested); this glue only speaks the prompt, opens the mic, and routes ONE matching utterance
+// to the SAME choose() path the card's buttons use. Everything else (silence, sentences, mishears)
+// falls through to ordinary dictation, and the backend's 300s fail-closed timeout is never touched.
+let voiceApproval: { id: string; danger: boolean; options: ApprovalOption[]; respond: (oid: string | null, label: string, ok: boolean) => void; reprompts: number } | null = null;
+function armVoiceApproval(e: Extract<ChatEvent, { type: "permission" }>, respond: (oid: string | null, label: string, ok: boolean) => void): void {
+  if (state.userRole !== "lucid-agent" || !state.voice?.ttsConversation) return;
+  voiceApproval = { id: e.id, danger: !!e.danger, options: e.options, respond, reprompts: 0 };
+  void speakText(approvalPrompt(e));
+  // Open the mic for the verdict if conversation isn't already listening (streaming blocks maybeListen).
+  window.setTimeout(() => { if (voiceApproval?.id === e.id && !dictation) void toggleMicRecording(true); }, 800);
+}
+/** Route a transcript to a pending approval. True = consumed (never reaches the composer). */
+function consumeApprovalUtterance(text: string): boolean {
+  const va = voiceApproval;
+  if (!va) return false;
+  const m = matchApprovalUtterance(text, va.danger);
+  if (m === "none") return false; // ordinary dictation - let it land in the prompt bar
+  if (m === "vague-yes") {
+    if (va.reprompts++ < 2) void speakText("This one is high risk. Say the word approve to run it, or say deny.");
+    return true;
+  }
+  const oid = pickOption(va.options, m === "approve" ? "allow" : "deny");
+  if (!oid) return false; // no safe mapping - the visual card is the only path
+  voiceApproval = null;
+  va.respond(oid, m === "approve" ? "Approved by voice" : "Denied by voice", m === "approve");
+  void speakText(m === "approve" ? "Approved." : "Denied.");
+  return true;
+}
+
+// ---- P-AVATAR.4 (ADR-0251): the enter flow - agent mode + fast model + conversation, gap-guided ----
+let agentPrior: AgentPrior | null = null;
+let agentFlowTimer = 0;
+let vaultAsked = false; // the KG offer fires at most once per app session (never nag)
+let conversationArmed = false;
+let lastSpokenGap = "";
+const modelOptions = (): { value: string; name?: string }[] => {
+  const opt = state.config.find((c) => c.id === "model");
+  return (opt?.options ?? []).map((o) => ({ value: String(o.value), name: o.name }));
+};
+async function enterAgentFlow(): Promise<void> {
+  if (agentPrior) return; // already in
+  agentPrior = { model: state.model, uiMode: state.uiMode, autoSpeak: !!state.voice?.ttsAutoSpeak, conversation: !!state.voice?.ttsConversation };
+  conversationArmed = false;
+  lastSpokenGap = "";
+  if (state.uiMode !== "agent") void applyConfig("mode", "agent"); // full agent mode for the hands-free session
+  const fast = resolveConversationModel(modelOptions(), state.model);
+  if (fast) void applyConfig("model", fast); // remember/restore handled by agentPrior
+  await agentFlowStep();
+  window.clearInterval(agentFlowTimer);
+  agentFlowTimer = window.setInterval(() => { void agentFlowStep(); }, 4000); // self-heals after any fix
+}
+async function exitAgentFlow(): Promise<void> {
+  window.clearInterval(agentFlowTimer); agentFlowTimer = 0;
+  $("#agentSetupCard")?.remove();
+  const prior = agentPrior;
+  agentPrior = null;
+  if (!prior) return;
+  const back = restoreModel(prior, state.model, modelOptions());
+  if (back) void applyConfig("model", back);
+  if (prior.uiMode !== state.uiMode) void applyConfig("mode", prior.uiMode);
+  // Only unwind what the flow turned ON - a user who had auto-speak before keeps it.
+  if (!prior.conversation && state.voice?.ttsConversation) void applyVoicePatch({ ttsAutoSpeak: prior.autoSpeak, ttsConversation: false });
+}
+/** One readiness pass: gather live signals, surface the FIRST gap (or the one-time KG offer), and arm
+ *  conversation mode the moment the required set is green. Cheap + idempotent; runs every 4s while in. */
+async function agentFlowStep(): Promise<void> {
+  if (!agentPrior) return;
+  const [auth, voicesData, ws, personal] = await Promise.all([
+    state.auth ? Promise.resolve(state.auth) : bridge.auth().catch(() => null),
+    bridge.voices().catch(() => null),
+    state.voice?.sttProvider === "whisper" ? bridge.whisperStatus().catch(() => null) : Promise.resolve(null),
+    bridge.personal().catch(() => null),
+  ]);
+  if (!agentPrior) return; // left the role while we were fetching
+  if (auth) state.auth = auth;
+  const ttsProvider = state.voice?.ttsProvider ?? "elevenlabs";
+  const sttReady = state.voice?.sttProvider === "elevenlabs"
+    ? !!(auth?.others ?? []).find((p) => p.id === "elevenlabs")?.keySet
+    : !!ws && (ws.running || (ws.capable && ws.binAvailable));
+  const items = readinessChecklist({
+    providers: configuredProviderCount(auth),
+    ttsReady: !!voicesData?.engines?.find((e) => e.id === ttsProvider)?.ready,
+    sttReady,
+    vaultConfigured: !!personal?.configured,
+    vaultUnlocked: !!personal?.unlocked,
+  });
+  const gap = nextGap(items, vaultAsked);
+  if (gap) {
+    if (gap.id === "vault") vaultAsked = true;
+    renderAgentGap(gap);
+    // Speak a NEW gap once when the voice already works (the tts gap itself stays visual-only).
+    if (gap.id !== lastSpokenGap && gap.id !== "tts" && items.find((i) => i.id === "tts")?.ok) {
+      lastSpokenGap = gap.id;
+      void speakText(`${gap.title}. ${gap.hint}`);
+    }
+    if (gap.required) return; // conversation stays off until the required set is green
+  } else {
+    $("#agentSetupCard")?.remove();
+  }
+  if (!conversationArmed) {
+    conversationArmed = true;
+    if (!state.voice?.ttsConversation) {
+      await applyVoicePatch({ ttsAutoSpeak: true, ttsConversation: true });
+      showToast({ tone: "ok", title: "You're in", desc: `Hands-free with ${modelLabel(state.model)}. Just start talking - Esc parks the stage.`, timeout: 4500 });
+    }
+  }
+}
+/** The one-gap card: block prose (invariant #11 - icon absolutely positioned, text flows), one action,
+ *  one dismiss. Lives over the stage but is an ordinary element in the parked layout too. */
+function renderAgentGap(item: ReadyItem): void {
+  $("#agentSetupCard")?.remove();
+  const card = el(`<div id="agentSetupCard" class="agent-setup-card" role="dialog" aria-label="${esc(item.title)}">
+    <span class="asc-ic">${icon(item.required ? "info" : "graph", 14)}</span>
+    <div class="asc-tx"><b>${esc(item.title)}</b> ${esc(item.hint)}</div>
+    <div class="asc-row"><button class="btn-mini ok" data-agent-fix="${esc(item.action)}" type="button">${esc(item.actionLabel)}</button>
+    <button class="btn-mini" data-agent-dismiss type="button">${item.required ? "Later" : "No thanks"}</button></div>
+  </div>`);
+  card.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-agent-dismiss]")) { card.remove(); return; }
+    const fix = (t.closest("[data-agent-fix]") as HTMLElement | null)?.dataset.agentFix;
+    if (!fix) return;
+    card.remove();
+    // The fix surfaces live in the rails, which the stage hides - park the stage first, then deep-link.
+    if (state.immersive) setImmersive(false);
+    if (fix === "hub") openProviderHub();
+    else if (fix === "voice") openSettingsToVoice();
+    else openKnowledge();
+  });
+  document.querySelector(".center")?.appendChild(card);
+}
+
 // active-block override still wins. The full per-role chrome presets are P-ROLE.2.
 function applyRoleDefault(role: UserRole): void {
   refreshTriviaGame(); // P-TRIV.2 (ADR-0175): the Trivia Wire bank follows the role (idempotent) - BEFORE the surfacing guard
@@ -2364,16 +2598,19 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
     ? `<div class="set-note ${a.source === "email" ? "ok" : ""}">${icon(a.source === "email" ? "check" : "info", 12)} Code activity is attributed to <b>${esc(a.identity)}</b>${a.source === "workstation" ? " (this workstation - add an email above to attribute to you)" : ""}.</div>`
     : `<div class="set-note">${icon("info", 12)} Your email tags how much code each model wrote, per repo (ADR-0030). Stored on this machine only.</div>`;
   const role = state.userRole ?? "developer";
-  const roleSeg = USER_ROLE_LIST.map((id) =>
-    `<button class="role-seg${id === role ? " on" : ""}" type="button" data-role-pick="${esc(id)}" data-tip="${esc(ROLE_META[id].label + " · " + ROLE_META[id].blurb)}">${icon(ROLE_META[id].icon, 13)}<span>${esc(ROLE_META[id].label)}</span></button>`).join("");
+  // Four compact chips + a full-width hero button for the immersive role (user call, 2026-08-01).
+  const chips = USER_ROLE_LIST.filter((id) => id !== "lucid-agent").map((id) =>
+    `<button class="role-seg${id === role ? " on" : ""}" type="button" data-role-pick="${esc(id)}" data-tip="${esc(ROLE_META[id].label + " \u00b7 " + ROLE_META[id].blurb)}">${icon(ROLE_META[id].icon, 13)}<span>${esc(ROLE_META[id].label)}</span></button>`).join("");
+  const hero = `<button class="role-seg role-seg-hero${role === "lucid-agent" ? " on" : ""}" type="button" data-role-pick="lucid-agent" data-tip="${esc(ROLE_META["lucid-agent"].blurb)}">${icon("spark", 14)}<span>LUCID Agent</span><em>immersive stage \u00b7 hands-free</em></button>`;
   const roleRow = `<div class="set-sub">Role</div>
-    <div class="role-seg-row">${roleSeg}</div>
-    <div class="set-note">${icon("info", 12)} Tailors what you see first - cosmetic only; every panel stays reachable. <button class="btn-link" id="replayTour" type="button">Take the tour</button></div>`;
+    <div class="role-seg-row">${chips}</div>
+    ${hero}
+    <div class="set-note">${icon("info", 12)} Shapes what you see first; nothing is ever locked away. <button class="btn-link" id="replayTour" type="button">Take the tour</button></div>`;
   return setCard("profile", "Profile", "", `<div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
     <div class="prov-row"><input id="setEmail" class="prov-key" type="email" inputmode="email" autocomplete="email" placeholder="Corporate email (optional - for code-activity attribution)" value="${esc(s?.email ?? "")}" />
       <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div>
     ${managedLine}${idLine}
-    ${roleRow}`, false);
+    ${roleRow}`, true);
 }
 function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // Collapsible + default-collapsed (not in SET_OPEN): the AskSage gov gateway sits above this and is the
@@ -2507,11 +2744,12 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
 // P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
 // picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
 function whisperCardHtml(s: WhisperStatusView): string {
-  // P-STT.6 (ADR-0255): the picker OFFERS tiny/base/small only (medium/large proved slow + buggy through
+  // P-STT.6 (ADR-0267): the picker OFFERS tiny/base/small only (medium/large proved slow + buggy through
   // the local server) and GRAYS OUT a tier this hardware can't run instead of hiding it, so the user sees
   // WHY it's unavailable. Anything already downloaded - offered or not - lists below with a Remove button.
+  // The selection falls back to the tiny DEFAULT (P-STT.6 autostart) before the capability recommendation.
   const offered = s.tiers.filter((t) => t.offered);
-  const pick = s.activeTier ?? s.recommended;
+  const pick = s.activeTier ?? s.defaultTier ?? s.recommended;
   const opts = offered.map((t) => `<option value="${esc(t.tier)}"${t.tier === pick && t.runnable ? " selected" : ""}${t.runnable ? "" : " disabled"}>${esc(t.label)}${t.installed ? " \u00b7 installed" : ""}${t.runnable ? "" : ` \u00b7 ${esc(t.reason)}`}</option>`).join("");
   const status = s.running ? `<span class="abadge ok">${icon("check", 11)} running${s.activeTier ? ` \u00b7 ${esc(s.activeTier)}` : ""}</span>` : `<span class="abadge none">stopped</span>`;
   const binWarn = s.binAvailable ? "" : `<div class="set-note">${icon("info", 12)} <span>${esc(s.binHint)}</span></div>`;
@@ -2554,7 +2792,7 @@ async function loadVoices(): Promise<void> {
   const selEl = $("#voiceSelect") as HTMLSelectElement | null;
   if (!selEl) return;
   const data = await bridge.voices().catch(() => null);
-  // P-STT.6 (ADR-0255): gray out TTS engines that cannot speak on this machine right now, mirroring the
+  // P-STT.6 (ADR-0267): gray out TTS engines that cannot speak on this machine right now, mirroring the
   // composer voice menu's "needs setup" treatment (voiceEngineHtml). The currently selected engine stays
   // enabled so an in-progress setup is never locked out; once its key/server is fixed, a re-render clears
   // the gray. The reason rides the option's title.
@@ -3014,16 +3252,14 @@ async function reindexEmbeddings(): Promise<void> {
 }
 function settingsShell(): string {
   return [
-    `<div data-sec="workspace"></div>`,
+    setSkel("workspace", "Workspace", "folder \u00b7 clone \u00b7 git", true),
     // Profile is just the local name we already hold in state - render it instantly (no skeleton /
     // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
     secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
     setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
-    // AskSage gov gateway sits ABOVE Providers (the foregrounded, accredited path), with its monthly-tokens
-    // bar directly under it; the direct U.S. providers tuck into a default-collapsed card below.
+    setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
-    setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
     setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
@@ -3044,7 +3280,7 @@ function hydrateSettings(): void {
   void bridge.workspace().then((ws) => {
     if (ws) { state.workspace = ws; renderWorkspaceBar(); }
     const el = document.querySelector(`#setBody [data-sec="workspace"]`);
-    if (el) el.outerHTML = `<div data-sec="workspace">${ws ? workspaceSection(ws) : ""}</div>`;
+    if (el) el.outerHTML = ws ? workspaceSection(ws) : `<div data-sec="workspace"></div>`;
   });
   void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0221
   // Profile already painted from cache; refresh from disk only if it changed AND the user isn't typing.
@@ -3896,13 +4132,43 @@ function closePreview(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
+
+// P-TRAINER.7 (ADR-0267): the immersive Trainer stage as an in-app panel. A sandboxed iframe renders the
+// self-contained trainer experience; mutually exclusive with the other right-edge surfaces. It covers the
+// main work area but leaves the left rail + titlebar live, so re-clicking the rail icon (or Esc) closes it.
+let trainerOpen = false;
+function onTrainerEsc(e: KeyboardEvent): void { if (e.key === "Escape" && trainerOpen) closeTrainer(); }
+function openTrainer(): void {
+  trainerOpen = true;
+  closeSettings(); closeKnowledge(); closePreview(); closeAgentBuilder(); closeSkills();
+  const p = $("#trainerPanel") as HTMLElement | null; if (!p) return;
+  const f = $("#trainerFrame") as HTMLIFrameElement | null;
+  if (f && !f.getAttribute("src")) f.setAttribute("src", "trainer.html"); // lazy-load on first open
+  const tb = document.querySelector(".titlebar") as HTMLElement | null;
+  p.style.top = (tb?.offsetHeight ?? 0) + "px";
+  p.style.left = railWidth() + "px";
+  p.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "trainer"));
+  document.addEventListener("keydown", onTrainerEsc);
+}
+function closeTrainer(): void {
+  if (!trainerOpen) return;
+  trainerOpen = false;
+  document.removeEventListener("keydown", onTrainerEsc);
+  const p = $("#trainerPanel") as HTMLElement | null; if (p) p.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
 /** P-PREVIEW.2 (ADR-0096; auto-show, 2026-07-01): the agent just wrote a browser-previewable file — show it in
  *  the Preview panel automatically. It's just a preview, so we don't ask (the old toast disappeared before the
  *  user could click it). If the panel is already open, swap to the new file; otherwise open it on this file. */
 function onPreviewAvailable(path: string): void {
   if (!path) return;
   state.lastPreviewablePath = path;
-  if (!previewOpen) { openPreview({ reveal: "agent" }); kickPreviewShotSoon(); return; } // first reveal shows the agent's work (nothing on Yours yet)
+  // A write JUST happened, so the agent lane's loaded document is stale by definition. Clear the lane's
+  // path before openPreview so its unchanged-path guard cannot skip the reload (that guard exists to keep
+  // a running previewed app alive across mere panel toggles, not across file changes).
+  if (!previewOpen) { prevPathByLane.agent = ""; openPreview({ reveal: "agent" }); kickPreviewShotSoon(); return; }
   loadPreview(path, "agent"); // already open → update the AGENT lane live; badges the tab if you're on Yours
   kickPreviewShotSoon(); // refresh the cached shot once the agent frame paints, so a following preview_screenshot has it
 }
@@ -5461,7 +5727,7 @@ async function copyExportPath(dest: string): Promise<void> {
 // ───────────────────────── workspace ─────────────────────────
 function workspaceSection(ws: WorkspaceInfo): string {
   const gitPatSaved = state.creds.some((c) => c.ref === "git_pat"); // ADR-0216: a git PAT already in the vault?
-  return `<div class="set-sec"><div class="set-lbl">Workspace <span class="set-sub">the folder the agent works in</span></div>
+  return setCard("workspace", "Workspace", esc(ws.name), `
     <div class="ws-current">
       <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
       <div class="ws-path">${esc(ws.current)}</div>
@@ -5484,7 +5750,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
       ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`
       : `Optional. A GitHub/GitLab personal access token for private-repo clones. Stored in the OS-encrypted vault; never sent to the agent.`}</div>
     ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<span class="ws-recent-item" title="${esc(r.path)}"><button class="ws-recent-open" data-ws="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)}<span class="ws-recent-name">${esc(r.name)}</span></button><button class="ws-recent-rm" data-ws-remove="${esc(r.path)}" title="Remove from recents" aria-label="Remove ${esc(r.name)} from recents">${icon("close", 10)}</button></span>`).join("")}</div>` : ""}
-  </div>`;
+  `, true);
 }
 // ADR-0216: persist a git PAT into the OS-encrypted vault (ref "git_pat"). Kept in `sessionGitPat` too so it
 // authenticates a clone THIS session (passed inline) before the next-launch env injection; the field is cleared
@@ -6430,15 +6696,17 @@ async function refresh(): Promise<void> {
 
 // P10.3: warn BEFORE you hit the wall. The Claude 5-hour (oauth) limit has no header to
 // probe and probing would consume it, so we watch omp's reported figure and warn once per
-// window when it crosses 90% - turning the silent stall into an early heads-up.
+// window when it crosses 90%.
+// Fix (2026-08-25): warn ONLY on a VERIFIABLY LIVE window - rateLimits() already drops rows whose
+// window expired (the stale "always at 100%" bug), and a row with no reset timestamp cannot be
+// confirmed current over OAuth, so it renders in the Memory panel but never toasts.
 function checkBudgetWarning(budgets: NonNullable<MemorySnapshot["budgets"]> | null | undefined): void {
   for (const b of budgets ?? []) {
-    if (b.used >= 0.9 && !state.budgetWarned.has(b.label)) {
+    if (b.used >= 0.9 && b.resetsAt != null && b.resetsAt > Date.now() && !state.budgetWarned.has(b.label)) {
       state.budgetWarned.add(b.label);
       showToast({
-        title: `${b.label} almost spent`,
+        title: `${b.label} budget almost spent`,
         desc: `You're at ${Math.round(b.used * 100)}% of your ${b.label} budget. New turns may stall until it resets ${ageStr(b.resetsAt)}.`,
-        meta: "a stalled turn now ends with a clear message instead of hanging",
         actions: [{ label: "OK" }],
         timeout: 9000,
       });
@@ -7575,8 +7843,11 @@ function startUtterance(sess: DictationSession): void {
     const r = await bridge.transcribe(await blobToBase64(wav), wav.type).catch(() => null);
     sess.pending--;
     if (r?.text) {
-      const ta = $("#input") as HTMLTextAreaElement;
-      ta.value = mergeTranscript(ta.value, r.text); autosize(ta); setSendEnabled();
+      // P-AVATAR.5: a pending voice approval eats a matching verdict; anything else is dictation.
+      if (!consumeApprovalUtterance(r.text)) {
+        const ta = $("#input") as HTMLTextAreaElement;
+        ta.value = mergeTranscript(ta.value, r.text); autosize(ta); setSendEnabled();
+      }
     } else void warnSttFailure(sess, r); // P-STT.4: a dead engine is VISIBLE, not a silent nothing
     maybeSendSpokenTurn(sess);
   };
@@ -10239,10 +10510,12 @@ function wire(): void {
     if (r === "agentBuilder" && abOpen) return closeAgentBuilder();
     if (r === "settings" && state.settingsOpen) return closeSettings();
     if (r === "skills" && skillsOpen) return closeSkills(); // P-SKILL.4
+    if (r === "trainer" && trainerOpen) return closeTrainer(); // P-TRAINER.7
     if (r !== "knowledge") closeKnowledge();
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
     if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b
     if (r !== "skills") closeSkills(); // P-SKILL.4
+    if (r !== "trainer") closeTrainer(); // P-TRAINER.7
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
@@ -10251,6 +10524,7 @@ function wire(): void {
     else if (r === "preview") openPreview();
     else if (r === "agentBuilder") openAgentBuilder(); // P-AGENT.2b
     else if (r === "skills") openSkills(); // P-SKILL.4
+    else if (r === "trainer") openTrainer(); // P-TRAINER.7
     else palette.show();
   }));
   // P-AGENT.2b: Agent Builder toolbar (add-node kinds · connect mode · validate · save).
@@ -10434,6 +10708,8 @@ function wire(): void {
   // model / mode / thinking picker
   $("#modelBadge")!.addEventListener("click", () => openConfigPopover($("#modelBadge")!));
 
+  // P-AVATAR.1: back into the stage after an Esc exit (chip only visible for the lucid-agent role).
+  $("#tbStage")!.addEventListener("click", () => setImmersive(true));
   // text zoom
   $("#zoomIn")!.addEventListener("click", () => nudgeZoom(0.1));
   $("#zoomOut")!.addEventListener("click", () => nudgeZoom(-0.1));
@@ -10591,7 +10867,7 @@ function wire(): void {
       return;
     }
     if (t.closest("[data-whisper-stop]")) { await bridge.whisperStop().catch(() => null); await hydrateWhisper(); return; }
-    // P-STT.6 (ADR-0255): delete a downloaded model's weights (the running tier is refused server-side).
+    // P-STT.6 (ADR-0267): delete a downloaded model's weights (the running tier is refused server-side).
     const wrm = t.closest("[data-whisper-remove]") as HTMLElement | null;
     if (wrm) {
       const tier = wrm.dataset.whisperRemove ?? "";
@@ -10753,6 +11029,7 @@ function wire(): void {
         state.userRole = role;
         await bridge.saveRole(role).catch(() => null);
         applyRoleDefault(role);
+        syncImmersiveWithRole(role); // P-AVATAR.1: entering/leaving the lucid-agent role flips the stage
         fillSec("profile", secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }));
         showToast({ title: `${ROLE_META[role].label} view`, desc: ROLE_META[role].blurb, timeout: 2800 });
       }
@@ -12261,6 +12538,21 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   state.tourSeen = !!s?.tourSeen;                  // ADR-0089: first-run walkthrough replay guard
   state.govconCui = s?.govconCui ?? null;         // P-GOVCUI.1: null until the first-run gov/CUI step asks
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
+  syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
+  // P-AVATAR.6: the lucid-agent role gets a hero opening over the ~6-9s session warm - REAL signals
+  // only, min beat + hard cap in boot_cinematic.ts, Esc/Skip always, reduced-motion = static card.
+  if (state.userRole === "lucid-agent" && !document.getElementById("bootCine")) {
+    mountBootCinematic(
+      () => ({
+        settings: true, // we are inside the settings .then - the gate answered
+        config: state.config.some((c) => c.id === "model"),
+        models: state.config.find((c) => c.id === "model")?.options?.length ?? 0,
+        voice: !!state.voice,
+      }),
+      () => { /* the stage below is already live; nothing to hand off */ },
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    );
+  }
   runOnboarding(); // ADR-0088/0089 + P-GOVCUI.1: role pick → email → gov/CUI setup → first-run tour, in sequence
 });
 refresh();

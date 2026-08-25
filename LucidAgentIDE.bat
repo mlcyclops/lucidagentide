@@ -191,7 +191,7 @@ goto :eof
 
 rem ===========================================================================
 rem  Fleet GUI: launch a PROJECT-BOUND Lucid window (Fleet Profile prototype for
-rem  the Fleet Management feature request / ADR-0260). Each profile gets its own
+rem  the Fleet Management feature request / ADR-0272). Each profile gets its own
 rem  lucid-gui.json (workspace + recents), its own Personal Knowledge dir, and
 rem  its own port. NEVER 5319: the default port keeps the canonical Electron
 rem  userData identity + the lucid:// OAuth deep-link (desktop/main.ts), so the

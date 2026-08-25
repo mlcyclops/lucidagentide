@@ -30,7 +30,7 @@ test("cancelled keeps the partial facts", () => {
   expect(r.line).toContain("kept 2 facts");
 });
 
-// P-KG-INGEST.5 (ADR-0252): a wedged run used to render as a healthy "0/500 messages" line forever. The
+// P-KG-INGEST.5 (ADR-0264): a wedged run used to render as a healthy "0/500 messages" line forever. The
 // formatter now calls it out, which is what makes the hang visible instead of silent.
 test("running but silent past STALL_MS reports the stall", () => {
   const now = 1_000_000;

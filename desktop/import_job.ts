@@ -27,7 +27,7 @@ export interface ImportJobView {
 }
 interface ImportJob extends ImportJobView { abort: AbortController; cancelTimer?: ReturnType<typeof setTimeout> }
 
-// P-KG-INGEST.5 (ADR-0252): how long Stop waits for the run to unwind before the job is declared
+// P-KG-INGEST.5 (ADR-0264): how long Stop waits for the run to unwind before the job is declared
 // cancelled anyway. Without this the job stayed "running" forever whenever the run was wedged, and
 // single-flight then refused every retry until the app was restarted.
 export const CANCEL_GRACE_MS = 15_000;

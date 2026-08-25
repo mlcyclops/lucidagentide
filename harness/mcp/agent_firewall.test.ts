@@ -165,7 +165,7 @@ test("a hidden vector in a permission-ask title is quarantined (permissionReques
   expect(r.content[0]?.text ?? "").not.toContain(ZWSP);
 });
 
-// ── P-FLEET.1 (ADR-0256): the job-handle surface ────────────────────────────────────────────────
+// ── P-FLEET.1 (ADR-0268): the job-handle surface ────────────────────────────────────────────────
 
 /** A remote whose prompt resolves only when the test says so - the "slow worker". */
 class SlowRemote implements RemoteAgent {

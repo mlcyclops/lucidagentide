@@ -8,7 +8,7 @@
 // real ones and holds the single running-process handle. Invariant #2: whisper.cpp is a native binary.
 
 import { whisperCapability, type MachineSpecs, type WhisperTier } from "./whisper_capability.ts";
-import { isOfferedTier, offeredRecommendation, planWhisperInstall, WHISPER_MODELS, whisperModelFileNames, whisperServeUrl, whisperServerArgs, type WhisperModel } from "./whisper_install.ts";
+import { DEFAULT_WHISPER_TIER, isOfferedTier, offeredRecommendation, planWhisperInstall, WHISPER_MODELS, whisperModelFileNames, whisperServeUrl, whisperServerArgs, type WhisperModel } from "./whisper_install.ts";
 import type { DownloadResult, ResolvedBin } from "./whisper_manager.ts";
 
 export interface WhisperProc { pid: number; kill: () => void }
@@ -35,7 +35,7 @@ export interface WhisperRuntimeDeps {
   modelSizeMB?: (fileName: string) => number | null;
 }
 
-// P-STT.6 (ADR-0255): `offered` = installable/startable through the picker (tiny/base/small; medium/large
+// P-STT.6 (ADR-0267): `offered` = installable/startable through the picker (tiny/base/small; medium/large
 // proved slow + buggy via the local server and are remove-only now). `reason` explains a non-runnable tier
 // so the UI can GRAY IT OUT instead of hiding it. `diskMB` is the real on-disk size when installed.
 export interface WhisperTierView {
@@ -55,6 +55,8 @@ export interface WhisperInstallState { active: boolean; tier: WhisperTier | null
 export interface WhisperStatusView {
   capable: boolean;
   recommended: WhisperTier | null;
+  /** The tier used when nothing is picked (tiny) - the Voice-card picker preselects it. */
+  defaultTier: WhisperTier;
   summary: string;
   binAvailable: boolean;
   binHint: string;
@@ -109,7 +111,8 @@ export function whisperStatus(deps: WhisperRuntimeDeps): WhisperStatusView {
     : caps.summary;
   return {
     capable: caps.capable,
-    recommended,
+    recommended, // clamped to the OFFERED set (ADR-0267 housekeeping) - never medium/large
+    defaultTier: DEFAULT_WHISPER_TIER, // the product default (P-STT.6: tiny runs anywhere, autostart-safe)
     summary,
     binAvailable: !!bin,
     binHint: bin ? `whisper-server (${bin.source})` : BIN_HINT,
@@ -124,7 +127,7 @@ export function whisperStatus(deps: WhisperRuntimeDeps): WhisperStatusView {
 
 export interface WhisperActionResult { ok: boolean; reason?: string; tier?: WhisperTier }
 
-/** Download a model tier (the recommendation if unspecified). Fail-closed on an incapable machine. */
+/** Download a model tier (DEFAULT_WHISPER_TIER if unspecified). Fail-closed on an incapable machine. */
 export async function installWhisper(deps: WhisperRuntimeDeps, tier: WhisperTier | undefined, onProgress: (fraction: number) => void): Promise<WhisperActionResult> {
   const present = new Set(deps.listModels());
   const plan = planWhisperInstall(whisperCapability(deps.specs()), { tier, presentModels: present });
@@ -186,6 +189,25 @@ export async function startWhisper(deps: WhisperRuntimeDeps, opts: { tier?: Whis
   return { ok: false, reason: "the whisper server did not become healthy in time" };
 }
 
+/** P-STT.6: should the INSTALLED app autostart the managed server on launch? Pure, so the gate is
+ *  unit-tested; dev.ts feeds it the live status + voice settings. Autostart only when:
+ *  - the app is packaged (the bundled binary is guaranteed; dev runs stay opt-in),
+ *  - Whisper is the chosen STT engine (never race an ElevenLabs user),
+ *  - the sttUrl is empty or loopback - a REMOTE url means the user runs their own server elsewhere,
+ *    and startWhisper would clobber that wiring via setSttUrl,
+ *  - the machine is capable, a binary resolved, and nothing is running or mid-install. */
+export function shouldAutostartWhisper(status: WhisperStatusView, voice: { sttProvider: string; sttUrl: string }, packaged: boolean): boolean {
+  if (!packaged || voice.sttProvider !== "whisper") return false;
+  if (!status.capable || !status.binAvailable || status.running || status.install.active) return false;
+  if (voice.sttUrl) {
+    try {
+      const host = new URL(voice.sttUrl).hostname;
+      if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1" && host !== "[::1]") return false;
+    } catch { /* unparseable url: treat as unset and manage locally */ }
+  }
+  return true;
+}
+
 /** Stop the managed server (no-op if not running). An ADOPTED server has no pid handle, so stopping it
  *  needs the injected port reaper (pass deps from the API route); without one it is left running. */
 export async function stopWhisper(deps?: WhisperRuntimeDeps): Promise<WhisperActionResult> {
@@ -200,7 +222,7 @@ export function whisperModelFiles(): string[] {
   return whisperModelFileNames();
 }
 
-/** P-STT.6 (ADR-0255): delete a downloaded model's weights. Fail-closed: never the tier the running
+/** P-STT.6 (ADR-0267): delete a downloaded model's weights. Fail-closed: never the tier the running
  *  server has loaded (stop it first); a filesystem failure is reported, not thrown. Idempotent when the
  *  file is already absent. Works for EVERY catalog tier, offered or not - reclaiming disk from a
  *  no-longer-offered medium/large install is exactly the point. */

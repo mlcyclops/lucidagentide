@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-FLEET.1 (ADR-0256): the pure job table. What matters: the closed state set, sticky terminals (a
+// P-FLEET.1 (ADR-0268): the pure job table. What matters: the closed state set, sticky terminals (a
 // cancelled job whose remote turn later settles must never become done), the unknown-id rule, key dedupe,
 // the queue cap, and the custody rule that metadata views can never leak an envelope or a prompt.
 

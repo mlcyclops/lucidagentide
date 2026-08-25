@@ -27,7 +27,9 @@ export type ChatEvent =
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
   | { type: "usage"; used: number; size: number; cost: number }
-  | { type: "slow"; waitedMs: number } // P-STALL.1 (ADR-0186): the provider is silent - the UI shows "still waiting"
+  // P-STALL.1 (ADR-0186) / P-STALL.2 (ADR-0263): the provider is silent - the UI shows "still waiting";
+  // `pending` names the open tool calls / spawned subagent tasks the turn is waiting on (longest first).
+  | { type: "slow"; waitedMs: number; pending?: { label: string; elapsedMs: number }[] }
   // P-GOAL.1/3 (ADR-0046): /goal loop events (kept in parity with desktop/acp_backend.ts).
   | { type: "goal-memory"; path: string }
   | { type: "goal-iter"; n: number; max: number }

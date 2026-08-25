@@ -11,14 +11,20 @@ import { looksLikeWhisperModel, offeredRecommendation, OFFERED_TIERS, planWhispe
 const mac = (totalRamGB: number): MachineSpecs => ({ arch: "arm64", platform: "darwin", totalRamGB, cpuCores: 10, accel: "metal" });
 
 describe("planWhisperInstall", () => {
-  it("plans the recommended tier for an 8GB machine (small)", () => {
+  it("defaults to the tiny tier when no tier is picked (cheap no-code start)", () => {
     const p = planWhisperInstall(whisperCapability(mac(8)));
     expect(p.ok).toBe(true);
-    if (p.ok) { expect(p.tier).toBe("small"); expect(p.model.fileName).toBe("ggml-small.en.bin"); expect(p.alreadyInstalled).toBe(false); }
+    if (p.ok) { expect(p.tier).toBe("tiny"); expect(p.model.fileName).toBe("ggml-tiny.en.bin"); expect(p.alreadyInstalled).toBe(false); }
+  });
+
+  it("honors the hardware-recommended tier when passed explicitly (small on 8GB)", () => {
+    const caps = whisperCapability(mac(8));
+    const p = planWhisperInstall(caps, { tier: caps.recommended ?? undefined });
+    expect(p.ok && p.tier).toBe("small");
   });
 
   it("marks a model already on disk as installed", () => {
-    const p = planWhisperInstall(whisperCapability(mac(8)), { presentModels: new Set(["ggml-small.en.bin"]) });
+    const p = planWhisperInstall(whisperCapability(mac(8)), { tier: "small", presentModels: new Set(["ggml-small.en.bin"]) });
     expect(p.ok && p.alreadyInstalled).toBe(true);
   });
 
@@ -27,7 +33,7 @@ describe("planWhisperInstall", () => {
     expect(p.ok && p.tier).toBe("small");
   });
 
-  // P-STT.6 (ADR-0255): medium/large are no longer offered - slow + unstable through the local server.
+  // P-STT.6 (ADR-0267): medium/large are no longer offered - slow + unstable through the local server.
   it("refuses a no-longer-offered tier even when the hardware could run it (medium on 8GB)", () => {
     const p = planWhisperInstall(whisperCapability(mac(8)), { tier: "medium" });
     expect(p.ok).toBe(false);

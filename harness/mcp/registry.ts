@@ -42,7 +42,7 @@ export interface RemoteAgentEntry {
   remoteUrl?: string;
   /** How to answer the remote's permission asks: "deny" (default, fail-closed) or "allow". */
   permissionPolicy?: "deny" | "allow";
-  /** P-FLEET.1 (ADR-0256): deadline for ONE worker turn, ms. Default 600_000 (P-STALL.1's ten minutes). */
+  /** P-FLEET.1 (ADR-0268): deadline for ONE worker turn, ms. Default 600_000 (P-STALL.1's ten minutes). */
   jobTimeoutMs?: number;
   /** P-FLEET.1: queued jobs beyond which dispatch refuses. Default 8. */
   maxQueue?: number;

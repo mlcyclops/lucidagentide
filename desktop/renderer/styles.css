@@ -1993,6 +1993,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .role-card:hover{border-color:var(--accent-2);background:var(--bg-3);transform:translateY(-1.5px);box-shadow:var(--shadow-md,0 8px 20px -10px rgba(0,0,0,.6))}
 .role-ic{display:grid;place-items:center;width:42px;height:42px;border-radius:11px;background:var(--bg-4);color:var(--accent-2);flex:none}
 .role-ic.r-security{color:var(--red)} .role-ic.r-manager{color:var(--green)} .role-ic.r-executive{color:var(--cyan)} .role-ic.r-developer{color:var(--accent-2)}
+/* P-AVATAR.1 (ADR-0251): matrix neon - deliberate one-off brand color for the lucid-agent role. */
+.role-ic.r-lucid-agent{color:#41ff8b}
+/* The fifth, behavioral role reads as the hero option: full-width card with a neon edge. */
+.role-card[data-role="lucid-agent"]{grid-column:1/-1;border-color:color-mix(in srgb,#41ff8b 45%,var(--line-strong));
+  background:linear-gradient(180deg,color-mix(in srgb,#41ff8b 7%,var(--bg-2)),var(--bg-2))}
+.role-card[data-role="lucid-agent"]:hover{border-color:#41ff8b;box-shadow:0 8px 24px -10px rgba(65,255,139,.35)}
 .role-tx{display:flex;flex-direction:column;gap:4px;min-width:0}
 .role-tx>b{font-size:16px;font-weight:650;color:var(--txt)}
 .role-lands{font-size:11px;font-weight:600;color:var(--txt-3);text-transform:uppercase;letter-spacing:.05em}
@@ -2051,9 +2057,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .ri-tie{animation:ritie 3.4s ease-in-out infinite}
 @keyframes ribust{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
 @keyframes ritie{0%,100%{opacity:.82}50%{opacity:1}}
+/* LUCID Agent - glyph rain falls through the head (P-AVATAR.1, ADR-0251) */
+.ri-rain{animation:ririan 1.9s linear infinite}
+.ri-rain2{animation-delay:.45s}.ri-rain3{animation-delay:.9s}
+@keyframes ririan{0%{transform:translateY(-2.5px);opacity:0}18%{opacity:1}82%{opacity:1}100%{transform:translateY(6px);opacity:0}}
 @media (prefers-reduced-motion:reduce){
-  .ri-caret,.ri-dev-l,.ri-dev-r,.ri-check,.ri-bar,.ri-bar2,.ri-bar3,.ri-trend,.ri-bust,.ri-tie{animation:none}
-  .ri-check,.ri-trend{stroke-dashoffset:0} .ri-bar{transform:none} .ri-caret,.ri-tie{opacity:1}
+  .ri-caret,.ri-dev-l,.ri-dev-r,.ri-check,.ri-bar,.ri-bar2,.ri-bar3,.ri-trend,.ri-bust,.ri-tie,.ri-rain{animation:none}
+  .ri-check,.ri-trend{stroke-dashoffset:0} .ri-bar{transform:none} .ri-caret,.ri-tie{opacity:1} .ri-rain{opacity:.8}
 }
 
 /* ADR-0088: Settings → Profile role switcher (segmented) */
@@ -2063,7 +2073,70 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   color:var(--txt-3);font:inherit;font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:8px;cursor:pointer;
   transition:color var(--t),background var(--t),border-color var(--t),box-shadow var(--t)}
 .role-seg:hover{color:var(--txt);border-color:var(--line-strong)}
+/* The immersive role gets its own full-width hero button under the four chips (user call, 2026-08-01):
+   centered, spanned, neon-edged. Three short single-element children - never raw prose in a flex box. */
+.role-seg-hero{width:100%;justify-content:center;gap:9px;margin:8px 0 2px;padding:10px 14px;border-radius:10px;
+  font-size:12.5px;border-color:color-mix(in srgb,#41ff8b 42%,var(--line-strong));
+  background:linear-gradient(180deg,color-mix(in srgb,#41ff8b 9%,var(--bg-2)),var(--bg-2));color:var(--txt)}
+.role-seg-hero>span{white-space:nowrap;font-weight:650}
+.role-seg-hero>em{font-style:normal;white-space:nowrap;font-size:11px;color:var(--txt-3);letter-spacing:.02em}
+.role-seg-hero:hover{border-color:#41ff8b;box-shadow:0 6px 18px -10px rgba(65,255,139,.5)}
+.role-seg-hero.on{border-color:#41ff8b;color:#8ef5bc;box-shadow:inset 0 0 0 1px #41ff8b,0 6px 18px -10px rgba(65,255,139,.55)}
+.role-seg-hero.on>em{color:color-mix(in srgb,#41ff8b 70%,var(--txt-3))}
 .role-seg.on{color:var(--txt);background:var(--bg-4);border-color:var(--accent-2);box-shadow:inset 0 0 0 1px var(--accent-2)}
+
+/* P-AVATAR.1 (ADR-0251): the immersive lucid-agent stage. Both rails + the inspector step aside; the
+   stage layer sits between the chat background and the thread (content keeps z-index:1).
+   CRITICAL (live-bug 2026-08-01): .body is a 5-track grid and Settings/Skills/etc are grid SIBLINGS -
+   `display:none` REMOVES an item from grid placement, so every later panel re-slots leftward (the
+   center collapses into an `auto` track, Settings lands mid-screen, the 1fr track sits empty). The
+   rails must therefore COLLAPSE IN PLACE (width 0, still placed), never leave the grid. */
+#app-inner.immersive .rail{width:0;min-width:0;padding:0;border:0;opacity:0;pointer-events:none;overflow:hidden;
+  transition:width var(--t) var(--ease),opacity var(--t) var(--ease),padding var(--t) var(--ease)}
+/* Hover-peek (user call, 2026-08-01): the mouse near the left edge slides the rail back in as a push
+   drawer (still a grid item - never out of flow, see the hazard note above); moving away tucks it. */
+#app-inner.immersive.rail-peek .rail{width:54px;min-width:54px;opacity:1;pointer-events:auto;padding:10px 0;border-right:1px solid var(--line-soft)}
+#app-inner.immersive .sidebar,#app-inner.immersive .inspector{width:0!important;min-width:0;opacity:0;border:0;box-shadow:none;pointer-events:none;overflow:hidden}
+.agent-stage{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.agent-stage-glow{position:absolute;inset:-20%;
+  background:
+    radial-gradient(58% 46% at 50% 38%, rgba(65,255,139,.16), transparent 66%),
+    radial-gradient(90% 70% at 50% 108%, rgba(65,255,139,.08), transparent 70%);
+  animation:agentGlow 7s ease-in-out infinite}
+@keyframes agentGlow{0%,100%{opacity:.75}50%{opacity:1}}
+.agent-stage-cap{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);
+  font-size:10.5px;letter-spacing:3.2px;text-transform:uppercase;color:rgba(65,255,139,.5);
+  font-weight:650;white-space:nowrap}
+@media (prefers-reduced-motion:reduce){.agent-stage-glow{animation:none}}
+
+/* P-AVATAR.6 (ADR-0251): the boot cinematic - full-screen, above everything, gone in under 12s. */
+.boot-cine{position:fixed;inset:0;z-index:300;background:#05080a;opacity:1;transition:opacity .4s ease}
+.boot-cine.out{opacity:0;pointer-events:none}
+.boot-cine .bc-rain{position:absolute;inset:0;width:100%;height:100%}
+.bc-panel{position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);text-align:center;pointer-events:none}
+.bc-word{font:800 44px/1 var(--mono,monospace);letter-spacing:14px;color:#41ff8b;text-indent:14px;
+  text-shadow:0 0 26px rgba(65,255,139,.5),0 0 4px rgba(65,255,139,.9);margin-bottom:22px}
+.bc-lines{display:flex;flex-direction:column;gap:7px;align-items:flex-start;margin:0 auto;width:max-content}
+.bc-line{font:500 12.5px var(--mono,monospace);letter-spacing:1px;color:#3d4f46;white-space:nowrap;transition:color .3s ease}
+.bc-line.done{color:#8ef5bc}
+.bc-line .bc-dot{display:inline-block;width:18px;color:inherit}
+.bc-skip{position:absolute;right:18px;bottom:16px;border:1px solid #1e2c26;background:transparent;color:#4d6157;
+  font:600 11px var(--mono,monospace);letter-spacing:1.5px;padding:6px 12px;border-radius:8px;cursor:pointer;
+  transition:color .2s,border-color .2s}
+.bc-skip:hover{color:#8ef5bc;border-color:#2f4a3d}
+@media (prefers-reduced-motion:reduce){.boot-cine{transition:none}}
+
+/* P-AVATAR.4 (ADR-0251): the one-gap setup card on/over the stage. BLOCK prose per invariant #11:
+   the icon is absolutely positioned and the text flows as a normal paragraph - never a flex row of
+   raw text + inline tags. */
+.agent-setup-card{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:6;
+  width:min(430px,86%);padding:13px 15px 12px 38px;border:1px solid color-mix(in srgb,#41ff8b 35%,var(--line-strong));
+  border-radius:12px;background:color-mix(in srgb,#41ff8b 6%,var(--bg-1));
+  box-shadow:0 10px 30px -12px rgba(0,0,0,.6)}
+.agent-setup-card .asc-ic{position:absolute;left:13px;top:14px;color:#41ff8b}
+.agent-setup-card .asc-tx{font-size:12.5px;line-height:1.55;color:var(--txt-2)}
+.agent-setup-card .asc-tx b{color:var(--txt);display:block;margin-bottom:2px}
+.agent-setup-card .asc-row{display:flex;gap:8px;margin-top:9px}
 
 /* ADR-0089 (P-ROLE.1b): first-run guided walkthrough - coachmark = the model hover-card's twin */
 .coach-catch{position:fixed;inset:0;z-index:140;background:transparent}
@@ -2312,6 +2385,12 @@ body.preview-open .thread{font-size:.9em}
 .preview-body{flex:1;min-height:0;position:relative;display:flex;background:var(--bg-0)}
 .preview-frame{flex:1;min-width:0;border:0;background:#fff}
 .preview-frame[hidden]{display:none}
+/* P-TRAINER.7 (ADR-0255): the immersive Trainer stage. Covers the main work area (top/left set inline to
+   sit below the titlebar + right of the rail, so both stay live); the iframe carries its own chrome. */
+.trainer-panel{position:fixed;top:0;left:56px;right:0;bottom:0;z-index:80;background:var(--bg-0);animation:trainerIn .28s cubic-bezier(.16,1,.3,1) both}
+.trainer-panel[hidden]{display:none}
+.trainer-frame{width:100%;height:100%;border:0;display:block;background:var(--bg-0)}
+@keyframes trainerIn{from{opacity:0;transform:scale(.995)}to{opacity:1;transform:none}}
 /* P-PREVIEW.6a (ADR-0148): live "reviewing / testing" indicator — the panel glows + a pill shows while
    the agent looks at / tests the preview. */
 #preview.testing .preview-body{box-shadow:inset 0 0 0 2px var(--accent,#6b8afd),inset 0 0 22px -4px color-mix(in srgb,var(--accent,#6b8afd) 65%,transparent);animation:prevGlow 1.6s ease-in-out infinite}

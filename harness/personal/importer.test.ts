@@ -206,7 +206,7 @@ test("importConversations: an aborted signal stops early but KEEPS facts learned
   expect(store.graph({ scope: "combined" }).facts.length).toBe(sum.learned); // ...and persisted (no torn write)
 });
 
-// P-KG-INGEST.5 (ADR-0252): cancel WITHIN a conversation.
+// P-KG-INGEST.5 (ADR-0264): cancel WITHIN a conversation.
 // In model mode one conversation is hundreds of slow completions, so a conversation-boundary-only check
 // made Stop look dead. The signal must be observed per MESSAGE and reach the extractor itself.
 test("importConversations: an abort stops mid-conversation, not at the next conversation boundary", async () => {

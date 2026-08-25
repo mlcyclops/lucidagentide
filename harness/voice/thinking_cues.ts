@@ -3,7 +3,7 @@
 
 // harness/voice/thinking_cues.ts
 //
-// P-VOICE.6 (ADR-0249) + P-VOICE.7 (ADR-0257): keep a hands-free user company while the agent is thinking.
+// P-VOICE.6 (ADR-0249) + P-VOICE.7 (ADR-0269): keep a hands-free user company while the agent is thinking.
 //
 // On screen, a long turn is legible - the thinking block streams, tool chips tick past, the HUD counts. With
 // your eyes off it, all of that is DEAD AIR. Thirty seconds of silence after you have spoken is indis-

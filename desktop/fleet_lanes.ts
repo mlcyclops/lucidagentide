@@ -13,7 +13,7 @@
 //     the OS, the browser, and the user's other apps keep their headroom, and a refusal always carries
 //     the measured number.
 //   - One turn at a time PER LANE (one ACP session per lane; overlapping prompts on one session would
-//     cross collectors - the ADR-0256 lesson). Parallelism is across lanes.
+//     cross collectors - the ADR-0268 lesson). Parallelism is across lanes.
 //   - Permission asks are FAIL-CLOSED: every session/request_permission surfaces to the lane's mini
 //     window as needs-approval and waits for the user; no answer within the cap, or no dashboard
 //     listening, means DENY. Lanes have no standing allowlists in L1 - a worker lane asking to run
@@ -62,7 +62,7 @@ export interface FleetStatusData {
 const LANE_TURN_TIMEOUT_MS = 600_000;
 /** An unanswered approval is a DENY after this long (fail-closed; the ask stays visible until then). */
 const APPROVAL_TIMEOUT_MS = 600_000;
-/** ACP handshake bounds (P-KG-INGEST.5, ADR-0252: every request carries a clock). */
+/** ACP handshake bounds (P-KG-INGEST.5, ADR-0264: every request carries a clock). */
 const HANDSHAKE_MS = 30_000;
 
 export interface FleetLaneDeps {

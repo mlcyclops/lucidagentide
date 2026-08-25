@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/native_dialog.ts - P-FS.2 (ADR-0253): the REAL OS folder dialog for the browser build.
+// desktop/native_dialog.ts - P-FS.2 (ADR-0265): the REAL OS folder dialog for the browser build.
 //
 // The packaged Electron shell already opens Explorer/Finder via `lucid:pickFolder` (preload). But the
 // default launch path (LucidAgentIDE.bat / lucid.exe) serves the GUI to a PLAIN BROWSER, where no

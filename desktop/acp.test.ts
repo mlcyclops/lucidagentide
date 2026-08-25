@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/acp.test.ts - P-KG-INGEST.5 (ADR-0252): the ACP request layer must ALWAYS settle.
+// desktop/acp.test.ts - P-KG-INGEST.5 (ADR-0264): the ACP request layer must ALWAYS settle.
 //
 // The chat-history import wedged at "0/500 messages" because `request()` had no timeout and never
 // rejected when the omp child died: the promise for `initialize` (or `session/new`) simply stayed

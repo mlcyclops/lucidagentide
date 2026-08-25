@@ -81,8 +81,11 @@ desktop/whisper/*
 # Local-only: contains real personal data (PII) — never commit
 tools/seed_personal_facts.ts
 
-# P-EXT.4: compiled lucid launcher (built during desktop dist)
-/bin/
+# P-EXT.4: compiled lucid launcher (built during desktop dist). The DIR itself stays tracked via
+# .gitkeep: compile-lucid/compile-engine write --outfile ../bin/<exe>, and a fresh CI checkout with
+# no bin/ dir fails ENOENT under current Bun (it no longer creates the outfile parent).
+/bin/*
+!/bin/.gitkeep
 netwatch.log
 
 # P-KG-CODE.1: generated per-workspace code-graph cache (the tracked .omp/commands stays)

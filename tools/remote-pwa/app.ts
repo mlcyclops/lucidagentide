@@ -17,9 +17,10 @@ import { importRoomKey } from "../../desktop/collab/crypto.ts";
 import { parseShareLink, formatShareLink } from "../../desktop/collab/link.ts";
 import { resolveReconnect, RELAY_FILE_NAME } from "../../desktop/collab/drive_relay_codes.ts"; // P-REMOTE.10c (ADR-0235): out-of-band reconnect reader
 import { findRelayFile, readRelayFile } from "../../desktop/collab/drive_file.ts";
-import { foldEvent, renderControls, renderTranscript, renderHeader, statusLabel, buildTurnReport, renderReportHtml, reportMarkdown, type ViewItem, type TurnReport } from "../../desktop/collab/pwa_view.ts";
+import { foldEvent, renderControls, renderTranscript, renderHeader, presentedStatus, RECONNECT_GRACE_MS, buildTurnReport, renderReportHtml, reportMarkdown, type ViewItem, type TurnReport } from "../../desktop/collab/pwa_view.ts";
 import { createRemoteCheckout, entitlementActive, isEntitlementDenied } from "../../desktop/collab/remote_entitlement.ts";
 import { acceptAttachment, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "../../desktop/renderer/composer_attachments.ts"; // P-REMOTE.8 (ADR-0229): pasted/attached images
+import { downmixMono, encodeWavPcm16, resampleLinear, WHISPER_SAMPLE_RATE } from "../../desktop/renderer/dictation.ts"; // P-REMOTE.12: pure PCM->WAV transcode (same math as the desktop mic)
 import { penWidthFor, toNormPoint, type NormPoint } from "../../desktop/collab/preview_snapshot.ts"; // P-PREVIEW-PWA.2 (ADR-0239): normalized markup strokes
 
 /** The auth bridge firebase_auth.js publishes on window — a Firebase ID token for the gated relay. */
@@ -162,6 +163,7 @@ function main(): void {
   // screen locks so, on the reconnect welcome-replay, we can summarize the turns that completed while away.
   let seenTurns = 0;
   let awayAt = -1;
+  let flapAt = 0; // P-REMOTE.13: when the current transient reconnect began (0 = healthy)
   let shotSrc = ""; // P-PREVIEW-PWA.1: the image currently open in the fullscreen snapshot viewer (for Save)
   let guestReadOnly = true; // P-PREVIEW-PWA.2: gates the markup send-back (view guests cannot prompt the host)
   // P-REMOTE.9: end-of-run report over the LAST turn (items since the previous `done`).
@@ -392,6 +394,82 @@ function main(): void {
   });
   $("abort-btn").addEventListener("click", () => { guest?.abort(); });
 
+  // ---- P-REMOTE.12 (ADR-0251): push-to-talk - HOLD to record, release to send ----
+  // The clip is transcoded ON the phone to 16k mono WAV (whisper.cpp cannot decode WebM server-side;
+  // there is no Web Audio in Bun) and sent as PromptFrame.audio; the HOST transcribes it with the same
+  // engine as its local mic and the transcript enters the session as an ordinary, scanned guest prompt.
+  // Push-to-talk (not VAD) is the user-confirmed mobile call: reliable on iOS, no hot mic ever.
+  const pttBtn = $("ptt-btn") as HTMLButtonElement;
+  let pttRec: MediaRecorder | null = null;
+  let pttStream: MediaStream | null = null;
+  let pttChunks: Blob[] = [];
+  let pttStartedAt = 0;
+  const pttStop = (): void => { try { pttRec?.stop(); } catch { /* already stopped */ } };
+  const pttCleanup = (): void => {
+    pttBtn.classList.remove("rec");
+    pttStream?.getTracks().forEach((t) => t.stop());
+    pttStream = null; pttRec = null;
+  };
+  /** Decode the recorded clip and re-encode as 16k mono WAV; null when the phone cannot decode it. */
+  const clipToWav = async (blob: Blob): Promise<Blob | null> => {
+    try {
+      // Safari < 14.1 exposes only the webkit-prefixed constructor; lib.dom cannot express it.
+      const w = window as Window & { webkitAudioContext?: typeof AudioContext };
+      const Ctor = typeof AudioContext !== "undefined" ? AudioContext : w.webkitAudioContext;
+      if (!Ctor) return null;
+      const ctx = new Ctor();
+      try {
+        const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+        const chans: Float32Array[] = [];
+        for (let c = 0; c < decoded.numberOfChannels; c++) chans.push(decoded.getChannelData(c));
+        const mono = downmixMono(chans);
+        const wav = encodeWavPcm16(resampleLinear(mono, decoded.sampleRate, WHISPER_SAMPLE_RATE), WHISPER_SAMPLE_RATE);
+        return new Blob([wav], { type: "audio/wav" });
+      } finally { void ctx.close(); }
+    } catch { return null; }
+  };
+  const blobB64 = (blob: Blob): Promise<string> => {
+    const { promise, resolve, reject } = Promise.withResolvers<string>();
+    const rd = new FileReader();
+    rd.onload = () => resolve(String(rd.result).split(",")[1] ?? "");
+    rd.onerror = () => reject(rd.error);
+    rd.readAsDataURL(blob);
+    return promise;
+  };
+  const pttStart = async (): Promise<void> => {
+    if (pttRec || guestReadOnly) return;
+    try {
+      pttStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch { $("bs-summary").textContent = "microphone blocked"; return; }
+    pttChunks = [];
+    pttStartedAt = Date.now();
+    pttRec = new MediaRecorder(pttStream);
+    pttRec.ondataavailable = (e) => { if (e.data.size) pttChunks.push(e.data); };
+    pttRec.onstop = async () => {
+      const held = Date.now() - pttStartedAt;
+      const raw = new Blob(pttChunks, { type: pttRec?.mimeType || "audio/webm" });
+      pttCleanup();
+      if (held < 350 || raw.size < 1200) return; // a tap / silence - nothing to send
+      const wav = await clipToWav(raw);
+      const clip = wav ?? raw; // raw fallback keeps cloud STT working when decode fails
+      const b64 = await blobB64(clip).catch(() => "");
+      if (!b64) return;
+      if (guest?.sendPrompt("", undefined, { b64, mime: wav ? "audio/wav" : (raw.type || "audio/webm") })) {
+        const echo = "[voice message]";
+        selfEchoes.push(echo);
+        items = [...items, { kind: "user", text: echo }];
+        render(guest.view());
+        $("catchup").hidden = true;
+      }
+    };
+    pttRec.start();
+    pttBtn.classList.add("rec");
+  };
+  pttBtn.addEventListener("pointerdown", (ev) => { ev.preventDefault(); pttBtn.setPointerCapture(ev.pointerId); void pttStart(); });
+  pttBtn.addEventListener("pointerup", pttStop);
+  pttBtn.addEventListener("pointercancel", pttStop);
+  pttBtn.addEventListener("contextmenu", (ev) => ev.preventDefault()); // long-press must not open a menu on iOS
+
   // Attach via the + label (a native <label for=file-input> - opens the iOS picker on tap, no JS .click(),
   // which iOS blocks for a display:none input), paste, or drag-drop. Every image is re-validated fail-closed.
   const fileInput = $("file-input") as HTMLInputElement;
@@ -448,7 +526,16 @@ function main(): void {
   const render = (view: GuestView): void => {
     $("hdr").innerHTML = renderHeader(view.header);
     // P-REMOTE.11: the live status shows in the condensed bottom strip's always-visible bar (dot + label).
-    const st = statusLabel(view);
+    // P-REMOTE.13: the HOURLY Cloud-Run flap stays INVISIBLE while younger than the grace window - the
+    // socket buffers sends and re-auths on its own; only a drop that outlives the grace shows amber.
+    if (view.phase === "reconnecting") {
+      if (!flapAt) {
+        flapAt = Date.now();
+        // Repaint once at grace expiry, so a REAL outage surfaces without waiting for the next frame.
+        window.setTimeout(() => { if (flapAt && guest) render(guest.view()); }, RECONNECT_GRACE_MS + 100);
+      }
+    } else flapAt = 0;
+    const st = presentedStatus(view, flapAt, Date.now());
     $("bs-summary").textContent = st.text;
     $("bs-dot").dataset.tone = st.tone;
     // P-REMOTE.11: back from a lock/disconnect -> summarize the turns that landed while away (once).

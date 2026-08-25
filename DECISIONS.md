@@ -16643,8 +16643,978 @@ auto-speak alone - you stop being listened to, replies are still read.
 6 unit tests pinning the restraint rules (nothing before the gap, the answer always wins, gaps provably
 escalate, hard cap, distinct + tool-flavoured lines, and every line short/markdown-free/sentence-terminated so
 the engine lands the intonation). 66 voice tests; renderer tsc clean.
+-----
 
-## ADR-0250 -- P-WINBOOT.1: Windows installed-app startup hardening (protected-directory failure)
+## ADR-0174 - P-SANDBOX.7b: the mediated --loopback-only posture for the AppContainer helper, BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built (security guarantee verified; the proxy-reachability completion is install-time
+admin). Increment 7b of the ADR-0157 epic. Activation/packaging (bundle + install-time register) is next.
+
+### Context
+
+P-SANDBOX.7 (ADR-0173) shipped the verified `--deny-network` AppContainer helper but the COMMON omp session
+is `trusted-local` (`canNetwork:true`), which the P-SANDBOX.6 seam maps to `--loopback-only` (mediated egress
+through the loopback proxy) - and `.7` left that mode refusing (exit 3). This implements it.
+
+### The Windows loopback wrinkle
+
+An AppContainer with an EMPTY capability set has **no `internetClient` ⇒ no direct outbound internet** (that
+is `.7`'s deny-network guarantee, and it holds for `--loopback-only` too). But AppContainers ALSO block
+**loopback** by default (a deliberate Windows security measure), so an empty-caps container can't reach the
+`127.0.0.1` proxy either. Reaching loopback requires a **loopback EXEMPTION** for the AppContainer SID -
+and `CheckNetIsolation LoopbackExempt -a` **requires administrator** (verified: "Access Denied, run as
+administrator"). It is a system-wide, per-SID setting, so it cannot be a per-spawn operation.
+
+### Decision
+
+- **`--loopback-only` runs the SAME empty-caps AppContainer as `--deny-network`** (no `internetClient`). The
+  child additionally inherits `HTTP(S)_PROXY` (set by the seam's `AppContainerBackend.wrap`) and relies on a
+  one-time, admin-registered loopback exemption to reach ONLY the proxy. Two postures, one container; the
+  difference is ambient system state + env, not the spawn. **The no-direct-internet guarantee is identical
+  and unconditional** - with or without the exemption, the child cannot reach the internet directly.
+- **`--register-loopback` / `--unregister-loopback`** (admin subcommands) shell to `CheckNetIsolation
+  LoopbackExempt -a/-d -n=<our AppContainer name>`. Run ELEVATED once at install; the pure
+  `checkNetIsolationArgs()` builds the command and is unit-tested.
+- **Fail-safe:** if the exemption is NOT registered, `--loopback-only` degrades to "no network at all"
+  (empty caps + blocked loopback) - safe (no exfil), just not usable until install registers it. It NEVER
+  becomes direct internet.
+
+### Verified (and the honest boundary)
+
+Live on Windows 10: `--loopback-only -- curl https://example.com` is **BLOCKED** (`http_code=000`, exit 28 -
+same empty-caps guarantee as `.7`), while a benign child runs (exit 0); `--register-loopback` reaches
+`CheckNetIsolation` and returns its "needs admin" (exit 5) without elevation - proving the mechanism is wired.
+NOT verifiable in this (non-admin) environment: the "contained child reaches the loopback proxy WITH the
+exemption registered" completion - that is exercised at **install time** (admin) and in packaging QA. The
+SECURITY guarantee (no direct internet) is fully verified; the USABILITY completion (proxy reachable) is the
+documented admin step. This is why `.7b` still does not bundle/activate the helper (that is the next
+increment: build + sign + bundle the `.exe`, run `--register-loopback` elevated at install, then let
+`resolveBackend` select it).
+
+### Invariants preserved
+
+Inv #1 (no omp fork). **Inv #2 (TypeScript/Bun only - the added registration shells to a stock Windows tool;
+no new native/Python source).** Inv #3 (fail-closed: no exemption ⇒ no network, never direct internet;
+non-Windows/errors ⇒ refuse). Inv #4/#6/#7/#8 (untouched).
+
+### Verification
+
+`lucid_appcontainer.test.ts` (+ `checkNetIsolationArgs` + the platform-guarded main() refuse-codes) green;
+`demo-P-SANDBOX.7b` green (live internet-denial on Windows; register reaches the OS; off-Windows fail-closed);
+`demo-P-SANDBOX.7` updated to the post-.7b truth and still green. Typecheck + license clean. Isolated worktree.
+
+### Relates to
+
+ADR-0173 (P-SANDBOX.7 - the deny-network helper this extends), ADR-0172 (the seam that emits `--loopback-only`),
+ADR-0166 (the mediated proxy the exempted loopback reaches), ADR-0157 (the epic).
+## ADR-0246 -- zombie-SID GPU-sandbox self-heal: relaunch with --disable-gpu-sandbox on the boot brick (P-GPUFIX.1) (2026-07-18)
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+On 2026-07-18 the installed v1.11.9 bricked at launch on the dev machine: every sandboxed Chromium GPU
+child exited 0xC0000022 (STATUS_ACCESS_DENIED); after 9 retries Electron logged FATAL "GPU process isn't
+usable. Goodbye." and the app died before the window ever showed. Root cause is upstream
+electron/electron#51761: an unresolvable ("zombie") AppContainer SID inherited in the DACL of the install
+dir under AppData\Local makes the GPU child's sandbox init fail on some Windows machines. The manual fix
+(icacls grant `*S-1-15-2-2:(OI)(CI)(RX)` on the install dir) works, but an NSIS upgrade recreates the
+folder and re-inherits the zombie SID, so it regresses on every release. (Same host lesson as the
+zombie-SID note in project memory; previously worked around by hand.)
+
+A second, adjacent gap: `startDevServer` attached no "error" listener to the spawned engine child, so a
+spawn failure (missing/blocked bun exe) was silently swallowed - engine.log showed only the banner and
+the app waited out the 30s health timeout with nothing to diagnose.
+
+### Decision
+
+Self-heal in the main process, shapes verified against the installed Electron 33.4.11:
+
+- **Pure core** (`desktop/gpu_watchdog.ts`, unit-tested): `decideGpuAction` counts fatal GPU deaths
+  (`type === "GPU"`, reason in launch-failed / abnormal-exit / crashed; clean-exit / killed / non-GPU
+  children are ignored) and verdicts ignore / log / relaunch. Relaunch triggers on death #2 BEFORE the
+  first window renders (1 death could be a one-off crash; Electron's own FATAL is at 9). Two guards:
+  a post-render GPU crash is a recoverable driver hiccup, never the brick; and a sandbox-off instance
+  NEVER relaunches again (no relaunch loop).
+- **Wiring** (`desktop/main.ts`): `app.on("child-process-gone")` consults the core; on relaunch it
+  persists a flag file (`gpu-sandbox-off.flag` in userData, which SURVIVES the NSIS reinstall that
+  re-inherits the zombie SID), tees a self-diagnosing line into engine.log (unsigned-hex NTSTATUS so it
+  literally reads 0xC0000022 + the upstream issue number), and `app.relaunch` with the switch appended
+  to argv (so the mitigation applies even if the flag write failed) + `app.exit(0)`. At module load,
+  BEFORE Chromium spawns the GPU process, the flag file or argv switch applies
+  `app.commandLine.appendSwitch("disable-gpu-sandbox")`.
+- **Scope**: ONLY the GPU sandbox is dropped, and only after the brick is observed twice. The renderer
+  sandbox (`sandbox`/contextIsolation on the BrowserWindow) is untouched; `--no-sandbox` is never used.
+  Deleting the flag file re-enables the GPU sandbox.
+- **The silent spawn failure**: `dev.on("error", ...)` now tees `[engine] dev-server spawn failed: ...`
+  into engine.log + stderr, so the existing error dialog's pointer at engine.log actually explains a
+  never-started engine.
+
+### Alternatives rejected
+
+- **icacls at install time (NSIS hook)**: fixes only OUR install dir, needs elevation timing to be
+  right, and re-breaks if the OS re-inherits later; the watchdog heals any future recurrence.
+- **Always disabling the GPU sandbox**: needlessly weakens defense-in-depth on the healthy majority of
+  machines. The flag is opt-in-by-evidence, per machine.
+- **`app.disableHardwareAcceleration()` fallback**: heavier (loses GPU compositing entirely) and does
+  not address the sandbox-init failure class; the sandbox switch keeps GPU acceleration.
+
+### Relates to
+
+CLAUDE.md invariant #1 (extend, never fork - this is app-side healing of an upstream Electron bug),
+ADR-0177 (engine.log self-diagnosis), the v1.10.2/v1.11.0 packaged-boot bricks (packaged_boot.test.ts),
+electron/electron#51761.
+
+## ADR-0250 -- P-MODEL.1: the fresh-session model default follows the user, not omp's hardcoded Opus
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+Every fresh session (launch, New session, respawn) opened the picker on omp's own hardcoded default, Claude
+4.8 Opus, regardless of which providers the user configured or which model they were using five minutes ago.
+Worse, `syncModelEnv()` persists whatever omp reports as `lastModel` the moment the session initializes, so
+the genuine last-used value was overwritten by the default before anything could read it.
+
+### Decision
+
+A pure, tested resolver (`desktop/startup_model.ts`, `resolveStartupModel`) picks what the session should
+open on: (1) the LAST-USED model when it is still offered and its provider still holds a credential - an
+explicit user choice is never re-litigated against heuristics; (2) else the BEST model among CONFIGURED
+providers: capability tier first (flagship > balanced > small, with `\bmini` so "gemini" never reads as a
+mini), direct route over the gov gateway on ties, then newest via `cmpModelsNewestFirst`; auxiliary/RAG
+routes, deprecated ids, and sovereignty-gated China-origin models are never auto-picked; (3) else null - omp's
+default stands (a fresh install with nothing configured has no better signal).
+
+`acp_backend.ensureSession` captures `lastModel()` BEFORE `session/new` (dodging the syncModelEnv stamp),
+then applies the pick fire-and-forget via `session/set_config_option` - the exact ADR-0217 lockdown pattern,
+and the lockdown still wins: a locked session runs `enforceAsksageLock` INSTEAD. Configured = the
+`providerConfigured` test (OAuth active, key set, or any field set) against `providerAuth()`; AskSage-routed
+ids check the GATEWAY credential (providerForModel deliberately maps them to the family provider, right for
+the budget pill, wrong here); unknown prefixes (user-added local providers) count as configured.
+
+**Seam note:** `renderer/budget_gate.ts` dropped its `bridge.ts` type import for local structural slices
+(`ProviderAuthLike`/`AuthGroupsLike`, generic-preserving) - bridge.ts is DOM-typed and the server program now
+imports budget_gate; `providerConfigured`'s one-line test is inlined at the call site for the same reason.
+
+### Alternatives rejected
+
+- **Spawning omp with a model flag/env** - undocumented seam vs the proven set_config_option path; the
+  fire-and-forget switch self-heals through config_option_update either way.
+- **Awaiting the switch in ensureSession** - re-creates the picker-freeze ADR-0217 explicitly avoided.
+- **Auto-picking acknowledged China models** - a sovereignty-gated default should always be a deliberate
+  manual pick; last-used still honors an explicit standing choice.
+
+### Verification
+
+13 unit tests on the resolver (last-used precedence incl. vanished/de-configured fallbacks, best-configured
+ranking, gov-only, China exclusion, gemini-vs-mini regex, nothing-configured null). All three tsconfigs clean
+(only the pre-existing symbol_graph + dev.ts diagnostics); full desktop suite 4541 pass / 6 fail, the same 6
+pre-existing failures as the baseline.
+
+## ADR-0251 -- P-AVATAR: the "LUCID Agent" immersive role - three.js talking face, hands-free agent mode, voice tool approval, cinematic boot, PWA voice (SCOPE/PLAN)
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT (2026-08-01, same day, through the P-MASCOT pivot). All increments shipped:
+P-AVATAR.1 (role + immersive layout), P-MASCOT.1/.2/.3 (the ninja + prompt-bar parkour + smoothness,
+replacing the killed face direction), P-AVATAR.4 (enter flow), .5/.5b (voice approvals + impact prompts),
+.6/.6b/.6c/.6d (boot cinematic + blade finale + live keyboard), P-REMOTE.12 (PWA push-to-talk),
+P-REMOTE.13 (invisible hourly reconnect). Residual release-cut items live in PROGRESS.md. Originally:
+SCOPE/PLAN, roadmap only; facts verified against the live tree by five parallel scouts as of v1.12.0.
+
+### The ask
+
+A fifth role, "LUCID Agent", that hides both rails and replaces the IDE chrome with a neon-green,
+Matrix-styled 3D digital face (particle digit-rain flowing down it) that talks in sync with the TTS engine;
+selecting it enters full-agent conversation mode on a fast model (GPT-5.6 Terra / Claude Sonnet / Gemini
+Flash class) with background subagents enabled and VOICE approval of gated tool calls; unconfigured users are
+guided (voice + visuals) through provider/voice/Knowledge-Graph setup including vault unlock; boot shows a
+cinematic opening instead of dead air; and the Remote PWA gains voice input without a visible 60-minute drop.
+
+### What exists today (the seams this plugs into)
+
+- **Roles are cosmetic** (ADR-0088/0089): `USER_ROLES` in `settings_store.ts` (+ duplicate list in
+  `renderer/tour.ts`), picker modal in `runOnboarding()` (`app.ts` ~2037), animated glyphs in
+  `role_icons.ts`, per-role tour subsets. This role becomes BEHAVIORAL - a deliberate, contained deviation.
+- **Layout**: 5-column grid `.body` (`styles.css:153`) - 54px `.rail`, collapsible `.sidebar`
+  (`state.sidebarCollapsed`), center chat, 440px `.inspector` (`state.inspectorRail`, `.collapsed` CSS).
+  Sidebar/inspector already collapse; the activity rail has no hide path yet.
+- **Voice arc complete** (ADR-0247/0248/0249): sentence-streamed TTS through ONE persistent `<audio>`
+  element; `VoiceEqualizer` (`voice_eq.ts`) already taps it with a Web Audio `AnalyserNode` (built lazily,
+  fail-safe); conversation mode (`toggleConversationMode`, Ctrl/Cmd+G) with VAD dictation loop, auto-send
+  (`maybeSendSpokenTurn`), thinking cues; engine readiness per provider (`ttsEngineStatus`,
+  `/api/voices`); STT via bundled Whisper (autostarts in the installed app since P-STT.6).
+  **No word-level TTS timing exists** - ElevenLabs with-timestamps is not invoked; Kokoro/OpenAI paths
+  return plain audio.
+- **Tool approvals**: omp -> `session/request_permission` -> `{type:"permission", id, tool, options,
+  danger}` ChatEvent (`acp_backend.ts` ~556-795) -> inline card (`createPermissionCard`, `app.ts` ~1036) ->
+  `respondPermission(id, optionId)`; fail-closed 300s timeout in `askUser()`. `setUiMode("agent")` flips
+  permissionMode; subagent runs already surface via `/api/subagents` cards (P-TASK.5).
+- **Models**: `setConfig("model", id)` over ACP; catalog already carries `gpt-5.6-terra` (256k),
+  `claude-sonnet-4-6` (1M), `google-gemini-3.5-flash-gov`, `google-claude-sonnet-5` (gov); ADR-0250's
+  `resolveStartupModel` established configured-provider ranking utilities to reuse.
+- **Onboarding signals** (all readable today): `configuredProviderCount`, `roleChosen`, `tourSeen`,
+  workspace, voice readiness, `whisperStatus`, `PersonalStore.exists()` / `personalStatus().unlocked`,
+  `/api/personal/unlock`, KG endpoints `/api/kb/*` + background ingest job. Boot to first config is ~6-9s
+  (`CONFIG_WARM_MS` 6000 + renderer warm-poll), with an Electron `splash.ts` before the window and instant
+  shell first-paint after.
+- **Remote PWA** (`tools/remote-pwa/app.ts`): text + images only; frame protocol (`collab/frames.ts`)
+  tolerates new optional fields; host already owns `/api/transcribe`. The "60-minute timeout" is Cloud
+  Run's hard WS request cap - ADR-0227 deliberately leans on it for hourly token re-verification; the
+  guest already re-auths on every reconnect.
+- **Renderer build**: bun-bundled ES module, CSP `script-src 'self'` (no unsafe-eval) - three.js bundles
+  cleanly under this (no eval; WebGL/GLSL is not CSP-gated). Canvas precedent: equalizer, waveform, KG
+  graph engine. No three dependency today (`desktop/package.json` deps: katex, monaco, electron-updater).
+
+### Decisions (the load-bearing ones)
+
+1. **Rights-safe art direction, procedural-first - USER-CONFIRMED (2026-08-01), scaled UP; REVISED same
+   day after the first build: SERENE, never scary.** The v1 face (glowing iris rings, hollow sockets, a
+   hard silhouette rim) was rejected by the user as scary. Settled direction, grounded in skills.sh
+   three.js skills (cloudai-x threejs-shaders/postprocessing, emalorenzo three-best-practices) and the
+   particle-portrait prior art (Codrops interactive-particles; GLTF-to-particles boilerplates): CLOSED
+   eyes as downward lash arcs (no eye contact - the uncanny trigger), a calm mouth with gently lifted
+   corners, features as smooth curved bands, a normal-based view fade dissolving the silhouette instead
+   of a rim, and a mint-white lift on feature glow. Encoded as the first-party `.agents/skills/
+   threejs-stage` skill so later sessions inherit the rules; SOURCES.md records provenance (nothing
+   third-party vendored - the pull rule stands).** "Neo" is a likeness we do not ship; the head is a stylized original.
+   Procedural: a head mesh from bundled typed-array vertex data (no third-party GLB, no asset licensing),
+   but rendered at HERO scale - the face fills the immersive stage's center viewport, lit by its own
+   emission. Layered look, back to front: a full-stage sparse glyph-rain field with depth (parallax on
+   slow idle camera drift), the head as a dense particle/wireframe hybrid with fresnel rim glow, a
+   SECOND denser rain layer depth-masked to stream down the face itself, and a post stack (UnrealBloomPass
+   bloom + subtle film grain + faint chromatic aberration) for the neon read. The whole scene is
+   AUDIO-REACTIVE: rain speed/brightness and rim intensity pulse with the same band energy that drives the
+   mouth, and the state choreography is explicit - particles converge to form the face on entry, drift
+   calm when idle, tighten and brighten while listening, cascade while speaking, slow-orbit shimmer while
+   thinking. Degrade ladder (fewer particles, no post, static glow) keeps integrated GPUs at 60fps.
+2. **Lip sync = amplitude visemes first, timestamps later.** Tier 1 drives jaw/mouth blend from the
+   EXISTING AnalyserNode - `voice_eq.ts` must grow a second-subscriber tap API because
+   `createMediaElementSource` is once-per-element (naive duplication silently breaks the equalizer). Bands
+   from `eq_bands.ts` (low = jaw, mid/high = lip spread), `stepEq`-style ballistics. Works for EVERY engine
+   incl. air-gapped Kokoro. Tier 2 (optional): ElevenLabs with-timestamps -> char/phoneme visemes,
+   `/api/tts/speak` gains an optional `timings` field; elevenlabs-only.
+3. **Voice approval is fail-closed and keyword-strict - USER-CONFIRMED (2026-08-01) incl. repeat-back
+   confirm for the danger class.** A pure `matchApprovalUtterance(transcript,
+   options, danger)` maps speech to an optionId: plain tools accept "approve/yes/deny/no"; danger-class
+   (exec/egress) REQUIRES the literal word "approve" after a spoken repeat-back of the command/host, and
+   anything ambiguous falls through to the visual card. Silence never approves (the 300s fail-closed
+   timeout stands). Voice can DENY anything freely. No voice path may widen permissionMode.
+4. **The 60-minute cap stays; it becomes invisible - USER-CONFIRMED (2026-08-01). PWA voice is
+   push-to-talk (also confirmed).** Hourly re-verify is a security feature (ADR-0227),
+   not a bug. We make the reconnect seamless (buffered composer, silent resume, no toast unless resume
+   fails) instead of re-hosting the relay to dodge the platform cap.
+5. **Fast-model pick reuses ADR-0250.** A `CONVERSATION_MODEL_PREFS` ranked matcher (terra/sonnet/flash
+   class) filtered by configured providers, falling back to `resolveStartupModel`; the user's prior model
+   is remembered and restored on exit from the role/mode.
+6. **Three.js loads lazily.** `three` lands in `desktop/package.json`, dynamically imported only when the
+   immersive stage mounts (bun build --splitting), so the other four roles pay zero parse/GPU cost. DPR
+   capped, rAF paused when hidden (same visibility discipline as `maybeListen`), `prefers-reduced-motion`
+   honored with a static-glow fallback.
+7. **Prompt-side content rides the user-turn preamble channel** (like `spoken_reply.ts`), never the frozen
+   prefix (invariant #6). Immersive UI text obeys invariant #11 (no cramped wrapping columns).
+
+### Increments
+
+- **P-AVATAR.1 - the role + immersive layout.** Add `lucid-agent` to `USER_ROLES` (+ tour.ts list), picker
+  card + `role_icons.ts` glyph, `.body.immersive` hiding rail/sidebar/inspector (Esc exits, state
+  persisted), center stage container. Tour subset for the role. Pure: role normalization + layout state.
+- **P-AVATAR.2a - the face stage scaffold.** three.js dep + lazy chunk; hero-scale procedural head,
+  full-stage rain field + face-masked rain layer, entry particle-convergence; idle/listening/speaking/
+  thinking states driven by the EXISTING speech/dictation state machine. Perf gate: 60fps on integrated
+  GPU, DPR cap, hidden-pause. Demo: state-machine + degrade-ladder transitions pure-tested; visual QA via
+  preview screenshots.
+- **P-AVATAR.2b - the cinematic polish pass.** The post stack (bloom, grain, chromatic aberration), idle
+  camera drift + parallax, audio-reactive rain/rim coupling, choreography tuning until it genuinely wows;
+  ships only after 2a's perf gate holds with the post stack ON (else the ladder drops post first).
+- **P-AVATAR.3 - amplitude lip sync.** The `voice_eq.ts` tap API (keystone risk: one MediaElementSource) +
+  band->viseme mapping module (pure, tested) + jaw/mouth blend in the stage. Tier-2 timestamps increment
+  parked behind it.
+- **P-AVATAR.4 - enter-the-Matrix flow + guided setup.** Role select (or hotkey) -> readiness sweep using
+  the existing signal inventory -> auto: conversation mode ON, `setUiMode("agent")`, fast-model switch
+  (remember/restore prior), whisper autostart already handled by P-STT.6. Not ready -> an in-stage,
+  spoken + visual checklist (one item at a time, never a wall) deep-linking Voice card / Provider Hub,
+  with test-voice playback; KG: offer setup (`/api/kb/create` + ingest) or vault unlock
+  (`/api/personal/unlock`) when `PersonalStore.exists()` and locked - ASK, never nag twice per session.
+- **P-AVATAR.5 - voice tool approval.** `matchApprovalUtterance` (pure + heavily tested), permission
+  ChatEvent -> spoken summary -> scoped listen window -> `respondPermission`; repeat-back confirm for
+  danger class; visual card always rendered as the fallback and the source of truth.
+- **P-AVATAR.6 - cinematic boot.** Renderer-side matrix-rain opening (2D canvas, no three needed at boot)
+  gated to the lucid-agent role: staged REAL progress lines (health, session, config, model, voice) over
+  the ~6-9s warm window, particle-converge handoff into the face stage when config lands; skippable,
+  reduced-motion aware, hard-capped so it never outlives readiness by more than ~2s. Electron `splash.ts`
+  untouched (it ends before the renderer exists).
+- **P-REMOTE.12 - PWA voice.** Push-to-talk mic in the PWA composer (iOS-safe user gesture), client-side
+  16k mono WAV transcode reusing the pure `dictation.ts` helpers already bundled with collab code,
+  `PromptFrame.audio?` optional field (protocol-compatible; 12MB cap is ~30x headroom for a 30s clip),
+  host transcribes via `/api/transcribe` and treats the transcript as an ordinary guest prompt (existing
+  scan gate + approvals apply). Host-side voice reply stays desktop-side (guests read the transcript).
+- **P-REMOTE.13 - invisible hourly reconnect.** Silent resume across the Cloud Run 60-min WS cap: auto
+  re-join with fresh token (already implemented) minus the user-visible drop - buffer an in-flight
+  composer/mic session across the flap, suppress the disconnect toast when resume succeeds within a grace
+  window, surface only real failures. No relay re-host.
+
+### Risks / non-goals
+
+- **GPU floor**: integrated-GPU laptops must hold 60fps or degrade (fewer particles, no bloom) - perf
+  budget is part of P-AVATAR.2's acceptance, not an afterthought.
+- **Likeness/IP**: stylized original face only; matrix-rain glyph aesthetic is fine, a recognizable actor
+  likeness is not.
+- **STT mishears**: approval grammar is allowlist-exact; a mumbled "yeah" never fires exec. Fail-closed
+  everywhere (invariant #3 spirit).
+- **Roles were cosmetic**: this ADR consciously makes ONE role behavioral; the other four stay cosmetic.
+- **Non-goal v1**: phoneme-accurate visemes, PWA-side TTS playback of replies, removing the hourly
+  re-verify, a marketplace of faces.
+
+### Order + estimate
+
+.1 -> .2a -> .2b -> .3 -> .4 -> .5 are sequential (each leans on the prior); .6, P-REMOTE.12, P-REMOTE.13
+are independent and can interleave. Nine increments, each a session; the split .2a/.2b reflects the
+user-requested hero-scale ambition (2026-08-01) - scaffold first, then a dedicated polish session judged on
+looks, not just function.
+
+### DIRECTION PIVOT (2026-08-01, same day): the talking head + particles are OUT; a game-character MASCOT is IN
+
+After two art passes (ring-eyed v1: "scary"; serene closed-eye v2: "still very bad") the user killed the
+talking-head-and-particles direction entirely. New brief: LUCID is a FUN, COOL game character - an original
+never-created fighting-game ninja mascot - that PLAYS while the agent works and stays in line with what is
+actually happening (idle / listening / speaking / working / victory follow the real session state).
+
+Consequences:
+- **P-MASCOT.1 replaces P-AVATAR.2a/2b/3.** 2D pixel-art sprite system (fighting-game heritage IS sprite
+  art): procedural frame grids in code (no binary assets, rights-safe original character), a pure animation
+  state machine + activity scheduler (kata combos, shuriken practice, meditation while working; victory pose
+  when a turn lands), nearest-neighbor canvas scaling for the crisp retro read. No uncanny valley risk by
+  construction - the single biggest lesson from the face attempts.
+- **three.js is REMOVED** (dep, avatar_stage.ts, avatar_math.ts, their tests + demo). The dev.ts splitting
+  bundler + /chunk route STAYS - a generic, documented capability the mascot may use later and P-REMOTE
+  work can lean on. The `.agents/skills/threejs-stage` skill is retired with a tombstone note (its QA-
+  workflow section migrates to the mascot skill notes; the three.js rendering rules go dormant with it).
+- **Lip sync (old .3) is dead**; the mascot's speaking state is a talk-gesture loop instead - the voice_eq
+  analyser tap idea survives only as OPTIONAL audio-reactive bounce, a P-MASCOT.2 nicety.
+- **Unchanged**: P-AVATAR.1 (role + immersive layout - the mascot mounts into the same #agentStage),
+  P-AVATAR.4 (enter flow + guided setup), .5 (voice approvals), .6 (cinematic boot - now themed to the
+  mascot), P-REMOTE.12/.13. The lockdown/security posture was never touched by any of this.
+- P-MASCOT.2 (more activities, audio-reactive bounce, polish) trails as the new .2b-equivalent.
+
+## ADR-0252 -- P-TRAINER: the LUCID Agent as knowledge trainer - process extraction, distillation, and teach-back for business roles (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- harness core BUILT (2026-08-02, same day): P-TRAINER.1-.6 shipped as
+`harness/trainer/` (coverage rubric, planner, store, redaction, distiller, teach-back, quiz
+generation), migration 0012, the trainer EventNames, and demo-P-TRAINER.1..5 (the .5 demo runs the
+whole flywheel). Model-agnostic guarantee added same day: `desktop/trainer_model.ts` resolves the
+trainer's model from the user's CONFIGURED catalog (the ADR-0250 ranking; flash/local tiers stay
+eligible, non-chat routes never qualify, current capable model is kept), and the distiller tolerates
+any family's reply style (fence/prose JSON extractor + one corrective retry, then fail-safe).
+Remaining: .7 (the desktop stage act) and .8 (engagement instrumentation).
+Numbering note: ADR-0250 (P-MODEL.1) and ADR-0251 (P-AVATAR/P-MASCOT) were authored on the
+`feat/lucid-agent-immersive-mascot` branch (since merged into this one); this ADR deliberately
+started at 0252 so both series survive the merge without a collision. Companion ADRs: 0253 (data
+contract), 0254 (trust pipeline), 0255 (interview mechanics). Facts below verified against master
+as of v1.12.0 plus a read of the mascot branch and of the external TacticalGenAI repo.
+
+### The ask
+
+Make the LUCID Agent role (ADR-0251's immersive, voice-first role) more than a coding companion: a
+TRAINER and knowledge-distillation engine that interviews a human expert about a business role,
+extracts process, procedure, and edge-case knowledge in an engaging conversation, distills it into
+the knowledge graph with provenance, verifies it by teaching it back, and can then train the next
+person from what was captured. First target role family: financial management and wealth-management
+operations for boutique firms of the Questmont Virtual Family Office class (multi-adviser
+coordination, custody, money movement, billing, tax and estate choreography, compliance).
+
+### Prior art: what TacticalGenAI proves, and the inversion
+
+`mlcyclops/TacticalGenAI` (the author's certification-training app, read end to end) is a working
+trainer in the PUSH direction: a curriculum of stable objectives (`GAIL-1.1`, `PCA-2.3`, each
+`{id, domain, title, description, sourceUrl, referenceLinks}` with per-domain exam weights) is pushed
+into a human via generated briefings, scenario quizzes, and practice exams, all through STRUCTURED
+OUTPUT schemas (quiz `{question, options[4], correctAnswer, explanation, verifiedSource}`;
+free-response evaluation `{score, feedback, isGrounded, missingPoints[]}`). Progress is a
+`masteryMap Record<objectiveId, 0-100>`, exams derive `weakDomains[]` from misses, and a
+`RANK_SYSTEM` of thresholds keeps it engaging.
+
+The innovative move here is running that machinery in REVERSE, then forward again, as one flywheel:
+
+1. **EXTRACT**: the agent interviews the expert, planning questions against a coverage map (the
+   objective map inverted: how completely is each objective CAPTURED, not learned).
+2. **DISTILL**: transcripts become typed knowledge units (procedures, edge cases, exceptions,
+   checklists, escalation rules) via structured output, scanned and stored with provenance.
+3. **VERIFY**: the agent teaches the procedure BACK to the expert, who confirms, corrects, or
+   rejects; `missingPoints` becomes the next round of questions, and confirmation is the promotion
+   event (ADR-0254).
+4. **TRAIN**: quizzes and scenario drills for new staff are generated FROM confirmed units,
+   TacticalGenAI-style; trainee misses reveal under-specified knowledge and feed new extraction
+   targets back to step 1.
+
+Extraction coverage is the inverted masteryMap; teach-back is the inverted practice exam; the gap
+queue is the inverted weakDomains. One engine, both directions.
+
+### What exists today (the seams this plugs into)
+
+- **The role and the stage** (branch ADR-0251): the `lucid-agent` role, immersive layout, hands-free
+  conversation mode, keyword-strict voice approvals, the mascot state machine, and the guided-setup
+  rule "one item at a time, never a wall". The trainer is a second ACT on that stage. On master
+  without the branch, the trainer degrades to plain chat plus panels; nothing below hard-depends on
+  the mascot.
+- **Interview precedent**: `desktop/loop_preflight.ts` (P-GOAL.12, ADR-0057) is literally "scope + a
+  short prompt-engineering interview": pure, DOM-free, with an `assessReadiness` L0-L3 rubric of
+  weighted `ReadinessCheck`s and `nudge` text, and best-effort model maturation (structured answers
+  alone still produce a complete report). `desktop/renderer/gov_onboarding.ts` (P-GOVCUI.1) is the
+  pure-questionnaire pattern; `runOnboarding()` and `tour.ts` (ADR-0089) own sequential guided flows.
+  House pattern throughout: pure tested module in one file, DOM in `app.ts`.
+- **Trainer-adjacent precedent**: Trivia Wire (`desktop/renderer/trivia_roles.ts`, `trivia_bank.ts`,
+  P-TRIV.2, ADR-0175): role-keyed question banks behind an `isTriviaQuestion` validation gate, with
+  generated packs pouring through the same selection seam and falling back to static banks when
+  malformed. The trainee-quiz mode reuses this exact shape.
+- **The knowledge substrate**: compiled KB per KG (`kb_graph.duckdb`: `kb_documents`, `kb_pages`,
+  `kb_links`, `kb_page_sources`, `kb_changelog`, ADR-0099) behind a fail-closed ingest (scan the
+  source, compile, RE-SCAN every derived page, store), a `vector|compiled|hybrid` retrieve router
+  (ADR-0100), the agent-callable `knowledge_search` tool (ADR-0220), multi-KG registry
+  (`desktop/kb_store.ts`), and `.lkgpack` packs (`harness/kb/pack.ts`, `LKGPACK_FORMAT "lkgpack/1"`,
+  signature proves origin never safety) with a storefront (`kg_packs.ts`) and 11 SKUs already
+  cataloged in KG-PACKS-STATUS.md. Role packs are ALREADY the product concept (flagship:
+  `senior-proposal-manager`); this arc adds the pack flavor that can author itself from interviews.
+- **The promotion keystone**: `harness/memory/promotion_gate.ts` (P4.3, correctness keystone #2)
+  blocks `suspicious|quarantined` sources, resolves trust from artifact provenance not caller claim,
+  fails closed on unknown, and is unblocked ONLY by a recorded `approval_events` row (actions
+  `approve | quarantine_release | promotion_approve`). `promotion_approve` already exists: expert
+  confirmation maps onto it with zero new security surface (ADR-0254).
+- **Frozen contracts**: `AGENT_MODES` in `contracts.ts` is a closed set and mode does not drive
+  prompts or tools (only `security-review|replay` force the audit profile). EventName is closed and
+  raising. DuckDB schemas freeze on first write; next free global migration number is 0012.
+
+### Decisions (the load-bearing ones)
+
+1. **The trainer is NOT a new AgentMode and not a fork of anything.** `AGENT_MODES` stays untouched;
+   the trainer is a session behavior ("act") of the lucid-agent role, entered like conversation mode,
+   implemented as pure modules + panels + prompt-tail content, riding existing hooks and tools.
+   The ONLY frozen-contract change in the whole arc is the EventName additions, isolated in its own
+   increment (P-TRAINER.2) per the frozen-file rule.
+2. **Coverage maps and knowledge units are DATA, not code** (ADR-0253). A new business role is a new
+   extraction pack, zero code. The wealth-management-operations pack is the first; the pack carries
+   the coverage map, elicitation seeds, and scenario seeds, and receives the distilled units.
+3. **Extraction rides the existing trust pipeline unchanged** (ADR-0254). Everything the expert says
+   is untrusted content (invariant 5); units are born `untrusted`; teach-back confirmation records
+   the approval that lets `promoteFactGated` project confirmed knowledge into semantic memory.
+   The P4.3 gate is reused verbatim, never bypassed, never widened.
+4. **Engagement is a designed system, not a vibe** (ADR-0255): scenario probes over abstract
+   questions, one question at a time, live visible capture, L0-L3 coverage rubric driving both the
+   planner and the HUD, milestones and session recaps, mascot choreography where present.
+5. **Trainee mode is generation FROM confirmed units only.** Quizzes cite their source unit the way
+   TacticalGenAI questions carry `verifiedSource`; an unconfirmed or superseded unit can never
+   generate training content. Trainee misses append to the gap queue as extraction targets.
+6. **Compliance posture is structural for the first vertical** (detailed in ADR-0254): packs hold
+   PROCEDURES, never client identities or account data; the scanner plus a redaction pass run before
+   storage; unresolved PII quarantines the unit. A wealth-management pack must be exportable as firm
+   IP without ever being a books-and-records liability.
+
+### Increments
+
+- **P-TRAINER.1 - the interview engine core (pure).** Coverage-map types, the L0-L3 objective rubric,
+  the session planner (pick the least-covered objective, branch on the expert's answers, never
+  repeat a confirmed unit, one question at a time), and the extract-act state machine
+  (opening recap -> probe -> capture -> follow-up -> recap). Pure, DOM-free, heavily tested; in-memory
+  store only. Demo: a scripted interview transcript drives the planner through a WMO fixture map.
+- **P-TRAINER.2 - contracts + storage.** The frozen-contract increment: `trainer_*` EventNames added
+  to `contracts.ts` (ADR-0254 lists them), plus migration `0012_trainer_tables.sql` in kb_graph
+  (ADR-0253 schema). Nothing else in the same session.
+- **P-TRAINER.3 - distillation.** Transcript spans -> typed knowledge units via structured output
+  (TacticalGenAI-style response schemas), fail-closed scan of every DERIVED unit mirroring
+  `kb/ingest.ts`, provenance stamping, kb_pages projection so retrieval/viz/knowledge_search see the
+  units with zero changes.
+- **P-TRAINER.4 - teach-back verification.** The agent recites a unit as steps; confirm / correct /
+  reject per step; confirmation writes `approval_events` + `promoteFactGated`; corrections mint a
+  superseding unit; `missingPoints` enqueue follow-ups. The trainer's practice-exam inversion.
+- **P-TRAINER.5 - the extraction pack.** Pack format extension (additive `coverage_map` manifest
+  member, ADR-0253) + the authored wealth-management-operations v1 pack (ADR-0255 content outline);
+  export path proves a round trip: interview -> confirmed units -> installable signed pack.
+- **P-TRAINER.6 - trainee mode.** Quiz/scenario generation from confirmed units through the Trivia
+  Wire selection-seam pattern with static fallbacks; trainee masteryMap and weak-domain derivation;
+  misses append extraction targets. The flywheel closes here.
+- **P-TRAINER.7 - the stage act.** Voice cadence for interviews, live capture cards, the coverage
+  HUD (invariant 11: labels never wrap into slivers), mascot states (scribe while distilling,
+  victory on confirmation milestones), graceful downgrade without the mascot branch.
+- **P-TRAINER.8 - engagement instrumentation.** Milestones/ranks on coverage thresholds, session
+  summaries ("2 procedures, 5 edge cases, 3 confirmations today"), streaks, the extraction
+  dashboard, telemetry review of drop-off points.
+
+### Risks / non-goals
+
+- **Expert fatigue is the product risk.** A 200-question checklist kills the whole idea; the planner
+  MUST cap sessions (20-30 minutes), lead with scenarios, and always close with visible progress.
+- **Garbage-in**: an expert can be wrong. Teach-back plus provenance means a wrong confirmed unit is
+  traceable and supersedable, never silently authoritative; trainee mode always cites its source.
+- **Regulated domain**: the first vertical touches SEC/FINRA-adjacent process. We capture HOW THE
+  FIRM WORKS, never advice, never client data; the ADR-0254 redaction posture is not optional.
+- **Non-goals v1**: multi-expert reconciliation, org charts, auto-ingesting the firm's document
+  store into the pack (existing KB ingest already covers documents separately), any new trust label,
+  any change to AGENT_MODES, phoneme-level interview VAD tuning.
+
+### Order + estimate
+
+.1 -> .2 -> .3 -> .4 are sequential (each leans on the prior); .5 needs .2 only for schema, .6 needs
+.4 (confirmed units exist), .7/.8 can interleave after .3. Eight increments, each one session, per
+the CLAUDE.md ritual.
+
+## ADR-0253 -- P-TRAINER data contract: coverage maps, knowledge units, and the extraction pack (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- BUILT (2026-08-02): migration `0012_trainer_tables.sql` +
+`harness/trainer/store.ts` (append-only proven by tests + demo-P-TRAINER.2); the lkgpack
+`coverage_map` member shipped in `harness/kb/pack.ts` (signature-bound, tamper-refused). The
+kb_pages projection of confirmed units is deferred to the desktop wiring increment. 0012 was the
+next free global number; the memory/0011 vs kb/0011 collision is prior art we do not repeat.
+
+### Problem
+
+The compiled KB stores PAGES about documents. An interview produces something more structured: an
+ordered procedure with roles and systems, an edge case with a trigger and a resolution, a checklist,
+an escalation rule. Flattening those to prose pages loses exactly the structure that teach-back and
+trainee-quiz generation need. And the coverage map (what a role contains, how completely each part
+is captured) has no home at all.
+
+### Decision
+
+**New tables live in `kb_graph.duckdb`** (per-KG, so a firm's extraction stays inside its KG and
+rides the existing registry, backup, and pack machinery), added by numbered migration, invariant 10:
+
+- `coverage_objectives`: `objective_id` TEXT PK (stable, pack-authored, e.g. `wmo-2.1`), `pack_id`,
+  `domain`, `title`, `description`, `weight` (the TacticalGenAI exam-weight idea repurposed as
+  extraction priority), `elicitation` JSON (seed questions, scenario seeds, follow-up patterns),
+  `created_at`.
+- `knowledge_units`: `unit_id` TEXT PK (minted once, invariant 9), `objective_id` FK, `kind` CHECK
+  IN (`procedure`, `edge_case`, `exception`, `checklist`, `glossary`, `escalation`), `title`,
+  `body_md`, `structure` JSON (ordered steps with actor/system/timing for procedures; trigger/
+  deviation/resolution for edge cases), `trust_label` (invariant 7 closed set, NO new labels),
+  `completeness` 0-100 (an ordinary column, never a trust signal), `source_session_id`,
+  `source_artifact_id`, `confirmed_at` NULL, `confirmed_by`, `superseded_by` NULL FK.
+- `extraction_sessions`: `session_id`, `pack_id`, `expert_label` (a display handle, deliberately not
+  an identity record), `started_at`, `ended_at`, `stats` JSON.
+- `teachback_results`: `teachback_id`, `unit_id`, `verdict` CHECK IN (`confirmed`, `corrected`,
+  `rejected`), `notes`, `approval_event_id` (the ADR-0254 link into the promotion gate).
+
+**Knowledge is append-only.** A correction never edits a unit; it mints a successor and sets
+`superseded_by` on the old one (the kb_changelog philosophy applied to units). Coverage per
+objective is DERIVED (from unit kinds present, completeness, confirmations), never hand-stored, so
+the rubric can evolve without a migration.
+
+**Confirmed units project into the existing graph.** Each confirmed unit compiles to a `kb_pages`
+row (existing kind `concept`, existing closed set untouched) with wikilinks and a `kb_page_sources`
+citation back to the unit's artifact, THROUGH the existing fail-closed ingest path. Retrieval, the
+KG visualizer, and the `knowledge_search` tool therefore work on trainer knowledge with zero
+changes; the trainer tables stay the structured source of truth.
+
+**The extraction pack is an additive evolution of lkgpack/1.** The manifest gains an OPTIONAL
+`coverage_map` member (objectives + elicitation seeds); `verifyPack` validates it when present and
+ignores its absence, format tag unchanged, old importers unaffected. The pack trust rule stands
+verbatim: signature proves origin, never safety; imported packs stay read-only and `untrusted`; the
+scanner remains the safety gate. An exported pack contains coverage objectives and CONFIRMED units
+only (draft and rejected units never leave the firm's KG).
+
+### Alternatives rejected
+
+- **Units as kb_pages with a new `kind`.** Touches the frozen kb_pages CHECK constraint for a shape
+  it cannot actually hold (ordered steps, verdicts); the projection gives graph visibility without
+  bending the page contract.
+- **A fifth DuckDB file.** Nothing here contends with kb writes the way vectors did (ADR-0053);
+  per-KG locality matters more than isolation, and packs already ship `kb_graph.duckdb`.
+- **Editing units in place on correction.** Destroys the provenance chain that makes an
+  expert-sourced KB auditable; supersession is the whole point in a regulated vertical.
+- **Storing coverage scores.** A stored score goes stale the moment the rubric improves; deriving it
+  keeps the rubric a pure function (and testable, loop_preflight-style).
+
+### Verification (planned)
+
+Migration applies on a fresh and an existing KG; unit round-trip property tests (mint, supersede,
+derive coverage); pack round trip (export -> verify -> import elsewhere -> retrieval finds the
+projected pages); a fixture WMO map drives derivation tests.
+
+## ADR-0254 -- P-TRAINER trust pipeline: extracted knowledge is untrusted until taught back (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- BUILT (2026-08-02): `harness/trainer/redact.ts` + `distiller.ts` +
+`teachback.ts` and the trainer EventNames in contracts.ts. Every decision below is pinned by tests
+(dead-scanner, poisoned-span, poisoned-derivation, hard-PII-quarantine, refused-confirm) and
+demo-P-TRAINER.3/.4. Adds NO new security surface; keystone #2 runs verbatim underneath.
+
+### Problem
+
+An interview is a firehose of human-typed and human-spoken content: the exact class of input the
+architecture already refuses to trust (invariant 5). Naively, a trainer is a machine for laundering
+untrusted prose into durable semantic memory, which is precisely the cross-session poisoning that
+the P4.3 promotion gate exists to prevent. The trainer must make extraction FLOW THROUGH the gate,
+not around it. Separately, the first vertical (wealth-management operations) is regulated: a pack
+that absorbs client names, account numbers, or balances becomes a books-and-records liability the
+moment it is exported.
+
+### Decision
+
+1. **Capture is untrusted by construction.** Expert turns enter prompts only inside the untrusted
+   delimiters, after scanning, after the cache breakpoint (invariant 5, unchanged). Distilled units
+   are DERIVED content and are re-scanned before storage, mirroring the `kb/ingest.ts` rule (scan
+   the source, then re-scan everything the model derived from it). Units are born
+   `trust_label = untrusted`.
+2. **Fail-closed stands mid-interview** (invariant 3). Sidecar dead, malformed scan, timeout: no
+   unit is minted, the capture card says so, and the planner parks the objective. The conversation
+   may continue; storage may not. No transcript span reaches a unit without a valid scan result.
+3. **Teach-back confirmation IS the approval.** A `confirmed` verdict in `teachback_results` records
+   an `approval_events` row with the EXISTING action `promotion_approve`, then calls
+   `promoteFactGated` to project the unit's entity/fact statements into `semantic_entities` /
+   `semantic_facts` with `source_artifact_id` provenance. The gate still resolves trust from
+   artifact provenance, still blocks on unknown, still emits `memory_promotion_blocked`. Nothing
+   about `promotion_gate.ts` changes; the trainer is just its first systematic supplier of
+   legitimate approvals.
+4. **Suspicious is never one-click.** Confirmation approvals apply to `untrusted` units only. A unit
+   whose source scan found injection signals is `suspicious|quarantined` and the trainer UI offers
+   NO release; the standard quarantine-release flow (its own approval action, existing) is the only
+   path, deliberately outside the interview's engagement loop. An enthusiastic expert clicking
+   "confirm" must never be the mechanism that frees a poisoned span.
+5. **PII posture: procedures, never people.** The interview prompt instructs role-shaped answers
+   ("what does the firm do", not "what did Mrs. X do"); the distiller normalizes actors to roles
+   (adviser, client, custodian, CPA) and strips names, account numbers, dollar-specifics into
+   placeholders; scanner findings for residual PII quarantine the unit (fail-closed, not a warning).
+   Exported packs contain confirmed units only (ADR-0253), so nothing quarantined can ever ship.
+6. **New EventNames** (the P-TRAINER.2 frozen-contract increment, invariant 8; every event carries
+   `run_id`/`session_id`/`artifact_id`): `trainer_session_started`, `trainer_question_asked`,
+   `trainer_unit_captured`, `trainer_teachback_run`, `trainer_unit_confirmed`,
+   `trainer_unit_rejected`, `trainer_pack_exported`. Blocked promotions keep emitting the existing
+   `memory_promotion_blocked`.
+
+### Alternatives rejected
+
+- **A `trainer` trust label** (e.g. `expert-confirmed`). Invariant 7 is a closed set for a reason;
+  confirmation state lives in `confirmed_at`/`teachback_results`, and PROMOTION state lives where it
+  always has, in the gate's own records.
+- **Auto-promoting on capture because "the expert said it live".** Exactly the laundering scenario
+  keystone #2 exists to stop; also wrong on the merits, experts misspeak, and teach-back catches it.
+- **Trusting the voice channel more than typed text.** STT output is still untrusted input; the
+  voice-approval grammar lesson from ADR-0251 (allowlist-exact, silence never approves) applies to
+  confirmation verdicts spoken aloud.
+- **Redaction as a post-export scrub.** By then the data has lived in the KG, been embedded, and
+  leaked into retrieval; redact before storage or not at all.
+
+### Verification (planned)
+
+The keystone tests stay green untouched. New: a poisoned-transcript fixture must land quarantined
+and unpromotable through the trainer path (gate blocks, event emitted); a sidecar-kill mid-interview
+test asserts zero units minted; a PII fixture (names, account numbers) must quarantine; a
+confirmed-unit promotion asserts the approval row, the gate outcome, and the semantic_facts
+provenance chain end to end.
+
+## ADR-0255 -- P-TRAINER interview mechanics: engagement as a designed system, and the wealth-management-operations pack (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- harness core BUILT (2026-08-02): the planner cadence rules (scenario-first,
+one-question-at-a-time, five-whys, session cap, L0-L3 rubric) shipped pure + tested in
+`harness/trainer/planner.ts`/`coverage.ts`; the 13-objective WMO coverage map + due-diligence seed
+shipped in `wmo_pack.ts`; trainee quizzes + the miss-to-extraction-target return edge in
+`quizgen.ts` (demo-P-TRAINER.5). The stage/HUD presentation (decisions 4-5) lands with
+P-TRAINER.7/.8.
+
+### Problem
+
+Experts do not fail interviews for lack of knowledge; they fail them for boredom, vagueness, and
+the wall-of-questions effect. TacticalGenAI keeps learners engaged with scenario stakes, visible
+progress, and ranks; a knowledge EXTRACTOR needs the same psychology pointed the other way, and it
+needs question craft that surfaces tacit knowledge (the Friday-4pm exceptions nobody writes down),
+not the official version of the process.
+
+### Decision
+
+1. **Scenario probes are the primary instrument.** Direct questions get the documented process;
+   concrete scenarios get the real one. The planner leads each objective with a generated situation
+   ("A client calls Friday at 4pm needing a $2M wire before a holiday weekend and the custodian
+   cutoff has passed. Walk me through exactly what happens.") and only then fills structural gaps
+   with direct questions. Every captured procedure ends with the standing probe "what goes wrong
+   here, and what do you do when it does" so edge cases are pursued, not incidental. Scenario seeds
+   ship in the pack's `elicitation` JSON; generation personalizes them, TacticalGenAI-style
+   structured output keeps them typed.
+2. **The L0-L3 coverage rubric** (the `assessReadiness` pattern from loop_preflight, reused as a
+   pure function over ADR-0253 data): L0 unexplored -> L1 outline captured -> L2 procedure stepped ->
+   L3 edge cases captured AND confirmed. Weighted by objective `weight`, it drives the planner's
+   next-question choice, the HUD, and the milestone system. `missingPoints` from teach-back
+   evaluations demote and re-queue, the weakDomains inversion.
+3. **Conversation cadence rules** (all testable as pure planner properties): one question at a time
+   (ADR-0251's checklist rule, promoted to the interview); follow the expert's energy (a story in
+   the answer spawns follow-ups before the planner returns to the map); five-whys on any mentioned
+   deviation; sessions capped at 20-30 minutes with an opening recap ("last time we mapped quarterly
+   billing; two edge cases still open") and a closing summary of what was captured. Voice-first
+   where the role provides it: questions short enough to speak, capture shown on screen.
+4. **Live visible capture builds trust.** While the expert talks, the capture card shows the unit
+   being structured (steps appearing, placeholders where names were redacted). The expert watches
+   the machine understand them, the single strongest engagement lever an extractor has, and
+   pre-verifies informally before teach-back makes it formal. Cards and HUD obey invariant 11: a
+   label owns its line and ellipsizes; no prose in flex rows.
+5. **Milestones, not points.** RANK_SYSTEM inverted: thresholds on confirmed coverage ("first
+   domain at L3", "ten edge cases confirmed", "pack export ready") with mascot victory beats where
+   the stage exists. No leaderboards, no scores on the expert themselves; the FIRM's knowledge
+   levels up, which reads as respect rather than gamification of a professional.
+6. **The wealth-management-operations pack v1** (`wmo`, authored in P-TRAINER.5), coverage domains
+   drawn from the boutique virtual-family-office shape (Questmont-class: coordinated investment,
+   tax, estate, insurance, and business-adviser work over an RIA affiliation):
+   - `wmo-1` client lifecycle: prospect intake, discovery, onboarding paperwork, custodial account
+     opening, ACAT transfers, funding, review cadence, offboarding and death-of-client.
+   - `wmo-2` money movement: wires/ACH/journals, standing instructions, verification callbacks,
+     fraud red flags, cutoffs and holiday handling.
+   - `wmo-3` investment operations: rebalancing, trade errors, corporate actions, cash management.
+   - `wmo-4` billing and fees: fee schedules, quarterly runs, prorations, refunds, disclosures.
+   - `wmo-5` tax coordination: gain/loss reporting, harvesting windows, CPA handoffs, K-1 season,
+     estimated-payment choreography.
+   - `wmo-6` estate, trust, and insurance coordination: attorney handoffs, beneficiary updates,
+     trust funding, policy reviews, business-sale and exit-planning support.
+   - `wmo-7` compliance and regulatory: which entity signs what (brand LLC vs the registered
+     adviser), ADV updates, fiduciary documentation, books and records, marketing review,
+     complaint handling.
+   - `wmo-8` the adviser network: custodian relationships, RIA/TAMP affiliations, outside
+     professional coordination, and due-diligence checklists (the entity/custody/fee/fiduciary
+     question set ships as a seed `checklist` unit, the one unit kind a pack may pre-fill).
+   Unit kinds per ADR-0253; every domain's elicitation seeds include at least one scenario probe
+   and one edge-case probe. The pack captures firm process, never advice and never client data
+   (ADR-0254 posture).
+
+### Alternatives rejected
+
+- **A fixed questionnaire per role.** The gov_onboarding pattern is right for four questions, fatal
+  for four hundred; a planner over a coverage map is what makes long extraction survivable.
+- **Free-form "tell me about your job" chat.** Engaging for one session, unmeasurable forever; no
+  coverage derivation, no teach-back targets, no pack.
+- **Scoring the expert.** The fastest way to lose a professional's goodwill; coverage belongs to
+  the knowledge base, not the person.
+- **Shipping pre-written WMO procedures in the pack.** Then it is a content SKU, not an extractor,
+  and every boutique firm's actual process differs; seeds are questions (plus one due-diligence
+  checklist), units come from the interview.
+
+### Verification (planned)
+
+Planner property tests (one-question invariant, energy-following branch, five-whys trigger, session
+cap, no repeat of confirmed units); rubric derivation fixtures; a full scripted WMO interview
+fixture driving extract -> distill -> teach-back -> quiz-generation round trip in demo form; HUD
+snapshot obeys invariant 11.
+
+## ADR-0256 -- P-FLEET: a Chief-of-Staff fleet - one LUCID orchestrating N gated LUCID workers across machines (SCOPE/PLAN)
+
+**Date:** 2026-08-14
+**Status:** Accepted -- SCOPE/PLAN (no code this ADR). Increments P-FLEET.1-.4 below are each their
+own session. Facts below verified against this tree (harness/mcp, harness/launcher, tools/remote-pwa).
+
+### Context
+
+Grok Bot popularized the always-on agent teammate: a chief-of-staff agent that owns the goal and
+farms work out to a standing team. LUCID already has every load-bearing piece of that pattern, built
+for other reasons and lying in a row:
+
+- **The Agent Firewall** (P-AGENTFW.1, ADR-0147; `harness/mcp/agent_firewall.ts` +
+  `harness/mcp/acp_client.ts`): a fail-closed stdio MCP proxy that scans OUTBOUND prompts before
+  they leave (the injection-relay block) and scans INBOUND replies, withholding a quarantined reply
+  and wrapping everything else in UNTRUSTED_CONTENT delimiters with a trust label that is never
+  `trusted`, delimiter literals neutralized (`neutralizeDelimiters`) so a hostile reply cannot break
+  the envelope. It is spawned per connection as `lucid agent-firewall --conn <id>`
+  (`remoteAgentMcpServers()` in `harness/mcp/registry.ts`), so each remote agent is its own gate
+  instance.
+- **The connection registry** (`harness/mcp/registry.ts`): `~/.omp/lucid-agents.json` at mode 0600
+  (dir 0700), each entry an ARBITRARY `command` + `args`, secrets kept out by the `--token-file`
+  pattern (ADR-0147 custody rule: the file stores how to reach an agent, never a credential).
+- **Every LUCID install is already a gated headless worker.** `lucid acp`
+  (`harness/launcher/lucid_acp.ts`, P-EXT.1/ADR-0038) is the sanctioned fail-closed ACP entrypoint:
+  it reproduces the exact gated omp command the desktop uses and refuses to start if the gate or
+  scanner sidecar is missing. An ungated worker session cannot exist.
+- **The management surface exists**: the Remote-agents Settings card + `GET/POST /api/agents`,
+  `/api/agents/remove`, `/api/agents/toggle` (P-AGENTFW.2, ADR-0149) already add/edit/enable
+  connections with no hand-edited JSON.
+- **The phone drives the orchestrator**: the P-REMOTE PWA (`tools/remote-pwa/`, ADR-0226/0227) can
+  watch and drive the HOST desktop session over the E2E relay. A phone driving the orchestrator that
+  drives the fleet is composition, not new code.
+
+The transport insight that makes this an ADR and not a project: because the registry stores an
+arbitrary command, `command: ssh, args: [<host>, lucid, acp]` IS a remote LUCID worker over
+stdio-over-SSH with ZERO new transport code, and N same-box workers are N plain `lucid acp`
+entries. The fleet is configuration.
+
+What is genuinely missing, and what this ADR decides to close, one increment each: the firewall's
+`prompt` tool is one synchronous round-trip (the orchestrator blocks per worker, so "fan out to
+five workers" serializes); nothing keeps a worker alive on a remote box or reports liveness; the
+Settings card and PWA show configuration, not fleet health; and workers cannot talk to each other
+at all.
+
+### Decision
+
+Build the fleet as configuration + four increments on existing surfaces, under these pinned
+security invariants:
+
+1. **Each connection is its own trust domain.** One firewall instance per connection (the existing
+   `--conn <id>` spawn), no shared parsing state, no cross-connection reply mixing.
+2. **Every inbound byte from a worker enters the orchestrator's model only inside UNTRUSTED_CONTENT
+   delimiters, after a scan, trust-labeled and never `trusted`** (invariant 5, exactly the ADR-0147
+   behavior, extended to every new reply path this ADR adds).
+3. **Scan unavailable = block** (invariant 3). A dead scanner means no dispatch, no result
+   delivery, no health-probe text reaching the model. Fail-closed is law on every new tool.
+4. **The firewall gate stays in-process** (invariant 4). Async job handles change WHEN a reply is
+   delivered, never WHERE the gating happens.
+5. **Secrets stay in token-files / the OS vault, never in the registry** (ADR-0147 precedent). SSH
+   credentials are the operator's keys and agent config, not registry fields.
+6. **No new EventName until the increment that logs it** (invariant 8): any fleet event names are
+   quarantined to their own contracts increment, exactly the P-TRAINER.2 / P-REMOTE.4 pattern.
+
+### Increments
+
+- **P-FLEET.1 - async job handles on the firewall.** Today `AgentFirewall.handlePrompt`
+  (`harness/mcp/agent_firewall.ts`) is ONE synchronous round-trip: outbound scan, send, inbound
+  scan, return; the orchestrator blocks per worker. Add three MCP tools beside `prompt`:
+  `dispatch` (outbound-scans and sends, returns a job id immediately), `status` (running / done /
+  failed, plus scanned partials), and `result` (the gated reply). Every reply and partial keeps the
+  EXACT inbound pipeline: scan, quarantine-withhold, UNTRUSTED_CONTENT wrap, trust label,
+  delimiter neutralization. Fail-closed law unchanged: dead scanner = no dispatch.
+- **P-FLEET.2 - worker keepalive + health.** A documented supervisor recipe (systemd unit /
+  Windows service wrapper) keeping `lucid acp` alive on a VPS, plus a lightweight health probe the
+  firewall can call (connection-level `ping`) so the orchestrator sees liveness before it
+  dispatches, not after a timeout.
+- **P-FLEET.3 - fleet visibility.** Extend the Remote-agents Settings card and add a PWA view with
+  per-connection health, running job count, and the last reply's trust label. All of this data
+  already flows through the firewall; this increment is surfacing, not new trust paths.
+- **P-FLEET.4 - agent-to-agent threads.** Worker-to-worker messages relayed THROUGH the
+  orchestrator's firewall so every hop is scanned and wrapped like any other inbound reply.
+  Explicitly NOT direct worker-to-worker links: a direct link would bypass the gate, and one
+  poisoned worker could then relay injection to the rest of the fleet unscanned.
+
+### Alternatives rejected
+
+- **A bespoke fleet RPC / daemon protocol.** Rejected: `lucid acp` over ssh (and the openclaw
+  wss-bridge precedent, `openclaw acp --url wss://gateway`, already a registry citizen per
+  ADR-0147) reuses the existing gated launcher and the existing transport patterns end to end.
+  Invariant 1 spirit: extend, never fork; a second protocol would be a fork of our own trust
+  perimeter.
+
+### Consequences
+
+- SSH key management is on the operator: provisioning keys, rotating them, and locking down the
+  worker account are deployment concerns this ADR deliberately does not absorb.
+- The synchronous `prompt` tool stays for single-shot use; `dispatch`/`status`/`result` are
+  additive, and P-FLEET.1 changes no frozen contract file (new MCP tools on the firewall's own
+  server, not new EventNames, not AGENT_MODES).
+- The PWA drives the fleet only THROUGH the orchestrator host. There is no direct phone-to-worker
+  path, deliberately: the orchestrator's firewall is the single choke point, and adding a second
+  entry would double the trust surface for zero capability.
+
+### Relates to
+
+ADR-0147 (P-AGENTFW.1: the firewall, registry, and launcher this fleet is made of), ADR-0149
+(P-AGENTFW.2/.3: the Settings card + `/api/agents*` endpoints P-FLEET.3 extends), ADR-0226/0227
+(P-REMOTE: the phone PWA that drives the orchestrator), ADR-0038 (P-EXT.1: `lucid acp`, the gated
+worker entrypoint), and CLAUDE.md invariants 1, 3, 4, 5, and 8.
+
+## ADR-0257 -- P-TRAINER.9: the trainer is role-generic by default; the WMO pack is an explicit sample (BUILT)
+
+**Date:** 2026-08-14
+**Status:** Accepted -- BUILT (this session).
+
+### Context
+
+The trainer core has been role-agnostic since P-TRAINER.8 (`rolepack.ts` builds a coverage pack for
+ANY role from a task list or a pasted Position Description), but the PRODUCT presented as a
+wealth-management tool: `desktop/trainer_session.ts` `activeRole()` silently fell back to the WMO
+demo role, `ensure()` unconditionally seeded `WMO_OBJECTIVES` plus the 8 authored reference units
+into every `trainer.duckdb`, and `trainer.html` booted with a hardcoded "Wealth-Management Ops"
+role chip. A fresh install therefore BECAME a wealth-management trainer before the user ever chose
+a role, and the WMO objectives leaked into stores that would only ever hold a custom role.
+
+### Decision
+
+No silent default role. The role choice is the trainer's first interaction:
+
+- `activeRole()` returns null when no role was ever chosen; `getState()` then returns a minimal
+  `needsRole: true` state (label "Choose a role", empty domains, no question) and does NOT create
+  or touch `trainer.duckdb`. `TrainerStateView` gains `needsRole` (not a frozen contract file).
+- WMO seeding moved out of `ensure()` into `seedDemoPack()`, called ONLY by the new exported
+  `useDemoPack()`, which activates the sample role (labeled "Wealth-Management Ops (sample)"),
+  seeds idempotently, and resets the planner onto it. `setRole` for user-built roles is unchanged
+  and never seeds WMO material.
+- `POST /api/trainer/role` accepts `demo: true` and routes to `useDemoPack()` (no new endpoint).
+- `trainer.html`: the chip defaults to "Choose a role"; live boot with `needsRole` opens the
+  role-setup modal, which now carries an explicitly-labeled "Try the sample role" button; the
+  OFFLINE standalone fallback keeps the embedded WMO sandbox data, labeled "(sample)", so the
+  self-contained page still demos without a backend.
+- `harness/trainer/wmo_pack.ts` and the `demo-P-TRAINER.1..5` scripts are untouched: the WMO pack
+  remains the authored fixture for demos, tests, and the sample role.
+
+### Consequences
+
+- A fresh install asks for the user's role instead of assuming wealth management; custom-role
+  stores carry zero WMO objectives (regression-tested: fresh-state, demo-activation idempotence,
+  and no-leak custom-role tests in `desktop/trainer_session.test.ts`).
+- `submitAnswer` with no active role advances nothing and stores nothing (`distilled: false`,
+  "choose a role first"); `getGames` returns empty. Fail-safe, not fail-open.
+- The Five Whys drill stays gated to the sample pack (it is authored WMO content); a generic
+  deviation-derived Five Whys generator is future work, not this increment.
+
+### Relates to
+
+ADR-0252..0255 (the trainer flywheel, data contract, trust pipeline, and interview mechanics this
+increment re-fronts), and CLAUDE.md invariants 3 and 5 (the distiller path is untouched).
+
+## ADR-0258 -- P-RELEASE.3: Homebrew is the working macOS update channel - pin the cask per release + CI re-pin (2026-08-15)
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+Observed on a real machine: `brew upgrade --cask lucidagentide` after the v1.12.1 release reported
+"successfully installed", yet About still showed v1.12.0. Traced end to end:
+
+1. The cask was `version :latest` + `sha256 :no_check`, downloading
+   `releases/download/latest/LucidAgentIDE-mac-<arch>.pkg` - the rolling `latest` TAG release.
+2. That rolling release is refreshed ONLY by the manual `publish-latest` dispatch
+   (`build-desktop.yml`), never by tag builds. Last refresh: 2026-07-05, with v1.10.0-era assets.
+   Every release since (v1.11.x, v1.12.x) was cut by tag push, so brew kept serving the July build
+   byte-for-byte (361,395,667 bytes - matched the observed download exactly).
+3. Latent second break: the mac artifact was renamed `LucidAgentIDE-mac-*` to `LucidAgent-mac-*`
+   (ADR-0225 rename era), so even a refreshed rolling release would 404 the cask URL.
+4. The installed app stayed at 1.12.0 (not downgraded to the pkg's 1.10.0): macOS `installer(8)`
+   bundle-version semantics left the newer bundle in place while still reporting success, which is
+   what made the failure look like "the version label is wrong" instead of "the artifact is stale".
+5. This matters because in-app auto-update CANNOT rescue macOS: the build is unsigned and
+   Squirrel.Mac refuses unsigned updates after paying for the full zip download (ADR-0246, all four
+   defects confirmed live on this machine: minutes-long silent download, Restart-then-nothing).
+   Windows NSIS has no such signing gate, which is why Windows updates in seconds and mac never.
+
+Net: Homebrew is the ONLY working macOS update channel until P-RELEASE.2a (signing) ships, and it
+was silently serving six-week-old unverified bits. A security-first product distributing unsigned
+installers with `sha256 :no_check` was also simply wrong.
+
+### Decision
+
+1. **Pin the cask** (`Casks/lucidagentide.rb`): `version "X.Y.Z"` + per-arch `sha256`, URL on the
+   versioned release (`releases/download/v#{version}/LucidAgent-mac-#{arch}.pkg`), livecheck via
+   `:github_latest`. Every brew install is now checksum-verified against a tagged release.
+2. **CI re-pins on every release**: new `update-cask` job in `build-desktop.yml` (tag builds only,
+   after `build`) rewrites version + both sha256s from the tag's uploaded assets (API digest, with
+   download-and-hash fallback) and pushes to master. Fail-closed: missing asset, missing digest, or
+   a drifted cask format fails the job loudly; it can never half-pin.
+3. **README** Homebrew section now states the real contract: `brew update && brew upgrade --cask`
+   is the macOS update path; in-app auto-update is inert on mac until ADR-0246/P-RELEASE.2a.
+
+The rolling `latest` release is no longer load-bearing for brew. The ADR-0246 open question
+(P-RELEASE.2d, whether `publish-latest` should set `make_latest` at all) stands and is now easier:
+only the README download buttons still reference GitHub's Latest pointer.
+
+### Verification
+
+`brew style` clean (one pre-existing cosmetic cop, frozen_string_literal, same as the old file);
+`brew fetch --cask` against the pinned cask downloaded the real v1.12.1 arm64 pkg from the
+versioned release and the sha256 matched the actual bytes. Workflow YAML parse-verified; the job
+only takes effect for tags cut after this lands on master (a tag build runs the workflow frozen at
+the tagged commit).
+
+### Relates to
+
+ADR-0213 (tolerant tag-to-semver derivation, reused verbatim), ADR-0246 (P-RELEASE.2: mac
+auto-update inert; this ADR is the interim channel), ADR-0225 (the artifact rename that broke the
+old URL), `Casks/lucidagentide.rb`, `.github/workflows/build-desktop.yml`, README "Homebrew".
+
+## ADR-0259 -- P-WINBOOT.1: Windows installed-app startup hardening (protected-directory failure)
 
 **Date:** 2026-08-01
 **Status:** Accepted -- BUILT (mitigation). The permanent rearchitecture (Increment B) + its CI guard
@@ -16722,15 +17692,15 @@ boot; that is Increment C.
 - **Increment D:** make `LucidAgentIDE.bat` bundled-runtime aware (discover `resources/runtimes`) or label it
   developer-only, and stop prompting for an API key when it could not read the omp vault.
 
-## ADR-0251 -- P-WINBOOT.2: the permanent fix - ship the engine as a compiled binary
+## ADR-0260 -- P-WINBOOT.2: the permanent fix - ship the engine as a compiled binary
 
 **Date:** 2026-08-01
-**Status:** Accepted -- BUILT. The permanent fix behind ADR-0250's mitigation (Increment B of that plan).
+**Status:** Accepted -- BUILT. The permanent fix behind ADR-0259's mitigation (Increment B of that plan).
 Re-enabling per-machine installs + the exact protected-location CI smoke are the named follow-ups below.
 
 ### Problem
 
-ADR-0250 stopped NEW installs from reaching `Program Files` and made the failure legible, but the root cause
+ADR-0259 stopped NEW installs from reaching `Program Files` and made the failure legible, but the root cause
 remained: main.ts ran `bun run desktop/dev.ts` from `<resources>/repo`, and Bun's module loader EPERMs
 loading a `.ts` out of an ACL-protected tree. The permanent fix must make the engine independent of Bun
 module-loading source off the (possibly protected) install disk at runtime.
@@ -16769,7 +17739,7 @@ Ship the engine as `bin/lucid-engine`, a `bun build --compile dev.ts --external 
 ### Alternatives rejected
 
 - **A bundled `.js` (not `--compile`).** Still loaded by Bun's module loader from disk -> same mmap EPERM.
-  Rejected in ADR-0250 and confirmed here: only an embedded (`--compile`) binary removes the `.ts`/`.js`
+  Rejected in ADR-0259 and confirmed here: only an embedded (`--compile`) binary removes the `.ts`/`.js`
   disk load.
 - **Externalize DuckDB's `.js` shim too.** Would move the mmap risk to `duckdb.js` in `Program Files`
   node_modules. Externalizing ONLY `*.node` keeps every JS shim embedded; the sole disk load is the native
@@ -16784,7 +17754,7 @@ main.ts/dev.ts/package.json wiring, then it BUILDS and BOOTS the real compiled e
 `/api/health` -> `{ok:true}` (DuckDB natives resolved at runtime) and the prebuilt `/app.js` serves 7 MB of
 real JS from the execPath-derived root (not an error page, no runtime Bun.build). Confirmed manually too:
 `/api/brief` (200, built from PROGRESS.md/DECISIONS.md via REPO_DIR). 7 engine_launch unit tests + 16
-engine_boot (ADR-0250) green. Desktop `tsc --noEmit` clean. `airgap-smoke.ts` now fails the build if
+engine_boot (ADR-0259) green. Desktop `tsc --noEmit` clean. `airgap-smoke.ts` now fails the build if
 `bin/lucid-engine` or `renderer/app.bundle.js` did not ship (so a broken dist can't silently revert to the
 vulnerable `bun run dev.ts` path). NOT verified here (no Windows install harness): the end-to-end boot from
 an actual `Program Files` ACL location - that is Increment C.
@@ -16792,13 +17762,222 @@ an actual `Program Files` ACL location - that is Increment C.
 ### Next
 
 - **Increment C:** the CI smoke that installs to a `Program Files`-ACL location and boots the compiled
+  engine to `/api/health` - the regression that would have caught ADR-0259's brick.
+- **Re-enable per-machine installs.** With the engine no longer running raw TS from resources, the ADR-0259
+  installer clamp (`allowElevation:false`, `allowToChangeInstallationDirectory:false`) can be relaxed once
+  Increment C proves a protected-root boot; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged from ADR-0259).
+
+## ADR-0261 -- P-WINBOOT.2C: the Program Files boot gate (Increment C of ADR-0259/0260)
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Numbering note (settled at the v1.12.2 merge): this branch's
+P-WINBOOT.1/.2 ADRs were originally 0250/0251, colliding with master's independently-numbered 0250
+(P-MODEL.1) and 0251 (P-AVATAR) - master's numbers win (they shipped in v1.12.1 code), so the WINBOOT
+pair renumbered to 0259/0260. The parked `wip/adr-0252-0260-sessions` branch renumbers on top of
+master's log when it lands.
+
+### Problem
+
+The v1.12.0 brick (ADR-0259) shipped because NOTHING ever booted the app from an ACL-protected install
+tree: `packaged_boot.test.ts` materializes the packaging filter but boots from a writable temp dir, and
+`demo_p_winboot_2.ts` boots the compiled engine from the writable repo. The compiled engine (ADR-0260)
+removes the root cause by construction, but without a gate that actually boots from a protected tree, a
+future change that reintroduces an install-dir write or on-disk load ships silently - again.
+
+### Constraints the design fell out of (both found by EXECUTING the gate, not by review)
+
+1. **CI runners are administrators.** Inherited `Program Files` ACLs allow admins full control, so
+   merely staging there constrains nothing. The standard-user posture must be reproduced with an
+   explicit DENY ACE for the current user (deny beats allow, even for admins).
+2. **Never deny generic `W`.** The first hardening denied `(W,DE,DC)` - and the engine could not even
+   SPAWN (`uv_spawn EPERM`), because icacls' generic write maps to FILE_GENERIC_WRITE, which includes
+   SYNCHRONIZE, and CreateProcess needs it. Real Program Files blocks a standard user by LACKING a
+   write allow, not by denying handle-open rights. The deny is therefore the SPECIFIC rights only:
+   `(WD,AD,WEA,WA,DE,DC)` - write data, append, write EA/attributes, delete, delete child - leaving
+   read+execute+synchronize intact. A `deny-probe` write inside the stage must FAIL before the boot is
+   attempted, so a hardening that silently did not take can never produce a green run.
+3. **Drain the pipes, kill before reading.** The first boot loop piped stdout/stderr undrained: the
+   engine filled the 64KB pipe buffer mid-console.log and never finished booting - then the smoke
+   awaited stderr EOF on the still-running process and deadlocked itself. The gate drains both pipes
+   from spawn and kills the process BEFORE awaiting the tails.
+
+### Decision
+
+`desktop/build/pf-boot-smoke.ts` (IO) over pure decisions in `desktop/engine_pf_smoke.ts`:
+
+1. **Stage.** Packaged mode: the `*-unpacked/resources/repo` tree (the exact bytes the installer lays
+   down) staged verbatim - robocopy on win32 (long-path-safe; exit codes 0-7 are success). Source mode
+   (a dev box with no fresh dist): compile the engine + renderer into a minimal skeleton plus every
+   native-addon package (`**/*.node` -> its top-level package dir, both node_modules trees).
+2. **Location.** `pickSmokeRoot`: strict (CI) REQUIRES the real `Program Files` tree and the packaged
+   layout - any fallback THROWS, because a silent downgrade to a temp dir is exactly how the original
+   gap survived. Non-strict falls back to a temp dir with the same deny hardening. The staged leaf
+   keeps a SPACE ("Lucid PF Smoke") so path-quoting bugs stay in scope.
+3. **Boot.** `resolveEngineSpawn({packaged:true, repoRoot: stage})` must pick the compiled binary (the
+   exact main.ts decision), spawned with cwd = stage and PORT like main.ts; `/api/health` must answer
+   `{ok:true}` within 30s and the prebuilt `/app.js` must serve >1MB from the protected tree.
+4. **Cleanup.** Remove the deny ACE, then delete (retrying - Windows briefly locks a just-killed exe).
+5. **CI.** `build-desktop.yml` runs it on the Windows runner right after the air-gap smoke, STRICT.
+
+### Alternatives rejected
+
+- **Rely on inherited Program Files ACLs.** Constrains nothing on an admin runner (constraint 1).
+- **Install via the real NSIS installer.** The ADR-0259 clamp deliberately prevents a Program Files
+  install, and the one-click installer ignores a target dir by design; staging the unpacked resources
+  verbatim exercises the same bytes without fighting the clamp.
+- **A .ts-load canary instead of a boot.** The brick class is broader than the one loader behavior
+  (any install-dir write also bricks); booting the real engine gates the whole class.
+
+### Verification
+
+`make demo-P-WINBOOT.2C`: the pure decisions (strict-never-downgrades, specific-rights deny, generic-W
+prohibition, restore, layout gate), the CI wiring (windows-gated, strict), then the REAL smoke end to
+end - on this Windows box: source skeleton (7 native-addon packages), write-denial PROVEN by a failed
+probe write, engine booted from the write-denied tree in ~2s, `/api/health` ok, 7.1MB prebuilt
+`/app.js` served, stage un-denied and deleted. 14 unit tests (`engine_pf_smoke.test.ts`); desktop tsc
+clean. NOT verified here: the strict path against a REAL `Program Files` root + the packaged tree -
+that is precisely what the CI step runs on the next installer build (this shell is non-elevated, and
+the local `win-unpacked` predates the compiled engine).
+
+### Limits (honest)
+
+The deny ACE reproduces the standard-user WRITE constraint; it cannot reproduce whatever exact
+machine-specific condition made Bun's loader EPERM on the v1.12.0 host (AV, CIG, mmap flags - never
+pinned). The gate's value is structural: the engine must boot + serve while the install tree refuses
+every write and delete, from the real Program Files path in CI.
+
+### Next
+
+- **Relax the ADR-0259 installer clamp** (re-enable per-machine installs) once this gate is green on a
+  real CI installer build; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged; the bat's shim-guard work is
+  parked on `wip/adr-0252-0260-sessions`).
+
+## ADR-0262 -- P-WINBOOT.3: relax the installer clamp - per-machine installs are legal again
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Closes the ADR-0259/0260 arc: mitigation (0259) -> permanent fix
+(0260) -> regression gate (0261) -> this relax.
+
+### Problem
+
+ADR-0259 clamped the NSIS installer (`allowElevation:false`, `allowToChangeInstallationDirectory:
+false`) so no new install could reach `Program Files` while the engine still module-loaded `.ts` off
+the install disk. That was a mitigation with a real UX cost: no per-machine installs (multi-user
+boxes duplicate the app per user; org-imaged machines cannot install to the standard location), and a
+user explicitly wanting `Program Files` is silently redirected. The justification for the clamp ended
+when ADR-0260 shipped the compiled engine and ADR-0261's CI gate proved - on the real runner, from
+the real `C:\Program Files`, against the exact packaged bytes - that the engine boots and serves from
+a write-denied protected tree.
+
+### Decision
+
+`desktop/package.json` build.nsis: `oneClick:false` (assisted installer - the location choice is
+conscious), `perMachine:false` (the DEFAULT stays per-user `%LOCALAPPDATA%\Programs`: writable, no
+elevation, the posture every user got during the clamp era), `allowElevation:true` +
+`allowToChangeInstallationDirectory:true` (per-machine `Program Files` allowed for those who choose
+it). The two flag flips are the exact diff the test branch carried as "test-only: DO NOT MERGE" since
+Aug 1; this ADR makes them intended. The branch history is deliberately kept as-is (no force-push):
+the old commit title stays, this ADR supersedes it, and the PR should SQUASH-merge so the title never
+reaches master.
+
+**The relax is COUPLED to the gate.** demo-P-WINBOOT.1 section [5] now asserts BOTH the posture and
+that `build-desktop.yml` still runs `build/pf-boot-smoke.ts` STRICT on the Windows runner: whoever
+removes or weakens the gate turns the demo red, so the clamp-relax can never outlive its
+justification silently.
+
+### What stays
+
+- `engine_boot.ts`'s protected-location classifier + dialog: installs from a STALE pre-engine package
+  (or a future regression between gate runs) still die in `Program Files`, and they must keep failing
+  FAST and ACTIONABLY (reinstall per-user / run portable), not as a 30s blank box.
+- The per-user DEFAULT: elevation prompts on every update are worse for the common single-user case,
+  and auto-update writes into the install dir - per-user keeps that writable without UAC.
+
+### Verification
+
+`make demo-P-WINBOOT.1` green with the new section [5] (posture + gate coupling); demos P-WINBOOT.2
+and .2C still green; engine_boot/engine_launch/engine_pf_smoke tests green; root + desktop tsc clean;
+license clean. The real-installer click-through (choose `C:\Program Files`, elevate, boot) is the
+user's on-device pass with the run-32796994917 artifacts - the gate already proved the boot half on
+the runner from the identical staged bytes.
+
+### Next
+
+- Drop nothing: the branch is PR-ready once history is rewritten (no DO-NOT-MERGE tip).
+- v1.12.2 release cut with the compiled engine + gate + this relax.
+- Increment D (`LucidAgentIDE.bat`) rides with the parked `wip/adr-0252-0260-sessions` branch.
+
+## ADR-0263 -- P-STALL.2: no turn cutoff - long work runs to completion, and the wait is legible
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Supersedes the cutoff half of ADR-0186 (P-STALL.1); its visibility half
+(the 2-minute slow notices) stays and gains content.
+
+### Problem
+
+P-STALL.1's 10-minute total-silence kill (`IDLE_MS`, raced against `session/prompt`) was designed for
+provider overload, but it murders LEGITIMATE work: an agent that fans tasks out to subagents (omp's
+`task` tool) can sit quiet far longer than any fixed clock while the work is genuinely running - the
+parent streams nothing while a subagent grinds. The user reported exactly this in the field: long
+runs now routinely exceed ten minutes, every one died with "the model sent nothing for 10 minutes",
+and the UI gave no visibility into WHAT the turn was waiting on. Any fixed number is the same bug
+with a different constant: the clock is guessing how long work is allowed to take.
+
+### Decision (user call: remove the cutoff, add visibility)
+
+1. **No time-based turn cutoff.** `IDLE_MS`, the stall promise, and the `Promise.race` around the
+   CHAT `session/prompt` are gone; the request is awaited directly. A turn ends when the work ends,
+   when the user presses Stop, or when the transport dies.
+2. **Transport death is event-driven, not a clock.** The only failure the old timer actually guarded
+   against is a dead omp child - and on this branch `ACPClient` never rejected pending requests on
+   exit, so removing the timer alone would trade early kills for infinite hangs. `ACPClient.start()`
+   now drains every pending request with a clear error on child `exit` and on spawn `error`
+   (`failPending`). Pinned by a REAL child process in `acp.test.ts` (and the demo): the child exits
+   mid-request, the promise rejects with the exit code, event-driven.
+3. **Visibility: every slow notice names the open work.** New pure `desktop/turn_pending.ts` tracks
+   the turn's OPEN tool calls from the raw ACP stream (`tool_call` opens; a terminal
+   `tool_call_update` - completed/failed/rejected/cancelled - closes; spawned subagent tasks are
+   labeled `subagent <agent> \u00d7N: <title>`). The `{ type:"slow" }` ChatEvent (additive field) now
+   carries `pending: { label, elapsedMs }[]` - longest-running first, capped at 6 - and the renderer
+   shows it: HUD phase `Working \u00b7 waiting on N tasks \u00b7 quiet for M min`, and the once-per-turn toast
+   lists the tasks (`stall_notice.ts: pendingSummaryLine`). No cap is ever named in copy; Stop is.
+
+### Scope (deliberate)
+
+- CHAT turns only. The util completions (`completeOn`/`completeShared`: KG extraction, the /goal
+  checker) keep their own deliberate background clocks - they are invisible background jobs with no
+  Stop affordance mid-flight, and the parked `wip/adr-0252-0260-sessions` branch (P-KG-INGEST.5)
+  reworks that path properly with bounded handshakes + cancellation. The inverse-lockstep test pins
+  the chat path precisely (`promptContent`), not the whole file.
+- `ACPClient.failPending` deliberately overlaps the parked P-KG-INGEST.5 redesign (request
+  `{timeoutMs, signal}` + `die()`); this is its minimal chat-unblocking subset, and the wip branch
+  supersedes it at its merge (a small, intentional conflict).
+
+### Verification
+
+`make demo-P-STALL.2` (clock gone from the chat path, REAL-child death rejection, tracking
+lifecycle, slow-event contract, honest copy) + the evolved `demo-P-STALL.1` (the visibility half that
+remains); 20 unit tests across `turn_pending.test.ts` (labels incl. subagent batches, terminal-only
+settling, snapshot order/cap), `acp.test.ts` (real child exit + spawn failure reject), and the
+rewritten `stall_notice.test.ts` (no-cap copy, pending summary, inverse lockstep). Root + desktop tsc
+clean; full desktop suite at the documented baseline. NOT exercised here: a live >10-minute
+provider-silent turn end to end (needs a real long model run; the removal is structural and the
+death/Stop exits are individually pinned).
+
+### Next
+
+- On-device: run a long fan-out and watch the HUD name the subagent tasks while quiet.
+- When the wip branch lands, fold `failPending` into its fuller `die()` path and extend pending
+  visibility to the util/ingest jobs it reworks.
   engine to `/api/health` - the regression that would have caught ADR-0250's brick.
 - **Re-enable per-machine installs.** With the engine no longer running raw TS from resources, the ADR-0250
   installer clamp (`allowElevation:false`, `allowToChangeInstallationDirectory:false`) can be relaxed once
   Increment C proves a protected-root boot; its own increment.
 - **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged from ADR-0250).
 
-## ADR-0252 -- P-KG-INGEST.5: the ingest cannot hang, and Stop always stops
+## ADR-0264 -- P-KG-INGEST.5: the ingest cannot hang, and Stop always stops
 
 **Date:** 2026-08-01
 **Status:** Accepted -- BUILT.
@@ -16887,14 +18066,14 @@ omp on the user's machine, which is what the bounds exist to make impossible.
   cancels between DOCUMENTS as well as within a call; its own increment.
 - Surface `stalled` in the KB ingest pill too (it shares the pattern, not the formatter).
 
-## ADR-0253 -- P-FS.2: the browser build opens the REAL OS folder dialog
+## ADR-0265 -- P-FS.2: the browser build opens the REAL OS folder dialog
 
 **Date:** 2026-08-03
 **Status:** Accepted -- BUILT.
 
 ### Problem
 
-ADR-0252 made every folder pick go through `pickFolderDialog()`, which opens the native Explorer/Finder
+ADR-0264 made every folder pick go through `pickFolderDialog()`, which opens the native Explorer/Finder
 dialog IN ELECTRON. But the default launch path (`LucidAgentIDE.bat` / `lucid.exe`) serves the GUI to a
 PLAIN BROWSER where no `window.lucid` preload exists, so every pick ("Choose a chat export or Obsidian
 markdown folder", KG pack import/export, save-to, workspace) fell back to the in-app dark browser: the
@@ -16945,7 +18124,7 @@ every failure path degrades to the in-app browser. `tsc --noEmit` clean.
 - The `defaultPath` seam (open the dialog at the current workspace) exists in the Electron path; thread it
   through the backend path when a caller wants it.
 
-## ADR-0254 -- P-DATA.1: the frozen data-integration steer (prefix v10)
+## ADR-0266 -- P-DATA.1: the frozen data-integration steer (prefix v10)
 
 **Date:** 2026-08-03
 **Status:** Accepted -- BUILT.
@@ -16991,7 +18170,7 @@ All 21 tests in the demo suite pass; `tsc --noEmit` clean.
 - A `/connect-data` slash command that runs the same interview interactively and ends in the Agent
   Builder with a drafted MCP-backed workflow; its own increment.
 
-## ADR-0255 -- P-STT.6: Whisper model housekeeping (offer small tiers only, gray out, remove)
+## ADR-0267 -- P-STT.6: Whisper model housekeeping (offer small tiers only, gray out, remove)
 
 **Date:** 2026-08-03
 **Status:** Accepted -- BUILT.
@@ -17050,7 +18229,7 @@ rendered from the tested view model.
 - Purge-all button ("remove every model not in use") if users accumulate several tiers.
 - Consider surfacing the whisper model dir path in the card for manual inspection.
 
-## ADR-0256 -- P-FLEET.1: async job handles through the Agent Firewall (the Chief-of-Staff fan-out) (SCOPE/PLAN)
+## ADR-0268 -- P-FLEET.1: async job handles through the Agent Firewall (the Chief-of-Staff fan-out) (SCOPE/PLAN)
 
 **Date:** 2026-08-14
 **Status:** Accepted -- SCOPE/PLAN. No code in this ADR. P-FLEET.1 is the next session's increment;
@@ -17274,7 +18453,7 @@ Plus: `demo-P-AGENTFW.1` stays green untouched, and `tsc --noEmit` clean.
   fields extend.
 - ADR-0152 (P-MCP-GATE.1) - the in-process MCP result gate that re-scans every deferred hand-off.
 - ADR-0186 (P-STALL.1) - where the ten-minute patience number comes from.
-- ADR-0252 (P-KG-INGEST.5) - the same lesson on the desktop ACP client: bounded requests, pending calls
+- ADR-0264 (P-KG-INGEST.5) - the same lesson on the desktop ACP client: bounded requests, pending calls
   drained on death, cancel threaded end to end.
 - ADR-0076 (P-KG-INGEST.1) and `desktop/import_job.ts` - the house job pattern this mirrors (mint an id,
   in-memory state, poll a view, soft-then-hard cancel, test-only reset seam).
@@ -17283,7 +18462,7 @@ Plus: `demo-P-AGENTFW.1` stays green untouched, and `tsc --noEmit` clean.
   EventName contracts increment), P-FLEET.4 (agent-to-agent threads through the firewall, each hop
   scanned) - the rest of the map.
 
-## ADR-0257 -- P-VOICE.7: varied openers, active-listening restatement, and spoken thinking snapshots
+## ADR-0269 -- P-VOICE.7: varied openers, active-listening restatement, and spoken thinking snapshots
 
 **Status:** Accepted -- BUILT.
 
@@ -17336,13 +18515,13 @@ path handling, vendored omp suites) - none in harness/voice or the renderer path
 - ADR-0249 (P-VOICE.6) - the cue engine and restraint rules this extends.
 - ADR-0247 (P-VOICE.2) - speakable() and the speech queue the cues ride on.
 
-## ADR-0258 -- P-FLEET.1 BUILT: job handles through the Agent Firewall, and the deltas from the plan
+## ADR-0270 -- P-FLEET.1 BUILT: job handles through the Agent Firewall, and the deltas from the plan
 
 **Date:** 2026-08-19
-**Status:** Accepted -- BUILT. Supersedes nothing; records the build of ADR-0256's plan and its four
-deltas. ADR-0256 remains the design of record.
+**Status:** Accepted -- BUILT. Supersedes nothing; records the build of ADR-0268's plan and its four
+deltas. ADR-0268 remains the design of record.
 
-### What shipped (per ADR-0256's file-by-file, all delivered)
+### What shipped (per ADR-0268's file-by-file, all delivered)
 
 - `harness/mcp/jobs.ts` (new, pure): the JobTable + closed state set (`queued | running | done | blocked |
   error | timeout | cancelled`), sticky terminals (a cancelled job whose remote turn later settles can
@@ -17359,12 +18538,12 @@ deltas. ADR-0256 remains the design of record.
 - `harness/mcp/registry.ts`: additive `jobTimeoutMs?` (default 600_000 via the firewall wiring) and
   `maxQueue?`; `isEntry` untouched, so existing registry files load unchanged.
 - `harness/mcp/jobs.test.ts` (11 tests), 14 FLEET tests in `agent_firewall.test.ts`,
-  `harness/scripts/demo_pfleet1.ts` + `make demo-P-FLEET.1` (all fifteen ADR-0256 checks),
+  `harness/scripts/demo_pfleet1.ts` + `make demo-P-FLEET.1` (all fifteen ADR-0268 checks),
   `docs/AGENT-FIREWALL.md` section 5 "Running several workers".
 
 ### Delta 1 - the inline wait is 25s, not the proposed 90s (the measured ceiling)
 
-ADR-0256's open question is answered: the pinned omp bundle times out one MCP `tools/call` at
+ADR-0268's open question is answered: the pinned omp bundle times out one MCP `tools/call` at
 `DEFAULT_MCP_TIMEOUT_MS = 30_000` (vendor mcp/timeout.ts; env `OMP_MCP_TIMEOUT_MS`; per-server `timeout`
 is not set by our registry's mcpServers entries). A 90s inline wait would die on the transport and hand
 the model an error instead of a handle. `DEFAULT_PROMPT_WAIT_MS = 25_000`, requested `wait_ms` is CLAMPED
@@ -17376,7 +18555,7 @@ exported beside it with the measurement note).
 Not in the plan, but load-bearing: the pump starts the next queued job only when the current prompt
 promise SETTLES. A cancelled or timed-out turn whose remote ignores `session/cancel` would wedge the queue
 forever behind an un-settling promise - and pumping anyway would cross collectors (the exact unsafety
-ADR-0256 documents). So: cancel sends `session/cancel`, waits `cancelGraceMs` (default 5s, injectable),
+ADR-0268 documents). So: cancel sends `session/cancel`, waits `cancelGraceMs` (default 5s, injectable),
 then `remote.stop()` if the turn has not settled - the child dies, the pending promise rejects, terminal
 stickiness swallows the late rejection, the queue pumps, and the next job gets a fresh session. The
 timeout path stops immediately (the deadline already waited). Demo checks 8b and 9 pin both.
@@ -17396,23 +18575,23 @@ the REAL AcpAgentClient stdio transport into a genuine `AcpTimeoutError` with it
 
 ### Verified
 
-`make demo-P-FLEET.1` green (all fifteen ADR-0256 checks, including two firewalls with both jobs provably
+`make demo-P-FLEET.1` green (all fifteen ADR-0268 checks, including two firewalls with both jobs provably
 running at the same instant, and a scanner killed mid-job landing `blocked`+fail_closed and never `done`).
 `demo-P-AGENTFW.1` green untouched. 144 mcp+voice tests pass (11 jobs, 14 FLEET, all pre-existing green).
 `tsc --noEmit` clean. contracts.ts untouched; the fleet EventNames stay deferred to P-FLEET.3 as planned.
 
 ### Relates to
 
-- ADR-0256 - the plan this builds; its open questions on the ceiling (answered: 30s) and the deadline
+- ADR-0268 - the plan this builds; its open questions on the ceiling (answered: 30s) and the deadline
   default (per-entry `jobTimeoutMs`, 600s default) are now settled in code.
 - ADR-0147 / ADR-0152 / ADR-0186 - unchanged foundations (gate, MCP result gate, patience number).
 - P-FLEET.2/.3/.4 - unchanged roadmap (supervisor, fleet panel + EventName contracts, agent threads).
 
-## ADR-0259 -- P-FLEET.L1: local lanes + the fleet grid dashboard
+## ADR-0271 -- P-FLEET.L1: local lanes + the fleet grid dashboard
 
 **Date:** 2026-08-19
 **Status:** Accepted -- BUILT.
-**Increment:** P-FLEET.L1. Sits BESIDE the P-FLEET roadmap (ADR-0256): P-FLEET.2 (remote worker
+**Increment:** P-FLEET.L1. Sits BESIDE the P-FLEET roadmap (ADR-0268): P-FLEET.2 (remote worker
 supervisor + health) and P-FLEET.3 (PWA fleet panel + the fleet EventName contracts increment) remain as
 mapped; this increment is the LOCAL flavor the user asked for first - concurrent lanes on one machine
 with a desktop dashboard.
@@ -17438,7 +18617,7 @@ Key rules:
   existing sample (P-SYSRES.1 - NOT re-implemented). Three gates: core-derived lane ceiling
   (min(6, cores/2)), memory watermark 75%, CPU watermark 75%. Refusals carry the measured number. Fails
   OPEN on missing evidence (UX guard doctrine, matching system_profile), but the ceiling always applies.
-- **One turn at a time per lane** (one session, per-turn collectors - the ADR-0256 crossing lesson);
+- **One turn at a time per lane** (one session, per-turn collectors - the ADR-0268 crossing lesson);
   parallelism is across lanes.
 - **Fail-closed approvals**: every session/request_permission surfaces as needs-approval in the lane's
   mini window; silence (10 min) or a closed dashboard is a DENY. No standing allowlists in L1. The in-omp
@@ -17477,20 +18656,20 @@ the next session - it needs the app window this environment cannot open.
 
 ### Relates to
 
-- ADR-0256/0258 (P-FLEET.1) - the remote-worker job handles; the serialization lesson reused here.
+- ADR-0268/0258 (P-FLEET.1) - the remote-worker job handles; the serialization lesson reused here.
 - ADR-0182 (P-SYSRES.1) - the system sample + fail-open guard doctrine the 75% verdict sits on.
 - ADR-0096/0153 (preview extension) - the token'd-env callback pattern fleet_status reuses.
 - ADR-0232/0242 (share/join docks) - the dock frame + pill conventions the fleet grid reuses.
 - P-FLEET.2/.3/.4 - unchanged roadmap; P-FLEET.3's PWA panel will subsume the remote view.
 
-## ADR-0260 -- P-FLEET.P1: Fleet Profiles - project-bound full-GUI instances and the lane-or-window spawn choice (SCOPE/PLAN)
+## ADR-0272 -- P-FLEET.P1: Fleet Profiles - project-bound full-GUI instances and the lane-or-window spawn choice (SCOPE/PLAN)
 
 **Date:** 2026-08-21
 **Status:** Accepted -- SCOPE/PLAN. No harness/desktop code in this ADR. The one artifact shipped
 beside it is the control panel's new `F) Fleet GUI` option (LucidAgentIDE.bat), a launcher-only
 prototype that proves the profile seams end to end; the native feature is the P-FLEET.P* increments
 mapped below, each its own session.
-**Increment:** P-FLEET.P* family. Sits BESIDE the P-FLEET roadmap exactly as P-FLEET.L1 (ADR-0259)
+**Increment:** P-FLEET.P* family. Sits BESIDE the P-FLEET roadmap exactly as P-FLEET.L1 (ADR-0271)
 did: P-FLEET.2 (remote supervisor), .3 (PWA panel + fleet EventName contracts), .4 (agent threads)
 are unchanged.
 
@@ -17510,7 +18689,7 @@ code and are all true:
 - Electron identity is keyed on the PORT, not the project: a non-default LUCID_PORT suffixes
   userData before the single-instance lock (main.ts:25-38, ADR-0206). Port drift changes identity.
 - No instance-identity endpoint exists; /api/health (dev.ts:1006) says only "something is alive".
-- Fleet lanes (ADR-0259) do not substitute: a lane is a headless gated omp child that inherits the
+- Fleet lanes (ADR-0271) do not substitute: a lane is a headless gated omp child that inherits the
   master's env (no per-lane GUI settings or Personal Knowledge), is ephemeral, and renders in a mini
   window, not a full IDE.
 
@@ -17579,7 +18758,7 @@ the user's on-device test (this environment cannot open app windows).
 ### Relates to
 
 - LUCID-FEATURE-REQUEST-FLEET-MANAGEMENT.md - the request this scopes.
-- ADR-0259 (P-FLEET.L1) - lanes, the other fleet shape; the spawn choice bridges the two.
-- ADR-0256/0258 (P-FLEET.1) - job handles; a full-GUI member is also reachable as a firewall worker.
+- ADR-0271 (P-FLEET.L1) - lanes, the other fleet shape; the spawn choice bridges the two.
+- ADR-0268/0258 (P-FLEET.1) - job handles; a full-GUI member is also reachable as a firewall worker.
 - ADR-0206 - the single-instance lock this re-keys by profile.
 - ADR-0182 (P-SYSRES.1) - the admission sample the instance ceiling reuses.

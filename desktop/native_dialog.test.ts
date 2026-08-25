@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/native_dialog.test.ts - P-FS.2 (ADR-0253): pin the native-picker contract.
+// desktop/native_dialog.test.ts - P-FS.2 (ADR-0265): pin the native-picker contract.
 //
 // The spawn paths need a desktop session, so the tests pin the PURE parts every platform shares:
 // the win32 script uses the MODERN Explorer dialog (never the legacy tree) and passes caller text

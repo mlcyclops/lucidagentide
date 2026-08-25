@@ -41,7 +41,7 @@ export interface FirewallEvent {
   reason: string;
   trustLabel?: TrustLabel;
   failClosed?: boolean;
-  /** P-FLEET.1 (ADR-0256): the job this decision belongs to, when one is in scope. */
+  /** P-FLEET.1 (ADR-0268): the job this decision belongs to, when one is in scope. */
   jobId?: string;
   /** P-FLEET.1: the job's state after this decision. */
   state?: JobState;
@@ -57,7 +57,7 @@ export interface AgentFirewallDeps {
   /** Connection kind label (hermes / openclaw / acp). */
   connKind: string;
   onEvent?: FirewallEventSink;
-  /** P-FLEET.1 (ADR-0256): queued jobs beyond which dispatch refuses. Default 8 (jobs.ts). */
+  /** P-FLEET.1 (ADR-0268): queued jobs beyond which dispatch refuses. Default 8 (jobs.ts). */
   maxQueue?: number;
   /** P-FLEET.1: after cancelling a RUNNING job, how long to wait for the remote turn to settle before
    *  force-stopping the remote (which kills a wedged child and lets the queue pump). Default 5s. */
@@ -82,7 +82,7 @@ export class AgentFirewall {
   }
 
   /** The MCP tools this firewall exposes to LUCID. `prompt` stays FIRST (pinned by tests + habit);
-   *  dispatch/job_status/cancel are the P-FLEET.1 (ADR-0256) handle surface over the same execution path. */
+   *  dispatch/job_status/cancel are the P-FLEET.1 (ADR-0268) handle surface over the same execution path. */
   tools(): McpTool[] {
     const conn = `"${this.deps.connName}" (${this.deps.connKind})`;
     return [{
@@ -268,7 +268,7 @@ export class AgentFirewall {
   }
 
   /** One job at a time per connection (the ACP client holds ONE session + per-turn collectors; overlap
-   *  would cross replies between jobs - ADR-0256). The next queued job starts when the current settles. */
+   *  would cross replies between jobs - ADR-0268). The next queued job starts when the current settles. */
   #pump(): void {
     if (this.#table.runningId()) return;
     const next = this.#table.nextQueued();
@@ -369,7 +369,7 @@ export async function runAgentFirewall(connId: string, opts: { scanner?: Scanner
   scanner.start();
   if (!scanner.alive) process.stderr.write(`🛡️  [agent-firewall:${entry.name}] WARNING scanner sidecar not started — every call will fail closed.\n`);
 
-  // P-FLEET.1 (ADR-0256): the worker-turn deadline is the entry's jobTimeoutMs (default P-STALL.1's ten
+  // P-FLEET.1 (ADR-0268): the worker-turn deadline is the entry's jobTimeoutMs (default P-STALL.1's ten
   // minutes) - NOT the old 120s client default, which no real refactor fits inside.
   let firewall: AgentFirewall | null = null;
   const remote = new AcpAgentClient(
@@ -405,7 +405,7 @@ export async function runAgentFirewall(connId: string, opts: { scanner?: Scanner
       `dispatching to several connections.`,
   });
 
-  // Shutdown order is load-bearing (ADR-0256 check 15): cancel live jobs FIRST (session/cancel reaches the
+  // Shutdown order is load-bearing (ADR-0268 check 15): cancel live jobs FIRST (session/cancel reaches the
   // remote turn), THEN stop the remote + scanner - a shutdown must never orphan a worker turn.
   const stop = () => { try { firewall?.cancelAllLive(); } catch { /* ignore */ } try { remote.stop(); } catch { /* ignore */ } try { scanner.stop(); } catch { /* ignore */ } };
   process.on("SIGINT", () => { stop(); process.exit(0); });

@@ -72,7 +72,7 @@ export interface AcpAgentClientOptions {
   onLog?: (line: string) => void;
   /** How to answer the remote's session/request_permission: "deny" (default, fail-closed) or "allow". */
   permissionPolicy?: "deny" | "allow";
-  /** P-FLEET.1 (ADR-0256): counts-only live progress. The struct has NO text field ON PURPOSE - remote
+  /** P-FLEET.1 (ADR-0268): counts-only live progress. The struct has NO text field ON PURPOSE - remote
    *  text is scanned once, whole-turn; a per-chunk hand-off would let an adversary split a hidden vector
    *  across two notifications so each chunk scans clean. Counts cannot carry a vector. */
   onProgress?: (p: AcpProgress) => void;

@@ -17,7 +17,7 @@ export interface ImportLineInput {
 }
 
 /** No tick for this long while running means the run is wedged, not slow. One model extraction is
- *  bounded well under this (P-KG-INGEST.5, ADR-0252), so silence past it is a real stall, and the pill
+ *  bounded well under this (P-KG-INGEST.5, ADR-0264), so silence past it is a real stall, and the pill
  *  must SAY so instead of showing a healthy-looking "0/500" forever. */
 export const STALL_MS = 90_000;
 

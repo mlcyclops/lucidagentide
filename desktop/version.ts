@@ -285,4 +285,11 @@
 //            zero-prereq BUNDLED offline Whisper installers on all 3 OSes (P-STT.2c/.2d), the mic waveform
 //            (P-STT.4) + orphan whisper-server reaper (P-STT.5), the Provider Hub + one-click local-model
 //            presets (P-PROV.2 / P-LOCAL.4), and the model-picker cold-start warm-poll.
-export const APP_VERSION = "1.12.0";
+// v1.12.0 = Voice mode. Hands-free conversation (Ctrl/Cmd+G: streaming read-aloud that starts after the
+//            first sentence, auto-mic on finish, silence sends the turn), answers shaped for the ear,
+//            the glowing pop-out equalizer, spoken thinking acknowledgements, and the truth-telling
+//            per-engine voice picker (P-VOICE.2-.6, ADR-0246/0247).
+// v1.12.1 = the LUCID Trainer + role-generic training packs + the LUCID Agent immersive role
+//            (scenario-first expert interviews, fail-closed distillation, teach-back promotion,
+//            drills from confirmed knowledge; P-TRAINER.1-.9, ADR-0252..0257).
+export const APP_VERSION = "1.12.2";

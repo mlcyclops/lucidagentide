@@ -225,7 +225,7 @@ For a local no-auth dev gateway on the default port, `"args": ["acp"]` is enough
 
 ---
 
-## 5. Running several workers (P-FLEET.1, ADR-0256)
+## 5. Running several workers (P-FLEET.1, ADR-0268)
 
 Every connection's firewall exposes FOUR tools over one gated execution path - the model reaches them as
 `mcp__agentfw-<id>_<tool>`:
@@ -256,7 +256,7 @@ scanned whole. Every state but `queued`/`running` is terminal: `done | blocked |
 cancelled`, each non-done carrying only a redacted reason.
 
 ```bash
-make demo-P-FLEET.1   # the fifteen ADR-0256 checks: non-blocking dispatch, two-connection fan-out,
+make demo-P-FLEET.1   # the fifteen ADR-0268 checks: non-blocking dispatch, two-connection fan-out,
                       # byte-identical envelopes, per-job fail-closed, deadline cleanup, idempotent
                       # retries, queue cap, metadata-only polling, shutdown ordering
 ```

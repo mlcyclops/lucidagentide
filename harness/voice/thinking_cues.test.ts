@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-VOICE.6 (ADR-0249) + P-VOICE.7 (ADR-0257): spoken "still working" cues. What matters is RESTRAINT - the
+// P-VOICE.6 (ADR-0249) + P-VOICE.7 (ADR-0269): spoken "still working" cues. What matters is RESTRAINT - the
 // failure mode is an agent that chatters over its own answer or narrates every second of a long turn - plus
 // the P-VOICE.7 additions: varied openers, active-listening restatement, and thinking snapshots that only
 // speak when the reasoning has genuinely moved forward.

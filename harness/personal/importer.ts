@@ -59,7 +59,7 @@ export async function importConversations(
     if (opts.signal?.aborted) { cancelled = true; break; }
     const runId = `${sessionId}:${idx}`;
     for (const m of convo.messages) {
-      // P-KG-INGEST.5 (ADR-0252): check EVERY message, not just conversation boundaries. In model mode one
+      // P-KG-INGEST.5 (ADR-0264): check EVERY message, not just conversation boundaries. In model mode one
       // conversation can be hundreds of slow completions, so a boundary-only check made Stop look dead.
       if (opts.signal?.aborted) { cancelled = true; break; }
       if (m.role !== "user" || !m.text.trim()) continue; // only the user's own words teach

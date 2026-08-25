@@ -13,7 +13,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
 
-/** Per-request bounds. Without at least one of these a request waits forever (P-KG-INGEST.5, ADR-0252). */
+/** Per-request bounds. Without at least one of these a request waits forever (P-KG-INGEST.5, ADR-0264). */
 export type RequestOpts = {
   /** Reject after this many ms with no response. Omit only for calls already raced against another clock. */
   timeoutMs?: number;

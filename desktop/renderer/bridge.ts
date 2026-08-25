@@ -234,6 +234,8 @@ export interface WhisperTierView {
 }
 export interface WhisperStatusView {
   capable: boolean; recommended: string | null; summary: string;
+  /** The tier used when nothing is picked (tiny); the picker preselects it when no server runs. */
+  defaultTier?: string | null;
   binAvailable: boolean; binHint: string;
   running: boolean; port: number; activeTier: string | null; serveUrl: string | null;
   tiers: WhisperTierView[];
@@ -436,8 +438,9 @@ export interface Attribution {
   // Enterprise-managed policy view (ADR-0030): drives the prompt + "Managed by …" UI.
   managed: boolean; orgName: string; requireEmail: boolean; allowSkip: boolean; allowedDomains: string[];
 }
-// ADR-0088 (P-ROLE.1): the four onboarding roles (renderer-side mirror of settings_store's UserRole).
-export type UserRole = "developer" | "security" | "manager" | "executive";
+// ADR-0088 (P-ROLE.1): the onboarding roles (renderer-side mirror of settings_store's UserRole).
+// P-AVATAR.1 (ADR-0251): + "lucid-agent", the one behavioral role (immersive stage).
+export type UserRole = "developer" | "security" | "manager" | "executive" | "lucid-agent";
 export interface ProfileSettings {
   username: string;
   email: string;
@@ -1394,7 +1397,11 @@ export const bridge: LucidBridge = {
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
-  previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`, // P-PREVIEW.4b
+  // P-PREVIEW.4b. The `v` nonce makes every deliberate load a FRESH navigation: assigning an iframe src
+  // its current value does not renavigate in Chromium, so without it a re-open (or a re-edit of the same
+  // file) kept showing the previously served document forever, no matter what was on disk. The server
+  // ignores `v`; the response is already no-store, the nonce only defeats the same-URL no-op.
+  previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}&v=${Date.now().toString(36)}`,
   previewImage: (dataUrl) => post("/api/preview/image", { dataUrl }) as Promise<{ path: string } | null>, // P-IMG.1 (ADR-0208)
   cachePreviewShot: async (png) => { await post("/api/preview/shot-cache", { png }); }, // P-PREVIEW.3a-shot
   previewInspectNext: () => getData("/api/preview/inspect/next"), // P-PREVIEW.6b

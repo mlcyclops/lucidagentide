@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/engine_boot.ts - P-WINBOOT.1 (ADR-0250): diagnose why the packaged Bun engine
+// desktop/engine_boot.ts - P-WINBOOT.1 (ADR-0259): diagnose why the packaged Bun engine
 // failed to start, and detect the protected-install-directory failure mode.
 //
 // v1.12.0 bricked on Windows when installed under C:\Program Files: main.ts spawns
@@ -13,9 +13,11 @@
 //
 // This module is the PURE brain the boot path uses to turn that dead-end into an IMMEDIATE,
 // actionable message: it decides which of three failures happened and writes the exact recovery
-// step. The installer guard (nsis allowElevation/allowToChangeInstallationDirectory = false)
-// prevents new installs from reaching Program Files in the first place; this covers the ones that
-// already did, plus any other early engine death.
+// step. History: ADR-0259 first CLAMPED the installer away from Program Files as a mitigation;
+// ADR-0262 re-allowed per-machine installs once the compiled engine (ADR-0260) + the strict CI boot
+// gate (ADR-0261) proved a protected-tree boot. This classifier stays: it covers installs from a
+// STALE pre-engine package, a future regression the gate has not yet caught, and any other early
+// engine death.
 
 import { join } from "node:path";
 

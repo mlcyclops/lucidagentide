@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/engine_launch.test.ts - P-WINBOOT.2 (ADR-0251): the compiled-engine launch decisions.
+// desktop/engine_launch.test.ts - P-WINBOOT.2 (ADR-0260): the compiled-engine launch decisions.
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";

@@ -29,7 +29,7 @@ export interface FactCandidate {
 export type Extractor = (turn: { user: string; assistant: string; signal?: AbortSignal }) => FactCandidate[] | Promise<FactCandidate[]>;
 
 /** One model round-trip for the model extractor. `signal` lets a batch import stop mid-call
- *  (P-KG-INGEST.5, ADR-0252) instead of waiting out the whole completion. */
+ *  (P-KG-INGEST.5, ADR-0264) instead of waiting out the whole completion. */
 export type CompleteFn = (system: string, user: string, opts?: { signal?: AbortSignal }) => Promise<string>;
 
 const clip = (s: string, n = 140): string => s.replace(/\s+/g, " ").trim().slice(0, n);
