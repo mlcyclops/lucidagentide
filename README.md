@@ -179,6 +179,20 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.12.1
+
+> **🧠 Teach it once. It trains everyone.** LUCID becomes a knowledge trainer: it interviews your expert, distills what they know into verified lesson units, and quizzes the team on it - for ANY role you give it.
+
+- **🧠 The LUCID Trainer (the headline)** - a new brain icon on the rail opens an immersive extraction stage: LUCID interviews your expert scenario-first ("walk me through the Friday-4pm wire..."), chases exceptions with capped five-whys followups, and never re-asks confirmed ground. Every answer runs the fail-closed pipeline before ANYTHING is stored: PII redacted to typed placeholders, scanned, distilled by your configured model inside untrusted delimiters, re-scanned, and born untrusted until the expert confirms the teach-back - confirmation IS the promotion. A live coverage HUD shows each domain filling L0 to L3, and drills (next-step, spot-the-exception, sequence) are generated ONLY from confirmed units, with a trainee miss re-opening extraction. *(P-TRAINER.1-.8, ADR-0252..0255)*
+- **🎯 Train ANY role** - the trainer is role-generic: paste a Position Description or a task list and it builds the coverage map for THAT job; a fresh install asks for your role instead of assuming one. The wealth-management-ops pack ships as a clearly-labeled sample you can try in one click. *(P-TRAINER.9, ADR-0257)*
+- **🥷 The LUCID Agent role** - an immersive agent persona with a talking mascot, cinematic boot, and hands-free flow, sharing the stage machinery the trainer runs on. *(ADR-0251)*
+- **🖼️ Preview panel: no more stale documents** - re-opening or re-editing a previewed file now always repaints; the panel used to pin the first served document forever (a same-URL iframe assignment never renavigates). *(fix)*
+- **🎨 Trainer stage readability** - WCAG AA contrast pass across the stage (dim labels, placeholders, drag grips, HUD chips) and design-token alignment with the app shell. *(fix)*
+- **🛡️ Sandbox hardening** - macOS Seatbelt now probes real sandbox_apply capability instead of mere presence, and the Windows AppContainer helper gains mediated loopback-only networking; plus the zombie-SID GPU-sandbox self-heal on Windows. *(P-SANDBOX.4/.7b, P-GPUFIX.1)*
+- **🚁 Groundwork: the agent fleet** - the Chief-of-Staff fleet design (one LUCID orchestrating N gated workers over `ssh <host> lucid acp`, every reply scanned) is now a documented plan. *(ADR-0256)*
+
+---
+
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.12.0
 
 > **🗣️ Talk to it.** LUCID reads its replies aloud as it writes them, opens the mic when it finishes, and answers you the way a person would - short, spoken, hands-free.
@@ -748,8 +762,11 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 
 ### Homebrew (macOS)
 
-Install the desktop app with Homebrew Cask straight from this repo - no manual unzip, and `brew upgrade`
-keeps the cask wiring current (the app itself also self-updates via electron-updater):
+Install the desktop app with Homebrew Cask straight from this repo - no manual unzip. The cask is
+pinned to the current tagged release with real SHA-256 checksums, and CI re-pins it on every release
+(the `update-cask` job), so `brew update && brew upgrade --cask lucidagentide` is the reliable way to
+update on macOS. (In-app auto-update cannot install on the unsigned macOS build until code-signing
+lands - ADR-0246 - so Homebrew IS the macOS update channel for now.)
 
 ```bash
 brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide
@@ -814,7 +831,12 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.11.9):**
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.12.1):**
+🧠 the **LUCID Trainer** - LUCID interviews your expert scenario-first, distills answers into verified
+lesson units through the fail-closed pipeline (PII-redacted, scanned, born untrusted until the teach-back
+confirms), and trains the team with drills generated only from confirmed knowledge - role-generic from a
+pasted Position Description, with the **LUCID Agent** immersive role on the same stage *(ADR-0251..0257)*;
+**v1.12.0** brought hands-free **Voice mode** *(ADR-0246/0247)*. **Earlier (v1.11.9):**
 **📱 LUCID Remote** - drive your running desktop LUCID from a **phone browser**: QR pairing, Google sign-in,
 an installable **guest PWA**, dual edit/view-only invites, and a self-host-or-hosted Cloud Run rendezvous with
 claims-gated admission - all over the E2E-encrypted collab plane, with every remote prompt still running the
@@ -832,6 +854,8 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v1.12.1 batch** | **🧠 The LUCID Trainer + role-generic training + the LUCID Agent role** - the knowledge-trainer flywheel (scenario-first expert interviews, capped five-whys, fail-closed distillation: PII redacted to typed placeholders + scanned + distilled inside untrusted delimiters + re-scanned + born untrusted, teach-back confirmation IS the promotion, coverage HUD L0-L3, drills generated only from confirmed units, a trainee miss re-opens extraction); **role-generic packs** from a pasted Position Description with the wealth-management-ops pack as a labeled sample; the **LUCID Agent** immersive role (talking mascot, cinematic boot, hands-free flow); plus the **preview stale-document fix**, the trainer-stage **WCAG AA contrast pass**, sandbox hardening (Seatbelt capability probe, AppContainer mediated loopback, GPU-sandbox self-heal), and the **P-FLEET** Chief-of-Staff fleet scope | [ADR-0251-0257](DECISIONS.md) |
+| **v1.12.0 batch** | **🗣️ Voice mode** - hands-free conversation (streaming read-aloud that starts after the first sentence, auto-mic on finish, silence sends the turn), answers shaped for the ear, the glowing pop-out equalizer, spoken thinking acknowledgements, and the per-engine voice picker that greys out engines you cannot use with the specific reason | [ADR-0246/0247](DECISIONS.md) |
 | **v1.11.9 batch** | **📱 LUCID Remote + the performance overhaul + preview tabs/viewports** - drive the desktop LUCID from a **phone browser** over the E2E-encrypted collab plane: **QR invite** from the Share panel, **Google sign-in** at the rendezvous (Firebase ID-token verified server-side, first-frame auth - never a URL param), the installable **guest PWA** (live transcript + composer + presence + preview snapshots), dual **edit/view-only** links, host **re-claim** with a grace window for flaky networks, self-host **or** hosted Cloud Run rendezvous with **claims-gated admission** (the paid Remote Access tier admits; payment never buys trust - every remote prompt still runs the host's fail-closed gate); plus **P-PERF.3** (the dashboard poll re-aggregated the entire session history + spawned omp synchronously every few seconds, stalling every model's replies - now gated/memoized/cached: repeat reads ~1-8 s → ~0-2 ms, idle CPU ~29% → ~8%) and the **preview panel**'s Yours/Agent tabs, phone/tablet device viewports, and 50% width cap | [ADR-0226/0227, 0240-0242](DECISIONS.md) |
 | **v1.11.6 batch** | **Air-gap installer + RAG for everyone + gov hardening** - the packaged app **bundles omp, a relocatable Python, and Bun**, so an offline or locked-down machine runs cold on first launch with **zero prerequisites and zero network** (a CI air-gap smoke test scrubs the global runtime to prove it); a **`knowledge_search`** tool grounds **any model** (Claude/GPT/Gemini/local) on your ingested **Obsidian vault / folders / imported history** - lexical + graph retrieval plus **bring-your-own-embeddings** semantic search (your OpenAI key or a local Ollama/vLLM `/embeddings`); AskSage **lockdown enforced server-side** across routing + egress + agent runs (was renderer-only) with the real GPT-5.6 ids, a per-session **CUI/Search mode**, and CUI + opt-in **DoD/STIG** banners; the **KG-pack `.lkgpack` marketplace/storefront**; a roomier **shared-session viewer** (host thinking + tools, whole window); an **overloaded-provider fallback** that recommends a lower same-family or cross-provider model when a model fails silently (Fable 5 → 4.8 Opus); reliable **OAuth connect/disconnect** (+ "Sign out of all") and a one-click **diagnostics collector**; and the **"Lucid Agent"** rename | [ADR-0217-0225](DECISIONS.md) |
 | **v1.11.0 batch** | **Live collaboration** - share a running session with another LUCID over an **E2E-encrypted** relay; a guest **watches read-only** or (edit link) **drives** the host (guest prompts run **on the host**, through its fail-closed gate + approvals); **self-hosted by default** ("be the relay" loopback/LAN/VPN, or a standalone jumpbox broker; public relay opt-in) with **enterprise/MDM** clamps; an optional **direct P2P (WebRTC)** upgrade (DTLS DataChannel, relay only signals, auto-fallback); a **metadata-only** share/join **audit trail**; plus a **Copy** button + **right-click Copy** for chat & code, the product **website** in About, and a pulled-back default **zoom** | [ADR-0192-0204](DECISIONS.md) |

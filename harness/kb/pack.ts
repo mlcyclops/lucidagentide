@@ -25,6 +25,16 @@ export interface TrustedPackKey { id: string; key: KeyObject }
 
 export interface PackKgMeta { name: string; role?: string; description?: string }
 
+/** ADR-0253 (P-TRAINER.5): the OPTIONAL extraction-pack declaration - a summary of the coverage map
+ *  shipped in the pack db's coverage_objectives table, surfaced here so storefront/import UI can
+ *  describe an extraction pack without opening the db. ADDITIVE: the format tag stays "lkgpack/1",
+ *  absent means an ordinary content pack, and old importers ignore it (unknown members were always
+ *  tolerated). When PRESENT it is validated (and, being inside the manifest, signature-bound). */
+export interface PackCoverageMap {
+  pack_id: string;
+  objectives: Array<{ id: string; domain: string; title: string; weight: number }>;
+}
+
 export interface PackManifest {
   format: string;          // "lkgpack/1"
   kg: PackKgMeta;
@@ -34,6 +44,7 @@ export interface PackManifest {
   db_file: string;         // "kb_graph.duckdb"
   db_sha256: string;       // hex sha256 of the db bytes — the integrity anchor
   page_count: number;
+  coverage_map?: PackCoverageMap; // extraction packs only (ADR-0253)
   key_id?: string;         // hint: which key signed it
   signature?: string;      // base64 Ed25519 over canonicalManifestBytes()
 }
@@ -67,14 +78,38 @@ export function canonicalManifestBytes(m: PackManifest): Buffer {
 export function buildManifest(input: {
   kg: PackKgMeta; author: string; version: string; createdAt: string;
   dbSha256: string; pageCount: number;
+  coverageMap?: PackCoverageMap;
   sign?: (canonical: Buffer) => { signature: string; keyId?: string };
 }): PackManifest {
   const m: PackManifest = {
     format: LKGPACK_FORMAT, kg: input.kg, author: input.author, version: input.version,
     created_at: input.createdAt, db_file: LKGPACK_DB_FILE, db_sha256: input.dbSha256, page_count: input.pageCount,
   };
+  if (input.coverageMap) m.coverage_map = input.coverageMap;
   if (input.sign) { const s = input.sign(canonicalManifestBytes(m)); m.signature = s.signature; if (s.keyId) m.key_id = s.keyId; }
   return m;
+}
+
+/** Validate a PRESENT coverage_map member (absent is always fine - an ordinary content pack).
+ *  Returns a reason string when invalid, undefined when acceptable. */
+function coverageMapProblem(c: unknown): string | undefined {
+  if (c === undefined) return undefined;
+  if (!c || typeof c !== "object" || Array.isArray(c)) return "coverage_map is not an object";
+  const cm = c as Record<string, unknown>;
+  if (typeof cm.pack_id !== "string" || !cm.pack_id.trim()) return "coverage_map.pack_id missing";
+  if (!Array.isArray(cm.objectives) || cm.objectives.length === 0) return "coverage_map.objectives empty";
+  const seen = new Set<string>();
+  for (const o of cm.objectives) {
+    if (!o || typeof o !== "object") return "coverage_map objective is not an object";
+    const oo = o as Record<string, unknown>;
+    if (typeof oo.id !== "string" || !oo.id.trim()) return "coverage_map objective id missing";
+    if (seen.has(oo.id)) return `coverage_map objective id duplicated: ${oo.id}`;
+    seen.add(oo.id);
+    if (typeof oo.domain !== "string" || !oo.domain.trim()) return `coverage_map objective ${oo.id} missing domain`;
+    if (typeof oo.title !== "string" || !oo.title.trim()) return `coverage_map objective ${oo.id} missing title`;
+    if (typeof oo.weight !== "number" || !(oo.weight > 0)) return `coverage_map objective ${oo.id} has non-positive weight`;
+  }
+  return undefined;
 }
 
 /** Verify an Ed25519 signature over `content` against trusted keys. FAIL-CLOSED: empty sig / no keys / no
@@ -108,6 +143,8 @@ export interface PackVerifyResult {
 export function verifyPackManifest(m: PackManifest, actualDbSha256: string, trusted: TrustedPackKey[]): PackVerifyResult {
   if (!m || m.format !== LKGPACK_FORMAT) return { ok: false, stage: "manifest", signed: false, reason: "unrecognized pack format" };
   if (!m.db_file || !m.db_sha256 || !m.kg?.name?.trim()) return { ok: false, stage: "manifest", signed: false, reason: "incomplete manifest" };
+  const cmProblem = coverageMapProblem(m.coverage_map);
+  if (cmProblem) return { ok: false, stage: "manifest", signed: false, reason: `invalid coverage_map - ${cmProblem}` };
   if (m.db_sha256.toLowerCase() !== actualDbSha256.toLowerCase()) {
     return { ok: false, stage: "integrity", signed: false, reason: "db hash mismatch — the pack is tampered or corrupt" };
   }

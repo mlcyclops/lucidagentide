@@ -151,7 +151,7 @@ if (/Failed to load pi_natives|Cannot find module .*pi_natives/i.test(said)) {
 }
 console.log(`  lucid launcher OK - ${addons.length} native addon${addons.length === 1 ? "" : "s"} resolve next to the binary, no load failure`);
 
-// --- 3b) compiled desktop ENGINE + prebuilt renderer (P-WINBOOT.2 / ADR-0251) ------------------------
+// --- 3b) compiled desktop ENGINE + prebuilt renderer (P-WINBOOT.2 / ADR-0260) ------------------------
 // The desktop app spawns the COMPILED engine (bin/lucid-engine) instead of `bun run desktop/dev.ts`, so
 // Bun never module-loads a .ts out of a protected install dir (the v1.12.0 Program Files brick). If dist
 // did not run compile-engine / build-renderer, resolveEngineSpawn silently FALLS BACK to `bun run dev.ts`

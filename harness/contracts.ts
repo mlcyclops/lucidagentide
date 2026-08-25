@@ -125,6 +125,17 @@ export const EVENT_NAMES = [
   "collab_share_stopped",
   "collab_guest_joined",
   "collab_guest_left",
+  // P-TRAINER.2 (ADR-0252/0254) - the knowledge-trainer lifecycle. Metadata only (ids/kinds/counts/
+  // verdicts), never transcript text or unit bodies. `trainer_unit_captured` fires when a distilled
+  // unit is stored (born untrusted, keystone #2); `trainer_unit_confirmed` when a teach-back verdict
+  // records the promotion approval; `trainer_unit_rejected` when the expert tombstones a unit.
+  "trainer_session_started",
+  "trainer_question_asked",
+  "trainer_unit_captured",
+  "trainer_teachback_run",
+  "trainer_unit_confirmed",
+  "trainer_unit_rejected",
+  "trainer_pack_exported",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

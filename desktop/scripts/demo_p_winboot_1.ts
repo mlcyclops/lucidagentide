@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-WINBOOT.1 - Windows installed-app startup hardening (ADR-0250).
+// Increment P-WINBOOT.1 - Windows installed-app startup hardening (ADR-0259).
 //
 // v1.12.0 for Windows showed a blank window for 30 seconds when installed under C:\Program Files:
 // main.ts spawns `bun run desktop/dev.ts` from <resources>/repo, and Bun's module loader EPERMs
@@ -11,9 +11,9 @@
 // This proves the fix end to end: (1) the pure classifier turns that dead-end into an immediate,
 // actionable "reinstall per-user / run portable" dialog and distinguishes it from a plain crash or a
 // still-starting engine; (2) main.ts is wired to detect the early exit + protected location and no
-// longer waits the full 30s; (3) the installer posture. ADR-0250 originally CLAMPED the installer
+// longer waits the full 30s; (3) the installer posture. ADR-0259 originally CLAMPED the installer
 // away from Program Files as a mitigation; ADR-0262 relaxed it (assisted installer, per-user default,
-// per-machine allowed) once the compiled engine (ADR-0251) plus the strict CI boot gate (ADR-0261)
+// per-machine allowed) once the compiled engine (ADR-0260) plus the strict CI boot gate (ADR-0261)
 // made a protected-tree boot a proven, regression-gated property. Section [5] pins that posture AND
 // its justification: the gate must stay wired, or this demo goes red.
 //
@@ -28,7 +28,7 @@ function assert(cond: unknown, msg: string): void {
   console.log("  \u2713 " + msg);
 }
 
-console.log("== #ADR-0250 P-WINBOOT.1: Windows installed-app startup hardening ==\n");
+console.log("== #ADR-0259 P-WINBOOT.1: Windows installed-app startup hardening ==\n");
 
 const PROGRAM_FILES = "C:\\Program Files\\LucidAgentIDE\\resources\\repo";
 const PER_USER = "C:\\Users\\me\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo";

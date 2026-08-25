@@ -39,8 +39,10 @@ export interface McpServerEntry {
 // ADR-0088 (P-ROLE.1): the four onboarding roles. A role is a COSMETIC presentation preset — it
 // shapes which surfaces are foregrounded by default. It never reads into or weakens the security
 // gate (invariant #3). Unset folds to "developer", the safe, full-surface default.
-export type UserRole = "developer" | "security" | "manager" | "executive";
-export const USER_ROLES: UserRole[] = ["developer", "security", "manager", "executive"];
+// P-AVATAR.1 (ADR-0251): "lucid-agent" is the ONE behavioral role - it additionally drives the immersive
+// stage layout (rails hidden). The other four stay cosmetic; none of them ever gates security (invariant #3).
+export type UserRole = "developer" | "security" | "manager" | "executive" | "lucid-agent";
+export const USER_ROLES: UserRole[] = ["developer", "security", "manager", "executive", "lucid-agent"];
 
 export interface GuiSettings {
   username?: string;
