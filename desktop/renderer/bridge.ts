@@ -40,7 +40,7 @@ export interface AgentTemplateInfo {
   tools: string[];
 }
 import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
-import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0253): backend-opened OS folder dialog
+import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 export type { RestoredTurn };
 import type { SkillRoot } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097): skill source roots
@@ -226,7 +226,7 @@ export interface TtsEngineView {
   reason: string;
 }
 // P-STT.2b: managed on-device Whisper status for the no-code Voice card.
-// P-STT.6 (ADR-0255): `offered` = installable through the picker (tiny/base/small; medium/large are
+// P-STT.6 (ADR-0267): `offered` = installable through the picker (tiny/base/small; medium/large are
 // remove-only), `reason` explains a grayed-out (non-runnable) tier, `diskMB` = real installed size.
 export interface WhisperTierView {
   tier: string; label: string; runnable: boolean; installed: boolean;
@@ -362,7 +362,7 @@ export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; fac
 export interface CodeGraphView { level: "file" | "symbol"; ingested: boolean; root: string; fileCount: number; symbolCount: number; edgeCount: number; updatedAt: number; nodes: GraphNode[]; edges: GraphEdge[] }
 export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model"; cancelled?: boolean }
 // P-KG-INGEST.1 (ADR-0076): the background import job - start returns a jobId; status is polled for a live countdown.
-/** Options for the native folder dialog (P-KG-INGEST.5, ADR-0252). */
+/** Options for the native folder dialog (P-KG-INGEST.5, ADR-0264). */
 export interface PickFolderOpts { title?: string; defaultPath?: string; buttonLabel?: string }
 export interface PersonalImportStart { ok: boolean; jobId?: string; error?: string }
 export interface PersonalImportJob {
@@ -616,7 +616,7 @@ export interface LucidBridge {
   whisperInstall(tier?: string): Promise<WhisperActionView | null>;
   whisperStart(tier?: string): Promise<WhisperActionView | null>;
   whisperStop(): Promise<{ ok: boolean } | null>;
-  /** P-STT.6 (ADR-0255): delete a downloaded model's weights (never the running tier - stop first). */
+  /** P-STT.6 (ADR-0267): delete a downloaded model's weights (never the running tier - stop first). */
   whisperRemove(tier: string): Promise<WhisperActionView | null>;
   speak(text: string, voiceId?: string, provider?: string): Promise<{ audioB64: string | null; mime: string; note: string } | null>;
   /** P-GOAL.14 (ADR-0112): list past After-Action Reports, and read one by its workspace-relative path. */
@@ -871,7 +871,7 @@ export interface LucidBridge {
   /** Native OS folder dialog in Electron (null in a plain browser). `title`/`buttonLabel` let each
    *  caller label its own dialog, so every folder pick is the real Explorer/Finder window. */
   pickFolder(opts?: PickFolderOpts): Promise<string | null>;
-  /** P-FS.2 (ADR-0253): native OS folder dialog via the LOCAL backend when the GUI runs in a plain
+  /** P-FS.2 (ADR-0265): native OS folder dialog via the LOCAL backend when the GUI runs in a plain
    *  browser (LucidAgentIDE.bat / lucid.exe + default browser). The server runs on the same machine
    *  (loopback bind), so it opens the real Explorer / Finder / zenity dialog itself. `supported:false`
    *  (or null: request failed) = fall back to the in-app browser; `supported:true, path:null` = the
@@ -1152,7 +1152,7 @@ export const bridge: LucidBridge = {
   whisperInstall: (tier) => post("/api/whisper/install", { tier }),
   whisperStart: (tier) => post("/api/whisper/start", { tier }),
   whisperStop: () => post("/api/whisper/stop", {}),
-  whisperRemove: (tier) => post("/api/whisper/remove", { tier }), // P-STT.6 (ADR-0255)
+  whisperRemove: (tier) => post("/api/whisper/remove", { tier }), // P-STT.6 (ADR-0267)
   speak: (text, voiceId, provider) => post("/api/tts/speak", { text, voiceId, provider }),
   pastReports: () => getData("/api/goal/reports"),
   pastReport: (rel) => getData(`/api/goal/reports?rel=${encodeURIComponent(rel)}`),
@@ -1380,7 +1380,7 @@ export const bridge: LucidBridge = {
   cloneWorkspace: (url, pat) => post("/api/workspace/clone", { url, ...(pat ? { pat } : {}) }),
   removeRecentWorkspace: (path) => post("/api/workspace/recent-remove", { path }),
   pickFolder: (opts) => (shell?.pickFolder ? shell.pickFolder(opts) : Promise.resolve(null)),
-  pickFolderNative: (opts) => post("/api/fs/pickfolder", opts ?? {}), // P-FS.2 (ADR-0253)
+  pickFolderNative: (opts) => post("/api/fs/pickfolder", opts ?? {}), // P-FS.2 (ADR-0265)
   pickFile: (opts) => (shell?.pickFile ? shell.pickFile(opts) : Promise.resolve(null)), // P-NETWL.1
   credStore: (input) => (shell?.credStore ? shell.credStore(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.1 (fail-closed in browser)
   credStoreFile: (input) => (shell?.credStoreFile ? shell.credStoreFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.2

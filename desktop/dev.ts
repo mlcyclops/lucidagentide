@@ -144,7 +144,7 @@ function whisperDeps(): WhisperRuntimeDeps {
     health: async (port) => { try { const res = await fetch(`${whisperServeUrl(port)}/`, { signal: AbortSignal.timeout(2000) }); return res.ok || res.status === 404; } catch { return false; } },
     setSttUrl: (url) => { setVoiceSettings({ sttProvider: "whisper", sttUrl: url }); },
     sleep: (ms) => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, ms); return promise; },
-    // P-STT.6 (ADR-0255): deletion + on-disk size for the installed-models list in the Voice card.
+    // P-STT.6 (ADR-0267): deletion + on-disk size for the installed-models list in the Voice card.
     removeModel: (f) => { try { rmSync(join(dir, f)); return true; } catch { return false; } },
     modelSizeMB: (f) => { try { return statSync(join(dir, f)).size / (1024 * 1024); } catch { return null; } },
     // P-STT.5: kill whatever LISTENs on the managed port (an orphan whisper-server from a previous run).
@@ -252,7 +252,7 @@ import type { CompleteFn } from "../harness/personal/distiller.ts";
 import { homedir } from "node:os";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { listDir } from "./fs_browse.ts";
-import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0253): real OS folder dialog for the browser build
+import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
@@ -1721,7 +1721,7 @@ const server = Bun.serve({
         return json({ ok: rr.ok, data: rr, error: rr.reason });
       }
       if (p === "/api/whisper/stop" && req.method === "POST") { const rr = await stopWhisper(whisperDeps()); return json({ ok: rr.ok, data: rr }); }
-      // P-STT.6 (ADR-0255): delete a downloaded model's weights (reclaim disk; the only path for the
+      // P-STT.6 (ADR-0267): delete a downloaded model's weights (reclaim disk; the only path for the
       // no-longer-offered medium/large tiers). Fail-closed on the running tier - stop the server first.
       if (p === "/api/whisper/remove" && req.method === "POST") {
         const wb = await readBody<{ tier?: unknown }>(req);
@@ -1767,7 +1767,7 @@ const server = Bun.serve({
       if (p === "/api/fs/list") {
         return json({ ok: true, data: listDir(url.searchParams.get("path"), { allowedRoots: managedWorkspaceRoots() }) });
       }
-      // P-FS.2 (ADR-0253): open the REAL OS folder dialog from the browser build. The GUI server runs on
+      // P-FS.2 (ADR-0265): open the REAL OS folder dialog from the browser build. The GUI server runs on
       // the same machine as the browser (loopback bind, H1), so it shows Explorer / Finder / zenity itself
       // and returns the chosen path. `supported:false` = headless or no dialog binary; the renderer then
       // falls back to the in-app browser (ADR-0103). A CANCEL is `supported:true, path:null` and the
@@ -2370,7 +2370,7 @@ const server = Bun.serve({
               store: await kbStore(targetId),
               scanner: kbScanner(),
               // The job's abort signal rides along, so Stop interrupts the in-flight compile call instead
-              // of waiting it out (same fix as the chat-history import, ADR-0252).
+              // of waiting it out (same fix as the chat-history import, ADR-0264).
               complete: (system: string, user: string) => backend.complete(system, user, { ...(model ? { model } : {}), signal }),
               docs: src.scan.docs,
               onProgress: onTick,
@@ -2486,7 +2486,7 @@ const server = Bun.serve({
         const b = await readBody<{ model?: unknown; path?: unknown; vendor?: ImportVendor }>(req);
         const path = String(b.path ?? ""), vendor = b.vendor;
         // The extractor's signal is the JOB's abort signal, so Stop interrupts the in-flight model call
-        // instead of waiting for it (P-KG-INGEST.5, ADR-0252).
+        // instead of waiting for it (P-KG-INGEST.5, ADR-0264).
         const complete: CompleteFn | undefined = b.model
           ? (system, user, o) => backend.complete(system, user, { signal: o?.signal })
           : undefined;

@@ -40,9 +40,11 @@ describe("planWhisperInstall", () => {
     if (!p.ok) expect(p.reason).toContain("no longer offered");
   });
 
-  it("clamps the DEFAULT tier to the offered set on a workstation (512GB -> small, not large-turbo)", () => {
+  it("the DEFAULT tier is tiny on ANY hardware (P-STT.6 autostart decision), never the raw capability pick", () => {
+    // Union semantics from the fleet-voice merge: master's shipped tiny-default wins over the earlier
+    // clamp-to-recommendation default; the clamped recommendation still surfaces via whisperStatus.
     const p = planWhisperInstall(whisperCapability(mac(512)));
-    expect(p.ok && p.tier).toBe("small");
+    expect(p.ok && p.tier).toBe("tiny");
   });
 
   it("offeredRecommendation: nothing larger than small is ever recommended", () => {

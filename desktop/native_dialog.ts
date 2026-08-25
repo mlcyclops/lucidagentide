@@ -160,22 +160,32 @@ export function linuxPickCommands(title: string): string[][] {
 // and never a fall-through to the in-app browser BEHIND the open native one).
 let inFlight = false;
 
+// node:child_process (not Bun.spawn) ON PURPOSE: renderer/bridge.ts type-imports NativePickResult from
+// this module, which pulls the file into the desktop tsconfig program - a NODE-typed project (Bun-runtime
+// modules are excluded there by policy; see desktop/tsconfig.json). node's spawn runs identically under
+// the Bun-run dev server, and the file stays typecheckable on both surfaces.
 async function runToText(argv: string[], opts: { stdinText?: string; env?: Record<string, string | undefined> } = {}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(argv, {
-    stdin: opts.stdinText === undefined ? "ignore" : "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: opts.env ? { ...process.env, ...opts.env } : process.env,
+  const { spawn } = await import("node:child_process");
+  return await new Promise((resolve) => {
+    const proc = spawn(argv[0]!, argv.slice(1), {
+      stdio: [opts.stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (exitCode: number) => { if (settled) return; settled = true; clearTimeout(reaper); resolve({ exitCode, stdout, stderr }); };
+    const reaper = setTimeout(() => { try { proc.kill(); } catch { /* already gone */ } }, DIALOG_TIMEOUT_MS);
+    proc.stdout?.on("data", (d) => { stdout += String(d); });
+    proc.stderr?.on("data", (d) => { stderr += String(d); });
+    proc.on("error", () => finish(-1)); // unspawnable (no binary) -> callers read it as unsupported
+    proc.on("close", (code) => finish(code ?? -1));
+    if (opts.stdinText !== undefined && proc.stdin) {
+      proc.stdin.write(opts.stdinText);
+      proc.stdin.end();
+    }
   });
-  if (opts.stdinText !== undefined && proc.stdin) {
-    proc.stdin.write(opts.stdinText);
-    void proc.stdin.end();
-  }
-  const reaper = setTimeout(() => { try { proc.kill(); } catch { /* already gone */ } }, DIALOG_TIMEOUT_MS);
-  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  const exitCode = await proc.exited;
-  clearTimeout(reaper);
-  return { exitCode, stdout, stderr };
 }
 
 async function winPick(opts: NativePickOpts): Promise<NativePickResult> {

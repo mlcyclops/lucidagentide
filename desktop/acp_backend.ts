@@ -190,7 +190,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // getConfig() caps the session warm-up at this bound so the model picker never blocks on a slow/hung
 // omp session init — it returns the current config and the renderer re-polls for the live list.
 const CONFIG_WARM_MS = 6000;
-// P-KG-INGEST.5 (ADR-0252): hard bounds on the ACP handshake / session lifecycle calls. Before these, a
+// P-KG-INGEST.5 (ADR-0264): hard bounds on the ACP handshake / session lifecycle calls. Before these, a
 // spawned-but-mute omp left `initialize` or `session/new` pending FOREVER, which wedged the whole chat
 // history import at "0/500 messages" with no way to stop it. Prompts are excluded: they keep their own
 // idle clock (a real turn can legitimately think for minutes).

@@ -1510,7 +1510,7 @@ async function send(): Promise<void> {
   const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
   const failures: { tool: string; reason: string; cmd?: string }[] = []; // P-CHAT.C (ADR-0190): this turn's failed (non-quarantined) tool calls, feed the eval report's fail-rate / wasted-token metrics
   let buf = "";
-  let thinkBuf = ""; // P-VOICE.7 (ADR-0257): this turn's reasoning stream - raw material for spoken thinking snapshots
+  let thinkBuf = ""; // P-VOICE.7 (ADR-0269): this turn's reasoning stream - raw material for spoken thinking snapshots
   const t0 = Date.now();
   // Cold start: the timer is already ticking but nothing has arrived - show an intent-aware
   // "warming" line so the user always sees something meaningful before the first token/tool.
@@ -9390,9 +9390,9 @@ function promptText(opts: { title: string; label?: string; value?: string; place
   });
 }
 
-/** Choose a folder. P-KG-INGEST.5 (ADR-0252): ALWAYS the real OS dialog (Explorer / Finder) when we're in
+/** Choose a folder. P-KG-INGEST.5 (ADR-0264): ALWAYS the real OS dialog (Explorer / Finder) when we're in
  *  Electron, so every picker navigates like the workspace/git one - type a path, use Quick access, sort,
- *  search. P-FS.2 (ADR-0253): the browser build gets the SAME native dialog through the local backend,
+ *  search. P-FS.2 (ADR-0265): the browser build gets the SAME native dialog through the local backend,
  *  which runs on this machine (loopback bind) and opens Explorer / Finder / zenity itself. A native
  *  CANCEL (`supported:true, path:null`) resolves null and never re-prompts. `openFolderBrowser` is the
  *  fallback ONLY when no native dialog exists anywhere (headless server, no dialog binary). Every folder
