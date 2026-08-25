@@ -11,7 +11,11 @@
 // This proves the fix end to end: (1) the pure classifier turns that dead-end into an immediate,
 // actionable "reinstall per-user / run portable" dialog and distinguishes it from a plain crash or a
 // still-starting engine; (2) main.ts is wired to detect the early exit + protected location and no
-// longer waits the full 30s; (3) the installer no longer lets a user reach Program Files at all.
+// longer waits the full 30s; (3) the installer posture. ADR-0250 originally CLAMPED the installer
+// away from Program Files as a mitigation; ADR-0262 relaxed it (assisted installer, per-user default,
+// per-machine allowed) once the compiled engine (ADR-0251) plus the strict CI boot gate (ADR-0261)
+// made a protected-tree boot a proven, regression-gated property. Section [5] pins that posture AND
+// its justification: the gate must stay wired, or this demo goes red.
 //
 // Run with: bun run desktop/scripts/demo_p_winboot_1.ts
 
@@ -64,10 +68,12 @@ assert(!main.includes("The bundled background service did not respond"), "the ol
 const allCopy = [rProtected.title, rProtected.detail, classifyEngineFailure({ ...failInput, exited: true, exitCode: 1 }).detail, classifyEngineFailure({ ...failInput }).detail];
 assert(allCopy.every((s) => !s.includes("\u2014")), "no em dash in any failure dialog copy (invariant #1)");
 
-console.log("\n[5] the installer can no longer land in Program Files");
+console.log("\n[5] the installer may offer Program Files again BECAUSE the boot gate holds (ADR-0262)");
 const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"));
-assert(pkg.build.nsis.allowElevation === false, "nsis allowElevation is false - no UAC prompt to write into Program Files");
-assert(pkg.build.nsis.allowToChangeInstallationDirectory === false, "nsis allowToChangeInstallationDirectory is false - the user cannot redirect the install");
-assert(pkg.build.nsis.perMachine === false, "nsis stays per-user (installs to the writable %LOCALAPPDATA%\\Programs default)");
+assert(pkg.build.nsis.oneClick === false, "assisted installer - the user consciously picks the install location, never a silent redirect");
+assert(pkg.build.nsis.perMachine === false, "the DEFAULT stays per-user (%LOCALAPPDATA%\\Programs - writable, no elevation needed)");
+assert(pkg.build.nsis.allowElevation === true && pkg.build.nsis.allowToChangeInstallationDirectory === true, "per-machine installs (Program Files) are allowed again - the compiled engine boots from protected trees");
+const wf = readFileSync(join(import.meta.dir, "..", "..", ".github", "workflows", "build-desktop.yml"), "utf8");
+assert(wf.includes("build/pf-boot-smoke.ts") && wf.includes("LUCID_PF_SMOKE_STRICT"), "the relax is COUPLED to the strict Program Files boot gate (ADR-0261): removing the gate turns this demo red");
 
-console.log("\n\u2713 P-WINBOOT.1 demo passed - a protected install fails fast with a fix, and new installs can't get there.");
+console.log("\n\u2713 P-WINBOOT.1 demo passed - a protected install fails fast with a fix, and per-machine installs are guarded by the boot gate.");

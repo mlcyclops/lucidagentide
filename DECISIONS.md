@@ -16881,3 +16881,58 @@ every write and delete, from the real Program Files path in CI.
   real CI installer build; its own increment.
 - **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged; the bat's shim-guard work is
   parked on `wip/adr-0252-0260-sessions`).
+
+## ADR-0262 -- P-WINBOOT.3: relax the installer clamp - per-machine installs are legal again
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Closes the ADR-0250/0251 arc: mitigation (0250) -> permanent fix
+(0251) -> regression gate (0261) -> this relax.
+
+### Problem
+
+ADR-0250 clamped the NSIS installer (`allowElevation:false`, `allowToChangeInstallationDirectory:
+false`) so no new install could reach `Program Files` while the engine still module-loaded `.ts` off
+the install disk. That was a mitigation with a real UX cost: no per-machine installs (multi-user
+boxes duplicate the app per user; org-imaged machines cannot install to the standard location), and a
+user explicitly wanting `Program Files` is silently redirected. The justification for the clamp ended
+when ADR-0251 shipped the compiled engine and ADR-0261's CI gate proved - on the real runner, from
+the real `C:\Program Files`, against the exact packaged bytes - that the engine boots and serves from
+a write-denied protected tree.
+
+### Decision
+
+`desktop/package.json` build.nsis: `oneClick:false` (assisted installer - the location choice is
+conscious), `perMachine:false` (the DEFAULT stays per-user `%LOCALAPPDATA%\Programs`: writable, no
+elevation, the posture every user got during the clamp era), `allowElevation:true` +
+`allowToChangeInstallationDirectory:true` (per-machine `Program Files` allowed for those who choose
+it). The two flag flips are the exact diff the test branch carried as "test-only: DO NOT MERGE" since
+Aug 1; this ADR makes them intended. The branch history is deliberately kept as-is (no force-push):
+the old commit title stays, this ADR supersedes it, and the PR should SQUASH-merge so the title never
+reaches master.
+
+**The relax is COUPLED to the gate.** demo-P-WINBOOT.1 section [5] now asserts BOTH the posture and
+that `build-desktop.yml` still runs `build/pf-boot-smoke.ts` STRICT on the Windows runner: whoever
+removes or weakens the gate turns the demo red, so the clamp-relax can never outlive its
+justification silently.
+
+### What stays
+
+- `engine_boot.ts`'s protected-location classifier + dialog: installs from a STALE pre-engine package
+  (or a future regression between gate runs) still die in `Program Files`, and they must keep failing
+  FAST and ACTIONABLY (reinstall per-user / run portable), not as a 30s blank box.
+- The per-user DEFAULT: elevation prompts on every update are worse for the common single-user case,
+  and auto-update writes into the install dir - per-user keeps that writable without UAC.
+
+### Verification
+
+`make demo-P-WINBOOT.1` green with the new section [5] (posture + gate coupling); demos P-WINBOOT.2
+and .2C still green; engine_boot/engine_launch/engine_pf_smoke tests green; root + desktop tsc clean;
+license clean. The real-installer click-through (choose `C:\Program Files`, elevate, boot) is the
+user's on-device pass with the run-32796994917 artifacts - the gate already proved the boot half on
+the runner from the identical staged bytes.
+
+### Next
+
+- Drop nothing: the branch is PR-ready once history is rewritten (no DO-NOT-MERGE tip).
+- v1.12.2 release cut with the compiled engine + gate + this relax.
+- Increment D (`LucidAgentIDE.bat`) rides with the parked `wip/adr-0252-0260-sessions` branch.
