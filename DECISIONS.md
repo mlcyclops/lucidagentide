@@ -17613,3 +17613,361 @@ the tagged commit).
 ADR-0213 (tolerant tag-to-semver derivation, reused verbatim), ADR-0246 (P-RELEASE.2: mac
 auto-update inert; this ADR is the interim channel), ADR-0225 (the artifact rename that broke the
 old URL), `Casks/lucidagentide.rb`, `.github/workflows/build-desktop.yml`, README "Homebrew".
+
+## ADR-0259 -- P-WINBOOT.1: Windows installed-app startup hardening (protected-directory failure)
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT (mitigation). The permanent rearchitecture (Increment B) + its CI guard
+(Increment C) are named follow-ups below, each its own ADR.
+
+### Problem
+
+v1.12.0 for Windows showed a blank window for 30 seconds, then a generic "could not start its local engine"
+dialog, when installed under `C:\Program Files`. The portable build worked. Root cause, confirmed against the
+code and a field report: `startDevServer()` (main.ts) spawns `bun run desktop/dev.ts` with cwd
+`<resources>/repo`, and the packaged app ships raw TypeScript there (`extraResources` includes
+`desktop/**/*.ts`). Bun 1.3.14's runtime module loader returns `EPERM` loading a `.ts` entrypoint out of the
+ACL-protected `Program Files` tree; `Bun.file().text()` reads the same bytes fine, and disabling the
+transpiler cache does not help. The behavioural tell (plain read succeeds, module-load is refused) points at
+the loader memory-mapping the source, which the directory's security refuses even with `Users:(RX)`. The
+engine dies before binding port 5319; the shell then waits the full `waitForServer(30000)` window before
+saying anything, because `startDevServer()` never watched `dev.on("exit")`.
+
+The installer let users get there: nsis `perMachine:false` but `allowElevation:true` +
+`allowToChangeInstallationDirectory:true`, so the dir chooser + a UAC elevation reach `Program Files`.
+(Per-machine would land there unconditionally, so that path is broken too.)
+
+This is the third packaged-engine startup failure (ADR-0177 v1.10.2 stripped a runtime import; ADR-0178
+v1.10.3 shipped broken-but-quiet). Those added the engine.log tee this increment reuses. The common
+product-level cause remains: production executes raw dev TypeScript from install resources.
+
+### Decision (mitigation: prevent the state, and diagnose it honestly)
+
+1. **Installer can no longer reach `Program Files`.** nsis `allowElevation:false` +
+   `allowToChangeInstallationDirectory:false` (perMachine stays false), so every install lands in the writable
+   per-user default (`%LOCALAPPDATA%\Programs\LucidAgentIDE`) where the `bun run` path works. Portable stays
+   the power-user escape hatch.
+2. **Fail fast, not after 30s.** `startDevServer()` now wires `dev.on("exit")` and keeps a bounded (4KB)
+   rolling tail of engine output; `waitForServer()` returns the instant the child exits instead of polling the
+   whole window.
+3. **An actionable dialog.** New pure module `desktop/engine_boot.ts` classifies the failure into
+   `protected-location | engine-exited | timeout`. A protected location is asserted only on real evidence (a
+   `Program Files`/`Windows` path, a failed write-probe of the engine dir, or an `EPERM`/`EACCES` signal in
+   the log), and the message names the exact folder and the two real fixes (reinstall per-user, or run
+   portable). A plain crash keeps its exit code + crash line; an alive-but-silent engine keeps "may still be
+   starting". `bestEngineLine()` surfaces the error line, not the trailing `Bun v...` noise. A dev run never
+   blames the install location.
+
+Deliberately NOT done here: the batch launcher's misleading diagnostics (Increment D) and the deep fix.
+
+### Alternatives rejected
+
+- **Ship a bundled `.js` engine artifact.** Tempting, but a `.js` module still takes Bun's file-mapping load
+  path, so it can `EPERM` from `Program Files` exactly like the `.ts`. Only `bun build --compile` (code
+  embedded in the exe, nothing mapped off disk) or running from a writable location is guaranteed. A naive
+  `.js` bundle would re-brick; do not assume it fixes this without a protected-location test.
+- **Copy `resources/repo` into writable user data on first run.** Fixes the ACL but weakens provenance
+  (~0.57 GiB of mutable executable source) unless every file is hash-verified before execution. Wrong tradeoff
+  for a security-first harness.
+- **Path-name check alone.** Kept as one signal, but the failed write-probe is the general, cross-platform
+  truth ("the engine's own directory is not user-writable"); the log's permission signal is a third corroborator.
+
+### Verification
+
+`bun run desktop/scripts/demo_p_winboot_1.ts` (make demo-P-WINBOOT.1): 20 checks over all three classifications
+(path / write-probe / log-signal), the dev-run exemption, the surfaced EPERM line, the main.ts wiring
+(`dev.on("exit")`, early-return `waitForServer`, classifier + bounded tail, old message gone, no em dash in
+dialog copy), and the nsis guard. 16 unit tests in `desktop/engine_boot.test.ts`. Desktop `tsc --noEmit`
+clean. Not exercised here (no Windows install harness in this environment): a real `Program Files` install
+boot; that is Increment C.
+
+### Next (each its own ADR / increment)
+
+- **Increment B - the permanent fix:** a `bun build --compile` production engine (not a `.js` bundle),
+  preserving `import.meta.dir`, DuckDB/native-addon resolution, the in-process gate, and the frozen prompt
+  prefix (invariant #6). Removes the raw-TS-from-resources dependency entirely and re-enables per-machine.
+- **Increment C - the regression that would have caught this:** on the Windows runner, install/copy the
+  packaged tree into a `Program Files`-ACL location, run the EXACT Electron spawn command with only bundled
+  runtimes, and require `/api/health`. `packaged_boot.test.ts` only ever booted from a writable temp dir.
+- **Increment D:** make `LucidAgentIDE.bat` bundled-runtime aware (discover `resources/runtimes`) or label it
+  developer-only, and stop prompting for an API key when it could not read the omp vault.
+
+## ADR-0260 -- P-WINBOOT.2: the permanent fix - ship the engine as a compiled binary
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT. The permanent fix behind ADR-0259's mitigation (Increment B of that plan).
+Re-enabling per-machine installs + the exact protected-location CI smoke are the named follow-ups below.
+
+### Problem
+
+ADR-0259 stopped NEW installs from reaching `Program Files` and made the failure legible, but the root cause
+remained: main.ts ran `bun run desktop/dev.ts` from `<resources>/repo`, and Bun's module loader EPERMs
+loading a `.ts` out of an ACL-protected tree. The permanent fix must make the engine independent of Bun
+module-loading source off the (possibly protected) install disk at runtime.
+
+### Spike (evidence before design)
+
+`bun build --compile desktop/dev.ts` embeds the code in the binary (no `.ts` mapped off disk), the precedent
+`harness/launcher/lucid_acp.ts` -> `bin/lucid` already sets. But dev.ts is a DuckDB server, and
+`lucid_acp.ts`'s own comment warns `--compile` "chases every platform's DuckDB `.node` and dies resolving
+other-OS binaries" (why it keeps DuckDB out via lazy import). The spike confirmed it: a bare
+`bun build --compile dev.ts` dies on `Could not resolve: "@duckdb/node-bindings-linux-x64-musl/duckdb.node"`.
+Then `--external "*.node"` cleared it (3641 modules -> exe): the JS shims EMBED, only the native addons stay
+external. A tiny compiled probe proved the two remaining unknowns: `import.meta.dir` is VIRTUALIZED to a
+bunfs path (`B:\~BUN\root`) while `process.execPath` is the real binary, and an externalized DuckDB binding
+RESOLVES AND RUNS from the compiled binary (`select 42` -> `[[42]]`). A native `.node` loads via the OS
+loader (LoadLibrary), which works from `Program Files`, unlike Bun's TS-mmap module-load path.
+
+### Decision
+
+Ship the engine as `bin/lucid-engine`, a `bun build --compile dev.ts --external "*.node"` standalone binary:
+
+1. **Embed all JS/TS, external only native `.node`.** dev.ts + every imported module lives inside the binary,
+   so Bun never module-loads a `.ts` off the install disk. DuckDB/onnx/pi-natives load from
+   `resources/repo/node_modules` via the OS loader (main.ts spawns with cwd = `<resources>/repo`, proven to
+   resolve the externals).
+2. **execPath-derived base dir.** `engine_launch.ts:engineDesktopDir()` returns `import.meta.dir` in a dev
+   run (renderer/ exists there) and `dirname(execPath)/../desktop` in the compiled binary (bunfs
+   import.meta.dir has no renderer/). dev.ts's ROOT / monaco / templates / repo-doc reads all route through
+   it (`DESKTOP_DIR` / `REPO_DIR`).
+3. **Prebuilt renderer.** `/app.js` used to `Bun.build(renderer/app.ts)` per request - the LAST path by which
+   Bun touches `.ts` on the install disk. `build-renderer` prebuilds `renderer/app.bundle.js` at package
+   time; `bundleApp()` serves it when present, and only Bun.build()s live in dev.
+4. **Spawn cutover.** `resolveEngineSpawn()` returns the compiled binary in packaged mode (fallback to
+   `bun run desktop/dev.ts` when it is absent - a dev run, or an older package), wired in main.ts.
+
+### Alternatives rejected
+
+- **A bundled `.js` (not `--compile`).** Still loaded by Bun's module loader from disk -> same mmap EPERM.
+  Rejected in ADR-0259 and confirmed here: only an embedded (`--compile`) binary removes the `.ts`/`.js`
+  disk load.
+- **Externalize DuckDB's `.js` shim too.** Would move the mmap risk to `duckdb.js` in `Program Files`
+  node_modules. Externalizing ONLY `*.node` keeps every JS shim embedded; the sole disk load is the native
+  addon (OS loader, PF-safe).
+- **Verified staging (copy engine to a writable dir).** Works but duplicates ~0.5 GiB and needs a hash
+  manifest to keep provenance. The compiled binary is smaller-surface and needs neither.
+
+### Verification
+
+`bun run desktop/scripts/demo_p_winboot_2.ts` (make demo-P-WINBOOT.2): the pure launch decisions + the
+main.ts/dev.ts/package.json wiring, then it BUILDS and BOOTS the real compiled engine and asserts
+`/api/health` -> `{ok:true}` (DuckDB natives resolved at runtime) and the prebuilt `/app.js` serves 7 MB of
+real JS from the execPath-derived root (not an error page, no runtime Bun.build). Confirmed manually too:
+`/api/brief` (200, built from PROGRESS.md/DECISIONS.md via REPO_DIR). 7 engine_launch unit tests + 16
+engine_boot (ADR-0259) green. Desktop `tsc --noEmit` clean. `airgap-smoke.ts` now fails the build if
+`bin/lucid-engine` or `renderer/app.bundle.js` did not ship (so a broken dist can't silently revert to the
+vulnerable `bun run dev.ts` path). NOT verified here (no Windows install harness): the end-to-end boot from
+an actual `Program Files` ACL location - that is Increment C.
+
+### Next
+
+- **Increment C:** the CI smoke that installs to a `Program Files`-ACL location and boots the compiled
+  engine to `/api/health` - the regression that would have caught ADR-0259's brick.
+- **Re-enable per-machine installs.** With the engine no longer running raw TS from resources, the ADR-0259
+  installer clamp (`allowElevation:false`, `allowToChangeInstallationDirectory:false`) can be relaxed once
+  Increment C proves a protected-root boot; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged from ADR-0259).
+
+## ADR-0261 -- P-WINBOOT.2C: the Program Files boot gate (Increment C of ADR-0259/0260)
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Numbering note (settled at the v1.12.2 merge): this branch's
+P-WINBOOT.1/.2 ADRs were originally 0250/0251, colliding with master's independently-numbered 0250
+(P-MODEL.1) and 0251 (P-AVATAR) - master's numbers win (they shipped in v1.12.1 code), so the WINBOOT
+pair renumbered to 0259/0260. The parked `wip/adr-0252-0260-sessions` branch renumbers on top of
+master's log when it lands.
+
+### Problem
+
+The v1.12.0 brick (ADR-0259) shipped because NOTHING ever booted the app from an ACL-protected install
+tree: `packaged_boot.test.ts` materializes the packaging filter but boots from a writable temp dir, and
+`demo_p_winboot_2.ts` boots the compiled engine from the writable repo. The compiled engine (ADR-0260)
+removes the root cause by construction, but without a gate that actually boots from a protected tree, a
+future change that reintroduces an install-dir write or on-disk load ships silently - again.
+
+### Constraints the design fell out of (both found by EXECUTING the gate, not by review)
+
+1. **CI runners are administrators.** Inherited `Program Files` ACLs allow admins full control, so
+   merely staging there constrains nothing. The standard-user posture must be reproduced with an
+   explicit DENY ACE for the current user (deny beats allow, even for admins).
+2. **Never deny generic `W`.** The first hardening denied `(W,DE,DC)` - and the engine could not even
+   SPAWN (`uv_spawn EPERM`), because icacls' generic write maps to FILE_GENERIC_WRITE, which includes
+   SYNCHRONIZE, and CreateProcess needs it. Real Program Files blocks a standard user by LACKING a
+   write allow, not by denying handle-open rights. The deny is therefore the SPECIFIC rights only:
+   `(WD,AD,WEA,WA,DE,DC)` - write data, append, write EA/attributes, delete, delete child - leaving
+   read+execute+synchronize intact. A `deny-probe` write inside the stage must FAIL before the boot is
+   attempted, so a hardening that silently did not take can never produce a green run.
+3. **Drain the pipes, kill before reading.** The first boot loop piped stdout/stderr undrained: the
+   engine filled the 64KB pipe buffer mid-console.log and never finished booting - then the smoke
+   awaited stderr EOF on the still-running process and deadlocked itself. The gate drains both pipes
+   from spawn and kills the process BEFORE awaiting the tails.
+
+### Decision
+
+`desktop/build/pf-boot-smoke.ts` (IO) over pure decisions in `desktop/engine_pf_smoke.ts`:
+
+1. **Stage.** Packaged mode: the `*-unpacked/resources/repo` tree (the exact bytes the installer lays
+   down) staged verbatim - robocopy on win32 (long-path-safe; exit codes 0-7 are success). Source mode
+   (a dev box with no fresh dist): compile the engine + renderer into a minimal skeleton plus every
+   native-addon package (`**/*.node` -> its top-level package dir, both node_modules trees).
+2. **Location.** `pickSmokeRoot`: strict (CI) REQUIRES the real `Program Files` tree and the packaged
+   layout - any fallback THROWS, because a silent downgrade to a temp dir is exactly how the original
+   gap survived. Non-strict falls back to a temp dir with the same deny hardening. The staged leaf
+   keeps a SPACE ("Lucid PF Smoke") so path-quoting bugs stay in scope.
+3. **Boot.** `resolveEngineSpawn({packaged:true, repoRoot: stage})` must pick the compiled binary (the
+   exact main.ts decision), spawned with cwd = stage and PORT like main.ts; `/api/health` must answer
+   `{ok:true}` within 30s and the prebuilt `/app.js` must serve >1MB from the protected tree.
+4. **Cleanup.** Remove the deny ACE, then delete (retrying - Windows briefly locks a just-killed exe).
+5. **CI.** `build-desktop.yml` runs it on the Windows runner right after the air-gap smoke, STRICT.
+
+### Alternatives rejected
+
+- **Rely on inherited Program Files ACLs.** Constrains nothing on an admin runner (constraint 1).
+- **Install via the real NSIS installer.** The ADR-0259 clamp deliberately prevents a Program Files
+  install, and the one-click installer ignores a target dir by design; staging the unpacked resources
+  verbatim exercises the same bytes without fighting the clamp.
+- **A .ts-load canary instead of a boot.** The brick class is broader than the one loader behavior
+  (any install-dir write also bricks); booting the real engine gates the whole class.
+
+### Verification
+
+`make demo-P-WINBOOT.2C`: the pure decisions (strict-never-downgrades, specific-rights deny, generic-W
+prohibition, restore, layout gate), the CI wiring (windows-gated, strict), then the REAL smoke end to
+end - on this Windows box: source skeleton (7 native-addon packages), write-denial PROVEN by a failed
+probe write, engine booted from the write-denied tree in ~2s, `/api/health` ok, 7.1MB prebuilt
+`/app.js` served, stage un-denied and deleted. 14 unit tests (`engine_pf_smoke.test.ts`); desktop tsc
+clean. NOT verified here: the strict path against a REAL `Program Files` root + the packaged tree -
+that is precisely what the CI step runs on the next installer build (this shell is non-elevated, and
+the local `win-unpacked` predates the compiled engine).
+
+### Limits (honest)
+
+The deny ACE reproduces the standard-user WRITE constraint; it cannot reproduce whatever exact
+machine-specific condition made Bun's loader EPERM on the v1.12.0 host (AV, CIG, mmap flags - never
+pinned). The gate's value is structural: the engine must boot + serve while the install tree refuses
+every write and delete, from the real Program Files path in CI.
+
+### Next
+
+- **Relax the ADR-0259 installer clamp** (re-enable per-machine installs) once this gate is green on a
+  real CI installer build; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged; the bat's shim-guard work is
+  parked on `wip/adr-0252-0260-sessions`).
+
+## ADR-0262 -- P-WINBOOT.3: relax the installer clamp - per-machine installs are legal again
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Closes the ADR-0259/0260 arc: mitigation (0259) -> permanent fix
+(0260) -> regression gate (0261) -> this relax.
+
+### Problem
+
+ADR-0259 clamped the NSIS installer (`allowElevation:false`, `allowToChangeInstallationDirectory:
+false`) so no new install could reach `Program Files` while the engine still module-loaded `.ts` off
+the install disk. That was a mitigation with a real UX cost: no per-machine installs (multi-user
+boxes duplicate the app per user; org-imaged machines cannot install to the standard location), and a
+user explicitly wanting `Program Files` is silently redirected. The justification for the clamp ended
+when ADR-0260 shipped the compiled engine and ADR-0261's CI gate proved - on the real runner, from
+the real `C:\Program Files`, against the exact packaged bytes - that the engine boots and serves from
+a write-denied protected tree.
+
+### Decision
+
+`desktop/package.json` build.nsis: `oneClick:false` (assisted installer - the location choice is
+conscious), `perMachine:false` (the DEFAULT stays per-user `%LOCALAPPDATA%\Programs`: writable, no
+elevation, the posture every user got during the clamp era), `allowElevation:true` +
+`allowToChangeInstallationDirectory:true` (per-machine `Program Files` allowed for those who choose
+it). The two flag flips are the exact diff the test branch carried as "test-only: DO NOT MERGE" since
+Aug 1; this ADR makes them intended. The branch history is deliberately kept as-is (no force-push):
+the old commit title stays, this ADR supersedes it, and the PR should SQUASH-merge so the title never
+reaches master.
+
+**The relax is COUPLED to the gate.** demo-P-WINBOOT.1 section [5] now asserts BOTH the posture and
+that `build-desktop.yml` still runs `build/pf-boot-smoke.ts` STRICT on the Windows runner: whoever
+removes or weakens the gate turns the demo red, so the clamp-relax can never outlive its
+justification silently.
+
+### What stays
+
+- `engine_boot.ts`'s protected-location classifier + dialog: installs from a STALE pre-engine package
+  (or a future regression between gate runs) still die in `Program Files`, and they must keep failing
+  FAST and ACTIONABLY (reinstall per-user / run portable), not as a 30s blank box.
+- The per-user DEFAULT: elevation prompts on every update are worse for the common single-user case,
+  and auto-update writes into the install dir - per-user keeps that writable without UAC.
+
+### Verification
+
+`make demo-P-WINBOOT.1` green with the new section [5] (posture + gate coupling); demos P-WINBOOT.2
+and .2C still green; engine_boot/engine_launch/engine_pf_smoke tests green; root + desktop tsc clean;
+license clean. The real-installer click-through (choose `C:\Program Files`, elevate, boot) is the
+user's on-device pass with the run-32796994917 artifacts - the gate already proved the boot half on
+the runner from the identical staged bytes.
+
+### Next
+
+- Drop nothing: the branch is PR-ready once history is rewritten (no DO-NOT-MERGE tip).
+- v1.12.2 release cut with the compiled engine + gate + this relax.
+- Increment D (`LucidAgentIDE.bat`) rides with the parked `wip/adr-0252-0260-sessions` branch.
+
+## ADR-0263 -- P-STALL.2: no turn cutoff - long work runs to completion, and the wait is legible
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Supersedes the cutoff half of ADR-0186 (P-STALL.1); its visibility half
+(the 2-minute slow notices) stays and gains content.
+
+### Problem
+
+P-STALL.1's 10-minute total-silence kill (`IDLE_MS`, raced against `session/prompt`) was designed for
+provider overload, but it murders LEGITIMATE work: an agent that fans tasks out to subagents (omp's
+`task` tool) can sit quiet far longer than any fixed clock while the work is genuinely running - the
+parent streams nothing while a subagent grinds. The user reported exactly this in the field: long
+runs now routinely exceed ten minutes, every one died with "the model sent nothing for 10 minutes",
+and the UI gave no visibility into WHAT the turn was waiting on. Any fixed number is the same bug
+with a different constant: the clock is guessing how long work is allowed to take.
+
+### Decision (user call: remove the cutoff, add visibility)
+
+1. **No time-based turn cutoff.** `IDLE_MS`, the stall promise, and the `Promise.race` around the
+   CHAT `session/prompt` are gone; the request is awaited directly. A turn ends when the work ends,
+   when the user presses Stop, or when the transport dies.
+2. **Transport death is event-driven, not a clock.** The only failure the old timer actually guarded
+   against is a dead omp child - and on this branch `ACPClient` never rejected pending requests on
+   exit, so removing the timer alone would trade early kills for infinite hangs. `ACPClient.start()`
+   now drains every pending request with a clear error on child `exit` and on spawn `error`
+   (`failPending`). Pinned by a REAL child process in `acp.test.ts` (and the demo): the child exits
+   mid-request, the promise rejects with the exit code, event-driven.
+3. **Visibility: every slow notice names the open work.** New pure `desktop/turn_pending.ts` tracks
+   the turn's OPEN tool calls from the raw ACP stream (`tool_call` opens; a terminal
+   `tool_call_update` - completed/failed/rejected/cancelled - closes; spawned subagent tasks are
+   labeled `subagent <agent> \u00d7N: <title>`). The `{ type:"slow" }` ChatEvent (additive field) now
+   carries `pending: { label, elapsedMs }[]` - longest-running first, capped at 6 - and the renderer
+   shows it: HUD phase `Working \u00b7 waiting on N tasks \u00b7 quiet for M min`, and the once-per-turn toast
+   lists the tasks (`stall_notice.ts: pendingSummaryLine`). No cap is ever named in copy; Stop is.
+
+### Scope (deliberate)
+
+- CHAT turns only. The util completions (`completeOn`/`completeShared`: KG extraction, the /goal
+  checker) keep their own deliberate background clocks - they are invisible background jobs with no
+  Stop affordance mid-flight, and the parked `wip/adr-0252-0260-sessions` branch (P-KG-INGEST.5)
+  reworks that path properly with bounded handshakes + cancellation. The inverse-lockstep test pins
+  the chat path precisely (`promptContent`), not the whole file.
+- `ACPClient.failPending` deliberately overlaps the parked P-KG-INGEST.5 redesign (request
+  `{timeoutMs, signal}` + `die()`); this is its minimal chat-unblocking subset, and the wip branch
+  supersedes it at its merge (a small, intentional conflict).
+
+### Verification
+
+`make demo-P-STALL.2` (clock gone from the chat path, REAL-child death rejection, tracking
+lifecycle, slow-event contract, honest copy) + the evolved `demo-P-STALL.1` (the visibility half that
+remains); 20 unit tests across `turn_pending.test.ts` (labels incl. subagent batches, terminal-only
+settling, snapshot order/cap), `acp.test.ts` (real child exit + spawn failure reject), and the
+rewritten `stall_notice.test.ts` (no-cap copy, pending summary, inverse lockstep). Root + desktop tsc
+clean; full desktop suite at the documented baseline. NOT exercised here: a live >10-minute
+provider-silent turn end to end (needs a real long model run; the removal is structural and the
+death/Stop exits are individually pinned).
+
+### Next
+
+- On-device: run a long fan-out and watch the HUD name the subagent tasks while quiet.
+- When the wip branch lands, fold `failPending` into its fuller `die()` path and extend pending
+  visibility to the util/ingest jobs it reworks.

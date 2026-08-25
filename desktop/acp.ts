@@ -37,7 +37,23 @@ export class ACPClient {
     this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, ...this.env } });
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
     this.proc.stderr!.on("data", (d) => this.onStderr(String(d)));
-    this.proc.on("exit", (code) => this.onExit(code));
+    // P-STALL.2 (ADR-0263): a dead agent must FAIL its in-flight requests, never strand them. With the
+    // time-based turn cutoff removed, this event-driven rejection is what ends a turn whose omp child
+    // died - the only failure the old 10-minute clock actually guarded against. A request sent to an
+    // already-dead child stays covered too: write() throws into the caller's promise chain via spawn's
+    // "error"/closed-stdin behavior, and any id parked before death is drained here.
+    this.proc.on("exit", (code) => {
+      this.failPending(new Error(`the omp agent process exited (code ${code ?? "unknown"}) while a request was in flight`));
+      this.onExit(code);
+    });
+    this.proc.on("error", (err) => this.failPending(new Error(`the omp agent process could not start: ${err.message}`)));
+  }
+
+  /** Reject every pending request (child exit / spawn failure) so no caller waits forever. */
+  private failPending(e: Error): void {
+    const waiting = [...this.pending.values()];
+    this.pending.clear();
+    for (const p of waiting) p.reject(e);
   }
 
   private onData(s: string): void {

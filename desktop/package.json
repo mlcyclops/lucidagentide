@@ -16,14 +16,16 @@
     "runtimes:linux": "bun run build/fetch-runtimes.ts",
     "whisper": "bun run build/fetch-whisper.ts",
     "compile-lucid": "bun build --compile ../harness/launcher/lucid_acp.ts --outfile ../bin/lucid && bun run natives",
+    "compile-engine": "bun build --compile dev.ts --outfile ../bin/lucid-engine --external '*.node'",
+    "build-renderer": "bun build renderer/app.ts --target=browser --outfile renderer/app.bundle.js --sourcemap=inline",
     "natives": "bun run build/copy-natives.ts",
     "start": "bun run build && electron .",
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
-    "dist:mac": "bun run runtimes:mac && bun run whisper && bun run icons && bun run build && bun run compile-lucid && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
-    "dist:win": "bun run runtimes:win && bun run whisper && bun run icons && bun run build && bun run compile-lucid && electron-builder --win --publish never",
-    "dist:linux": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build && bun run compile-lucid && electron-builder --linux --publish never",
-    "dist": "bun run runtimes && bun run whisper && bun run icons && bun run build && bun run compile-lucid && electron-builder --publish never"
+    "dist:mac": "bun run runtimes:mac && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
+    "dist:win": "bun run runtimes:win && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --win --publish never",
+    "dist:linux": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --publish never",
+    "dist": "bun run runtimes && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --publish never"
   },
   "build": {
     "appId": "com.lucidagentide.desktop",
