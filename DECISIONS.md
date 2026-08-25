@@ -17908,3 +17908,66 @@ the runner from the identical staged bytes.
 - Drop nothing: the branch is PR-ready once history is rewritten (no DO-NOT-MERGE tip).
 - v1.12.2 release cut with the compiled engine + gate + this relax.
 - Increment D (`LucidAgentIDE.bat`) rides with the parked `wip/adr-0252-0260-sessions` branch.
+
+## ADR-0263 -- P-STALL.2: no turn cutoff - long work runs to completion, and the wait is legible
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Supersedes the cutoff half of ADR-0186 (P-STALL.1); its visibility half
+(the 2-minute slow notices) stays and gains content.
+
+### Problem
+
+P-STALL.1's 10-minute total-silence kill (`IDLE_MS`, raced against `session/prompt`) was designed for
+provider overload, but it murders LEGITIMATE work: an agent that fans tasks out to subagents (omp's
+`task` tool) can sit quiet far longer than any fixed clock while the work is genuinely running - the
+parent streams nothing while a subagent grinds. The user reported exactly this in the field: long
+runs now routinely exceed ten minutes, every one died with "the model sent nothing for 10 minutes",
+and the UI gave no visibility into WHAT the turn was waiting on. Any fixed number is the same bug
+with a different constant: the clock is guessing how long work is allowed to take.
+
+### Decision (user call: remove the cutoff, add visibility)
+
+1. **No time-based turn cutoff.** `IDLE_MS`, the stall promise, and the `Promise.race` around the
+   CHAT `session/prompt` are gone; the request is awaited directly. A turn ends when the work ends,
+   when the user presses Stop, or when the transport dies.
+2. **Transport death is event-driven, not a clock.** The only failure the old timer actually guarded
+   against is a dead omp child - and on this branch `ACPClient` never rejected pending requests on
+   exit, so removing the timer alone would trade early kills for infinite hangs. `ACPClient.start()`
+   now drains every pending request with a clear error on child `exit` and on spawn `error`
+   (`failPending`). Pinned by a REAL child process in `acp.test.ts` (and the demo): the child exits
+   mid-request, the promise rejects with the exit code, event-driven.
+3. **Visibility: every slow notice names the open work.** New pure `desktop/turn_pending.ts` tracks
+   the turn's OPEN tool calls from the raw ACP stream (`tool_call` opens; a terminal
+   `tool_call_update` - completed/failed/rejected/cancelled - closes; spawned subagent tasks are
+   labeled `subagent <agent> \u00d7N: <title>`). The `{ type:"slow" }` ChatEvent (additive field) now
+   carries `pending: { label, elapsedMs }[]` - longest-running first, capped at 6 - and the renderer
+   shows it: HUD phase `Working \u00b7 waiting on N tasks \u00b7 quiet for M min`, and the once-per-turn toast
+   lists the tasks (`stall_notice.ts: pendingSummaryLine`). No cap is ever named in copy; Stop is.
+
+### Scope (deliberate)
+
+- CHAT turns only. The util completions (`completeOn`/`completeShared`: KG extraction, the /goal
+  checker) keep their own deliberate background clocks - they are invisible background jobs with no
+  Stop affordance mid-flight, and the parked `wip/adr-0252-0260-sessions` branch (P-KG-INGEST.5)
+  reworks that path properly with bounded handshakes + cancellation. The inverse-lockstep test pins
+  the chat path precisely (`promptContent`), not the whole file.
+- `ACPClient.failPending` deliberately overlaps the parked P-KG-INGEST.5 redesign (request
+  `{timeoutMs, signal}` + `die()`); this is its minimal chat-unblocking subset, and the wip branch
+  supersedes it at its merge (a small, intentional conflict).
+
+### Verification
+
+`make demo-P-STALL.2` (clock gone from the chat path, REAL-child death rejection, tracking
+lifecycle, slow-event contract, honest copy) + the evolved `demo-P-STALL.1` (the visibility half that
+remains); 20 unit tests across `turn_pending.test.ts` (labels incl. subagent batches, terminal-only
+settling, snapshot order/cap), `acp.test.ts` (real child exit + spawn failure reject), and the
+rewritten `stall_notice.test.ts` (no-cap copy, pending summary, inverse lockstep). Root + desktop tsc
+clean; full desktop suite at the documented baseline. NOT exercised here: a live >10-minute
+provider-silent turn end to end (needs a real long model run; the removal is structural and the
+death/Stop exits are individually pinned).
+
+### Next
+
+- On-device: run a long fan-out and watch the HUD name the subagent tasks while quiet.
+- When the wip branch lands, fold `failPending` into its fuller `die()` path and extend pending
+  visibility to the util/ingest jobs it reworks.

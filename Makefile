@@ -750,8 +750,11 @@ demo-P-CHAT.B: ## P-CHAT.B (ADR-0189): inline tool-event chips - PURE fence-awar
 demo-P-CHAT.C: ## P-CHAT.C (ADR-0190): settled-turn "Generate engineering report" - PURE observed-turn->RunRecord adapter (buildRunRecord/renderTurnEvalReport) that maps a turn's tool calls + diffstats + tokens into evals.ts's RunRecord (reads/searches/bash are not files, repeated edits merge, the surplus is a re-edit, no AC/test signal stays needs_signal not faked) and renders the reused Model-Evaluation markdown. Pure keystone verified here; the run-footer CTA + /api/eval/report route are typechecked and QA-gated in-app
 	$(BUN) run harness/scripts/demo_pchatc.ts
 .PHONY: demo-P-STALL.1
-demo-P-STALL.1: ## P-STALL.1 (ADR-0186): patience for overloaded providers - the chat turn waits 10 min (was 5, message falsely said 2); a slow event at each silent 2-min mark keeps the wait visible (HUD phase + one toast naming the cap); the stall error derives its duration from the constant
+demo-P-STALL.1: ## P-STALL.1 (ADR-0186, evolved by ADR-0263): visible provider silence - a slow event at each quiet 2-min mark keeps the wait legible (HUD phase counts the silence honestly); the 10-min cap itself was removed by P-STALL.2
 	$(BUN) run desktop/scripts/demo_p_stall_1.ts
+.PHONY: demo-P-STALL.2
+demo-P-STALL.2: ## P-STALL.2 (ADR-0263): no turn cutoff, visible pending work - the 10-min silence kill is GONE (long subagent fan-outs outlive any fixed clock; a turn runs until the work ends or Stop), a dead omp child now rejects in-flight requests EVENT-DRIVEN (proven with a real child process), and every slow notice names the open tool calls / spawned subagent tasks with their elapsed time (turn_pending.ts -> { type:'slow', pending } -> HUD phase + toast)
+	$(BUN) run desktop/scripts/demo_p_stall_2.ts
 .PHONY: demo-P-WINBOOT.1
 demo-P-WINBOOT.1: ## P-WINBOOT.1 (ADR-0259): Windows installed-app startup hardening - a Program Files install (Bun EPERMs loading dev.ts from the protected tree) is diagnosed FAST + ACTIONABLY (reinstall per-user / run portable) instead of a 30s blank box; waitForServer bails on the engine's early exit; a failed write probe / EPERM signal / protected path all classify, while a dev run never blames the install location; and the installer posture (ADR-0262): assisted installer, per-user DEFAULT, per-machine (Program Files) allowed again - pinned as legal ONLY while build-desktop.yml carries the strict ADR-0261 boot gate (removing the gate turns this demo red)
 	$(BUN) run desktop/scripts/demo_p_winboot_1.ts
