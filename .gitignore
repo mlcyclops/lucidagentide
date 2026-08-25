@@ -88,6 +88,10 @@ tools/seed_personal_facts.ts
 !/bin/.gitkeep
 netwatch.log
 
+# Machine-generated memory/fact extraction scratch (local analysis artifacts, never source)
+/.memory-extract.json
+/extracted_facts.json
+
 # P-KG-CODE.1: generated per-workspace code-graph cache (the tracked .omp/commands stays)
 .omp/codegraph.json
 .omp/codegraph-symbol.json
