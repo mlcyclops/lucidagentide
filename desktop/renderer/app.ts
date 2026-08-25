@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { mountMascot, type MascotHandle } from "./mascot.ts"; // P-MASCOT.1: LUCID the ninja (tiny, static import)
 import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
@@ -73,11 +73,12 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
+import { initFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1: local engine lanes as a movable fleet grid
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstNewest } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstByLevel, topModel } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
@@ -91,7 +92,7 @@ import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estim
 import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
 import { TTS_PROVIDERS } from "../../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247): every engine's selectable voices
 import { takeSpeechChunks } from "../../harness/voice/speech_stream.ts"; // P-VOICE.2: sentence-at-a-time live read-aloud
-import { nextThinkingCue } from "../../harness/voice/thinking_cues.ts"; // P-VOICE.6 (ADR-0249): spoken "still working" cues
+import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues.ts"; // P-VOICE.6/.7 (ADR-0249/0257): spoken "still working" cues, active-listening openers, thinking snapshots
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
 import type { ElevenVoiceView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
@@ -305,6 +306,8 @@ function buildShell(): void {
             <!-- P-VOICE.2 (ADR-0247): the read-aloud control - engine + voice picker and the auto-speak switch.
                  It sits beside the mic so talking TO the agent and listening TO it are one pair of controls. -->
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
+            <!-- P-FLEET.L1: the fleet grid - headless local engine lanes as streaming mini agent windows. -->
+            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - local lanes|Spawn headless LUCID engine lanes on this machine and drive them from a movable grid of mini agent windows.">${icon("bolt", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
             <!-- P-VOICE.4 (ADR-0248): a live spectrum analyser of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
@@ -408,7 +411,7 @@ function buildShell(): void {
         </div>
       </aside>
 
-      <!-- P-TRAINER.7 (ADR-0255): the immersive Trainer stage - a self-contained experience (extraction
+      <!-- P-TRAINER.7 (ADR-0267): the immersive Trainer stage - a self-contained experience (extraction
            stage + coverage HUD + lesson-based mini-game flyout) in a sandboxed iframe. Lazy-loaded on
            first open; covers the main area while the rail + titlebar stay live. -->
       <section id="trainerPanel" class="trainer-panel" hidden>
@@ -641,13 +644,24 @@ async function runPersonalImport(folder: string, useModel: boolean): Promise<voi
   const fill = $("#importPillFill", pill) as HTMLElement, text = $("#importPillText", pill) as HTMLElement, ven = $("#importPillVendor", pill) as HTMLElement;
   const cancelBtn = $("#importPillCancel", pill) as HTMLButtonElement;
   cancelBtn.disabled = false; cancelBtn.textContent = "Cancel";
-  cancelBtn.onclick = () => { cancelBtn.disabled = true; cancelBtn.textContent = "Stopping…"; void bridge.personalImportCancel(jobId); };
+  // First press asks the run to unwind; the button stays LIVE as "Force stop" so a wedged import is never
+  // a dead end (the old code disabled it forever, which is what "Stop hangs" looked like).
+  let stopPresses = 0;
+  cancelBtn.onclick = () => {
+    stopPresses++;
+    cancelBtn.textContent = stopPresses === 1 ? "Force stop" : "Stopping\u2026";
+    cancelBtn.disabled = stopPresses > 1;
+    void bridge.personalImportCancel(jobId);
+  };
   const poll = async () => {
     const st = await bridge.personalImportStatus(jobId).catch(() => null);
     if (!st) { hideImportPill(); return; }
-    const { pct, line, done } = formatImportLine(st);
+    const { pct, line, done, stalled } = formatImportLine(st);
     fill.style.width = `${pct}%`; text.textContent = line; ven.textContent = vendorName(st.vendor);
+    pill.classList.toggle("stalled", stalled);
+    if (stalled && stopPresses === 0) cancelBtn.textContent = "Stop";
     if (!done) { importPollTimer = window.setTimeout(() => void poll(), 1200); return; }
+    pill.classList.remove("stalled");
     hideImportPill();
     const r = st.result;
     if (st.state === "failed" || !r?.ok) {
@@ -1420,7 +1434,7 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   </div>`;
   container.querySelectorAll("[data-noresp-switch]").forEach((b) => b.addEventListener("click", async () => {
     const v = (b as HTMLElement).dataset.norespSwitch!;
-    await applyConfig("model", v); // switch the active model
+    await applyConfig("model", v, { system: true }); // no-response fallback switch (system, not the user's sticky pick)
     const last = state.lastPrompt;
     const ta = $("#input") as HTMLTextAreaElement | null;
     if (last && ta) { ta.value = last; autosize(ta); setSendEnabled(); void send(); } // re-send the same prompt
@@ -1496,6 +1510,7 @@ async function send(): Promise<void> {
   const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
   const failures: { tool: string; reason: string; cmd?: string }[] = []; // P-CHAT.C (ADR-0190): this turn's failed (non-quarantined) tool calls, feed the eval report's fail-rate / wasted-token metrics
   let buf = "";
+  let thinkBuf = ""; // P-VOICE.7 (ADR-0269): this turn's reasoning stream - raw material for spoken thinking snapshots
   const t0 = Date.now();
   // Cold start: the timer is already ticking but nothing has arrived - show an intent-aware
   // "warming" line so the user always sees something meaningful before the first token/tool.
@@ -1577,9 +1592,10 @@ async function send(): Promise<void> {
   // P-VOICE.2 (ADR-0247): a new turn - stop anything still being read from the last one and reset the
   // read-aloud cursor, so auto-speak can never trail one reply behind.
   speech.stop(); speechCursor = 0; speechFedAt = 0;
-  // P-VOICE.6: hands-free, a long think is DEAD AIR - indistinguishable from a crash. Speak short, escalating
-  // acknowledgements until the answer itself starts talking.
-  startThinkingCues(() => sawTool);
+  // P-VOICE.6/.7: hands-free, a long think is DEAD AIR - indistinguishable from a crash. Open with a varied,
+  // active-listening acknowledgement (restating the ask when it can be restated faithfully), then speak
+  // snapshots of the live reasoning while the user waits - until the answer itself starts talking.
+  startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
   const onEvent = (e: ChatEvent) => {
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
@@ -1588,6 +1604,7 @@ async function send(): Promise<void> {
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
       if (!sawTool) setPhase(thinkLine);
       countDelta(e.text); // thinking tokens ARE output - count them in the readout
+      thinkBuf += e.text; // P-VOICE.7: feed the spoken snapshot cues
       reasoning.push(e.text); paintHud(); scrollChat();
     }
     else if (e.type === "tool") {
@@ -2182,7 +2199,7 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
     await loadConfig(); await loadAsksage(); // surface gov models + reflect lockdown
     // Lockdown must guarantee gateway routing: if we're on a direct model, switch to a gov one.
     const model = state.config.find((c) => c.id === "model");
-    if (model && !isAsksage(model.currentValue)) { const gov = model.options.find((o) => isAsksage(o.value)); if (gov) await applyConfig("model", gov.value); }
+    if (model && !isAsksage(model.currentValue)) { const gov = topModel(model.options, isAsksage)?.value; if (gov) await applyConfig("model", gov, { system: true }); }
     showDodBanner(); // ADR-0224: entering lockdown surfaces the DoD/STIG consent banner
     updateComposerTools(); renderStatus();
     finish({ title: "CUI mode on", desc: "Every turn now routes through the AskSage gov gateway. Direct providers are hidden." });
@@ -2727,8 +2744,13 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
 // P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
 // picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
 function whisperCardHtml(s: WhisperStatusView): string {
-  const sel = s.activeTier ?? s.defaultTier ?? s.recommended; // running tier, else the tiny default
-  const opts = s.tiers.filter((t) => t.runnable).map((t) => `<option value="${esc(t.tier)}"${t.tier === sel ? " selected" : ""}>${esc(t.label)}${t.installed ? " \u00b7 installed" : ""}</option>`).join("");
+  // P-STT.6 (ADR-0267): the picker OFFERS tiny/base/small only (medium/large proved slow + buggy through
+  // the local server) and GRAYS OUT a tier this hardware can't run instead of hiding it, so the user sees
+  // WHY it's unavailable. Anything already downloaded - offered or not - lists below with a Remove button.
+  // The selection falls back to the tiny DEFAULT (P-STT.6 autostart) before the capability recommendation.
+  const offered = s.tiers.filter((t) => t.offered);
+  const pick = s.activeTier ?? s.defaultTier ?? s.recommended;
+  const opts = offered.map((t) => `<option value="${esc(t.tier)}"${t.tier === pick && t.runnable ? " selected" : ""}${t.runnable ? "" : " disabled"}>${esc(t.label)}${t.installed ? " \u00b7 installed" : ""}${t.runnable ? "" : ` \u00b7 ${esc(t.reason)}`}</option>`).join("");
   const status = s.running ? `<span class="abadge ok">${icon("check", 11)} running${s.activeTier ? ` \u00b7 ${esc(s.activeTier)}` : ""}</span>` : `<span class="abadge none">stopped</span>`;
   const binWarn = s.binAvailable ? "" : `<div class="set-note">${icon("info", 12)} <span>${esc(s.binHint)}</span></div>`;
   const inst = s.install;
@@ -2742,8 +2764,20 @@ function whisperCardHtml(s: WhisperStatusView): string {
     controls = `<div class="voice-row"><label class="voice-lbl" for="whisperTier">Model</label><select id="whisperTier" class="prov-key">${opts}</select></div>
        <div class="prov-row whisper-actions">${s.running ? `<button class="btn-mini" data-whisper-stop>${icon("close", 12)} Stop</button>` : `<button class="btn-mini ok" data-whisper-start${s.binAvailable ? "" : " disabled"}>${icon("expand", 12)} Install &amp; start</button>`}<span class="whisper-status">${status}</span></div>`;
   } else controls = "";
+  // P-STT.6: every downloaded model is listed with its real on-disk size and a Remove button - including
+  // (especially) the no-longer-offered medium/large weights from an earlier version. The tier the running
+  // server has loaded shows "in use" instead (stop first). Shown even on an incapable machine: reclaiming
+  // disk is exactly what such a machine wants.
+  const mb = (t: WhisperTierView): string => `${Math.round(t.diskMB ?? t.approxMB)} MB`;
+  const installedRows = s.tiers.filter((t) => t.installed).map((t) => {
+    const inUse = s.running && s.activeTier === t.tier;
+    const legacy = t.offered ? "" : `<span class="abadge warn" title="Slow and unstable through the local whisper server - no longer offered. Remove it to reclaim disk.">not offered</span>`;
+    const act = inUse ? `<span class="abadge ok">${icon("check", 11)} in use</span>` : `<button class="btn-mini danger" data-whisper-remove="${esc(t.tier)}" title="Delete ${mb(t)} of model weights from disk">${icon("close", 12)} Remove</button>`;
+    return `<div class="whisper-model"><span class="whisper-model-name">${esc(t.label)}</span><span class="abadge set">${mb(t)}</span>${legacy}${act}</div>`;
+  }).join("");
+  const installedList = installedRows ? `<div class="whisper-models"><div class="whisper-models-h">Installed models</div>${installedRows}</div>` : "";
   return `<div class="voice-whisper-inner"><div class="voice-whisper-h"><b>Local Whisper</b><span>offline STT on this machine</span></div>
-    <div class="set-note">${icon("info", 12)} <span>${esc(s.summary)}</span></div>${binWarn}${controls}</div>`;
+    <div class="set-note">${icon("info", 12)} <span>${esc(s.summary)}</span></div>${binWarn}${controls}${installedList}</div>`;
 }
 /** Fill the Local Whisper block from live status (best-effort; empty when unavailable). */
 async function hydrateWhisper(): Promise<void> {
@@ -2758,6 +2792,19 @@ async function loadVoices(): Promise<void> {
   const selEl = $("#voiceSelect") as HTMLSelectElement | null;
   if (!selEl) return;
   const data = await bridge.voices().catch(() => null);
+  // P-STT.6 (ADR-0267): gray out TTS engines that cannot speak on this machine right now, mirroring the
+  // composer voice menu's "needs setup" treatment (voiceEngineHtml). The currently selected engine stays
+  // enabled so an in-progress setup is never locked out; once its key/server is fixed, a re-render clears
+  // the gray. The reason rides the option's title.
+  const ttsSel = $("#voiceTts") as HTMLSelectElement | null;
+  if (ttsSel && data?.engines?.length) {
+    for (const e of data.engines) {
+      const o = ttsSel.querySelector(`option[value="${e.id}"]`) as HTMLOptionElement | null;
+      if (!o || o.value === ttsSel.value) continue;
+      o.disabled = !e.ready;
+      o.title = e.ready ? "" : e.reason;
+    }
+  }
   const note = $("#voiceNote");
   if (!data || !data.voices.length) {
     selEl.innerHTML = `<option value="">no voices to list</option>`;
@@ -3850,7 +3897,7 @@ async function newKgFlow(apply: (v: import("./bridge.ts").KgListView | null) => 
  *  vault. Choose the folder, NAME the KG (rename-at-ingest), then a single gated batch compile (every source
  *  scanned fail-closed); on success the freshly-seeded KG is activated + drawn. */
 async function importKgFlow(): Promise<void> {
-  const folder = await openFolderBrowser({ title: "Choose a chat export or Obsidian markdown folder", confirm: "Use this folder" });
+  const folder = await pickFolderDialog({ title: "Choose a chat export or Obsidian markdown folder", confirm: "Use this folder" });
   if (!folder) return;
   const suggested = (folder.split(/[\\/]/).pop() || "Imported KG").trim();
   const name = await promptText({ title: "Name this knowledge graph", label: "KG name", value: suggested, placeholder: "e.g. Backend Engineer" });
@@ -3894,7 +3941,7 @@ async function importKgFlow(): Promise<void> {
  *  signed only if a signing key is configured (the private authoring path), otherwise unsigned. */
 async function exportPackFlow(kgId: string, view: import("./bridge.ts").KgListView): Promise<void> {
   const kgName = view.kgs.find((k) => k.kg_id === kgId)?.name ?? "KG";
-  const dest = await openFolderBrowser({ title: `Export "${kgName}" as a KG Pack - choose a destination`, confirm: "Export here" });
+  const dest = await pickFolderDialog({ title: `Export "${kgName}" as a KG Pack - choose a destination`, confirm: "Export here" });
   if (!dest) return;
   showToast({ title: `Exporting "${kgName}"…`, desc: "Writing the .lkgpack (db + manifest).", timeout: 1600 });
   const r = await bridge.kbPackExport({ kgId, dest }).catch(() => null);
@@ -3904,7 +3951,7 @@ async function exportPackFlow(kgId: string, view: import("./bridge.ts").KgListVi
 /** P-KGPACK.4: import a .lkgpack. Integrity + origin are verified and every page is re-scanned fail-closed
  *  before anything registers; a clean pack installs as a read-only, untrusted KG and is shown. */
 async function importPackFlow(): Promise<void> {
-  const folder = await openFolderBrowser({ title: "Choose a .lkgpack KG Pack folder", confirm: "Import this pack" });
+  const folder = await pickFolderDialog({ title: "Choose a .lkgpack KG Pack folder", confirm: "Import this pack" });
   if (!folder) return;
   showToast({ title: "Verifying + scanning the pack…", desc: "Integrity + origin are checked and every page is re-scanned before anything installs.", timeout: 2200 });
   const r = await bridge.kbPackImport({ path: folder }).catch(() => null);
@@ -3942,7 +3989,7 @@ function openKgDataMenu(anchor: HTMLElement): void {
   });
 }
 async function kgImportHistory(): Promise<void> {
-  const folder = await openFolderBrowser({ title: "Choose your ChatGPT / Claude / Gemini export", confirm: "Import from here" });
+  const folder = await pickFolderDialog({ title: "Choose your ChatGPT / Claude / Gemini export folder", confirm: "Import from here" });
   if (!folder) return;
   // Read-only pre-import estimate → warn about AI-mode token cost + runtime before the paid run.
   const est = await bridge.personalImportEstimate(folder);
@@ -4086,7 +4133,7 @@ function closePreview(): void {
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
 
-// P-TRAINER.7 (ADR-0255): the immersive Trainer stage as an in-app panel. A sandboxed iframe renders the
+// P-TRAINER.7 (ADR-0267): the immersive Trainer stage as an in-app panel. A sandboxed iframe renders the
 // self-contained trainer experience; mutually exclusive with the other right-edge surfaces. It covers the
 // main work area but leaves the left rail + titlebar live, so re-clicking the rail icon (or Esc) closes it.
 let trainerOpen = false;
@@ -5702,7 +5749,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
     <div class="set-sub ws-gitpat-note">${gitPatSaved
       ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`
       : `Optional. A GitHub/GitLab personal access token for private-repo clones. Stored in the OS-encrypted vault; never sent to the agent.`}</div>
-    ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<button class="ws-recent-item" data-ws="${esc(r.path)}" title="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)} ${esc(r.name)}</button>`).join("")}</div>` : ""}
+    ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<span class="ws-recent-item" title="${esc(r.path)}"><button class="ws-recent-open" data-ws="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)}<span class="ws-recent-name">${esc(r.name)}</span></button><button class="ws-recent-rm" data-ws-remove="${esc(r.path)}" title="Remove from recents" aria-label="Remove ${esc(r.name)} from recents">${icon("close", 10)}</button></span>`).join("")}</div>` : ""}
   `, true);
 }
 // ADR-0216: persist a git PAT into the OS-encrypted vault (ref "git_pat"). Kept in `sessionGitPat` too so it
@@ -5839,6 +5886,15 @@ function confirmDeleteSession(id: string): void {
   });
 }
 
+// Remove one folder from the recents pills. The active workspace is untouched, so there's no respawn and no
+// session reset - just persist the drop and re-render the Workspace section (+ the top bar) in place.
+async function forgetRecentWorkspace(path: string): Promise<void> {
+  const info = await bridge.removeRecentWorkspace(path).catch(() => null);
+  if (info) state.workspace = info;
+  const el = document.querySelector(`#setBody [data-sec="workspace"]`);
+  if (el && state.workspace) el.outerHTML = `<div data-sec="workspace">${workspaceSection(state.workspace)}</div>`;
+  renderWorkspaceBar();
+}
 async function applyWorkspace(path: string): Promise<void> {
   // #11 perceived-latency: setWorkspace() respawns the backend (2–5s). Reassure the user
   // up front that work is happening, then confirm when it's ready, and reflect the switch
@@ -7308,18 +7364,22 @@ function speechSay(raw: string): void {
   speech.say(clean.slice(0, 4000));
 }
 
-// ── P-VOICE.6 (ADR-0249): spoken progress while the agent works ──────────────────────────
+// ── P-VOICE.6/.7 (ADR-0249/0257): spoken progress while the agent works ──────────────────────────
 let lastVoiceAt = 0;
 let cuesSpoken = 0;
 let cueTimer = 0;
+let cueSeed = 0; // P-VOICE.7: one seed per turn, so a turn's cues share one register and turns vary
+let cueLastSnapshot: string | null = null; // the last thinking snapshot spoken - never narrate it twice
 
 /** Start the cue clock for a turn. Conversation mode only: with your eyes on the screen the thinking block
  *  and tool chips already say "working", and a spoken cue would just talk over what you are reading. */
-function startThinkingCues(toolActive: () => boolean): void {
+function startThinkingCues(o: { toolActive: () => boolean; topic: string | null; thinking: () => string }): void {
   stopThinkingCues();
   if (!state.voice?.ttsAutoSpeak || !state.voice?.ttsConversation) return;
   lastVoiceAt = Date.now();
   cuesSpoken = 0;
+  cueSeed = Math.floor(Math.random() * 0xffffff);
+  cueLastSnapshot = null;
   cueTimer = window.setInterval(() => {
     // Never queue a cue behind audio that is already playing - by the time it was heard it would be stale,
     // and it would delay the answer sitting behind it.
@@ -7328,11 +7388,16 @@ function startThinkingCues(toolActive: () => boolean): void {
       cuesSpoken,
       sinceVoiceMs: Date.now() - lastVoiceAt,
       answerStarted: speechCursor > 0,
-      toolActive: toolActive(),
+      toolActive: o.toolActive(),
+      seed: cueSeed,
+      topic: o.topic,
+      thinking: o.thinking(),
+      lastSnapshot: cueLastSnapshot,
     });
     if (!cue) return;
     cuesSpoken++;
-    speechSay(cue);
+    if (cue.snapshot) cueLastSnapshot = cue.snapshot;
+    speechSay(cue.text);
   }, 700);
 }
 function stopThinkingCues(): void {
@@ -8169,7 +8234,7 @@ function loadRunWith(ov: HTMLElement): void {
       if (gov.length) opts = gov;
     }
     if (locked) {
-      modelSel.innerHTML = groupByFamily(sortGovFirstNewest(opts), GUIDED_GOV_FAMILY_ORDER)
+      modelSel.innerHTML = groupByFamily(sortGovFirstByLevel(opts), GUIDED_GOV_FAMILY_ORDER)
         .map(({ fam, models }) => `<optgroup label="${esc(fam.label)}">` + models.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
     } else {
       const byProv = new Map<string, { value: string; name?: string }[]>();
@@ -9325,6 +9390,20 @@ function promptText(opts: { title: string; label?: string; value?: string; place
   });
 }
 
+/** Choose a folder. P-KG-INGEST.5 (ADR-0264): ALWAYS the real OS dialog (Explorer / Finder) when we're in
+ *  Electron, so every picker navigates like the workspace/git one - type a path, use Quick access, sort,
+ *  search. P-FS.2 (ADR-0265): the browser build gets the SAME native dialog through the local backend,
+ *  which runs on this machine (loopback bind) and opens Explorer / Finder / zenity itself. A native
+ *  CANCEL (`supported:true, path:null`) resolves null and never re-prompts. `openFolderBrowser` is the
+ *  fallback ONLY when no native dialog exists anywhere (headless server, no dialog binary). Every folder
+ *  pick in the app goes through here; call the in-app browser directly nowhere. */
+async function pickFolderDialog(opts: { title?: string; confirm?: string } = {}): Promise<string | null> {
+  if (bridge.isElectron && bridge.pickFolder) return bridge.pickFolder({ title: opts.title, buttonLabel: opts.confirm });
+  const native = await bridge.pickFolderNative({ title: opts.title, buttonLabel: opts.confirm }).catch(() => null);
+  if (native?.supported) return native.path;
+  return openFolderBrowser(opts);
+}
+
 function openFolderBrowser(opts: { title?: string; confirm?: string } = {}): Promise<string | null> {
   const title = opts.title ?? "Choose a workspace folder";
   const confirm = opts.confirm ?? "Open this folder";
@@ -9610,7 +9689,7 @@ function runGuestPromptLocally(text: string, from: string, images?: string[]): v
 // host resolved from the opaque id (a guest never sent, and never learns, the path).
 function runGuestModelLocally(value: string, from: string): void {
   showToast({ title: `${from} switched the model`, desc: modelLabel(value), timeout: 3500 });
-  void applyConfig("model", value);
+  void applyConfig("model", value, { system: true }); // a collab guest's pick, not the host's sticky default
 }
 function runGuestWorkspaceLocally(path: string, from: string): void {
   showToast({ title: `${from} switched the folder`, desc: path, timeout: 3500 });
@@ -10676,6 +10755,20 @@ function wire(): void {
     applyVoiceDockShape();
   });
   void bridge.voiceSettings().then((v) => { if (v) { state.voice = v; updateVoiceChip(); } });
+  // P-FLEET.L1: the fleet grid dashboard - headless local lanes as streaming mini agent windows.
+  initFleetGrid({
+    fleetStatus: bridge.fleetStatus,
+    fleetSpawn: bridge.fleetSpawn,
+    fleetPrompt: bridge.fleetPrompt,
+    fleetAnswer: bridge.fleetAnswer,
+    fleetCancel: bridge.fleetCancel,
+    fleetStop: bridge.fleetStop,
+    fleetSetModel: bridge.fleetSetModel,
+    getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
+    getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
+    getMasterCwd: () => state.workspace?.current ?? "",
+  });
+  $("#ctFleet")?.addEventListener("click", () => toggleFleetGrid());
 
   // settings page actions (delegated)
   $("#setClose")!.addEventListener("click", () => closeSettings());
@@ -10774,6 +10867,16 @@ function wire(): void {
       return;
     }
     if (t.closest("[data-whisper-stop]")) { await bridge.whisperStop().catch(() => null); await hydrateWhisper(); return; }
+    // P-STT.6 (ADR-0267): delete a downloaded model's weights (the running tier is refused server-side).
+    const wrm = t.closest("[data-whisper-remove]") as HTMLElement | null;
+    if (wrm) {
+      const tier = wrm.dataset.whisperRemove ?? "";
+      const rr = await bridge.whisperRemove(tier).catch(() => null);
+      if (rr?.ok) showToast({ tone: "ok", title: "Model removed", desc: `The ${tier} weights were deleted from disk.`, timeout: 3000 });
+      else showToast({ tone: "warn", title: "Couldn't remove the model", desc: rr?.reason || "See Settings \u2192 Voice.", timeout: 4500 });
+      await hydrateWhisper();
+      return;
+    }
     if (t.closest("[data-lp-test-form]")) { await testLocalProviderConn(($("#lpBaseUrl", $("#setBody")!) as HTMLInputElement | null)?.value ?? ""); return; }
     const lpTest = t.closest("[data-lp-test]") as HTMLElement | null;
     if (lpTest) { await testLocalProviderConn(lpTest.dataset.url ?? ""); return; }
@@ -10787,7 +10890,7 @@ function wire(): void {
       // Prefer the NATIVE OS folder-open dialog (Electron): it browses the whole machine and can create new
       // folders, with no home-folder confinement. Fall back to the in-app browser only in a plain browser
       // build where no native dialog exists.
-      const path = bridge.isElectron && bridge.pickFolder ? await bridge.pickFolder() : await openFolderBrowser();
+      const path = await pickFolderDialog({ title: "Choose or create a workspace folder", confirm: "Open this folder" });
       if (path) await applyWorkspace(path);
       return;
     }
@@ -10809,6 +10912,8 @@ function wire(): void {
       else showToast({ tone: "danger", title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
       return;
     }
+    const wsRm = t.closest("[data-ws-remove]") as HTMLElement | null;
+    if (wsRm) { await forgetRecentWorkspace(wsRm.dataset.wsRemove!); return; }
     const wsr = t.closest("[data-ws]") as HTMLElement | null;
     if (wsr) { await applyWorkspace(wsr.dataset.ws!); return; }
     // P-IDE.1c: China-origin model unlock / re-lock
@@ -10892,8 +10997,8 @@ function wire(): void {
       if (only) {
         const model = state.config.find((c) => c.id === "model");
         if (model && !isAsksage(model.currentValue)) {
-          const gov = model.options.find((o) => isAsksage(o.value));
-          if (gov) await applyConfig("model", gov.value);
+          const gov = topModel(model.options, isAsksage)?.value;
+          if (gov) await applyConfig("model", gov, { system: true });
         }
       }
       if (only) showDodBanner(); // ADR-0224: entering lockdown surfaces the DoD/STIG consent banner
@@ -11347,7 +11452,7 @@ function wire(): void {
       showToast({ title: "Added to the composer", desc: "Review it and press send when ready.", timeout: 2500 });
     },
     pickSavePath: async (suggested) => {
-      const dir = await openFolderBrowser({ title: "Choose a folder to save into", confirm: "Save here" });
+      const dir = await pickFolderDialog({ title: "Choose a folder to save into", confirm: "Save here" });
       if (!dir) return null;
       const name = await promptText({ title: "Save as", label: "File name", value: suggested, placeholder: "filename.ext" });
       if (!name) return null;
@@ -11467,6 +11572,31 @@ function loadCachedConfig(): void {
 // just-connected provider's models never appeared until a manual refresh.
 let configWarmTries = 0;
 let configWarmTimer: number | null = null; // the single scheduled re-poll (one chain at a time)
+// P-MODELDEF: once per launch, land on the highest-LEVEL model for the ACTIVE provider - unless the user
+// has an explicit sticky choice (chosenModel). Fixes "the default sits on Opus 4.8 / GPT-5.5 instead of
+// the provider's top model (Fable 5 / GPT-5.6)": omp reports its OWN default and we merely mirror it, so
+// we bump it to the best in-family model. Runs only on a real ADOPTED list; never overrides a live turn
+// or the user's saved pick; under AskSage lockdown it stays on a gov model. Fire-and-forget, guarded once.
+let defaultModelApplied = false;
+async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promise<void> {
+  if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming) return;
+  defaultModelApplied = true;
+  // loadAsksage / auth race loadConfig at boot; both gate what's selectable, so make sure they're known.
+  if (state.asksage == null) { const a = await bridge.asksage().catch(() => null); if (a) state.asksage = a; }
+  if (!state.auth) { const au = await bridge.auth().catch(() => null); if (au) state.auth = au; }
+  const chosen = (await bridge.chosenModel().catch(() => "")) || "";
+  const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value));
+  if (!candidates.length) return;
+  const inList = (v: string) => candidates.some((o) => o.value === v);
+  // Respect an explicit prior choice; else the highest-level model in the CURRENT provider's family (version
+  // numbers only compare WITHIN a family - a GPT "5.6" is not a Claude "fable-5"=5.0).
+  const curFam = familyOf(modelOpt.currentValue).id;
+  let desired = chosen && inList(chosen) ? chosen : (topModel(candidates, (v) => familyOf(v).id === curFam)?.value ?? "");
+  if (state.asksage?.only && desired && !isGovModel(desired)) {
+    desired = topModel(candidates, (v) => isGovModel(v) && familyOf(v).id === curFam)?.value ?? topModel(candidates, isGovModel)?.value ?? desired;
+  }
+  if (desired && desired !== modelOpt.currentValue) await applyConfig("model", desired, { system: true });
+}
 async function loadConfig(newCycle = true): Promise<void> {
   if (newCycle && configWarmTimer !== null) { window.clearTimeout(configWarmTimer); configWarmTimer = null; }
   try {
@@ -11501,6 +11631,7 @@ async function loadConfig(newCycle = true): Promise<void> {
     }
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
+    if (step.action === "adopt") void maybeApplyDefaultModel(model); // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
     updateComposerTools();
     void syncMode();
     pickerRedraw?.(); // if a picker is open on the cached list, refresh it with the live one
@@ -11593,7 +11724,7 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   } finally { document.removeEventListener("visibilitychange", onVisible); }
 }
 
-async function applyConfig(configId: string, value: string): Promise<void> {
+async function applyConfig(configId: string, value: string, opts: { system?: boolean } = {}): Promise<void> {
   // P-ACP.2/3: the mode control is the client 3-way Plan/Ask/Agent; it sets omp's session mode +
   // the permission posture in one call, not an omp config option.
   if (configId === "mode") {
@@ -11613,6 +11744,9 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   if (opt) opt.currentValue = value;
   if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(value); renderStatus(); if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); /* P-COLLAB.14: mirror to direct-P2P edit guests */ }
   updateComposerTools();
+  // P-MODELDEF: a genuine USER pick becomes the sticky default (restored on the next launch). A SYSTEM
+  // switch (lockdown clamp, no-response fallback, collab-guest mirror, boot default-select) never does.
+  if (configId === "model" && !opts.system) void bridge.setChosenModel(value).catch(() => {});
   void bridge.setConfig(configId, value)
     .then((cfg) => {
       state.config = cfg;
@@ -11623,9 +11757,13 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   // P-IDE.1e (ADR-0109): selecting Fable 5 raises a persistent privacy notice (no absolute privacy from the
   // U.S. government) instead of the routine "applied" toast.
   if (configId === "model" && shortModelId(value) === FABLE_ID) {
-    showToast({ title: "Fable 5 selected - privacy notice", desc: `${FABLE_PRIVACY_WARN} New turns use Fable 5; you can switch models anytime.`, tone: "danger", actions: [{ label: "I understand" }], timeout: 0 });
+    // Explicit pick raises a persistent modal; a SYSTEM select (e.g. the boot default) shows a brief timed
+    // notice so a serious USG-privacy warning is not a blocking modal on every launch.
+    if (opts.system) showToast({ title: "Fable 5 selected - privacy notice", desc: FABLE_PRIVACY_WARN, tone: "danger", timeout: 8000 });
+    else showToast({ title: "Fable 5 selected - privacy notice", desc: `${FABLE_PRIVACY_WARN} New turns use Fable 5; you can switch models anytime.`, tone: "danger", actions: [{ label: "I understand" }], timeout: 0 });
     return;
   }
+  if (opts.system) return; // a system switch is automatic - no routine "applied" toast noise on boot
   showToast({ title: `${opt?.name ?? configId} → ${label}`, desc: configId === "model" ? "New turns use this model." : "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
 }
 
@@ -11824,12 +11962,11 @@ const MODEL_INFO: Record<string, ModelInfo> = {
 const stripProvider = (v: string) => v.replace(/^[^/]*\//, "");
 const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemini: "Google Gemini", gpt: "OpenAI GPT", "gpt-o": "OpenAI o-series", rag: "AskSage RAG", other: "this provider" };
 function inferModelInfo(value: string): ModelInfo {
-  const s = stripProvider(value).toLowerCase();
   const fam = familyOf(value).id;
-  // `\bmini` (word boundary) so "ge·mini" no longer false-matches as small (it was downgrading EVERY
-  // inferred Gemini - incl. the Pro tiers - to 3 stars); "-mini" in gpt-5-mini etc. still matches.
-  const small = /\bmini|nano|lite|flash|haiku|oss|-8b|-7b/.test(s);
-  const big = !small && /opus|pro|max|fable|mythos|ultra|gpt-5|gpt-o/.test(s);
+  // Capability tier from the SHARED heuristic (model_families.capabilityTier) so the hover-card iq stars
+  // match the picker/default "level" ranking exactly: 2 = flagship, 1 = balanced, 0 = small/fast.
+  const t = capabilityTier(value);
+  const small = t === 0, big = t === 2;
   const iq = big ? 5 : small ? 3 : 4;
   const exp = big ? 4 : small ? 1 : 3;
   const ctxNum = modelCtx(value);
@@ -11915,7 +12052,7 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // Final safety: an omp catalog can list the same model twice under one provider. Drop rows that would
   // render IDENTICALLY (same gov/provider + same display name) - the user can't tell them apart anyway.
   const seen = new Set<string>();
-  const deduped = sortGovFirstNewest(list).filter((o) => {
+  const deduped = sortGovFirstByLevel(list).filter((o) => {
     const key = `${isGovModel(o.value) ? "gov" : providerLabel(o.value)}|${cleanModelName(o.name)}`;
     if (seen.has(key)) return false;
     seen.add(key);

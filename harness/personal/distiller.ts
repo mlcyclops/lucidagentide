@@ -26,7 +26,11 @@ export interface FactCandidate {
   confidence?: number; // 0..1
   relations?: { to: string; relation: string }[];
 }
-export type Extractor = (turn: { user: string; assistant: string }) => FactCandidate[] | Promise<FactCandidate[]>;
+export type Extractor = (turn: { user: string; assistant: string; signal?: AbortSignal }) => FactCandidate[] | Promise<FactCandidate[]>;
+
+/** One model round-trip for the model extractor. `signal` lets a batch import stop mid-call
+ *  (P-KG-INGEST.5, ADR-0264) instead of waiting out the whole completion. */
+export type CompleteFn = (system: string, user: string, opts?: { signal?: AbortSignal }) => Promise<string>;
 
 const clip = (s: string, n = 140): string => s.replace(/\s+/g, " ").trim().slice(0, n);
 
@@ -89,11 +93,12 @@ export const EXTRACT_SYSTEM =
   '{"to":"rust","relation":"used for"}. Use it to show how the user\'s facts connect. ' +
   "Return [] if there is nothing durable.";
 
-export function modelExtractor(callModel: (system: string, user: string) => Promise<string>): Extractor {
+export function modelExtractor(callModel: CompleteFn): Extractor {
   const KINDS = new Set<UserKind>(["user:preference", "user:decision", "user:interest", "user:behavior", "user:personality", "user:link", "user:skill", "user:goal", "user:relationship"]);
-  return async ({ user }) => {
+  return async ({ user, signal }) => {
+    if (signal?.aborted) return [];
     let raw: string;
-    try { raw = await callModel(EXTRACT_SYSTEM, user); } catch { return []; }
+    try { raw = await callModel(EXTRACT_SYSTEM, user, { signal }); } catch { return []; }
     const start = raw.indexOf("["), end = raw.lastIndexOf("]");
     if (start < 0 || end <= start) return [];
     let arr: unknown;
@@ -141,15 +146,17 @@ const CROSS_LINK_STOP = new Set([
 export async function distillTurn(
   store: PersonalStore,
   scanner: ScannerClient,
-  opts: { userText: string; assistantText?: string; scope: PersonalScope; sessionId?: string; runId?: string; extract: Extractor; telemetry?: Telemetry; persist?: boolean },
+  opts: { userText: string; assistantText?: string; scope: PersonalScope; sessionId?: string; runId?: string; extract: Extractor; telemetry?: Telemetry; persist?: boolean; signal?: AbortSignal },
 ): Promise<DistillResult> {
+  // 0. Cancelled before we started: learn nothing, and do NOT count it as a gate block.
+  if (opts.signal?.aborted) return { learned: 0, blocked: false, reason: "cancelled" };
   // 1. Scan the SOURCE (the user's own text). Anything not clean+trusted => learn nothing.
   const decision = await scanAndDecide(scanner, opts.userText, DEFAULT_POLICY);
   if (decision.block || decision.trustLabel !== "trusted") {
     return { learned: 0, blocked: true, reason: decision.block ? decision.reason : `source is ${decision.trustLabel}` };
   }
   // 2. Extract candidates, then write the clean ones into the active compartment.
-  const candidates = await opts.extract({ user: opts.userText, assistant: opts.assistantText ?? "" });
+  const candidates = await opts.extract({ user: opts.userText, assistant: opts.assistantText ?? "", signal: opts.signal });
   // Snapshot the graph BEFORE this turn writes to it, so cross-turn linking (below) can tell which
   // entities are pre-existing and which links already exist.
   const before = store.graph();

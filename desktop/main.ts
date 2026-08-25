@@ -215,12 +215,20 @@ function createWindow(): void {
   win.on("closed", () => (win = null));
 }
 
-ipcMain.handle("lucid:pickFolder", async (e) => {
+ipcMain.handle("lucid:pickFolder", async (e, opts: unknown) => {
   const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
   // Native OS folder dialog: browse anywhere on the machine and CREATE a new folder from within the dialog.
   // `createDirectory` enables the New Folder button on macOS (Windows always offers it); the whole tree is
   // reachable (no home confinement).
-  const r = await dialog.showOpenDialog(w!, { properties: ["openDirectory", "createDirectory"], title: "Choose or create a workspace folder" });
+  // P-KG-INGEST.5 (ADR-0252): title/defaultPath/buttonLabel come from the renderer so EVERY folder picker
+  // (workspace, chat-history import, pack export) is this real Explorer dialog, not the in-app browser.
+  const o = (opts ?? {}) as { title?: unknown; defaultPath?: unknown; buttonLabel?: unknown };
+  const r = await dialog.showOpenDialog(w!, {
+    properties: ["openDirectory", "createDirectory"],
+    title: typeof o.title === "string" ? o.title : "Choose or create a workspace folder",
+    ...(typeof o.defaultPath === "string" && o.defaultPath ? { defaultPath: o.defaultPath } : {}),
+    ...(typeof o.buttonLabel === "string" && o.buttonLabel ? { buttonLabel: o.buttonLabel } : {}),
+  });
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 

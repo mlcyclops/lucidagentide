@@ -40,6 +40,7 @@ export interface AgentTemplateInfo {
   tools: string[];
 }
 import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
+import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 export type { RestoredTurn };
 import type { SkillRoot } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097): skill source roots
@@ -167,6 +168,27 @@ export interface ConfigOption {
   id: string; name: string; category: string; type: string;
   currentValue: string; options: { value: string; name: string }[];
 }
+
+// P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
+// at this one boundary, like ChatEvent).
+export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
+export interface LaneView {
+  id: string; name: string; cwd: string; model: string; status: LaneStatus;
+  createdAt: number; lastActivityAt: number; turns: number;
+  pendingApproval?: { summary: string };
+}
+export type LaneEvent =
+  | { type: "token" | "thinking"; text: string }
+  | { type: "tool"; name: string; detail: string }
+  | { type: "permission"; summary: string }
+  | { type: "status"; status: LaneStatus }
+  | { type: "done" }
+  | { type: "error"; message: string };
+export interface FleetStatusView {
+  lanes: LaneView[];
+  resources: { cpuPct: number | null; memPct: number | null; watermarkPct: number; maxLanes: number };
+  masterModel: string;
+}
 // P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
 export interface VoiceSettingsView {
   sttProvider: "elevenlabs" | "whisper";
@@ -204,7 +226,12 @@ export interface TtsEngineView {
   reason: string;
 }
 // P-STT.2b: managed on-device Whisper status for the no-code Voice card.
-export interface WhisperTierView { tier: string; label: string; runnable: boolean; installed: boolean }
+// P-STT.6 (ADR-0267): `offered` = installable through the picker (tiny/base/small; medium/large are
+// remove-only), `reason` explains a grayed-out (non-runnable) tier, `diskMB` = real installed size.
+export interface WhisperTierView {
+  tier: string; label: string; runnable: boolean; installed: boolean;
+  offered: boolean; reason: string; approxMB: number; diskMB: number | null;
+}
 export interface WhisperStatusView {
   capable: boolean; recommended: string | null; summary: string;
   /** The tier used when nothing is picked (tiny); the picker preselects it when no server runs. */
@@ -335,11 +362,14 @@ export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; fac
 export interface CodeGraphView { level: "file" | "symbol"; ingested: boolean; root: string; fileCount: number; symbolCount: number; edgeCount: number; updatedAt: number; nodes: GraphNode[]; edges: GraphEdge[] }
 export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model"; cancelled?: boolean }
 // P-KG-INGEST.1 (ADR-0076): the background import job - start returns a jobId; status is polled for a live countdown.
+/** Options for the native folder dialog (P-KG-INGEST.5, ADR-0264). */
+export interface PickFolderOpts { title?: string; defaultPath?: string; buttonLabel?: string }
 export interface PersonalImportStart { ok: boolean; jobId?: string; error?: string }
 export interface PersonalImportJob {
   jobId: string; state: "running" | "done" | "failed" | "cancelled"; vendor?: string;
   messages: number; totalMessages: number; conversations: number; totalConversations: number;
   learned: number; blocked: number; startedAt: number; updatedAt: number;
+  cancelRequestedAt?: number; // P-KG-INGEST.5: Stop pressed, run unwinding
   result?: PersonalImportResult; error?: string;
 }
 export interface PersonalImportEstimate { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; userMessages?: number; userChars?: number }
@@ -586,6 +616,8 @@ export interface LucidBridge {
   whisperInstall(tier?: string): Promise<WhisperActionView | null>;
   whisperStart(tier?: string): Promise<WhisperActionView | null>;
   whisperStop(): Promise<{ ok: boolean } | null>;
+  /** P-STT.6 (ADR-0267): delete a downloaded model's weights (never the running tier - stop first). */
+  whisperRemove(tier: string): Promise<WhisperActionView | null>;
   speak(text: string, voiceId?: string, provider?: string): Promise<{ audioB64: string | null; mime: string; note: string } | null>;
   /** P-GOAL.14 (ADR-0112): list past After-Action Reports, and read one by its workspace-relative path. */
   pastReports(): Promise<{ rel: string; id: string; goal: string; outcome: string; updatedAt: number }[] | null>;
@@ -672,6 +704,10 @@ export interface LucidBridge {
   /** Respawn omp + re-read its model list (after connecting a provider via OAuth or key). */
   refreshConfig(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
+  // P-MODELDEF: the user's explicitly-chosen model ("" if never chosen). getChosenModel reads it;
+  // setChosenModel persists it on a genuine user pick, so it survives across launches.
+  chosenModel(): Promise<string>;
+  setChosenModel(value: string): Promise<string | null>;
   // P-ACP.2 (ADR-0027): ACP session modes (Plan / Agent), switched via session/set_mode.
   modes(): Promise<ModeState | null>;
   setMode(modeId: string): Promise<ModeState | null>;
@@ -681,6 +717,14 @@ export interface LucidBridge {
   // P-ACP.4: Stop the in-flight turn (interrupt reply + tool calls).
   cancelChat(): Promise<unknown>;
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
+  // P-FLEET.L1: local lanes - concurrent headless LUCID agents in the fleet grid dashboard.
+  fleetStatus(): Promise<FleetStatusView | null>;
+  fleetSpawn(opts: { cwd: string; model?: string; name?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
+  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void): Promise<void>;
+  fleetAnswer(laneId: string, allow: boolean): Promise<{ ok: boolean } | null>;
+  fleetCancel(laneId: string): Promise<{ ok: boolean } | null>;
+  fleetStop(laneId: string): Promise<{ ok: boolean } | null>;
+  fleetSetModel(laneId: string, model: string): Promise<{ ok: boolean; model?: string; reason?: string } | null>;
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<SkillView[] | null>;
   // P-SKILL.4 (ADR-0097): the directory's per-skill management menu (all confined, all additive).
@@ -822,7 +866,17 @@ export interface LucidBridge {
   workspace(): Promise<WorkspaceInfo | null>;
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
   cloneWorkspace(url: string, pat?: string): Promise<WorkspaceInfo | null>; // pat: optional inline git token (ADR-0216)
-  pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
+  /** Remove one folder from the recents list (does NOT change the active workspace, so no respawn). */
+  removeRecentWorkspace(path: string): Promise<WorkspaceInfo | null>;
+  /** Native OS folder dialog in Electron (null in a plain browser). `title`/`buttonLabel` let each
+   *  caller label its own dialog, so every folder pick is the real Explorer/Finder window. */
+  pickFolder(opts?: PickFolderOpts): Promise<string | null>;
+  /** P-FS.2 (ADR-0265): native OS folder dialog via the LOCAL backend when the GUI runs in a plain
+   *  browser (LucidAgentIDE.bat / lucid.exe + default browser). The server runs on the same machine
+   *  (loopback bind), so it opens the real Explorer / Finder / zenity dialog itself. `supported:false`
+   *  (or null: request failed) = fall back to the in-app browser; `supported:true, path:null` = the
+   *  user CANCELLED, never re-prompt. */
+  pickFolderNative(opts?: PickFolderOpts): Promise<NativePickResult | null>;
   // P-NETWL.1 (ADR-0106): native FILE picker + OS-encrypted credential vault. All Electron-only; in a plain
   // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
   pickFile(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -907,7 +961,7 @@ export interface WhitelistEntryView {
 interface NativeShell {
   isElectron?: boolean;
   setZoom?(factor: number): void;
-  pickFolder?(): Promise<string | null>;
+  pickFolder?(opts?: PickFolderOpts): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   openExternal?(url: string): Promise<boolean>;
   revealPath?(path: string): Promise<boolean>;
@@ -1098,6 +1152,7 @@ export const bridge: LucidBridge = {
   whisperInstall: (tier) => post("/api/whisper/install", { tier }),
   whisperStart: (tier) => post("/api/whisper/start", { tier }),
   whisperStop: () => post("/api/whisper/stop", {}),
+  whisperRemove: (tier) => post("/api/whisper/remove", { tier }), // P-STT.6 (ADR-0267)
   speak: (text, voiceId, provider) => post("/api/tts/speak", { text, voiceId, provider }),
   pastReports: () => getData("/api/goal/reports"),
   pastReport: (rel) => getData(`/api/goal/reports?rel=${encodeURIComponent(rel)}`),
@@ -1133,12 +1188,28 @@ export const bridge: LucidBridge = {
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   refreshConfig: async () => (await post("/api/config/refresh", {})) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
+  chosenModel: async () => (await getData("/api/model/chosen")) ?? "",
+  setChosenModel: (value) => post("/api/model/chosen", { value }),
   modes: () => getData("/api/modes"),
   setMode: (modeId) => post("/api/modes", { modeId }),
   setUiMode: (uiMode) => post("/api/uimode", { uiMode }),
   respondPermission: (id, optionId) => post("/api/chat/permission", { id, optionId }),
   cancelChat: () => { chatAbort?.abort(); return post("/api/chat/cancel", {}); },
   cancelGoal: () => post("/api/goal/cancel", {}),
+  // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
+  fleetStatus: () => getData("/api/fleet/status"),
+  fleetSpawn: (opts) => post("/api/fleet/spawn", opts),
+  fleetPrompt: (laneId, text, onEvent) => {
+    // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are
+    // structurally valid LaneEvents too, so the sink types unify at this one boundary. Named cast per
+    // house rule: structurally-compatible tagged unions the reader's ChatEvent signature can't express.
+    const sink = onEvent as (e: ChatEvent) => void;
+    return streamNdjson("/api/fleet/prompt", { laneId, text }, sink);
+  },
+  fleetAnswer: (laneId, allow) => post("/api/fleet/answer", { laneId, allow }),
+  fleetCancel: (laneId) => post("/api/fleet/cancel", { laneId }),
+  fleetStop: (laneId) => post("/api/fleet/stop", { laneId }),
+  fleetSetModel: (laneId, model) => post("/api/fleet/model", { laneId, model }),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
   userCommands: async () => (await getData("/api/usercommand")) ?? [], // P-CMD.1
@@ -1307,7 +1378,9 @@ export const bridge: LucidBridge = {
   workspace: () => getData("/api/workspace"),
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url, pat) => post("/api/workspace/clone", { url, ...(pat ? { pat } : {}) }),
-  pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
+  removeRecentWorkspace: (path) => post("/api/workspace/recent-remove", { path }),
+  pickFolder: (opts) => (shell?.pickFolder ? shell.pickFolder(opts) : Promise.resolve(null)),
+  pickFolderNative: (opts) => post("/api/fs/pickfolder", opts ?? {}), // P-FS.2 (ADR-0265)
   pickFile: (opts) => (shell?.pickFile ? shell.pickFile(opts) : Promise.resolve(null)), // P-NETWL.1
   credStore: (input) => (shell?.credStore ? shell.credStore(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.1 (fail-closed in browser)
   credStoreFile: (input) => (shell?.credStoreFile ? shell.credStoreFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.2

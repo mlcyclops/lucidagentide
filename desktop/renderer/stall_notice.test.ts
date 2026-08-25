@@ -73,7 +73,8 @@ describe("the cutoff stays dead (inverse lockstep with the backend)", () => {
   });
   test("the ACP client rejects in-flight requests when the child dies (the event-driven replacement)", () => {
     const src = readFileSync(join(import.meta.dir, "..", "acp.ts"), "utf8");
-    expect(src).toContain("failPending");
-    expect(src).toMatch(/on\("exit",[\s\S]{0,300}failPending/);
+    expect(src).toContain("private die(");
+    expect(src).toMatch(/on\("exit",[\s\S]{0,200}die\(/);
+    expect(src).toMatch(/on\("error",[\s\S]{0,200}die\(/); // spawn failure emits no exit - both must drain
   });
 });

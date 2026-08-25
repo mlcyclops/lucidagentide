@@ -412,6 +412,10 @@ demo-P-CHAT.1: ## P-CHAT.1 (ADR-0104): inline expandable code preview for tool s
 demo-P-FS.1: ## P-FS.1 (ADR-0103): full-tree workspace folder browser - browse above home to the FS root / drives, with an optional managed workspaceRoots confinement
 	$(BUN) run desktop/scripts/demo_p_fs_1.ts
 
+.PHONY: demo-P-FS.2
+demo-P-FS.2: ## P-FS.2 (ADR-0253/0254): the browser build opens the REAL OS folder dialog through the local backend (modern Explorer picker, marker-anchored parse, escaped/argv-passed titles, cancel never re-prompts) + the frozen data-integration steer (prefix v10) routes prompt-stuffed datasets to MCP / RAG / secure vendor connections
+	$(BUN) test desktop/native_dialog.test.ts harness/prompt/assembler.test.ts
+
 .PHONY: demo-P-NETWL.1
 demo-P-NETWL.1: ## P-NETWL.1 (ADR-0106): curated network whitelist (domain wildcards + IP CIDR, internal/external, trust scopes) auto-allows egress under the managed ceiling; OS-encrypted credential vault fail-closes with no plaintext
 	$(BUN) run desktop/scripts/demo_p_netwl_1.ts
@@ -470,8 +474,16 @@ demo-P-AGENT.8.1: ## P-AGENT.8.1 (ADR-0134): secret guardrail — agents DECLARE
 	$(BUN) run harness/scripts/demo_p_agent_8_1.ts
 
 .PHONY: demo-P-AGENTFW.1
-demo-P-AGENTFW.1: ## P-AGENTFW.1 (ADR-0147): agent-firewall MCP — scans both directions vs a remote ACP agent (hermes/openclaw); quarantines poisoned replies, neutralizes delimiter breakout, blocks outbound hidden vectors, fails closed when the scanner dies
+demo-P-AGENTFW.1: ## P-AGENTFW.1 (ADR-0147): agent-firewall MCP \u2014 scans both directions vs a remote ACP agent (hermes/openclaw); quarantines poisoned replies, neutralizes delimiter breakout, blocks outbound hidden vectors, fails closed when the scanner dies
 	$(BUN) run harness/scripts/demo_pagentfw1.ts
+
+.PHONY: demo-P-FLEET.1
+demo-P-FLEET.1: ## P-FLEET.1 (ADR-0268): async job handles through the agent-firewall - dispatch/job_status/cancel + bounded-wait prompt over ONE gated path; fan-out across connections, serialization within one, fail-closed per job, deadline cleanup, idempotent retries
+	$(BUN) run harness/scripts/demo_pfleet1.ts
+
+.PHONY: demo-P-FLEET.L1
+demo-P-FLEET.L1: ## P-FLEET.L1: local lanes - concurrent gated headless LUCID agents under the 75% headroom guard, fail-closed approvals (needs-approval glow), cancel/stop hygiene, metadata-only fleet status for the master agent
+	$(BUN) run harness/scripts/demo_pfleetl1.ts
 
 .PHONY: demo-P-MCP-GATE.1
 demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate — poisoned MCP result withheld, clean result delimited+labeled untrusted, LOCAL tool results untouched (source-scoped), fail-closed
@@ -611,6 +623,10 @@ demo-P-LOCAL.4: ## P-LOCAL.4: one-click local-model presets (Laguna 2.1 Poolside
 .PHONY: demo-P-STT.2
 demo-P-STT.2: ## P-STT.2: guided on-device Whisper - hardware-capability gate (run only where it fits), model catalog + install/serve plan, whisper.cpp binary resolution, and the download-with-integrity flow (all pure/injected; no network, no binary)
 	$(BUN) run desktop/scripts/demo_p_stt_2.ts
+
+.PHONY: demo-P-STT.6
+demo-P-STT.6: ## P-STT.6 (ADR-0255): Whisper model housekeeping - the picker offers tiny/base/small only (medium/large proved slow + buggy through the local server), grays out tiers the hardware can't run (reason shown, never hidden), lists every downloaded model with its real on-disk size + a Remove button (legacy medium/large installs reclaim disk; the running tier is refused until stopped), and the recommendation/summary clamp to the offered set
+	$(BUN) test desktop/whisper_install.test.ts desktop/whisper_runtime.test.ts
 
 .PHONY: demo-P-SECACK.1
 demo-P-SECACK.1: ## P-SECACK.1 (ADR-0170): reviewed security rows leave the active view - GUI-owned ack ledger (releases NOTHING, audit kept), findings-seen watermark counts only new findings, and the right-click Cut/Copy/Paste menu for the prompt bar (no Cut/Copy on password fields)
@@ -764,6 +780,9 @@ demo-P-WINBOOT.2: ## P-WINBOOT.2 (ADR-0260): the permanent fix - the engine ship
 .PHONY: demo-P-WINBOOT.2C
 demo-P-WINBOOT.2C: ## P-WINBOOT.2C (ADR-0261): the Program Files boot GATE - stages the packaged repo (or a source-built skeleton) into a Program Files-ACL location, denies the current user the specific write/delete rights (never generic W - that denies SYNCHRONIZE and EPERMs CreateProcess itself), PROVES the denial took, then requires the compiled bin/lucid-engine to answer /api/health and serve the prebuilt renderer bundle from the protected tree; wired STRICT into build-desktop.yml's Windows runner so the v1.12.0 brick class fails the build, never a user
 	$(BUN) run desktop/scripts/demo_p_winboot_2c.ts
+.PHONY: demo-P-KG-INGEST.5
+demo-P-KG-INGEST.5: ## P-KG-INGEST.5 (ADR-0264): the chat-history ingest can no longer hang and Stop always stops - ACP requests are bounded (timeout + signal) and drained when the omp child exits (an unanswered `initialize` used to freeze the import at 0/500 forever), cancel is checked per MESSAGE and reaches the extractor so an in-flight model call is interrupted rather than awaited, a wedged job is force-cancelled after a grace period so single-flight releases and the user can retry without restarting, and the pill reports a silent run as STALLED instead of rendering a healthy-looking bar
+	$(BUN) run desktop/scripts/demo_p_kg_ingest_5.ts
 .PHONY: demo-P-EVAL.2
 demo-P-EVAL.2: ## P-EVAL.2 (ADR-0187): the API-latency CAPTURE + PERSISTENCE pipeline - the GUI-side sink turns t_sent/t_first_token/t_end into a LatencySample appended to an append-only JSONL (the GUI opens the observer DB read-only), the frozen migration 0011 creates api_latency + eval_metrics + the latency_rollup view, the single-writer ingest loads the JSONL idempotently, and readLatencyCalls round-trips the rows back into evals.ts's ApiLatencyCall (ok-only) so rollupLatency + render stay the P-EVAL.1 source of truth
 	$(BUN) run harness/scripts/demo_peval2.ts

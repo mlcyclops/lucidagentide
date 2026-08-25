@@ -42,6 +42,10 @@ export interface RemoteAgentEntry {
   remoteUrl?: string;
   /** How to answer the remote's permission asks: "deny" (default, fail-closed) or "allow". */
   permissionPolicy?: "deny" | "allow";
+  /** P-FLEET.1 (ADR-0268): deadline for ONE worker turn, ms. Default 600_000 (P-STALL.1's ten minutes). */
+  jobTimeoutMs?: number;
+  /** P-FLEET.1: queued jobs beyond which dispatch refuses. Default 8. */
+  maxQueue?: number;
   enabled: boolean;
 }
 
@@ -80,6 +84,8 @@ export function upsertRemoteAgent(e: {
   env?: Record<string, string>;
   remoteUrl?: string;
   permissionPolicy?: "deny" | "allow";
+  jobTimeoutMs?: number;
+  maxQueue?: number;
   enabled?: boolean;
 }): RemoteAgentEntry {
   const agents = listRemoteAgents();
@@ -94,6 +100,8 @@ export function upsertRemoteAgent(e: {
     env: e.env && Object.keys(e.env).length ? e.env : undefined,
     remoteUrl: e.remoteUrl?.trim() || undefined,
     permissionPolicy: e.permissionPolicy === "allow" ? "allow" : undefined,
+    jobTimeoutMs: typeof e.jobTimeoutMs === "number" && e.jobTimeoutMs > 0 ? e.jobTimeoutMs : undefined,
+    maxQueue: typeof e.maxQueue === "number" && e.maxQueue > 0 ? Math.floor(e.maxQueue) : undefined,
     enabled: e.enabled ?? true,
   };
   const i = agents.findIndex((a) => a.id === id);

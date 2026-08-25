@@ -15,11 +15,14 @@
 //   breakout    → replies embedding a literal UNTRUSTED_CONTENT_END (the firewall must neutralize it)
 //   permission  → sends the client a session/request_permission FIRST (the firewall must deny it), then
 //                 replies with the recorded outcome so a test can assert we denied.
+//   hang        → NEVER answers session/prompt (P-FLEET.1 deadline checks) - unless a session/cancel
+//                 arrives, which is answered faithfully with stopReason "cancelled" like a real agent.
 //
 // stdout is reserved for ACP JSON-RPC; logs go to stderr.
 
 const MODE = process.env.FAKE_ACP_MODE ?? "clean";
 const ZWSP = String.fromCodePoint(0x200b);
+let hangingPromptId: number | undefined;
 let buf = "";
 let nextId = 9000;
 const pending = new Map<number, (result: unknown) => void>();
@@ -65,10 +68,17 @@ async function handle(line: string): Promise<void> {
   if (method === "session/prompt") {
     const sessionId = params?.sessionId ?? "fake-session-1";
     const promptText = extractText(params?.prompt);
+    if (MODE === "hang") { hangingPromptId = id; return; } // never answer - the client's deadline must fire
     const outcome = MODE === "permission" ? await requestPermission(sessionId) : undefined;
     write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", title: "search", status: "completed" } } });
     write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: replyText(MODE, promptText, outcome) } } } });
     write({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+    return;
+  }
+  // A faithful agent answers session/cancel by finishing the outstanding prompt as "cancelled".
+  if (method === "session/cancel" && hangingPromptId !== undefined) {
+    write({ jsonrpc: "2.0", id: hangingPromptId, result: { stopReason: "cancelled" } });
+    hangingPromptId = undefined;
     return;
   }
   // Any other request gets an empty ack; notifications (no id) are ignored.

@@ -15,7 +15,7 @@ import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
-import { AGENT_BUILDER_POLICY, BUILD_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
+import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { previewActivityLabel } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
@@ -132,6 +132,9 @@ const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
 const PREVIEW_EXT = join(REPO, "harness", "omp", "preview_extension.ts");
 const AGENT_BUILDER_EXT = join(REPO, "harness", "omp", "agent_builder_extension.ts"); // P-AGENT.8.2: chat -> canvas handoff tool
 const SLASH_CMD_EXT = join(REPO, "harness", "omp", "slash_command_extension.ts"); // P-CMD.1: slash_command_create tool
+// P-FLEET.L1: registers the read-tier `fleet_status` tool so the master agent's model can see the local
+// lane fleet (metadata only). Only added when the file exists - a missing extension never blocks omp launch.
+const FLEET_EXT = join(REPO, "harness", "omp", "fleet_extension.ts");
 // P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
 // (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
 const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
@@ -171,10 +174,60 @@ function ompBin(): string {
   for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
   return "omp";
 }
+
+/** P-FLEET.L1: the gated omp argv for a LOCAL LANE. Same fail-closed security gate (-e GATE, invariant 4)
+ *  and MCP result gate as the master session, WITHOUT the renderer-coupled extension surfaces (preview /
+ *  agent-builder / slash-command / fleet_status - a lane has no canvas, and a lane calling fleet_status
+ *  would recurse). ONE source of truth for the gate path lives in this file, so a lane can never spawn
+ *  ungated by path drift. */
+export function fleetLaneArgv(): { cmd: string; args: string[] } {
+  const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
+  const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...isoCfg, "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  return { cmd: argv[0]!, args: argv.slice(1) };
+}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // getConfig() caps the session warm-up at this bound so the model picker never blocks on a slow/hung
 // omp session init — it returns the current config and the renderer re-polls for the live list.
 const CONFIG_WARM_MS = 6000;
+// P-KG-INGEST.5 (ADR-0264): hard bounds on the ACP handshake / session lifecycle calls. Before these, a
+// spawned-but-mute omp left `initialize` or `session/new` pending FOREVER, which wedged the whole chat
+// history import at "0/500 messages" with no way to stop it. Prompts are excluded: they keep their own
+// idle clock (a real turn can legitimately think for minutes).
+const HANDSHAKE_MS = 20_000; // initialize
+const SESSION_MS = 30_000;   // session/new, session/set_config_option
+// Whole-completion ceiling for ONE utility extraction (spawn + handshake + session + prompt). The import
+// runs hundreds of these back-to-back behind utilLock, so one wedged call must never stall the queue.
+const COMPLETE_MS = 180_000;
+
+/** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
+export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal };
+
+/** A composed abort: fires after `ms`, or as soon as `parent` aborts. dispose() clears the timer. */
+export type Deadline = { readonly signal: AbortSignal; dispose(): void };
+
+function deadlineSignal(ms: number, parent?: AbortSignal): Deadline {
+  const ctl = new AbortController();
+  const onParent = () => ctl.abort(new Error("cancelled"));
+  const timer = setTimeout(() => ctl.abort(new Error(`completion exceeded ${ms}ms`)), ms);
+  timer.unref?.();
+  if (parent?.aborted) onParent();
+  else parent?.addEventListener("abort", onParent, { once: true });
+  return { signal: ctl.signal, dispose() { clearTimeout(timer); parent?.removeEventListener("abort", onParent); } };
+}
+
+/** Wait for the chat gate to go idle, but give up the moment the caller aborts (a chat turn whose end()
+ *  never fires must not park a background extraction forever). Resolves either way; the caller's next
+ *  bounded request observes the abort and unwinds. */
+function whenIdleOrAborted(gate: ChatGate, signal?: AbortSignal): Promise<void> {
+  if (!signal) return gate.whenIdle();
+  if (signal.aborted) return Promise.resolve();
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const done = () => { signal.removeEventListener("abort", done); resolve(); };
+  signal.addEventListener("abort", done, { once: true });
+  void gate.whenIdle().then(done);
+  return promise;
+}
 
 export type ChatEvent =
   | { type: "token"; text: string }
@@ -404,11 +457,12 @@ class Backend {
         if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
-        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}`;
+        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}\n\n${DATA_INTEGRATION_POLICY}`;
         const previewArgs = existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []; // P-PREVIEW.3a (draft)
         const codegraphArgs = loadSettings().codeGraphAgent && existsSync(CODEGRAPH_EXT) ? ["-e", CODEGRAPH_EXT] : []; // P-KG-SYM.1: opt-in
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
         const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
+        const fleetArgs = existsSync(FLEET_EXT) ? ["-e", FLEET_EXT] : []; // P-FLEET.L1: fleet_status
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
@@ -417,7 +471,7 @@ class Backend {
         // requires isolation, in which case exec fail-closes (this.sandboxExecBlock) rather than runs
         // unisolated: the spawn still happens (chat/read tools stay useful) but every exec permission
         // is denied at the session/request_permission seam below.
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), spawnPlan.env);
         acp.onNotify = (method, params) => {
@@ -702,9 +756,19 @@ class Backend {
         // P-EXEC.2 (ADR-0110): advertise `elicitation.form` so omp delivers its per-tool approval (and
         // plan-mode approval) as an `elicitation/create` we can answer (see answerElicitation). Without it
         // omp's tool wrapper silently denies every gated tool call ("Tool call denied by user").
-        await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, elicitation: { form: {} } } });
+        try {
+          await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, elicitation: { form: {} } } }, { timeoutMs: HANDSHAKE_MS });
+        } catch (e) {
+          try { acp.stop(); } catch { /* ignore */ }
+          throw e;
+        }
         this.acp = acp;
-      })();
+      })().catch((e) => {
+        // A failed handshake must not poison every later call: drop the memoized promise so the NEXT
+        // start() respawns. Without this, one timed-out initialize disables chat until app restart.
+        this.starting = null;
+        throw e;
+      });
     }
     await this.starting;
   }
@@ -721,7 +785,7 @@ class Backend {
         // P-MODEL.1: capture the persisted last-used model BEFORE session/new - syncModelEnv() below stamps
         // omp's hardcoded default into the store the moment omp reports it, which would erase the real value.
         const remembered = lastModel();
-        const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
+        const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS });
         this.sessionId = s?.sessionId ?? s?.id ?? null;
         if (Array.isArray(s?.configOptions)) this.configOptions = s.configOptions;
         if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
@@ -1545,13 +1609,15 @@ class Backend {
 
   /** Lazily spawn the dedicated util omp. Returns null on spawn failure (→ shared-connection fallback). */
   private async startUtil(): Promise<ACPClient | null> {
+    if (this.utilAcp?.isDead) this.utilAcp = null; // a dead connection is worse than none: it never answers
     if (this.utilAcp) return this.utilAcp;
     if (!this.utilStarting) {
       this.utilStarting = (async () => {
+        let spawned: ACPClient | null = null;
         try {
           this.applyAttributionEnv(); // same env threading as the chat spawn
           const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
-          const acp = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...isoCfg], currentWorkspace());
+          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...isoCfg], currentWorkspace());
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {
@@ -1561,11 +1627,20 @@ class Backend {
           };
           acp.onRequest = async () => ({}); // no interactive permissions during extraction
           acp.onStderr = () => { /* no tools here → nothing to surface */ };
+          // If this second omp dies, FORGET it, otherwise every later completion is handed a corpse and
+          // waits on a connection that can never answer (the import would sit at 0 forever).
+          acp.onExit = () => { if (this.utilAcp === acp) this.utilAcp = null; this.utilSink = null; };
           acp.start();
-          await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } });
+          await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } }, { timeoutMs: HANDSHAKE_MS });
           this.utilAcp = acp;
           return acp;
-        } catch { this.utilAcp = null; return null; }
+        } catch {
+          // Handshake timed out or the spawn failed: kill the half-open child so it can't linger, and
+          // report null so complete() falls back to the shared connection instead of waiting on a corpse.
+          try { spawned?.stop(); } catch { /* ignore */ }
+          this.utilAcp = null;
+          return null;
+        }
       })();
     }
     const acp = await this.utilStarting;
@@ -1578,13 +1653,21 @@ class Backend {
    *  Serialized via utilLock so it can't race a chat turn. Used by the import model-extractor:
    *  the model only ever sees text that already passed the scanner gate, and tool-call events
    *  (if any) are ignored — only assistant text is collected. */
-  async complete(system: string, user: string, opts: { idleMs?: number; model?: string } = {}): Promise<string> {
+  async complete(system: string, user: string, opts: CompleteOpts = {}): Promise<string> {
     const run = this.utilLock.then(async () => {
-      await this.start();
-      // P-KG-INGEST.4: prefer the DEDICATED util connection (true concurrency — never touches chat). If it
-      // couldn't spawn, fall back to the shared connection with the ChatGate (chat preempts, ≤1 extraction).
-      const util = await this.startUtil();
-      return completionPath(!!util) === "dedicated" ? this.completeOn(util!, system, user, opts) : this.completeShared(system, user, opts);
+      if (opts.signal?.aborted) return "";
+      // Hard ceiling for the WHOLE attempt. Every inner await is individually bounded, but this is the
+      // backstop that guarantees utilLock always advances, so a batch import can never wedge on one call.
+      const deadline = deadlineSignal(COMPLETE_MS, opts.signal);
+      try {
+        await this.start();
+        // P-KG-INGEST.4: prefer the DEDICATED util connection (true concurrency, never touches chat). If it
+        // couldn't spawn, fall back to the shared connection with the ChatGate (chat preempts, max 1 extraction).
+        const util = await this.startUtil();
+        const inner = { ...opts, signal: deadline.signal };
+        return completionPath(!!util) === "dedicated" ? await this.completeOn(util!, system, user, inner) : await this.completeShared(system, user, inner);
+      } catch { return ""; } // start()/startUtil() can now REJECT (timeout); an extraction failure is just "no facts"
+      finally { deadline.dispose(); }
     });
     this.utilLock = run.then(() => {}, () => {}); // next complete() waits for this one
     return run;
@@ -1593,38 +1676,44 @@ class Backend {
   /** Run a completion on the DEDICATED util connection (P-KG-INGEST.4): independent process + sink, so it
    *  never swaps the chat listener and never needs to yield to chat. Serialized via utilLock, so utilSink
    *  is never contended. */
-  private async completeOn(acp: ACPClient, system: string, user: string, opts: { idleMs?: number; model?: string }): Promise<string> {
+  private async completeOn(acp: ACPClient, system: string, user: string, opts: CompleteOpts): Promise<string> {
+    const signal = opts.signal;
     let sid: string | null = null;
     let text = "";
     let idle: ReturnType<typeof setTimeout> | undefined;
     let onStall: (e: Error) => void = () => {};
     try {
-      const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
+      const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
       sid = s?.sessionId ?? s?.id ?? null;
       if (!sid) return "";
-      if (opts.model) await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
+      if (opts.model) await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).catch(() => {});
       const IDLE = opts.idleMs ?? 60_000;
-      const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
+      const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
       this.utilSink = (t) => { arm(); text += t; };
       arm();
-      const stall = new Promise<never>((_, reject) => { onStall = reject; });
+      const stall = Promise.withResolvers<never>();
+      onStall = stall.reject;
+      stall.promise.catch(() => {}); // the race below handles it; keep it from surfacing as unhandled
       await Promise.race([
-        acp.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }),
-        stall,
+        acp.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }, { signal }),
+        stall.promise,
       ]);
       return text;
     } catch { return text; }
     finally {
-      if (idle) clearTimeout(idle);
+      clearTimeout(idle);
       this.utilSink = null;
       this.turnDiag(`complete.util chars=${text.length}`);
-      if (sid) acp.request("session/close", { sessionId: sid }).catch(() => {});
+      // Cancel a still-running turn before closing, else omp keeps generating into a dead session.
+      if (sid && signal?.aborted) { try { acp.notify("session/cancel", { sessionId: sid }); } catch { /* best-effort */ } }
+      if (sid) acp.request("session/close", { sessionId: sid }, { timeoutMs: SESSION_MS }).catch(() => {});
     }
   }
 
   /** Fallback path: run on the SHARED chat connection, swapping the listener + yielding to a live chat turn
    *  via the ChatGate (P-KG-INGEST.3). Used only when the dedicated util omp couldn't spawn. */
-  private async completeShared(system: string, user: string, opts: { idleMs?: number; model?: string }): Promise<string> {
+  private async completeShared(system: string, user: string, opts: CompleteOpts): Promise<string> {
+    const signal = opts.signal;
     const prev = this.listener;
     let sid: string | null = null;
     let text = "";
@@ -1632,30 +1721,35 @@ class Backend {
     let onStall: (e: Error) => void = () => {};
     let myListener: ((e: ChatEvent) => void) | null = null;
     try {
-      await this.chatGate.whenIdle(); // chat preempts extraction on the shared connection
-      const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
+      // Chat preempts extraction here, but a chat turn whose end() never fires must not park us forever:
+      // the deadline/cancel signal from complete() releases the wait.
+      await whenIdleOrAborted(this.chatGate, signal);
+      const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
       sid = s?.sessionId ?? s?.id ?? null;
       if (!sid) return "";
-      if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }).catch(() => {});
+      if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).catch(() => {});
       const IDLE = opts.idleMs ?? 60_000;
-      const arm = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
+      const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
       myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
       this.listener = myListener;
       arm();
-      const stall = new Promise<never>((_, reject) => { onStall = reject; });
+      const stall = Promise.withResolvers<never>();
+      onStall = stall.reject;
+      stall.promise.catch(() => {}); // the race below handles it; keep it from surfacing as unhandled
       await Promise.race([
-        this.acp!.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }),
-        stall,
+        this.acp!.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }, { signal }),
+        stall.promise,
       ]);
       return text;
     } catch { return text; }
     finally {
-      if (idle) clearTimeout(idle);
+      clearTimeout(idle);
+      if (sid && signal?.aborted) { try { this.acp?.notify("session/cancel", { sessionId: sid }); } catch { /* best-effort */ } }
       // Only restore if WE are still the active listener (a chat turn may have taken over a long overlap).
       const clobber = myListener !== null && this.listener !== myListener;
       this.turnDiag(`complete.shared clobberAvoided=${clobber} chars=${text.length}`);
       if (!clobber) this.listener = prev;
-      if (sid) this.acp!.request("session/close", { sessionId: sid }).catch(() => {});
+      if (sid) this.acp?.request("session/close", { sessionId: sid }, { timeoutMs: SESSION_MS }).catch(() => {});
     }
   }
 }

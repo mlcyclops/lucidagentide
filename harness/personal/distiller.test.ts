@@ -76,6 +76,36 @@ test("cross-turn linking does NOT connect unrelated turns", async () => {
   expect(g.links.length).toBe(0); // no shared words → no cross-link, no false edges
 });
 
+// P-KG-INGEST.5 (ADR-0264): Stop must interrupt the extraction, not wait it out.
+test("modelExtractor forwards the abort signal to the model call", async () => {
+  const ctl = new AbortController();
+  let received: AbortSignal | undefined;
+  const callModel = async (_s: string, _u: string, o?: { signal?: AbortSignal }) => { received = o?.signal; return "[]"; };
+  await modelExtractor(callModel)({ user: "anything", assistant: "", signal: ctl.signal });
+  expect(received).toBe(ctl.signal);
+});
+
+test("modelExtractor skips the model call entirely once cancelled", async () => {
+  let calls = 0;
+  const callModel = async () => { calls++; return '[{"kind":"user:goal","entity":"x","statement":"y"}]'; };
+  const facts = await modelExtractor(callModel)({ user: "anything", assistant: "", signal: AbortSignal.abort() });
+  expect(calls).toBe(0);
+  expect(facts).toEqual([]);
+});
+
+test("distillTurn learns nothing once cancelled, and does not report it as a gate block", async () => {
+  const store = newStore();
+  let extracted = false;
+  const r = await distillTurn(store, cleanScanner, {
+    userText: "I prefer Rust", scope: "personal", signal: AbortSignal.abort(),
+    extract: () => { extracted = true; return [{ kind: "user:preference", entity: "rust", statement: "Prefers Rust" }]; },
+  });
+  expect(extracted).toBe(false);
+  expect(r.learned).toBe(0);
+  expect(r.blocked).toBe(false); // cancelled is NOT quarantined; conflating them would corrupt the audit
+  expect(store.graph({ scope: "combined" }).facts.length).toBe(0);
+});
+
 test("modelExtractor parses a JSON array and drops invalid kinds", async () => {
   const callModel = async () => 'noise before [{"kind":"user:goal","entity":"P9","statement":"Ship P9.2","confidence":0.9},{"kind":"bogus","entity":"x","statement":"y"}] trailing';
   const facts = await modelExtractor(callModel)({ user: "anything", assistant: "" });
