@@ -307,3 +307,25 @@ test("staged prompts run FIFO when the lane goes idle; reorder and remove work; 
   live.cancel(l2.lane!.id);
   await hangTurn;
 }, TIMEOUT);
+
+// ── P-FLEET.L5 (ADR-0274): the durable lane-session ledger ───────────────────────────────────────────
+
+test("spawn and every recovery NAME the session in the ledger; the view exposes the session id", async () => {
+  const records: { laneId: string; name: string; sessionId: string; event: string }[] = [];
+  process.env.FAKE_ACP_MODE = "";
+  delete process.env.FAKE_ACP_MODE;
+  live = new FleetLaneManager({
+    argv: () => ({ cmd: "bun", args: [FAKE] }),
+    masterModel: () => "master-model-a",
+    sample: async () => healthy,
+    recordLaneSession: (rec) => records.push({ laneId: rec.laneId, name: rec.name, sessionId: rec.sessionId, event: rec.event }),
+  });
+  const r = await live.spawn({ cwd: import.meta.dir, name: "ledgered" });
+  expect(r.ok).toBe(true);
+  expect(r.lane!.sessionId).toBe("fake-session-1"); // the timeline's key into the on-disk .jsonl
+  expect(records).toEqual([{ laneId: r.lane!.id, name: "ledgered", sessionId: "fake-session-1", event: "spawn" }]);
+  await live.respawn(r.lane!.id);
+  expect(records.length).toBe(2);
+  expect(records[1]!.event).toBe("respawn");
+  expect(records[1]!.laneId).toBe(r.lane!.id); // same logical lane, whole lineage in the ledger
+}, TIMEOUT);

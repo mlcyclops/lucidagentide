@@ -47,6 +47,10 @@ export interface LaneView {
   /** P-FLEET.L4: how many times this lane has been respawned in place (same id, memory carried). */
   respawns: number;
   pendingApproval?: { summary: string };
+  /** P-FLEET.L5: the omp ACP session id behind this lane - the key into its on-disk .jsonl history.
+   *  Changes when a fallback recovery mints a fresh session; every id this lane has held is in the
+   *  durable lane-session ledger. */
+  sessionId: string | null;
   /** P-FLEET.L3: staged prompts waiting for the lane to go idle. Previews only - clamped text + image
    *  count; the full payloads live in the manager, drained FIFO one turn at a time. */
   queued: { text: string; images: number }[];
@@ -112,6 +116,11 @@ const SAMPLE_MIN_GAP_MS = 2_000;
 /** Stop sampling once nothing is live and nobody has asked for status this long. Restarts on demand. */
 const SAMPLER_IDLE_MS = 20_000;
 
+/** P-FLEET.L5: one durable ledger line - a lane claimed an omp session. Appended at spawn AND at every
+ *  recovery, so a lane's whole session lineage survives engine restarts and the timeline can label the
+ *  on-disk .jsonl histories that would otherwise read as anonymous chats. */
+export interface LaneSessionRecord { at: number; laneId: string; name: string; cwd: string; sessionId: string; event: "spawn" | "respawn" }
+
 export interface FleetLaneDeps {
   /** The gated omp argv for a lane (MUST carry the -e security gate; built by acp_backend). */
   argv: () => { cmd: string; args: string[] };
@@ -120,6 +129,9 @@ export interface FleetLaneDeps {
   /** Machine sample for admission + the dashboard headroom bar. */
   sample?: () => Promise<SystemSnapshot>;
   now?: () => number;
+  /** P-FLEET.L5: durable lane-session ledger sink (dev.ts appends JSONL). Optional and fail-quiet -
+   *  a broken ledger must never block a lane. */
+  recordLaneSession?: (rec: LaneSessionRecord) => void;
 }
 
 /** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time. */
@@ -163,7 +175,7 @@ interface Lane {
 
 export class FleetLaneManager {
   readonly #lanes = new Map<string, Lane>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -172,7 +184,7 @@ export class FleetLaneManager {
   #lastStatusAt = 0;
 
   constructor(deps: FleetLaneDeps) {
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), now: deps.now ?? Date.now };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select. */
@@ -489,6 +501,12 @@ export class FleetLaneManager {
       lane.resumeContext = resume && lane.transcript.length ? this.#resumePreamble(lane) : null;
     }
     await this.#setModel(lane, lane.model);
+    // P-FLEET.L5: name the session in the durable ledger the moment it exists - the timeline's link
+    // between this lane and its on-disk .jsonl. Fail-quiet by contract.
+    if (lane.sessionId) {
+      try { this.#deps.recordLaneSession?.({ at: this.#deps.now(), laneId: lane.id, name: lane.name, cwd: lane.cwd, sessionId: lane.sessionId, event: resume ? "respawn" : "spawn" }); }
+      catch { /* a broken ledger never blocks a lane */ }
+    }
   }
 
   /** Revive a dead/errored lane IN PLACE: same lane id (invariant 9 - one logical entity, one id), same
@@ -661,6 +679,7 @@ export class FleetLaneManager {
       turns: lane.turns,
       canRetry: lane.lastPrompt !== null,
       respawns: lane.respawns,
+      sessionId: lane.sessionId,
       queued: lane.queue.map((q) => ({ text: q.text.length > 140 ? `${q.text.slice(0, 140)}\u2026` : q.text, images: q.images.length })),
       ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary } } : {}),
     };

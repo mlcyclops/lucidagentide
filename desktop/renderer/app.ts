@@ -74,6 +74,7 @@ import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOpti
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
 import { initFleetGrid, mountFleetPill, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
@@ -309,6 +310,8 @@ function buildShell(): void {
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
             <!-- P-FLEET.L1: the fleet grid - headless local engine lanes as streaming mini agent windows. -->
             <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - local lanes|Spawn headless LUCID engine lanes on this machine and drive them from a movable grid of mini agent windows.">${icon("bolt", 15)}</button>
+            <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
+            <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet lanes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
             <!-- P-VOICE.4 (ADR-0248): a live spectrum analyser of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
@@ -10794,6 +10797,9 @@ function wire(): void {
     vaultAvailable: () => bridge.isElectron && !!bridge.credStore,
   });
   $("#ctFleet")?.addEventListener("click", () => toggleFleetGrid());
+  // P-FLEET.L5: the reviewable timeline dock.
+  initTimelineDock({ timelineList: bridge.timelineList, timelineSession: bridge.timelineSession });
+  $("#ctTimeline")?.addEventListener("click", () => toggleTimelineDock());
 
   // settings page actions (delegated)
   $("#setClose")!.addEventListener("click", () => closeSettings());

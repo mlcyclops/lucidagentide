@@ -162,6 +162,43 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
   };
 }
 
+/** P-FLEET.L5 (ADR-0274): one session row for the TIMELINE - a SessionInfo plus the cwd it belongs to,
+ *  because the timeline spans EVERY workspace (master chats, lane folders, clones) instead of filtering
+ *  to the current one like the sidebar. */
+export interface SessionRow extends SessionInfo { cwd: string }
+
+/** Every parseable session on disk, across ALL workspaces, newest first, uncapped. Rides the SAME
+ *  mtime+size index as listSessions (P-PERF.4), so a timeline poll re-parses only what changed. */
+export function listAllSessions(root: string = join(homedir(), ".omp", "agent", "sessions")): SessionRow[] {
+  if (!existsSync(root)) return [];
+  const all: SessionRow[] = [];
+  const seen = new Set<string>();
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const p = join(dir, f);
+        try {
+          const st = statSync(p);
+          seen.add(p);
+          let e = sessionIndex.get(p);
+          if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
+            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionFile(p, f) };
+            sessionIndex.set(p, e);
+          }
+          if (!e.meta) continue; // empty/probe session
+          all.push({ ...e.meta, updatedAt: st.mtimeMs, cwd: e.scwd });
+        } catch { /* skip unreadable file */ }
+      }
+    } catch { /* skip dir */ }
+  }
+  for (const k of sessionIndex.keys()) if (k.startsWith(root) && !seen.has(k)) sessionIndex.delete(k);
+  all.sort((a, b) => b.updatedAt - a.updatedAt);
+  return all;
+}
+
 /** P-KG-INGEST.2 (ADR-0079): delete ALL kg-ingest throwaway sessions for one workspace. Defense in depth:
  *  only removes files that BOTH (a) belong to the current workspace AND (b) are extractor throwaways
  *  (`isIngestPrompt` on the first user message) — a real chat is never touched. Returns the count removed. */

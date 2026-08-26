@@ -19121,3 +19121,49 @@ invariant-11 verified in a headless render at 300px card width.
 
 ADR-0274 (the roadmap), ADR-0275 (L4: the recovery machinery the queue leans on), P-CHAT.1/ADR-0104
 (the extraction contract), P-VISION.1/ADR-0136 (the image shape), ADR-0268 (one turn per lane).
+
+## ADR-0277 -- P-FLEET.L5 BUILT: histories + the reviewable timeline, and the deltas
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. `make demo-P-FLEET.L5` green (4 sections); timeline suite 5/5, lane
+ledger test green (fleet_lanes 16/16); firewall suite unaffected (71 pass); typechecks clean;
+invariant-11 verified in a headless render at 380px.
+**Increment:** P-FLEET.L5, the last of the ADR-0274 roadmap. The Fleet fidelity arc (L2/L3/L4/L5) is
+complete; fork-at-step from a timeline row stays named-and-deferred.
+
+### What shipped
+
+1. **Lanes are NAMED at spawn, durably.** `FleetLaneDeps.recordLaneSession` (optional, fail-quiet by
+   contract) fires at every successful handshake - spawn AND recovery - and dev.ts appends it to
+   `~/.omp/lucid-fleet-lanes.jsonl` (the P-LOC.4 sidecar pattern; the session corpus itself is never
+   written). One line = {at, laneId, name, cwd, sessionId, event}. A lane's whole session lineage
+   (fallback recoveries mint fresh session ids) survives engine restarts. `LaneView.sessionId` exposes
+   the current key.
+2. **One reviewable timeline.** New `sessions.listAllSessions` returns every parseable session across
+   ALL workspaces (riding the SAME P-PERF.4 mtime+size index as the sidebar - a timeline poll re-parses
+   only what changed), and pure `timeline.buildTimeline` merges it with the ledger: a ledger-matched
+   session is a LANE row carrying its lane name (LATEST record wins) and its spawn-lineage count; the
+   parser's own kg-ingest kind classifies ingest; everything else is a chat. Newest first, paged,
+   clamped. `GET /api/timeline` + `POST /api/timeline/session` (the transcript read reuses
+   sessionMessages, so the issue-#52 preamble stripping applies for free).
+3. **The Timeline dock.** A clock icon on the rail opens a movable/resizable dock (share_dock
+   primitives, own keys): rows grouped by day - time, kind badge, cyan lane name, one-line ellipsized
+   title, workspace chip, turn count - and clicking a row expands its transcript IN PLACE, tail-limited
+   with an honest "showing the last N of M". Read-only by design: a review surface owns no lifecycle -
+   nothing here prompts, resumes, or deletes. Data loads on open + Refresh; a chronology needs no poll.
+4. **Honest under damage.** Torn ledger lines skip (append-only files earn torn tails); a missing
+   ledger degrades rows to plain chats - labels degrade, the surface never breaks, and no session is
+   ever INVENTED as a lane.
+
+### Deltas from ADR-0274's plan
+
+- "Sourced from the session corpus + the DuckDB event log" landed corpus-only: the omp child holds
+  agent_obs.duckdb read-write for the whole session (the acp_backend live-read constraint), so the
+  event log cannot back a live timeline. The corpus alone already answers "what did the model see" -
+  the DuckDB join (and FTS, per the dsh derived-disposable-index topology) remains the named follow-up.
+- The dsh unified-query shape held: one surface, exact reads, the .jsonl files stay the truth.
+
+### See also
+
+ADR-0274 (the roadmap, now fully built), ADR-0275/0276 (L4/L3), P-PERF.4/ADR-0131 (the session index
+this rides), P-LOC.4/ADR-0211 (the sidecar-JSONL precedent), issue #52 (transcript preamble stripping).

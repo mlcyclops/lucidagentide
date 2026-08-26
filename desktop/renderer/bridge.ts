@@ -177,10 +177,21 @@ export interface LaneView {
   createdAt: number; lastActivityAt: number; turns: number;
   /** P-FLEET.L4: Retry is offered only when a last prompt exists; respawns counts in-place revivals. */
   canRetry: boolean; respawns: number;
+  /** P-FLEET.L5: the omp session id behind this lane - the key into its on-disk history. */
+  sessionId: string | null;
   pendingApproval?: { summary: string };
   /** P-FLEET.L3: staged-prompt previews (clamped text + image count), drained FIFO when idle. */
   queued: { text: string; images: number }[];
 }
+// P-FLEET.L5 (ADR-0274): the reviewable timeline - one row per session on this machine, every workspace,
+// lanes labeled through the durable lane-session ledger.
+export type TimelineKind = "chat" | "lane" | "ingest";
+export interface TimelineEntry {
+  sessionId: string; kind: TimelineKind; title: string; cwd: string; wsName: string;
+  model: string; turns: number; updatedAt: number;
+  laneId?: string; laneName?: string; laneEvents?: number;
+}
+export interface TimelinePage { entries: TimelineEntry[]; total: number }
 /** P-FLEET.L3: a pasted image on a lane prompt - the P-VISION.1 shape the master chat uses. */
 export interface LaneImage { data: string; mimeType: string }
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
@@ -749,6 +760,9 @@ export interface LucidBridge {
   fleetQueueRemove(laneId: string, index: number): Promise<{ ok: boolean } | null>;
   fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
   fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
+  // P-FLEET.L5: the reviewable timeline (list + open-a-point). Transcript reads are tail-limited.
+  timelineList(limit?: number, offset?: number): Promise<TimelinePage | null>;
+  timelineSession(id: string, limit?: number): Promise<{ messages: { role: string; text: string; turn?: number }[]; total: number; userTotal: number } | null>;
   /** P-FLEET.L4: re-send the lane's last prompt, streaming like fleetPrompt (recovers an error lane first). */
   fleetRetry(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   /** P-FLEET.L4: revive an error/stopped lane in place - same id, transcript memory carried. */
@@ -1231,6 +1245,8 @@ export const bridge: LucidBridge = {
   // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
   fleetStatus: () => getData("/api/fleet/status"),
   fleetSpawn: (opts) => post("/api/fleet/spawn", opts),
+  timelineList: (limit = 100, offset = 0) => getData(`/api/timeline?limit=${limit}&offset=${offset}`), // P-FLEET.L5
+  timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5
   fleetPrompt: (laneId, text, onEvent, images) => {
     // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are
     // structurally valid LaneEvents too, so the sink types unify at this one boundary. Named cast per

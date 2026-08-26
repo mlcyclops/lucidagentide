@@ -62,6 +62,7 @@ import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
 import { backend, fleetLaneArgv } from "./acp_backend.ts";
 import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
@@ -534,9 +535,11 @@ const PORT = Number(process.env.PORT ?? 5319);
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
 const TOKEN = randomBytes(32).toString("hex");
-// P-FLEET.L1/L2/L4: the local lane manager - N gated headless LUCID agents on this machine under the
-// sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks another.
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName() });
+// P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
+// sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
+// another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
+// the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger });
 // P-FLEET.L3: the P-VISION.1 image filter for lane prompts and the staged queue - identical discipline to
 // /api/chat (well-formed {data, mimeType} blocks only, capped at 6; anything torn is dropped, not trusted).
 function laneImages(raw: unknown): { data: string; mimeType: string }[] {
@@ -2586,6 +2589,20 @@ const server = Bun.serve({
       }
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
+      // P-FLEET.L5 (ADR-0274): the reviewable timeline - every session on this machine (master chats,
+      // lane sessions labeled through the durable ledger, ingest throwaways), across ALL workspaces,
+      // newest first. Reading a point reuses the same transcript reader the sidebar resume uses; the
+      // injected user-turn preamble is already stripped for display there (issue #52).
+      if (p === "/api/timeline") {
+        const limit = Number(url.searchParams.get("limit") ?? 100);
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        return json({ ok: true, data: listTimeline({ limit: Number.isFinite(limit) ? limit : 100, offset: Number.isFinite(offset) ? offset : 0 }) });
+      }
+      if (p === "/api/timeline/session" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; limit?: unknown }>(req);
+        const lim = Number(b.limit ?? 40);
+        return json({ ok: true, data: sessionMessages(String(b.id ?? ""), Number.isFinite(lim) && lim > 0 ? lim : 40) });
+      }
       // P-FLEET.L1/L2: the local lane fleet. Status is metadata (lanes + pressure evidence); prompt streams
       // the lane's turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on
       // silence).

@@ -497,6 +497,10 @@ demo-P-FLEET.L3: ## P-FLEET.L3 (ADR-0274): lane FIDELITY - a write/edit tool cal
 demo-P-FLEET.L4: ## P-FLEET.L4 (ADR-0274): lanes that SURVIVE - no lane turn clock (a mid-turn child crash lands error in milliseconds, event-driven, never a 600s deadline), error is a recoverable state (Retry re-sends the last prompt, Respawn revives IN PLACE on the same lane id with the transcript carried - capability-gated session/load when the agent offers it, delimited-transcript preamble otherwise), fail-closed survives recovery (an ask open at death dies as a DENY and the revived lane RE-ASKS a human), and a user-stopped lane is refused by prompt but revived by explicit respawn with memory intact
 	$(BUN) run harness/scripts/demo_pfleetl4.ts
 
+.PHONY: demo-P-FLEET.L5
+demo-P-FLEET.L5: ## P-FLEET.L5 (ADR-0274): histories + the reviewable TIMELINE - every lane spawn/recovery NAMES its omp session in a durable JSONL ledger (~/.omp/lucid-fleet-lanes.jsonl), so the .jsonl histories omp already persists become attributable; one timeline surface merges master chats + lane sessions + kg-ingest throwaways across EVERY workspace, newest first, lanes labeled with their names (latest ledger record wins); a stopped lane's transcript still opens (review is an index over existing files, never a second recording); torn ledger lines skip and a missing ledger degrades labels, never the surface
+	$(BUN) run harness/scripts/demo_pfleetl5.ts
+
 .PHONY: demo-P-MCP-GATE.1
 demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate — poisoned MCP result withheld, clean result delimited+labeled untrusted, LOCAL tool results untouched (source-scoped), fail-closed
 	$(BUN) run harness/scripts/demo_pmcpgate1.ts

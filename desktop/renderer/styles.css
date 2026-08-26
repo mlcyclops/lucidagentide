@@ -3835,3 +3835,38 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   .fleet-card.lane-working .fleet-led,.fleet-cursor,
   .fleet-pip.lane-working i,.fleet-pip.lane-needs-approval i{animation:none}
 }
+
+/* ───────────────────────── the Timeline dock — P-FLEET.L5 (ADR-0274) ─────────────────────────
+   One chronological, reviewable surface over every session (chats / lanes / ingest). Rows are FLEX of
+   single-text-child spans (invariant 11): the title takes the slack and ellipsizes; time/kind/ws/turn
+   chips stay nowrap. Transcript messages are BLOCK paragraphs - prose never lives in a flex row. */
+.tl-dock{min-width:320px}
+.tl-body{padding:8px 10px}
+.tl-count{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-3);white-space:nowrap}
+.tl-list{display:flex;flex-direction:column;gap:2px}
+.tl-day{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--txt-4);
+  padding:8px 2px 3px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+.tl-row{display:flex;align-items:center;gap:6px;min-width:0;padding:4px 6px;border-radius:7px;cursor:pointer}
+.tl-row:hover{background:var(--bg-2)}
+.tl-row.open{background:var(--bg-2);outline:1px solid var(--line)}
+.tl-time{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4);min-width:42px;white-space:nowrap}
+.tl-kind{flex:none;font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+  border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--txt-3);white-space:nowrap}
+.tl-row.kind-lane .tl-kind{color:var(--cyan);border-color:color-mix(in srgb,var(--cyan) 40%,var(--line))}
+.tl-row.kind-ingest .tl-kind{opacity:.6}
+.tl-lane-name{flex:none;font-size:10.5px;font-weight:700;color:var(--cyan);white-space:nowrap;max-width:90px;overflow:hidden;text-overflow:ellipsis}
+.tl-title{flex:1;min-width:0;font-size:11.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl-ws{flex:none;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);border:1px solid var(--line-soft);
+  border-radius:4px;padding:0 4px;background:var(--bg-1);white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis}
+.tl-turns{flex:none;font-family:var(--mono);font-size:9.5px;color:var(--txt-4);white-space:nowrap}
+/* the in-place transcript: read-only review, tail-limited; messages are block paragraphs */
+.tl-transcript{margin:2px 4px 8px 48px;padding:6px 8px;background:var(--bg-1);border:1px solid var(--line-soft);
+  border-radius:8px;max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+.tl-msg{min-width:0}
+.tl-role{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--txt-4);margin-bottom:1px}
+.tl-msg.u .tl-role{color:var(--accent-2)}
+.tl-text{display:block;font-size:11.5px;line-height:1.5;color:var(--txt-2);white-space:pre-wrap;word-break:break-word}
+.tl-clip{font-size:10px;color:var(--txt-4)}
+.tl-clip span,.tl-loading span,.tl-empty span,.tl-more span{display:block;min-width:0}
+.tl-loading,.tl-empty{padding:8px 4px;font-size:11.5px;color:var(--txt-3)}
+.tl-more{padding:8px 4px 2px;font-size:10.5px;color:var(--txt-4)}
