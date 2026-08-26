@@ -18897,3 +18897,122 @@ so the minimized view and the open panel can never disagree about what amber mea
 - ADR-0265 (P-FS.2) - the real OS folder dialog the spawn form now opens.
 - AGENTS.md invariant 11 - the spawn form's note is a BLOCK paragraph and its rows hold controls, never
   bare prose beside inline tags.
+
+## ADR-0274 -- P-FLEET.L3/.L4/.L5: lane fidelity, recovery spawns, and the reviewable timeline (SCOPE/PLAN, after a deepseek-harness survey)
+
+**Date:** 2026-08-25
+**Status:** Accepted -- SCOPE/PLAN. No code in this ADR. Three increments are mapped, each its own
+session; build order is by user pain: L4 (fault tolerance) first, then L3 (fidelity), then L5 (timeline).
+**Increment:** P-FLEET.L3/.L4/.L5 family, extending P-FLEET.L1/L2 (ADR-0271/0273). The P-FLEET.P*
+profile family (ADR-0272) and the P-FLEET.1 job surface (ADR-0270) are untouched.
+
+### Context: four field reports, all reproduced in the code
+
+1. **No diffs in a lane.** The lane wire (fleet_lanes.ts `#wire`) collapses every `tool_call` /
+   `tool_call_update` to `{ name, detail: title }` and the card renders one line per tool
+   (fleet_grid.ts `toolLine`, detail clamped to 120 chars). The SAME ACP stream feeds the master chat,
+   where P-CHAT.B chips show +/- diffstats per edit - so the data exists on the wire and the lane
+   surface throws it away.
+2. **No image thumbnails in a lane.** `/api/fleet/prompt` accepts text only (dev.ts), while
+   `/api/chat` takes pasted-image blocks (P-VISION.1, capped at 6, defensively filtered). The lane
+   composer cannot paste, and a lane turn cannot carry an image.
+3. **No staged prompts.** One turn at a time per lane is CORRECT (the ADR-0268 collector-crossing
+   lesson), but the UI merely disables Send while streaming - there is nowhere to park the next
+   prompt, so the user sits on their own thought while a compact card streams.
+4. **A timeout is a grave.** The screenshot error - `acp: session/prompt timed out after 600000ms`,
+   then `lane is error` - is fleet_lanes.ts `LANE_TURN_TIMEOUT_MS = 600_000` (ADR-0186's ten minutes).
+   The MASTER already removed that clock (P-STALL.2, ADR-0263: long turns run to completion with
+   legible waiting); lanes never got the memo. Worse: `prompt()` refuses an `error`-status lane, and
+   `onExit` has no respawn path, so one timeout permanently kills a lane whose transcript lives only
+   in the renderer's in-memory `runs` map.
+
+And one finding that reframes the ask: **lane histories are ALREADY recorded.** omp persists every
+session - interactive or ACP - as a .jsonl under `~/.omp/agent/sessions/<encoded-cwd>/`
+(sessions.ts:6-8). A lane child is a full gated `omp acp`, so every lane turn is on disk today, keyed
+by the LANE's cwd. They are invisible only because the sidebar filters to the MASTER's workspace.
+The timeline feature is therefore an INDEXING problem, not a recording problem.
+
+### The deepseek-harness survey (github.com/deepseek-ai/deepseek-harness, MIT)
+
+DeepSeek Harness (`dsh`, developer preview, 2026-08-13) is an "everything is a plugin" agent harness
+on the Cordis runtime. Its published Agent Notes are the transferable part; three map one-to-one onto
+this roadmap:
+
+- **Result-time applied-hunk diffs** (note 2026-07-02): call-time diffs are context-free snippets; the
+  REAL editor diff is emitted after the mutation applies, as applied hunks with context lines, carried
+  on a persisted, tool-private presentation channel (`presentationMeta`) so replay reproduces the card
+  from the log without recomputation or I/O. Adopt the PRINCIPLE for lanes: forward the result-time
+  diff the omp stream already carries, and persist what the card needs to re-render.
+- **Unified session query service** (note 2026-07-23): ONE service over one session corpus - exact
+  reads inherited and backend-independent, full-text search as the only backend-specific part, a
+  disposable SQLite FTS index beside the persistence root, never authoritative. Adopt the topology for
+  the timeline: one query surface over the EXISTING session .jsonl corpus + the DuckDB event log;
+  any index is derived and disposable; the log stays the truth.
+- **Append-only session log + fork-at-step**: everything the model saw is in the log; a run that went
+  sideways at step 40 forks at step 39 with the full trace. Adopt the SEMANTICS for recovery spawns:
+  a dead lane's replacement replays the recorded transcript, not a summary of vibes.
+
+**Explicitly not adopted:** the Cordis plugin runtime and dsh's session file format. Invariant 1
+(extend omp, never fork or re-platform) rules out a second plugin substrate, and omp owns our session
+files - we index them, we do not replace them. License posture: MIT is compatible; current plan reuses
+CONCEPTS only, and any future copied code carries attribution in a third-party notice.
+
+### Increment map
+
+**P-FLEET.L4 - lanes that survive (build FIRST; it is the active pain).**
+- **Drop the lane turn clock**, exactly as P-STALL.2 dropped the master's: no `LANE_TURN_TIMEOUT_MS`
+  kill; child death is detected event-driven (`onExit` already fires); long waits surface as slow
+  notices on the card, not a synthetic error. The 600s cap on APPROVALS stays - that is fail-closed
+  policy, not patience.
+- **Error is a state, not a grave:** an `error` lane keeps its transcript, offers `Retry last turn`
+  and `Respawn`, and `prompt()` on an error lane triggers recovery instead of refusing.
+- **Recovery spawn with memory:** persist per lane the spec `{cwd, model, name, repoUrl}` and the
+  turn transcript (the renderer already accumulates it; move ownership into the manager and write it
+  through). Respawn = new gated child + `session/new` + REPLAY of the recorded turns as context
+  (dsh fork semantics), then the staged/failed prompt re-sends. Approvals NEVER auto-replay -
+  anything gated re-asks the human (invariant: fail-closed survives recovery).
+- Keystone test: kill a lane child mid-turn; the respawned lane answers a follow-up that requires
+  memory of the pre-crash turns, and a pending approval from before the crash is re-asked, not
+  auto-granted.
+
+**P-FLEET.L3 - lane fidelity (diffs, images, staged prompts).**
+- **Forward the rich tool event:** widen the lane wire's tool events with what omp already sends
+  (kind, file locations, diff content when present) instead of `title.slice(0,120)`; render the
+  master's chip pattern in-card - a diff chip with +/- counts expanding to the hunk. Persisted with
+  the transcript so a reopened card still shows it (the dsh presentation-channel principle).
+- **Images into lanes:** accept the P-VISION.1 image shape on `/api/fleet/prompt`, paste-to-thumbnail
+  in the lane composer (same scanning path as the master - an image block is untrusted input like any
+  other), thumbnails in the transcript.
+- **Staged prompts:** a per-lane FIFO queue owned by the MANAGER (survives dock close), drained on
+  turn end; one-turn-per-lane stays inviolate. UI: compact queued chips above the composer with
+  reorder/delete, invariant-11 clean (one-line ellipsized labels, no wrapping slivers).
+
+**P-FLEET.L5 - histories + the reviewable timeline.**
+- **Name the lane session at spawn:** map lane id -> omp ACP sessionId -> its .jsonl (the files
+  already exist; today nothing ties them to lanes). Stopped lanes become REVIEWABLE, not gone.
+- **One timeline surface** across master chats, lane sessions, and ingest runs, ordered by time,
+  sourced from the session corpus + the DuckDB event log (schema changes only via migrations,
+  invariant 10). Exact reads first; FTS later as a derived, disposable index (the dsh unified-query
+  topology). Scrub the timeline, open any point, read what the model saw.
+- Fork-at-step across the timeline (start a NEW lane from an old step) is named but deferred - it
+  falls out of L4's replay machinery once the timeline can address a step.
+
+### Alternatives rejected
+
+- **Adopt Cordis / re-platform on dsh.** Invariant 1. We extend omp; a second plugin runtime is a
+  fork of our own architecture.
+- **Raise the lane timeout instead of removing it.** ADR-0263 already litigated this for the master:
+  any constant kills a legitimate long fan-out; death detection + legible waiting is the fix.
+- **Client-side prompt queue.** Dies with the renderer state; the manager owns lane lifecycle, so it
+  owns the queue.
+- **Summarize-and-respawn recovery.** A summary loses exactly the tool-level detail the user is asking
+  to SEE; the transcript is already recorded, so replay it.
+
+### See also
+
+- ADR-0263 (P-STALL.2) - the no-turn-clock precedent lanes now inherit.
+- ADR-0271/0273 - the lane surface this extends; ADR-0268/0270 - one-turn-per-lane's origin.
+- P-CHAT.B (ADR-0189) - the chip + diffstat pattern the lane cards adopt.
+- P-VISION.1 (ADR-0136) - the image-block shape `/api/fleet/prompt` adopts.
+- deepseek-harness Agent Notes: result-time applied-hunk diffs (2026-07-02), unified session query
+  service (2026-07-23) - MIT, concept reuse.
