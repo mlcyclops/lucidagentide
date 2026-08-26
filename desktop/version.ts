@@ -301,4 +301,12 @@
 //            fail-closed approval glows, Fleet Profiles, spoken thinking snapshots, an ingest that
 //            cannot hang, real OS folder dialogs from the browser build, and no turn clock
 //            (P-FLEET.1/.L1/.P*, ADR-0264..0272).
-export const APP_VERSION = "1.13.1";
+// v1.13.1 = unlimited fleet lanes under the sustained-pressure guard (90% held 30s; the cap deleted),
+//            lanes spawned straight from GitHub/GitLab/Azure DevOps remotes with per-host tokens in the
+//            OS-encrypted vault, the real OS folder dialog in the lane form, and the truthful minimized
+//            per-state pill (P-FLEET.L2, ADR-0273).
+// v1.13.2 = the fleet fidelity arc: no lane turn clock + Retry/Respawn recovery spawns with memory
+//            (session/load or transcript replay, approvals re-asked), diff chips + pasted-image
+//            thumbnails + staged prompt queues in lane cards, the durable lane-session ledger, and the
+//            reviewable Timeline dock across every workspace (P-FLEET.L3/.L4/.L5, ADR-0274..0277).
+export const APP_VERSION = "1.13.2";
