@@ -24,12 +24,12 @@ import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
-import type { FleetStatusView, LaneEvent, LaneStatus, LaneView, LucidBridge } from "./bridge.ts";
+import type { FleetStatusView, LaneEvent, LaneImage, LaneStatus, LaneToolCode, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetAnswer" | "fleetCancel" | "fleetStop" | "fleetSetModel">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetCancel" | "fleetStop" | "fleetSetModel">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -70,8 +70,8 @@ const STATUS_WORDS: Record<LaneStatus, string> = {
   stopped: "stopped",
 };
 
-interface LaneTool { name: string; detail: string }
-interface LaneTurn { role: "user" | "assistant"; text: string; thinking?: string; tools?: LaneTool[]; error?: string }
+interface LaneTool { name: string; detail: string; code?: LaneToolCode }
+interface LaneTurn { role: "user" | "assistant"; text: string; thinking?: string; tools?: LaneTool[]; error?: string; images?: string[] }
 /** Per-lane render state: the LATEST server view + the locally accumulated stream transcript. Kept in the
  *  module (not the DOM) so a close/reopen of the panel repaints the full history. */
 interface LaneRun {
@@ -83,6 +83,8 @@ interface LaneRun {
   streaming: boolean;
   collapsed: boolean;
   card: HTMLElement | null;
+  /** P-FLEET.L3: images pasted into THIS lane's composer, waiting to ride the next send/stage. */
+  attached: LaneImage[];
 }
 
 let deps: FleetGridDeps | null = null;
@@ -146,6 +148,7 @@ export function openFleetGrid(): void {
   dock.addEventListener("change", onChange);
   dock.addEventListener("keydown", onDockKey);
   dock.addEventListener("input", onInput);
+  dock.addEventListener("paste", onPaste); // P-FLEET.L3: paste an image into a lane composer
   window.addEventListener("resize", onWinResize);
   document.addEventListener("keydown", onKey);
   paintEmpty();
@@ -334,13 +337,14 @@ async function refresh(): Promise<void> {
     seen.add(lane.id);
     let run = runs.get(lane.id);
     if (!run) {
-      run = { view: lane, turns: [], pending: "", pendingThinking: "", pendingTools: [], streaming: false, collapsed: false, card: null };
+      run = { view: lane, turns: [], pending: "", pendingThinking: "", pendingTools: [], streaming: false, collapsed: false, card: null, attached: [] };
       runs.set(lane.id, run);
     } else {
       run.view = lane; // the server is the source of truth on poll; stream events fill the gaps between
     }
     if (grid && !run.card) { run.card = buildCard(run); grid.append(run.card); paintOutput(run); }
     paintFrame(run);
+    maybeDrain(run); // P-FLEET.L3: an idle lane with staged prompts runs the next one, streamed visibly
   }
   for (const [id, run] of [...runs]) {
     if (!seen.has(id)) { run.card?.remove(); runs.delete(id); } // lane fully gone (stopped lanes still list, dimmed)
@@ -411,6 +415,8 @@ function buildCard(run: LaneRun): HTMLElement {
           <button class="btn-mini" data-fleet-respawn>${icon("bolt", 11)} Respawn</button>
         </span>
       </div>
+      <div class="fleet-queue" data-fleet-queue hidden></div>
+      <div class="fleet-attach" data-fleet-attach hidden></div>
       <div class="fleet-compose">
         <textarea class="fleet-input" rows="1" data-fleet-input placeholder="Prompt this lane\u2026" spellcheck="false"></textarea>
         <button class="fleet-card-btn fleet-send" data-fleet-send aria-label="Send to this lane" title="Send">${icon("send", 13)}</button>
@@ -472,12 +478,32 @@ function paintFrame(run: LaneRun): void {
       if (retry) retry.hidden = v.status !== "error" || !v.canRetry;
     }
   }
+  // P-FLEET.L3: the staged-prompt strip - one compact chip per queued prompt, in run order, each with
+  // reorder/delete. Chips ellipsize on one line (invariant 11); the queue itself lives in the manager.
+  const q = $("[data-fleet-queue]", card) as HTMLElement | null;
+  if (q) {
+    q.hidden = v.queued.length === 0;
+    const html = v.queued
+      .map((item, i) => `<span class="fleet-q-chip"><b>${i + 1}</b><span class="fleet-q-txt" title="${esc(item.text)}">${esc(item.text)}${item.images ? ` [${item.images} img]` : ""}</span><button class="fleet-q-btn" data-q-up="${i}" title="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" title="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" title="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
+      .join("");
+    if (q.innerHTML !== html) q.innerHTML = html;
+  }
   const cancel = $("[data-fleet-cancel]", card) as HTMLElement | null;
   if (cancel) cancel.hidden = !(run.streaming || v.status === "working");
   const send = $("[data-fleet-send]", card) as HTMLButtonElement | null;
-  if (send) send.disabled = run.streaming || v.status === "stopped";
+  if (send) {
+    // P-FLEET.L3: a busy lane's Send becomes STAGE - never disabled mid-turn, because parking the next
+    // thought is exactly what the user wants to do while a compact card streams.
+    const staging = run.streaming || v.status === "working" || v.status === "needs-approval";
+    send.disabled = v.status === "stopped";
+    send.title = staging ? "Stage for later - runs in order when this lane goes idle" : "Send";
+    send.classList.toggle("staging", staging);
+  }
   const input = $("[data-fleet-input]", card) as HTMLTextAreaElement | null;
-  if (input) input.disabled = v.status === "stopped";
+  if (input) {
+    input.disabled = v.status === "stopped";
+    input.placeholder = run.streaming || v.status === "working" ? "Stage the next prompt\u2026" : "Prompt this lane\u2026";
+  }
 }
 
 function fillModelSelect(sel: HTMLSelectElement, current: string): void {
@@ -493,8 +519,38 @@ function fillModelSelect(sel: HTMLSelectElement, current: string): void {
 
 // ---------------------------------------------------------------- output stream
 
+/** P-FLEET.L3: the diffstat for a tool's authored code - added/removed line counts, the same signal the
+ *  master's P-CHAT.B chips carry. A write counts all lines added; a patch is uncounted (shown raw). */
+function diffStat(code: LaneToolCode): { added: number; removed: number } | null {
+  if (typeof code.oldText === "string" || typeof code.newText === "string") {
+    const removed = code.oldText ? code.oldText.split("\n").length : 0;
+    const added = code.newText ? code.newText.split("\n").length : 0;
+    return { added, removed };
+  }
+  if (typeof code.content === "string") return { added: code.content ? code.content.split("\n").length : 0, removed: 0 };
+  return null;
+}
+
+/** P-FLEET.L3: the expandable body under a diff chip - old lines prefixed `-`, new prefixed `+`, a
+ *  write's content prefixed `+`, a hashline patch shown raw. Escaped text in a <pre>; never markdown. */
+function diffBody(code: LaneToolCode): string {
+  if (typeof code.patch === "string") return esc(code.patch);
+  const minus = (code.oldText ?? "").split("\n").filter((l, i, a) => l || i < a.length - 1).map((l) => `- ${l}`);
+  const plus = ((code.newText ?? code.content) ?? "").split("\n").filter((l, i, a) => l || i < a.length - 1).map((l) => `+ ${l}`);
+  return esc([...minus, ...plus].join("\n"));
+}
+
 function toolLine(t: LaneTool): string {
-  return `<div class="fleet-tool">${icon("command", 10)}<b>${esc(t.name)}</b><span class="fleet-tool-detail">${esc(t.detail.slice(0, 120))}</span></div>`;
+  const base = `${icon("command", 10)}<b>${esc(t.name)}</b><span class="fleet-tool-detail">${esc(t.detail.slice(0, 120))}</span>`;
+  if (!t.code) return `<div class="fleet-tool">${base}</div>`;
+  // A write/edit gets a DIFF CHIP: the +/- counts inline, the hunk one click away, exactly the master's
+  // chip pattern scaled to a mini window. Lives in the module transcript, so a reopened card keeps it.
+  const stat = diffStat(t.code);
+  const chip = stat
+    ? `<span class="fleet-diffstat"><ins>+${stat.added}</ins><del>-${stat.removed}</del></span>`
+    : `<span class="fleet-diffstat"><ins>patch</ins></span>`;
+  const file = t.code.path ? `<span class="fleet-diff-path" title="${esc(t.code.path)}">${esc(baseName(t.code.path))}</span>` : "";
+  return `<details class="fleet-diff"><summary class="fleet-tool">${base}${file}${chip}</summary><pre class="fleet-diff-pre">${diffBody(t.code)}</pre></details>`;
 }
 function assistantHtml(text: string, thinking: string, tools: LaneTool[], live: boolean, error?: string): string {
   const think = thinking.trim() ? `<div class="fleet-think">${esc(thinking)}</div>` : "";
@@ -513,7 +569,7 @@ function idleLabel(run: LaneRun): string {
 }
 function outputHtml(run: LaneRun): string {
   const turns = run.turns.map((t) => t.role === "user"
-    ? `<div class="fleet-turn-user" title="${esc(t.text)}">${esc(t.text)}</div>`
+    ? `<div class="fleet-turn-user" title="${esc(t.text)}">${(t.images ?? []).map((src) => `<img class="fleet-thumb" src="${src}" alt="pasted image" />`).join("")}${esc(t.text)}</div>`
     : assistantHtml(t.text, t.thinking ?? "", t.tools ?? [], false, t.error)).join("");
   const hasPending = run.streaming || run.pending || run.pendingThinking || run.pendingTools.length;
   const pending = hasPending ? assistantHtml(run.pending, run.pendingThinking, run.pendingTools, true) : "";
@@ -545,7 +601,7 @@ function onLaneEvent(id: string, e: LaneEvent): void {
   switch (e.type) {
     case "token": run.pending += e.text; paintOutput(run); break;
     case "thinking": run.pendingThinking += e.text; paintOutput(run); break;
-    case "tool": run.pendingTools.push({ name: e.name, detail: e.detail }); paintOutput(run); break;
+    case "tool": run.pendingTools.push({ name: e.name, detail: e.detail, ...(e.code ? { code: e.code } : {}) }); paintOutput(run); break;
     case "permission":
       run.view.status = "needs-approval";
       run.view.pendingApproval = { summary: e.summary };
@@ -565,21 +621,65 @@ function onLaneEvent(id: string, e: LaneEvent): void {
   }
 }
 
+/** Send or STAGE: a busy lane cannot take a second turn (one turn per lane, the ADR-0268 lesson), so the
+ *  same button stages the prompt into the manager-owned queue instead - it runs, in order, when the lane
+ *  goes idle. Pasted images ride either path. */
 function sendPrompt(run: LaneRun): void {
-  if (!deps || run.streaming) return;
+  if (!deps) return;
   const input = run.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
   const text = input?.value.trim() ?? "";
-  if (!text) return;
+  const images = run.attached.slice();
+  if (!text && !images.length) return;
+  const id = run.view.id;
+  if (run.streaming || run.view.status === "working" || run.view.status === "needs-approval") {
+    void deps.fleetQueueAdd(id, text, images).then((r) => {
+      if (!r?.ok) { onLaneEvent(id, { type: "error", message: r?.reason ?? "could not stage the prompt" }); return; }
+      if (input) { input.value = ""; input.style.height = ""; }
+      run.attached = [];
+      run.view.queued = [...run.view.queued, { text: text.length > 140 ? `${text.slice(0, 140)}\u2026` : text, images: images.length }];
+      paintFrame(run); paintAttach(run);
+    });
+    return;
+  }
   if (input) { input.value = ""; input.style.height = ""; }
-  run.turns.push({ role: "user", text });
+  run.attached = [];
+  run.turns.push({ role: "user", text, ...(images.length ? { images: images.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}) });
   run.pending = ""; run.pendingThinking = ""; run.pendingTools = [];
   run.streaming = true;
   run.view.status = "working"; // optimistic; the stream's status events correct it
-  paintFrame(run); paintOutput(run); paintPill();
-  const id = run.view.id;
-  void deps.fleetPrompt(id, text, (e) => onLaneEvent(id, e))
+  paintFrame(run); paintOutput(run); paintAttach(run); paintPill();
+  void deps.fleetPrompt(id, text, (e) => onLaneEvent(id, e), images)
     .catch((err: unknown) => onLaneEvent(id, { type: "error", message: err instanceof Error ? err.message : String(err) }))
-    .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); });
+    .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); maybeDrain(run); });
+}
+
+/** P-FLEET.L3: run the next STAGED prompt when the lane is idle - streamed into the card like any turn.
+ *  Guarded so only one drain fires per lane; approvals still glow and wait for a human mid-drain. */
+function maybeDrain(run: LaneRun): void {
+  if (!deps || run.streaming) return;
+  if (!run.view.queued.length) return;
+  if (run.view.status !== "awaiting-input" && run.view.status !== "done") return;
+  const id = run.view.id;
+  const next = run.view.queued[0]!;
+  run.view.queued = run.view.queued.slice(1);
+  run.turns.push({ role: "user", text: next.text + (next.images ? ` [${next.images} image${next.images === 1 ? "" : "s"}]` : "") });
+  run.pending = ""; run.pendingThinking = ""; run.pendingTools = [];
+  run.streaming = true;
+  run.view.status = "working";
+  paintFrame(run); paintOutput(run); paintPill();
+  void deps.fleetDrain(id, (e) => onLaneEvent(id, e))
+    .catch((err: unknown) => onLaneEvent(id, { type: "error", message: err instanceof Error ? err.message : String(err) }))
+    .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); maybeDrain(run); });
+}
+
+/** The pasted-image strip above the composer: thumbnails with an x each, cleared on send/stage. */
+function paintAttach(run: LaneRun): void {
+  const card = run.card; if (!card) return;
+  const strip = $("[data-fleet-attach]", card) as HTMLElement | null; if (!strip) return;
+  strip.hidden = run.attached.length === 0;
+  strip.innerHTML = run.attached
+    .map((im, i) => `<span class="fleet-attach-item"><img class="fleet-thumb" src="data:${im.mimeType};base64,${im.data}" alt="pasted image ${i + 1}" /><button class="fleet-attach-x" data-attach-x="${i}" title="Remove this image" aria-label="Remove pasted image ${i + 1}">${icon("close", 9)}</button></span>`)
+    .join("");
 }
 
 /** Retry the last turn: streams like sendPrompt but pushes NO new user turn - the transcript already
@@ -768,6 +868,33 @@ function onClick(ev: Event): void {
   if (t.closest("[data-fleet-deny]")) { answer(run, false); return; }
   if (t.closest("[data-fleet-retry]")) { runRetry(run); return; }
   if (t.closest("[data-fleet-respawn]")) { runRespawn(run); return; }
+  // P-FLEET.L3: the pasted-image strip and the staged-prompt chips.
+  const ax = t.closest("[data-attach-x]") as HTMLElement | null;
+  if (ax) { run.attached.splice(Number(ax.dataset.attachX), 1); paintAttach(run); return; }
+  const qx = t.closest("[data-q-x]") as HTMLElement | null;
+  if (qx) {
+    const i = Number(qx.dataset.qX);
+    run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
+    paintFrame(run);
+    void deps.fleetQueueRemove(run.view.id, i).catch(() => { /* the next poll corrects it */ });
+    return;
+  }
+  const qup = t.closest("[data-q-up]") as HTMLElement | null;
+  const qdn = t.closest("[data-q-dn]") as HTMLElement | null;
+  if (qup || qdn) {
+    const i = Number((qup ?? qdn)!.dataset[qup ? "qUp" : "qDn"]);
+    const dir: -1 | 1 = qup ? -1 : 1;
+    const to = i + dir;
+    if (to >= 0 && to < run.view.queued.length) {
+      const next = run.view.queued.slice();
+      const [item] = next.splice(i, 1);
+      next.splice(to, 0, item!);
+      run.view.queued = next; // optimistic; the poll is truth
+      paintFrame(run);
+      void deps.fleetQueueMove(run.view.id, i, dir).catch(() => { /* the next poll corrects it */ });
+    }
+    return;
+  }
 }
 
 function onChange(ev: Event): void {
@@ -792,6 +919,35 @@ function onDockKey(ev: KeyboardEvent): void {
     return;
   }
   if (t instanceof HTMLInputElement && t.closest(".fleet-spawn-card")) { ev.preventDefault(); void submitSpawn(); }
+}
+
+/** P-FLEET.L3: paste an image into a lane composer - the master chat's paste-to-thumbnail, per card.
+ *  Text pastes fall through untouched; only image clipboard items are captured. Cap 6, like /api/chat. */
+function onPaste(ev: Event): void {
+  const e = ev as ClipboardEvent;
+  const t = e.target as HTMLElement;
+  if (!(t instanceof HTMLTextAreaElement) || !t.matches("[data-fleet-input]")) return;
+  const card = t.closest(".fleet-card[data-lane]") as HTMLElement | null;
+  const run = card ? runs.get(card.dataset.lane ?? "") : null;
+  if (!run) return;
+  const items = [...(e.clipboardData?.items ?? [])].filter((it) => it.kind === "file" && it.type.startsWith("image/"));
+  if (!items.length) return;
+  e.preventDefault();
+  for (const it of items) {
+    if (run.attached.length >= 6) break;
+    const file = it.getAsFile();
+    if (!file) continue;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result ?? "");
+      const comma = url.indexOf(",");
+      if (comma < 0) return;
+      if (run.attached.length >= 6) return;
+      run.attached.push({ mimeType: file.type, data: url.slice(comma + 1) });
+      paintAttach(run);
+    };
+    reader.readAsDataURL(file);
+  }
 }
 
 function onInput(ev: Event): void {

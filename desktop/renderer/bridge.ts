@@ -178,10 +178,16 @@ export interface LaneView {
   /** P-FLEET.L4: Retry is offered only when a last prompt exists; respawns counts in-place revivals. */
   canRetry: boolean; respawns: number;
   pendingApproval?: { summary: string };
+  /** P-FLEET.L3: staged-prompt previews (clamped text + image count), drained FIFO when idle. */
+  queued: { text: string; images: number }[];
 }
+/** P-FLEET.L3: a pasted image on a lane prompt - the P-VISION.1 shape the master chat uses. */
+export interface LaneImage { data: string; mimeType: string }
+/** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
+export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
   | { type: "token" | "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string }
+  | { type: "tool"; name: string; detail: string; code?: LaneToolCode }
   | { type: "permission"; summary: string }
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
@@ -736,7 +742,13 @@ export interface LucidBridge {
    *  freshly-typed token used ONLY to spawn that git process - it is redacted from errors and never
    *  persisted by the server (the encrypted copy is written separately through the OS vault). */
   fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
-  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void): Promise<void>;
+  /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat. */
+  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[]): Promise<void>;
+  /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
+  fleetQueueAdd(laneId: string, text: string, images?: LaneImage[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
+  fleetQueueRemove(laneId: string, index: number): Promise<{ ok: boolean } | null>;
+  fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
+  fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   /** P-FLEET.L4: re-send the lane's last prompt, streaming like fleetPrompt (recovers an error lane first). */
   fleetRetry(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   /** P-FLEET.L4: revive an error/stopped lane in place - same id, transcript memory carried. */
@@ -1219,12 +1231,19 @@ export const bridge: LucidBridge = {
   // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
   fleetStatus: () => getData("/api/fleet/status"),
   fleetSpawn: (opts) => post("/api/fleet/spawn", opts),
-  fleetPrompt: (laneId, text, onEvent) => {
+  fleetPrompt: (laneId, text, onEvent, images) => {
     // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are
     // structurally valid LaneEvents too, so the sink types unify at this one boundary. Named cast per
     // house rule: structurally-compatible tagged unions the reader's ChatEvent signature can't express.
     const sink = onEvent as (e: ChatEvent) => void;
-    return streamNdjson("/api/fleet/prompt", { laneId, text }, sink);
+    return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}) }, sink);
+  },
+  fleetQueueAdd: (laneId, text, images) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}) }),
+  fleetQueueRemove: (laneId, index) => post("/api/fleet/queue/remove", { laneId, index }),
+  fleetQueueMove: (laneId, index, dir) => post("/api/fleet/queue/move", { laneId, index, dir }),
+  fleetDrain: (laneId, onEvent) => {
+    const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
+    return streamNdjson("/api/fleet/drain", { laneId }, sink);
   },
   fleetRetry: (laneId, onEvent) => {
     const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt

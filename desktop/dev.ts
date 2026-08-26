@@ -534,9 +534,22 @@ const PORT = Number(process.env.PORT ?? 5319);
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
 const TOKEN = randomBytes(32).toString("hex");
-// P-FLEET.L1: the local lane manager - N gated headless LUCID agents on this machine, capped by the 75%
-// headroom guard. Lanes default to the MASTER session's current model unless the user picks another.
+// P-FLEET.L1/L2/L4: the local lane manager - N gated headless LUCID agents on this machine under the
+// sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks another.
 const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName() });
+// P-FLEET.L3: the P-VISION.1 image filter for lane prompts and the staged queue - identical discipline to
+// /api/chat (well-formed {data, mimeType} blocks only, capped at 6; anything torn is dropped, not trusted).
+function laneImages(raw: unknown): { data: string; mimeType: string }[] {
+  if (!Array.isArray(raw)) return [];
+  const out: { data: string; mimeType: string }[] = [];
+  for (const im of raw) {
+    if (out.length >= 6) break;
+    if (im && typeof im === "object" && "data" in im && "mimeType" in im && typeof im.data === "string" && typeof im.mimeType === "string") {
+      out.push({ data: im.data, mimeType: im.mimeType });
+    }
+  }
+  return out;
+}
 // Lanes are child processes: an engine shutdown must never orphan a worker turn (deny open asks, cancel,
 // kill). "exit" is the last-resort sync path; SIGINT/SIGTERM cover a clean stop.
 process.on("exit", () => { try { fleet.stopAll(); } catch { /* dying anyway */ } });
@@ -2595,11 +2608,32 @@ const server = Bun.serve({
         const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined });
         return json({ ok: true, data: r });
       }
+      // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
+      // capped at 6). The same filter guards the queue and its drain below.
       if (p === "/api/fleet/prompt" && req.method === "POST") {
-        const b = await readBody<{ laneId?: unknown; text?: unknown }>(req);
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown }>(req);
         const laneId = String(b.laneId ?? "");
         const text = String(b.text ?? "");
-        return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, text, emit));
+        return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, text, emit, laneImages(b.images)));
+      }
+      // P-FLEET.L3: the staged-prompt queue - manager-owned (survives dock close), drained FIFO by the
+      // renderer when the lane goes idle, so every drained turn streams into a visible card.
+      if (p === "/api/fleet/queue" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown }>(req);
+        return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images)) });
+      }
+      if (p === "/api/fleet/queue/remove" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
+        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index)) });
+      }
+      if (p === "/api/fleet/queue/move" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown; dir?: unknown }>(req);
+        return json({ ok: true, data: fleet.queueMove(String(b.laneId ?? ""), Number(b.index), Number(b.dir) < 0 ? -1 : 1) });
+      }
+      if (p === "/api/fleet/drain" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        const laneId = String(b.laneId ?? "");
+        return ndjsonStream("fleet", (emit) => fleet.drain(laneId, emit));
       }
       // P-FLEET.L4 (ADR-0274): retry streams the re-sent last turn exactly like /api/fleet/prompt;
       // respawn revives an error/stopped lane IN PLACE (same id, memory carried) and returns its view.

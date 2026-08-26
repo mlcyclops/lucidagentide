@@ -19070,3 +19070,54 @@ firewall suite sharing the fake agent unaffected (71 pass); renderer + server ty
 
 ADR-0274 (the roadmap this builds), ADR-0263 (the master's no-clock precedent), ADR-0271/0273 (the
 lane surface), acp.ts `die()` (the event-driven death this leans on).
+
+## ADR-0276 -- P-FLEET.L3 BUILT: lane fidelity (diff chips, images, staged prompts), and the deltas
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. `make demo-P-FLEET.L3` green (3 sections); fleet_lanes suite 15/15; the
+firewall suite sharing the fake agent unaffected (71 pass); renderer + server typecheck clean;
+invariant-11 verified in a headless render at 300px card width.
+**Increment:** P-FLEET.L3, second of the ADR-0274 roadmap. L5 (histories + timeline) remains.
+
+### What shipped
+
+1. **Diffs on the lane wire.** The measurement settled the roadmap's open question: omp does NOT emit
+   result-time diffs on this path - the master's chips derive the code from the tool_call's **rawInput
+   at call time** (P-CHAT.1: a write's `content`, an edit's `edits[{old_text,new_text}]` joined into one
+   before/after pair, omp's hashline `patch` in `input`). The lane wire now runs the SAME extraction
+   (`#toolCode`, 16K cap vs the master's 64K - mini windows), with relative paths resolved against the
+   LANE's cwd, never the master's. `LaneEvent` tool gains an optional `code` payload; the card renders a
+   one-line **diff chip** - tool name, ellipsized detail, filename, green +N / red -N - expanding to the
+   escaped hunk in a bounded `<pre>`. Chips live in the module transcript, so a reopened card keeps them.
+   dsh's result-time-hunk PRINCIPLE (persist what the card needs; replay without recompute) is honored;
+   its mechanism was not applicable to this stream.
+2. **Images into lanes.** `/api/fleet/prompt` (and the queue) take the P-VISION.1 shape through one
+   shared `laneImages` filter (well-formed `{data, mimeType}` only, cap 6); the manager appends them as
+   ACP image blocks after the text, byte-identical to the master chat's path. The composer pastes to
+   thumbnails (per-card strip with per-image remove); the user turn renders them. The recovery
+   transcript records `[attached N images]` - the COUNT, never the base64, which would burn the whole
+   replay budget on one screenshot.
+3. **Staged prompts.** A per-lane FIFO **owned by the manager** (survives dock close and renderer
+   reloads), capped at 8 (P-FLEET.1's queue discipline: past the cap, refuse loudly with the number).
+   The card's Send flips to **Stage** (amber) while the lane is busy - never disabled mid-turn - and
+   staged chips render as numbered one-line rows with reorder/remove. The DRAIN is renderer-triggered:
+   when the poll (or a settling stream) sees an idle lane with a queue, it streams the next item into
+   the visible card. The manager never runs a turn nobody can watch - approvals need a human and a card
+   to glow in. One-turn-per-lane is inviolate: a busy lane refuses the drain.
+
+### Deltas from ADR-0274's plan
+
+- "Compact chips above the composer with reorder/delete" landed exactly; the plan's implicit
+  auto-drain-anywhere became **renderer-triggered drain** for the approval-visibility reason above. A
+  headless fleet with a closed dashboard holds its queue rather than running turns whose asks nobody
+  can answer - that is fail-closed posture, not a limitation.
+- Diff fidelity is call-time (rawInput), not result-time: measured against acp_backend, the stream
+  simply does not carry applied result hunks; adopting dsh's mechanism would have required forking the
+  edit tools (invariant 1 says no).
+- `fake_acp_agent.ts` gained an edit-shaped `rawInput` on its tool_call and an `[images: N]` echo -
+  additive; firewall consumers read title/kind only and are unaffected (71 pass).
+
+### See also
+
+ADR-0274 (the roadmap), ADR-0275 (L4: the recovery machinery the queue leans on), P-CHAT.1/ADR-0104
+(the extraction contract), P-VISION.1/ADR-0136 (the image shape), ADR-0268 (one turn per lane).

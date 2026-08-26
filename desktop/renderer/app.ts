@@ -10764,6 +10764,10 @@ function wire(): void {
     fleetPrompt: bridge.fleetPrompt,
     fleetRetry: bridge.fleetRetry, // P-FLEET.L4: streamed re-send of the last turn
     fleetRespawn: bridge.fleetRespawn, // P-FLEET.L4: revive in place, memory carried
+    fleetQueueAdd: bridge.fleetQueueAdd, // P-FLEET.L3: stage a prompt while the lane is busy
+    fleetQueueRemove: bridge.fleetQueueRemove,
+    fleetQueueMove: bridge.fleetQueueMove,
+    fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
     fleetAnswer: bridge.fleetAnswer,
     fleetCancel: bridge.fleetCancel,
     fleetStop: bridge.fleetStop,

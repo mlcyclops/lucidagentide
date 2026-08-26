@@ -238,3 +238,72 @@ test("respawn revives a user-STOPPED lane; prompt alone never does", async () =>
   expect(reply).toContain("second wind");
   expect(reply).toContain("first turn"); // the stop did not amputate the memory
 }, TIMEOUT);
+
+// ── P-FLEET.L3 (ADR-0274): lane fidelity - diffs on the wire, images in prompts, staged queue ────────
+
+test("a write/edit tool_call carries its authored code over the lane wire, path resolved to the LANE cwd", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "edit something", (e) => events.push(e));
+  const tool = events.find((e) => e.type === "tool" && e.code);
+  expect(tool).toBeDefined();
+  if (tool?.type !== "tool" || !tool.code) throw new Error("unreachable");
+  expect(tool.code.oldText).toBe("hello");
+  expect(tool.code.newText).toBe("hello\nworld");
+  expect(tool.code.path.replace(/\\/g, "/")).toContain("desktop/src/greeting.ts"); // lane cwd, not the master's
+}, TIMEOUT);
+
+test("images ride the prompt as ACP blocks; the transcript remembers the COUNT, never the bytes", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const events: LaneEvent[] = [];
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  await live.prompt(id, "what is in this screenshot?", (e) => events.push(e), [png, png]);
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("[images: 2]"); // the fake counts the image blocks it actually received
+  // Crash-free way to see the transcript: respawn and read the preamble on the next turn.
+  await live.respawn(id);
+  const events2: LaneEvent[] = [];
+  await live.prompt(id, "still there?", (e) => events2.push(e));
+  const reply2 = events2.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply2).toContain("[attached 2 images]"); // the count, in memory
+  expect(reply2).not.toContain("aGVsbG8="); // the bytes, never
+}, TIMEOUT);
+
+test("staged prompts run FIFO when the lane goes idle; reorder and remove work; the cap refuses loudly", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  expect(live.enqueue(id, "first staged").ok).toBe(true);
+  expect(live.enqueue(id, "second staged").ok).toBe(true);
+  expect(live.enqueue(id, "third staged").ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.text)).toEqual(["first staged", "second staged", "third staged"]);
+  // Reorder: third before second; then drop first.
+  expect(live.queueMove(id, 2, -1).ok).toBe(true);
+  expect(live.queueRemove(id, 0).ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.text)).toEqual(["third staged", "second staged"]);
+  // Drain streams the HEAD like any turn.
+  const events: LaneEvent[] = [];
+  await live.drain(id, (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("third staged");
+  expect((await live.status()).lanes[0]!.queued.length).toBe(1);
+  // The cap: fill to QUEUE_MAX and the next one is refused with the number.
+  for (let i = 0; i < 7; i++) live.enqueue(id, `filler ${i}`);
+  const overflow = live.enqueue(id, "one too many");
+  expect(overflow.ok).toBe(false);
+  expect(overflow.reason).toContain("full");
+  // Draining while BUSY is refused, not crossed (one turn per lane).
+  process.env.FAKE_ACP_MODE = "hang";
+  const l2 = await live.spawn({ cwd: import.meta.dir, name: "busy" });
+  const hangTurn = live.prompt(l2.lane!.id, "long", () => {});
+  await Bun.sleep(150);
+  live.enqueue(l2.lane!.id, "queued behind the hang");
+  const refused: LaneEvent[] = [];
+  await live.drain(l2.lane!.id, (e) => refused.push(e));
+  expect(refused.some((e) => e.type === "error" && /busy/.test(e.message))).toBe(true);
+  live.cancel(l2.lane!.id);
+  await hangTurn;
+}, TIMEOUT);

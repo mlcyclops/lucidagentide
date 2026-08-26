@@ -489,6 +489,10 @@ demo-P-FLEET.L1: ## P-FLEET.L1 (guard evolved by P-FLEET.L2): local lanes - conc
 demo-P-FLEET.L2: ## P-FLEET.L2 (ADR-0273): UNLIMITED lanes gated only by SUSTAINED pressure (90% held 30s - a burst never refuses, a blind sample never counts as load, no evidence fails open), lanes spawned from real GitHub/GitLab/Azure DevOps remotes via the OS folder dialog, per-HOST credentials in the OS-encrypted vault (scoped ref -> env round-trip, never offered cross-host, rides an Authorization header not the URL, redacted from errors), and the minimized status-bar snapshot (one colored dot + count per lane state, needs-approval first)
 	$(BUN) run harness/scripts/demo_pfleetl2.ts
 
+.PHONY: demo-P-FLEET.L3
+demo-P-FLEET.L3: ## P-FLEET.L3 (ADR-0274): lane FIDELITY - a write/edit tool call's authored code crosses the lane wire as a structured payload (P-CHAT.1 rawInput contract, path resolved against the LANE's cwd) so cards render real diff chips; pasted images ride as ACP image blocks exactly like the master chat (replay memory keeps the COUNT, never the base64); and staged prompts wait in a capped manager-owned FIFO per lane (reorder/remove, drained in order when idle, refused loudly at 8, never crossed into a busy lane)
+	$(BUN) run harness/scripts/demo_pfleetl3.ts
+
 .PHONY: demo-P-FLEET.L4
 demo-P-FLEET.L4: ## P-FLEET.L4 (ADR-0274): lanes that SURVIVE - no lane turn clock (a mid-turn child crash lands error in milliseconds, event-driven, never a 600s deadline), error is a recoverable state (Retry re-sends the last prompt, Respawn revives IN PLACE on the same lane id with the transcript carried - capability-gated session/load when the agent offers it, delimited-transcript preamble otherwise), fail-closed survives recovery (an ask open at death dies as a DENY and the revived lane RE-ASKS a human), and a user-stopped lane is refused by prompt but revived by explicit respawn with memory intact
 	$(BUN) run harness/scripts/demo_pfleetl4.ts

@@ -36,7 +36,13 @@ function write(o: unknown): void { process.stdout.write(JSON.stringify(o) + "\n"
 
 function extractText(prompt: unknown): string {
   if (!Array.isArray(prompt)) return "";
-  return prompt.map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : "")).join("");
+  return prompt.map((p) => (p && typeof p === "object" && "text" in p && typeof p.text === "string" ? p.text : "")).join("");
+}
+
+/** P-FLEET.L3: how many image blocks rode the prompt - echoed so a test can PROVE they crossed the wire. */
+function countImages(prompt: unknown): number {
+  if (!Array.isArray(prompt)) return 0;
+  return prompt.filter((p) => p && typeof p === "object" && "type" in p && p.type === "image").length;
 }
 
 function requestPermission(sessionId: string): Promise<unknown> {
@@ -77,8 +83,13 @@ async function handle(line: string): Promise<void> {
       process.exit(1); // mid-turn death: session/prompt never gets its response
     }
     const outcome = MODE === "permission" ? await requestPermission(sessionId) : undefined;
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", title: "search", status: "completed" } } });
-    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: replyText(MODE, promptText, outcome) } } } });
+    // P-FLEET.L3: the tool_call carries an EDIT-shaped rawInput (the P-CHAT.1 extraction contract), so a
+    // lane test can assert the authored diff survives the wire. Consumers that only read title/kind are
+    // unaffected (the firewall suites).
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", title: "search", kind: "edit", status: "completed", rawInput: { path: "src/greeting.ts", edits: [{ old_text: "hello", new_text: "hello\nworld" }] } } } });
+    const imgs = countImages(params?.prompt);
+    const echoed = imgs ? `${replyText(MODE, promptText, outcome)} [images: ${imgs}]` : replyText(MODE, promptText, outcome);
+    write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: echoed } } } });
     write({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
     return;
   }
