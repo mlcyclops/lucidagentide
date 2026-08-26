@@ -2601,6 +2601,17 @@ const server = Bun.serve({
         const text = String(b.text ?? "");
         return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, text, emit));
       }
+      // P-FLEET.L4 (ADR-0274): retry streams the re-sent last turn exactly like /api/fleet/prompt;
+      // respawn revives an error/stopped lane IN PLACE (same id, memory carried) and returns its view.
+      if (p === "/api/fleet/retry" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        const laneId = String(b.laneId ?? "");
+        return ndjsonStream("fleet", (emit) => fleet.retry(laneId, emit));
+      }
+      if (p === "/api/fleet/respawn" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        return json({ ok: true, data: await fleet.respawn(String(b.laneId ?? "")) });
+      }
       if (p === "/api/fleet/answer" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; allow?: unknown }>(req);
         return json({ ok: true, data: fleet.answer(String(b.laneId ?? ""), b.allow === true) });

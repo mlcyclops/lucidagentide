@@ -10762,6 +10762,8 @@ function wire(): void {
     fleetStatus: bridge.fleetStatus,
     fleetSpawn: bridge.fleetSpawn,
     fleetPrompt: bridge.fleetPrompt,
+    fleetRetry: bridge.fleetRetry, // P-FLEET.L4: streamed re-send of the last turn
+    fleetRespawn: bridge.fleetRespawn, // P-FLEET.L4: revive in place, memory carried
     fleetAnswer: bridge.fleetAnswer,
     fleetCancel: bridge.fleetCancel,
     fleetStop: bridge.fleetStop,

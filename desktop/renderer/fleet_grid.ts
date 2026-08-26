@@ -29,7 +29,7 @@ import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetAnswer" | "fleetCancel" | "fleetStop" | "fleetSetModel">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetAnswer" | "fleetCancel" | "fleetStop" | "fleetSetModel">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -390,6 +390,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <span class="fleet-led" aria-hidden="true"></span>
       <span class="fleet-lane-name" data-fleet-name></span>
       <span class="fleet-cwd-chip" data-fleet-cwd></span>
+      <span class="fleet-quiet" data-fleet-quiet hidden></span>
       <select class="fleet-model" data-fleet-model aria-label="Lane model"></select>
       <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the lane card" title="Collapse (keeps the header)">${icon("minus", 12)}</button>
       <button class="fleet-card-btn" data-fleet-stop aria-label="Stop this lane" title="Stop the lane">${icon("close", 12)}</button>
@@ -403,6 +404,13 @@ function buildCard(run: LaneRun): HTMLElement {
           <button class="btn-mini danger" data-fleet-deny>${icon("close", 11)} Deny</button>
         </span>
       </div>
+      <div class="fleet-recover" data-fleet-recover hidden>
+        <span class="fleet-recover-txt" data-fleet-recover-txt></span>
+        <span class="fleet-approve-acts">
+          <button class="btn-mini ok" data-fleet-retry>${icon("refresh", 11)} Retry</button>
+          <button class="btn-mini" data-fleet-respawn>${icon("bolt", 11)} Respawn</button>
+        </span>
+      </div>
       <div class="fleet-compose">
         <textarea class="fleet-input" rows="1" data-fleet-input placeholder="Prompt this lane\u2026" spellcheck="false"></textarea>
         <button class="fleet-card-btn fleet-send" data-fleet-send aria-label="Send to this lane" title="Send">${icon("send", 13)}</button>
@@ -413,16 +421,31 @@ function buildCard(run: LaneRun): HTMLElement {
 }
 
 /** Repaint everything on the card EXCEPT the output stream: the status frame (class + LED + border), the
- *  labels, the model pick, the approval bar, and the compose row's enable/cancel state. Never touches the
- *  textarea's value, and never rebuilds a focused select - polls must not eat what the user is doing. */
+ *  labels, the model pick, the approval bar, the recovery bar, the quiet chip, and the compose row's
+ *  enable/cancel state. Never touches the textarea's value, and never rebuilds a focused select - polls
+ *  must not eat what the user is doing. */
 function paintFrame(run: LaneRun): void {
   const card = run.card; if (!card) return;
   const v = run.view;
   card.className = `fleet-card lane-${v.status}`;
   const name = $("[data-fleet-name]", card) as HTMLElement | null;
-  if (name) { name.textContent = v.name || v.id; name.title = `${v.name || v.id} \u00b7 ${v.status} \u00b7 ${v.turns} turns`; }
+  if (name) {
+    name.textContent = v.name || v.id;
+    name.title = `${v.name || v.id} \u00b7 ${v.status} \u00b7 ${v.turns} turns${v.respawns ? ` \u00b7 respawned ${v.respawns}\u00d7, memory carried` : ""}`;
+  }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
   if (cwd) { cwd.textContent = baseName(v.cwd); cwd.title = v.cwd; }
+  // P-FLEET.L4: lanes have NO turn clock, so a long silent stretch must be LEGIBLE instead of fatal.
+  const quiet = $("[data-fleet-quiet]", card) as HTMLElement | null;
+  if (quiet) {
+    const quietMs = v.status === "working" ? Date.now() - v.lastActivityAt : 0;
+    quiet.hidden = quietMs <= 90_000;
+    if (quietMs > 90_000) {
+      const m = Math.floor(quietMs / 60_000);
+      quiet.textContent = m >= 1 ? `quiet ${m}m` : `quiet ${Math.round(quietMs / 1000)}s`;
+      quiet.title = `Nothing has streamed for ${Math.round(quietMs / 1000)}s. Long turns run to completion (no lane clock) - Cancel is yours whenever you want it.`;
+    }
+  }
   const sel = $("[data-fleet-model]", card) as HTMLSelectElement | null;
   if (sel && document.activeElement !== sel) fillModelSelect(sel, v.model);
   const main = $(".fleet-card-main", card) as HTMLElement | null;
@@ -432,6 +455,22 @@ function paintFrame(run: LaneRun): void {
     ap.hidden = v.status !== "needs-approval";
     const txt = $("[data-fleet-approve-txt]", card) as HTMLElement | null;
     if (txt) { const s = v.pendingApproval?.summary ?? "The lane asks to run a gated action."; txt.textContent = s; txt.title = s; }
+  }
+  // P-FLEET.L4: error is a state, not a grave. Retry re-sends the last prompt (error lanes with one);
+  // Respawn revives in place. A user-STOPPED lane gets Respawn only - stopping was a decision.
+  const rec = $("[data-fleet-recover]", card) as HTMLElement | null;
+  if (rec) {
+    const show = (v.status === "error" || v.status === "stopped") && !run.streaming;
+    rec.hidden = !show;
+    if (show) {
+      const txt = $("[data-fleet-recover-txt]", card) as HTMLElement | null;
+      const msg = v.status === "error"
+        ? "The lane failed. Retry re-sends the last prompt; either way its memory is carried."
+        : "Lane stopped. Respawn revives it in place with its memory.";
+      if (txt) { txt.textContent = msg; txt.title = msg; }
+      const retry = $("[data-fleet-retry]", card) as HTMLButtonElement | null;
+      if (retry) retry.hidden = v.status !== "error" || !v.canRetry;
+    }
   }
   const cancel = $("[data-fleet-cancel]", card) as HTMLElement | null;
   if (cancel) cancel.hidden = !(run.streaming || v.status === "working");
@@ -541,6 +580,29 @@ function sendPrompt(run: LaneRun): void {
   void deps.fleetPrompt(id, text, (e) => onLaneEvent(id, e))
     .catch((err: unknown) => onLaneEvent(id, { type: "error", message: err instanceof Error ? err.message : String(err) }))
     .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); });
+}
+
+/** Retry the last turn: streams like sendPrompt but pushes NO new user turn - the transcript already
+ *  shows the prompt from the failed attempt; only the fresh reply is new. */
+function runRetry(run: LaneRun): void {
+  if (!deps || run.streaming) return;
+  run.pending = ""; run.pendingThinking = ""; run.pendingTools = [];
+  run.streaming = true;
+  run.view.status = "working"; // optimistic; the stream's status events correct it
+  paintFrame(run); paintOutput(run); paintPill();
+  const id = run.view.id;
+  void deps.fleetRetry(id, (e) => onLaneEvent(id, e))
+    .catch((err: unknown) => onLaneEvent(id, { type: "error", message: err instanceof Error ? err.message : String(err) }))
+    .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); });
+}
+
+/** Respawn in place (memory carried); the returned view or the next poll repaints the frame. */
+function runRespawn(run: LaneRun): void {
+  if (!deps) return;
+  run.view.status = "starting"; paintFrame(run); paintPill();
+  void deps.fleetRespawn(run.view.id)
+    .then((r) => { if (r?.ok && r.lane) { run.view = r.lane; } paintFrame(run); paintOutput(run); paintPill(); })
+    .catch(() => { /* the next poll corrects it */ });
 }
 
 function answer(run: LaneRun, allow: boolean): void {
@@ -704,6 +766,8 @@ function onClick(ev: Event): void {
   if (t.closest("[data-fleet-cancel]")) { void deps.fleetCancel(run.view.id).catch(() => { /* stream end resolves the state */ }); return; }
   if (t.closest("[data-fleet-allow]")) { answer(run, true); return; }
   if (t.closest("[data-fleet-deny]")) { answer(run, false); return; }
+  if (t.closest("[data-fleet-retry]")) { runRetry(run); return; }
+  if (t.closest("[data-fleet-respawn]")) { runRespawn(run); return; }
 }
 
 function onChange(ev: Event): void {

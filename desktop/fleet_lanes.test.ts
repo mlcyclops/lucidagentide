@@ -84,7 +84,7 @@ test("a prompt turn streams tokens, lands done, and counts the turn", async () =
   const r = await live.spawn({ cwd: import.meta.dir, name: "worker-1" });
   const events: LaneEvent[] = [];
   await live.prompt(r.lane!.id, "ping", (e) => events.push(e));
-  const text = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+  const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
   expect(text).toContain("You said: ping");
   expect(events.some((e) => e.type === "done")).toBe(true);
   const st = await live.status();
@@ -106,7 +106,7 @@ test("one turn at a time per lane - an overlapping prompt is refused, not crosse
   await Bun.sleep(150);
   const second: LaneEvent[] = [];
   await live.prompt(r.lane!.id, "overlap", (e) => second.push(e));
-  expect(second.some((e) => e.type === "error" && /busy/.test((e as { message: string }).message))).toBe(true);
+  expect(second.some((e) => e.type === "error" && /busy/.test(e.message))).toBe(true);
   live.cancel(r.lane!.id); // the fake answers session/cancel with stopReason cancelled
   await firstTurn;
   const st = await live.status();
@@ -126,7 +126,7 @@ test("a permission ask lands needs-approval and DENY resolves it fail-closed", a
   expect((await live.status()).lanes[0]!.status).toBe("needs-approval");
   expect(live.answer(r.lane!.id, false).ok).toBe(true);
   await turn;
-  const text = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+  const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
   expect(text).toContain("cancelled"); // the fake echoes the outcome: we denied
   expect(events.some((e) => e.type === "permission")).toBe(true);
 }, TIMEOUT);
@@ -139,4 +139,102 @@ test("stop kills the lane and dies as a deny for any open ask; stopped lanes ref
   const events: LaneEvent[] = [];
   await live.prompt(r.lane!.id, "hello?", (e) => events.push(e));
   expect(events.some((e) => e.type === "error")).toBe(true);
+}, TIMEOUT);
+
+// ── P-FLEET.L4 (ADR-0274): fault tolerance + recovery spawns ─────────────────────────────────────────
+
+test("a mid-turn CRASH lands error event-driven (no clock), and the next prompt recovers WITH MEMORY", async () => {
+  // The child streams half a thought then dies without answering session/prompt. acp.ts die() must
+  // reject the pending request the instant the process exits - not after any timeout.
+  live = manager({ mode: "crash" });
+  const r = await live.spawn({ cwd: import.meta.dir, name: "worker" });
+  const id = r.lane!.id;
+  const t0 = Date.now();
+  const first: LaneEvent[] = [];
+  await live.prompt(id, "remember the codeword: PELICAN", (e) => first.push(e));
+  expect(Date.now() - t0).toBeLessThan(5_000); // event-driven death, never a deadline
+  expect(first.some((e) => e.type === "error")).toBe(true);
+  let st = await live.status();
+  expect(st.lanes[0]!.status).toBe("error");
+  expect(st.lanes[0]!.canRetry).toBe(true);
+
+  // The NEXT prompt recovers in place: a healthy child this time. The fake agent advertises no
+  // loadSession capability, so recovery must take the FALLBACK path - the recorded transcript rides the
+  // next wire prompt as a one-shot preamble, which the fake echoes back ("You said: ...").
+  delete process.env.FAKE_ACP_MODE;
+  const second: LaneEvent[] = [];
+  await live.prompt(id, "what was the codeword?", (e) => second.push(e));
+  const reply = second.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("PELICAN");                          // memory of the pre-crash turn survived
+  expect(reply).toContain("what was the codeword?");           // the new prompt rode along
+  expect(reply).toContain("TRANSCRIPT START");                 // clearly delimited as memory, not instructions
+  st = await live.status();
+  expect(st.lanes[0]!.id).toBe(id);                            // same logical lane, same id (invariant 9)
+  expect(st.lanes[0]!.respawns).toBe(1);
+  expect(st.lanes[0]!.status).toBe("done");
+}, TIMEOUT);
+
+test("retry re-sends the LAST prompt after a crash, without the user asking twice", async () => {
+  live = manager({ mode: "crash" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  await live.prompt(id, "ship the release notes", () => {});
+  expect((await live.status()).lanes[0]!.status).toBe("error");
+  delete process.env.FAKE_ACP_MODE;
+  const events: LaneEvent[] = [];
+  await live.retry(id, (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("ship the release notes");           // the same ask went out again
+  // the failed attempt's user turn was replaced, not duplicated: the preamble carries it at most once
+  expect(reply.split("ship the release notes").length - 1).toBeLessThanOrEqual(2); // preamble echo + live prompt
+  expect((await live.status()).lanes[0]!.status).toBe("done");
+}, TIMEOUT);
+
+test("a pre-respawn approval dies as a DENY, and the revived lane RE-ASKS - never auto-grants", async () => {
+  live = manager({ mode: "permission" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const first: LaneEvent[] = [];
+  const turn = live.prompt(id, "attempt the gated action", (e) => first.push(e));
+  let pending = false;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = !!(await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending).toBe(true);
+  // Stop with the ask OPEN: it must die as a deny (fail-closed), never dangle into the respawn.
+  expect(live.stop(id).ok).toBe(true);
+  await turn;
+  const firstText = first.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  if (firstText) expect(firstText).not.toContain('"selected"'); // whatever settled, nothing was granted
+
+  // Revive in place; the SAME gated action must ask a HUMAN again on the new child.
+  const rev = await live.respawn(id);
+  expect(rev.ok).toBe(true);
+  const second: LaneEvent[] = [];
+  const turn2 = live.prompt(id, "attempt the gated action again", (e) => second.push(e));
+  let pending2 = false;
+  for (let i = 0; i < 40 && !pending2; i++) { await Bun.sleep(100); pending2 = !!(await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending2).toBe(true);                                  // re-asked, not remembered as granted
+  expect(live.answer(id, true).ok).toBe(true);
+  await turn2;
+  const reply = second.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain('"selected"');                        // THIS allow was explicit and fresh
+  expect((await live.status()).lanes[0]!.respawns).toBe(1);
+}, TIMEOUT);
+
+test("respawn revives a user-STOPPED lane; prompt alone never does", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  await live.prompt(id, "first turn", () => {});
+  expect(live.stop(id).ok).toBe(true);
+  const refused: LaneEvent[] = [];
+  await live.prompt(id, "hello?", (e) => refused.push(e));
+  expect(refused.some((e) => e.type === "error" && /respawn/.test(e.message))).toBe(true);
+  const rev = await live.respawn(id);
+  expect(rev.ok).toBe(true);
+  expect(rev.lane!.status).toBe("awaiting-input");
+  const events: LaneEvent[] = [];
+  await live.prompt(id, "second wind", (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("second wind");
+  expect(reply).toContain("first turn"); // the stop did not amputate the memory
 }, TIMEOUT);

@@ -42,6 +42,10 @@ export interface LaneView {
   lastActivityAt: number;
   /** Completed prompt turns. */
   turns: number;
+  /** P-FLEET.L4: a failed/stopped lane can re-send its last prompt (Retry) when one was recorded. */
+  canRetry: boolean;
+  /** P-FLEET.L4: how many times this lane has been respawned in place (same id, memory carried). */
+  respawns: number;
   pendingApproval?: { summary: string };
 }
 
@@ -70,12 +74,19 @@ export interface FleetStatusData {
   masterModel: string;
 }
 
-/** One worker turn's deadline - ADR-0186's ten minutes of patience, same as P-FLEET.1's jobTimeoutMs. */
-const LANE_TURN_TIMEOUT_MS = 600_000;
+// P-FLEET.L4 (ADR-0274): there is NO lane turn clock. ADR-0186's ten-minute deadline killed exactly the
+// turns worth running (the master lost its clock in P-STALL.2, ADR-0263; lanes now match). Child DEATH is
+// event-driven - acp.ts die() rejects every pending request the instant the process exits - so a prompt
+// with no timeout is raced against the child's life, not against a wall clock. Silence is patience;
+// Cancel and Stop remain the human's levers.
 /** An unanswered approval is a DENY after this long (fail-closed; the ask stays visible until then). */
 const APPROVAL_TIMEOUT_MS = 600_000;
 /** ACP handshake bounds (P-KG-INGEST.5, ADR-0264: every request carries a clock). */
 const HANDSHAKE_MS = 30_000;
+/** The transcript kept for recovery replay, per lane: enough memory to resume mid-task, bounded so a
+ *  chatty lane cannot grow without limit. Oldest turns fall off first; the byte cap trims per turn. */
+const TRANSCRIPT_MAX_TURNS = 40;
+const TRANSCRIPT_MAX_TURN_CHARS = 8_000;
 /** Pressure-window cadence. Ten readings per sustain window is plenty of resolution to tell a burst
  *  from a siege, and a two-point os.cpus() read costs nothing measurable. */
 const SAMPLE_MS = 3_000;
@@ -95,6 +106,9 @@ export interface FleetLaneDeps {
   now?: () => number;
 }
 
+/** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time. */
+interface LaneTurnRecord { role: "user" | "assistant"; text: string }
+
 interface Lane {
   id: string;
   name: string;
@@ -112,6 +126,20 @@ interface Lane {
   pending: { summary: string; resolve: (allow: boolean) => void } | null;
   /** A prompt turn is in flight (one at a time per lane). */
   busy: boolean;
+  // ── P-FLEET.L4 recovery state ─────────────────────────────────────────────────────────────────────
+  /** Bounded conversation memory (user + folded assistant turns) for the respawn replay. */
+  transcript: LaneTurnRecord[];
+  /** Assistant text accumulating during the CURRENT turn; folded into `transcript` when it settles. */
+  liveText: string;
+  /** Compact tool titles for the current turn, folded with the assistant text. */
+  liveTools: string[];
+  /** The last user prompt, for Retry. */
+  lastPrompt: string | null;
+  /** Did initialize advertise session/load? Gates NATIVE resume (omp replays its own session log). */
+  canLoadSession: boolean;
+  /** Set by a fallback recovery; prepended to the NEXT prompt's WIRE text once, never recorded. */
+  resumeContext: string | null;
+  respawns: number;
 }
 
 export class FleetLaneManager {
@@ -157,20 +185,18 @@ export class FleetLaneManager {
       sinks: new Set(),
       pending: null,
       busy: false,
+      transcript: [],
+      liveText: "",
+      liveTools: [],
+      lastPrompt: null,
+      canLoadSession: false,
+      resumeContext: null,
+      respawns: 0,
     };
     this.#lanes.set(id, lane);
     this.#wire(lane);
     try {
-      lane.client.start();
-      await lane.client.request("initialize", {
-        protocolVersion: 1,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-      }, { timeoutMs: HANDSHAKE_MS });
-      const s = await lane.client.request<{ sessionId?: string; id?: string }>("session/new", { cwd, mcpServers: [] }, { timeoutMs: HANDSHAKE_MS });
-      lane.sessionId = typeof s?.sessionId === "string" ? s.sessionId : typeof s?.id === "string" ? s.id : null;
-      if (!lane.sessionId) throw new Error("lane agent returned no session id");
-      // Model select: the lane defaults to the MASTER's current model unless the caller chose one.
-      await this.#setModel(lane, lane.model);
+      await this.#handshake(lane);
       this.#setStatus(lane, "awaiting-input");
       return { ok: true, lane: this.#view(lane) };
     } catch (e) {
@@ -181,19 +207,38 @@ export class FleetLaneManager {
     }
   }
 
-  /** One prompt turn on one lane, events streamed to `sink`. One turn at a time per lane. */
+  /** One prompt turn on one lane, events streamed to `sink`. One turn at a time per lane.
+   *
+   *  P-FLEET.L4: an ERROR lane (or a lane whose child died) is recovered in place first - same lane id,
+   *  memory carried - instead of refusing. A user-STOPPED lane stays stopped: that was a decision, not a
+   *  failure, and only an explicit respawn() revives it. The turn itself carries NO deadline: the request
+   *  is raced against the child's life (acp.ts rejects all pending on exit), never a wall clock. */
   async prompt(laneId: string, text: string, sink: (e: LaneEvent) => void): Promise<void> {
     const lane = this.#lanes.get(laneId);
-    if (!lane || !lane.sessionId) { sink({ type: "error", message: `unknown lane "${laneId}"` }); return; }
+    if (!lane) { sink({ type: "error", message: `unknown lane "${laneId}"` }); return; }
     if (lane.busy) { sink({ type: "error", message: "lane is busy - one turn at a time per lane" }); return; }
-    if (lane.status === "stopped" || lane.status === "error") { sink({ type: "error", message: `lane is ${lane.status}` }); return; }
+    if (lane.status === "stopped") { sink({ type: "error", message: "lane is stopped - respawn it to continue" }); return; }
+    if (lane.status === "error" || lane.client.isDead || !lane.sessionId) {
+      const r = await this.#recover(lane);
+      if (!r.ok) { sink({ type: "error", message: r.reason ?? "lane recovery failed" }); return; }
+      this.#emit(lane, { type: "status", status: lane.status });
+    }
     lane.busy = true;
     lane.sinks.add(sink);
+    lane.lastPrompt = text;
+    lane.liveText = "";
+    lane.liveTools = [];
+    this.#record(lane, { role: "user", text });
     this.#setStatus(lane, "working");
     try {
-      const res = await lane.client.request<{ stopReason?: string }>("session/prompt", { sessionId: lane.sessionId, prompt: [{ type: "text", text }] }, { timeoutMs: LANE_TURN_TIMEOUT_MS });
+      // The wire text carries the one-shot recovery preamble when a fallback resume is pending; the
+      // transcript recorded only `text` - the user never "said" the preamble.
+      const wireText = lane.resumeContext ? `${lane.resumeContext}${text}` : text;
+      lane.resumeContext = null;
+      const res = await lane.client.request<{ stopReason?: string }>("session/prompt", { sessionId: lane.sessionId, prompt: [{ type: "text", text: wireText }] });
       // ACP cancel RESOLVES the prompt with stopReason "cancelled" (it does not reject) - a cancelled
       // turn goes back to awaiting-input, never "done".
+      this.#foldLiveTurn(lane);
       if (typeof res?.stopReason === "string" && /cancel/i.test(res.stopReason)) {
         this.#setStatus(lane, "awaiting-input");
       } else {
@@ -203,6 +248,7 @@ export class FleetLaneManager {
       this.#emit(lane, { type: "done" });
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
+      this.#foldLiveTurn(lane, why);
       // A cancelled turn settles as done-with-nothing rather than a scary error card.
       if (/cancel/i.test(why)) { this.#setStatus(lane, "awaiting-input"); this.#emit(lane, { type: "done" }); }
       else { this.#setStatus(lane, "error"); this.#emit(lane, { type: "error", message: why }); }
@@ -210,6 +256,28 @@ export class FleetLaneManager {
       lane.busy = false;
       lane.sinks.delete(sink);
     }
+  }
+
+  /** Re-send the lane's last prompt (recovering first if the lane is in error). No recorded prompt is a
+   *  quiet, explained refusal, not a crash. */
+  async retry(laneId: string, sink: (e: LaneEvent) => void): Promise<void> {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) { sink({ type: "error", message: `unknown lane "${laneId}"` }); return; }
+    if (!lane.lastPrompt) { sink({ type: "error", message: "nothing to retry - this lane has not been prompted yet" }); return; }
+    // The failed attempt's user turn is already in the transcript; drop it so the retry does not read as
+    // the user asking twice.
+    const last = lane.transcript[lane.transcript.length - 1];
+    if (last?.role === "user" && last.text === lane.lastPrompt) lane.transcript.pop();
+    await this.prompt(laneId, lane.lastPrompt, sink);
+  }
+
+  /** Explicit revive: works on error AND stopped lanes (the button, not the automatic path). */
+  async respawn(laneId: string): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (lane.busy) return { ok: false, reason: "lane is mid-turn - cancel it first" };
+    const r = await this.#recover(lane);
+    return r.ok ? { ok: true, lane: this.#view(lane) } : { ok: false, reason: r.reason };
   }
 
   /** Answer the lane's pending approval. No pending ask is a quiet no-op (a late click, not an error). */
@@ -328,6 +396,83 @@ export class FleetLaneManager {
     lane.model = model;
   }
 
+  /** initialize + session/new (or session/load on recovery) + model select, on the lane's CURRENT client.
+   *  Capability-gated native resume: only an agent that ADVERTISES loadSession is asked to load - probing
+   *  by trial is unsafe because a permissive agent acks unknown methods with an empty result. */
+  async #handshake(lane: Lane, resume = false): Promise<void> {
+    lane.client.start();
+    const init = await lane.client.request<{ agentCapabilities?: { loadSession?: boolean } }>("initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+    }, { timeoutMs: HANDSHAKE_MS });
+    lane.canLoadSession = init?.agentCapabilities?.loadSession === true;
+    if (resume && lane.canLoadSession && lane.sessionId) {
+      // NATIVE resume: omp replays its own persisted session log - full memory, nothing re-sent by us.
+      await lane.client.request("session/load", { sessionId: lane.sessionId, cwd: lane.cwd, mcpServers: [] }, { timeoutMs: HANDSHAKE_MS });
+      lane.resumeContext = null;
+    } else {
+      const s = await lane.client.request<{ sessionId?: string; id?: string }>("session/new", { cwd: lane.cwd, mcpServers: [] }, { timeoutMs: HANDSHAKE_MS });
+      lane.sessionId = typeof s?.sessionId === "string" ? s.sessionId : typeof s?.id === "string" ? s.id : null;
+      if (!lane.sessionId) throw new Error("lane agent returned no session id");
+      // FALLBACK resume: a fresh session gets the recorded transcript prepended to the NEXT prompt.
+      lane.resumeContext = resume && lane.transcript.length ? this.#resumePreamble(lane) : null;
+    }
+    await this.#setModel(lane, lane.model);
+  }
+
+  /** Revive a dead/errored lane IN PLACE: same lane id (invariant 9 - one logical entity, one id), same
+   *  cwd/model/name, memory carried. The old ask (if any) died as a DENY on exit; nothing gated is ever
+   *  auto-replayed - a re-attempted action re-asks the human through the normal permission path. */
+  async #recover(lane: Lane): Promise<{ ok: boolean; reason?: string }> {
+    lane.pending?.resolve(false);
+    try { lane.client.stop(); } catch { /* already dead */ }
+    const plan = this.#deps.argv();
+    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, {});
+    this.#wire(lane);
+    this.#setStatus(lane, "starting");
+    try {
+      await this.#handshake(lane, true);
+      lane.respawns++;
+      this.#setStatus(lane, "awaiting-input");
+      return { ok: true };
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      try { lane.client.stop(); } catch { /* already dead */ }
+      this.#setStatus(lane, "error");
+      return { ok: false, reason: `lane recovery failed: ${why}` };
+    }
+  }
+
+  /** The fallback resume preamble: the lane's own recorded conversation, clearly delimited as a
+   *  TRANSCRIPT (data to remember, not instructions to re-execute). Tool effects on disk are real - the
+   *  work is not redone, it is remembered. */
+  #resumePreamble(lane: Lane): string {
+    const lines = lane.transcript.map((t) => `${t.role === "user" ? "USER" : "LANE"}: ${t.text}`).join("\n\n");
+    return (
+      `[SESSION RECOVERY] You are the same worker lane, resumed after your previous process died. ` +
+      `The transcript of your session so far follows between the markers. Treat it as MEMORY: do not ` +
+      `re-run tools for work it already shows as done; continue from where it ends.\n` +
+      `--- TRANSCRIPT START ---\n${lines}\n--- TRANSCRIPT END ---\n\n`
+    );
+  }
+
+  /** Append a turn to the bounded recovery transcript (per-turn char clamp, oldest turns fall off). */
+  #record(lane: Lane, turn: LaneTurnRecord): void {
+    const text = turn.text.length > TRANSCRIPT_MAX_TURN_CHARS ? `${turn.text.slice(0, TRANSCRIPT_MAX_TURN_CHARS)}\u2026[truncated]` : turn.text;
+    lane.transcript.push({ role: turn.role, text });
+    if (lane.transcript.length > TRANSCRIPT_MAX_TURNS) lane.transcript.splice(0, lane.transcript.length - TRANSCRIPT_MAX_TURNS);
+  }
+
+  /** Fold the streaming turn (assistant text + compact tool titles + any error) into the transcript. */
+  #foldLiveTurn(lane: Lane, error?: string): void {
+    const tools = lane.liveTools.length ? `${lane.liveTools.map((t) => `[ran: ${t}]`).join("\n")}\n` : "";
+    const err = error ? `\n[turn ended in error: ${error.slice(0, 300)}]` : "";
+    const text = `${tools}${lane.liveText}${err}`.trim();
+    if (text) this.#record(lane, { role: "assistant", text });
+    lane.liveText = "";
+    lane.liveTools = [];
+  }
+
   #wire(lane: Lane): void {
     lane.client.onNotify = (method, params) => {
       if (method !== "session/update") return;
@@ -335,15 +480,22 @@ export class FleetLaneManager {
       lane.lastActivityAt = this.#deps.now();
       switch (u?.sessionUpdate) {
         case "agent_message_chunk":
-          if (u.content?.type === "text") this.#emit(lane, { type: "token", text: String(u.content.text) });
+          if (u.content?.type === "text") {
+            const text = String(u.content.text);
+            lane.liveText += text; // recovery memory rides the same stream the card renders
+            this.#emit(lane, { type: "token", text });
+          }
           break;
         case "agent_thought_chunk":
           if (u.content?.type === "text") this.#emit(lane, { type: "thinking", text: String(u.content.text) });
           break;
         case "tool_call":
-        case "tool_call_update":
-          this.#emit(lane, { type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? "") });
+        case "tool_call_update": {
+          const title = String(u.title ?? "");
+          if (u.sessionUpdate === "tool_call" && title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
+          this.#emit(lane, { type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: title });
           break;
+        }
       }
     };
     lane.client.onRequest = async (method, params) => {
@@ -409,6 +561,8 @@ export class FleetLaneManager {
       createdAt: lane.createdAt,
       lastActivityAt: lane.lastActivityAt,
       turns: lane.turns,
+      canRetry: lane.lastPrompt !== null,
+      respawns: lane.respawns,
       ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary } } : {}),
     };
   }

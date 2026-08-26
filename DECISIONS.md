@@ -19016,3 +19016,57 @@ CONCEPTS only, and any future copied code carries attribution in a third-party n
 - P-VISION.1 (ADR-0136) - the image-block shape `/api/fleet/prompt` adopts.
 - deepseek-harness Agent Notes: result-time applied-hunk diffs (2026-07-02), unified session query
   service (2026-07-23) - MIT, concept reuse.
+
+## ADR-0275 -- P-FLEET.L4 BUILT: lanes that survive, and the deltas from the plan
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. `make demo-P-FLEET.L4` green (5 checks); fleet_lanes suite 12/12; the
+firewall suite sharing the fake agent unaffected (71 pass); renderer + server typecheck clean.
+**Increment:** P-FLEET.L4, first of the ADR-0274 roadmap. L3 (fidelity) and L5 (timeline) unbuilt.
+
+### What shipped
+
+1. **The lane turn clock is GONE.** `session/prompt` carries no timeout; the request is raced against
+   the child's LIFE - acp.ts `die()` rejects every pending request the instant the process exits, so a
+   mid-turn crash surfaces in milliseconds (measured 9ms in the demo) instead of a 600s deadline. The
+   600s cap on APPROVALS stays: that is fail-closed policy, not patience. A long silent working stretch
+   is legible instead of fatal: the card header shows an amber `quiet Nm` chip after 90s of no stream,
+   computed renderer-side from `lastActivityAt` (no new wire event).
+2. **Error is a state, not a grave.** An error lane keeps its transcript and shows a recovery bar:
+   `Retry` (re-sends `lastPrompt`, offered only when one exists - `LaneView.canRetry`) and `Respawn`.
+   `prompt()` on an error lane recovers it automatically first. A user-STOPPED lane is refused by
+   prompt with the fix named ("respawn it to continue") - stopping was a decision, so only the explicit
+   button revives it.
+3. **Recovery spawns carry memory, on the SAME lane id** (invariant 9: one logical lane, one id;
+   `LaneView.respawns` counts revivals). The manager now OWNS a bounded transcript (40 turns, 8K chars
+   per turn: user turns at prompt time, assistant text + compact `[ran: tool]` lines folded at settle).
+   Respawn = new gated child + handshake + resume:
+   - **Native resume, capability-gated:** only an agent whose `initialize` advertises
+     `agentCapabilities.loadSession` is sent `session/load` - omp then replays its own persisted
+     session log. Probing by trial is UNSAFE (measured: the fake agent acks unknown methods with an
+     empty result, so a trial "load" false-positives), hence the gate.
+   - **Fallback resume:** `session/new` + the recorded transcript as a ONE-SHOT preamble prepended to
+     the next prompt's wire text, delimited as `TRANSCRIPT START/END` and framed as memory, not
+     instructions. The preamble is never recorded as the user's text and costs no extra turn.
+4. **Fail-closed survives recovery.** An ask open at death dies as a DENY (unchanged `onExit`), and
+   nothing gated is ever replayed: a re-attempted action re-asks through the normal permission path.
+   The demo proves the revived lane RE-ASKS and only a fresh explicit allow passes.
+5. **Surface:** `/api/fleet/retry` (NDJSON stream, like prompt) + `/api/fleet/respawn`;
+   `fleetRetry`/`fleetRespawn` on the bridge; the recovery bar mirrors the approve bar's one-text-child
+   flex shape (invariant 11 verified in a headless render: one ellipsized line, nowrap buttons).
+
+### Deltas from ADR-0274's plan
+
+- The plan said "persist ... and write it through": the transcript lives in MANAGER memory only. The
+  DURABLE copy already exists - omp writes every lane session to its own .jsonl - so writing a second
+  file would duplicate the source L5 is about to index. App-RESTART recovery therefore lands with L5
+  (it needs the lane-spec index anyway); process-crash recovery, the reported pain, works today.
+- "Slow notices" became the `quiet Nm` chip: poll-driven, zero new wire events, honest about what it
+  knows (time since last stream activity).
+- `fake_acp_agent.ts` gained a `crash` mode (chunk, then exit 1 mid-turn) - additive; the firewall
+  suites that share the fake are unaffected.
+
+### See also
+
+ADR-0274 (the roadmap this builds), ADR-0263 (the master's no-clock precedent), ADR-0271/0273 (the
+lane surface), acp.ts `die()` (the event-driven death this leans on).

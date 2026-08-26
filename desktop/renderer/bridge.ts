@@ -175,6 +175,8 @@ export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-i
 export interface LaneView {
   id: string; name: string; cwd: string; model: string; status: LaneStatus;
   createdAt: number; lastActivityAt: number; turns: number;
+  /** P-FLEET.L4: Retry is offered only when a last prompt exists; respawns counts in-place revivals. */
+  canRetry: boolean; respawns: number;
   pendingApproval?: { summary: string };
 }
 export type LaneEvent =
@@ -735,6 +737,10 @@ export interface LucidBridge {
    *  persisted by the server (the encrypted copy is written separately through the OS vault). */
   fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
   fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void): Promise<void>;
+  /** P-FLEET.L4: re-send the lane's last prompt, streaming like fleetPrompt (recovers an error lane first). */
+  fleetRetry(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
+  /** P-FLEET.L4: revive an error/stopped lane in place - same id, transcript memory carried. */
+  fleetRespawn(laneId: string): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
   fleetAnswer(laneId: string, allow: boolean): Promise<{ ok: boolean } | null>;
   fleetCancel(laneId: string): Promise<{ ok: boolean } | null>;
   fleetStop(laneId: string): Promise<{ ok: boolean } | null>;
@@ -1220,6 +1226,11 @@ export const bridge: LucidBridge = {
     const sink = onEvent as (e: ChatEvent) => void;
     return streamNdjson("/api/fleet/prompt", { laneId, text }, sink);
   },
+  fleetRetry: (laneId, onEvent) => {
+    const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
+    return streamNdjson("/api/fleet/retry", { laneId }, sink);
+  },
+  fleetRespawn: (laneId) => post("/api/fleet/respawn", { laneId }),
   fleetAnswer: (laneId, allow) => post("/api/fleet/answer", { laneId, allow }),
   fleetCancel: (laneId) => post("/api/fleet/cancel", { laneId }),
   fleetStop: (laneId) => post("/api/fleet/stop", { laneId }),
