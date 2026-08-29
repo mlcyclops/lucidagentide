@@ -23,7 +23,7 @@ console.log("== P-PREVIEW.1 — in-app preview target resolver ==");
 console.log("\n1) a local file the agent built → rendered");
 const mine = resolvePreview("C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html");
 if (mine.kind !== "local") fail("a local html file must render");
-if (mine.src !== "file:///C:/Users/neorc/Documents/My Music/hormuz-minesweeper.html") fail(`bad src: ${mine.src}`);
+if (mine.src !== "file:///C:/Users/neorc/Documents/My%20Music/hormuz-minesweeper.html") fail(`bad src: ${mine.src}`);
 ok(`local → ${mine.label} (${mine.src})`);
 
 // (2) Remote is recognized but gated, not auto-loaded.
@@ -47,6 +47,7 @@ const cases: Array<[string, string]> = [
   ["C:/a/b.html", "file:///C:/a/b.html"],
   ["/home/n/b.html", "file:///home/n/b.html"],
   ["file:///already/url.html", "file:///already/url.html"],
+  ["C:/Users/x/OneDrive/Apps AI Vibe/app.html", "file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html"],
 ];
 for (const [inp, want] of cases) {
   const got = toFileUrl(inp);

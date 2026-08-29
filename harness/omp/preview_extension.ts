@@ -13,10 +13,13 @@
 // `preview-available` path. The renderer re-gates the path (resolvePreview → readPreviewFile) before
 // anything renders, so a bad path can never escape the sandbox.
 //
-// CONFIRMED against the installed omp's ExtensionAPI (dist/types/.../extensions/types.d.ts):
+// CONFIRMED against the installed omp's ExtensionAPI (dist/types/.../extensions/types.d.ts + rpc-mode):
 //   • `pi.registerTool(ToolDefinition)` IS exposed to `-e` extensions (same API as pi.registerProvider).
-//   • `parameters` must be a TSchema — authored here via the injected `pi.typebox` shim, NOT a raw
-//     JSON-schema object (the previous draft's placeholder would have been rejected).
+//   • `parameters` is typed `TParams extends TSchema` (TypeBox), but at runtime omp only requires "a JSON
+//     Schema object" (rpc-mode) and passes non-Zod schemas to the wire untouched - and TypeBox schemas ARE
+//     plain JSON-Schema objects at runtime. So we author via the injected `pi.typebox` shim when it is
+//     healthy, and fall back to structurally identical plain JSON-Schema literals when it is absent or
+//     malformed (a missing T.Optional used to throw mid-registration and silently drop ALL five tools).
 //   • `approval` defaults to `"exec"`; we set `"read"` so opening a preview never trips the exec gate.
 // Everything is still defensively wrapped: a registration failure NEVER breaks omp launch — worst case
 // `preview_open` is simply absent and the user keeps auto-on-write preview (P-PREVIEW.2) + the manual panel.
@@ -35,13 +38,48 @@ export function previewShotImage(dataUrl: string | null | undefined): { type: "i
   return mimeType && data ? { type: "image", data, mimeType } : null;
 }
 
+/** Agents sometimes hand preview_open a quoted or padded path ('"C:\\x\\app.html"', " 'x.html' "). Trim and
+ *  strip matching pairs of surrounding single/double quotes so a well-meant but wrapped path still previews
+ *  (the LOCAL_PATH gate already accepts either a bare path or a file:// prefix, matching the desktop
+ *  helpers). Pure + exported for tests. */
+export function normalizeToolPath(raw: unknown): string {
+  let p = String(raw ?? "").trim();
+  while (p.length >= 2 && ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'")))) {
+    p = p.slice(1, -1).trim();
+  }
+  return p;
+}
+
 export default function previewExtension(pi: any): void {
+  // Which schema-authoring mode registration used; hoisted so the catch below can name it in the log.
+  let schemaMode: "typebox" | "literal" = "literal";
   try {
     if (!pi || typeof pi.registerTool !== "function") return; // older omp / no custom-tool support → no-op
-    // Author the parameter schema with omp's injected TypeBox shim (a real TSchema). Fall back defensively
-    // if the shim is missing on some build — a registration that throws is swallowed below.
+    // Author the parameter schemas via omp's injected TypeBox shim when it is HEALTHY (Object/String/Optional
+    // all present); otherwise fall back to plain JSON-Schema object literals - the same shape TypeBox emits
+    // at runtime, so registerTool sees a structurally identical schema either way and registration succeeds
+    // in BOTH modes. (A shim with a missing T.Optional used to throw "T.Optional is not a function" mid-way
+    // and silently drop ALL five preview tools.)
     const T = pi.typebox?.Type;
-    if (!T) return;
+    const typeboxOk = !!T && typeof T.Object === "function" && typeof T.String === "function" && typeof T.Optional === "function";
+    schemaMode = typeboxOk ? "typebox" : "literal";
+    /** Declare a tool's params ONCE (name -> description, all strings) and build them for the active mode.
+     *  Props listed in `optional` are wrapped in T.Optional (typebox mode) or omitted from `required`
+     *  (literal mode); an empty `required` is dropped entirely, matching what TypeBox emits. */
+    const schema = (props: Record<string, string>, optional: string[] = []): any => {
+      if (typeboxOk) {
+        const shape: Record<string, any> = {};
+        for (const [k, d] of Object.entries(props)) {
+          const s = T.String({ description: d });
+          shape[k] = optional.includes(k) ? T.Optional(s) : s;
+        }
+        return T.Object(shape);
+      }
+      const properties: Record<string, any> = {};
+      for (const [k, d] of Object.entries(props)) properties[k] = { type: "string", description: d };
+      const required = Object.keys(props).filter((k) => !optional.includes(k));
+      return { type: "object", properties, ...(required.length ? { required } : {}) };
+    };
     pi.registerTool({
       name: "preview_open",
       label: "Open in Preview",
@@ -53,11 +91,10 @@ export default function previewExtension(pi: any): void {
       // Read-only from omp's view: it only acknowledges; the desktop opens the (sandboxed) panel. Setting
       // "read" keeps preview_open out of the exec-approval flow so showing a preview is never blocked.
       approval: "read",
-      parameters: T.Object({
-        path: T.String({ description: "Absolute path to the local .html/.svg file to preview" }),
-      }),
+      parameters: schema({ path: "Absolute path to the local .html/.svg file to preview" }),
       async execute(_toolCallId: string, params: any) {
-        const path = String(params?.path ?? "").trim();
+        // Normalize first: agents sometimes pass the path quoted or padded; a wrapped path still previews.
+        const path = normalizeToolPath(params?.path);
         if (!path || !LOCAL_PATH.test(path) || !PREVIEWABLE.test(path)) {
           return { content: [{ type: "text", text: `preview_open: "${path}" is not a local .html/.svg file — nothing to preview.` }], isError: true };
         }
@@ -85,7 +122,7 @@ export default function previewExtension(pi: any): void {
         "DOM and works even when the panel is not in front. Use this to verify graphics/layout rather than a " +
         "browser or bash/eval, which are security-gated.",
       approval: "read",
-      parameters: T.Object({}),
+      parameters: schema({}),
       async execute() {
         const text = (t: string) => ({ content: [{ type: "text", text: t }] });
         // A screenshot only exists for the AGENT preview lane while it is the front panel (screen capture sees
@@ -127,10 +164,10 @@ export default function previewExtension(pi: any): void {
         "portrait/landscape, tablet landscape) via the phone icon in the preview toolbar — if you're building a " +
         "PWA or a mobile/responsive layout, note that and design/verify for those viewports.",
       approval: "read",
-      parameters: T.Object({
-        selector: T.Optional(T.String({ description: "Optional CSS selector — return details of matching elements (tag/text/id/role/rect)" })),
-        what: T.Optional(T.String({ description: "'summary' (default: text + headings + controls + errors), 'errors', or 'title'" })),
-      }),
+      parameters: schema({
+        selector: "Optional CSS selector - return details of matching elements (tag/text/id/role/rect)",
+        what: "'summary' (default: text + headings + controls + errors), 'errors', or 'title'",
+      }, ["selector", "what"]),
       async execute(_toolCallId: string, params: any) {
         const text = (t: string) => ({ content: [{ type: "text", text: t }] });
         const base = process.env.LUCID_PREVIEW_INSPECT_URL;
@@ -185,7 +222,7 @@ export default function previewExtension(pi: any): void {
         "Click an element in the LIVE preview by CSS `selector` (e.g. a button or link) to test your UI, then " +
         "screenshot or preview_inspect to see what happened. Open a preview first. Structured action — no JS.",
       approval: "read",
-      parameters: T.Object({ selector: T.String({ description: "CSS selector of the element to click" }) }),
+      parameters: schema({ selector: "CSS selector of the element to click" }),
       async execute(_toolCallId: string, params: any) { return act("click", String(params?.selector ?? "")); },
     });
     pi.registerTool({
@@ -195,15 +232,16 @@ export default function previewExtension(pi: any): void {
         "Type `text` into an input/textarea/contenteditable in the LIVE preview by CSS `selector` (fires input+change), " +
         "so you can fill a form and test behavior, then screenshot or preview_inspect. Open a preview first. No JS.",
       approval: "read",
-      parameters: T.Object({
-        selector: T.String({ description: "CSS selector of the input/textarea to type into" }),
-        text: T.String({ description: "The text to set as the field's value" }),
+      parameters: schema({
+        selector: "CSS selector of the input/textarea to type into",
+        text: "The text to set as the field's value",
       }),
       async execute(_toolCallId: string, params: any) { return act("type", String(params?.selector ?? ""), String(params?.text ?? "")); },
     });
   } catch (e) {
-    // Never break omp launch: skip the tool if registration throws (e.g. a schema-format mismatch on this
-    // omp version). The gate, chat, and auto-on-write preview all keep working.
-    try { process.stderr.write(`\n[LucidAgentIDE] preview_open tool not registered: ${String((e as { message?: unknown })?.message ?? e)}\n`); } catch { /* ignore */ }
+    // Never break omp launch: skip the tools if registration throws (e.g. a schema-format mismatch on this
+    // omp version). The gate, chat, and auto-on-write preview all keep working. Naming the schema mode makes
+    // a field report actionable ("literal" means the typebox shim was absent/malformed on that build).
+    try { process.stderr.write(`\n[LucidAgentIDE] preview tools not registered (schema mode: ${schemaMode}): ${String((e as { message?: unknown })?.message ?? e)}\n`); } catch { /* ignore */ }
   }
 }

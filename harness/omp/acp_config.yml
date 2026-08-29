@@ -42,6 +42,12 @@ tools:
     web_search: prompt
     web: prompt
     fetch: prompt
+    # P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window is still an egress - force the
+    # opening call to PROMPT in every approval mode (omp's default `yolo` auto-approves even exec-tier
+    # tools, so the tool's own approval:"exec" is not enough on its own). The desktop routes this to the
+    # per-website approval dialog (the request carries the https target). The iterate tools
+    # (browser_screenshot/scroll/close) stay read-tier: they only observe the already-approved window.
+    browser_open: prompt
     # P-EXEC.1 (ADR-0066): force the exec tools to PROMPT too. omp's default auto-runs bash/eval in Agent
     # mode; the desktop intercepts these (acp_backend onRequest → askExec) and classifies the command —
     # read-only commands auto-approve, risky ones gate, a catastrophic set (rm -rf, sudo, pipe-to-shell,

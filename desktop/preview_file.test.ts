@@ -4,9 +4,25 @@
 // desktop/preview_file.test.ts — P-PREVIEW.4 (ADR-0096): the local-file content reader behind srcdoc render.
 
 import { describe, expect, test } from "bun:test";
-import { readPreviewFile } from "./preview_file.ts";
+import { readPreviewFile, toFsPath } from "./preview_file.ts";
 
 const io = (content: string, bytes = content.length) => ({ read: () => content, size: () => bytes });
+
+describe("toFsPath (round-trip partner of toFileUrl's percent-encoding)", () => {
+  test("decodes %20 segments back to spaces (OneDrive-style dirs)", () => {
+    expect(toFsPath("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html")).toBe("C:/Users/x/OneDrive/Apps AI Vibe/app.html");
+    expect(toFsPath("file:///home/n/my%20app/x.html")).toBe("/home/n/my app/x.html");
+  });
+  test("decodes %25 back to a literal percent sign", () => {
+    expect(toFsPath("file:///C:/Users/n/100%25%20done/x.html")).toBe("C:/Users/n/100% done/x.html");
+  });
+  test("a bare OS path (no file:// scheme) passes through untouched, %-sequences included", () => {
+    expect(toFsPath("C:/Users/n/100% done/x.html")).toBe("C:/Users/n/100% done/x.html");
+  });
+  test("a malformed %-sequence never throws (falls back to the raw path)", () => {
+    expect(toFsPath("file:///C:/Users/n/bad%zz/x.html")).toBe("C:/Users/n/bad%zz/x.html");
+  });
+});
 
 describe("readPreviewFile", () => {
   test("reads a local .html file's content (+ filename label)", () => {

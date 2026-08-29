@@ -12,6 +12,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -23,9 +24,11 @@ import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDir
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
+import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
+import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
 
 const DEFAULT_PORT = 5319;
 const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
@@ -37,7 +40,28 @@ const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
 // makes them never share a lock. The default-port instance keeps the canonical identity, so the lucid://
 // OAuth deep-link still re-focuses the primary app rather than spawning an engine.
 // Must run before requestSingleInstanceLock() and before anything resolves a userData path.
+const CANONICAL_USER_DATA = app.getPath("userData"); // the unsuffixed install identity - owns the one true safeStorage key
 if (PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${PORT}`);
+// safeStorage on Windows is Chromium os_crypt: its AES key lives in `<userData>/Local State`, so the
+// per-port userData above silently gave EVERY instance its own encryption key while the credential vault
+// (~/.omp/lucid-cred-vault) is global. A key stored on port A was undecryptable on port B: readCredential
+// failed closed, the Local Provider was skipped at engine spawn, and the model vanished from the picker
+// with the UI still saying "key in vault". Seed this instance's Local State from the canonical dir NOW -
+// before Chromium reads it at app-ready - so every instance shares the canonical key. macOS (Keychain)
+// and Linux (libsecret) key by app NAME and already share; this is win32-only. Best-effort: a failed
+// seed just means this instance mints its own key (the pre-fix behavior).
+const localStatePath = (dir: string): string => join(dir, "Local State");
+function readTextBestEffort(p: string): string { try { return readFileSync(p, "utf8"); } catch { return ""; } }
+if (process.platform === "win32" && PORT !== DEFAULT_PORT) {
+  try {
+    const instPath = localStatePath(app.getPath("userData"));
+    const seed = seedInstanceFromCanonical(readTextBestEffort(localStatePath(CANONICAL_USER_DATA)), readTextBestEffort(instPath));
+    if (seed.changed && seed.content !== undefined) {
+      mkdirSync(app.getPath("userData"), { recursive: true });
+      writeFileSync(instPath, seed.content);
+    }
+  } catch (err) { console.error("[main] os_crypt seed failed (instance will mint its own key):", err); }
+}
 let REPO = "";
 const preloadPath = () => join(app.getAppPath(), "dist", "preload.js");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -133,7 +157,10 @@ function startDevServer(): void {
     cwd: REPO,
     // LUCID_RESOURCES lets the dev child resolve the bundled whisper.cpp binary under <resources>/whisper
     // (P-STT.2c); process.resourcesPath is an Electron property, not an env var, so it must be threaded here.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT) },
+    // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
+    // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
+    // its agent-browser poll loop against the child's /api/browser routes.
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -280,8 +307,14 @@ function prepareLocalProviders(): Record<string, string> {
       readSecret: (ref) => { try { return readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), ref); } catch { return null; } },
     });
     try { registerLocalProviderEgress(defs, Date.now()); } catch { /* egress registration is best-effort */ }
-    if (r.wrote) console.error(`[LOCAL_PROVIDERS] ${r.included.length} provider(s) → ~/.omp/agent/models.yml${r.skipped.length ? `; skipped ${r.skipped.map((s) => s.id).join(", ")}` : ""}`);
-    else if (r.writeReason) console.error(`[LOCAL_PROVIDERS] models.yml not written: ${r.writeReason}`);
+    // Tee the outcome into engine.log too: main's console is invisible in a packaged GUI app, and a
+    // silently-skipped provider (vault miss) is exactly the failure that needs a trail to diagnose.
+    const skippedNote = r.skipped.length ? `; skipped ${r.skipped.map((s) => `${s.id} (${s.reason})`).join(", ")}` : "";
+    const line = r.wrote
+      ? `[LOCAL_PROVIDERS] ${r.included.length} provider(s) → ~/.omp/agent/models.yml${skippedNote}`
+      : `[LOCAL_PROVIDERS] models.yml not written: ${r.writeReason ?? "unknown"}${skippedNote}`;
+    console.error(line);
+    appendEngineLog(line + "\n");
     return r.childEnv;
   } catch (err) { console.error("[LOCAL_PROVIDERS] prepare failed:", err); return {}; }
 }
@@ -393,6 +426,249 @@ ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
   } catch { return null; }
 });
 
+// ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ────────────────────────────────
+// A real Chromium BrowserWindow the AGENT drives through the dev server's command mailbox
+// (desktop/browser_control.ts): agent tools enqueue on /api/browser/*, this loop drains
+// GET /api/browser/commands every 500ms, executes on the window, and POSTs /api/browser/result.
+// Deliberately VISIBLE: the user watches every step, can log in on real pages, and closing the window
+// is a hard kill switch. capturePage reads compositor pixels, so DOM-locking/anti-agent pages cannot
+// blind the agent (and a prior ADR rejects puppeteering the user's OWN browser - this sanctioned window
+// is the alternative). Everything here is fail-quiet: the poll loop must never throw.
+// AUTH: this parent cannot read the child's token, so it MINTS the per-launch token itself and hands it
+// down via the spawn env (LUCID_MAIN_TOKEN, adopted by dev.ts as TOKEN); every call sends x-lucid-token.
+const MAIN_TOKEN = randomBytes(32).toString("hex");
+let agentWin: BrowserWindow | null = null;
+let agentCloseByCommand = false; // distinguishes the agent's own close from the user's X (kill switch)
+let agentPollBusy = false;
+// Width (px) of the newest snapshot handed to the agent. Click coordinates are expressed in THAT image's
+// space, so this is the only number needed to map them back onto the live window. Null until a capture.
+let agentLastShotWidth: number | null = null;
+// Injected into every page the agent visits: a breathing accent glow on the html element (the user can
+// tell at a glance which window the agent is driving) + the .lucid-snap-flash pulse replayed per shot.
+const AGENT_FX_CSS = `
+@keyframes lucidAgentBreathe {
+  0%, 100% { box-shadow: inset 0 0 0 3px rgba(198, 75, 214, .55), inset 0 0 44px rgba(198, 75, 214, .16); }
+  50% { box-shadow: inset 0 0 0 3px rgba(70, 200, 220, .70), inset 0 0 72px rgba(70, 200, 220, .28); }
+}
+@keyframes lucidSnapFlash {
+  0% { filter: brightness(1.85) saturate(1.25); }
+  100% { filter: none; }
+}
+html { animation: lucidAgentBreathe 3.2s ease-in-out infinite; }
+html.lucid-snap-flash { animation: lucidAgentBreathe 3.2s ease-in-out infinite, lucidSnapFlash .45s ease-out 1; }
+`;
+async function browserApiPost(path: string, body: unknown): Promise<void> {
+  try {
+    await fetch(`http://localhost:${PORT}${path}`, {
+      method: "POST",
+      headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch { /* fail-quiet: the dev server may be restarting */ }
+}
+/** The live agent window's contents, or null once destroyed/never opened. */
+function agentPage(): Electron.WebContents | null {
+  return agentWin && !agentWin.isDestroyed() ? agentWin.webContents : null;
+}
+async function agentBrowserOpen(id: string, url: string): Promise<void> {
+  if (!/^https?:\/\//i.test(url)) { await browserApiPost("/api/browser/result", { id, ok: false, error: "only http(s) URLs can be opened" }); return; }
+  try {
+    if (!agentWin || agentWin.isDestroyed()) {
+      agentCloseByCommand = false;
+      agentWin = new BrowserWindow({
+        width: 1180, height: 800, show: true, autoHideMenuBar: true, title: "LUCID agent browser",
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      // target=_blank / window.open stays in THIS window - the agent never fans out into new windows.
+      agentWin.webContents.setWindowOpenHandler(({ url: u }) => {
+        if (/^https?:\/\//i.test(u)) void agentWin?.loadURL(u).catch(() => {});
+        return { action: "deny" };
+      });
+      agentWin.webContents.on("did-finish-load", () => { void agentPage()?.insertCSS(AGENT_FX_CSS).catch(() => {}); });
+      agentWin.webContents.on("page-title-updated", () => {
+        const wc = agentPage();
+        if (wc) void browserApiPost("/api/browser/status", { active: true, title: wc.getTitle(), url: wc.getURL() });
+      });
+      agentWin.webContents.on("did-navigate", () => {
+        const wc = agentPage();
+        if (wc) void browserApiPost("/api/browser/status", { active: true, title: wc.getTitle(), url: wc.getURL() });
+      });
+      agentWin.on("closed", () => {
+        agentWin = null;
+        const byUser = !agentCloseByCommand;
+        agentCloseByCommand = false;
+        // User-X = KILL SWITCH: the server fails every queued/pending command with "browser closed by
+        // user" and keeps failing browser calls until a fresh browser_open. Agent closes just go inactive.
+        void browserApiPost("/api/browser/status", { active: false, closedByUser: byUser });
+      });
+    }
+    await agentWin.loadURL(url);
+    const wc = agentPage();
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc?.getTitle() ?? "", url: wc?.getURL() ?? url });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `could not load ${url}: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+async function agentBrowserCapture(id: string): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const img = await wc.capturePage();
+    const scaled = img.getSize().width > 1100 ? img.resize({ width: 1100 }) : img;
+    // Remember what the AGENT saw: click coordinates arrive in this image's pixel space, and mapping
+    // them back needs the width that actually went out (never the raw capture, never the display ratio).
+    agentLastShotWidth = scaled.getSize().width || null;
+    // Pulse AFTER the pixels are read, so the flash marks the shot without contaminating it.
+    void wc.executeJavaScript(
+      `(() => { const h = document.documentElement; h.classList.remove("lucid-snap-flash"); void h.offsetWidth; h.classList.add("lucid-snap-flash"); setTimeout(() => h.classList.remove("lucid-snap-flash"), 500); })();`,
+      true,
+    ).catch(() => {});
+    await browserApiPost("/api/browser/result", { id, ok: true, png: scaled.toDataURL(), title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `capture failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+/** Snapshot pixels -> window content coordinates. The agent aims at the downscaled image it was shown;
+ *  contentBounds is in DIP, which is also what sendInputEvent expects, so one ratio covers both the
+ *  downscale and the display's pixel ratio. No shot yet = treat the coordinates as already-live. */
+function agentMapPoint(x: number, y: number): { x: number; y: number } | null {
+  if (!agentWin || agentWin.isDestroyed()) return null;
+  const b = agentWin.getContentBounds();
+  const ratio = agentLastShotWidth && agentLastShotWidth > 0 ? b.width / agentLastShotWidth : 1;
+  const clamp = (v: number, hi: number) => Math.max(0, Math.min(Math.max(hi - 1, 0), Math.round(v)));
+  return { x: clamp(x * ratio, b.width), y: clamp(y * ratio, b.height) };
+}
+async function agentBrowserClick(id: string, x: number, y: number, button: "left" | "right"): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const pt = agentMapPoint(x, y);
+    if (!pt) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+    // Move first: hover-gated controls (menus, custom dropdowns) need the pointer to arrive before the
+    // press, exactly as it would for the user's own mouse.
+    wc.sendInputEvent({ type: "mouseMove", x: pt.x, y: pt.y });
+    wc.sendInputEvent({ type: "mouseDown", x: pt.x, y: pt.y, button, clickCount: 1 });
+    wc.sendInputEvent({ type: "mouseUp", x: pt.x, y: pt.y, button, clickCount: 1 });
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `click failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+/** Press at one point, travel, release at another. The intermediate moves are the point: HTML5
+ *  drag-and-drop, range sliders and canvas handles all read the move stream, and a bare down-then-up
+ *  is indistinguishable from a click. Ten steps is enough for every such listener to see motion. */
+async function agentBrowserDrag(id: string, x: number, y: number, toX: number, toY: number): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const from = agentMapPoint(x, y), to = agentMapPoint(toX, toY);
+    if (!from || !to) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+    const STEPS = 10;
+    wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y });
+    wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 });
+    for (let i = 1; i <= STEPS; i++) {
+      const px = Math.round(from.x + ((to.x - from.x) * i) / STEPS);
+      const py = Math.round(from.y + ((to.y - from.y) * i) / STEPS);
+      wc.sendInputEvent({ type: "mouseMove", x: px, y: py });
+      await new Promise((r) => setTimeout(r, 16)); // ~one frame between moves, so listeners actually run
+    }
+    wc.sendInputEvent({ type: "mouseUp", x: to.x, y: to.y, button: "left", clickCount: 1 });
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `drag failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+/** One key combo, modifiers held for the press. Re-parsed here (not trusted from the queue) so main is
+ *  the authority on what actually reaches Chromium. */
+async function agentBrowserKeys(id: string, keys: string): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  const parsed = parseKeyCombo(keys);
+  if ("error" in parsed) { await browserApiPost("/api/browser/result", { id, ok: false, error: parsed.error }); return; }
+  try {
+    const { keyCode, modifiers } = parsed;
+    wc.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+    // A char event is what puts a printable key into a field; a named key (Escape, Tab) must NOT get one,
+    // or Chromium inserts a stray control character alongside the keydown the page is listening for.
+    if ([...keyCode].length === 1 && !modifiers.includes("control") && !modifiers.includes("meta")) {
+      wc.sendInputEvent({ type: "char", keyCode, modifiers });
+    }
+    wc.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `key press failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+async function agentBrowserType(id: string, text: string, pressEnter: boolean): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const enter = (): void => {
+      wc.sendInputEvent({ type: "keyDown", keyCode: "Return" });
+      wc.sendInputEvent({ type: "char", keyCode: "Return" });
+      wc.sendInputEvent({ type: "keyUp", keyCode: "Return" });
+    };
+    for (const ch of text) {
+      if (ch === "\n" || ch === "\r") { enter(); continue; }
+      wc.sendInputEvent({ type: "char", keyCode: ch });
+    }
+    if (pressEnter) enter();
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `type failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+async function agentBrowserScroll(id: string, dy: number): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const step = Number.isFinite(dy) ? Math.max(-20_000, Math.min(20_000, Math.round(dy))) : 800;
+    await wc.executeJavaScript(`window.scrollBy(0, ${step});`, true);
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `scroll failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+async function agentBrowserClose(id: string): Promise<void> {
+  if (agentWin && !agentWin.isDestroyed()) {
+    agentCloseByCommand = true;
+    try { agentWin.destroy(); } catch { /* already gone */ }
+  }
+  agentWin = null;
+  await browserApiPost("/api/browser/result", { id, ok: true });
+}
+/** Drain + execute the agent's queued browser commands. Sequential: order matters (open -> capture). */
+async function agentBrowserTick(): Promise<void> {
+  if (agentPollBusy) return;
+  agentPollBusy = true;
+  try {
+    const res = await fetch(`http://localhost:${PORT}/api/browser/commands`, { headers: { "x-lucid-token": MAIN_TOKEN } });
+    if (!res.ok) return;
+    const parsed: unknown = await res.json().catch(() => null);
+    const data = parsed && typeof parsed === "object" && "data" in parsed ? parsed.data : null;
+    const cmds = data && typeof data === "object" && "commands" in data && Array.isArray(data.commands) ? data.commands : [];
+    for (const raw of cmds) {
+      if (!raw || typeof raw !== "object") continue;
+      const id = "id" in raw && typeof raw.id === "string" ? raw.id : "";
+      if (!id) continue;
+      const op = "op" in raw && typeof raw.op === "string" ? raw.op : "";
+      if (op === "open") await agentBrowserOpen(id, "url" in raw && typeof raw.url === "string" ? raw.url : "");
+      else if (op === "capture") await agentBrowserCapture(id);
+      else if (op === "scroll") await agentBrowserScroll(id, "dy" in raw && typeof raw.dy === "number" ? raw.dy : 800);
+      else if (op === "click") await agentBrowserClick(id, "x" in raw && typeof raw.x === "number" ? raw.x : 0, "y" in raw && typeof raw.y === "number" ? raw.y : 0, "button" in raw && raw.button === "right" ? "right" : "left");
+      else if (op === "drag") await agentBrowserDrag(id, "x" in raw && typeof raw.x === "number" ? raw.x : 0, "y" in raw && typeof raw.y === "number" ? raw.y : 0, "toX" in raw && typeof raw.toX === "number" ? raw.toX : 0, "toY" in raw && typeof raw.toY === "number" ? raw.toY : 0);
+      else if (op === "keys") await agentBrowserKeys(id, "keys" in raw && typeof raw.keys === "string" ? raw.keys : "");
+      else if (op === "type") await agentBrowserType(id, "text" in raw && typeof raw.text === "string" ? raw.text : "", "pressEnter" in raw && raw.pressEnter === true);
+      else if (op === "close") await agentBrowserClose(id);
+      else await browserApiPost("/api/browser/result", { id, ok: false, error: "unknown browser command" });
+    }
+  } catch { /* fail-quiet: never let the poll loop throw */
+  } finally { agentPollBusy = false; }
+}
+function startAgentBrowserLoop(): void {
+  setInterval(() => { void agentBrowserTick(); }, 500);
+}
+
 // Open an EXTERNAL http(s) URL in the user's default browser via the OS — a reliable path for the OAuth
 // sign-in page that doesn't depend on the renderer's window.open reaching setWindowOpenHandler (which can
 // silently no-op in some contexts, leaving "Connect via OAuth" with a toast but no browser). Strictly
@@ -475,9 +751,26 @@ app.whenReady().then(async () => {
     console.warn("[main] runtime bootstrap failed (continuing):", (e as Error).message);
   }
 
+  // os_crypt convergence, backfill direction: on a machine that only ever ran port-suffixed instances
+  // the canonical dir has no key, so adopt the key Chromium just minted for THIS instance as the
+  // canonical one - every later instance then seeds from it (module-load seed above). Never overwrites
+  // an existing canonical key. Best-effort: a miss self-heals on a later launch.
+  if (process.platform === "win32" && PORT !== DEFAULT_PORT) {
+    try {
+      const canonPath = localStatePath(CANONICAL_USER_DATA);
+      const fill = backfillCanonicalFromInstance(readTextBestEffort(canonPath), readTextBestEffort(localStatePath(app.getPath("userData"))));
+      if (fill.changed && fill.content !== undefined) {
+        mkdirSync(CANONICAL_USER_DATA, { recursive: true });
+        writeFileSync(canonPath, fill.content);
+      }
+    } catch (err) { console.error("[main] os_crypt canonical backfill failed:", err); }
+  }
   startDevServer();
   const serverUp = await waitForServer();
   createWindow();
+  // P-BROWSER.1 (wave 2): start the agent-browser command poll once the server answered /api/health.
+  // Started even on a timeout - the loop is fail-quiet and a late-starting server self-heals into it.
+  startAgentBrowserLoop();
   splash?.close();
   // Don't leave the user staring at a black window with no explanation: if the local engine never
   // came up (e.g. no usable bun runtime), say so. The window keeps retrying via did-fail-load, so a

@@ -19167,3 +19167,61 @@ complete; fork-at-step from a timeline row stays named-and-deferred.
 
 ADR-0274 (the roadmap, now fully built), ADR-0275/0276 (L4/L3), P-PERF.4/ADR-0131 (the session index
 this rides), P-LOC.4/ADR-0211 (the sidecar-JSONL precedent), issue #52 (transcript preamble stripping).
+
+## ADR-0278 -- one safeStorage key across port-keyed instances (the vanishing Local Provider)
+
+**Date:** 2026-08-29
+**Status:** Accepted -- BUILT. oscrypt_seed suite 11/11; desktop typecheck clean; dist/main.js rebuilt.
+
+### The incident
+
+A user stored a Local Provider API key ("key in vault" badge shown, endpoint Test green), hit
+"Restart to apply", and the provider's model never appeared in the picker. models.yml on disk read
+`{"providers": {}}` and the managed-ids sidecar `[]`: the provider was skipped fail-closed at engine
+spawn because readCredential returned null.
+
+### Root cause
+
+Electron `safeStorage` on Windows is Chromium os_crypt: encryptString/decryptString use an AES-256-GCM
+key stored (DPAPI-wrapped) in `<userData>/Local State` -- per PROFILE DIRECTORY, not per OS user.
+main.ts keys userData on the port (`...-<PORT>`, ADR-0206 territory: the single-instance lock) so a
+dev build can run beside the installed app. Net effect: EVERY port instance owned a DIFFERENT
+encryption key, while the credential vault (~/.omp/lucid-cred-vault) is global. The relaunch rolled a
+new free port, the new instance minted a fresh key, and the blob encrypted minutes earlier became
+undecryptable. Fail-closed did its job (invariant 3: scan-or-block thinking applies to secrets too);
+the UI still said "key in vault" because listCredentials reads only meta.json and the endpoint Test
+sends an unauthenticated probe -- neither ever decrypts.
+
+### Decision
+
+Converge every instance on the CANONICAL (unsuffixed userData) key rather than sharing profile dirs:
+
+1. `desktop/oscrypt_seed.ts` (pure, IO-free): seedInstanceFromCanonical copies the canonical
+   `os_crypt.encrypted_key` into the instance's Local State text; backfillCanonicalFromInstance adopts
+   an instance's freshly-minted key into a keyless canonical file (machines that only ever ran
+   port-suffixed builds). A non-empty unparseable Local State is REFUSED, never overwritten
+   (mergeModelsYaml's posture). A divergent pre-fix instance key is deliberately replaced: anything it
+   encrypted was already unreadable everywhere else.
+2. main.ts wiring: the seed runs at MODULE LOAD, right after the userData suffix and before Chromium
+   reads Local State at app-ready; the backfill runs in whenReady. Both win32-only (macOS Keychain and
+   Linux libsecret key by app NAME and already share) and best-effort (a failed seed reverts to
+   pre-fix behavior, never blocks launch).
+3. prepareLocalProviders now tees its `[LOCAL_PROVIDERS]` outcome line (with per-provider skip
+   REASONS) into engine.log: main's console is invisible in a packaged GUI app, and this exact silent
+   skip needed a trail.
+
+DPAPI unwrap of the old blob for in-place re-encryption was written but not run; the user chose to
+re-enter the key once instead (simpler, no secret ever transits a script).
+
+### Alternatives rejected
+
+- Sharing sessionData/profile dirs across instances: Chromium locks profile internals; concurrent
+  dev-beside-installed is the stated use case.
+- Raw DPAPI vault (bypass safeStorage): needs a native module or shelling to PowerShell for every
+  read; heavy, and safeStorage already DPAPI-wraps the shared key.
+- Pinning the relaunch port: fixes only the relaunch drift, not key-stored-on-port-A-read-on-port-B.
+
+### See also
+
+ADR-0135 (Local Providers + vault delivery), ADR-0206 (port-keyed userData / single-instance lock),
+P-KEYS.1/ADR-0107 (vault metadata, last4), invariant 3 (fail-closed).

@@ -77,6 +77,13 @@ if exist "%UD%\engine.log" (
   > "%OUT%\engine.log" echo ^(no engine.log found at %UD%^)
 )
 
+REM --- lucid-acp.log: every omp child's stderr (the "agent process exited" evidence), redacted ---
+if exist "%OMPHOME%\lucid-acp.log" (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$c = Get-Content -LiteralPath '%OMPHOME%\lucid-acp.log' -Tail 3000 -ErrorAction SilentlyContinue; $c = $c -replace '(?i)(bearer\s+|x-access-tokens\s*[:=]?\s*|authorization\s*[:=]\s*|sk-|token\s*[:=]\s*|api[_-]?key\s*[:=]\s*)[A-Za-z0-9_\-\.]{10,}','$1<REDACTED>'; Set-Content -LiteralPath '%OUT%\lucid-acp.log' -Value $c" 2>nul
+) else (
+  > "%OUT%\lucid-acp.log" echo ^(no lucid-acp.log found at %OMPHOME%^)
+)
+
 REM --- zip onto the REAL Desktop (resolves a OneDrive-redirected Desktop) + reveal it ---
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$dt=[Environment]::GetFolderPath('Desktop'); $zip=Join-Path $dt 'lucid-diagnostics.zip'; if(Test-Path $zip){Remove-Item $zip -Force}; Compress-Archive -Path '%OUT%\*' -DestinationPath $zip -Force; if(Test-Path $zip){ Write-Host ''; Write-Host '  Done. Please send me this file:'; Write-Host ('    ' + $zip); Start-Process explorer.exe ('/select,' + $zip) } else { Write-Host '  ERROR: could not create the zip.' }"
 

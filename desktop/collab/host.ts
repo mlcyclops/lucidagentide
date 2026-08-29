@@ -28,8 +28,8 @@ import type {
   HelloFrame,
   LucidCollabFrame,
 } from "./frames.ts";
-import { COLLAB_PROTOCOL_VERSION, isGuestFrame, validPromptAudio } from "./frames.ts";
-import type { PromptAudio } from "./frames.ts";
+import { COLLAB_PROTOCOL_VERSION, isGuestFrame, validPromptAudio, validSttSource } from "./frames.ts";
+import type { PromptAudio, SttSource } from "./frames.ts";
 import type { RelayControlMessage } from "@oh-my-pi/pi-wire";
 
 /** The slice of {@link CollabSocket} the host needs - so a mock transport can stand in for tests. */
@@ -56,8 +56,10 @@ export interface HostStartOpts {
   transcriptLimit?: number;
   /** P-COLLAB.12: an EDIT guest sent a prompt to run in the host's session. The host wires this to its own
    *  prompt path, so the turn passes the SAME scan gate + exec/egress approvals as a local prompt.
-   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer. */
-  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio) => void;
+   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer.
+   *  P-REMOTE.14: `sttSource` is the re-validated transcription provenance (undefined = no claim), recorded
+   *  with the staged turn so the transcript + audit show where the words were turned into text. */
+  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio, sttSource?: SttSource) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
   /** P-COLLAB.14: the pickable model + already-used-folder allowlists offered to EDIT guests (unicast on
@@ -70,9 +72,24 @@ export interface HostStartOpts {
    *  `options.workspaces`). Wire this to the host's own workspace-switch path (resolves id->path locally +
    *  restarts the agent in the new cwd). */
   onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
+  /** P-PWA-FLEET.1: an EDIT guest prompts a fleet lane. Wire to the lane manager's prompt path (which
+   *  gates + queues); the laneId is validated THERE (unknown lane -> refused), never trusted here. */
+  onGuestFleetPrompt?: (laneId: string, text: string, guest: CollabParticipant) => void;
+  /** P-PWA-FLEET.1: an EDIT guest stops a fleet lane. */
+  onGuestFleetStop?: (laneId: string, guest: CollabParticipant) => void;
+  /** P-PWA-FLEET.1: an EDIT guest answers a lane's pending approval. `scope` already re-validated here
+   *  (only "once" / "session" / undefined ever reaches the callback - fail-closed on junk). */
+  onGuestFleetAnswer?: (laneId: string, allow: boolean, scope: "once" | "session" | undefined, guest: CollabParticipant) => void;
+  /** P-PWA-FLEET.1: an EDIT guest injects a mid-turn operator note ("master" or a laneId). The wiring
+   *  delivers it OUTSIDE untrusted-content delimiters, marked operator-origin (AGENTS.md #5). */
+  onGuestInterject?: (target: string, text: string, guest: CollabParticipant) => void;
   /** P-COLLAB.18 (ADR-0204): a guest joined ("join", on its `hello`) or left ("leave", on relay peer-left).
    *  Host-authoritative audit hook — the caller records a metadata-only telemetry event. */
   onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
+  /** P-REMOTE.14: the host's CUI + lockdown stance, read FRESH on every welcome/state push and on every
+   *  incoming prompt (so flipping a session's mode lands immediately). Guests use it to decide whether
+   *  device speech-to-text is allowed at all. Absent = the strictest posture (fail-closed). */
+  posture?: () => { cui: boolean; lockdown: boolean };
 }
 
 const DEFAULT_TRANSCRIPT_LIMIT = 40;
@@ -85,12 +102,17 @@ export class CollabHost {
   #writeTokenB64: string | null;
   #allowGuestWrite: boolean;
   #transcriptLimit: number;
-  #onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio) => void;
+  #onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio, sttSource?: SttSource) => void;
   #onGuestAbort?: (guest: CollabParticipant) => void;
   #onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
   #onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
   #onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
+  #onGuestFleetPrompt?: (laneId: string, text: string, guest: CollabParticipant) => void;
+  #onGuestFleetStop?: (laneId: string, guest: CollabParticipant) => void;
+  #onGuestFleetAnswer?: (laneId: string, allow: boolean, scope: "once" | "session" | undefined, guest: CollabParticipant) => void;
+  #onGuestInterject?: (target: string, text: string, guest: CollabParticipant) => void;
   #options: CollabOptions | null;
+  #posture?: () => { cui: boolean; lockdown: boolean };
 
   #participants = new Map<number, CollabParticipant>();
   #transcript: CollabTranscriptTurn[] = [];
@@ -110,7 +132,12 @@ export class CollabHost {
     this.#onParticipant = opts.onParticipant;
     this.#onGuestSetModel = opts.onGuestSetModel;
     this.#onGuestSetWorkspace = opts.onGuestSetWorkspace;
+    this.#onGuestFleetPrompt = opts.onGuestFleetPrompt;
+    this.#onGuestFleetStop = opts.onGuestFleetStop;
+    this.#onGuestFleetAnswer = opts.onGuestFleetAnswer;
+    this.#onGuestInterject = opts.onGuestInterject;
     this.#options = opts.options ?? null;
+    this.#posture = opts.posture;
   }
 
   /** Wire the transport callbacks and open the relay connection. */
@@ -206,7 +233,19 @@ export class CollabHost {
         // P-REMOTE.12: a push-to-talk clip - re-validated HOST-side fail-closed (shape/size/mime); an
         // invalid clip is DROPPED, never trusted because the guest said so.
         const audio = validPromptAudio(frame.audio) ? frame.audio : undefined;
-        if (text.trim() || (images && images.length) || audio) this.#onGuestPrompt?.(text, guest, images, audio);
+        // P-REMOTE.14: the transcription provenance, re-validated here (anything unknown collapses to "no
+        // claim"). Then the fail-closed CUI backstop: in a STRICT session (CUI designated AND model lockdown
+        // on) a prompt that says its text came from the browser vendor's CLOUD recognizer is REFUSED outright.
+        // The audio already left the phone, so this cannot prevent that leak; it stops cloud-derived text from
+        // entering a CUI session and makes the violation loud rather than silent. The phone's own
+        // device_stt_policy refuses first; this is the host's backstop when it does not.
+        const sttSource = validSttSource(frame.sttSource) ? frame.sttSource : undefined;
+        const posture = this.#currentPosture();
+        if (sttSource === "device-cloud" && posture.cui && posture.lockdown) {
+          this.#transport.send({ t: "error", message: "this session is CUI with model lockdown on, so a cloud-transcribed voice message is refused: hold the mic button and this desktop will transcribe it offline" }, fromPeer);
+          return;
+        }
+        if (text.trim() || (images && images.length) || audio) this.#onGuestPrompt?.(text, guest, images, audio, sttSource);
         return;
       }
       case "abort":
@@ -224,6 +263,33 @@ export class CollabHost {
         const id = (frame.id ?? "").toString();
         if (this.#options?.workspaces.some((w) => w.id === id)) this.#onGuestSetWorkspace?.(id, guest);
         else this.#transport.send({ t: "error", message: "that folder isn't available in this session" }, fromPeer);
+        return;
+      }
+      // P-PWA-FLEET.1: fleet controls + mid-turn interjection. Edit rights were re-validated by the guard
+      // above (mirroring set-model); shapes are sanitized here, and the laneId/target is validated by the
+      // backend wiring (an unknown lane is refused there, fail-closed).
+      case "fleet-prompt": {
+        const laneId = (frame.laneId ?? "").toString();
+        const text = (frame.text ?? "").toString();
+        if (laneId && text.trim()) this.#onGuestFleetPrompt?.(laneId, text, guest);
+        return;
+      }
+      case "fleet-stop": {
+        const laneId = (frame.laneId ?? "").toString();
+        if (laneId) this.#onGuestFleetStop?.(laneId, guest);
+        return;
+      }
+      case "fleet-answer": {
+        const laneId = (frame.laneId ?? "").toString();
+        // Fail-closed on junk scope: anything but the two known values collapses to undefined ("once").
+        const scope = frame.scope === "once" || frame.scope === "session" ? frame.scope : undefined;
+        if (laneId) this.#onGuestFleetAnswer?.(laneId, frame.allow === true, scope, guest);
+        return;
+      }
+      case "interject": {
+        const target = (frame.target ?? "").toString();
+        const text = (frame.text ?? "").toString();
+        if (target && text.trim()) this.#onGuestInterject?.(target, text, guest);
         return;
       }
     }
@@ -258,6 +324,7 @@ export class CollabHost {
         transcript: this.#transcript.slice(-this.#transcriptLimit),
         participants: this.participants(),
         readOnly: !canWrite,
+        posture: this.#currentPosture(), // P-REMOTE.14: the guest decides device-STT from this, fail-closed
       },
       fromPeer,
     );
@@ -284,6 +351,16 @@ export class CollabHost {
     return timingSafeEqualStr(presented, this.#writeTokenB64);
   }
 
+  /** P-REMOTE.14: the host's stance, read FRESH per call so a session mode flip lands on the very next push.
+   *  Fail-closed: no callback, or one that throws, yields the strictest posture, never a permissive guess. */
+  #currentPosture(): { cui: boolean; lockdown: boolean } {
+    if (!this.#posture) return { cui: true, lockdown: true };
+    try {
+      const p = this.#posture();
+      return { cui: p.cui !== false, lockdown: p.lockdown !== false };
+    } catch { return { cui: true, lockdown: true }; }
+  }
+
   #appendTranscript(turn: CollabTranscriptTurn): void {
     this.#transcript.push(turn);
     // Keep a little more than we replay, so folding recent state stays cheap.
@@ -296,7 +373,7 @@ export class CollabHost {
   }
 
   #broadcastState(): void {
-    this.#broadcast({ t: "state", participants: this.participants(), model: this.#model, contextPct: this.#contextPct });
+    this.#broadcast({ t: "state", participants: this.participants(), model: this.#model, contextPct: this.#contextPct, posture: this.#currentPosture() });
   }
 }
 

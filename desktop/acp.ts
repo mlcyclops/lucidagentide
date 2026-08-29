@@ -10,6 +10,26 @@
 // could not be exercised headlessly).
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+// Support diagnosability (the "agent process exited (code 1)" support ticket): every omp child's stderr
+// is appended to ONE rolling log so a fresh-install failure leaves evidence a human can send in. The
+// write is best-effort - diagnostics must never break the client - and the file is bounded: past 512KB
+// it is rewritten keeping the newest 256KB.
+const ACP_LOG = join(homedir(), ".omp", "lucid-acp.log");
+const ACP_LOG_MAX = 512 * 1024;
+const ACP_LOG_KEEP = 256 * 1024;
+function acpLog(text: string): void {
+  try {
+    appendFileSync(ACP_LOG, text);
+    if (statSync(ACP_LOG).size > ACP_LOG_MAX) {
+      const tail = readFileSync(ACP_LOG, "utf8").slice(-ACP_LOG_KEEP);
+      writeFileSync(ACP_LOG, tail);
+    }
+  } catch { /* best-effort; never break the client over a log line */ }
+}
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
 
@@ -43,15 +63,38 @@ export class ACPClient {
   // child inherits process.env exactly as before.
   constructor(private cmd: string, private args: string[], private cwd: string, private env: Record<string, string> = {}) {}
 
+  /** Newest stderr bytes from THIS child (bounded). A non-zero exit quotes the last line so the UI
+   *  error names the actual failure instead of a bare exit code. */
+  private errTail = "";
+
   start(): void {
     this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, ...this.env } });
+    acpLog(`\n[acp spawn ${new Date().toISOString()} cmd=${this.cmd} cwd=${this.cwd}]\n`);
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
-    this.proc.stderr!.on("data", (d) => this.onStderr(String(d)));
+    this.proc.stderr!.on("data", (d) => {
+      const s = String(d);
+      this.errTail = (this.errTail + s).slice(-4096);
+      acpLog(s);
+      this.onStderr(s);
+    });
     this.proc.stdin!.on("error", () => { /* EPIPE once the child is gone; the exit handler drains */ });
     // A spawn failure (ENOENT, EACCES) emits "error" and NO "exit". Both must drain `pending`,
     // otherwise every in-flight request stays unsettled forever (the import-hang bug).
     this.proc.on("error", (e) => this.die(`acp: agent process failed to start: ${e.message}`, null));
-    this.proc.on("exit", (code) => this.die(`acp: agent process exited (code ${code ?? "null"})`, code));
+    this.proc.on("exit", (code) => {
+      const hint = code ? this.lastStderrLine() : "";
+      this.die(`acp: agent process exited (code ${code ?? "null"})${hint ? ` - last stderr: ${hint}` : ""}`, code);
+    });
+  }
+
+  /** The newest non-empty stderr line, clamped for a UI-safe error suffix. */
+  private lastStderrLine(): string {
+    const lines = this.errTail.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const t = lines[i]!.trim();
+      if (t) return t.slice(0, 200);
+    }
+    return "";
   }
 
   /** Child is gone: reject everything still waiting, then notify the owner exactly once. */

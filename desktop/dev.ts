@@ -11,7 +11,7 @@
 //
 //   bun run desktop:web        # http://localhost:5319
 
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -60,8 +60,12 @@ import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECA
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
-import { backend, fleetLaneArgv } from "./acp_backend.ts";
+import { backend, fleetLaneArgv, interjectChildEnv } from "./acp_backend.ts";
 import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
+import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
+import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
+import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth } from "./auth_status.ts";
@@ -82,7 +86,7 @@ import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
 // `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
@@ -188,13 +192,13 @@ import { RelayTokenCache } from "./collab/relay_token_cache.ts"; // P-REMOTE.2c:
 import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watch a shared session read-only
 import { parseShareLink } from "./collab/link.ts";
 import { importRoomKey } from "./collab/crypto.ts";
-import type { CollabOptions } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks
+import type { CollabOptions, SttSource } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks; P-REMOTE.14: voice provenance
 import { MAX_FAVS, offeredModels } from "./renderer/model_favorites.ts"; // P-REMOTE.11b (ADR-0238): favorites-filtered guest picker (pure, DOM-free)
 import { accessCounts, buildShareAwareness, type ShareCounts } from "./collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness preamble
 import { recordCollabShareStarted, recordCollabShareStopped, recordCollabGuestJoined, recordCollabGuestLeft, recordCollabAudit } from "./collab/collab_audit.ts"; // P-COLLAB.18 (ADR-0204)
 import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
-import { sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode
+import { asksageOnly, sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode; ADR-0217: the AskSage lockdown flag
 import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // ADR-0221: BYO-embeddings config
 
 // ADR-0221: the desktop's Embedder — an ApiEmbedder built from the stored config + the vault secret injected as
@@ -241,6 +245,19 @@ import { createUserCommand, deleteUserCommand, listUserCommands } from "./user_c
 import { archiveGoalReport, deleteGoalReport, listResumableLoops, listGoalReports, readGoalReport, restoreGoalReport } from "./goal_memory.ts";
 import { createAutomation, deleteAutomation, listAutomations, normalizeCadence, updateAutomation } from "./automations.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { profileWorkspace, scaffoldAgentsFramework } from "./workspace_setup.ts"; // P-WSSETUP: .agents framework offer
+
+// P-WSSETUP: remember that this workspace was already offered setup (agents-init or an explicit
+// dismissal), keyed by the exact folder path. Bounded to the 50 most recently asked folders so
+// the map can never grow without limit.
+function markWorkspaceSetupAsked(path: string): void {
+  const s = loadSettings();
+  const m = { ...(s.workspaceSetupAsked ?? {}) };
+  m[path] = Date.now();
+  const keep = Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 50);
+  s.workspaceSetupAsked = Object.fromEntries(keep);
+  saveSettings(s);
+}
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
@@ -382,7 +399,7 @@ function leaveCollabGuest(): void { try { collabGuest?.guest.leave("you left the
 // P-COLLAB.13 (ADR-0198): an EDIT guest's prompt/abort lands here; the HOST renderer polls this inbox and
 // runs it through its OWN composer (so omp's scan gate + exec/egress approvals fire, and the turn taps back to
 // collab). Consume-on-read. The prompt text is a remote guest's input - clamp its length defensively.
-let pendingGuestPrompt: { text: string; from: string; images?: string[] } | null = null;
+let pendingGuestPrompt: { text: string; from: string; images?: string[]; sttSource?: SttSource } | null = null;
 let guestAbortRequested = false;
 // P-COLLAB.14 (ADR-0228): a connected EDIT guest's model / already-used-folder pick, consumed-on-read by the
 // host renderer's guest-inbox poll and applied through its OWN picker path (applyConfig / applyWorkspace).
@@ -391,6 +408,27 @@ let pendingGuestWorkspace: { path: string; from: string } | null = null;
 // OPAQUE id -> absolute workspace path, host-LOCAL only: a guest picks by id and never sends (or learns) a
 // filesystem path. Rebuilt on every buildCollabOptions() (share start + refreshOptions).
 let collabWsById: Record<string, string> = {};
+
+// P-REMOTE.14: the SHORT provenance marker appended to a guest turn's author label. `from` is the ONE string
+// that survives the whole staging path (this inbox -> the host renderer -> POST /api/chat -> tapUserTurn ->
+// UserTurnFrame.from), so putting the marker there shows the provenance in the shared transcript AND the
+// audited turn with NO protocol change and no UserTurnFrame consumer touched. `sttSource` also rides the
+// inbox record as an adjacent field, for any consumer that wants the raw value instead of the label.
+// Only the NOTABLE cases are marked. "host" is the default and safe path (the desktop's own offline
+// whisper), so labelling it would put "(voice: desktop)" on every hold-to-talk turn and make the author
+// column noise; absence of a marker already means "transcribed here".
+const STT_MARKER: Record<SttSource, string> = {
+  "device-local": " (voice: on-device)",
+  "device-cloud": " (voice: vendor cloud)",
+  host: "",
+};
+/** Build a staged guest turn's author label, keeping the whole string inside the 48-char clamp /api/chat
+ *  applies to `from` - so the marker is never the part that gets truncated away. */
+function guestTurnLabel(name: string, src?: SttSource): string {
+  const marker = src ? STT_MARKER[src] : "";
+  if (!marker) return name;
+  return `${name.slice(0, Math.max(1, 48 - marker.length))}${marker}`;
+}
 
 /** P-COLLAB.14: a stable, path-revealing-nothing id for a workspace (short SHA-256 of the absolute path). */
 function collabWorkspaceId(path: string): string { return createHash("sha256").update(path).digest("base64url").slice(0, 16); }
@@ -448,12 +486,14 @@ const collabManager = new CollabManager({
     ...(effectiveRelay()?.gated ? { authToken: () => relayTokenCache.get() } : {}),
   }),
   now: () => Date.now(),
-  onGuestPrompt: (text, guest, images, audio) => {
-    const stage = (finalText: string): void => {
+  onGuestPrompt: (text, guest, images, audio, sttSource) => {
+    // P-REMOTE.14: `src` is the provenance recorded WITH the turn: the guest's validated claim, or "host"
+    // once the desktop's own offline transcription actually produced text (whatever the phone claimed).
+    const stage = (finalText: string, src?: SttSource): void => {
       if (!finalText.trim() && !(Array.isArray(images) && images.length)) return;
-      pendingGuestPrompt = { text: finalText.slice(0, 20_000), from: guest.name, ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}) };
+      pendingGuestPrompt = { text: finalText.slice(0, 20_000), from: guestTurnLabel(guest.name, src), ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}), ...(src ? { sttSource: src } : {}) };
     };
-    if (!audio) { stage(String(text)); return; }
+    if (!audio) { stage(String(text), sttSource); return; }
     // P-REMOTE.12: a push-to-talk clip (already host-validated in CollabHost). Transcribe on the SAME
     // path as the local mic, fold the transcript into the guest text, and stage it like any typed
     // prompt - the fail-closed scan gate sees it identically. Fire-and-forget: a slow STT must never
@@ -462,23 +502,90 @@ const collabManager = new CollabManager({
       try {
         const bytes = new Uint8Array(Buffer.from(audio.b64, "base64"));
         const r = await transcribeClip(bytes, audio.mime);
-        stage([String(text).trim(), r.text.trim()].filter(Boolean).join(" "));
-      } catch { stage(String(text)); }
+        stage([String(text).trim(), r.text.trim()].filter(Boolean).join(" "), r.text.trim() ? "host" : sttSource);
+      } catch { stage(String(text), sttSource); }
     })();
   },
   onGuestAbort: () => { guestAbortRequested = true; },
+  // P-REMOTE.14: the CUI + lockdown stance a phone needs to decide whether IT may transcribe (and the host's
+  // fail-closed backstop against cloud-transcribed text). Read FRESH on every call, never cached, so flipping
+  // a session's mode or the AskSage lock lands on the very next state push. `lockdown` mirrors
+  // acp_backend's asksageLocked() (the user's lock OR the org-managed one); sessionMode() already defaults
+  // an unknown session to "cui" fail-closed.
+  posture: () => ({ cui: sessionMode(backend.currentSessionId() ?? "") === "cui", lockdown: asksageOnly() || managedAsksageOnly() }),
   // P-COLLAB.14 (ADR-0228): offer EDIT guests the model + already-used-folder allowlists, and honor their
   // picks. The host has already re-validated the value/id against the allowlist (fail-closed); here we just
   // stage it for the host renderer to apply through its OWN picker path (its UI + omp reconcile identically).
   collabOptions: buildCollabOptions,
   onGuestSetModel: (value, guest) => { pendingGuestModel = { value: String(value).slice(0, 200), from: guest.name }; },
   onGuestSetWorkspace: (id, guest) => { const path = collabWsById[String(id)]; if (path) pendingGuestWorkspace = { path, from: guest.name }; },
+  // P-PWA-FLEET.1: EDIT-guest fleet controls + mid-turn interjection. Edit rights + frame shapes were
+  // re-validated in CollabHost (mirrors set-model); the lane manager re-validates the laneId itself
+  // (an unknown lane is refused there, fail-closed). Guests follow progress via the fleet-status
+  // broadcast below, so the prompt sink only watches for the busy refusal.
+  onGuestFleetPrompt: (laneId, text) => {
+    const clipped = String(text).slice(0, 20_000);
+    // Queue-if-busy: run the turn NOW when the lane is idle; a mid-turn lane stages it on the existing
+    // P-FLEET.L3 queue instead (drained FIFO when the lane goes idle), so the guest's prompt never drops.
+    let busy = false;
+    void fleet
+      .prompt(laneId, clipped, (e) => { if (e.type === "error" && e.message.includes("busy")) busy = true; })
+      .then(() => { if (busy) fleet.enqueue(laneId, clipped); })
+      .catch(() => { /* non-fatal: the lane records its own error state */ });
+  },
+  onGuestFleetStop: (laneId) => { fleet.stop(laneId); },
+  onGuestFleetAnswer: (laneId, allow, scope) => { fleet.answer(laneId, allow, scope); },
+  // Target is "master" or a laneId; the store trims/caps the note (8 per target, 4000 chars). Delivery
+  // to the omp child lands OUTSIDE untrusted-content delimiters, marked operator-origin (AGENTS.md #5).
+  onGuestInterject: (target, text) => { addInterject(String(target).slice(0, 64), String(text)); },
   // P-COLLAB.18 (ADR-0204): host-authoritative audit — a guest joined/left the RELAY share. Metadata only.
   onParticipant: (kind, guest) => {
     const meta = { transport: "relay" as const, access: guest.access, roomId: collabManager.status().roomId, guest: guest.name };
     if (kind === "join") recordCollabGuestJoined(meta); else recordCollabGuestLeft(meta);
   },
 });
+
+// P-PWA-FLEET.1: the fleet-status + process-list broadcasters. While a share is ACTIVE, poll the lane
+// manager every 5s, map lane views to the guest-safe shape (cwd -> BASENAME: the frames.ts "no file
+// paths" invariant), and tap a ChatEvent into the share ONLY when the payload changed (hash diff - an
+// unchanged fleet sends nothing). The participant count rides in the stamp so a newly joined guest gets
+// a fresh snapshot on the next tick without waiting for a real lane change; an all-lanes-gone tick sends
+// one final empty snapshot so the phone clears its FLEET section. The process list follows the same
+// discipline, reusing the /api/processes builder DIRECTLY (never a loopback fetch).
+let lastFleetStamp = "";
+let lastFleetSent = "[]";
+let lastProcStamp = "";
+let lastProcSent = "[]";
+setInterval(() => {
+  if (!collabManager.active) { lastFleetStamp = ""; lastFleetSent = "[]"; lastProcStamp = ""; lastProcSent = "[]"; return; }
+  void (async () => {
+    const count = collabManager.status().participantCount;
+    try {
+      const lanes = (await fleet.status()).lanes.map((l) => ({
+        id: l.id, name: l.name, status: l.status as string, cwd: basename(l.cwd), turns: l.turns,
+        lastActivityAt: l.lastActivityAt,
+        ...(l.pendingApproval ? { pendingApproval: { summary: l.pendingApproval.summary, kind: l.pendingApproval.kind } } : {}),
+      }));
+      const body = JSON.stringify(lanes);
+      const stamp = `${body}#${count}`;
+      if (stamp !== lastFleetStamp && (lanes.length > 0 || lastFleetSent !== "[]")) {
+        collabManager.tapEvent({ type: "fleet-status", lanes });
+        lastFleetSent = body;
+      }
+      lastFleetStamp = stamp;
+    } catch { /* non-fatal: a failed poll never breaks the share */ }
+    try {
+      const processes = await buildProcessViews();
+      const body = JSON.stringify(processes);
+      const stamp = `${body}#${count}`;
+      if (stamp !== lastProcStamp && (processes.length > 0 || lastProcSent !== "[]")) {
+        collabManager.tapEvent({ type: "process-list", processes });
+        lastProcSent = body;
+      }
+      lastProcStamp = stamp;
+    } catch { /* non-fatal */ }
+  })();
+}, 5000);
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
 let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
@@ -534,12 +641,46 @@ const PORT = Number(process.env.PORT ?? 5319);
 // ADR-0024: per-launch capability token. Minted once per server process, injected into the served
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
-const TOKEN = randomBytes(32).toString("hex");
+// P-BROWSER.1 (wave 2): when the Electron main spawned us it minted the token itself and passed it
+// down as LUCID_MAIN_TOKEN - adopting it means main's agent-browser poll loop can authenticate its
+// /api/browser/commands + /api/browser/result calls with the standard x-lucid-token header (there is
+// no other channel from this child back up to its parent). Still one random value per launch; a
+// standalone `bun run desktop/dev.ts` has no main and mints its own exactly as before.
+const TOKEN = process.env.LUCID_MAIN_TOKEN || randomBytes(32).toString("hex");
 // P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
 // sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
 // another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
 // the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger });
+// P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
+// interject_extension drains only the notes addressed to it (the master child gets target "master").
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => interjectChildEnv(laneId) });
+// P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
+// /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
+fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+
+// P-INTERJECT.1: the unified Processes list - everything "running" in this app right now, assembled
+// from the live sources this server already holds. One builder, two consumers: GET /api/processes
+// and the collab process-list broadcast (P-PWA-FLEET.1). Every source is fail-quiet: a broken one
+// drops its entries, never the whole list.
+async function buildProcessViews(): Promise<ProcessView[]> {
+  const processes: ProcessView[] = [];
+  try {
+    const mt = backend.midTurn();
+    if (mt.busy) processes.push({ id: "master-turn", kind: "master-turn", label: "Master chat turn", status: "running", startedAt: mt.startedAt, lastActivityAt: null, detail: backend.activeModelName() });
+  } catch { /* backend not up yet - no master entry */ }
+  try {
+    for (const lane of (await fleet.status()).lanes) {
+      if (lane.status === "stopped") continue;
+      processes.push({ id: `lane:${lane.id}`, kind: "lane", label: lane.name, status: lane.status, startedAt: lane.createdAt, lastActivityAt: lane.lastActivityAt, detail: basename(lane.cwd) });
+    }
+  } catch { /* fleet status failed - no lane entries */ }
+  try {
+    const job = importJobStatus();
+    if (job?.state === "running") processes.push({ id: `import:${job.jobId}`, kind: "import", label: "Chat-history import", status: job.cancelRequestedAt ? "stopping" : "running", startedAt: job.startedAt, lastActivityAt: job.updatedAt, detail: `${job.messages}/${job.totalMessages} messages` });
+  } catch { /* no import entry */ }
+  processes.push(...browserProcesses()); // [] until wave 2 registers browser sessions
+  return processes;
+}
 // P-FLEET.L3: the P-VISION.1 image filter for lane prompts and the staged queue - identical discipline to
 // /api/chat (well-formed {data, mimeType} blocks only, capped at 6; anything torn is dropped, not trusted).
 function laneImages(raw: unknown): { data: string; mimeType: string }[] {
@@ -561,6 +702,17 @@ process.on("SIGTERM", () => { try { fleet.stopAll(); } catch { /* dying */ } pro
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
+// P-BROWSER.1 (wave 2): the live agent-browser session feeds the unified Processes list (the popover
+// renders a Close action for kind "browser" rows). Label/detail come straight from the status store;
+// `browserKilledByUser` flips when main reports a user-X close, so later commands fail with the honest
+// "browser closed by user" instead of a generic timeout, until a fresh browser_open succeeds.
+let browserKilledByUser = false;
+let browserCmdSeq = 0;
+setBrowserProcessSource(() => {
+  const s = getBrowserStatus();
+  if (!s.active) return [];
+  return [{ id: "browser", kind: "browser", label: `Agent browser: ${s.title || s.url}`, status: "open", startedAt: s.startedAt, lastActivityAt: lastBrowserActivityAt() || s.startedAt, detail: s.url }];
+});
 // P-PREVIEW.6b (ADR-0153): relay for the agent's read-only DOM inspect of the sandboxed preview.
 const inspectRelay = new InspectRelay();
 const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
@@ -909,7 +1061,13 @@ const server = Bun.serve({
       // token'd LUCID_KB_RETRIEVE_URL it inherits), which can't set a header — accept the `?t=` token for it too.
       // P-FLEET.L1: /api/fleet/status is also fetched by the omp subprocess's fleet_status tool (via the
       // token'd LUCID_FLEET_STATUS_URL it inherits), which can't set a header - accept the ?t= token too.
-      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve" || p === "/api/fleet/status";
+      // P-INTERJECT.1: /api/interject/pending is drained by the omp child's interject_extension (via the
+      // token'd LUCID_INTERJECT_URL it inherits), which can't set a header - accept the ?t= token too.
+      // P-BROWSER.1 (wave 2): /api/browser/{open,capture,scroll,close,shot} are called by the omp child's
+      // browser_* tools (via the token'd LUCID_BROWSER_URL it inherits), same ?t= convention. The two
+      // main-process endpoints (/commands, /result) and the status push stay header-only: main MINTED the
+      // token (LUCID_MAIN_TOKEN) and sends it as x-lucid-token on every poll.
+      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve" || p === "/api/fleet/status" || p === "/api/interject/pending" || p === "/api/browser/open" || p === "/api/browser/capture" || p === "/api/browser/scroll" || p === "/api/browser/close" || p === "/api/browser/shot" || p === "/api/browser/click" || p === "/api/browser/type" || p === "/api/browser/drag" || p === "/api/browser/keys";
       const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
       if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
     }
@@ -1858,6 +2016,154 @@ const server = Bun.serve({
       if (p === "/api/preview/shot") {
         return json({ ok: true, data: { png: latestPreviewShot } });
       }
+      // ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ──────────────────────────
+      // The Electron MAIN owns the real BrowserWindow (compositor-level capturePage defeats DOM-locking
+      // pages; the user watches every step and closing the window is a hard kill switch). Main cannot be
+      // imported from this child process, so these routes are the mailbox: agent tools enqueue + await,
+      // main polls /commands (500ms) and posts /result. Mirrors the /api/preview conventions above.
+      if (p === "/api/browser/open" && req.method === "POST") {
+        const b = await readBody<{ url?: unknown }>(req);
+        const target = String(b.url ?? "").trim();
+        // http/https only - the visible window must never be steered at file:// or a custom scheme.
+        if (!/^https?:\/\//i.test(target)) return json({ ok: false, error: "browser_open needs an http:// or https:// URL" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "open", url: target });
+        const r = await waitBrowserResult(id, 20_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "the browser window did not respond" });
+        browserKilledByUser = false; // a fresh window supersedes an earlier user-X kill
+        const wasActive = getBrowserStatus().active;
+        setBrowserStatus({ active: true, title: r.title ?? target, url: r.url ?? target, ...(wasActive ? {} : { startedAt: Date.now(), shots: 0 }) });
+        return json({ ok: true, data: { title: r.title ?? "", url: r.url ?? target } });
+      }
+      if (p === "/api/browser/capture" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "capture" });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok || !r.png) return json({ ok: false, error: r.error ?? "capture failed" });
+        setLatestBrowserShot(r.png);
+        setBrowserStatus({ shots: getBrowserStatus().shots + 1, ...(r.title ? { title: r.title } : {}), ...(r.url ? { url: r.url } : {}) });
+        return json({ ok: true, data: { png: r.png, title: r.title ?? "" } });
+      }
+      if (p === "/api/browser/scroll" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ dy?: unknown }>(req);
+        const dy = Number.isFinite(Number(b.dy)) ? Math.max(-20_000, Math.min(20_000, Number(b.dy))) : 800;
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "scroll", dy });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "scroll failed" });
+        return json({ ok: true, data: { dy, title: r.title ?? "" } });
+      }
+      // Click + type: the window's own input path, so the page sees ordinary user interaction (a
+      // synthesized DOM .click() misses handlers that read real pointer state). Coordinates are the
+      // agent's snapshot space; MAIN maps them onto the live content bounds. Both are pointless without
+      // an open window, and both stay cheap acks - the agent re-screenshots to see what changed.
+      if (p === "/api/browser/click" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ x?: unknown; y?: unknown; button?: unknown }>(req);
+        const x = Number(b.x), y = Number(b.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return json({ ok: false, error: "browser_click needs finite x and y snapshot coordinates (0 or greater)" });
+        const button = b.button === "right" ? "right" : "left";
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "click", x, y, button });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "click failed" });
+        return json({ ok: true, data: { button, title: r.title ?? "", url: r.url ?? "" } });
+      }
+      if (p === "/api/browser/type" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ text?: unknown; pressEnter?: unknown }>(req);
+        const text = String(b.text ?? "");
+        if (!text || text.length > 2000) return json({ ok: false, error: "browser_type needs text of 1 to 2000 characters" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "type", text, pressEnter: b.pressEnter === true });
+        const r = await waitBrowserResult(id, 15_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "type failed" });
+        return json({ ok: true, data: { typed: text.length, title: r.title ?? "" } });
+      }
+      // Drag needs intermediate moves between press and release: HTML5 drag-and-drop, sliders, and canvas
+      // handles all watch the move stream, and a down-then-up with nothing between reads as a click.
+      if (p === "/api/browser/drag" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ x?: unknown; y?: unknown; toX?: unknown; toY?: unknown }>(req);
+        const x = Number(b.x), y = Number(b.y), toX = Number(b.toX), toY = Number(b.toY);
+        const finite = [x, y, toX, toY].every((n) => Number.isFinite(n) && n >= 0);
+        if (!finite) return json({ ok: false, error: "browser_drag needs finite x, y, toX and toY snapshot coordinates (0 or greater)" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "drag", x, y, toX, toY });
+        const r = await waitBrowserResult(id, 15_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "drag failed" });
+        return json({ ok: true, data: { title: r.title ?? "", url: r.url ?? "" } });
+      }
+      // Key combos are parsed HERE as well as in main: an unknown name comes back as a named error
+      // immediately instead of costing the agent a round trip that acks and changes nothing.
+      if (p === "/api/browser/keys" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ keys?: unknown }>(req);
+        const keys = String(b.keys ?? "");
+        const parsed = parseKeyCombo(keys);
+        if ("error" in parsed) return json({ ok: false, error: `browser_keys: ${parsed.error}` });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "keys", keys });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "key press failed" });
+        return json({ ok: true, data: { keys, title: r.title ?? "", url: r.url ?? "" } });
+      }
+      // Close is idempotent and shared by three callers (agent tool, pill button, Stop-agent path):
+      // an already-closed window answers ok so a stop sequence never trips over a race with the user's X.
+      if (p === "/api/browser/close" && req.method === "POST") {
+        if (!getBrowserStatus().active) return json({ ok: true, data: { closed: true } });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "close" });
+        await waitBrowserResult(id, 10_000); // best-effort ack; inactive either way below
+        setBrowserStatus({ active: false });
+        failAllBrowserCommands("browser window closed");
+        return json({ ok: true, data: { closed: true } });
+      }
+      if (p === "/api/browser/shot") {
+        const png = latestBrowserShot();
+        return png ? json({ ok: true, data: { png } }) : json({ ok: false, error: "no shot yet" });
+      }
+      if (p === "/api/browser/status" && req.method === "POST") {
+        // Push from MAIN: title/navigation updates while the window lives, and the close notification.
+        // `closedByUser` is the kill switch - queued + pending commands settle immediately with the
+        // honest error (never a 10-20s timeout), and stay failing until a fresh browser_open.
+        const b = await readBody<{ active?: unknown; title?: unknown; url?: unknown; closedByUser?: unknown }>(req);
+        if (b.closedByUser === true) {
+          browserKilledByUser = true;
+          setBrowserStatus({ active: false });
+          failAllBrowserCommands("browser closed by user");
+        } else if (b.active === false) {
+          setBrowserStatus({ active: false });
+          failAllBrowserCommands("browser window closed");
+        } else if (getBrowserStatus().active) {
+          setBrowserStatus({ ...(typeof b.title === "string" ? { title: b.title } : {}), ...(typeof b.url === "string" ? { url: b.url } : {}) });
+        }
+        return json({ ok: true, data: getBrowserStatus() });
+      }
+      if (p === "/api/browser/status") return json({ ok: true, data: getBrowserStatus() });
+      // Drained by MAIN's 500ms poll loop (x-lucid-token header; main minted the token).
+      if (p === "/api/browser/commands") return json({ ok: true, data: { commands: drainBrowserCommands() } });
+      if (p === "/api/browser/result" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; ok?: unknown; error?: unknown; png?: unknown; title?: unknown; url?: unknown }>(req);
+        if (typeof b.id === "string" && b.id) {
+          completeBrowserCommand(b.id, {
+            ok: b.ok === true,
+            ...(typeof b.error === "string" ? { error: b.error } : {}),
+            ...(typeof b.png === "string" && b.png.startsWith("data:image/") ? { png: b.png } : {}),
+            ...(typeof b.title === "string" ? { title: b.title } : {}),
+            ...(typeof b.url === "string" ? { url: b.url } : {}),
+          });
+        }
+        return json({ ok: true, data: { settled: typeof b.id === "string" && !!b.id } });
+      }
       // P-PREVIEW.7 (ADR-0179): is the previewed file part of an ELECTRON app (which the sandboxed
       // frame cannot run - no Node/require)? Read-only detection for the renderer's explain-overlay.
       if (p === "/api/preview/electron-detect") {
@@ -1980,6 +2286,26 @@ const server = Bun.serve({
         const r = await cloneRepo(String(url ?? ""), typeof pat === "string" ? pat : undefined);
         if (r.ok && r.path) { setWorkspace(r.path); backend.restart(); }
         return json({ ok: r.ok, data: { ...workspaceInfo(), cloned: r.ok, error: r.error } });
+      }
+      // P-WSSETUP: the workspace-initialization offer. Profile the current folder (is it empty?
+      // a code repo? already framework-equipped?), scaffold the .agents framework on accept, or
+      // record a dismissal so the popup never re-asks for this folder.
+      if (p === "/api/workspace/setup-profile") {
+        const ws = currentWorkspace();
+        return json({ ok: true, data: { ...profileWorkspace(ws), asked: !!loadSettings().workspaceSetupAsked?.[ws] } });
+      }
+      if (p === "/api/workspace/agents-init" && req.method === "POST") {
+        const b = await readBody<{ purpose?: unknown; scan?: unknown }>(req);
+        const purpose = b.purpose;
+        if (purpose !== "app" && purpose !== "docs" && purpose !== "analysis" && purpose !== "other") return json({ ok: false, error: "invalid purpose" });
+        const ws = currentWorkspace();
+        const r = scaffoldAgentsFramework(ws, { purpose, scan: !!b.scan });
+        markWorkspaceSetupAsked(ws);
+        return json({ ok: r.ok, data: r, error: r.error });
+      }
+      if (p === "/api/workspace/setup-dismiss" && req.method === "POST") {
+        markWorkspaceSetupAsked(currentWorkspace());
+        return json({ ok: true, data: { asked: true } });
       }
 
       // settings + provider auth
@@ -2593,10 +2919,12 @@ const server = Bun.serve({
       // lane sessions labeled through the durable ledger, ingest throwaways), across ALL workspaces,
       // newest first. Reading a point reuses the same transcript reader the sidebar resume uses; the
       // injected user-turn preamble is already stripped for display there (issue #52).
+      // `?selfTest=1` opts the repo's own echo/demo throwaways back IN (held back by default).
       if (p === "/api/timeline") {
         const limit = Number(url.searchParams.get("limit") ?? 100);
         const offset = Number(url.searchParams.get("offset") ?? 0);
-        return json({ ok: true, data: listTimeline({ limit: Number.isFinite(limit) ? limit : 100, offset: Number.isFinite(offset) ? offset : 0 }) });
+        const includeSelfTest = url.searchParams.get("selfTest") === "1";
+        return json({ ok: true, data: listTimeline({ limit: Number.isFinite(limit) ? limit : 100, offset: Number.isFinite(offset) ? offset : 0, includeSelfTest }) });
       }
       if (p === "/api/timeline/session" && req.method === "POST") {
         const b = await readBody<{ id?: unknown; limit?: unknown }>(req);
@@ -2663,9 +2991,29 @@ const server = Bun.serve({
         const b = await readBody<{ laneId?: unknown }>(req);
         return json({ ok: true, data: await fleet.respawn(String(b.laneId ?? "")) });
       }
+      // P-FLEET.L6: answer carries an optional approval SCOPE - "session" remembers the pending ask's
+      // kind for the lane's lifetime (only on an allow; the manager ignores scope on a deny, fail-closed).
       if (p === "/api/fleet/answer" && req.method === "POST") {
-        const b = await readBody<{ laneId?: unknown; allow?: unknown }>(req);
-        return json({ ok: true, data: fleet.answer(String(b.laneId ?? ""), b.allow === true) });
+        const b = await readBody<{ laneId?: unknown; allow?: unknown; scope?: unknown }>(req);
+        if (b.scope !== undefined && b.scope !== "once" && b.scope !== "session") return json({ ok: false, error: `invalid scope "${String(b.scope)}"` });
+        return json({ ok: true, data: fleet.answer(String(b.laneId ?? ""), b.allow === true, b.scope as "once" | "session" | undefined) });
+      }
+      // P-FLEET.L6: full auto-mode. laneId targets ONE lane; omitted applies to ALL lanes and persists
+      // fleetAutoApprove as the default for new lanes. Turning auto ON anywhere is refused until the user
+      // has explicitly accepted the risk once (fleetAutoRiskAcceptedAt; acceptRisk === true records it).
+      // The in-omp security gate still scans every tool call in auto mode - only the human ask goes away.
+      if (p === "/api/fleet/auto" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; on?: unknown; acceptRisk?: unknown }>(req);
+        const on = b.on === true;
+        if (on && !loadSettings().fleetAutoRiskAcceptedAt) {
+          if (b.acceptRisk !== true) return json({ ok: false, error: "full auto-mode needs an explicit risk acceptance first" });
+          saveSettings({ ...loadSettings(), fleetAutoRiskAcceptedAt: Date.now() });
+        }
+        const laneId = typeof b.laneId === "string" && b.laneId ? b.laneId : "";
+        if (laneId) return json({ ok: true, data: fleet.setAuto(laneId, on) });
+        fleet.setAutoAll(on);
+        saveSettings({ ...loadSettings(), fleetAutoApprove: on });
+        return json({ ok: true, data: { ok: true } });
       }
       if (p === "/api/fleet/cancel" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown }>(req);
@@ -2679,6 +3027,26 @@ const server = Bun.serve({
         const b = await readBody<{ laneId?: unknown; model?: unknown }>(req);
         return json({ ok: true, data: await fleet.setModel(String(b.laneId ?? ""), String(b.model ?? "")) });
       }
+      // P-INTERJECT.1: mid-turn operator interjections. POST queues a note for "master" or a laneId
+      // (store enforces trim/4000-char/8-note discipline; validation here mirrors it for a crisp error).
+      // GET /pending returns AND clears atomically - the single consumer is the target's omp child
+      // (interject_extension.ts polls it once per tool result via the token'd LUCID_INTERJECT_URL).
+      if (p === "/api/interject" && req.method === "POST") {
+        const b = await readBody<{ target?: unknown; text?: unknown }>(req);
+        const target = String(b.target ?? "").trim();
+        const text = String(b.text ?? "").trim();
+        if (!target) return json({ ok: false, error: "target required" });
+        if (!text) return json({ ok: false, error: "text required" });
+        if (text.length > 4000) return json({ ok: false, error: "note too long (max 4000 chars)" });
+        const r = addInterject(target, text);
+        return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, error: r.reason });
+      }
+      if (p === "/api/interject/pending" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        return json({ ok: true, data: { notes: target ? drainInterjects(target) : [] } });
+      }
+      // P-INTERJECT.1: the unified Processes list (master turn, live lanes, import job, wave-2 browsers).
+      if (p === "/api/processes") return json({ ok: true, data: { processes: await buildProcessViews() } });
       if (p === "/api/chat" && req.method === "POST") {
         const { text, images, from, share } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown }>(req);
         // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
@@ -2995,6 +3363,18 @@ process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retr
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
 process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${TOKEN}`;
+// P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
+// LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
+// token'd drain endpoint (same pattern as LUCID_FLEET_STATUS_URL - /api requires the per-launch token,
+// which a child can only carry as ?t=). Per-child LUCID_INTERJECT_TARGET rides the spawn env overlay
+// (interjectChildEnv in acp_backend.ts for the master, the fleet env dep above for lanes).
+process.env.LUCID_DEV_URL = `http://127.0.0.1:${server.port}`;
+process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${TOKEN}`;
+// P-BROWSER.1 (wave 2): the omp child's browser_* tools reach the agent-browser routes through this
+// token'd BASE (the extension appends /open, /capture, /scroll, /close, /shot and keeps the ?t=).
+// Gated on LUCID_MAIN_TOKEN: without the Electron main there is no window executor, so the env stays
+// unset and browser_extension.ts skips registration entirely (bun-only / plain-browser dev runs).
+if (process.env.LUCID_MAIN_TOKEN) process.env.LUCID_BROWSER_URL = `http://127.0.0.1:${server.port}/api/browser?t=${TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp

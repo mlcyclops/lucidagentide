@@ -68,6 +68,16 @@ export interface GuiSettings {
   // (spillage protection); a "search" session allows web search (the user affirmed no CUI datasets). Absent/
   // unknown ⇒ "cui" (fail-closed). Keyed by omp session id; pruned to a bounded size.
   sessionModes?: Record<string, "cui" | "search">;
+  // P-FLEET.L6: fleet full-auto approvals. `fleetAutoApprove` is the default for NEW lanes (per-lane
+  // toggles live in the running manager). Enabling auto anywhere is refused server-side until the user
+  // has explicitly accepted the risk warning once - `fleetAutoRiskAcceptedAt` records that acceptance
+  // (epoch ms). The in-omp security gate still scans every tool call either way; auto-mode only stops
+  // asking the human for permission.
+  fleetAutoApprove?: boolean;
+  fleetAutoRiskAcceptedAt?: number;
+  // P-WSINIT.1: workspaces already offered the init/.agents-framework popup (path -> epoch ms of the
+  // offer). Bounded to the 50 most recent so the map can never grow without limit.
+  workspaceSetupAsked?: Record<string, number>;
   // ADR-0221: bring-your-own-embeddings config for SEMANTIC knowledge search (non-AskSage RAG increment 2).
   // Non-secret (baseUrl/model/dim/auth); the token lives in the OS vault behind `vaultRef` and is injected into
   // the dev child env by main as LUCID_EMBEDDINGS_KEY (the Figma/git-PAT vault→env pattern). Off ⇒ lexical only.

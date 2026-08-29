@@ -142,6 +142,16 @@ const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
 // knowledge base (Obsidian/folders/chat history → compiled KB). Always added when present (self-describing when
 // empty); the non-AskSage RAG path, independent of the gov gateway.
 const KNOWLEDGE_EXT = join(REPO, "harness", "omp", "knowledge_extension.ts");
+// P-INTERJECT.1: delivers mid-turn operator interjections into tool results (loopback drain of the
+// dev server's interject store). Loaded on the master AND lane argv, AFTER the security/MCP gates so
+// its tool_result hook sees already-wrapped content and appends OUTSIDE the untrusted envelope.
+// Only added when the file exists - a missing extension never blocks omp launch.
+const INTERJECT_EXT = join(REPO, "harness", "omp", "interject_extension.ts");
+// P-BROWSER.1 (wave 2): the agent-controlled visible browser window's tools (browser_open /
+// browser_screenshot / browser_scroll / browser_close). MASTER ONLY - the window is a singleton and
+// lanes driving one shared window would fight over it (same rationale that keeps preview off lanes).
+// The extension self-skips when LUCID_BROWSER_URL is absent (no Electron main = no window executor).
+const BROWSER_EXT = join(REPO, "harness", "omp", "browser_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
@@ -182,9 +192,24 @@ function ompBin(): string {
  *  ungated by path drift. */
 export function fleetLaneArgv(): { cmd: string; args: string[] } {
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
+  const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
   const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...isoCfg, "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...isoCfg, "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
+}
+
+/** P-INTERJECT.1: the per-child env overlay that routes mid-turn operator notes to ONE omp child.
+ *  `target` is "master" for the master chat session or the laneId for a fleet lane; the child's
+ *  interject_extension polls the dev server with it. LUCID_DEV_URL / LUCID_INTERJECT_URL are set on
+ *  process.env by dev.ts once the server binds (children inherit process.env; the overlay re-states
+ *  LUCID_DEV_URL only for determinism - LUCID_INTERJECT_TARGET is the genuinely per-child part).
+ *  P-BROWSER.1 (wave 2): LUCID_BROWSER_URL (the token'd /api/browser base for browser_extension.ts)
+ *  rides along the same way, re-stated for determinism. */
+export function interjectChildEnv(target: string): Record<string, string> {
+  const env: Record<string, string> = { LUCID_INTERJECT_TARGET: target };
+  if (process.env.LUCID_DEV_URL) env.LUCID_DEV_URL = process.env.LUCID_DEV_URL;
+  if (process.env.LUCID_BROWSER_URL) env.LUCID_BROWSER_URL = process.env.LUCID_BROWSER_URL;
+  return env;
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // getConfig() caps the session warm-up at this bound so the model picker never blocks on a slow/hung
@@ -240,7 +265,7 @@ export type ChatEvent =
   // images are validated + capped in extractToolImages before this event is emitted; the UI renders them
   // inline in the reply with a download + "send to preview" (for markup) affordance.
   | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string }
-  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task ids from rawInput.tasks[].id (absent when all auto-generated)
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
@@ -274,6 +299,9 @@ class Backend {
   private starting: Promise<void> | null = null;
   private sessioning: Promise<void> | null = null; // dedupe concurrent session/new (getConfig races it with a timeout)
   private listener: ((e: ChatEvent) => void) | null = null;
+  // P-INTERJECT.1: when the current chat turn armed its listener (null when idle) - the /api/processes
+  // "Master chat turn" entry. Meaningful only while `listener` is non-null.
+  private turnStartedAtMs: number | null = null;
   // Approved (scanned + delimited) AskSage persona. STANDING guidance: re-delivered EVERY turn in the
   // user turn (never the frozen prefix; ADR-0007 / invariant #5) so it doesn't fade (issue #54).
   private persona: string | null = null;
@@ -465,15 +493,18 @@ class Backend {
         const fleetArgs = existsSync(FLEET_EXT) ? ["-e", FLEET_EXT] : []; // P-FLEET.L1: fleet_status
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
+        const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
+        const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
         // requires isolation, in which case exec fail-closes (this.sandboxExecBlock) rather than runs
         // unisolated: the spawn still happens (chat/read tools stay useful) but every exec permission
         // is denied at the session/request_permission seam below.
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...interjectArgs, ...browserArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), spawnPlan.env);
+        // P-INTERJECT.1: the master session drains operator notes addressed to "master".
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...interjectChildEnv("master") });
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -494,10 +525,15 @@ class Backend {
               const ri = u.rawInput ?? {};
               if (ri.agent && (Array.isArray(ri.tasks) || typeof ri.assignment === "string")) {
                 const items: any[] = Array.isArray(ri.tasks) ? ri.tasks : [{ assignment: ri.assignment, description: ri.description }];
+                // P-TASK.5a: per-task ids (rawInput.tasks[].id) scope each delegation card to ITS batch's
+                // runs - without them two batches in one turn render the union of all runs on every card.
+                // Only emitted when at least one task carried an explicit id (they may be auto-generated).
+                const names = items.map((t) => (typeof t?.id === "string" ? t.id.trim() : "")).filter(Boolean);
                 this.emit({
                   type: "subagent", id: String(u.toolCallId ?? u.title ?? ""), agent: String(ri.agent),
                   title: String(u.title ?? `${ri.agent} subagent`),
                   assignments: items.map((t) => String(t?.description ?? t?.assignment ?? "").slice(0, 200)).filter(Boolean),
+                  ...(names.length ? { names } : {}),
                 });
               } else if (ri.poll || ri.cancel || ri.list || ri.wait) {
                 // job-coordination calls (poll/list/cancel/wait of background subagents) are internal
@@ -1001,6 +1037,13 @@ class Backend {
    *  Used by the delete route to close the session before removing its file (#53). */
   currentSessionId(): string | null { return this.sessionId; }
 
+  /** P-INTERJECT.1: whether a chat turn is streaming right now (listener armed), and when it started.
+   *  Feeds the /api/processes "Master chat turn" entry; a util completion riding the chat connection
+   *  counts as busy too (it occupies the session either way). */
+  midTurn(): { busy: boolean; startedAt: number | null } {
+    return this.listener !== null ? { busy: true, startedAt: this.turnStartedAtMs } : { busy: false, startedAt: null };
+  }
+
   /** P-COLLAB.3: the model id omp currently reports active (for the shared-session welcome header). */
   activeModelName(): string { return this.activeModel(); }
 
@@ -1090,6 +1133,7 @@ class Backend {
       try { onEvent(e); } catch { enqueueErr++; }
     };
     this.listener = sink;
+    this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
     this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
@@ -1153,6 +1197,7 @@ class Backend {
       endStepTurn(this.sessionId); // P-RESUME.1: persist the buffered thinking for this turn
     }
     this.listener = null;
+    this.turnStartedAtMs = null;
     // P-NORESP.1: the turn produced NO content at all (no token/thinking/tool) — either a silent empty
     // response (200 with nothing) OR a failure that threw before any output (e.g. an overloaded gov model
     // returning HTTP 429/5xx, or Claude Fable 5 erroring). Both leave the user with nothing, so surface a

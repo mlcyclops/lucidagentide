@@ -18,7 +18,7 @@ import { CollabHost, type HostTransport } from "./host.ts";
 import { generateRoomId, mintRoomLinks } from "./link.ts"; // P-COLLAB.19 (ADR-0241): one room, two capabilities
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto.ts";
 import type { ChatEvent } from "../renderer/chat_events.ts";
-import type { CollabOptions, CollabParticipant, PromptAudio } from "./frames.ts";
+import type { CollabOptions, CollabParticipant, PromptAudio, SttSource } from "./frames.ts";
 
 /** An authorized relay endpoint: `wsBase` is the origin (no path); `httpBase` its http(s) form for links.
  *  `pwaBase` (P-REMOTE.2b): when set (the hosted rendezvous), the browser invite points at the phone PWA
@@ -35,8 +35,9 @@ export interface CollabManagerDeps {
   /** Injected clock (the workflow/test host forbids Date.now()); UNIX ms. */
   now(): number;
   /** P-COLLAB.12: run an EDIT guest's prompt in the host's session (through the host's fail-closed gate).
-   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer. */
-  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio) => void;
+   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer.
+   *  P-REMOTE.14: `sttSource` is the validated transcription provenance, staged with the turn for the audit. */
+  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio, sttSource?: SttSource) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
   /** P-COLLAB.18 (ADR-0204): a guest joined/left the hosted share (host-authoritative audit hook). */
@@ -48,6 +49,15 @@ export interface CollabManagerDeps {
   onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
   /** P-COLLAB.14: an EDIT guest picked an already-used folder by its OPAQUE id (validated host-side). */
   onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
+  /** P-PWA-FLEET.1: an EDIT guest prompts / stops / answers a fleet lane, or injects a mid-turn operator
+   *  note ("master" or a laneId). All edit-gated host-side; laneId/target validated by the backend wiring. */
+  onGuestFleetPrompt?: (laneId: string, text: string, guest: CollabParticipant) => void;
+  onGuestFleetStop?: (laneId: string, guest: CollabParticipant) => void;
+  onGuestFleetAnswer?: (laneId: string, allow: boolean, scope: "once" | "session" | undefined, guest: CollabParticipant) => void;
+  onGuestInterject?: (target: string, text: string, guest: CollabParticipant) => void;
+  /** P-REMOTE.14: the host's CUI + lockdown stance, re-read per welcome/state push and per incoming prompt.
+   *  Guests use it to decide whether device speech-to-text is allowed; absent = strictest (fail-closed). */
+  posture?: () => { cui: boolean; lockdown: boolean };
 }
 
 export interface ShareStatus {
@@ -119,6 +129,14 @@ export class CollabManager {
       options: this.#deps.collabOptions?.() ?? null,
       onGuestSetModel: this.#deps.onGuestSetModel,
       onGuestSetWorkspace: this.#deps.onGuestSetWorkspace,
+      // P-PWA-FLEET.1: fleet controls + mid-turn interjection (edit-gated in CollabHost like set-model).
+      onGuestFleetPrompt: this.#deps.onGuestFleetPrompt,
+      onGuestFleetStop: this.#deps.onGuestFleetStop,
+      onGuestFleetAnswer: this.#deps.onGuestFleetAnswer,
+      onGuestInterject: this.#deps.onGuestInterject,
+      // P-REMOTE.14: the CUI + lockdown stance guests decide device speech-to-text from, and the host's
+      // fail-closed backstop against cloud-transcribed text entering a CUI session.
+      posture: this.#deps.posture,
     });
     this.#host.start();
     this.#allowEdit = allowEdit;

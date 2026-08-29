@@ -18,6 +18,7 @@ import { mountBootCinematic } from "./boot_cinematic.ts"; // P-AVATAR.6: the her
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
+import { laneTabId, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -49,6 +50,8 @@ import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptim
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
+import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable)
+import { filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, PersonalGraphData } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
@@ -150,7 +153,7 @@ const state = {
   lastOk: 0,
   streaming: false,
   streamStartedAt: null as number | null, // P-TRIV.1 (ADR-0174): when the current turn began streaming - gates the Trivia Wire
-  queued: null as string | null, // P-ACP.4: a prompt the user pre-staged while a turn was running
+  queuedItems: [] as QueuedItem[], // P-INTERJECT.2 (was P-ACP.4's single slot): prompts staged while a turn runs - "hold" auto-fires when it ends, "push" is the record of a mid-turn interject
   lastPrompt: "" as string, // last user message - re-sent by an Approve & retry (ADR-0019 C)
   probedLimits: [] as import("./bridge.ts").ProbedLimit[], // P10.3 live API-key rate limits
   probeEnabled: false, // P10.3 opt-in state for the live rate-limit probe
@@ -249,7 +252,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
-        <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
+        <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}<span class="rail-live-dot prev-rail-dot" id="railPreviewDot" hidden></span></button>
         <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
@@ -1339,7 +1342,7 @@ function renderAnswerBody(container: HTMLElement, md: string, marks?: readonly T
   return false;
 }
 
-function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: HTMLElement; finish: () => void } {
+function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true): { el: HTMLElement; finish: () => void } {
   const n = e.assignments.length;
   const body = (e.assignments.length ? e.assignments : [e.title]).map((a) =>
     `<div class="subagent-task">${icon("chevron", 11)}<span>${esc(a)}</span></div>`).join("");
@@ -1392,7 +1395,10 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
   };
   const refreshRuns = async (): Promise<void> => {
     const v = await bridge.subagents().catch(() => null);
-    if (v?.runs) renderRuns(v.runs as Parameters<typeof renderRuns>[0]);
+    // P-TASK.5a: /api/subagents returns ALL runs in the parent session - scope this card to ITS batch
+    // (task ids when the delegation carried them, else assignment-prefix matching; the sole-card
+    // fallback keeps single-batch turns rendering even when neither yields a match).
+    if (v?.runs) renderRuns(filterRunsForBatch(v.runs as Parameters<typeof renderRuns>[0], { names: e.names, assignments: e.assignments, soleCard: isSoleCard() }));
   };
   void refreshRuns();
   const runsTimer = window.setInterval(() => { if (win.isConnected) void refreshRuns(); }, 2500);
@@ -1483,9 +1489,9 @@ async function send(): Promise<void> {
     }
     sendText = inline.text || text;
   }
-  // P-ACP.4: a turn is already running → pre-stage this prompt instead of dropping it. It auto-sends
-  // when the current turn ends (naturally or via Stop). One slot - a newer entry replaces the old.
-  if (state.streaming) { state.queued = text; ta.value = ""; autosize(ta); renderQueued(); setSendEnabled(); return; }
+  // P-INTERJECT.2 (was P-ACP.4's single slot): a turn is already running - the send action becomes an
+  // explicit choice instead of a silent stage: hold it for the next turn, or push it into THIS one.
+  if (state.streaming) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
   // First message of the app session: auto-collapse the sessions panel (Claude-Code style) so the
   // chat takes the focus - the nav hamburger (#sideToggle) reopens history on demand. Done once so
   // we never fight a user who reopens it mid-chat.
@@ -1500,7 +1506,7 @@ async function send(): Promise<void> {
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
-  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-tps"></span><span class="hud-meta"></span></div>`);
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button></div>`);
   const streamEl = el(`<div class="stream"></div>`);
   textEl.append(streamEl, hud); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
@@ -1540,6 +1546,7 @@ async function send(): Promise<void> {
     // Brief crossfade on phase change - GPU-friendly (opacity only), respects reduced-motion via CSS.
     phaseEl.classList.remove("swap"); void phaseEl.offsetWidth; phaseEl.classList.add("swap");
     phaseEl.textContent = p;
+    liveTurn.phase = p; // P-INTERJECT.3: the Check-in card reads the same line the HUD shows
   };
   const paintHud = () => {
     ($(".hud-t", hud) as HTMLElement).textContent = fmtClock(Date.now() - t0);
@@ -1555,6 +1562,9 @@ async function send(): Promise<void> {
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
   };
   phaseEl.textContent = phase;
+  // P-INTERJECT.3: reset the live-turn mirror for this turn and arm the HUD's Check-in button.
+  liveTurn.phase = phase; liveTurn.pending = []; liveTurn.pendingAt = 0;
+  ($(".hud-checkin", hud) as HTMLElement | null)?.addEventListener("click", openCheckinCard);
   paintHud();
   const timer = window.setInterval(paintHud, 1000);
   let finished = false;
@@ -1622,7 +1632,7 @@ async function send(): Promise<void> {
     }
     else if (e.type === "subagent") {
       sawTool = true; setPhase(`Delegating to ${e.agent}…`); paintHud();
-      const card = createSubagentCard(e);
+      const card = createSubagentCard(e, () => subCards.length <= 1);
       subCards.push(card);
       streamEl.after(card.el); // delegation card sits just below the answer
       scrollChat();
@@ -1651,6 +1661,7 @@ async function send(): Promise<void> {
       // P-STALL.2 (ADR-0263): no cutoff to warn about - the phase line counts the quiet and names how
       // many tasks the turn is waiting on; the once-per-turn toast lists the longest-running ones.
       setPhase(slowPhaseLabel(e.waitedMs, e.pending)); paintHud();
+      liveTurn.pending = e.pending ?? []; liveTurn.pendingAt = Date.now(); // P-INTERJECT.3: the freshest pending-call snapshot, aged locally by the Check-in card
       if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, e.pending); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
     // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
@@ -1679,8 +1690,10 @@ async function send(): Promise<void> {
     void renderSessions(); void refreshBudget(false); void syncMode(); void refresh(); // P-PERF.3: one dashboard catch-up now the turn (and its stream) is done, since the poll no longer runs the heavy obs-DB read mid-stream
     scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
     maybeListen(); // P-VOICE.3: the turn has settled - if the audio already drained, open the mic now
-    // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).
-    if (state.queued) { const q = state.queued; state.queued = null; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; ta2.value = q; setSendEnabled(); void send(); }
+    // P-INTERJECT.2 (was P-ACP.4): the turn ended - fire the first HELD prompt as the next turn (push
+    // records and later holds stay staged; they drain one per turn, preserving the auto-fire UX).
+    const nq = nextHold(state.queuedItems);
+    if (nq.item) { state.queuedItems = nq.rest; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; ta2.value = nq.item.text; setSendEnabled(); void send(); }
   }
 }
 
@@ -1741,20 +1754,38 @@ function setSendEnabled(): void {
     btn.setAttribute("data-tip", "Send|Enter");
   }
 }
-/** P-ACP.4: show/refresh the pre-staged ("queued") prompt chip above the composer. */
+/** P-INTERJECT.2 (was P-ACP.4): the staged-prompt STACK above the composer - one chip per item, in run
+ *  order. Each chip: a mode badge ("next turn" hold / "mid-turn" push record), the ellipsized text with
+ *  the full prompt in its title, Push now on hold items (interject the running turn instead of waiting),
+ *  and remove. Every label is its own nowrap span (invariant #11). */
 function renderQueued(): void {
-  let chip = $("#queuedChip");
-  if (!state.queued) { chip?.remove(); return; }
-  if (!chip) {
+  let stack = $("#queuedChip");
+  if (!state.queuedItems.length) { stack?.remove(); return; }
+  if (!stack) {
     const row = $("#input")!.closest(".composer-row") ?? $("#input")!.parentElement!;
-    chip = el(`<div id="queuedChip" class="queued-chip"></div>`);
-    row.before(chip); // sits above the composer row, inside .composer-wrap
+    stack = el(`<div id="queuedChip" class="queued-chip queued-stack"></div>`);
+    row.before(stack); // sits above the composer row, inside .composer-wrap
   }
-  // P-IDE.1d: compact, subdued, right-aligned pill - a small "Queued" tag, the prompt preview, and a
-  // delete (✕) that removes the pre-staged prompt before it sends.
-  chip.innerHTML = `<div class="q-pill" data-tip="Sends automatically when the current turn ends"><span class="q-label">Queued</span><span class="q-text"></span><button class="q-cancel" data-tip="Delete queued prompt">${icon("close", 12)}</button></div>`;
-  ($(".q-text", chip) as HTMLElement).textContent = state.queued.slice(0, 90);
-  ($(".q-cancel", chip) as HTMLElement).addEventListener("click", () => { state.queued = null; renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus(); });
+  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? "Sends automatically when the current turn ends" : "Already pushed into the running turn - kept as a record"}">
+      <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
+      <span class="q-text" data-q-i="${i}"></span>
+      ${q.mode === "hold" ? `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>` : ""}
+      <button class="q-cancel" data-q-x="${i}" data-tip="Remove staged prompt">${icon("close", 12)}</button>
+    </div>`).join("");
+  // Prompt text is user content: set it as a DOM property, never interpolated into the HTML string.
+  state.queuedItems.forEach((q, i) => { const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; } });
+  $$("[data-q-x]", stack).forEach((b) => b.addEventListener("click", () => {
+    const i = Number((b as HTMLElement).dataset.qX);
+    state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
+    renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus();
+  }));
+  $$("[data-q-push]", stack).forEach((b) => b.addEventListener("click", () => {
+    const i = Number((b as HTMLElement).dataset.qPush);
+    const item = state.queuedItems[i]; if (!item) return;
+    state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
+    renderQueued();
+    void pushMidTurn(item.text);
+  }));
 }
 /** P-ACP.4: Stop - interrupt the running turn. omp's session/cancel ends the turn, so the streaming
  *  `done`/finally path flips `streaming` off and fires any pre-staged prompt. */
@@ -1763,6 +1794,196 @@ async function stopTurn(): Promise<void> {
   // P-GOAL.2: a running /goal loop is cancelled at the LOOP level (halt iterations + abort the turn);
   // an ordinary turn just cancels the turn.
   try { await (goalLoopRunning ? bridge.cancelGoal() : bridge.cancelChat()); } catch { /* best-effort; it still settles */ }
+}
+
+// ───────────────────────── turn controls - P-INTERJECT.2/.3/.4 (wave 2) ─────────────────────────
+// The composer's hold-or-push chooser, the mid-turn Check-in card, and the status-bar Processes
+// popover. All three ride the wave-1 plumbing: POST /api/interject (notes the running agent reads at
+// its next tool boundary) and GET /api/processes (the unified running list).
+
+const STATUS_ASK = "Please give a brief status update: what is finished, what you are doing now, what remains. Then continue.";
+
+/** P-INTERJECT.3: renderer mirror of the live turn for the Check-in card - the phase line the HUD
+ *  shows, plus the last pending-call snapshot a { type:"slow" } event carried (aged via pendingAt). */
+const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0 };
+
+/** P-INTERJECT.2: interject a note into the RUNNING master turn + leave a transcript record chip. */
+async function pushMidTurn(text: string): Promise<void> {
+  const r = await bridge.interject("master", text);
+  if (r) addNoteChip(`Pushed mid-turn: ${text}`);
+  else showToast({ tone: "warn", title: "Push not delivered", desc: "The note was refused - the per-turn note cap may be full, or the backend is unreachable.", timeout: 6000 });
+}
+
+/** A quiet transcript note (the .evt chip family): one nowrap-ellipsis text span, full text in title. */
+function addNoteChip(text: string): void {
+  const chip = addEvent(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
+  const t = $(".note-chip-txt", chip) as HTMLElement | null;
+  if (t) { t.textContent = text; t.title = text; }
+}
+
+/** P-INTERJECT.2: the hold-or-push chooser. Sending while a turn streams stages the text here and asks
+ *  which way it should go; X puts it back in the composer. If the turn ended while the chooser sat open,
+ *  both buttons degrade to a plain send - staging for a turn that is over would strand the prompt. */
+function openQueueChooser(text: string): void {
+  closeQueueChooser();
+  const row = $("#input")!.closest(".composer-row") ?? $("#input")!.parentElement!;
+  const ch = el(`<div id="queueChooser" class="queue-chooser">
+      <span class="qc-text"></span>
+      <button class="btn-mini" data-qc-hold data-tip="Runs automatically when the current turn ends">Queue for next turn</button>
+      <button class="btn-mini" data-qc-push data-tip="Interject now - the agent reads it at its next tool boundary">Push mid-turn</button>
+      <button class="q-cancel" data-qc-x aria-label="Cancel" data-tip="Put the text back in the composer">${icon("close", 12)}</button>
+    </div>`);
+  const t = $(".qc-text", ch) as HTMLElement; t.textContent = text; t.title = text;
+  row.before(ch);
+  const resend = () => { const ta = $("#input") as HTMLTextAreaElement; ta.value = text; autosize(ta); setSendEnabled(); void send(); };
+  ($("[data-qc-hold]", ch) as HTMLElement).addEventListener("click", () => {
+    closeQueueChooser();
+    if (!state.streaming) { resend(); return; }
+    const r = addQueued(state.queuedItems, text, "hold");
+    if (r.ok) { state.queuedItems = r.items; renderQueued(); }
+    else showToast({ tone: "warn", title: "Not staged", desc: `${r.reason ?? "refused"}.`, timeout: 5000 });
+  });
+  ($("[data-qc-push]", ch) as HTMLElement).addEventListener("click", () => {
+    closeQueueChooser();
+    if (!state.streaming) { resend(); return; }
+    void pushMidTurn(text);
+  });
+  ($("[data-qc-x]", ch) as HTMLElement).addEventListener("click", () => {
+    closeQueueChooser();
+    const ta = $("#input") as HTMLTextAreaElement; ta.value = text; autosize(ta); setSendEnabled(); ta.focus();
+  });
+}
+function closeQueueChooser(): void { $("#queueChooser")?.remove(); }
+
+// ───── the Check-in card - P-INTERJECT.3 ─────
+let checkinEl: HTMLElement | null = null;
+let checkinTimer: number | null = null;
+function closeCheckin(): void {
+  checkinEl?.remove(); checkinEl = null;
+  if (checkinTimer != null) { window.clearInterval(checkinTimer); checkinTimer = null; }
+  document.removeEventListener("pointerdown", checkinAway, true);
+}
+function checkinAway(e: Event): void { if (checkinEl && !checkinEl.contains(e.target as Node)) closeCheckin(); }
+/** A compact "how is it going" snapshot, inline in the transcript: elapsed, the HUD's phase line, the
+ *  pending calls the last slow notice named (per-call elapsed, aged locally), the staged-prompt count,
+ *  and a one-click canned status ask. Every line is its own block element - never a shattered flex row. */
+function openCheckinCard(): void {
+  closeCheckin();
+  const started = state.streamStartedAt ?? Date.now();
+  const card = addEvent(`<div class="checkin-card">
+      <div class="ck-head"><span class="ck-title">Check-in</span><button class="q-cancel" data-ck-x aria-label="Close">${icon("close", 12)}</button></div>
+      <div class="ck-line" data-ck-elapsed></div>
+      <div class="ck-line" data-ck-phase></div>
+      <div class="ck-pending" data-ck-pending></div>
+      <div class="ck-line" data-ck-queue></div>
+      <div class="ck-acts"><button class="btn-mini" data-ck-ask>${icon("send", 11)} Ask agent for a status update</button></div>
+    </div>`);
+  checkinEl = card;
+  const paint = () => {
+    if (!checkinEl) return;
+    const elapsed = $("[data-ck-elapsed]", card) as HTMLElement | null;
+    if (elapsed) elapsed.textContent = state.streaming ? `Elapsed: ${fmtClock(Date.now() - started)}` : "The turn has ended.";
+    const ph = $("[data-ck-phase]", card) as HTMLElement | null;
+    if (ph) { ph.textContent = liveTurn.phase ? `Now: ${liveTurn.phase}` : "Now: warming up"; ph.title = liveTurn.phase; }
+    const pend = $("[data-ck-pending]", card) as HTMLElement | null;
+    if (pend) {
+      if (!liveTurn.pending.length) pend.innerHTML = `<div class="ck-sub">No slow tool calls reported yet.</div>`;
+      else {
+        const age = liveTurn.pendingAt ? Date.now() - liveTurn.pendingAt : 0;
+        pend.innerHTML = `<div class="ck-sub">Waiting on:</div>` + liveTurn.pending.map((_, i) => `<div class="ck-call" data-ck-call="${i}"></div>`).join("");
+        liveTurn.pending.forEach((p, i) => {
+          const row = $(`[data-ck-call="${i}"]`, pend) as HTMLElement | null;
+          if (row) { const line = `${p.label} · ${fmtClock(p.elapsedMs + age)}`; row.textContent = line; row.title = line; }
+        });
+      }
+    }
+    const q = $("[data-ck-queue]", card) as HTMLElement | null;
+    if (q) q.textContent = `Staged prompts: ${state.queuedItems.length}`;
+  };
+  paint();
+  checkinTimer = window.setInterval(paint, 1000);
+  ($("[data-ck-x]", card) as HTMLElement).addEventListener("click", closeCheckin);
+  ($("[data-ck-ask]", card) as HTMLElement).addEventListener("click", () => {
+    closeCheckin();
+    void bridge.interject("master", STATUS_ASK).then((r) => {
+      if (r) addNoteChip("Check-in sent - the agent will answer at its next tool boundary.");
+      else showToast({ tone: "warn", title: "Check-in not delivered", desc: "The note was refused - the turn may have ended or the note cap is full.", timeout: 6000 });
+    });
+  });
+  // Click-away dismiss - armed a tick later so the opening click cannot instantly close it.
+  window.setTimeout(() => { if (checkinEl) document.addEventListener("pointerdown", checkinAway, true); }, 0);
+}
+
+// ───── the Processes popover - P-INTERJECT.4 ─────
+let procBtnEl: HTMLElement | null = null;
+let procPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
+let procTimer: number | null = null;
+const PROC_ICON: Record<string, string> = { "master-turn": "bolt", lane: "send", import: "download", browser: "eye" };
+
+/** Compact "how long has this run" readout: 42s, 7m 05s, 1h 12m. */
+function fmtProcElapsed(startedAt: number | null): string {
+  if (!startedAt) return "";
+  const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+/** The status-bar Processes button. Created ONCE and re-adopted after every renderStatus innerHTML
+ *  swap (the fleet-pill convention) so the 2.5s repaint never drops it. */
+function mountProcButton(): void {
+  if (!procBtnEl) {
+    procBtnEl = el(`<div class="seg seg-btn proc-seg" data-tip="Processes|Everything running right now: the master turn, fleet lanes, imports, and agent browser windows."><b>Processes</b></div>`);
+    procBtnEl.addEventListener("click", () => { if (procPop) procPop.close(); else void openProcPopover(); });
+  }
+  const sb = document.getElementById("statusbar");
+  if (sb && !sb.contains(procBtnEl)) sb.append(procBtnEl);
+}
+
+async function openProcPopover(): Promise<void> {
+  if (!procBtnEl) return;
+  procPop = popover(procBtnEl, `<div class="proc-pop"><div class="proc-pop-head">Running processes</div><div class="proc-pop-list"><div class="proc-empty">Loading…</div></div></div>`, () => {
+    procPop = null;
+    if (procTimer != null) { window.clearInterval(procTimer); procTimer = null; }
+  });
+  // Row actions, delegated once per open: lane Stop, master-turn Stop, browser Close (the browser
+  // seam lands with the BrowserFeature wave - optional chaining keeps this popover working without it).
+  procPop.node.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const stop = t.closest("[data-proc-stop]") as HTMLElement | null;
+    if (stop) { const id = stop.dataset.procStop ?? ""; void bridge.fleetStop(id.startsWith("lane:") ? id.slice(5) : id); window.setTimeout(() => void refreshProcPopover(), 400); return; }
+    if (t.closest("[data-proc-stopturn]")) { void stopTurn(); window.setTimeout(() => void refreshProcPopover(), 400); return; }
+    if (t.closest("[data-proc-close]")) { void (bridge as { browserClose?: () => Promise<unknown> }).browserClose?.(); window.setTimeout(() => void refreshProcPopover(), 400); return; }
+  });
+  await refreshProcPopover();
+  procTimer = window.setInterval(() => void refreshProcPopover(), 2500);
+}
+
+async function refreshProcPopover(): Promise<void> {
+  if (!procPop) return;
+  const rows = await bridge.processes();
+  if (!procPop) return; // closed while the fetch was in flight
+  const list = $(".proc-pop-list", procPop.node) as HTMLElement | null; if (!list) return;
+  if (!rows?.length) {
+    list.innerHTML = `<div class="proc-empty">${rows ? "Nothing is running right now." : "Process list unavailable - the backend did not answer."}</div>`;
+    procPop.reposition();
+    return;
+  }
+  list.innerHTML = rows.map((r, i) => {
+    const act = r.kind === "lane" ? `<button class="btn-mini danger" data-proc-stop="${esc(r.id)}">Stop</button>`
+      : r.kind === "master-turn" ? `<button class="btn-mini danger" data-proc-stopturn>Stop</button>`
+      : r.kind === "browser" ? `<button class="btn-mini danger" data-proc-close>Close</button>` : "";
+    return `<div class="proc-row"><span class="proc-ic">${icon(PROC_ICON[r.kind] ?? "bolt", 13)}</span><span class="proc-label" data-proc-label="${i}"></span><span class="proc-status" data-proc-status="${i}"></span><span class="proc-elapsed">${esc(fmtProcElapsed(r.startedAt))}</span>${act}</div>`;
+  }).join("");
+  // Labels/status are server-fed strings (lane names come from user folders): DOM properties, not HTML.
+  rows.forEach((r, i) => {
+    const lab = $(`[data-proc-label="${i}"]`, list) as HTMLElement | null;
+    if (lab) { lab.textContent = r.label; lab.title = r.detail ? `${r.label} · ${r.detail}` : r.label; }
+    const st = $(`[data-proc-status="${i}"]`, list) as HTMLElement | null;
+    if (st) st.textContent = r.status;
+  });
+  procPop.reposition();
 }
 
 // ───────────────────────── inspector ─────────────────────────
@@ -4169,6 +4390,7 @@ function closeTrainer(): void {
 function onPreviewAvailable(path: string): void {
   if (!path) return;
   state.lastPreviewablePath = path;
+  schedulePhoneAutoSend(path); // P-PREVIEW-PWA.2: auto-mirror the agent's refreshed preview to phone guests
   // A write JUST happened, so the agent lane's loaded document is stale by definition. Clear the lane's
   // path before openPreview so its unchanged-path guard cannot skip the reload (that guard exists to keep
   // a running previewed app alive across mere panel toggles, not across file changes).
@@ -4295,22 +4517,28 @@ async function openDesignInIde(): Promise<void> {
 // the agent can never clobber the file you're reviewing. Only the active lane's iframe is shown; both stay
 // loaded (live page state preserved). Your Open/Browse target the yours lane; the agent's preview_screenshot
 // and preview_inspect target the agent lane; an agent update badges the Agent tab instead of stealing your view.
-type PrevLane = "yours" | "agent";
+// P-PREVIEW.10: tab ids generalize the pair - the fixed "yours" / "agent" lanes plus dynamic
+// "lane:<laneId>" tabs that a fleet lane's previewable writes create (registry in preview_tabs.ts).
+type PrevLane = string;
 let prevLane: PrevLane = "yours";
+/** The dynamic lane tabs' iframes, keyed by tab id - created on demand, removed with their tab. */
+const laneTabFrames = new Map<string, HTMLIFrameElement>();
 const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
-  $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
-const prevPathByLane: Record<PrevLane, string> = { yours: "", agent: "" };
-const prevKindByLane: Record<PrevLane, string> = { yours: "", agent: "" };
+  l.startsWith("lane:") ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
+const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
+const prevKindByLane: Record<string, string> = { yours: "", agent: "" };
 /** Switch which lane's iframe is visible; the other stays loaded but hidden. Updates the shared header chrome. */
 function switchPrevLane(l: PrevLane): void {
   prevLane = l;
   const yf = laneFrame("yours"), af = laneFrame("agent");
   if (yf) yf.hidden = l !== "yours" || !prevPathByLane.yours;
   if (af) af.hidden = l !== "agent" || !prevPathByLane.agent;
+  for (const [id, f] of laneTabFrames) f.hidden = l !== id || !prevPathByLane[id]; // P-PREVIEW.10: lane tab frames follow the same rule
   $$(".prev-tab").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.lane === l));
   if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing the agent lane clears the "new" badge + refreshes the shot cache for preview_screenshot
-  const path = $("#prevPath") as HTMLInputElement | null; if (path) path.value = prevPathByLane[l];
-  const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l];
+  if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; } // viewing a lane tab clears the rail badge
+  const path = $("#prevPath") as HTMLInputElement | null; if (path) path.value = prevPathByLane[l] ?? "";
+  const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l] ?? "";
   const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
   const notice = $("#prevNotice") as HTMLElement | null; if (notice) { notice.hidden = true; notice.innerHTML = ""; } // health is per-page, re-derived on load
   syncPreviewCanvas();
@@ -4356,7 +4584,7 @@ function applyDevice(device: PrevDevice): void {
   if (!body || !stage) return;
   body.classList.toggle("device", device !== "desktop");
   const d = PREV_DEVICES[device];
-  for (const f of [laneFrame("yours"), laneFrame("agent")]) {
+  for (const f of [laneFrame("yours"), laneFrame("agent"), ...laneTabFrames.values()]) {
     if (!f) continue;
     if (device === "desktop") { f.style.width = ""; f.style.height = ""; }
     else { f.style.width = `${d.w}px`; f.style.height = `${d.h}px`; }
@@ -4442,6 +4670,77 @@ function loadPreview(target: string, lane: PrevLane = prevLane): void {
   }
   // An agent load into the background lane badges the Agent tab instead of stealing your view.
   if (lane === "agent" && prevLane !== "agent" && prevPathByLane.agent) { const d = $("#prevAgentDot"); if (d) d.hidden = false; }
+}
+
+// ── P-PREVIEW.10: dynamic per-lane tabs ──────────────────────────────────────────────────────────
+// A fleet lane that writes a previewable file (fleet_grid's stream sink → the previewLaneFile dep) gets
+// its OWN tab beside Yours / Agent, labeled with the lane's name and backed by its own persistent iframe
+// through the same loadPreview / serve path (nonce reload included). The registry itself is pure
+// (preview_tabs.ts); this section is only the DOM around it.
+let prevLaneTabs: PreviewTab[] = [];
+/** Re-render the tab strip from the registry: the fixed Yours / Agent pair first, then the lane tabs.
+ *  Each lane tab is a flex row with ONE nowrap-ellipsis text span (title = the previewed path) and a
+ *  close X. The Agent tab's "new update" dot survives the re-render. */
+function renderPrevTabs(): void {
+  const strip = $("#prevTabs"); if (!strip) return;
+  const agentDotHidden = ($("#prevAgentDot") as HTMLElement | null)?.hidden ?? true;
+  const act = (id: string) => (prevLane === id ? " active" : "");
+  const lanes = prevLaneTabs.map((t) =>
+    `<button type="button" class="prev-tab prev-tab-lane${act(t.id)}" data-lane="${esc(t.id)}" title="${esc(t.path)}">` +
+    `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
+    `<span class="prev-tab-x" data-close="${esc(t.id)}" title="Close this lane's preview tab">${icon("close", 10)}</span>` +
+    `</button>`).join("");
+  strip.innerHTML =
+    `<button type="button" class="prev-tab${act("yours")}" data-lane="yours" data-tip="Your preview|Files you open stay here - the agent can't clobber this tab.">Yours</button>` +
+    `<button type="button" class="prev-tab${act("agent")}" data-lane="agent" data-tip="The agent's preview|What the agent is building or reviewing. It updates here without stealing your tab.">Agent <span class="prev-tab-dot" id="prevAgentDot"${agentDotHidden ? " hidden" : ""} aria-label="new update"></span></button>` +
+    lanes;
+}
+/** The lane tab's persistent iframe - created on demand into the shared stage, same sandbox / allow as
+ *  the fixed lanes, hidden until its tab is the active one. Matches the active device viewport. */
+function ensureLaneTabFrame(tabId: string): void {
+  const cur = laneTabFrames.get(tabId);
+  if (cur?.isConnected) return;
+  const stage = $("#prevStage"); if (!stage) return;
+  const f = document.createElement("iframe");
+  f.className = "preview-frame";
+  f.setAttribute("sandbox", PREVIEW_SANDBOX);
+  f.setAttribute("allow", PREVIEW_ALLOW);
+  f.setAttribute("referrerpolicy", "no-referrer");
+  f.title = "A fleet lane's app preview";
+  f.hidden = true;
+  if (prevDevice !== "desktop") { const d = PREV_DEVICES[prevDevice]; f.style.width = `${d.w}px`; f.style.height = `${d.h}px`; }
+  stage.appendChild(f);
+  laneTabFrames.set(tabId, f);
+}
+function dropLaneTabFrame(tabId: string): void {
+  laneTabFrames.get(tabId)?.remove();
+  laneTabFrames.delete(tabId);
+  delete prevPathByLane[tabId];
+  delete prevKindByLane[tabId];
+}
+/** Close a lane tab (the X): registry + iframe + per-lane state go together; if it was the active tab,
+ *  fall back the same way openPreview picks its reveal (yours-with-content, else agent, else yours). */
+function closeLaneTab(tabId: string): void {
+  prevLaneTabs = removeLaneTab(prevLaneTabs, tabId.startsWith("lane:") ? tabId.slice(5) : tabId);
+  dropLaneTabFrame(tabId);
+  if (prevLane === tabId) switchPrevLane(prevPathByLane.yours ? "yours" : (prevPathByLane.agent ? "agent" : "yours"));
+  renderPrevTabs();
+}
+/** P-PREVIEW.10 entry (threaded into fleet_grid as the previewLaneFile dep): a lane wrote a previewable
+ *  file. Upsert its tab, load the file through the normal serve path, and badge the preview rail icon
+ *  (the agent-dot pattern). NEVER steals the user's current tab: only when the panel is CLOSED does it
+ *  auto-open on the lane tab - mirroring onPreviewAvailable's auto-show. */
+export function previewShowLaneFile(laneId: string, laneName: string, path: string): void {
+  if (!laneId || !path) return;
+  const id = laneTabId(laneId);
+  const prior = prevLaneTabs;
+  prevLaneTabs = upsertLaneTab(prevLaneTabs, laneId, laneName, path);
+  for (const t of prior) if (!prevLaneTabs.some((n) => n.id === t.id)) dropLaneTabFrame(t.id); // cap-evicted
+  renderPrevTabs();
+  ensureLaneTabFrame(id);
+  loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
+  const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
+  if (!previewOpen) openPreview({ reveal: id }); // closed → auto-open ON the lane tab; open → focus nothing
 }
 /** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
  *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
@@ -5256,6 +5555,37 @@ async function downscaleDataUrl(dataUrl: string, max: number): Promise<string> {
   return promise;
 }
 
+// P-PREVIEW-PWA.2: AUTO send-to-phone. When the agent produces or refreshes a preview while a share is
+// live, mirror ONE downscaled snapshot to the connected phones automatically - the exact capture →
+// downscale → broadcast path of the manual button, but silent, rate-limited to one send per 3s, and only
+// ever the AGENT lane (a file YOU opened never auto-leaves this machine). Capture sees on-screen pixels,
+// so it waits for the agent frame to paint and no-ops when that frame is not the visible one.
+const PHONE_AUTO_GAP_MS = 3000;
+const PHONE_AUTO_PAINT_MS = 900;
+let phoneAutoLastSend = 0;
+function schedulePhoneAutoSend(path: string): void {
+  window.setTimeout(() => void phoneAutoSend(path), PHONE_AUTO_PAINT_MS); // let the agent frame paint first
+}
+async function phoneAutoSend(path: string): Promise<void> {
+  if (Date.now() - phoneAutoLastSend < PHONE_AUTO_GAP_MS) return;
+  if (!bridge.isElectron || !bridge.capturePreview) return;
+  const frame = laneFrame("agent");
+  if (!frame || frame.hidden || prevLane !== "agent") return; // agent lane only, and only while it is the visible one
+  const rect = frame.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return;
+  const share = await currentShareStatus().catch(() => null);
+  if (!share?.active) return;
+  if (Date.now() - phoneAutoLastSend < PHONE_AUTO_GAP_MS) return; // re-check: the status await may have raced a burst
+  phoneAutoLastSend = Date.now(); // claim the slot BEFORE the capture so a burst collapses to one send
+  const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
+  if (!png) return;
+  const image = await downscaleDataUrl(png, MAX_SNAPSHOT_EDGE);
+  const label = `Preview: ${path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path}`;
+  const evt: ChatEvent = { type: "preview-snapshot", image, label };
+  if (p2pHostActive()) { p2pTeeEvent(evt); return; } // direct-P2P: broadcast straight from the renderer host
+  await bridge.collabBroadcastPreview(image, label).catch(() => { /* best-effort; the manual button reports errors */ });
+}
+
 // P-PREVIEW-PWA.1 (ADR-0237): capture the visible Preview lane + broadcast it to connected phone guests as a
 // scaled-down snapshot - direct-P2P via teeEvent, relay via the backend tap. Electron-only capture (like the
 // Screenshot button); needs a live share.
@@ -5274,6 +5604,85 @@ async function sendPreviewToPhone(): Promise<void> {
   else { const r = await bridge.collabBroadcastPreview(image, "Preview snapshot"); if (!r?.sent) { showToast({ tone: "warn", title: "Not sent", desc: "The relay share is not live.", timeout: 3000 }); return; } }
   showToast({ title: "Preview sent to phone", desc: "Connected guests can view + save it.", timeout: 2600 });
 }
+
+// ── P-BROWSER.1 (wave 2): the agent-browser pill (BrowserFeature section) ────────────────────────────
+// While the agent drives its visible browser window (bridge.browserStatus().active), a floating pill
+// hovers near the top of the chat: the live page title, a CSS-only breathing-particle aura, a pulse
+// replayed each time a screenshot lands, and two controls - "Close tab" (just the window, the agent
+// keeps working) and "Stop agent" (window + the running turn). Self-contained: its own 2.5s poll,
+// lazily mounted into main.center on the first tick. When a shot lands AND a collab share is live,
+// the capture auto-forwards to phone guests (3s minimum gap) via the P-PREVIEW-PWA.1 downscale +
+// broadcast path. Invariant #11: the pill row has ONE text child (.bp-label, nowrap+ellipsis).
+let bpLastShots = -1; // -1 = not yet sighted this activation (never pulse or auto-send on first sight)
+let bpLastSentAt = 0;
+let bpPollBusy = false;
+
+function ensureBrowserPill(): HTMLElement | null {
+  const existing = document.getElementById("browserPill");
+  if (existing) return existing;
+  const host = document.querySelector("main.center");
+  if (!host) return null; // layout not rendered yet - the next tick retries
+  const el = document.createElement("div");
+  el.id = "browserPill";
+  el.className = "browser-pill";
+  el.hidden = true;
+  el.innerHTML = `
+    <span class="bp-fx" aria-hidden="true"></span>
+    <span class="bp-ico" aria-hidden="true">${icon("eye", 14)}</span>
+    <span class="bp-label">Agent browser</span>
+    <button class="bp-btn" id="browserPillClose" type="button" data-tip="Close the agent's browser window">Close tab</button>
+    <button class="bp-btn bp-danger" id="browserPillStop" type="button" data-tip="Close the window and stop the agent's turn">Stop agent</button>`;
+  el.querySelector("#browserPillClose")?.addEventListener("click", () => { void bridge.browserClose(); });
+  // Stop agent = both halves: close the window (server-side) AND interrupt the running turn (the same
+  // stop path as the composer's Stop button; a no-op when nothing is streaming).
+  el.querySelector("#browserPillStop")?.addEventListener("click", () => { void bridge.browserStop(); void stopTurn(); });
+  host.appendChild(el);
+  return el;
+}
+
+// AUTO SEND-TO-PHONE: forward the newest browser shot to connected guests - only while a share is
+// actually live (same gate as sendPreviewToPhone), never more than once per 3s.
+async function browserAutoSendShot(title: string): Promise<void> {
+  const now = Date.now();
+  if (now - bpLastSentAt < 3000) return;
+  bpLastSentAt = now; // claim the slot before any await so overlapping ticks can't double-send
+  const share = await currentShareStatus();
+  if (!share?.active) return;
+  const png = await bridge.browserShot();
+  if (!png) return;
+  const image = await downscaleDataUrl(png, MAX_SNAPSHOT_EDGE);
+  const label = `Browser: ${title}`.slice(0, 120);
+  const evt: ChatEvent = { type: "preview-snapshot", image, label };
+  if (p2pHostActive()) p2pTeeEvent(evt); // direct-P2P: broadcast straight from the renderer host
+  else void bridge.collabBroadcastPreview(image, label); // relay share; fail-quiet (no toast spam on auto)
+}
+
+async function browserPillTick(): Promise<void> {
+  if (bpPollBusy) return;
+  bpPollBusy = true;
+  try {
+    const s = await bridge.browserStatus();
+    const el = ensureBrowserPill();
+    if (!el) return;
+    if (!s?.active) { el.hidden = true; bpLastShots = -1; return; }
+    el.hidden = false;
+    const label = el.querySelector(".bp-label") as HTMLElement | null;
+    if (label) {
+      label.textContent = `Agent browser - ${s.title || s.url || "loading"}`;
+      label.title = s.url || "";
+    }
+    const grew = bpLastShots >= 0 && s.shots > bpLastShots;
+    bpLastShots = s.shots;
+    if (grew) {
+      el.classList.remove("snap");
+      void el.offsetWidth; // restart the CSS pulse so every shot visibly lands
+      el.classList.add("snap");
+      void browserAutoSendShot(s.title || s.url);
+    }
+  } catch { /* fail-quiet: a status poll error never breaks the app */
+  } finally { bpPollBusy = false; }
+}
+window.setInterval(() => { void browserPillTick(); }, 2500);
 // P-IMG.1 (ADR-0208): a download for an image data URL — the standard blob/anchor idiom, but a data: URL is
 // already a valid href, so set it as a PROPERTY (never interpolated into HTML) and click a transient anchor.
 function downloadDataUrl(dataUrl: string, filename: string): void {
@@ -5899,6 +6308,86 @@ async function forgetRecentWorkspace(path: string): Promise<void> {
   if (el && state.workspace) el.outerHTML = `<div data-sec="workspace">${workspaceSection(state.workspace)}</div>`;
   renderWorkspaceBar();
 }
+// P-WSSETUP: the workspace-initialization offer. When the opened folder has no .agents framework
+// and was never asked before, offer to lay one down: an empty folder gets a "what is this for?"
+// step first, an existing code repo gets a one-step scan-and-set-up offer. Skip / Not now / Esc is
+// remembered server-side per folder, so nobody is nagged twice about the same workspace.
+async function maybeOfferWorkspaceSetup(): Promise<void> {
+  const prof = await bridge.workspaceSetupProfile();
+  if (!prof || prof.asked || prof.hasAgentsFramework || document.getElementById("wsSetup")) return;
+  type Purpose = import("./bridge.ts").WorkspacePurpose;
+
+  const ov = el(`<div id="wsSetup" class="modal-ov"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="wsSetupTitle"></div></div>`);
+  const box = $(".modal", ov) as HTMLElement;
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); dismiss(); } };
+  const close = () => { document.removeEventListener("keydown", onKey); ov.remove(); };
+  const dismiss = () => { close(); void bridge.workspaceSetupDismiss(); };
+  const accept = async (purpose: Purpose, scan: boolean) => {
+    close();
+    const r = await bridge.agentsInit(purpose, scan);
+    if (r?.ok) showToast({ title: "Workspace initialized", desc: "AGENTS.md and .agents/ created (" + r.created.length + " files).", timeout: 4000 });
+    else showToast({ tone: "danger", title: "Workspace setup failed", desc: (r?.error ?? "Could not create the .agents files.").slice(0, 180), timeout: 6000 });
+  };
+
+  // Step 2 of the purpose flows: explain the .agents framework, then scaffold on accept.
+  const frameworkStep = (purpose: Purpose): void => {
+    box.innerHTML = `
+      <div class="modal-icon">${icon("folder", 24)}</div>
+      <h2 class="modal-title" id="wsSetupTitle">Set up the .agents framework?</h2>
+      <p class="modal-desc">The .agents folder is a portable context layer that lives inside the workspace: agents record their context, progress, decisions, and skills there as plain files.</p>
+      <p class="modal-desc">Any agent on any system, and any person who works on this project later, inherits that record instead of starting cold.</p>
+      <p class="modal-desc">LUCID will create AGENTS.md plus .agents/ with CONTEXT, PROGRESS, DECISIONS, and skills files. Nothing existing is overwritten.</p>
+      <div class="modal-actions">
+        <button class="btn-mini" id="wsSetupNo" type="button">Not now</button>
+        <button class="btn-mini ok" id="wsSetupGo" type="button">${icon("check", 12)} Set up .agents framework</button>
+      </div>`;
+    $("#wsSetupNo", box)!.addEventListener("click", dismiss);
+    $("#wsSetupGo", box)!.addEventListener("click", () => void accept(purpose, false));
+  };
+
+  if (!prof.isEmpty && prof.hasCode) {
+    // Existing code repo: a single step - offer the scan + scaffold directly.
+    const detected = prof.stack.length ? ` (detected: ${esc(prof.stack.join(", "))})` : "";
+    box.innerHTML = `
+      <div class="modal-icon">${icon("folder", 24)}</div>
+      <h2 class="modal-title" id="wsSetupTitle">Existing project detected</h2>
+      <p class="modal-desc">This folder already contains an application${detected}.</p>
+      <p class="modal-desc">The .agents folder saves context, progress, decisions, and skills as plain files inside the workspace, so other agents and future developers inherit that record instead of starting cold.</p>
+      <p class="modal-desc">LUCID can scan the project and pre-fill AGENTS.md with the detected stack and commands. Nothing existing is overwritten.</p>
+      <div class="modal-actions">
+        <button class="btn-mini" id="wsSetupNo" type="button">Not now</button>
+        <button class="btn-mini ok" id="wsSetupGo" type="button">${icon("scan", 12)} Scan and set up .agents</button>
+      </div>`;
+    $("#wsSetupNo", box)!.addEventListener("click", dismiss);
+    $("#wsSetupGo", box)!.addEventListener("click", () => void accept("app", true));
+  } else {
+    // Empty folder (or non-empty without code): ask what the folder is FOR first. Documents
+    // leads the list when the folder already holds non-code content.
+    const choices: { purpose: Purpose; icon: string; label: string }[] = [
+      { purpose: "app", icon: "spark", label: "Build a new application" },
+      { purpose: "docs", icon: "report", label: "Analyze documents" },
+      { purpose: "analysis", icon: "search", label: "Research or data analysis" },
+      { purpose: "other", icon: "folder", label: "Something else" },
+    ];
+    if (!prof.isEmpty) choices.unshift(choices.splice(1, 1)[0]!); // docs first
+    box.innerHTML = `
+      <div class="modal-icon">${icon("folder", 24)}</div>
+      <h2 class="modal-title" id="wsSetupTitle">${prof.isEmpty ? "Set up this new workspace" : "Set up this workspace"}</h2>
+      <p class="modal-desc">What will you use this folder for? LUCID can lay down a starting structure.</p>
+      <div class="gov-choices">
+        ${choices.map((c) => `<button class="gov-choice" type="button" data-purpose="${c.purpose}">${icon(c.icon, 18)}<span class="gov-choice-tx"><b>${c.label}</b></span></button>`).join("")}
+      </div>
+      <div class="modal-actions"><button class="btn-mini" id="wsSetupSkip" type="button">Skip</button></div>`;
+    $("#wsSetupSkip", box)!.addEventListener("click", dismiss);
+    $$("[data-purpose]", box).forEach((b) => b.addEventListener("click", () => {
+      const c = choices.find((x) => x.purpose === (b as HTMLElement).dataset.purpose);
+      if (c) frameworkStep(c.purpose);
+    }));
+  }
+
+  document.body.appendChild(ov);
+  document.addEventListener("keydown", onKey);
+}
 async function applyWorkspace(path: string): Promise<void> {
   // #11 perceived-latency: setWorkspace() respawns the backend (2–5s). Reassure the user
   // up front that work is happening, then confirm when it's ready, and reflect the switch
@@ -5913,6 +6402,7 @@ async function applyWorkspace(path: string): Promise<void> {
   void renderSessions(); void renderSettings();
   showToast({ title: "Workspace set", desc: `Agent now works in ${info?.name ?? path}.`, actions: [{ label: "OK" }], timeout: 2600 });
   if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); // P-COLLAB.14: mirror the folder switch to direct-P2P edit guests
+  void maybeOfferWorkspaceSetup(); // P-WSSETUP: offer the .agents framework for the newly opened folder
 }
 
 function chips(items: { cls: string; n: number | string; l: string }[]): string {
@@ -6375,6 +6865,7 @@ function renderStatus(): void {
   mountSharePill(); // P-REMOTE.11: re-adopt the minimized Share pill (it lives in the bar, right of the ticker)
   mountJoinPill(); // P-COLLAB.20: re-adopt the minimized Join pill (watching continues while minimized)
   mountFleetPill(); // P-FLEET.L2: re-adopt the minimized Fleet pill - without this the innerHTML swap above dropped it every status repaint and the next 2.5s poll put it back, which is the lower-right flicker
+  mountProcButton(); // P-INTERJECT.4: re-adopt the Processes button (same fleet-pill convention - the innerHTML swap above would drop it every 2.5s repaint)
 }
 
 // ───────────────────────── the Trivia Wire — P-TRIV.1 (ADR-0174) ─────────────────────────
@@ -10155,6 +10646,10 @@ function openSharePanel(): void {
             onGuestSetWorkspace: (id, guest) => { const path = p2pWsById[id]; if (path) runGuestWorkspaceLocally(path, guest.name); },
             // P-COLLAB.18: host-authoritative audit — a guest joined/left this direct-P2P share.
             onParticipant: (kind, guest) => bridge.collabAudit(kind === "join" ? "guest_joined" : "guest_left", { transport: "direct-p2p", access: guest.access, roomId: p2pHostStatus()?.roomId, guest: guest.name }),
+            // P-REMOTE.14: advertise this host's CUI + lockdown stance so a phone guest can tell whether
+            // device-native dictation is permitted. Read fresh per call (the titlebar toggle can flip mid
+            // share), and it matches the relay host's wiring so upgrading to P2P never changes the answer.
+            posture: () => ({ cui: state.sessionMode === "cui", lockdown: !!(state.managed?.asksageOnly || state.asksage?.only) }),
           });
           bridge.collabAudit("share_started", { transport: "direct-p2p", access: allowEdit ? "edit" : "view", roomId: p2pStatus.roomId });
         } catch (e) { startFail("Couldn't start sharing", String((e as Error)?.message ?? e)); return; }
@@ -10564,7 +11059,12 @@ function wire(): void {
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") openPreviewFile(($("#prevPath") as HTMLInputElement).value.trim()); });
   $("#prevReload")?.addEventListener("click", () => { const f = laneFrame(); if (f && !f.hidden && f.src) f.src = f.src; }); // reload the visible lane
   // P-PREVIEW.8: the Yours / Agent tab strip.
-  $("#prevTabs")?.addEventListener("click", (e) => { const t = (e.target as HTMLElement).closest(".prev-tab") as HTMLElement | null; if (t?.dataset.lane) switchPrevLane(t.dataset.lane as PrevLane); });
+  $("#prevTabs")?.addEventListener("click", (e) => {
+    const closeId = ((e.target as HTMLElement).closest(".prev-tab-x") as HTMLElement | null)?.dataset.close;
+    if (closeId) { closeLaneTab(closeId); return; } // the close X wins over the tab switch
+    const tabId = ((e.target as HTMLElement).closest(".prev-tab") as HTMLElement | null)?.dataset.lane;
+    if (tabId) switchPrevLane(tabId);
+  });
   $("#prevBrowse")?.addEventListener("click", () => void browsePreviewFile()); // P-PREVIEW.5: open cwd file
   $("#prevDevice")?.addEventListener("click", (e) => openDeviceMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.9: device viewports
   $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.5: markup tools
@@ -10771,10 +11271,13 @@ function wire(): void {
     fleetQueueRemove: bridge.fleetQueueRemove,
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
-    fleetAnswer: bridge.fleetAnswer,
+    fleetAnswer: bridge.fleetAnswer, // scope "session" also allows every same-kind ask for the lane's session
+    fleetAuto: bridge.fleetAuto, // full auto-mode: risk-gated ON, per-lane or all-lanes
     fleetCancel: bridge.fleetCancel,
     fleetStop: bridge.fleetStop,
     fleetSetModel: bridge.fleetSetModel,
+    interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
+    previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
     getMasterCwd: () => state.workspace?.current ?? "",
@@ -10939,7 +11442,7 @@ function wire(): void {
       const pat = (($("#wsGitPat", $("#setBody")!) as HTMLInputElement | null)?.value.trim() || sessionGitPat) || undefined;
       showToast({ title: "Cloning…", desc: "Fetching the repo - this can take a moment.", timeout: 2500 });
       const info = await bridge.cloneWorkspace(url, pat);
-      if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); }
+      if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); void maybeOfferWorkspaceSetup(); /* P-WSSETUP: clone does not funnel through applyWorkspace */ }
       else showToast({ tone: "danger", title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
       return;
     }

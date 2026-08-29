@@ -11,6 +11,19 @@
 
 import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Agent Builder spec type
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
+import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (DOM-free)
+
+/** P-PWA-FLEET.1: one fleet lane's status as mirrored to phone guests. `cwd` carries only the folder
+ *  BASENAME (the frames.ts "no file paths" invariant - a full path never crosses the wire). */
+export interface FleetLaneStatus {
+  id: string;
+  name: string;
+  status: string;
+  cwd: string;
+  turns: number;
+  lastActivityAt: number;
+  pendingApproval?: { summary: string; kind: string };
+}
 
 export type ChatEvent =
   | { type: "token"; text: string }
@@ -18,7 +31,7 @@ export type ChatEvent =
   | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
   | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string } // P-IMG.1 (ADR-0208): a tool result produced image(s) → render inline + download + push-to-preview
   | { type: "preview-snapshot"; image: string; label?: string } // P-PREVIEW-PWA.1 (ADR-0237): a scaled-down capture of the host's Preview panel, broadcast to phone guests only (never fed to the local desktop transcript)
-  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[] }
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task ids from the delegation rawInput (absent when all auto-generated)
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
@@ -41,4 +54,9 @@ export type ChatEvent =
   // P-NORESP.1: the model returned NOTHING (no token, thinking, or tool) without erroring — a silent
   // failure, typically an overloaded/oversubscribed gov model. `model` is the id that produced nothing.
   | { type: "no-response"; model: string; stopReason?: string; reason?: string }
-  | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
+  | { type: "done"; text?: string } // text = the authoritative full assistant reply (reconciles lossy streaming)
+  // P-PWA-FLEET.1: fleet + process mirroring for phone guests. Broadcast-only: these are tapped straight
+  // into the collab share by the engine's fleet-status broadcaster, never emitted into the local chat
+  // stream, so the desktop renderer never receives them.
+  | { type: "fleet-status"; lanes: FleetLaneStatus[] }
+  | { type: "process-list"; processes: ProcessView[] };

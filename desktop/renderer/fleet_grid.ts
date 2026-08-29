@@ -24,12 +24,13 @@ import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
-import type { FleetStatusView, LaneEvent, LaneImage, LaneStatus, LaneToolCode, LaneView, LucidBridge } from "./bridge.ts";
+import { isPreviewablePath } from "./preview_tabs.ts";
+import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneStatus, LaneToolCode, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetCancel" | "fleetStop" | "fleetSetModel">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetSetModel" | "interject">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -48,6 +49,10 @@ export interface FleetGridDeps extends FleetFns {
   /** Is the OS vault reachable at all (desktop shell)? A plain browser build can only use a token for the
    *  clone happening right now, so the form must say that rather than promise storage it cannot do. */
   vaultAvailable: () => boolean;
+  /** P-PREVIEW.10: a lane wrote a browser-previewable file (html/svg) - surface it as that lane's own
+   *  Preview panel tab. Optional and threaded from app.ts (like fleetAuto) so this module never imports
+   *  the app shell; absent, previewable writes simply stay in the transcript. */
+  previewLaneFile?: (laneId: string, laneName: string, path: string) => void;
 }
 
 const FLEET_DOCK_KEY = "lucid.fleetDock.v1";
@@ -396,6 +401,8 @@ function buildCard(run: LaneRun): HTMLElement {
       <span class="fleet-cwd-chip" data-fleet-cwd></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
       <select class="fleet-model" data-fleet-model aria-label="Lane model"></select>
+      <button class="fleet-card-btn fleet-auto-btn" data-fleet-auto aria-label="Toggle full auto-mode" title="Full auto-mode: approve every ask automatically">${icon("bolt", 12)}</button>
+      <button class="fleet-card-btn" data-fleet-checkin aria-label="Check in on this lane" title="Check in: status, turns, last activity, queue depth">${icon("eye", 12)}</button>
       <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the lane card" title="Collapse (keeps the header)">${icon("minus", 12)}</button>
       <button class="fleet-card-btn" data-fleet-stop aria-label="Stop this lane" title="Stop the lane">${icon("close", 12)}</button>
     </div>
@@ -405,6 +412,7 @@ function buildCard(run: LaneRun): HTMLElement {
         <span class="fleet-approve-txt" data-fleet-approve-txt></span>
         <span class="fleet-approve-acts">
           <button class="btn-mini ok" data-fleet-allow>${icon("check", 11)} Allow</button>
+          <button class="btn-mini ok" data-fleet-allow-session title="Approve this ask and every same-kind ask for the rest of this lane's session">${icon("check", 11)} Session</button>
           <button class="btn-mini danger" data-fleet-deny>${icon("close", 11)} Deny</button>
         </span>
       </div>
@@ -454,13 +462,21 @@ function paintFrame(run: LaneRun): void {
   }
   const sel = $("[data-fleet-model]", card) as HTMLSelectElement | null;
   if (sel && document.activeElement !== sel) fillModelSelect(sel, v.model);
+  // Full auto-mode: the bolt is lit while ON; the title carries the state so hover always explains it.
+  const auto = $("[data-fleet-auto]", card) as HTMLButtonElement | null;
+  if (auto) {
+    auto.classList.toggle("auto-on", v.autoApprove);
+    auto.title = v.autoApprove
+      ? "Full auto-mode is ON - every ask is approved automatically. Click to turn it off."
+      : "Full auto-mode: approve every ask automatically";
+  }
   const main = $(".fleet-card-main", card) as HTMLElement | null;
   if (main) main.hidden = run.collapsed;
   const ap = $("[data-fleet-approve]", card) as HTMLElement | null;
   if (ap) {
     ap.hidden = v.status !== "needs-approval";
     const txt = $("[data-fleet-approve-txt]", card) as HTMLElement | null;
-    if (txt) { const s = v.pendingApproval?.summary ?? "The lane asks to run a gated action."; txt.textContent = s; txt.title = s; }
+    if (txt) { const s = v.pendingApproval?.summary ?? "The lane asks to run a gated action."; txt.textContent = s; txt.title = v.pendingApproval?.kind ? `${s} (${v.pendingApproval.kind})` : s; }
   }
   // P-FLEET.L4: error is a state, not a grave. Retry re-sends the last prompt (error lanes with one);
   // Respawn revives in place. A user-STOPPED lane gets Respawn only - stopping was a decision.
@@ -479,12 +495,13 @@ function paintFrame(run: LaneRun): void {
     }
   }
   // P-FLEET.L3: the staged-prompt strip - one compact chip per queued prompt, in run order, each with
-  // reorder/delete. Chips ellipsize on one line (invariant 11); the queue itself lives in the manager.
+  // reorder/delete + Push now (P-INTERJECT.2: interject the RUNNING turn instead of waiting for idle).
+  // Chips ellipsize on one line (invariant 11); the queue itself lives in the manager.
   const q = $("[data-fleet-queue]", card) as HTMLElement | null;
   if (q) {
     q.hidden = v.queued.length === 0;
     const html = v.queued
-      .map((item, i) => `<span class="fleet-q-chip"><b>${i + 1}</b><span class="fleet-q-txt" title="${esc(item.text)}">${esc(item.text)}${item.images ? ` [${item.images} img]` : ""}</span><button class="fleet-q-btn" data-q-up="${i}" title="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" title="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" title="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
+      .map((item, i) => `<span class="fleet-q-chip"><b>${i + 1}</b><span class="fleet-q-txt" title="${esc(item.text)}">${esc(item.text)}${item.images ? ` [${item.images} img]` : ""}</span><button class="fleet-q-btn fleet-q-push" data-q-go="${i}" title="Push now - interject this into the running turn instead of waiting" aria-label="Push staged prompt ${i + 1} into the running turn now">Push now</button><button class="fleet-q-btn" data-q-up="${i}" title="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" title="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" title="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
       .join("");
     if (q.innerHTML !== html) q.innerHTML = html;
   }
@@ -601,11 +618,21 @@ function onLaneEvent(id: string, e: LaneEvent): void {
   switch (e.type) {
     case "token": run.pending += e.text; paintOutput(run); break;
     case "thinking": run.pendingThinking += e.text; paintOutput(run); break;
-    case "tool": run.pendingTools.push({ name: e.name, detail: e.detail, ...(e.code ? { code: e.code } : {}) }); paintOutput(run); break;
+    case "tool":
+      run.pendingTools.push({ name: e.name, detail: e.detail, ...(e.code ? { code: e.code } : {}) });
+      paintOutput(run);
+      // P-PREVIEW.10: a previewable write (html/svg) earns the lane its own Preview panel tab.
+      if (e.code?.path && isPreviewablePath(e.code.path)) deps?.previewLaneFile?.(run.view.id, run.view.name || run.view.id, e.code.path);
+      break;
     case "permission":
       run.view.status = "needs-approval";
-      run.view.pendingApproval = { summary: e.summary };
+      run.view.pendingApproval = { summary: e.summary, kind: e.kind };
       paintFrame(run); paintPill();
+      break;
+    case "auto-approved":
+      // Rides the tool-chip render path: the transcript shows WHAT was auto-granted and by which mode.
+      run.pendingTools.push({ name: e.mode === "auto" ? "auto-approved" : "session-approved", detail: e.summary });
+      paintOutput(run);
       break;
     case "status":
       run.view.status = e.status;
@@ -705,12 +732,62 @@ function runRespawn(run: LaneRun): void {
     .catch(() => { /* the next poll corrects it */ });
 }
 
-function answer(run: LaneRun, allow: boolean): void {
+function answer(run: LaneRun, allow: boolean, scope?: ApprovalScope): void {
   if (!deps) return;
   run.view.pendingApproval = undefined;
   run.view.status = "working"; // optimistic; the lane's status events / next poll correct it
   paintFrame(run); paintPill();
-  void deps.fleetAnswer(run.view.id, allow).catch(() => { /* the next poll re-surfaces it */ });
+  void deps.fleetAnswer(run.view.id, allow, scope).catch(() => { /* the next poll re-surfaces it */ });
+}
+
+/** Auto-mode toggle: turning OFF is immediate (optimistic, the poll is truth); turning ON always routes
+ *  through the risk modal - the acceptance is explicit every time the switch is thrown. */
+function toggleAuto(run: LaneRun): void {
+  if (!deps) return;
+  if (run.view.autoApprove) {
+    run.view.autoApprove = false; paintFrame(run);
+    void deps.fleetAuto({ laneId: run.view.id, on: false }).catch(() => { /* the next poll corrects it */ });
+    return;
+  }
+  openAutoRiskModal(run);
+}
+
+/** The full auto-mode risk gate (the app.ts first-open modal pattern; classes are global). Esc and Cancel
+ *  close without action; Accept sends acceptRisk: true, which the server persists as the risk timestamp.
+ *  The checkbox widens the switch to ALL lanes, including ones spawned later. */
+function openAutoRiskModal(run: LaneRun): void {
+  const ov = el(`<div class="modal-ov" id="fleetAutoRisk">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="fleetAutoRiskTitle">
+      <div class="modal-icon">${icon("bolt", 24)}</div>
+      <h2 class="modal-title" id="fleetAutoRiskTitle">Enable full auto-mode?</h2>
+      <p class="modal-desc">Every approval this lane asks for - commands, file edits, network access - will be granted automatically, without asking you.</p>
+      <p class="modal-desc">LUCID's security gate still scans every tool call and quarantines suspicious content. Auto-mode removes the human approval step only.</p>
+      <p class="modal-desc">By enabling it you accept the risk of the commands the agent chooses to run.</p>
+      <label class="fleet-auto-all"><input type="checkbox" data-auto-all /><span>Apply to all lanes, including new ones</span></label>
+      <div class="modal-actions">
+        <button class="btn-mini" type="button" data-auto-cancel>Cancel</button>
+        <button class="btn-mini danger" type="button" data-auto-accept>${icon("bolt", 12)} Accept risk and enable</button>
+      </div>
+    </div></div>`);
+  const close = (): void => { window.removeEventListener("keydown", onEsc, true); ov.remove(); };
+  const onEsc = (e: KeyboardEvent): void => {
+    // Capture + stopPropagation: the dock's own Escape-minimizes handler must not also fire.
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+  };
+  window.addEventListener("keydown", onEsc, true);
+  $("[data-auto-cancel]", ov)?.addEventListener("click", close);
+  $("[data-auto-accept]", ov)?.addEventListener("click", () => {
+    const allLanes = ($("[data-auto-all]", ov) as HTMLInputElement | null)?.checked ?? false;
+    void deps?.fleetAuto({ ...(allLanes ? {} : { laneId: run.view.id }), on: true, acceptRisk: true })
+      .then((r) => {
+        if (!r?.ok) return; // no toast surface in this module - the next poll re-states the truth
+        const targets = allLanes ? [...runs.values()] : [run];
+        for (const t of targets) { t.view.autoApprove = true; paintFrame(t); }
+      })
+      .catch(() => { /* the next poll corrects it */ });
+    close();
+  });
+  document.body.appendChild(ov);
 }
 
 // ---------------------------------------------------------------- the + Lane form
@@ -864,10 +941,32 @@ function onClick(ev: Event): void {
   }
   if (t.closest("[data-fleet-send]")) { sendPrompt(run); return; }
   if (t.closest("[data-fleet-cancel]")) { void deps.fleetCancel(run.view.id).catch(() => { /* stream end resolves the state */ }); return; }
+  if (t.closest("[data-fleet-allow-session]")) { answer(run, true, "session"); return; }
+  if (t.closest("[data-fleet-auto]")) { toggleAuto(run); return; }
   if (t.closest("[data-fleet-allow]")) { answer(run, true); return; }
   if (t.closest("[data-fleet-deny]")) { answer(run, false); return; }
   if (t.closest("[data-fleet-retry]")) { runRetry(run); return; }
   if (t.closest("[data-fleet-respawn]")) { runRespawn(run); return; }
+  // P-INTERJECT.2/.3: the per-lane Check in card + its actions (before the generic chip handlers so
+  // clicks inside the card never fall through to them).
+  if (t.closest("[data-fleet-checkin]")) { toggleLaneCheckin(run); return; }
+  if (t.closest("[data-fleet-ck-x]")) { $("[data-fleet-checkin-card]", card)?.remove(); return; }
+  const ask = t.closest("[data-fleet-ask]") as HTMLButtonElement | null;
+  if (ask) {
+    ask.disabled = true; ask.textContent = "Sent - answers at the next tool boundary";
+    void deps.interject(run.view.id, LANE_STATUS_ASK).catch(() => { /* the reply simply never lands */ });
+    return;
+  }
+  const qgo = t.closest("[data-q-go]") as HTMLElement | null;
+  if (qgo) {
+    const i = Number(qgo.dataset.qGo);
+    const item = run.view.queued[i]; if (!item) return;
+    run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
+    paintFrame(run);
+    void deps.interject(run.view.id, item.text).catch(() => { /* the next poll corrects it */ });
+    void deps.fleetQueueRemove(run.view.id, i).catch(() => { /* the next poll corrects it */ });
+    return;
+  }
   // P-FLEET.L3: the pasted-image strip and the staged-prompt chips.
   const ax = t.closest("[data-attach-x]") as HTMLElement | null;
   if (ax) { run.attached.splice(Number(ax.dataset.attachX), 1); paintAttach(run); return; }
@@ -895,6 +994,28 @@ function onClick(ev: Event): void {
     }
     return;
   }
+}
+
+// P-INTERJECT.3: the per-lane Check in card - a compact snapshot inline in the lane body (status, turns,
+// last activity, queue depth; one block element per line) + a canned status ask routed as an interject.
+const LANE_STATUS_ASK = "Please give a brief status update: what is finished, what you are doing now, what remains. Then continue.";
+function toggleLaneCheckin(run: LaneRun): void {
+  const card = run.card; if (!card) return;
+  const old = $("[data-fleet-checkin-card]", card); if (old) { old.remove(); return; }
+  const v = run.view;
+  const secs = Math.max(0, Math.round((Date.now() - v.lastActivityAt) / 1000));
+  const ck = el(`<div class="fleet-checkin" data-fleet-checkin-card>
+    <div class="fleet-ck-line" data-ck-status></div>
+    <div class="fleet-ck-line" data-ck-turns></div>
+    <div class="fleet-ck-line" data-ck-act></div>
+    <div class="fleet-ck-line" data-ck-queue></div>
+    <div class="fleet-ck-acts"><button class="btn-mini" data-fleet-ask>${icon("send", 11)} Ask for status</button><button class="btn-mini" data-fleet-ck-x>${icon("close", 11)} Close</button></div>
+  </div>`);
+  ($("[data-ck-status]", ck) as HTMLElement).textContent = `Status: ${v.status}`;
+  ($("[data-ck-turns]", ck) as HTMLElement).textContent = `Turns: ${v.turns}`;
+  ($("[data-ck-act]", ck) as HTMLElement).textContent = `Last activity: ${secs}s ago`;
+  ($("[data-ck-queue]", ck) as HTMLElement).textContent = `Queue depth: ${v.queued.length}`;
+  ($(".fleet-card-main", card) as HTMLElement | null)?.prepend(ck);
 }
 
 function onChange(ev: Event): void {

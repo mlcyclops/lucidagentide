@@ -79,44 +79,83 @@ export interface TimelineEntry {
   laneName?: string;
   /** Lane rows only: how many ledger events (spawn + respawns) point at this session. */
   laneEvents?: number;
+  /** Set ONLY when true, so every assertion about a real row keeps reading a plain entry: this
+   *  session is a throwaway from the repo's own self-test or demo scripts (isSelfTestSession). */
+  selfTest?: true;
 }
 
-export interface TimelinePage { entries: TimelineEntry[]; total: number }
+/** `total` counts what the caller can actually page through; `selfTest` counts what was held back
+ *  (or, with includeSelfTest, merely marked) across the WHOLE corpus, never just this page. */
+export interface TimelinePage { entries: TimelineEntry[]; total: number; selfTest: number }
+
+/** basename(cwd) with trailing separators trimmed - the workspace label a row shows. */
+const byName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+
+/** PRIMARY rule: workspace directories only a throwaway run ever creates. `harness/scripts/demo00_omp_echo.ts`
+ *  and the `demo-00` make targets mkdtemp an `omp-echo-<rand>` dir per probe, so dozens of them pile up
+ *  per minute; the second pattern covers the test/smoke/fixture scaffolds beside it. Matching here is
+ *  sufficient on its own because no human names a workspace this. */
+const SELF_TEST_WS: readonly RegExp[] = [
+  /^omp[-_]echo[-_]/i,
+  /^(?:lucid|omp)[-_](?:test|selftest|smoke|demo|fixture|tmp)/i,
+];
+
+/** SECONDARY rule: the bare probe prompts those scripts send. A title NEVER condemns a session by
+ *  itself - it must also be short enough to be a probe (see the turns guard in isSelfTestSession),
+ *  because "ping" is a perfectly legitimate opening line for a real conversation. */
+const SELF_TEST_TITLE: readonly RegExp[] = [
+  /^(?:ping|go|ok|hi|hello|test|noop)$/i,
+  /^turn \d+: add some context/i,
+];
+
+/** Is this row a throwaway the repo's own self-test/demo scripts produced, rather than a session a
+ *  human would ever want to review? Load-bearing SAFETY PROPERTY: a real workspace name plus more
+ *  than 2 turns is NEVER self-test, whatever the title says. */
+export function isSelfTestSession(row: { cwd: string; wsName: string; title: string; turns: number }): boolean {
+  const ws = row.wsName || byName(row.cwd);
+  if (SELF_TEST_WS.some((re) => re.test(ws))) return true;
+  return row.turns <= 2 && SELF_TEST_TITLE.some((re) => re.test(row.title.trim()));
+}
 
 /** PURE merge: classify every session row against the lane ledger, newest first, paged. The ledger's
  *  LATEST record per session wins (a respawn may rename nothing, but the freshest name is the honest
  *  one). Ingest classification rides the parser's own kind - the ledger never overrides it, because a
- *  lane cannot be an extractor throwaway. */
-export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[], opts: { limit?: number; offset?: number } = {}): TimelinePage {
-  const byName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+ *  lane cannot be an extractor throwaway. Self-test throwaways are held back by DEFAULT (they drown a
+ *  real chronology dozens-to-the-minute); `includeSelfTest` keeps them, still marked. */
+export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[], opts: { limit?: number; offset?: number; includeSelfTest?: boolean } = {}): TimelinePage {
   const laneBySession = new Map<string, { laneId: string; name: string; events: number; at: number }>();
   for (const rec of ledger) {
     const cur = laneBySession.get(rec.sessionId);
     if (!cur) laneBySession.set(rec.sessionId, { laneId: rec.laneId, name: rec.name, events: 1, at: rec.at });
     else { cur.events++; if (rec.at >= cur.at) { cur.laneId = rec.laneId; cur.name = rec.name; cur.at = rec.at; } }
   }
-  const entries: TimelineEntry[] = sessions.map((s) => {
+  const all: TimelineEntry[] = sessions.map((s) => {
     const lane = laneBySession.get(s.id);
     const kind: TimelineKind = s.kind === "kg-ingest" ? "ingest" : lane ? "lane" : "chat";
+    const wsName = byName(s.cwd);
+    const junk = isSelfTestSession({ cwd: s.cwd, wsName, title: s.title, turns: s.turns });
     return {
       sessionId: s.id,
       kind,
       title: s.title,
       cwd: s.cwd,
-      wsName: byName(s.cwd),
+      wsName,
       model: s.model,
       turns: s.turns,
       updatedAt: s.updatedAt,
       ...(lane ? { laneId: lane.laneId, laneName: lane.name, laneEvents: lane.events } : {}),
+      ...(junk ? { selfTest: true as const } : {}),
     };
   });
+  const selfTest = all.reduce((n, e) => n + (e.selfTest ? 1 : 0), 0);
+  const entries = opts.includeSelfTest ? all : all.filter((e) => !e.selfTest);
   entries.sort((a, b) => b.updatedAt - a.updatedAt);
   const offset = Math.max(0, opts.offset ?? 0);
   const limit = Math.max(1, Math.min(500, opts.limit ?? 100));
-  return { entries: entries.slice(offset, offset + limit), total: entries.length };
+  return { entries: entries.slice(offset, offset + limit), total: entries.length, selfTest };
 }
 
 /** The live listing dev.ts serves: corpus scan (index-cached) + ledger read + pure merge. */
-export function listTimeline(opts: { limit?: number; offset?: number } = {}, root?: string, ledgerPath?: string): TimelinePage {
+export function listTimeline(opts: { limit?: number; offset?: number; includeSelfTest?: boolean } = {}, root?: string, ledgerPath?: string): TimelinePage {
   return buildTimeline(listAllSessions(root), readLaneLedger(ledgerPath), opts);
 }

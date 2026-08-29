@@ -32,6 +32,10 @@ import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
 
+/** P-FLEET.L6: how far an ALLOW reaches. "once" answers only the pending ask; "session" also remembers
+ *  the ask's kind for the lane's lifetime. A deny never records anything, whatever the scope says. */
+export type ApprovalScope = "once" | "session";
+
 export interface LaneView {
   id: string;
   name: string;
@@ -46,7 +50,12 @@ export interface LaneView {
   canRetry: boolean;
   /** P-FLEET.L4: how many times this lane has been respawned in place (same id, memory carried). */
   respawns: number;
-  pendingApproval?: { summary: string };
+  pendingApproval?: { summary: string; kind: string };
+  /** P-FLEET.L6: this lane approves privileged actions WITHOUT asking. The in-omp security gate
+   *  (invariant 4) still scans every tool call - auto mode removes only the human approval step. */
+  autoApprove: boolean;
+  /** P-FLEET.L6: ask kinds the user allowed for this lane's whole session ("allow for session"). */
+  sessionAllow: string[];
   /** P-FLEET.L5: the omp ACP session id behind this lane - the key into its on-disk .jsonl history.
    *  Changes when a fallback recovery mints a fresh session; every id this lane has held is in the
    *  durable lane-session ledger. */
@@ -67,7 +76,9 @@ export interface LaneToolCode { path: string; content?: string; oldText?: string
 export type LaneEvent =
   | { type: "token" | "thinking"; text: string }
   | { type: "tool"; name: string; detail: string; code?: LaneToolCode }
-  | { type: "permission"; summary: string }
+  | { type: "permission"; summary: string; kind: string }
+  /** P-FLEET.L6: an ask was granted WITHOUT a human - full auto-mode or a standing session allow. */
+  | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
   | { type: "error"; message: string };
@@ -132,6 +143,11 @@ export interface FleetLaneDeps {
   /** P-FLEET.L5: durable lane-session ledger sink (dev.ts appends JSONL). Optional and fail-quiet -
    *  a broken ledger must never block a lane. */
   recordLaneSession?: (rec: LaneSessionRecord) => void;
+  /** P-INTERJECT.1: per-lane spawn env OVERLAY (on top of the inherited process.env - ACPClient
+   *  semantics). dev.ts supplies interjectChildEnv(laneId), which stamps LUCID_INTERJECT_TARGET=<laneId>
+   *  (+ LUCID_DEV_URL) so the lane's interject_extension drains only ITS notes. Optional: absent means
+   *  a bare inherit, exactly the pre-seam behavior. Applied at spawn AND at every in-place recovery. */
+  env?: (laneId: string) => Record<string, string>;
 }
 
 /** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time. */
@@ -151,7 +167,11 @@ interface Lane {
   /** Live event sinks (the streaming mini window). */
   sinks: Set<(e: LaneEvent) => void>;
   /** The unanswered permission ask, if any. Resolving it answers the remote. */
-  pending: { summary: string; resolve: (allow: boolean) => void } | null;
+  pending: { summary: string; kind: string; resolve: (allow: boolean) => void } | null;
+  /** P-FLEET.L6: approve every ask without a human (per-lane; initialized from the manager default). */
+  autoApprove: boolean;
+  /** P-FLEET.L6: ask kinds the user granted for this lane's lifetime via scope "session". */
+  sessionAllow: Set<string>;
   /** A prompt turn is in flight (one at a time per lane). */
   busy: boolean;
   // ── P-FLEET.L4 recovery state ─────────────────────────────────────────────────────────────────────
@@ -175,16 +195,19 @@ interface Lane {
 
 export class FleetLaneManager {
   readonly #lanes = new Map<string, Lane>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string> };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
   #sampler: ReturnType<typeof setInterval> | null = null;
   #sampling = false;
   #lastStatusAt = 0;
+  /** P-FLEET.L6: the auto-approve default NEW lanes inherit (persisted as GuiSettings.fleetAutoApprove;
+   *  dev.ts seeds it at boot and setAutoAll moves it with the fleet-wide toggle). */
+  #autoDefault = false;
 
   constructor(deps: FleetLaneDeps) {
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select. */
@@ -211,10 +234,12 @@ export class FleetLaneManager {
       createdAt: t,
       lastActivityAt: t,
       turns: 0,
-      client: new ACPClient(plan.cmd, plan.args, cwd, {}),
+      client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id) ?? {}),
       sessionId: null,
       sinks: new Set(),
       pending: null,
+      autoApprove: this.#autoDefault,
+      sessionAllow: new Set(),
       busy: false,
       transcript: [],
       liveText: "",
@@ -363,12 +388,40 @@ export class FleetLaneManager {
     return r.ok ? { ok: true, lane: this.#view(lane) } : { ok: false, reason: r.reason };
   }
 
-  /** Answer the lane's pending approval. No pending ask is a quiet no-op (a late click, not an error). */
-  answer(laneId: string, allow: boolean): { ok: boolean } {
+  /** Answer the lane's pending approval. No pending ask is a quiet no-op (a late click, not an error).
+   *  P-FLEET.L6: scope "session" ALSO remembers the ask's kind for the lane's lifetime - but only on an
+   *  allow. A deny records NOTHING regardless of scope (fail-closed: refusals never build allowlists). */
+  answer(laneId: string, allow: boolean, scope?: ApprovalScope): { ok: boolean } {
     const lane = this.#lanes.get(laneId);
     if (!lane?.pending) return { ok: false };
+    if (allow && scope === "session") lane.sessionAllow.add(lane.pending.kind); // BEFORE resolve - resolve nulls pending
     lane.pending.resolve(allow);
     return { ok: true };
+  }
+
+  /** P-FLEET.L6: flip one lane's full auto-mode. Turning it ON with an ask open resolves that ask as an
+   *  ALLOW - the human just granted everything, the pending ask rides along. The in-omp security gate
+   *  (invariant 4) still scans every tool call in auto mode; only the human approval step goes away. */
+  setAuto(laneId: string, on: boolean): { ok: boolean; lane?: LaneView; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    lane.autoApprove = on;
+    if (on) lane.pending?.resolve(true);
+    return { ok: true, lane: this.#view(lane) };
+  }
+
+  /** P-FLEET.L6: fleet-wide auto-mode - every live lane flips AND new lanes inherit it as the default. */
+  setAutoAll(on: boolean): void {
+    this.#autoDefault = on;
+    for (const lane of this.#lanes.values()) {
+      lane.autoApprove = on;
+      if (on) lane.pending?.resolve(true);
+    }
+  }
+
+  /** P-FLEET.L6: seed the new-lane default only (the boot path - never touches live lanes). */
+  setAutoDefault(on: boolean): void {
+    this.#autoDefault = on;
   }
 
   cancel(laneId: string): { ok: boolean } {
@@ -516,7 +569,7 @@ export class FleetLaneManager {
     lane.pending?.resolve(false);
     try { lane.client.stop(); } catch { /* already dead */ }
     const plan = this.#deps.argv();
-    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, {});
+    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, this.#deps.env?.(lane.id) ?? {});
     this.#wire(lane);
     this.#setStatus(lane, "starting");
     try {
@@ -593,14 +646,24 @@ export class FleetLaneManager {
     };
     lane.client.onRequest = async (method, params) => {
       // FAIL-CLOSED approvals: every ask goes to the human in the mini window; silence is a DENY.
+      // P-FLEET.L6: full auto-mode and standing "session" grants answer WITHOUT the human - the in-omp
+      // security gate (invariant 4) still scans every tool call either way; auto removes only the ask.
       if (method === "session/request_permission") {
         const opts: { optionId?: string; kind?: string }[] = params?.options ?? [];
         const tc = params?.toolCall ?? params?.tool_call ?? {};
         const summary = String(tc.title ?? tc.kind ?? params?.tool ?? "a privileged action").slice(0, 300);
-        const allow = await this.#askUser(lane, summary);
+        const kind = String(tc.kind ?? params?.tool ?? "action").slice(0, 80);
+        const pick = () => {
+          const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+          return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
+        };
+        if (lane.autoApprove || lane.sessionAllow.has(kind)) {
+          this.#emit(lane, { type: "auto-approved", summary, mode: lane.autoApprove ? "auto" : "session" });
+          return pick();
+        }
+        const allow = await this.#askUser(lane, summary, kind);
         if (!allow) return { outcome: { outcome: "cancelled" } };
-        const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
-        return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
+        return pick();
       }
       // omp's redundant INNER elicitation gate (see acp_backend): it only fires AFTER the permission
       // ask above was allowed, so pick the affirmative option; a custom question gets no synthesized answer.
@@ -640,7 +703,7 @@ export class FleetLaneManager {
     return undefined;
   }
 
-  #askUser(lane: Lane, summary: string): Promise<boolean> {
+  #askUser(lane: Lane, summary: string, kind: string): Promise<boolean> {
     lane.pending?.resolve(false); // never two open asks - the older one dies as a deny
     const gate = Promise.withResolvers<boolean>();
     const resolve = (allow: boolean) => {
@@ -650,9 +713,9 @@ export class FleetLaneManager {
       gate.resolve(allow);
     };
     const timer = setTimeout(() => resolve(false), APPROVAL_TIMEOUT_MS);
-    lane.pending = { summary, resolve };
+    lane.pending = { summary, kind, resolve };
     this.#setStatus(lane, "needs-approval");
-    this.#emit(lane, { type: "permission", summary });
+    this.#emit(lane, { type: "permission", summary, kind });
     return gate.promise;
   }
 
@@ -681,7 +744,9 @@ export class FleetLaneManager {
       respawns: lane.respawns,
       sessionId: lane.sessionId,
       queued: lane.queue.map((q) => ({ text: q.text.length > 140 ? `${q.text.slice(0, 140)}\u2026` : q.text, images: q.images.length })),
-      ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary } } : {}),
+      autoApprove: lane.autoApprove,
+      sessionAllow: [...lane.sessionAllow],
+      ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary, kind: lane.pending.kind } } : {}),
     };
   }
 }

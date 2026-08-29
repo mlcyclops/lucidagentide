@@ -329,3 +329,79 @@ test("spawn and every recovery NAME the session in the ledger; the view exposes 
   expect(records[1]!.event).toBe("respawn");
   expect(records[1]!.laneId).toBe(r.lane!.id); // same logical lane, whole lineage in the ledger
 }, TIMEOUT);
+
+// ── P-FLEET.L6: approval scopes ("allow for session") + full auto-mode ───────────────────────────────
+
+test("scope 'session' remembers the ask's KIND - the next identical ask is granted without a human", async () => {
+  live = manager({ mode: "permission" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const first: LaneEvent[] = [];
+  const turn = live.prompt(id, "risky one", (e) => first.push(e));
+  // Real clock on purpose: the ask crosses a REAL subprocess stdio boundary. Bounded poll, fails loudly.
+  let pending: { summary: string; kind: string } | undefined;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending).toBeDefined();
+  expect(pending!.kind).toBe("execute"); // the fake's toolCall kind, threaded into the view
+  expect(live.answer(id, true, "session").ok).toBe(true);
+  await turn;
+  // Turn 2: the SAME kind of ask is granted silently - no permission event, an auto-approved one instead.
+  const second: LaneEvent[] = [];
+  await live.prompt(id, "risky two", (e) => second.push(e));
+  expect(second.some((e) => e.type === "permission")).toBe(false);
+  const text = second.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(text).toContain("selected"); // the fake echoes the outcome: we allowed
+  expect(second.some((e) => e.type === "auto-approved" && e.mode === "session")).toBe(true);
+  expect((await live.status()).lanes[0]!.sessionAllow).toContain("execute");
+}, TIMEOUT);
+
+test("full auto-mode answers asks with NO human ask - auto-approved event, never a permission event", async () => {
+  live = manager({ mode: "permission" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const set = live.setAuto(r.lane!.id, true);
+  expect(set.ok).toBe(true);
+  expect(set.lane!.autoApprove).toBe(true);
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "risky", (e) => events.push(e));
+  expect(events.some((e) => e.type === "permission")).toBe(false);
+  const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(text).toContain("selected");
+  expect(events.some((e) => e.type === "auto-approved" && e.mode === "auto")).toBe(true);
+  expect((await live.status()).lanes[0]!.autoApprove).toBe(true);
+}, TIMEOUT);
+
+test("turning auto ON with an ask open resolves the pending ask as an ALLOW - it rides along", async () => {
+  live = manager({ mode: "permission" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const events: LaneEvent[] = [];
+  const turn = live.prompt(r.lane!.id, "risky", (e) => events.push(e));
+  let pending = false;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = !!(await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending).toBe(true);
+  expect(live.setAuto(r.lane!.id, true).ok).toBe(true);
+  await turn;
+  const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(text).toContain("selected"); // the human granted everything; the open ask went with it
+}, TIMEOUT);
+
+test("a DENY with scope 'session' records NOTHING - the next ask still lands needs-approval", async () => {
+  live = manager({ mode: "permission" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const first: LaneEvent[] = [];
+  const turn1 = live.prompt(id, "risky one", (e) => first.push(e));
+  let pending = false;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = !!(await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending).toBe(true);
+  expect(live.answer(id, false, "session").ok).toBe(true); // refusals never build allowlists
+  await turn1;
+  expect((await live.status()).lanes[0]!.sessionAllow).toEqual([]);
+  // Turn 2: a FRESH ask surfaces - nothing was remembered from the denied one.
+  const second: LaneEvent[] = [];
+  const turn2 = live.prompt(id, "risky two", (e) => second.push(e));
+  pending = false;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = !!(await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending).toBe(true);
+  expect(live.answer(id, false).ok).toBe(true);
+  await turn2;
+}, TIMEOUT);

@@ -25,8 +25,12 @@ import type {
   LucidCollabFrame,
   WelcomeFrame,
 } from "./frames.ts";
-import { COLLAB_PROTOCOL_VERSION, isHostFrame, validPromptAudio } from "./frames.ts";
-import type { PromptAudio } from "./frames.ts";
+import { COLLAB_PROTOCOL_VERSION, isHostFrame, validPromptAudio, validSttSource } from "./frames.ts";
+import type { PromptAudio, SttSource } from "./frames.ts";
+
+/** P-REMOTE.14: the strictest posture, and the DEFAULT until a host frame says otherwise. Shared + frozen:
+ *  every fail-closed path returns this exact object, so no caller can loosen it by mutation. */
+const STRICT_POSTURE: { cui: boolean; lockdown: boolean } = Object.freeze({ cui: true, lockdown: true });
 
 /** The slice of {@link CollabSocket} the guest needs - so a mock transport can stand in for tests. */
 export interface GuestTransport {
@@ -93,6 +97,9 @@ export class CollabGuest {
   #model = "";
   #contextPct: number | null = null;
   #readOnly = true;
+  // P-REMOTE.14: the host's CUI + lockdown stance, learned from `welcome`/`state`. Starts STRICT so a phone
+  // never offers cloud speech-to-text in the window before the first frame lands (fail-closed).
+  #posture: { cui: boolean; lockdown: boolean } = STRICT_POSTURE;
   #options: CollabOptions | null = null;
   #note: string | null = null;
   #reconnecting = false; // P-REMOTE.8: a transient "connection lost - retrying" note is in #note; cleared on recovery
@@ -125,13 +132,16 @@ export class CollabGuest {
    *  P-REMOTE.8: `images` (validated image data URLs) ride along as vision input; an image-only message (empty
    *  text) is allowed when at least one image is attached.
    *  P-REMOTE.12: `audio` is a push-to-talk clip the HOST transcribes; an audio-only message is allowed.
-   *  Invalid/oversized audio is dropped HERE (fail-closed) - it never leaves the phone. */
-  sendPrompt(text: string, images?: string[], audio?: PromptAudio): boolean {
+   *  Invalid/oversized audio is dropped HERE (fail-closed) - it never leaves the phone.
+   *  P-REMOTE.14: `sttSource` declares where the text was transcribed (device_stt_policy.ts decides which).
+   *  An unrecognized value is DROPPED rather than forwarded, so the host only ever sees a known claim. */
+  sendPrompt(text: string, images?: string[], audio?: PromptAudio, sttSource?: SttSource): boolean {
     if (this.#ended || this.#readOnly) return false;
     const imgs = Array.isArray(images) ? images.filter((s) => typeof s === "string" && s) : [];
     const clip = validPromptAudio(audio) ? audio : undefined;
+    const src = validSttSource(sttSource) ? sttSource : undefined;
     if (!text.trim() && imgs.length === 0 && !clip) return false;
-    this.#transport.send({ t: "prompt", text, ...(imgs.length ? { images: imgs } : {}), ...(clip ? { audio: clip } : {}) }, 0); // 0 = the host
+    this.#transport.send({ t: "prompt", text, ...(imgs.length ? { images: imgs } : {}), ...(clip ? { audio: clip } : {}), ...(src ? { sttSource: src } : {}) }, 0); // 0 = the host
     return true;
   }
 
@@ -162,7 +172,42 @@ export class CollabGuest {
     return true;
   }
 
+  /** P-PWA-FLEET.1: prompt a fleet LANE on the host (EDIT access only - a view guest cannot steer). The
+   *  host wiring runs it through the lane's own gate and queues it when the lane is mid-turn. */
+  fleetPrompt(laneId: string, text: string): boolean {
+    if (this.#ended || this.#readOnly || !laneId || !text.trim()) return false;
+    this.#transport.send({ t: "fleet-prompt", laneId, text }, 0);
+    return true;
+  }
+
+  /** P-PWA-FLEET.1: stop a fleet lane (EDIT access only). */
+  fleetStop(laneId: string): boolean {
+    if (this.#ended || this.#readOnly || !laneId) return false;
+    this.#transport.send({ t: "fleet-stop", laneId }, 0);
+    return true;
+  }
+
+  /** P-PWA-FLEET.1: answer a lane's pending approval (EDIT access only). `scope` "session" also remembers
+   *  the ask's kind for the lane's lifetime; the host re-validates scope + edit rights fail-closed. */
+  fleetAnswer(laneId: string, allow: boolean, scope?: "once" | "session"): boolean {
+    if (this.#ended || this.#readOnly || !laneId) return false;
+    this.#transport.send({ t: "fleet-answer", laneId, allow, ...(scope ? { scope } : {}) }, 0);
+    return true;
+  }
+
+  /** P-PWA-FLEET.1: inject a mid-turn operator note into "master" or a laneId (EDIT access only - steering
+   *  the agent is a write, so a view-only guest is refused here AND host-side). */
+  interject(target: string, text: string): boolean {
+    if (this.#ended || this.#readOnly || !target || !text.trim()) return false;
+    this.#transport.send({ t: "interject", target, text }, 0);
+    return true;
+  }
+
   get readOnly(): boolean { return this.#readOnly; }
+
+  /** P-REMOTE.14: the host's CUI + lockdown stance, for `decideSttMode`. Strict until a host frame proves
+   *  otherwise, so the phone's first decision is always the safe one. */
+  posture(): { cui: boolean; lockdown: boolean } { return this.#posture; }
 
   view(): GuestView {
     return {
@@ -200,6 +245,7 @@ export class CollabGuest {
         this.#participants = f.participants;
         this.#model = f.header.model;
         this.#readOnly = f.readOnly;
+        this.#posture = readPosture(f.posture); // P-REMOTE.14: strict unless the host says otherwise
         this.#phase = "live";
         this.#reconnecting = false; // P-REMOTE.8: a fresh sync means we recovered - drop any stale retry note
         this.#note = null;
@@ -224,6 +270,7 @@ export class CollabGuest {
         this.#participants = f.participants;
         this.#model = f.model;
         this.#contextPct = f.contextPct;
+        this.#posture = readPosture(f.posture); // P-REMOTE.14: a mode flip re-decides device STT on the next record
         this.#cb.onState?.(f.participants, f.model, f.contextPct);
         this.#emit();
         break;
@@ -289,4 +336,14 @@ function b64url(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** P-REMOTE.14 fail-closed posture read: only an EXPLICIT `false` relaxes a half of the guarantee, so a
+ *  missing field, a malformed frame, or an older host that knows nothing about posture all resolve to the
+ *  strictest stance rather than to a cloud transcriber. */
+function readPosture(p: unknown): { cui: boolean; lockdown: boolean } {
+  if (!p || typeof p !== "object") return STRICT_POSTURE;
+  const { cui, lockdown } = p as { cui?: unknown; lockdown?: unknown };
+  if (cui !== false && lockdown !== false) return STRICT_POSTURE;
+  return { cui: cui !== false, lockdown: lockdown !== false };
 }

@@ -43,6 +43,8 @@ import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: sel
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 export type { RestoredTurn };
+import type { ProcessView } from "../process_view.ts"; // P-INTERJECT.1: the unified Processes list rows (canonical shape - imported, never mirrored, so it cannot drift)
+export type { ProcessView };
 import type { SkillRoot } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097): skill source roots
 import type { TrustLabel } from "../../harness/contracts.ts"; // invariant #7: closed-set trust labels
 
@@ -172,6 +174,9 @@ export interface ConfigOption {
 // P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
 // at this one boundary, like ChatEvent).
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
+/** Approval scope: "once" answers only the pending ask; "session" also allows every same-kind ask for
+ *  the rest of the lane's session (mirrors desktop/fleet_lanes.ts). */
+export type ApprovalScope = "once" | "session";
 export interface LaneView {
   id: string; name: string; cwd: string; model: string; status: LaneStatus;
   createdAt: number; lastActivityAt: number; turns: number;
@@ -179,7 +184,11 @@ export interface LaneView {
   canRetry: boolean; respawns: number;
   /** P-FLEET.L5: the omp session id behind this lane - the key into its on-disk history. */
   sessionId: string | null;
-  pendingApproval?: { summary: string };
+  pendingApproval?: { summary: string; kind: string };
+  /** Full auto-mode: every ask is approved automatically (the security gate still scans every call). */
+  autoApprove: boolean;
+  /** Ask kinds the user allowed for the rest of this lane's session ("allow for session"). */
+  sessionAllow: string[];
   /** P-FLEET.L3: staged-prompt previews (clamped text + image count), drained FIFO when idle. */
   queued: { text: string; images: number }[];
 }
@@ -190,8 +199,11 @@ export interface TimelineEntry {
   sessionId: string; kind: TimelineKind; title: string; cwd: string; wsName: string;
   model: string; turns: number; updatedAt: number;
   laneId?: string; laneName?: string; laneEvents?: number;
+  /** Present only when true: a throwaway from the repo's own echo/demo self-test scripts. */
+  selfTest?: true;
 }
-export interface TimelinePage { entries: TimelineEntry[]; total: number }
+/** `total` = pageable rows; `selfTest` = how many throwaways the engine held back (or marked). */
+export interface TimelinePage { entries: TimelineEntry[]; total: number; selfTest: number }
 /** P-FLEET.L3: a pasted image on a lane prompt - the P-VISION.1 shape the master chat uses. */
 export interface LaneImage { data: string; mimeType: string }
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
@@ -199,7 +211,8 @@ export interface LaneToolCode { path: string; content?: string; oldText?: string
 export type LaneEvent =
   | { type: "token" | "thinking"; text: string }
   | { type: "tool"; name: string; detail: string; code?: LaneToolCode }
-  | { type: "permission"; summary: string }
+  | { type: "permission"; summary: string; kind: string }
+  | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
   | { type: "error"; message: string };
@@ -414,6 +427,14 @@ export interface WorkspaceInfo {
   recent: { path: string; name: string; isGit: boolean }[];
   cloned?: boolean; error?: string;
 }
+// P-WSSETUP: the workspace-initialization offer. Mirrors desktop/workspace_setup.ts, plus the
+// server-side `asked` flag (this folder was already offered setup, never re-ask).
+export type WorkspacePurpose = "app" | "docs" | "analysis" | "other";
+export interface WorkspaceProfile {
+  path: string; isGit: boolean; isEmpty: boolean; hasAgentsFramework: boolean; hasCode: boolean;
+  stack: string[]; fileCount: number; asked: boolean;
+}
+export interface AgentsInitResult { ok: boolean; created: string[]; skipped: string[]; error?: string }
 
 // The LUCID session event union now lives in a DOM-free module (chat_events.ts) so node-side code that only
 // needs the shape doesn't drag bridge.ts (a DOM file) into the non-DOM root typecheck. Re-exported here so
@@ -541,6 +562,10 @@ export interface CollabShareStatus {
 
 /** P-COLLAB.17 (ADR-0202): the "prefer direct P2P" preference + STUN/TURN servers (stun:/turn: URLs). */
 export interface CollabP2PConfig { preferDirect: boolean; iceUrls: string[]; turnUsername?: string; turnCredential?: string }
+
+/** P-BROWSER.1 (wave 2): the agent-controlled visible browser window's live status (mirrors
+ *  desktop/browser_control.ts BrowserStatus - the shared cross-agent contract shape). */
+export interface BrowserStatusView { active: boolean; title: string; url: string; startedAt: number | null; shots: number }
 
 export interface LucidBridge {
   isElectron: boolean;
@@ -761,13 +786,17 @@ export interface LucidBridge {
   fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
   fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   // P-FLEET.L5: the reviewable timeline (list + open-a-point). Transcript reads are tail-limited.
-  timelineList(limit?: number, offset?: number): Promise<TimelinePage | null>;
+  // `includeSelfTest` opts the repo's own echo/demo throwaways back in; they are hidden by default.
+  timelineList(limit?: number, offset?: number, includeSelfTest?: boolean): Promise<TimelinePage | null>;
   timelineSession(id: string, limit?: number): Promise<{ messages: { role: string; text: string; turn?: number }[]; total: number; userTotal: number } | null>;
   /** P-FLEET.L4: re-send the lane's last prompt, streaming like fleetPrompt (recovers an error lane first). */
   fleetRetry(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   /** P-FLEET.L4: revive an error/stopped lane in place - same id, transcript memory carried. */
   fleetRespawn(laneId: string): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
-  fleetAnswer(laneId: string, allow: boolean): Promise<{ ok: boolean } | null>;
+  fleetAnswer(laneId: string, allow: boolean, scope?: ApprovalScope): Promise<{ ok: boolean } | null>;
+  /** Full auto-mode. laneId omitted = ALL lanes + persisted default for new ones. The server refuses
+   *  on=true unless the risk was accepted before or acceptRisk is true (which persists the acceptance). */
+  fleetAuto(opts: { laneId?: string; on: boolean; acceptRisk?: boolean }): Promise<{ ok: boolean } | null>;
   fleetCancel(laneId: string): Promise<{ ok: boolean } | null>;
   fleetStop(laneId: string): Promise<{ ok: boolean } | null>;
   fleetSetModel(laneId: string, model: string): Promise<{ ok: boolean; model?: string; reason?: string } | null>;
@@ -914,6 +943,11 @@ export interface LucidBridge {
   cloneWorkspace(url: string, pat?: string): Promise<WorkspaceInfo | null>; // pat: optional inline git token (ADR-0216)
   /** Remove one folder from the recents list (does NOT change the active workspace, so no respawn). */
   removeRecentWorkspace(path: string): Promise<WorkspaceInfo | null>;
+  // P-WSSETUP: the workspace-initialization offer - profile the current folder, scaffold the
+  // .agents framework, or record a dismissal so the popup never re-asks for this folder.
+  workspaceSetupProfile(): Promise<WorkspaceProfile | null>;
+  agentsInit(purpose: WorkspacePurpose, scan: boolean): Promise<AgentsInitResult | null>;
+  workspaceSetupDismiss(): Promise<{ asked: boolean } | null>;
   /** Native OS folder dialog in Electron (null in a plain browser). `title`/`buttonLabel` let each
    *  caller label its own dialog, so every folder pick is the real Explorer/Finder window. */
   pickFolder(opts?: PickFolderOpts): Promise<string | null>;
@@ -968,6 +1002,15 @@ export interface LucidBridge {
   // P-PREVIEW.7 (ADR-0179): Electron-app detection + USER-initiated external launch
   previewElectronDetect(path: string): Promise<{ electron: boolean; reasons: string[]; appDir: string; launchable: boolean; via: string | null } | null>;
   previewElectronLaunch(path: string): Promise<{ launched: boolean; via?: string; appDir?: string; reason?: string } | null>;
+  // ── P-BROWSER.1 (wave 2): the agent-controlled visible browser window (BrowserFeature section) ──
+  // Status feeds the floating browser pill; close is shared with the Processes popover's Close action.
+  browserStatus(): Promise<BrowserStatusView | null>;
+  // Latest capture as a data:image/png;base64 URL (null before the first shot) - the pill's auto
+  // send-to-phone fetches it here rather than re-driving a capture.
+  browserShot(): Promise<string | null>;
+  browserClose(): Promise<void>;
+  // Same close POST; the stop-the-turn half happens renderer-side (the pill calls stopTurn itself).
+  browserStop(): Promise<void>;
   // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
   subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
@@ -978,6 +1021,12 @@ export interface LucidBridge {
   showInFolder(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a FILE highlighted in its parent folder (Electron only; false in browser)
   canShowInFolder(): boolean; // whether the native shell can reveal a file in its folder (Electron only)
   openExternal(url: string): Promise<boolean>; // open an http(s) URL in the OS browser (OAuth); false in browser → caller falls back to window.open
+  // P-INTERJECT.1/.2 (wave 2): mid-turn operator interjection - queue a note the running turn's agent
+  // reads at its next tool boundary (target "master" or a laneId; the server enforces trim, the 4000-char
+  // limit, and the 8-note-per-target cap). Resolves the pending count, or null on refusal/transport failure.
+  interject(target: string, text: string): Promise<{ pending: number } | null>;
+  // P-INTERJECT.1: everything running right now - master turn, live lanes, import job, agent browsers.
+  processes(): Promise<ProcessView[] | null>;
 }
 
 /** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
@@ -1245,7 +1294,7 @@ export const bridge: LucidBridge = {
   // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
   fleetStatus: () => getData("/api/fleet/status"),
   fleetSpawn: (opts) => post("/api/fleet/spawn", opts),
-  timelineList: (limit = 100, offset = 0) => getData(`/api/timeline?limit=${limit}&offset=${offset}`), // P-FLEET.L5
+  timelineList: (limit = 100, offset = 0, includeSelfTest = false) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}`), // P-FLEET.L5
   timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5
   fleetPrompt: (laneId, text, onEvent, images) => {
     // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are
@@ -1266,7 +1315,8 @@ export const bridge: LucidBridge = {
     return streamNdjson("/api/fleet/retry", { laneId }, sink);
   },
   fleetRespawn: (laneId) => post("/api/fleet/respawn", { laneId }),
-  fleetAnswer: (laneId, allow) => post("/api/fleet/answer", { laneId, allow }),
+  fleetAnswer: (laneId, allow, scope) => post("/api/fleet/answer", { laneId, allow, ...(scope ? { scope } : {}) }),
+  fleetAuto: (opts) => post("/api/fleet/auto", opts),
   fleetCancel: (laneId) => post("/api/fleet/cancel", { laneId }),
   fleetStop: (laneId) => post("/api/fleet/stop", { laneId }),
   fleetSetModel: (laneId, model) => post("/api/fleet/model", { laneId, model }),
@@ -1439,6 +1489,9 @@ export const bridge: LucidBridge = {
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url, pat) => post("/api/workspace/clone", { url, ...(pat ? { pat } : {}) }),
   removeRecentWorkspace: (path) => post("/api/workspace/recent-remove", { path }),
+  workspaceSetupProfile: () => getData("/api/workspace/setup-profile"), // P-WSSETUP
+  agentsInit: (purpose, scan) => post("/api/workspace/agents-init", { purpose, scan }), // P-WSSETUP
+  workspaceSetupDismiss: () => post("/api/workspace/setup-dismiss", {}), // P-WSSETUP
   pickFolder: (opts) => (shell?.pickFolder ? shell.pickFolder(opts) : Promise.resolve(null)),
   pickFolderNative: (opts) => post("/api/fs/pickfolder", opts ?? {}), // P-FS.2 (ADR-0265)
   pickFile: (opts) => (shell?.pickFile ? shell.pickFile(opts) : Promise.resolve(null)), // P-NETWL.1
@@ -1468,13 +1521,24 @@ export const bridge: LucidBridge = {
   previewInspectResult: async (id, result) => { await post("/api/preview/inspect/result", { id, result }); }, // P-PREVIEW.6b
   previewElectronDetect: (path) => getData(`/api/preview/electron-detect?path=${encodeURIComponent(path)}`), // P-PREVIEW.7
   previewElectronLaunch: (path) => post("/api/preview/electron-launch", { path }), // P-PREVIEW.7
+  // ── P-BROWSER.1 (wave 2): the agent-controlled visible browser window (BrowserFeature section) ──
+  browserStatus: async () => { // fail-open null: a malformed/missing status just hides the pill
+    const v: unknown = await getData("/api/browser/status");
+    if (!v || typeof v !== "object" || !("active" in v)) return null;
+    const s = v as Partial<BrowserStatusView>; // safe view: presence-checked object; fields re-defaulted below
+    return { active: s.active === true, title: typeof s.title === "string" ? s.title : "", url: typeof s.url === "string" ? s.url : "", startedAt: typeof s.startedAt === "number" ? s.startedAt : null, shots: typeof s.shots === "number" ? s.shots : 0 };
+  },
+  browserShot: async () => { const d: unknown = await getData("/api/browser/shot"); return d && typeof d === "object" && "png" in d && typeof d.png === "string" ? d.png : null; },
+  browserClose: async () => { await post("/api/browser/close", {}); },
+  browserStop: async () => { await post("/api/browser/close", {}); }, // the turn-stop half is renderer-side
   subagents: () => getData("/api/subagents"), // P-TASK.5
   systemStatus: async (fresh) => { // P-SYSRES.1: fail-open - malformed/missing reads as null (never blocks)
     const v: unknown = await getData(`/api/system${fresh ? "?fresh=1" : ""}`).catch(() => null);
     return isSystemStatus(v) ? v : null;
   },
-
-
+  // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects + the unified Processes list.
+  interject: (target, text) => post("/api/interject", { target, text }),
+  processes: async () => { const d = await getData("/api/processes"); return Array.isArray((d as { processes?: unknown } | null)?.processes) ? (d as { processes: ProcessView[] }).processes : null; },
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,

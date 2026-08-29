@@ -61,12 +61,31 @@ export interface PreviewTarget {
   reason?: string;
 }
 
-/** Normalize a local path/`file://` target to a `file://` URL the iframe can load. Leaves an existing
- *  file:// URL alone; turns a Windows/UNC/POSIX path into file:// with backslashes flipped. Pure. */
+/** Trim and strip matching pairs of surrounding single/double quotes: agents sometimes hand us a quoted
+ *  path ('"C:\\x\\app.html"'), which would otherwise fail the local-file gate and block the preview. Pure. */
+export function normalizePreviewPath(raw: string | null | undefined): string {
+  let p = (raw ?? "").trim();
+  while (p.length >= 2 && ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'")))) {
+    p = p.slice(1, -1).trim();
+  }
+  return p;
+}
+
+/** Percent-encode an OS path (already forward-slashed) for a file:// URL, per segment so "/" separators
+ *  survive. The leading Windows drive segment stays LITERAL: encodeURIComponent("C:") is "C%3A", which
+ *  breaks drive letters. Round-trips through preview_file.ts toFsPath's decodeURIComponent. */
+function encodeFileUrlPath(p: string): string {
+  return p.split("/").map((seg, i) => (i === 0 && /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg))).join("/");
+}
+
+/** Normalize a local path/`file://` target to a `file://` URL the iframe can load. Percent-encodes path
+ *  segments (spaces in OneDrive-style dirs used to yield broken URLs); turns a Windows/UNC/POSIX path into
+ *  file:// with backslashes flipped. An existing file:// URL is presumed already encoded and only literal
+ *  spaces (never valid in a URL) are fixed up - %20 is never double-encoded. Pure. */
 export function toFileUrl(target: string): string {
   const t = target.trim();
-  if (/^file:\/\//i.test(t)) return t;
-  let p = t.replace(/\\/g, "/");
+  if (/^file:\/\//i.test(t)) return t.replace(/ /g, "%20");
+  const p = encodeFileUrlPath(t.replace(/\\/g, "/"));
   if (/^[A-Za-z]:\//.test(p)) return `file:///${p}`;       // C:/Users/... → file:///C:/Users/...
   if (p.startsWith("//")) return `file:${p}`;               // //server/share → file://server/share (UNC)
   if (p.startsWith("/")) return `file://${p}`;              // /home/n/x.html → file:///home/n/x.html
@@ -90,7 +109,7 @@ export function canPreviewRemote(url: string | null | undefined, egressAllowed: 
  *  the preview". Pure; the path is still re-gated by resolvePreview before anything renders. */
 export function previewOpenPath(toolName: string | null | undefined, rawInput: any): string | null {
   if (!/\bpreview_open\b/i.test(toolName ?? "")) return null;
-  const p = typeof (rawInput ?? {}).path === "string" ? rawInput.path.trim() : "";
+  const p = normalizePreviewPath(typeof (rawInput ?? {}).path === "string" ? rawInput.path : "");
   return p || null;
 }
 
@@ -108,7 +127,7 @@ export function previewablePath(toolName: string | null | undefined, rawInput: a
   const ri = rawInput ?? {};
   let path = "";
   for (const k of ["path", "file_path", "filePath", "filename", "file", "target"]) {
-    if (typeof ri[k] === "string" && ri[k].trim()) { path = ri[k].trim(); break; }
+    if (typeof ri[k] === "string" && normalizePreviewPath(ri[k])) { path = normalizePreviewPath(ri[k]); break; }
   }
   if (!path || !PREVIEWABLE_EXT.test(path)) return null;
   return path;
@@ -117,7 +136,7 @@ export function previewablePath(toolName: string | null | undefined, rawInput: a
 /** Resolve a preview target into a safe, labeled render decision. Fail-safe: only a clearly-local file is
  *  rendered; http(s) is flagged `remote` (not loaded here — P-PREVIEW.3); everything else is `blocked`. */
 export function resolvePreview(target: string | null | undefined): PreviewTarget {
-  const t = (target ?? "").trim();
+  const t = normalizePreviewPath(target);
   if (!t) return { kind: "blocked", src: "", label: "(nothing to preview)", reason: "empty target" };
   if (isLocalFileTarget(t)) {
     const src = toFileUrl(t);

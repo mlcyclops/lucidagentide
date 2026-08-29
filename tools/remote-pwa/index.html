@@ -120,8 +120,23 @@
     #composer-actions { display: flex; align-items: center; gap: 10px; }
     /* P-REMOTE.12: push-to-talk. Held = red ring + fill; disabled while read-only (composer hidden anyway). */
     #ptt-btn { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--txt); -webkit-touch-callout: none; user-select: none; touch-action: none; }
-    #ptt-btn.rec { color: #ff5f5f; border-color: #ff5f5f; box-shadow: 0 0 0 3px rgba(255,95,95,.25); animation: pttpulse 1.2s ease-in-out infinite; }
+    #ptt-btn.rec, #stt-btn.rec { color: #ff5f5f; border-color: #ff5f5f; box-shadow: 0 0 0 3px rgba(255,95,95,.25); animation: pttpulse 1.2s ease-in-out infinite; }
     @keyframes pttpulse { 0%,100% { box-shadow: 0 0 0 3px rgba(255,95,95,.25); } 50% { box-shadow: 0 0 0 6px rgba(255,95,95,.12); } }
+    /* P-REMOTE.14: device-native dictation - the button beside push-to-talk (idle / offer / caution states),
+       its one-line note under the composer, and the consent sheet. The listening pulse REUSES the
+       push-to-talk animation above: this app has exactly one recording animation, on purpose. */
+    #stt-btn { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--txt); -webkit-touch-callout: none; user-select: none; }
+    #stt-btn[data-stt=offer] { color: var(--cyan); border-color: rgba(45, 212, 191, 0.45); }
+    #stt-btn[data-stt=cloud] { color: var(--amber); border-color: rgba(245, 158, 11, 0.45); }
+    #stt-note { font-size: 12px; line-height: 1.45; color: var(--txt3); }
+    #stt-sheet { position: fixed; inset: 0; z-index: 55; background: var(--bg); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+    .stt-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
+    .stt-title { flex: 1; font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stt-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+    .stt-p { font-size: 14.5px; line-height: 1.55; color: var(--txt); }
+    #stt-sheet-note { padding: 0 16px 10px; font-size: 13px; color: var(--amber); }
+    .stt-acts { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
+    .stt-acts button { height: 44px; min-height: 44px; padding: 0 18px; width: auto; max-width: max-content; font-size: 14px; }
     .composer-spacer { flex: 1; }
     #prompt-input { display: block; width: 100%; resize: none; background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font: inherit; min-height: 44px; max-height: 160px; overflow-y: auto; transition: border-color 0.2s; -webkit-appearance: none; line-height: 1.4; }
     #prompt-input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
@@ -229,6 +244,59 @@
     .reconnect-input { width: 100%; max-width: 340px; background: var(--bg1); color: var(--txt); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; font: inherit; min-height: 48px; -webkit-appearance: none; text-align: center; }
     .reconnect-input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
     #reconnect-status { min-height: 20px; font-size: 13px; color: var(--txt2); max-width: 320px; }
+
+    /* P-PWA-FLEET.1: FLEET strip (above the transcript) - lane cards in a horizontal scroller */
+    #fleet { flex-shrink: 0; border-bottom: 1px solid var(--line); background: var(--bg1); }
+    .fleet-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px 0; }
+    .fleet-title { flex: none; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--txt3); white-space: nowrap; }
+    #fleet-filter { flex: 1; min-width: 0; background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; font-size: 13px; min-height: 32px; -webkit-appearance: none; }
+    #fleet-filter:focus { outline: none; border-color: var(--cyan); }
+    #fleet-body { display: flex; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 8px 14px 10px; }
+    .fleet-lanes { display: contents; }
+    .fleet-empty { font-size: 12.5px; color: var(--txt3); padding: 4px 0; }
+    .lane-card { flex: 0 0 auto; width: 220px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+    .lane-row { display: flex; align-items: center; gap: 8px; }
+    .lane-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--txt3); flex: none; }
+    .lane-dot[data-status=working], .lane-dot[data-status=starting] { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .lane-dot[data-status=needs-approval], .lane-dot[data-status=awaiting-input] { background: var(--amber); }
+    .lane-dot[data-status=error], .lane-dot[data-status=stopped] { background: var(--red); }
+    .lane-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lane-status { flex: none; font-size: 11px; color: var(--txt3); white-space: nowrap; }
+    .lane-meta { display: flex; align-items: center; gap: 8px; }
+    .lane-cwd { flex: 1; min-width: 0; font-size: 12px; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lane-turns { flex: none; font-size: 11px; color: var(--txt3); white-space: nowrap; }
+    .lane-pend { display: flex; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 6px 8px; }
+    .lane-pend-sum { flex: 1; min-width: 0; font-size: 12px; color: var(--amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lane-approve, .lane-act { display: flex; gap: 6px; }
+    .lane-btn { flex: 1; min-height: 32px; padding: 0 8px; font-size: 12px; font-weight: 600; border-radius: 8px; background: var(--bg2); color: var(--txt); border: 1px solid var(--line); white-space: nowrap; }
+    .lane-btn.allow { color: var(--green); border-color: rgba(16, 185, 129, 0.3); }
+    .lane-btn.deny { color: var(--red); border-color: rgba(239, 68, 68, 0.3); }
+    /* view guests see status only - the guest core + host refuse their sends anyway (fail-closed) */
+    #fleet[data-readonly] .lane-act, #fleet[data-readonly] .lane-approve { display: none; }
+
+    /* P-PWA-FLEET.1: PROCESSES strip - collapsed by default, same double-decker pattern as botstrip */
+    #procs { flex-shrink: 0; border-bottom: 1px solid var(--line); background: var(--bg1); }
+    #procs-bar { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 14px; background: transparent; border: none; color: var(--txt2); font-size: 12px; text-align: left; border-radius: 0; }
+    #procs-bar:active { transform: none; }
+    #procs-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pr-chev { flex: none; color: var(--txt3); transition: transform 0.15s ease; }
+    #procs[data-open] .pr-chev { transform: rotate(180deg); }
+    #procs-body { max-height: 30vh; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 2px 14px 10px; }
+    .proc-list { display: contents; }
+    .proc-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); }
+    .proc-row:first-child { border-top: 0; }
+    .proc-kind { flex: none; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--cyan); background: rgba(45, 212, 191, 0.08); border: 1px solid rgba(45, 212, 191, 0.2); border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
+    .proc-label { flex: 1; min-width: 0; font-size: 12.5px; color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .proc-status { flex: none; font-size: 11px; color: var(--txt3); white-space: nowrap; }
+
+    /* P-PWA-FLEET.1: composer lane-target chip + streaming send split (Queue / Push now) + Check in */
+    #lane-target { display: flex; align-items: center; gap: 8px; background: rgba(14, 165, 233, 0.08); border: 1px solid rgba(14, 165, 233, 0.3); border-radius: 10px; padding: 5px 10px; }
+    #lane-target-label { flex: 1; min-width: 0; font-size: 12.5px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #lane-target-x { flex: none; width: 22px; height: 22px; border-radius: 50%; background: transparent; color: var(--accent); border: none; font-size: 15px; padding: 0; }
+    #checkin-btn, #push-btn, #queue-btn { height: 44px; min-height: 44px; padding: 0 14px; font-size: 13.5px; font-weight: 600; }
+    #checkin-btn { background: var(--bg2); color: var(--cyan); border: 1px solid rgba(45, 212, 191, 0.3); }
+    #push-btn { background: rgba(245, 158, 11, 0.08); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+    #queue-btn { background: var(--bg2); color: var(--txt); border: 1px solid var(--line); }
   </style>
 </head>
 <body>
@@ -274,20 +342,53 @@
       </button>
       <div id="catchup-body" hidden></div>
     </div>
+    <!-- P-PWA-FLEET.1: the FLEET strip renders the LATEST fleet-status snapshot; the filter is client-side.
+         Lane controls hide for view guests (data-readonly); their sends are refused fail-closed anyway. -->
+    <div id="fleet" hidden>
+      <div class="fleet-head">
+        <span class="fleet-title">Fleet</span>
+        <input id="fleet-filter" type="search" placeholder="Filter lanes" autocomplete="off" aria-label="Filter lanes by name" />
+      </div>
+      <div id="fleet-body"></div>
+    </div>
+    <!-- P-PWA-FLEET.1: the PROCESSES strip renders the LATEST process-list snapshot, collapsed by default. -->
+    <div id="procs" hidden>
+      <button id="procs-bar" type="button" aria-expanded="false" aria-controls="procs-body">
+        <span id="procs-label">Processes</span>
+        <svg class="pr-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div id="procs-body" hidden></div>
+    </div>
     <div id="transcript"></div>
     <div id="cx-thumbs" hidden></div>
     <form id="composer" hidden>
+      <!-- P-PWA-FLEET.1: a lane target set by a lane card's Prompt button - the next send goes to that lane. -->
+      <div id="lane-target" hidden>
+        <span id="lane-target-label"></span>
+        <button id="lane-target-x" type="button" aria-label="Clear lane target">&times;</button>
+      </div>
       <textarea id="prompt-input" rows="1" placeholder="Message your agent…" autocomplete="off" aria-label="Message your agent"></textarea>
       <!-- Auto-collapsed actions row: shown while composing (focus/text/attachments) or streaming (Stop). -->
       <div id="composer-actions" hidden>
         <label id="attach-btn" for="file-input" title="Attach image" role="button" tabindex="0" aria-label="Attach image"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></label>
         <!-- P-REMOTE.12 (ADR-0251): push-to-talk - HOLD to record, release to send; the host transcribes. -->
         <button type="button" id="ptt-btn" title="Hold to talk" aria-label="Hold to talk"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <!-- P-REMOTE.14: OPTIONAL device dictation - the phone's own recognizer types into the composer for
+             review; app.ts shows this button only when the policy allows it, and never as a dead control. -->
+        <button type="button" id="stt-btn" hidden aria-pressed="false" title="Dictate on this phone" aria-label="Dictate on this phone"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></button>
         <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="sr-only" />
+        <!-- P-PWA-FLEET.1: mid-turn check-in - asks the agent for a brief status update, then it continues. -->
+        <button type="button" id="checkin-btn" hidden>Check in</button>
         <span class="composer-spacer"></span>
         <button type="button" id="abort-btn" title="Stop the current turn" aria-label="Stop"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg>Stop</button>
-        <button type="submit" class="btn-primary" aria-label="Send message"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4a1 1 0 0 0 1.4 1.1l16.4-8a1 1 0 0 0 0-1.8L4.8 3.6a1 1 0 0 0-1.4 1.1L5 12z"/></svg>Send</button>
+        <!-- P-PWA-FLEET.1: while streaming, Send splits into Queue (stage for after the turn - the existing
+             PromptFrame path) vs Push now (interject into the running turn). Idle keeps the single Send. -->
+        <button type="button" id="push-btn" hidden>Push now</button>
+        <button type="submit" id="queue-btn" hidden>Queue</button>
+        <button type="submit" id="send-btn" class="btn-primary" aria-label="Send message"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4a1 1 0 0 0 1.4 1.1l16.4-8a1 1 0 0 0 0-1.8L4.8 3.6a1 1 0 0 0-1.4 1.1L5 12z"/></svg>Send</button>
       </div>
+      <!-- P-REMOTE.14: the voice status line - why dictation is unavailable, or what the current mode does. -->
+      <p id="stt-note" role="status" hidden></p>
     </form>
     <div id="botstrip">
       <div id="botstrip-panel" hidden>
@@ -372,6 +473,21 @@
     </div>
     <div id="report-hint">Scroll to review &middot; screenshot any card &middot; or tap Copy for Markdown</div>
     <div id="report-body" class="rp-scroll"></div>
+  </div>
+
+  <!-- P-REMOTE.14: the device-dictation sheets - the one-time language-pack offer, and the cloud-transcription
+       consent. app.ts fills the body with whole <p> blocks, one explanation each (AGENTS.md #11). -->
+  <div id="stt-sheet" hidden>
+    <div class="stt-head">
+      <span class="stt-title" id="stt-sheet-title">Dictate on this phone</span>
+      <button type="button" id="stt-sheet-x" class="rp-x" aria-label="Close">&times;</button>
+    </div>
+    <div class="stt-body" id="stt-sheet-body"></div>
+    <p id="stt-sheet-note" role="status" hidden></p>
+    <div class="stt-acts">
+      <button type="button" id="stt-sheet-go" class="btn-primary">Install</button>
+      <button type="button" id="stt-sheet-alt" class="btn-ghost">Use hold-to-talk instead</button>
+    </div>
   </div>
 
   <script src="./config.js"></script>

@@ -17,11 +17,14 @@ import { importRoomKey } from "../../desktop/collab/crypto.ts";
 import { parseShareLink, formatShareLink } from "../../desktop/collab/link.ts";
 import { resolveReconnect, RELAY_FILE_NAME } from "../../desktop/collab/drive_relay_codes.ts"; // P-REMOTE.10c (ADR-0235): out-of-band reconnect reader
 import { findRelayFile, readRelayFile } from "../../desktop/collab/drive_file.ts";
-import { foldEvent, renderControls, renderTranscript, renderHeader, presentedStatus, RECONNECT_GRACE_MS, buildTurnReport, renderReportHtml, reportMarkdown, type ViewItem, type TurnReport } from "../../desktop/collab/pwa_view.ts";
+import { foldEvent, renderControls, renderTranscript, renderHeader, renderLaneCard, renderProcessRow, presentedStatus, RECONNECT_GRACE_MS, buildTurnReport, renderReportHtml, reportMarkdown, type ViewItem, type TurnReport } from "../../desktop/collab/pwa_view.ts";
 import { createRemoteCheckout, entitlementActive, isEntitlementDenied } from "../../desktop/collab/remote_entitlement.ts";
 import { acceptAttachment, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "../../desktop/renderer/composer_attachments.ts"; // P-REMOTE.8 (ADR-0229): pasted/attached images
-import { downmixMono, encodeWavPcm16, resampleLinear, WHISPER_SAMPLE_RATE } from "../../desktop/renderer/dictation.ts"; // P-REMOTE.12: pure PCM->WAV transcode (same math as the desktop mic)
+import { downmixMono, encodeWavPcm16, mergeTranscript, resampleLinear, WHISPER_SAMPLE_RATE } from "../../desktop/renderer/dictation.ts"; // P-REMOTE.12: pure PCM->WAV transcode (same math as the desktop mic); P-REMOTE.14 reuses mergeTranscript
 import { penWidthFor, toNormPoint, type NormPoint } from "../../desktop/collab/preview_snapshot.ts"; // P-PREVIEW-PWA.2 (ADR-0239): normalized markup strokes
+import { decideSttMode, type SttCapability, type SttDecision } from "../../desktop/collab/device_stt_policy.ts"; // P-REMOTE.14: the pure, fail-closed "may this phone transcribe?" decision
+import { installSttLanguage, probeSttCapability, startDictation } from "./device_stt.ts"; // P-REMOTE.14: the typed Web Speech wrapper
+import type { SttSource } from "../../desktop/collab/frames.ts";
 
 /** The auth bridge firebase_auth.js publishes on window — a Firebase ID token for the gated relay. */
 interface LucidAuth {
@@ -171,6 +174,13 @@ function main(): void {
   let turnStart = 0;
   // P-COLLAB.15: texts this guest sent + echoed optimistically, to dedup the host's live re-broadcast of them.
   const selfEchoes: string[] = [];
+  // P-PWA-FLEET.1: a lane target staged by a lane card's Prompt button - the NEXT send goes to that lane
+  // (via guest.fleetPrompt); cleared after the send or by the chip's x. null = the master session.
+  let laneTarget: { id: string; name: string } | null = null;
+  // P-REMOTE.14: OPTIONAL device dictation. `pendingSttSource` labels the NEXT send with where its text was
+  // transcribed; `sttNote` is the one-line voice status shown under the composer with the actions row.
+  let pendingSttSource: SttSource | null = null;
+  let sttNote = "";
 
   // Exactly one of the three primary views is visible at a time (fatal() takes over on a hard error).
   const show = (view: "signin" | "session" | "subscribe"): void => {
@@ -339,7 +349,10 @@ function main(): void {
   let composerStreaming = false;
   const syncComposerActions = (): void => {
     const composing = document.activeElement === promptInput || promptInput.value.trim().length > 0 || attachments.length > 0;
-    $("composer-actions").hidden = !(composing || composerStreaming);
+    const open = composing || composerStreaming;
+    $("composer-actions").hidden = !open;
+    // P-REMOTE.14: the voice note rides with the actions row - it explains the mic buttons sitting next to it.
+    $("stt-note").hidden = !(open && sttNote.length > 0);
   };
   const renderThumbs = (): void => {
     const strip = $("cx-thumbs");
@@ -378,8 +391,22 @@ function main(): void {
   promptForm.addEventListener("submit", (ev) => {
     ev.preventDefault();
     const text = promptInput.value.trim();
+    // P-PWA-FLEET.1: a staged lane target routes this send to that LANE (text-only; images stay
+    // master-bound). One-shot: the chip clears after the send.
+    if (laneTarget) {
+      if (text && guest?.fleetPrompt(laneTarget.id, text)) {
+        items = [...items, { kind: "user", text: `[lane: ${laneTarget.name}] ${text}` }];
+        render(guest.view());
+        promptInput.value = ""; autosize();
+        clearLaneTarget();
+        syncComposerActions();
+      }
+      return;
+    }
     const imgs = attachments.map((a) => a.dataUrl);
-    if ((text || imgs.length) && guest?.sendPrompt(text, imgs.length ? imgs : undefined)) {
+    // P-REMOTE.14: `pendingSttSource` is set only by a device-dictated transcript, so the host learns whether
+    // the words were transcribed on the phone (locally or by the browser vendor's cloud) or not at all.
+    if ((text || imgs.length) && guest?.sendPrompt(text, imgs.length ? imgs : undefined, undefined, pendingSttSource ?? undefined)) {
       // P-REMOTE.9: echo the guest's OWN message into the transcript immediately (the host doesn't broadcast
       // user turns live; on a reconnect the welcome replay re-supplies it, so no duplication).
       const echo = text || `[${imgs.length} image${imgs.length === 1 ? "" : "s"}]`;
@@ -388,11 +415,98 @@ function main(): void {
       render(guest.view());
       promptInput.value = ""; autosize();
       attachments = []; renderThumbs();
+      pendingSttSource = null; dictatedText = "";
       syncComposerActions();
       $("catchup").hidden = true; // P-REMOTE.11: back in flow - clear the reconnect catch-up
     }
   });
   $("abort-btn").addEventListener("click", () => { guest?.abort(); });
+
+  // ---- P-PWA-FLEET.1: fleet strip + processes strip + mid-turn steering ----
+  const fleetFilter = $("fleet-filter") as HTMLInputElement;
+  // The FLEET strip renders the LATEST fleet-lanes snapshot (replace-in-place fold), name-filtered
+  // client-side. View guests see status only (data-readonly hides the controls; the guest core refuses
+  // their sends and the host re-refuses, fail-closed).
+  const renderFleetStrip = (): void => {
+    const el = $("fleet");
+    const snap = items.find((i) => i.kind === "fleet-lanes");
+    if (!snap || snap.kind !== "fleet-lanes" || snap.lanes.length === 0) { el.hidden = true; return; }
+    const q = fleetFilter.value.trim().toLowerCase();
+    const lanes = q ? snap.lanes.filter((l) => l.name.toLowerCase().includes(q)) : snap.lanes;
+    el.toggleAttribute("data-readonly", guestReadOnly);
+    $("fleet-body").innerHTML = lanes.length ? lanes.map(renderLaneCard).join("") : `<div class="fleet-empty">No lanes match</div>`;
+    el.hidden = false;
+  };
+  const renderProcsStrip = (): void => {
+    const el = $("procs");
+    const snap = items.find((i) => i.kind === "processes");
+    if (!snap || snap.kind !== "processes" || snap.processes.length === 0) { el.hidden = true; return; }
+    $("procs-label").textContent = `Processes (${snap.processes.length})`;
+    $("procs-body").innerHTML = snap.processes.map(renderProcessRow).join("");
+    el.hidden = false;
+  };
+  fleetFilter.addEventListener("input", () => renderFleetStrip());
+  const procs = $("procs");
+  $("procs-bar").addEventListener("click", () => {
+    const open = !procs.hasAttribute("data-open");
+    procs.toggleAttribute("data-open", open);
+    $("procs-body").hidden = !open;
+    $("procs-bar").setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  const setLaneTarget = (id: string, name: string): void => {
+    laneTarget = { id, name };
+    $("lane-target-label").textContent = `To lane: ${name}`; // textContent - a host-authored name stays text
+    $("lane-target").hidden = false;
+    promptInput.focus();
+    syncComposerActions();
+  };
+  const clearLaneTarget = (): void => {
+    laneTarget = null;
+    $("lane-target").hidden = true;
+  };
+  $("lane-target-x").addEventListener("click", () => clearLaneTarget());
+  // Lane card taps: approval answers, Stop, and Prompt (stages the lane target on the composer).
+  $("fleet-body").addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement | null)?.closest("button[data-lane]") as HTMLElement | null;
+    if (!btn || !guest) return;
+    const laneId = btn.dataset.lane ?? "";
+    const answer = btn.dataset.fleetAnswer;
+    if (answer) {
+      guest.fleetAnswer(laneId, answer !== "deny", answer === "once" || answer === "session" ? answer : undefined);
+      items = [...items, { kind: "note", text: answer === "deny" ? "Denied the lane's approval ask" : `Allowed the lane's approval ask (${answer})` }];
+      render(guest.view());
+      return;
+    }
+    if (btn.dataset.fleetAct === "stop") { guest.fleetStop(laneId); return; }
+    if (btn.dataset.fleetAct === "prompt") {
+      const snap = items.find((i) => i.kind === "fleet-lanes");
+      const name = snap && snap.kind === "fleet-lanes" ? (snap.lanes.find((l) => l.id === laneId)?.name ?? laneId) : laneId;
+      setLaneTarget(laneId, name);
+    }
+  });
+  // Push now: interject the composed text into the RUNNING turn (master, or the staged lane) instead of
+  // queueing it for after the turn. The host delivers it OUTSIDE untrusted-content delimiters, marked
+  // operator-origin (AGENTS.md #5).
+  $("push-btn").addEventListener("click", () => {
+    const text = promptInput.value.trim();
+    if (!text || !guest) return;
+    const target = laneTarget?.id ?? "master";
+    if (guest.interject(target, text)) {
+      items = [...items, { kind: "user", text }, { kind: "note", text: laneTarget ? `Pushed mid-turn to lane ${laneTarget.name}` : "Pushed mid-turn" }];
+      render(guest.view());
+      promptInput.value = ""; autosize();
+      clearLaneTarget();
+      syncComposerActions();
+    }
+  });
+  // Check in: a one-tap mid-turn status ask; the agent answers briefly and continues.
+  const CHECKIN_PROMPT = "Please give a brief status update: what is finished, what you are doing now, what remains. Then continue.";
+  $("checkin-btn").addEventListener("click", () => {
+    if (guest?.interject("master", CHECKIN_PROMPT)) {
+      items = [...items, { kind: "note", text: "check-in requested" }];
+      render(guest.view());
+    }
+  });
 
   // ---- P-REMOTE.12 (ADR-0251): push-to-talk - HOLD to record, release to send ----
   // The clip is transcoded ON the phone to 16k mono WAV (whisper.cpp cannot decode WebM server-side;
@@ -470,6 +584,189 @@ function main(): void {
   pttBtn.addEventListener("pointercancel", pttStop);
   pttBtn.addEventListener("contextmenu", (ev) => ev.preventDefault()); // long-press must not open a menu on iOS
 
+  // ---- P-REMOTE.14: OPTIONAL device-native dictation, BESIDE push-to-talk (never instead of it) ----
+  // The phone's own recognizer types into the composer and only TEXT is sent. Whether that is allowed at all
+  // is decided by the pure policy (device_stt_policy.ts) from a runtime probe PLUS the host's posture, so a
+  // CUI + lockdown session can never reach a cloud recognizer. Nothing auto-sends: the transcript lands in the
+  // composer for the user to read, because iOS interim results are unreliable and an unreviewed prompt is
+  // worse than one extra tap.
+  const sttBtn = $("stt-btn") as HTMLButtonElement;
+  const sttSheet = $("stt-sheet");
+  const sttLang = navigator.language || "en-US";
+  let sttCap: SttCapability | null = null; // the browser probe, cached for the tab's lifetime
+  let sttDecision: SttDecision | null = null;
+  let sttPosture = ""; // the host posture the cached decision was made for ("" = not decided yet)
+  let sttSeq = 0; // guards against a slow probe applying a decision for an already-stale posture
+  let sttCloudOk = false; // THIS session's explicit cloud consent - never persisted, reset on every connect
+  let dictation: { stop: () => void } | null = null;
+  let dictationBase = ""; // composer text before dictation began, so interim results replace instead of repeat
+  let dictationYielded = false; // a push-to-talk hold ended dictation: land the text, but keep the keyboard shut
+  let dictatedText = ""; // the last transcript this phone produced, so the sttSource label cannot outlive it
+  let sheetKind: "install" | "cloud" = "install";
+
+  const setSttNote = (msg: string): void => {
+    sttNote = msg;
+    $("stt-note").textContent = msg; // host/browser text stays textContent, never innerHTML
+    syncComposerActions();
+  };
+  const endDictation = (): void => {
+    const live = dictation;
+    dictation = null; // null FIRST: stopping delivers the final transcript synchronously, which re-enters here
+    live?.stop();
+    sttBtn.classList.remove("rec");
+    sttBtn.setAttribute("aria-pressed", "false");
+  };
+  const applySttDecision = (): void => {
+    const d = sttDecision;
+    if (!d || d.mode === "host") {
+      endDictation();
+      sttBtn.hidden = true; // a dead button is worse than none: explain instead
+      sttSheet.hidden = true;
+      setSttNote(d ? d.reason : "");
+      return;
+    }
+    sttBtn.hidden = false;
+    sttBtn.dataset.stt = d.mode === "device-local" ? "local" : d.mode === "install-first" ? "offer" : "cloud";
+    const label = d.mode === "device-local" ? "Dictate on this phone"
+      : d.mode === "install-first" ? "Set up dictation on this phone"
+      : "Dictate (this browser transcribes in the cloud)";
+    sttBtn.title = label;
+    sttBtn.setAttribute("aria-label", label);
+    setSttNote(d.mode === "device-cloud" ? d.warn : d.note);
+  };
+  // Re-decided on join AND on every posture change: the host can flip CUI mode or lockdown mid-session, and
+  // the cloud path must die the moment it does. `reprobe` re-runs the browser probe (after a pack install).
+  const refreshStt = async (reprobe: boolean): Promise<void> => {
+    if (!guest) return;
+    const posture = guest.posture(); // fail-closed { cui: true, lockdown: true } until a welcome/state frame lands
+    sttPosture = `${posture.cui}/${posture.lockdown}`; // set synchronously, so the render hook cannot re-enter
+    const seq = ++sttSeq;
+    if (reprobe || !sttCap) sttCap = await probeSttCapability(sttLang);
+    if (seq !== sttSeq) return; // a newer posture landed while probing: its decision wins
+    sttDecision = decideSttMode(sttCap, posture);
+    applySttDecision();
+  };
+  const beginDictation = (mode: "device-local" | "device-cloud"): void => {
+    if (dictation || guestReadOnly) return;
+    dictationBase = promptInput.value;
+    pendingSttSource = mode;
+    sttBtn.classList.add("rec");
+    sttBtn.setAttribute("aria-pressed", "true");
+    setSttNote(mode === "device-local" ? "Listening on this phone. Tap again to stop." : "Listening. This browser is transcribing in its vendor's cloud.");
+    dictation = startDictation({
+      lang: sttLang,
+      processLocally: mode === "device-local",
+      onInterim: (text) => { promptInput.value = mergeTranscript(dictationBase, text); autosize(); },
+      onFinal: (text) => {
+        dictatedText = text;
+        promptInput.value = mergeTranscript(dictationBase, text);
+        endDictation();
+        autosize();
+        if (!dictationYielded) promptInput.focus(); // review, edit, then Send - a transcript is NEVER auto-sent
+        syncComposerActions();
+        setSttNote(sttDecision?.mode === "device-cloud" ? sttDecision.warn : "Read it over, then tap Send.");
+      },
+      // A mid-session failure falls back to the path that always works: hold-to-talk, transcribed on the desktop.
+      onError: (message) => {
+        endDictation();
+        pendingSttSource = null; dictatedText = "";
+        setSttNote(`${message} Hold the mic button instead and your desktop will transcribe the recording.`);
+      },
+    });
+  };
+
+  // The two sheets. Every explanation is a WHOLE block paragraph (AGENTS.md #11) - prose never becomes flex
+  // items - and the cloud consent is spelled out in full because it is the only path where audio leaves.
+  const SHEET_COPY: Record<"install" | "cloud", { title: string; go: string; body: string[] }> = {
+    install: {
+      title: "Dictate on this phone",
+      go: "Install",
+      body: ["Your phone can turn speech into text without sending the audio anywhere, but it needs a one-time language pack first. It downloads once over your current connection, and after that dictation runs entirely on this phone, even with no network at all."],
+    },
+    cloud: {
+      title: "This browser transcribes in the cloud",
+      go: "Dictate anyway",
+      body: [
+        "If you dictate here, this browser sends your recorded speech to its vendor's servers to be turned into text. The audio leaves your phone.",
+        "Hold-to-talk sends the recording to your own desktop instead, which transcribes it offline with its own engine, so your voice stays between your two machines.",
+        "Choosing to dictate applies to this session only. It is never remembered: reload or reopen the app and you will be asked again.",
+      ],
+    },
+  };
+  const openSttSheet = (kind: "install" | "cloud"): void => {
+    sheetKind = kind;
+    const copy = SHEET_COPY[kind];
+    $("stt-sheet-title").textContent = copy.title;
+    const body = $("stt-sheet-body");
+    body.textContent = "";
+    for (const para of copy.body) {
+      const p = document.createElement("p");
+      p.className = "stt-p";
+      p.textContent = para;
+      body.append(p);
+    }
+    const go = $("stt-sheet-go") as HTMLButtonElement;
+    go.textContent = copy.go;
+    go.disabled = false;
+    $("stt-sheet-note").textContent = "";
+    $("stt-sheet-note").hidden = true;
+    sttSheet.hidden = false;
+  };
+  $("stt-sheet-x").addEventListener("click", () => { sttSheet.hidden = true; });
+  $("stt-sheet-alt").addEventListener("click", () => {
+    sttSheet.hidden = true;
+    setSttNote("Hold the mic button to talk and your desktop will transcribe the recording offline.");
+  });
+  $("stt-sheet-go").addEventListener("click", () => {
+    if (sheetKind === "cloud") {
+      sttCloudOk = true; // session-only: `connect` clears it, and nothing writes it to storage
+      sttSheet.hidden = true;
+      beginDictation("device-cloud");
+      return;
+    }
+    const go = $("stt-sheet-go") as HTMLButtonElement;
+    const note = $("stt-sheet-note");
+    go.disabled = true;
+    note.hidden = false;
+    note.textContent = "Downloading the on-device language pack\u2026";
+    void (async () => {
+      if (!await installSttLanguage(sttLang)) {
+        go.disabled = false;
+        note.textContent = "That download did not finish. Try again on a better connection, or use hold-to-talk.";
+        return;
+      }
+      await refreshStt(true); // the pack is in: re-probe, so "available" is PROVEN rather than assumed
+      if (sttDecision?.mode === "device-local") {
+        sttSheet.hidden = true;
+        beginDictation("device-local");
+        return;
+      }
+      go.disabled = false;
+      note.textContent = "The language pack is not ready yet. Wait a moment and tap Install again, or use hold-to-talk.";
+    })();
+  });
+  sttBtn.addEventListener("click", () => {
+    if (dictation) { endDictation(); return; } // tap again = stop; whatever was heard stays in the composer
+    const d = sttDecision;
+    if (!d || d.mode === "host") return;
+    if (d.mode === "device-local") { beginDictation("device-local"); return; }
+    if (d.mode === "install-first") { openSttSheet("install"); return; }
+    if (sttCloudOk) beginDictation("device-cloud"); else openSttSheet("cloud"); // first tap ALWAYS asks
+  });
+  // Holding push-to-talk while dictating would fight over the microphone: the hold wins, dictation lands its
+  // text and stops. Additive listener - the push-to-talk path above is untouched.
+  pttBtn.addEventListener("pointerdown", () => {
+    if (!dictation) return;
+    dictationYielded = true;
+    endDictation();
+    dictationYielded = false;
+  });
+  // Provenance stays honest: once the user has typed the dictated words back out of the composer, the send is
+  // no longer a transcript, so it must not carry an sttSource claim into the host's audit trail.
+  promptInput.addEventListener("input", () => {
+    if (pendingSttSource && dictatedText && !promptInput.value.includes(dictatedText)) { pendingSttSource = null; dictatedText = ""; }
+  });
+
   // Attach via the + label (a native <label for=file-input> - opens the iOS picker on tap, no JS .click(),
   // which iOS blocks for a display:none input), paste, or drag-drop. Every image is re-validated fail-closed.
   const fileInput = $("file-input") as HTMLInputElement;
@@ -545,7 +842,8 @@ function main(): void {
       awayAt = -1;
     }
     const tr = $("transcript");
-    tr.innerHTML = renderTranscript(view.transcript, items);
+    // P-PWA-FLEET.1: fleet/process snapshots render in their strips above the transcript, never inline.
+    tr.innerHTML = renderTranscript(view.transcript, items.filter((i) => i.kind !== "fleet-lanes" && i.kind !== "processes"));
     // Re-apply the user's Thinking open/closed choices - the innerHTML repaint above resets every <details>.
     for (const d of Array.from(tr.querySelectorAll<HTMLDetailsElement>("details[data-think]"))) {
       const want = thinkIntent.get(Number(d.dataset.think ?? -1));
@@ -559,6 +857,22 @@ function main(): void {
     guestReadOnly = view.readOnly || view.phase === "ended"; // P-PREVIEW-PWA.2: gates the markup send-back
     composerStreaming = items.some((i) => i.kind === "answer" && i.streaming);
     syncComposerActions();
+    // P-REMOTE.14: the host's posture rides on welcome/state frames, so re-decide device dictation whenever it
+    // changes (a flip to CUI + lockdown must revoke a cloud recognizer immediately). Also the first decision
+    // of a session, since `connect` resets the cached key to "".
+    if (guestReadOnly) endDictation(); // the composer just vanished (session ended / view-only): no hot mic
+    if (guest) {
+      const p = guest.posture();
+      if (`${p.cui}/${p.lockdown}` !== sttPosture) void refreshStt(false);
+    }
+    // P-PWA-FLEET.1: the strips render the LATEST folded snapshots; while streaming, Send splits into
+    // Queue (stage via the existing PromptFrame path) vs Push now (interject), and Check in appears.
+    renderFleetStrip();
+    renderProcsStrip();
+    ($("send-btn") as HTMLButtonElement).hidden = composerStreaming;
+    ($("queue-btn") as HTMLButtonElement).hidden = !composerStreaming;
+    ($("push-btn") as HTMLButtonElement).hidden = !composerStreaming;
+    ($("checkin-btn") as HTMLButtonElement).hidden = !composerStreaming;
     // P-COLLAB.14: the model + already-used-folder pickers (edit guest only). renderControls returns "" for a
     // view guest, so hide the row whenever it's empty.
     const controlsHtml = renderControls(view);
@@ -637,6 +951,10 @@ function main(): void {
         const wsUrl = `${cfg.relayWsBase.replace(/\/+$/, "")}/r/${parsed.roomId}`;
         socket = new CollabSocket({ wsUrl, role: "guest", key, authToken: () => auth.getIdToken() });
         items = []; thinkIntent.clear(); lastReport = null; turnStart = 0; selfEchoes.length = 0;
+        // P-REMOTE.14: a fresh session re-decides dictation from scratch, and cloud consent NEVER carries over.
+        endDictation();
+        sttDecision = null; sttPosture = ""; sttCloudOk = false; pendingSttSource = null; dictatedText = "";
+        applySttDecision();
         guest = new CollabGuest(socket, { name: currentEmail ?? "phone", writeToken: parsed.writeToken }, {
           onEvent: (e) => {
             items = foldEvent(items, e);

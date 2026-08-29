@@ -10,7 +10,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendLaneLedger, buildTimeline, listTimeline, readLaneLedger } from "./timeline.ts";
+import { appendLaneLedger, buildTimeline, isSelfTestSession, listTimeline, readLaneLedger } from "./timeline.ts";
 import { __resetSessionIndex } from "./sessions.ts";
 import type { LaneSessionRecord } from "./fleet_lanes.ts";
 
@@ -97,4 +97,68 @@ test("paging clamps and slices without losing the true total", () => {
   const page = buildTimeline(sessions, [], { limit: 3, offset: 2 });
   expect(page.total).toBe(7);
   expect(page.entries.map((e) => e.sessionId)).toEqual(["s-2", "s-3", "s-4"]);
+});
+
+// ── P-TL.2: holding back the repo's OWN self-test throwaways ─────────────────────────────────────────
+// The user's timeline read "6560 sessions" and was almost entirely `omp-echo-<rand>` workspaces titled
+// "ping" / "go", one real conversation buried among them. These lock the classifier's two rules AND the
+// safety property that matters more than either: a real session can never be swept up by its title.
+
+/** A SessionRow as buildTimeline consumes it, with only the fields a classification cares about set. */
+const row = (o: { id?: string; cwd: string; title: string; turns?: number; atSec?: number }) => ({
+  id: o.id ?? o.title,
+  title: o.title,
+  model: "claude-fable-5",
+  turns: o.turns ?? 1,
+  kind: "chat" as const,
+  updatedAt: (o.atSec ?? 1_000) * 1000,
+  cwd: o.cwd,
+});
+
+test("the echo/demo workspace patterns are self-test on their own, whatever the title says", () => {
+  for (const cwd of ["C:/tmp/omp-echo-pL5cBg", "/tmp/omp_echo-x2h2WY", "C:/tmp/lucid-test-9", "/tmp/omp-smoke-1", "C:/tmp/lucid_fixture-a"]) {
+    expect(isSelfTestSession({ cwd, wsName: "", title: "a perfectly real sounding prompt", turns: 40 })).toBe(true);
+  }
+});
+
+test("bare probe titles are self-test only while the session is short enough to BE a probe", () => {
+  for (const title of ["ping", "go", "GO", "ok", "hi", "hello", "test", "noop", "turn 0: add some context to grow the history"]) {
+    expect(isSelfTestSession({ cwd: "C:/repos/alpha", wsName: "alpha", title, turns: 1 })).toBe(true);
+    expect(isSelfTestSession({ cwd: "C:/repos/alpha", wsName: "alpha", title, turns: 2 })).toBe(true);
+    // THE SAFETY PROPERTY: past two turns it is a conversation, not a probe, whatever it was called.
+    expect(isSelfTestSession({ cwd: "C:/repos/alpha", wsName: "alpha", title, turns: 3 })).toBe(false);
+  }
+});
+
+test("a real session in a real workspace is never self-test", () => {
+  expect(isSelfTestSession({ cwd: "C:/repos/LucidAgentIDE", wsName: "LucidAgentIDE", title: "I have some issues with Fleet Manager", turns: 264 })).toBe(false);
+  expect(isSelfTestSession({ cwd: "C:/repos/LucidAgentIDE", wsName: "LucidAgentIDE", title: "why is the preview blank", turns: 1 })).toBe(false);
+  expect(isSelfTestSession({ cwd: "", wsName: "", title: "no cwd recorded", turns: 1 })).toBe(false);
+});
+
+test("buildTimeline hides throwaways by default, counts them, and can opt them back in", () => {
+  const sessions = [
+    row({ id: "real", cwd: "C:/repos/alpha", title: "fix the login bug", turns: 12, atSec: 3_000 }),
+    row({ id: "e1", cwd: "C:/tmp/omp-echo-aaa", title: "ping", atSec: 2_900 }),
+    row({ id: "e2", cwd: "C:/tmp/omp-echo-bbb", title: "go", atSec: 2_800 }),
+    row({ id: "e3", cwd: "C:/repos/alpha", title: "turn 0: add some context to grow the history", atSec: 2_700 }),
+  ];
+  const hidden = buildTimeline(sessions, []);
+  expect(hidden.entries.map((e) => e.sessionId)).toEqual(["real"]);
+  expect(hidden.total).toBe(1);          // total is what the caller can page through
+  expect(hidden.selfTest).toBe(3);       // counted across the whole corpus
+  expect(hidden.entries[0]!.selfTest).toBeUndefined(); // a real row stays a plain entry
+
+  const shown = buildTimeline(sessions, [], { includeSelfTest: true });
+  expect(shown.entries.map((e) => e.sessionId)).toEqual(["real", "e1", "e2", "e3"]); // newest-first preserved
+  expect(shown.total).toBe(4);
+  expect(shown.selfTest).toBe(3);
+  expect(shown.entries[1]!.selfTest).toBe(true);
+});
+
+test("a corpus of nothing but throwaways reports zero pageable rows, not an empty machine", () => {
+  const page = buildTimeline([row({ cwd: "C:/tmp/omp-echo-zzz", title: "ping" })], []);
+  expect(page.entries).toEqual([]);
+  expect(page.total).toBe(0);
+  expect(page.selfTest).toBe(1); // the header can say "1 self-test hidden" instead of "no sessions"
 });

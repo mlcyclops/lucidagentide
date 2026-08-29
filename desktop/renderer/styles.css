@@ -2366,6 +2366,17 @@ body.preview-open .thread{font-size:.9em}
 .prev-tab.active{color:var(--txt);border-bottom-color:var(--accent,#6b8afd)}
 .prev-tab-dot{width:7px;height:7px;border-radius:50%;background:var(--accent-2,#c64bd6);animation:prevPulse 1.3s ease-out infinite}
 .prev-tab-dot[hidden]{display:none}
+/* P-PREVIEW.10: dynamic per-lane tabs (fleet writes). One nowrap-ellipsis label per tab (invariant #11),
+   a close X that reads quiet until the tab is hovered; active state rides the shared .prev-tab.active. */
+.preview-tabs{overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+.prev-tab{white-space:nowrap;flex:none}
+.prev-tab-lane{max-width:170px;padding-right:8px;gap:5px}
+.prev-tab-lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prev-tab-x{flex:none;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:4px;color:var(--txt-2);opacity:.55}
+.prev-tab-lane:hover .prev-tab-x{opacity:1}
+.prev-tab-x:hover{background:color-mix(in srgb,var(--txt) 14%,transparent);color:var(--txt)}
+/* The preview rail icon's "a lane updated" badge - the agent-dot color on the rail-dot chassis. */
+.prev-rail-dot{background:var(--accent-2,#c64bd6);box-shadow:0 0 0 2px var(--bg-1),0 0 8px var(--accent-2,#c64bd6);animation:prevPulse 1.3s ease-out infinite}
 /* P-PREVIEW.9: device viewports — the stage holds both lane frames; device mode centers + fit-scales them. */
 .preview-stage{flex:1;min-width:0;display:flex;position:relative}
 .preview-body.device{align-items:center;justify-content:center;overflow:auto;padding:14px}
@@ -3728,6 +3739,14 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-approve{display:flex;align-items:center;gap:7px;min-width:0;padding:6px 9px;background:var(--red-dim);border-top:1px solid rgba(239,95,95,.4)}
 .fleet-approve-txt{flex:1;min-width:0;font-size:11px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-approve-acts{display:flex;gap:5px;flex:none}
+.fleet-approve-acts .btn-mini{white-space:nowrap}
+/* Full auto-mode: the bolt lights the existing amber while ON - no new token, the staging/quiet amber. */
+.fleet-auto-btn.auto-on{color:var(--amber)}
+.fleet-auto-btn.auto-on:hover{color:var(--amber)}
+/* the auto-risk modal's checkbox row: checkbox + ONE text span (invariant 11), centered under the prose. */
+.fleet-auto-all{display:flex;align-items:center;justify-content:center;gap:7px;min-width:0;font-size:12px;color:var(--txt-2);cursor:pointer;margin:2px 0 0}
+.fleet-auto-all input{accent-color:var(--accent);flex:none}
+.fleet-auto-all span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* P-FLEET.L4: the recovery bar (error/stopped lanes) mirrors the approve bar's one-text-child flex shape
    (invariant 11): a single ellipsizing span takes the slack, the action buttons stay nowrap. */
 .fleet-recover{display:flex;align-items:center;gap:7px;min-width:0;padding:6px 9px;background:var(--bg-1);border-top:1px solid var(--line)}
@@ -3836,37 +3855,212 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   .fleet-pip.lane-working i,.fleet-pip.lane-needs-approval i{animation:none}
 }
 
-/* ───────────────────────── the Timeline dock — P-FLEET.L5 (ADR-0274) ─────────────────────────
-   One chronological, reviewable surface over every session (chats / lanes / ingest). Rows are FLEX of
-   single-text-child spans (invariant 11): the title takes the slack and ellipsizes; time/kind/ws/turn
-   chips stay nowrap. Transcript messages are BLOCK paragraphs - prose never lives in a flex row. */
+/* ───────────────────────── the Timeline dock - P-FLEET.L5 / P-TL.2 / P-TL.3 ─────────────────────────
+   A two-pane inspector over every session (chats / lanes / ingest): the LEFT pane is the chronology,
+   the RIGHT pane reads the selected transcript. The left pane scrolls BOTH ways, so a long title is
+   reachable in full instead of ellipsized away, and the fixed metadata columns line up into something
+   the eye can scan down. Rows are FLEX of single-text-child spans (invariant 11) and every row column
+   is nowrap; the detail pane's prose lives in BLOCK lines, never in a flex row. */
 .tl-dock{min-width:320px}
-.tl-body{padding:8px 10px}
+.tl-body{padding:8px 10px;display:flex;flex-direction:column;gap:6px;min-height:0;container-type:inline-size}
 .tl-count{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-3);white-space:nowrap}
-.tl-list{display:flex;flex-direction:column;gap:2px}
-.tl-day{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--txt-4);
-  padding:8px 2px 3px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
-.tl-row{display:flex;align-items:center;gap:6px;min-width:0;padding:4px 6px;border-radius:7px;cursor:pointer}
-.tl-row:hover{background:var(--bg-2)}
-.tl-row.open{background:var(--bg-2);outline:1px solid var(--line)}
-.tl-time{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4);min-width:42px;white-space:nowrap}
-.tl-kind{flex:none;font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;
-  border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--txt-3);white-space:nowrap}
+/* P-TL.2: the header chip that holds back this repo's own echo/demo throwaways. */
+.tl-junk{flex:none;background:none;border:1px solid var(--line);border-radius:999px;padding:0 8px;
+  font-family:var(--mono);font-size:9.5px;color:var(--txt-4);cursor:pointer;white-space:nowrap;line-height:17px}
+.tl-junk:hover{color:var(--txt-2);border-color:var(--line-strong);background:var(--bg-3)}
+.tl-junk.on{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,var(--line))}
+/* P-TL.3: the filter row, and the two panes. */
+.tl-tools{flex:none;display:flex;align-items:center;gap:6px}
+.tl-search{flex:1;min-width:0;background:var(--bg-1);border:1px solid var(--line);border-radius:7px;
+  padding:4px 8px;font-size:11.5px;color:var(--txt);outline:none}
+.tl-search:focus{border-color:var(--accent-2);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent-2) 18%,transparent)}
+.tl-search::placeholder{color:var(--txt-4)}
+.tl-panes{flex:1;min-height:0;display:flex;gap:8px}
+/* The chronology: scrolls vertically AND horizontally. */
+.tl-left{flex:1 1 auto;min-width:0;overflow:auto}
+.tl-list{display:flex;flex-direction:column;gap:2px;width:max-content;min-width:100%}
+.tl-detail{flex:0 0 44%;min-width:0;overflow:auto;padding-left:9px;border-left:1px solid var(--line-soft)}
+/* Narrow dock: the detail pane drops BELOW the chronology instead of squeezing it. */
+@container (max-width:619px){
+  .tl-panes{flex-direction:column}
+  .tl-detail{flex:0 0 auto;max-height:46%;padding:6px 0 0;border-left:0;border-top:1px solid var(--line-soft)}
+}
+/* Day header: sticky on BOTH axes, so the label survives a horizontal scroll. */
+.tl-day{position:sticky;top:-8px;left:0;z-index:2;display:flex;align-items:center;gap:7px;
+  padding:8px 2px 3px;margin-top:2px;background:var(--bg-1);border-bottom:1px solid var(--line-soft)}
+.tl-day-label{flex:none;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--txt-3);white-space:nowrap}
+.tl-day-n{flex:none;font-family:var(--mono);font-size:9px;color:var(--txt-4);white-space:nowrap}
+.tl-strip{flex:none;width:120px;display:flex;gap:1px;height:3px;border-radius:2px;overflow:hidden;opacity:.75}
+.tl-seg{display:block;height:100%;background:var(--txt-4)}
+.tl-seg.kind-chat{background:var(--accent-2)}
+.tl-seg.kind-lane{background:var(--cyan)}
+.tl-seg.kind-ingest{background:var(--txt-4)}
+/* Rows: fixed metadata columns, then the title at natural width. The accent rail reads the kind. */
+.tl-row{position:relative;display:flex;align-items:center;gap:8px;padding:4px 10px 4px 12px;
+  border-radius:7px;cursor:pointer;transition:background .12s ease,transform .12s ease}
+.tl-row::before{content:"";position:absolute;left:4px;top:5px;bottom:5px;width:2px;border-radius:2px;
+  background:var(--line);transition:width .12s ease,opacity .12s ease}
+.tl-row.kind-chat::before{background:var(--accent-2)}
+.tl-row.kind-lane::before{background:var(--cyan)}
+.tl-row.kind-ingest::before{background:var(--txt-4);opacity:.5}
+.tl-row:nth-of-type(even){background:color-mix(in srgb,var(--bg-2) 45%,transparent)}
+/* Hover and keyboard focus are the SAME state: lift, brighten the rail, reveal the model. */
+.tl-row:hover,.tl-row:focus-visible{background:var(--bg-2);outline:none;transform:translateX(1px)}
+.tl-row:hover::before,.tl-row:focus-visible::before{width:3px;opacity:1}
+.tl-row:hover .tl-model,.tl-row:focus-visible .tl-model{opacity:1}
+.tl-row:hover .tl-title,.tl-row:focus-visible .tl-title{color:var(--txt)}
+.tl-row:focus-visible{box-shadow:0 0 0 1px color-mix(in srgb,var(--accent-2) 45%,transparent) inset}
+/* Selected: the row whose transcript the detail pane is showing. Persistent, distinct from hover. */
+.tl-row.sel{background:color-mix(in srgb,var(--accent-2) 12%,var(--bg-2))}
+.tl-row.sel::before{width:3px;opacity:1}
+.tl-row.sel .tl-title{color:var(--txt);font-weight:600}
+/* A self-test throwaway, only visible when the header chip opts them in: present but clearly lesser. */
+.tl-row.self-test{opacity:.45}
+.tl-row.self-test:hover{opacity:.8}
+.tl-row.self-test .tl-kind{color:var(--txt-4);border-style:dashed}
+.tl-row.self-test::before{background:var(--txt-4);opacity:.35}
+.tl-time{flex:none;width:46px;font-family:var(--mono);font-size:10px;color:var(--txt-4);white-space:nowrap}
+.tl-kind{flex:none;width:58px;text-align:center;font-family:var(--mono);font-size:9px;letter-spacing:.06em;
+  text-transform:uppercase;border:1px solid var(--line);border-radius:4px;padding:0 3px;color:var(--txt-3);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.tl-row.kind-chat .tl-kind{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent-2) 35%,var(--line))}
 .tl-row.kind-lane .tl-kind{color:var(--cyan);border-color:color-mix(in srgb,var(--cyan) 40%,var(--line))}
 .tl-row.kind-ingest .tl-kind{opacity:.6}
-.tl-lane-name{flex:none;font-size:10.5px;font-weight:700;color:var(--cyan);white-space:nowrap;max-width:90px;overflow:hidden;text-overflow:ellipsis}
-.tl-title{flex:1;min-width:0;font-size:11.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tl-ws{flex:none;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);border:1px solid var(--line-soft);
-  border-radius:4px;padding:0 4px;background:var(--bg-1);white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis}
-.tl-turns{flex:none;font-family:var(--mono);font-size:9.5px;color:var(--txt-4);white-space:nowrap}
-/* the in-place transcript: read-only review, tail-limited; messages are block paragraphs */
-.tl-transcript{margin:2px 4px 8px 48px;padding:6px 8px;background:var(--bg-1);border:1px solid var(--line-soft);
-  border-radius:8px;max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
-.tl-msg{min-width:0}
-.tl-role{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--txt-4);margin-bottom:1px}
-.tl-msg.u .tl-role{color:var(--accent-2)}
+.tl-ws{flex:none;width:104px;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);
+  border:1px solid var(--line-soft);border-radius:4px;padding:0 5px;background:var(--bg-1);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl-ws.lane{color:var(--cyan);border-color:color-mix(in srgb,var(--cyan) 30%,var(--line-soft));font-weight:600}
+.tl-turns{flex:none;width:38px;text-align:right;font-family:var(--mono);font-size:9.5px;color:var(--txt-4);white-space:nowrap}
+/* The title takes its NATURAL width and the pane scrolls to it: nothing is truncated out of reach. */
+.tl-title{flex:none;font-size:11.5px;color:var(--txt-2);white-space:nowrap}
+/* Revealed on hover: always in the layout so nothing shifts, just invisible until wanted. */
+.tl-model{flex:none;font-family:var(--mono);font-size:9px;color:var(--txt-4);white-space:nowrap;
+  opacity:0;transition:opacity .12s ease}
+/* The detail pane: header block lines, then the transcript. */
+.tl-d-head{padding:2px 0 7px;border-bottom:1px solid var(--line-soft);margin-bottom:7px}
+.tl-d-top{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.tl-d-when{flex:1;min-width:0;font-family:var(--mono);font-size:9.5px;color:var(--txt-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl-d-title span{display:block;font-size:12.5px;font-weight:600;color:var(--txt);line-height:1.35;word-break:break-word}
+.tl-d-line span{display:block;font-family:var(--mono);font-size:9.5px;color:var(--txt-4);margin-top:3px;word-break:break-all}
+/* Transcript: a GRID of a fixed monospace role gutter plus a block text paragraph, so a long
+   transcript scans by source (the borrowed idea from the reference inspector). */
+.tl-msgs{display:flex;flex-direction:column;gap:5px}
+.tl-msg{display:grid;grid-template-columns:52px minmax(0,1fr);gap:8px;align-items:start;min-width:0;
+  padding-bottom:4px;border-bottom:1px solid color-mix(in srgb,var(--line-soft) 55%,transparent)}
+.tl-msg:last-child{border-bottom:0;padding-bottom:0}
+.tl-role{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--txt-4);text-align:right;padding-top:2px;white-space:nowrap;overflow:hidden}
+.tl-msg.role-user .tl-role{color:var(--accent-2)}
+.tl-msg.role-assistant .tl-role,.tl-msg.role-agent .tl-role{color:var(--cyan)}
+.tl-msg.role-tool .tl-role{color:var(--amber)}
+.tl-msg.role-system .tl-role{color:var(--txt-4);opacity:.7}
 .tl-text{display:block;font-size:11.5px;line-height:1.5;color:var(--txt-2);white-space:pre-wrap;word-break:break-word}
-.tl-clip{font-size:10px;color:var(--txt-4)}
+.tl-clip{font-size:10px;color:var(--txt-4);margin-bottom:5px}
 .tl-clip span,.tl-loading span,.tl-empty span,.tl-more span{display:block;min-width:0}
 .tl-loading,.tl-empty{padding:8px 4px;font-size:11.5px;color:var(--txt-3)}
-.tl-more{padding:8px 4px 2px;font-size:10.5px;color:var(--txt-4)}
+.tl-more{padding:8px 4px 2px;font-size:10.5px;color:var(--txt-4);position:sticky;left:0}
+@media (prefers-reduced-motion:reduce){
+  .tl-row,.tl-row::before,.tl-model{transition:none}
+  .tl-row:hover,.tl-row:focus-visible{transform:none}
+}
+
+/* ───────── turn controls - P-INTERJECT.2/.3/.4 (wave 2, TurnControls section) ─────────
+   The composer's staged-prompt STACK + hold-or-push chooser, the HUD Check-in button and its
+   transcript card, the per-lane fleet check-in, and the status-bar Processes popover. Flex rows
+   here hold single-text-child spans (invariant 11); card lines are BLOCK elements. */
+.queued-stack{flex-direction:column;align-items:flex-end;gap:4px}
+.q-pill .q-push{flex:none;background:none;border:1px solid var(--line);border-radius:999px;padding:0 7px;
+  font-size:10px;color:var(--txt-3);cursor:pointer;white-space:nowrap;line-height:16px}
+.q-pill .q-push:hover{color:var(--txt);border-color:var(--line-strong);background:var(--bg-3)}
+.queue-chooser{max-width:min(1080px,94vw);margin:0 auto 6px;display:flex;align-items:center;gap:7px;
+  justify-content:flex-end;padding:3px 8px;background:var(--bg-2);border:1px solid var(--line-soft);border-radius:999px}
+.queue-chooser .qc-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  color:var(--txt-2);font-size:11px}
+.queue-chooser .btn-mini{flex:none;white-space:nowrap}
+.queue-chooser .q-cancel{flex:none;background:none;border:0;color:var(--txt-4);cursor:pointer;display:grid;
+  place-items:center;width:18px;height:18px;border-radius:50%}
+.queue-chooser .q-cancel:hover{color:var(--txt);background:var(--bg-3)}
+/* the HUD Check-in button: visible only while the turn streams; gone the moment the HUD settles */
+.hud .hud-checkin{display:none}
+.hud.streaming .hud-checkin{display:inline-flex;align-items:center;flex:none;margin-left:6px;background:none;
+  border:1px solid var(--line);border-radius:999px;padding:0 8px;font-size:10px;line-height:16px;
+  color:var(--txt-3);cursor:pointer;white-space:nowrap}
+.hud.streaming .hud-checkin:hover{color:var(--txt);border-color:var(--line-strong);background:var(--bg-2)}
+/* the Check-in card: a block card in the transcript - every line its own block element */
+.checkin-card{width:fit-content;min-width:280px;max-width:100%;padding:9px 12px;border-radius:10px;
+  border:1px solid var(--line);background:var(--bg-1);animation:rise var(--t) var(--ease-out)}
+.checkin-card .ck-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.checkin-card .ck-title{flex:1;min-width:0;font-size:10px;font-weight:700;letter-spacing:.6px;
+  text-transform:uppercase;color:var(--txt-4);white-space:nowrap}
+.checkin-card .q-cancel{flex:none;background:none;border:0;color:var(--txt-4);cursor:pointer;display:grid;
+  place-items:center;width:18px;height:18px;border-radius:50%}
+.checkin-card .q-cancel:hover{color:var(--txt);background:var(--bg-3)}
+.checkin-card .ck-line{display:block;font-size:11.5px;color:var(--txt-2);padding:1px 0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px}
+.checkin-card .ck-sub{display:block;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+  color:var(--txt-4);padding:3px 0 1px}
+.checkin-card .ck-call{display:block;font-family:var(--mono);font-size:10.5px;color:var(--txt-3);padding:1px 0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px}
+.checkin-card .ck-acts{display:flex;gap:6px;margin-top:6px}
+/* transcript note chip: one nowrap-ellipsis text span inside the .evt flex row */
+.note-chip-txt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* the per-lane fleet check-in card (inline at the top of the lane body) */
+.fleet-checkin{margin:6px 8px 0;padding:7px 9px;border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-2)}
+.fleet-ck-line{display:block;font-size:11px;color:var(--txt-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-ck-acts{display:flex;gap:6px;margin-top:5px}
+.fleet-q-push{white-space:nowrap;font-size:9.5px}
+/* the status-bar Processes button + popover */
+.proc-seg b{white-space:nowrap}
+.proc-pop{padding:10px 12px}
+.proc-pop-head{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt-4);
+  margin-bottom:6px;white-space:nowrap}
+.proc-pop-list{display:flex;flex-direction:column;gap:3px}
+.proc-empty{font-size:11.5px;color:var(--txt-3);padding:4px 0}
+.proc-row{display:flex;align-items:center;gap:7px;min-width:0;padding:4px 5px;border-radius:7px}
+.proc-row:hover{background:var(--bg-2)}
+.proc-row .proc-ic{flex:none;color:var(--txt-3);display:grid;place-items:center}
+.proc-row .proc-label{flex:1;min-width:0;font-size:11.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.proc-row .proc-status{flex:none;font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--txt-3);border:1px solid var(--line);border-radius:4px;padding:0 4px;white-space:nowrap}
+.proc-row .proc-elapsed{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4);white-space:nowrap;min-width:44px;text-align:right}
+.proc-row .btn-mini{flex:none;white-space:nowrap}
+
+/* ── P-BROWSER.1 (wave 2): the agent-browser pill (BrowserFeature section) ──────────────────────
+   Floats near the top of the chat while the agent drives its visible browser window. Invariant #11:
+   ONE text child (.bp-label, nowrap+ellipsis); the icon and buttons are flex:none controls. .bp-fx is
+   the CSS-only "breathing particles" aura: two stacked pseudo-elements of tiny radial-gradient dots on
+   slow, offset scale/opacity loops. .snap replays a ring pulse every time a screenshot lands. */
+.browser-pill{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:26;
+  display:flex;align-items:center;gap:8px;max-width:min(560px,86%);padding:6px 8px 6px 12px;border-radius:999px;
+  background:color-mix(in srgb,var(--bg-2) 90%,transparent);
+  border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));
+  box-shadow:0 6px 22px rgba(0,0,0,.45);backdrop-filter:blur(6px)}
+.browser-pill .bp-ico{flex:none;display:grid;place-items:center;color:var(--accent);
+  animation:bpBlink 3.2s ease-in-out infinite}
+.browser-pill .bp-label{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:12px;color:var(--txt)}
+.browser-pill .bp-btn{flex:none;white-space:nowrap;font-size:11px;padding:3px 9px;border-radius:999px;cursor:pointer;
+  color:var(--txt-2);background:var(--bg-1);border:1px solid var(--line);
+  transition:background var(--t),color var(--t),border-color var(--t)}
+.browser-pill .bp-btn:hover{color:var(--txt);border-color:var(--line-strong);background:var(--bg-2)}
+.browser-pill .bp-danger:hover{color:#fff;background:var(--red);border-color:var(--red)}
+/* breathing particles: layered radial-gradient dots drifting through a slow scale/opacity loop */
+.browser-pill .bp-fx{position:absolute;inset:-7px;border-radius:999px;pointer-events:none;z-index:-1}
+.browser-pill .bp-fx::before,.browser-pill .bp-fx::after{content:"";position:absolute;inset:0;border-radius:inherit;
+  background:
+    radial-gradient(5px 5px at 10% 28%,color-mix(in srgb,var(--accent) 70%,transparent) 0 45%,transparent 72%),
+    radial-gradient(3px 3px at 30% 78%,color-mix(in srgb,var(--cyan) 65%,transparent) 0 45%,transparent 72%),
+    radial-gradient(4px 4px at 55% 12%,color-mix(in srgb,var(--accent-2) 60%,transparent) 0 45%,transparent 72%),
+    radial-gradient(3px 3px at 74% 82%,color-mix(in srgb,var(--accent) 55%,transparent) 0 45%,transparent 72%),
+    radial-gradient(5px 5px at 92% 34%,color-mix(in srgb,var(--cyan) 60%,transparent) 0 45%,transparent 72%);
+  animation:bpBreathe 3.6s ease-in-out infinite}
+.browser-pill .bp-fx::after{animation-duration:5.2s;animation-delay:-1.8s;filter:blur(1.5px);
+  transform:scale(1.06) rotate(180deg)}
+@keyframes bpBreathe{0%,100%{opacity:.3;transform:scale(.94)}50%{opacity:.95;transform:scale(1.06)}}
+@keyframes bpBlink{0%,100%{opacity:.65}50%{opacity:1}}
+/* replayed per screenshot: the pill throws an expanding accent ring (class re-added after a reflow) */
+.browser-pill.snap{animation:bpSnap .6s ease-out 1}
+@keyframes bpSnap{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 75%,transparent),0 6px 22px rgba(0,0,0,.45)}
+  100%{box-shadow:0 0 0 18px transparent,0 6px 22px rgba(0,0,0,.45)}}

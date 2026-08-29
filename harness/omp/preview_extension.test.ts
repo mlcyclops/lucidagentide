@@ -3,18 +3,24 @@
 
 // harness/omp/preview_extension.test.ts — P-PREVIEW.3a + .3a-shot (ADR-0096). Verifies the extension's LOGIC
 // against a mock `pi` (the real omp registerTool + the model invoking/seeing tools is verified live). The
-// load-bearing property: registration NEVER throws, so it can never break omp launch.
+// load-bearing properties: registration NEVER throws (so it can never break omp launch) and it succeeds in
+// BOTH schema modes - a healthy typebox shim, or plain JSON-Schema literals when the shim is absent/broken.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import previewExtension, { previewShotImage } from "./preview_extension.ts";
+import previewExtension, { normalizeToolPath, previewShotImage } from "./preview_extension.ts";
 
-// Minimal TypeBox shim mirroring what omp injects as `pi.typebox` (Type.Object/Type.String produce a
-// standard JSON-schema-ish object). The extension authors its parameters through this; the test asserts
-// the shape that reaches registerTool.
+// Minimal TypeBox shim mirroring what omp injects as `pi.typebox`: Type.Object/String/Optional produce a
+// standard JSON-schema object, with Optional-wrapped props left OUT of `required` (like real TypeBox, which
+// omits an empty `required` entirely). The extension authors its parameters through this in typebox mode;
+// the tests assert the shape that reaches registerTool.
 const typebox = {
   Type: {
-    Object: (properties: Record<string, any>) => ({ type: "object", properties, required: Object.keys(properties) }),
+    Object: (properties: Record<string, any>) => {
+      const required = Object.keys(properties).filter((k) => !properties[k]["~optional"]);
+      return { type: "object", properties, ...(required.length ? { required } : {}) };
+    },
     String: (opts: any = {}) => ({ type: "string", ...opts }),
+    Optional: (schema: any) => ({ ...schema, "~optional": true }),
   },
 };
 
@@ -24,23 +30,52 @@ function capture() {
 }
 
 const byName = (tools: any[], name: string) => tools.find((t) => t.name === name);
+const ALL_TOOLS = ["preview_click", "preview_inspect", "preview_open", "preview_screenshot", "preview_type"];
 
 describe("preview_extension (mock pi)", () => {
-  test("registers preview_open (path param) and preview_screenshot, both read-tier", () => {
+  test("typebox mode: registers ALL FIVE preview tools, every one read-tier, preview_open requires path", () => {
     const { pi, tools } = capture();
     previewExtension(pi);
-    expect(tools.map((t) => t.name).sort()).toEqual(["preview_open", "preview_screenshot"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(ALL_TOOLS);
     const open = byName(tools, "preview_open");
     expect(open.parameters.required).toContain("path");
     expect(typeof open.execute).toBe("function");
-    expect(open.approval).toBe("read");            // opening a preview never trips the exec gate
-    expect(byName(tools, "preview_screenshot").approval).toBe("read");
+    for (const t of tools) expect(t.approval).toBe("read"); // never trips the exec gate
   });
 
-  test("never throws — and registers nothing — when the typebox shim is absent", () => {
+  // THE proven bug: a shim whose Type lacks Optional threw "T.Optional is not a function" while registering
+  // preview_inspect - swallowed by the outer catch, silently dropping tools. Now a malformed shim routes to
+  // literal mode and all five still register.
+  test("literal mode: a typebox shim MISSING Optional no longer drops the tools - all five register", () => {
+    const tools: any[] = [];
+    const broken = { Type: { Object: typebox.Type.Object, String: typebox.Type.String } }; // no Optional
+    expect(() => previewExtension({ registerTool: (t: any) => tools.push(t), typebox: broken })).not.toThrow();
+    expect(tools.map((t) => t.name).sort()).toEqual(ALL_TOOLS);
+  });
+
+  test("literal mode: absent typebox shim registers all five with a registrable JSON-Schema shape", () => {
     const tools: any[] = [];
     expect(() => previewExtension({ registerTool: (t: any) => tools.push(t) })).not.toThrow();
-    expect(tools).toHaveLength(0); // no TSchema authoring → silent no-op, omp launch unaffected
+    expect(tools.map((t) => t.name).sort()).toEqual(ALL_TOOLS);
+    for (const t of tools) {
+      // What omp's rpc-mode requires of a tool schema: a non-array "JSON Schema object".
+      expect(typeof t.parameters).toBe("object");
+      expect(Array.isArray(t.parameters)).toBe(false);
+      expect(t.parameters.type).toBe("object");
+      expect(typeof t.parameters.properties).toBe("object");
+    }
+    // Structurally identical to what TypeBox emits: required props listed, optional props simply omitted.
+    const open = byName(tools, "preview_open");
+    expect(open.parameters).toEqual({
+      type: "object",
+      properties: { path: { type: "string", description: expect.stringContaining(".html/.svg") } },
+      required: ["path"],
+    });
+    const inspect = byName(tools, "preview_inspect");
+    expect(Object.keys(inspect.parameters.properties).sort()).toEqual(["selector", "what"]);
+    expect(inspect.parameters.required).toBeUndefined(); // both optional -> empty required dropped entirely
+    expect(byName(tools, "preview_type").parameters.required).toEqual(["selector", "text"]);
+    expect(byName(tools, "preview_screenshot").parameters).toEqual({ type: "object", properties: {} });
   });
 
   test("execute accepts a local .html/.svg path (no error)", async () => {
@@ -49,6 +84,17 @@ describe("preview_extension (mock pi)", () => {
     const r = await tools[0].execute("id", { path: "C:/Users/n/game.html" });
     expect(r.isError).toBeFalsy();
     expect(r.content[0].text).toContain("game.html");
+  });
+
+  test("execute accepts a QUOTED or padded path (agents sometimes wrap paths in quotes)", async () => {
+    const { pi, tools } = capture();
+    previewExtension(pi);
+    const open = byName(tools, "preview_open");
+    const dq = await open.execute("id", { path: '"C:/Users/x/OneDrive/Apps AI Vibe/app.html"' });
+    expect(dq.isError).toBeFalsy();
+    expect(dq.content[0].text).toContain("app.html");
+    const sq = await open.execute("id", { path: " 'C:\\Users\\n\\game.svg' " });
+    expect(sq.isError).toBeFalsy();
   });
 
   test("execute rejects a non-local or non-previewable path (isError)", async () => {
@@ -66,6 +112,20 @@ describe("preview_extension (mock pi)", () => {
   });
   test("never throws — a registerTool that rejects the schema is swallowed", () => {
     expect(() => previewExtension({ registerTool: () => { throw new Error("schema rejected"); } })).not.toThrow();
+  });
+});
+
+describe("normalizeToolPath (quoted/padded agent paths)", () => {
+  test("trims and strips matching surrounding quotes, even nested pairs", () => {
+    expect(normalizeToolPath('  "C:/x/app.html"  ')).toBe("C:/x/app.html");
+    expect(normalizeToolPath("'/home/n/app.html'")).toBe("/home/n/app.html");
+    expect(normalizeToolPath("\"'C:/x/a.html'\"")).toBe("C:/x/a.html");
+  });
+  test("leaves unquoted / mismatched-quote paths alone; null-safe", () => {
+    expect(normalizeToolPath("C:/x/app.html")).toBe("C:/x/app.html");
+    expect(normalizeToolPath('"C:/x/app.html')).toBe('"C:/x/app.html');
+    expect(normalizeToolPath(null)).toBe("");
+    expect(normalizeToolPath(undefined)).toBe("");
   });
 });
 

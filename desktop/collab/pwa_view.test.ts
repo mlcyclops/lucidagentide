@@ -8,7 +8,7 @@
 // (the load-bearing safety property — the phone must never turn host/echoed content into markup).
 
 import { describe, expect, it } from "bun:test";
-import { foldEvent, renderItem, renderTranscript, renderHeader, statusLabel, escapeHtml, thinkingGist, type ViewItem } from "./pwa_view.ts";
+import { foldEvent, renderItem, renderTranscript, renderHeader, renderLaneCard, renderProcessRow, statusLabel, escapeHtml, thinkingGist, type ViewItem } from "./pwa_view.ts";
 import type { ChatEvent } from "../renderer/chat_events.ts";
 import type { GuestView } from "./guest.ts";
 
@@ -150,5 +150,79 @@ describe("pwa_view: status label", () => {
     expect(statusLabel({ ...base, phase: "live", readOnly: false }).text).toContain("drive");
     expect(statusLabel({ ...base, phase: "live", readOnly: false }).tone).toBe("live");
     expect(statusLabel({ ...base, phase: "ended", note: "host ended the session" })).toEqual({ text: "host ended the session", tone: "ended" });
+  });
+});
+
+// ── P-PWA-FLEET.1: fleet lanes + processes (replace-in-place fold + escaped cards) ──────────────────────
+
+const LANE = { id: "lane-1", name: "worker-a", status: "working", cwd: "project-alpha", turns: 3, lastActivityAt: 111 };
+
+describe("pwa_view: fleet-status / process-list fold (replace-in-place)", () => {
+  it("a fleet-status REPLACES the prior lanes item in place - never one item per poll, never a split stream", () => {
+    let items = fold([{ type: "token", text: "hi" }, { type: "fleet-status", lanes: [LANE] }]);
+    // the FIRST insert lands BEFORE the trailing live stream, so the next delta keeps coalescing
+    const at = items.findIndex((i) => i.kind === "fleet-lanes");
+    expect(at).toBe(0);
+    items = foldEvent(items, { type: "token", text: "!" });
+    items = foldEvent(items, { type: "fleet-status", lanes: [{ ...LANE, status: "done", turns: 4 }] });
+    items = foldEvent(items, { type: "fleet-status", lanes: [{ ...LANE, status: "stopped", turns: 4 }] });
+    const lanes = items.filter((i) => i.kind === "fleet-lanes");
+    expect(lanes).toHaveLength(1); // only the LATEST snapshot survives
+    expect(items.findIndex((i) => i.kind === "fleet-lanes")).toBe(at); // stable position across polls
+    expect(lanes[0]).toEqual({ kind: "fleet-lanes", lanes: [{ ...LANE, status: "stopped", turns: 4 }] });
+    expect(items.filter((i) => i.kind === "answer")).toEqual([{ kind: "answer", text: "hi!", streaming: true }]); // ONE unbroken bubble
+  });
+
+  it("a process-list folds the same way", () => {
+    const p1 = { id: "master", kind: "master-turn" as const, label: "Master session", status: "working", startedAt: 1, lastActivityAt: 2, detail: "streaming" };
+    let items = fold([{ type: "process-list", processes: [p1] }, { type: "token", text: "x" }]);
+    items = foldEvent(items, { type: "process-list", processes: [{ ...p1, status: "idle" }] });
+    const procs = items.filter((i) => i.kind === "processes");
+    expect(procs).toHaveLength(1);
+    expect(items.findIndex((i) => i.kind === "processes")).toBe(0); // replaced in place, still ahead of the token
+    expect(procs[0]).toEqual({ kind: "processes", processes: [{ ...p1, status: "idle" }] });
+  });
+});
+
+describe("pwa_view: fleet lane cards + process rows", () => {
+  it("escapes hostile lane names, ids, cwd, and approval text (host-authored, never markup)", () => {
+    const hostile = `<img src=x onerror=alert(1)>`;
+    const html = renderLaneCard({ id: `"?><script>a</script>`, name: hostile, status: "working", cwd: hostile, turns: 1, lastActivityAt: 0, pendingApproval: { summary: hostile, kind: hostile } });
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("renders approval buttons ONLY with a pendingApproval", () => {
+    const idle = renderLaneCard(LANE);
+    expect(idle).not.toContain("data-fleet-answer");
+    expect(idle).toContain('data-fleet-act="prompt"');
+    expect(idle).toContain('data-fleet-act="stop"');
+    const pending = renderLaneCard({ ...LANE, status: "needs-approval", pendingApproval: { summary: "run tests", kind: "exec" } });
+    expect(pending).toContain('data-fleet-answer="once"');
+    expect(pending).toContain('data-fleet-answer="session"');
+    expect(pending).toContain('data-fleet-answer="deny"');
+    expect(pending).toContain("run tests");
+  });
+
+  it("shows the lane's cwd BASENAME, turn count, and status dot; renderItem wraps the card list", () => {
+    const html = renderLaneCard({ ...LANE, cwd: "C:\\work\\repos\\proj" });
+    expect(html).toContain(">proj</span>");
+    expect(html).toContain("3 turns");
+    expect(html).toContain('data-status="working"');
+    const wrapped = renderItem({ kind: "fleet-lanes", lanes: [LANE] });
+    expect(wrapped).toContain("fleet-lanes");
+    expect(wrapped).toContain("worker-a");
+  });
+
+  it("escapes process rows and renders kind + label + status", () => {
+    const hostile = `<b onmouseover=x>`;
+    const html = renderProcessRow({ id: "p1", kind: "lane", label: hostile, status: hostile, startedAt: null, lastActivityAt: null, detail: hostile });
+    expect(html).not.toContain("<b ");
+    expect(html).toContain("&lt;b");
+    expect(html).toContain("proc-kind");
+    expect(html).toContain("proc-label");
+    expect(html).toContain("proc-status");
   });
 });

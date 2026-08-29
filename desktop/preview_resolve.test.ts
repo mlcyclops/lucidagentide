@@ -4,11 +4,16 @@
 // desktop/preview_resolve.test.ts — P-PREVIEW.1 (ADR-0096): the fail-safe preview-target resolver.
 
 import { describe, expect, test } from "bun:test";
-import { PREVIEW_ALLOW, PREVIEW_FRAME_CSP, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, previewOpenPath, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+import { PREVIEW_ALLOW, PREVIEW_FRAME_CSP, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, normalizePreviewPath, previewOpenPath, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+import { toFsPath } from "./preview_file.ts";
 
 describe("previewOpenPath (P-PREVIEW.3a, ADR-0096): the agent's preview_open tool call", () => {
   test("a preview_open call → its path", () => {
     expect(previewOpenPath("preview_open", { path: "C:/Users/n/game.html" })).toBe("C:/Users/n/game.html");
+  });
+  test("a QUOTED path (agents sometimes wrap paths in quotes) → unwrapped path", () => {
+    expect(previewOpenPath("preview_open", { path: '"C:/Users/n/game.html"' })).toBe("C:/Users/n/game.html");
+    expect(previewOpenPath("preview_open", { path: " 'C:\\Users\\n\\game.html' " })).toBe("C:\\Users\\n\\game.html");
   });
   test("matches the ACP-rendered call title (custom tool name lands in the title, not kind)", () => {
     // omp maps a custom tool's `kind` to "other" and renders the call title as `"preview_open: <path>"`,
@@ -95,6 +100,10 @@ describe("previewablePath (P-PREVIEW.2, ADR-0096): auto-surface a written app", 
     expect(previewablePath("edit", { file_path: "/home/n/app.htm" })).toBe("/home/n/app.htm");
     expect(previewablePath("Write", { filename: "diagram.svg" })).toBe("diagram.svg");
   });
+  test("a QUOTED path is unwrapped before the extension check", () => {
+    expect(previewablePath("write", { path: '"C:\\Users\\n\\game.html"' })).toBe("C:\\Users\\n\\game.html");
+    expect(previewablePath("edit", { file_path: "'/home/n/app.htm'" })).toBe("/home/n/app.htm");
+  });
   test("a write of a NON-previewable file → null (only browser docs auto-surface)", () => {
     expect(previewablePath("write", { path: "src/index.ts" })).toBeNull();
     expect(previewablePath("edit", { path: "notes.md" })).toBeNull();
@@ -111,9 +120,25 @@ describe("previewablePath (P-PREVIEW.2, ADR-0096): auto-surface a written app", 
   });
 });
 
+describe("normalizePreviewPath (quoted/padded agent paths)", () => {
+  test("trims and strips matching surrounding quote pairs, even nested", () => {
+    expect(normalizePreviewPath('  "C:/x/app.html"  ')).toBe("C:/x/app.html");
+    expect(normalizePreviewPath("'/home/n/app.html'")).toBe("/home/n/app.html");
+    expect(normalizePreviewPath("\"'C:/x/a.html'\"")).toBe("C:/x/a.html");
+  });
+  test("leaves unquoted / mismatched-quote paths alone; null-safe", () => {
+    expect(normalizePreviewPath("C:/x/app.html")).toBe("C:/x/app.html");
+    expect(normalizePreviewPath('"C:/x/app.html')).toBe('"C:/x/app.html');
+    expect(normalizePreviewPath(null)).toBe("");
+    expect(normalizePreviewPath(undefined)).toBe("");
+  });
+});
+
 describe("toFileUrl", () => {
-  test("leaves an existing file:// URL alone", () => {
+  test("leaves an existing file:// URL alone (only literal spaces get encoded, %20 never double-encodes)", () => {
     expect(toFileUrl("file:///C:/Users/n/game.html")).toBe("file:///C:/Users/n/game.html");
+    expect(toFileUrl("file:///C:/Users/n/My Docs/game.html")).toBe("file:///C:/Users/n/My%20Docs/game.html");
+    expect(toFileUrl("file:///C:/Users/n/My%20Docs/game.html")).toBe("file:///C:/Users/n/My%20Docs/game.html");
   });
   test("Windows drive path → file:/// with forward slashes", () => {
     expect(toFileUrl("C:\\Users\\n\\game.html")).toBe("file:///C:/Users/n/game.html");
@@ -122,14 +147,50 @@ describe("toFileUrl", () => {
   test("POSIX absolute path → file://", () => {
     expect(toFileUrl("/home/n/game.html")).toBe("file:///home/n/game.html");
   });
+  test("percent-encodes spaces per segment (OneDrive-style dirs used to produce broken URLs)", () => {
+    expect(toFileUrl("C:/Users/x/OneDrive/Apps AI Vibe/app.html")).toBe("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html");
+    expect(toFileUrl("C:\\Users\\x\\OneDrive\\Apps AI Vibe\\app.html")).toBe("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html");
+    expect(toFileUrl("/home/n/my app/x.html")).toBe("file:///home/n/my%20app/x.html");
+  });
+  test("the Windows drive segment stays LITERAL (never C%3A, which breaks drive letters)", () => {
+    const u = toFileUrl("C:/Users/x/OneDrive/Apps AI Vibe/app.html");
+    expect(u.startsWith("file:///C:/")).toBe(true);
+    expect(u).not.toContain("%3A");
+  });
+  test("encodes other URL-hostile characters (# would truncate as a fragment, % must survive)", () => {
+    expect(toFileUrl("/home/n/a#b/x.html")).toBe("file:///home/n/a%23b/x.html");
+    expect(toFileUrl("C:/Users/n/100% done/x.html")).toBe("file:///C:/Users/n/100%25%20done/x.html");
+  });
+  test("round-trips through toFsPath (preview_file.ts) back to the original OS path", () => {
+    for (const p of [
+      "C:/Users/x/OneDrive/Apps AI Vibe/app.html",
+      "C:/Users/neorc/OneDrive/Desktop/Apps AI Vibe/10-COVERT AGENT IDE/game.html",
+      "/home/n/my app/x.html",
+      "C:/Users/n/100% done/x.html",
+    ]) {
+      expect(toFsPath(toFileUrl(p))).toBe(p);
+    }
+  });
 });
 
 describe("resolvePreview (fail-safe)", () => {
-  test("a local file is rendered, with a filename label", () => {
+  test("a local file is rendered with a percent-encoded src and a human filename label", () => {
     const r = resolvePreview("C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html");
     expect(r.kind).toBe("local");
-    expect(r.src).toBe("file:///C:/Users/neorc/Documents/My Music/hormuz-minesweeper.html");
-    expect(r.label).toBe("hormuz-minesweeper.html");
+    expect(r.src).toBe("file:///C:/Users/neorc/Documents/My%20Music/hormuz-minesweeper.html");
+    expect(r.label).toBe("hormuz-minesweeper.html"); // label stays human-readable (no %20)
+  });
+  test("an OneDrive-style path with spaces resolves to a loadable, encoded src", () => {
+    const r = resolvePreview("C:/Users/x/OneDrive/Apps AI Vibe/app.html");
+    expect(r.kind).toBe("local");
+    expect(r.src).toBe("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html");
+    expect(r.src).not.toContain("%3A"); // drive colon stays literal
+  });
+  test("a QUOTED local path is unwrapped, then rendered", () => {
+    const r = resolvePreview('"C:\\Users\\n\\game.html"');
+    expect(r.kind).toBe("local");
+    expect(r.src).toBe("file:///C:/Users/n/game.html");
+    expect(r.label).toBe("game.html");
   });
   test("a file:// URL is local and keeps its src", () => {
     const r = resolvePreview("file:///home/n/game.html");

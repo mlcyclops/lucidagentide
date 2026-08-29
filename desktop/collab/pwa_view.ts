@@ -13,10 +13,11 @@
 // before it becomes HTML. The frames are E2E from the host, but the host's session can echo untrusted content,
 // so the phone treats all of it as text, never markup.
 
-import type { ChatEvent } from "../renderer/chat_events.ts";
+import type { ChatEvent, FleetLaneStatus } from "../renderer/chat_events.ts";
 import { toolChip } from "../renderer/answer_chips.ts"; // P-REMOTE.9: reuse the desktop's +/- diffstat convention
 import type { CollabSessionHeader, CollabTranscriptTurn } from "./frames.ts";
 import type { GuestPhase, GuestView } from "./guest.ts";
+import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (type-only)
 
 /** Escape the five HTML-significant characters. The only text→markup boundary in the PWA. */
 export function escapeHtml(s: string): string {
@@ -36,6 +37,11 @@ export type ViewItem =
   // P-PREVIEW-PWA.1: a preview snapshot the host sent. `image` is a data URL, hydrated as an <img> property by
   // the PWA (never inlined into the transcript HTML); `id` is stable across re-renders for that hydration.
   | { kind: "preview"; image: string; label?: string; id: string }
+  // P-PWA-FLEET.1: the LATEST fleet + process snapshots. REPLACE-in-place fold semantics: at most ONE of
+  // each ever exists in the list (a poll updates it in position, never appends), so the transcript cannot
+  // fill up with stale status blocks.
+  | { kind: "fleet-lanes"; lanes: FleetLaneStatus[] }
+  | { kind: "processes"; processes: ProcessView[] }
   | { kind: "note"; text: string };
 
 /** Fold one host ChatEvent into the item list (PURE — returns a new list). Token/thinking deltas coalesce
@@ -88,10 +94,29 @@ export function foldEvent(items: ViewItem[], e: ChatEvent): ViewItem[] {
       out.push({ kind: "preview", image: e.image, ...(e.label ? { label: e.label } : {}), id: `shot-${n}` });
       return out;
     }
+    // P-PWA-FLEET.1: fleet/process snapshots REPLACE the prior one in place (stable position, never one
+    // item per poll) - the transcript keeps only the LATEST of each. A FIRST insert lands BEFORE a
+    // trailing live stream (streaming answer / thinking), so the next token delta still coalesces into
+    // its bubble instead of starting a new one every broadcast tick.
+    case "fleet-status":
+      return upsertSnapshot(out, "fleet-lanes", { kind: "fleet-lanes", lanes: e.lanes });
+    case "process-list":
+      return upsertSnapshot(out, "processes", { kind: "processes", processes: e.processes });
     // Desktop-only / non-viewer events (preview, design, goal, usage, slow, …) are ignored on the phone.
     default:
       return out;
   }
+}
+
+/** Replace-in-place upsert for the fleet/process snapshot items (at most ONE of `kind` ever exists).
+ *  A first insert slips in BEFORE a trailing live stream so token/thinking deltas keep coalescing. */
+function upsertSnapshot(out: ViewItem[], kind: "fleet-lanes" | "processes", item: ViewItem): ViewItem[] {
+  const i = out.findIndex((it) => it.kind === kind);
+  if (i !== -1) { out[i] = item; return out; }
+  const last = out[out.length - 1];
+  if (last && ((last.kind === "answer" && last.streaming) || last.kind === "thinking")) out.splice(out.length - 1, 0, item);
+  else out.push(item);
+  return out;
 }
 
 const SEV_CLASS: Record<string, string> = { high: "sev-high", medium: "sev-med", low: "sev-low" };
@@ -102,6 +127,46 @@ export function thinkingGist(text: string, max = 64): string {
   const lines = text.split(/\n+/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
   const last = lines[lines.length - 1] ?? "";
   return last.length > max ? `${last.slice(0, max - 1).trimEnd()}…` : last;
+}
+
+/** The last path segment of a lane cwd. The broadcaster already sends a basename (the "no file paths"
+ *  wire invariant); this is belt-and-braces for any slash that slips through. Pure. */
+export function laneCwdName(cwd: string): string {
+  const trimmed = cwd.replace(/[\\/]+$/, "");
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || trimmed;
+}
+
+/** P-PWA-FLEET.1: one fleet lane card (all host strings escaped, including data attributes). Approval
+ *  buttons render ONLY with a pendingApproval; the Prompt/Stop row is always in the markup - the PWA hides
+ *  it for view guests (guest.ts refuses their sends anyway, and the host re-refuses, fail-closed).
+ *  Invariant #11: every flex row is spans-with-one-text-child; labels get nowrap+ellipsis in the CSS. */
+export function renderLaneCard(lane: FleetLaneStatus): string {
+  const id = escapeHtml(lane.id);
+  const pend = lane.pendingApproval
+    ? `<div class="lane-pend"><span class="lane-pend-sum">${escapeHtml(lane.pendingApproval.kind)}: ${escapeHtml(lane.pendingApproval.summary)}</span></div>` +
+      `<div class="lane-approve">` +
+      `<button type="button" class="lane-btn allow" data-lane="${id}" data-fleet-answer="once">Allow once</button>` +
+      `<button type="button" class="lane-btn allow" data-lane="${id}" data-fleet-answer="session">Allow session</button>` +
+      `<button type="button" class="lane-btn deny" data-lane="${id}" data-fleet-answer="deny">Deny</button>` +
+      `</div>`
+    : "";
+  return `<div class="lane-card" data-lane="${id}">` +
+    `<div class="lane-row"><span class="lane-dot" data-status="${escapeHtml(lane.status)}"></span><span class="lane-name">${escapeHtml(lane.name)}</span><span class="lane-status">${escapeHtml(lane.status)}</span></div>` +
+    `<div class="lane-meta"><span class="lane-cwd">${escapeHtml(laneCwdName(lane.cwd))}</span><span class="lane-turns">${lane.turns} turn${lane.turns === 1 ? "" : "s"}</span></div>` +
+    pend +
+    `<div class="lane-act"><button type="button" class="lane-btn" data-lane="${id}" data-fleet-act="prompt">Prompt</button><button type="button" class="lane-btn" data-lane="${id}" data-fleet-act="stop">Stop</button></div>` +
+    `</div>`;
+}
+
+/** P-PWA-FLEET.1: one process row (kind badge + label + status; the detail rides as a title tooltip).
+ *  All host strings escaped. Invariant #11: three label spans, each a single text child. */
+export function renderProcessRow(p: ProcessView): string {
+  return `<div class="proc-row" title="${escapeHtml(p.detail)}">` +
+    `<span class="proc-kind">${escapeHtml(p.kind)}</span>` +
+    `<span class="proc-label">${escapeHtml(p.label)}</span>` +
+    `<span class="proc-status">${escapeHtml(p.status)}</span>` +
+    `</div>`;
 }
 
 /** Render one view item to a mobile HTML fragment (all host text escaped).
@@ -142,6 +207,12 @@ export function renderItem(item: ViewItem, i = 0, activeThinking = false): strin
       const cap = item.label ? `<div class="cu-shot-cap">${escapeHtml(item.label)}</div>` : "";
       return `<div class="msg shot"><button class="cu-shot-btn" type="button" data-shot="${escapeHtml(item.id)}" aria-label="Open preview snapshot"><img class="cu-shot-img" alt="preview snapshot" /></button>${cap}</div>`;
     }
+    case "fleet-lanes":
+      // P-PWA-FLEET.1: the fleet snapshot. The PWA renders this item into its FLEET section (filtered out
+      // of the transcript flow); inline rendering here keeps the item printable + fully escape-tested.
+      return `<div class="fleet-lanes">${item.lanes.map(renderLaneCard).join("")}</div>`;
+    case "processes":
+      return `<div class="proc-list">${item.processes.map(renderProcessRow).join("")}</div>`;
     case "note":
       return `<div class="msg note">${escapeHtml(item.text)}</div>`;
   }
