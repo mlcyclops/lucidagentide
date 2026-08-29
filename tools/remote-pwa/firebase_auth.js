@@ -1,10 +1,10 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 //
-// tools/remote-pwa/firebase_auth.js — P-REMOTE.3 (ADR-0226/0227): the Firebase Auth bridge for the phone PWA.
+// tools/remote-pwa/firebase_auth.js - P-REMOTE.3 (ADR-0226/0227): the Firebase Auth bridge for the phone PWA.
 //
 // Loaded as an ES module by index.html DIRECTLY from Google's CDN, so the Firebase SDK never enters app.js's
-// bundle (and an air-gapped desktop build never ships it — the PWA is inherently online). It exchanges a
+// bundle (and an air-gapped desktop build never ships it - the PWA is inherently online). It exchanges a
 // Google sign-in for a FIREBASE ID token (iss=securetoken.google.com/<project>, the exact token the relay
 // verifies in P-REMOTE.1) and publishes a tiny, typed surface on window.__lucidAuth that app.ts consumes.
 // The Firebase web config is PUBLIC by design (it identifies the project; it is not a secret); it comes from
@@ -54,7 +54,7 @@ if (!cfg) {
   try { sessionStorage.removeItem(RECONNECT_KEY); } catch { /* storage unavailable */ }
 
   window.__lucidAuth = {
-    // A FRESH ID token per call (Firebase refreshes it under the hood near expiry) — the relay re-verifies on
+    // A FRESH ID token per call (Firebase refreshes it under the hood near expiry) - the relay re-verifies on
     // every reconnect, so the hourly Cloud-Run cap just re-presents a valid token. Pass force=true after a
     // checkout so the webhook-set `premium` custom claim is pulled immediately (P-REMOTE.6), not up to 1h later.
     async getIdToken(force) { return auth.currentUser ? await auth.currentUser.getIdToken(!!force) : null; },

@@ -1,9 +1,9 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// tools/remote-pwa/app.ts — P-REMOTE.3 (ADR-0226/0227): the phone guest PWA entry (Firebase Hosting).
+// tools/remote-pwa/app.ts - P-REMOTE.3 (ADR-0226/0227): the phone guest PWA entry (Firebase Hosting).
 //
-// See a running desktop LUCID from an iPhone (Chrome/Safari, WebKit) and — with a full link — drive it. This
+// See a running desktop LUCID from an iPhone (Chrome/Safari, WebKit) and - with a full link - drive it. This
 // is a GUEST built from the SAME desktop/collab modules the desktop uses (CollabSocket + CollabGuest + crypto
 // + link), so the E2E protocol is single-sourced, never reimplemented. The room key rides ONLY in the URL
 // fragment (never sent to any server); the relay is the hosted Cloud Run rendezvous, gated on a Google
@@ -26,7 +26,7 @@ import { decideSttMode, type SttCapability, type SttDecision } from "../../deskt
 import { installSttLanguage, probeSttCapability, startDictation } from "./device_stt.ts"; // P-REMOTE.14: the typed Web Speech wrapper
 import type { SttSource } from "../../desktop/collab/frames.ts";
 
-/** The auth bridge firebase_auth.js publishes on window — a Firebase ID token for the gated relay. */
+/** The auth bridge firebase_auth.js publishes on window - a Firebase ID token for the gated relay. */
 interface LucidAuth {
   /** A fresh Firebase ID token; pass force=true after checkout to pull the webhook-set claim now (P-REMOTE.6). */
   getIdToken(force?: boolean): Promise<string | null>;
@@ -100,7 +100,7 @@ function reconnectFlow(auth: LucidAuth): void {
       const res = await resolveReconnect(body, pinInput.value.trim() || null, Date.now());
       switch (res.status) {
         case "locked": pinInput.hidden = false; setStatus("These codes are PIN-protected. Enter the PIN, then tap again."); pinInput.focus(); return;
-        case "bad-pin": pinInput.hidden = false; setStatus("Wrong PIN \u2014 check it and try again."); return;
+        case "bad-pin": pinInput.hidden = false; setStatus("Wrong PIN - check it and try again."); return;
         case "expired": setStatus("Your saved reconnect codes have expired. Get a fresh invite from the desktop."); return;
         case "empty": setStatus("That file has no usable reconnect code yet."); return;
         case "ok": {
@@ -149,7 +149,7 @@ function main(): void {
   if (!cfg?.relayWsBase) return fatal("This build has no relay configured (config.js is missing __LUCID_REMOTE__.relayWsBase).");
 
   // The invite fragment carries roomId + the E2E secret; the relay endpoint comes from deploy config (never
-  // the link — the phone only ever connects to its own configured, allowlisted rendezvous).
+  // the link - the phone only ever connects to its own configured, allowlisted rendezvous).
   const frag = location.hash.replace(/^#/, "").trim();
   if (!frag) { reconnectFlow(auth); return; } // P-REMOTE.10c: no room in the URL -> offer an out-of-band reconnect
   let parsed: ReturnType<typeof parseShareLink>;

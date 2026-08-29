@@ -15,8 +15,8 @@ describe("version is single-sourced", () => {
     expect(pkg.version).toBe(APP_VERSION);
   });
 
-  test("app version is v1.13.2", () => {
-    expect(APP_VERSION).toBe("1.13.2");
+  test("app version is v1.14.0", () => {
+    expect(APP_VERSION).toBe("1.14.0");
   });
 });
 
@@ -25,7 +25,7 @@ describe("aboutHtml", () => {
 
   test("shows the dynamic version with a v prefix", () => {
     expect(html).toContain(`v${APP_VERSION}`);
-    expect(html).toContain("v1.13.2");
+    expect(html).toContain("v1.14.0");
   });
 
   test("carries the product + company identity", () => {
@@ -52,8 +52,8 @@ describe("aboutHtml", () => {
   });
 
   test("links the product website, opening safely in the OS browser", () => {
-    expect(html).toContain('href="https://lucid-agent.web.app/"');
-    expect(html).toContain("lucid-agent.web.app");
+    expect(html).toContain('href="https://lucid-agents.com/"');
+    expect(html).toContain("lucid-agents.com");
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"'); // no window.opener / referrer leak
   });

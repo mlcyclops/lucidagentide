@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 //
-// tools/remote-pwa/sw.js — P-REMOTE.3 (ADR-0226/0227): the PWA service worker (installability + offline shell).
+// tools/remote-pwa/sw.js - P-REMOTE.3 (ADR-0226/0227): the PWA service worker (installability + offline shell).
 //
 // Caches ONLY the static app shell so "Add to Home Screen" works and a cold launch paints instantly. It NEVER
 // caches session data: the relay WebSocket, Firebase auth, and Google's CDN are always network (a stale token

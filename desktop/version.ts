@@ -309,4 +309,21 @@
 //            (session/load or transcript replay, approvals re-asked), diff chips + pasted-image
 //            thumbnails + staged prompt queues in lane cards, the durable lane-session ledger, and the
 //            reviewable Timeline dock across every workspace (P-FLEET.L3/.L4/.L5, ADR-0274..0277).
-export const APP_VERSION = "1.13.2";
+// v1.14.0 = the control + reach arc: fleet approval SCOPES (Allow / Allow-for-session / Deny) and a
+//            full auto-mode behind an explicit risk acceptance; MID-TURN interjection (the security
+//            gate's tool-result seam carries a typed note to the model at its next tool boundary),
+//            stacked hold-or-push prompt queues, check-in cards, and a running-processes popover; an
+//            agent-controlled VISIBLE browser window (open / screenshot / scroll / click / type / drag /
+//            keys, egress-gated, breathing glow, close-X kill switch); per-lane Preview tabs plus auto
+//            send-to-phone; workspace INIT offers that scaffold the .agents framework; the phone PWA
+//            gains fleet control (name filter, prompt / stop / approve) and OPTIONAL device-native STT
+//            that is refused unless the audio can be PROVEN to stay on the device; the Timeline hides
+//            its own self-test throwaways and becomes a two-pane inspector; ACP child stderr persists
+//            to ~/.omp/lucid-acp.log and a code-1 exit quotes its last line (the "no response from the
+//            provider" support ticket); and on Windows every port-keyed instance now shares ONE
+//            safeStorage os_crypt key, so a vault credential written by one instance is readable by the
+//            next and the Local Provider stops vanishing from the picker; and the site + About link move
+//            to the canonical lucid-agents.com (the PWA and sign-in origin stay on lucid-agent.web.app,
+//            where the OAuth authDomain is registered) (P-FLEET.L6, P-WSSETUP,
+//            P-INTERJECT.1, P-BROWSER.1..3, P-REMOTE.14, P-TL.2/.3, ADR-0278).
+export const APP_VERSION = "1.14.0";
