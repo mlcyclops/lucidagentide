@@ -118,9 +118,14 @@ export function ownerProbeSpec(platform: string, port: number): { cmd: string; a
     // name/start/path; ConvertTo-Json gives us a shape parseOwnerProbe can parse without locale
     // guessing. -NoProfile keeps user profiles from polluting stdout. SilentlyContinue everywhere:
     // this probe must never throw a dialog of its own - empty output just means "attribution failed".
+    // Win32_Process is joined in for CommandLine, which Get-Process does NOT expose (its Path is the
+    // image path only). The ARGV is the diagnostic bit: the field incident was identified by its
+    // command line (`bun server.ts` named the fork's dev server), where a bare `bun.exe` says nothing.
     const script =
       `$c = Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -First 1; ` +
-      `if ($c) { Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, StartTime, Path | ConvertTo-Json }`;
+      `if ($c) { $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; ` +
+      `$w = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue; ` +
+      `if ($p) { [pscustomobject]@{ Id = $p.Id; ProcessName = $p.ProcessName; StartTime = $p.StartTime; Path = $p.Path; CommandLine = $w.CommandLine } | ConvertTo-Json } }`;
     return { cmd: "powershell.exe", args: ["-NoProfile", "-Command", script] };
   }
   if (platform === "darwin" || platform === "linux") {
@@ -177,8 +182,13 @@ function parseWindowsProbe(text: string): SquatterInfo | null {
   if (pid === null) return null;
   const name = "ProcessName" in record && typeof record.ProcessName === "string" ? record.ProcessName : null;
   const startedAt = "StartTime" in record ? normalizeWindowsTimestamp(record.StartTime) : null;
-  const command = "Path" in record && typeof record.Path === "string" ? record.Path : null;
-  return { pid, name, startedAt, command };
+  // Prefer the full CommandLine (argv, the diagnostic bit) and fall back to the image Path, so an
+  // older probe shape or a process whose CIM record is unreadable still attributes SOMETHING.
+  const cmdLine = "CommandLine" in record && typeof record.CommandLine === "string" && record.CommandLine.length > 0
+    ? record.CommandLine
+    : null;
+  const imagePath = "Path" in record && typeof record.Path === "string" && record.Path.length > 0 ? record.Path : null;
+  return { pid, name, startedAt, command: cmdLine ?? imagePath };
 }
 
 /** One `ps -o pid=,lstart=,command=` line: pid, then EXACTLY five lstart tokens (weekday, month,

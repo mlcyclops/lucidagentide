@@ -20953,9 +20953,23 @@ compliant echo, incident-block forensics incl. the attribution-failed branch, bo
 desktop `tsc --noEmit` clean; full harness suite 4324 pass with exactly the pre-existing 11
 environmental failures (fs_browse 5, symbol_graph 4, lucid_acp assets 2 - byte-identical list to the
 pre-change baseline run); sidecar 57 pass; and the REAL engine booted with
-`LUCID_ENGINE_NONCE=fable-test-nonce-42` answered `/api/health` with that exact nonce. NOT exercised
-here: the Electron error dialog itself on a real foreign boot (needs a GUI launch against a live
-squatter on the default port) - the user's on-device ritual.
+`LUCID_ENGINE_NONCE=fable-test-nonce-42` answered `/api/health` with that exact nonce.
+
+ON-DEVICE, the full path (2026-08-30, Windows 10, dev build): a deliberate squatter answering
+`/api/health` with `{ok:true}` and no nonce was put on 5319, then the dev app was launched pinned to
+5319. Result, 2.8s from launch to a complete report: our own engine died honestly
+(`Failed to start server. Is port 5319 in use?` at dev.ts:1405), NO window was ever created, the
+incident block landed in engine.log, and the dialog appeared titled "Another program is using LUCID's
+port" naming the port, both remediations, and the squatter (bun, PID 20552, started 22:02:02Z).
+"Copy report and quit" put the block on the clipboard verbatim (confirmed by paste-back).
+
+One delta found BY that on-device run and fixed immediately: the win32 probe reported only the image
+path (`bun.exe`), because `Get-Process` does not expose argv. It now joins `Win32_Process` for
+`CommandLine` (falling back to `Path`), so the block prints the full command. That is the field that
+identified the fork's dev server in the original Mac incident, so a bare exe path was not good enough.
+Re-verified live: `Command: "...\bun.exe" ...\lucid-squat-5319.ts`. Two tests cover the preference and
+the fallback (22 pass total). Two prior port-guard incidents in this session's own logs are the
+regression fixtures if this ever needs re-proving.
 
 ### Links
 

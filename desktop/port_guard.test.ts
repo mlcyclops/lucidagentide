@@ -110,6 +110,10 @@ describe("ownerProbeSpec", () => {
     expect(script).toContain("-LocalPort 5319");
     expect(script).toContain("Get-Process");
     expect(script).toContain("ConvertTo-Json");
+    // The argv is what identifies a squatter (`bun server.ts` named the fork's dev server in the
+    // field incident); Get-Process cannot supply it, so Win32_Process must be in the join.
+    expect(script).toContain("Win32_Process");
+    expect(script).toContain("CommandLine");
   });
   test.each(["darwin", "linux"])("%s is an sh -c lsof-to-ps pipeline", (platform) => {
     const spec = ownerProbeSpec(platform, 5320);
@@ -148,6 +152,22 @@ describe("parseOwnerProbe", () => {
       startedAt: "2026-08-27T09:14:02.0000000-07:00",
       command: "C:\\Users\\dev\\.bun\\bin\\bun.exe",
     });
+  });
+  test("win32 prefers the full CommandLine over the bare image Path (argv identifies the squatter)", () => {
+    const withArgv = JSON.stringify({
+      Id: 20552,
+      ProcessName: "bun",
+      StartTime: "\/Date(1756300000000)\/",
+      Path: "C:\\Users\\dev\\.bun\\bin\\bun.exe",
+      CommandLine: "C:\\Users\\dev\\.bun\\bin\\bun.exe server.ts",
+    });
+    expect(parseOwnerProbe("win32", withArgv)!.command).toBe("C:\\Users\\dev\\.bun\\bin\\bun.exe server.ts");
+  });
+  test("win32 falls back to the image Path when CommandLine is unreadable or empty", () => {
+    const emptyArgv = JSON.stringify({ Id: 1, ProcessName: "bun", StartTime: null, Path: "C:\\bun.exe", CommandLine: "" });
+    const nullArgv = JSON.stringify({ Id: 1, ProcessName: "bun", StartTime: null, Path: "C:\\bun.exe", CommandLine: null });
+    expect(parseOwnerProbe("win32", emptyArgv)!.command).toBe("C:\\bun.exe");
+    expect(parseOwnerProbe("win32", nullArgv)!.command).toBe("C:\\bun.exe");
   });
   test("win32 array form takes the first entry and normalizes /Date(ms)/ to ISO", () => {
     const info = parseOwnerProbe("win32", WIN_ARRAY);
