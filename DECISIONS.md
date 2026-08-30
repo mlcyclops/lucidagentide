@@ -19953,6 +19953,185 @@ and `-c`.
 ADR-0295 decision 6 (the same split applied to the Blender runner, with the no-shell test as its
 compensating control), ADR-0157/P-SANDBOX.1 (why argv discipline matters here at all).
 
+## ADR-0297 -- CREATOR-3b: driving a real scene through the deterministic clock
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT, then CORRECTED TWICE by its own on-device pass, which found a real defect and
+then a flaw in the fix's own measurement. See "What the on-device pass found" below. `demo-CREATOR-3` green at
+14 sections / 125 checks (was 13 / 101); `desktop/renderer/capture_driver.test.ts` 27 tests;
+`preview_bridge.test.ts` 5 -> 9; 454 pass across the 11 affected files, 0 fail; `demo-CREATOR-2`,
+`demo-CREATOR-5`, `demo-P-PREVIEW.6b` and `verify-creator-comfy` still green; root and renderer typechecks
+clean, the server program at its documented baseline; license headers clean; renderer bundle 130 modules (was
+127). Every count measured with `--path-ignore-patterns='desktop/release/**'`, per ADR-0295's correction.
+**On-device status: COMPLETE, both halves.** The bridge half was executed under a real headless Chromium
+against the real reference scene, in a real opaque-origin sandboxed iframe served with the real
+`PREVIEW_FRAME_CSP`, through the real driver with real `toDataURL` readback and a real `OffscreenCanvas`
+decode: 60 frames, `driven: true`, 480x270, 0 missing, 0 stuck, 60 distinct fingerprints. The PANEL half was
+then driven through the real UI on a live engine: open the Preview rail, load the scene by path, press
+Capture. First press disabled the button for the duration, unhid the notice with the driven sentence and the
+audit, and toasted "Capture recorded / 60 frames at 30fps, 480x270. Stored as the baseline for this file."
+Second press produced the fix working in situ: a `warn` toast reading "Capture: no verdict / 330 pixel(s)
+differ between two renders of the SAME time here, so a byte compare cannot judge this scene. The capture
+itself is fine.", with the notice carrying the measured reason in full. WITHOUT the fix that second press
+would have read "Capture: not reproducible" and blamed the user's scene for the compositor. Nothing in the
+capture path is now unexercised on this machine; the only unavailable capability is exact regression compare,
+which the platform itself forbids (see below).
+**Increment:** CREATOR-3b, closing the gap ADR-0295 recorded as unbuilt ("driving a user's three.js scene
+through it from the Preview panel is NOT wired"). Requested directly by the user rather than taken off the
+roadmap.
+
+### Context
+
+CREATOR-3 shipped the deterministic clock, the fingerprint, the comparator and the audit, and nothing that
+drove a real scene through them. The pure core could prove its own arithmetic against synthetic fingerprints;
+it could not tell anyone whether a page in the Preview panel actually renders reproducibly. That is the half a
+user can see, so leaving it unbuilt made the feature a claim rather than a capability.
+
+Two facts about this repo shaped the answer. three.js is deliberately NOT a dependency (removed in
+P-MASCOT.2, and the Creator skill states there is no install and no egress for it), so a scene is a
+user-authored document, not a library LUCID drives. And the preview iframe is opaque-origin sandboxed, so the
+renderer cannot touch its DOM at all: everything must cross a `postMessage` boundary that already exists for
+P-PREVIEW.6b's inspect relay.
+
+### Decision
+
+1. **Capture rides the EXISTING bridge.** The responder is added to `PREVIEW_BRIDGE_JS` in
+   `desktop/preview_bridge.ts` and routed ahead of the inspect/action chain, written so P-PREVIEW.6b's pinned
+   routing contract stays a literal substring of the same line. A second channel would have meant a second
+   security surface to review.
+2. **The contract belongs to the SCENE, not to LUCID.** A document defines `window.lucidRenderAt(tMs)`. The
+   bridge calls it behind a `typeof` check and reads the canvas back with `toDataURL` in the SAME synchronous
+   task. LUCID therefore never evaluates scene code: it calls a function the document itself installed, and
+   the file adds no dynamic-code or markup-writing primitive, which `demo_p_preview_6b.ts` enforces by
+   scanning the bridge string.
+3. **DRIVEN versus SAMPLED, labeled on every verdict.** With the hook, the times are LUCID's and a second
+   pass is a real reproducibility result. Without it, the page can only be sampled on its own clock, and the
+   verdict says so and names the hook that would fix it, because two sampled runs agreeing is luck and two
+   disagreeing is not evidence of a change. This is CREATOR-2's vendor-versus-derived discipline applied to
+   time instead of alignment.
+4. **The parent half is a pure-ish driver with injected I/O** (`desktop/renderer/capture_driver.ts`): plan in,
+   verdict out, with `send` and `decode` supplied by the caller, so the whole exchange is unit-tested with no
+   iframe, no canvas and no clock.
+5. **The boundary is untrusted.** The reply arrives as `unknown` and passes a shape gate before any field is
+   read; the bridge's own refusal sentence is passed through verbatim rather than replaced; and ONE malformed,
+   undecodable or oversized frame refuses the WHOLE pass, because a report built from a surviving subset
+   understates its own `missing` count and can read as a clean capture of a shorter animation.
+6. **The caps are pinned equal.** `MAX_CAPTURE_PASS` (driver) and `CAP_MAX_FRAMES` (bridge) are the same
+   number, asserted by a test that greps the bridge string. A driver that asks for more frames than the bridge
+   will ever return would report a phantom missing frame on every capture.
+7. **A baseline is per session and per file, in memory, and only a DRIVEN clean pass earns one.** A baseline
+   that outlived the session would be compared against a scene since edited, which is worse than having none;
+   a sampled baseline would invite a comparison against timings LUCID never controlled.
+8. **A reference scene ships** (`desktop/scripts/capture_scene_example.html`): self-contained, canvas-2D,
+   deterministic by construction, with a deliberately broken variant beside the honest one so a reviewer can
+   watch the compare catch a sub-pixel wobble that looks fine to the eye. The demo asserts the reference
+   honours its own contract, so the teaching material cannot rot into a lie.
+9. **THE PLATFORM IS MEASURED, NOT ASSUMED** (added after the on-device pass, see below). Before judging a
+   baseline the driver asks the page to render one time twice and diffs the readbacks into a `NoiseFloor`. A
+   compare runs only when that floor proves byte-stable; unmeasured is treated as unproven. Otherwise the
+   verdict is `inconclusive`, no regression is claimed in either direction, and `ok` stays true because the
+   scene did nothing wrong. An inconclusive answer is the third honest outcome beside pass and fail.
+
+### What the on-device pass found, and the defect it exposed
+
+The pass ran the real bridge under headless Chromium and immediately failed in a way the headless tests could
+not: two captures of the reference scene at identical planned times DISAGREED. Diagnosis, in order, each step
+ruling out the previous suspect:
+
+1. The same `tMs` rendered twice inside ONE synchronous pass differed, so it was not a between-pass effect and
+   not the scene's live loop interleaving (the capture loop is synchronous, and `lucidRenderAt` paints
+   synchronously).
+2. Four renders of one time all differed, so it was not first-render warmup.
+3. `save`/`restore` were balanced and the only `clip` was properly nested, so it was not leaked canvas state,
+   which had been the leading hypothesis.
+4. A CONTROL in the same browser settled it. Identical drawing code, including a radial-gradient bloom under
+   `lighter` and a `shadowBlur` arc: a fresh DETACHED canvas reproduced byte-identically three times, a reused
+   detached canvas likewise, and an ATTACHED, VISIBLE canvas did NOT, alternating between two bitmaps in a
+   clean 2-cycle. Readback through a detached copy did not help: `drawImage` inherits the source bitmap.
+
+So the scene was never at fault. **Byte equality of a canvas readback is a property of the PLATFORM**, and the
+driver had assumed it: it compared exact fingerprints, so a real panel would have reported a false regression
+on the user's first click, blaming the user's scene for the compositor's rasterization. That is the defect this
+pass existed to find, and it would have shipped.
+
+**The fix (decision 9).** The driver now MEASURES the platform before it judges: it asks for one time twice,
+diffs the two readbacks with `compareFrames`, and records a `NoiseFloor`. A baseline is compared only when the
+floor proves byte-stable. Unmeasured counts as unproven, not as stable. When it cannot be judged the result is
+`inconclusive: true` with no regression verdict at all, the note quotes the measured numbers and points at the
+alternatives, and `ok` is not set false, because the scene did nothing wrong. Verified against the real
+platform afterwards: the floor came back unstable (63 pixels, up to 27 per channel at t=0), no verdict was
+drawn, and the false failure was gone.
+
+**The second correction: the fix's own measurement was too narrow.** With the floor probed at ONE time, the
+tolerance came out as cell delta 0 + 1, and the honest reference scene FAILED its own compare in the real
+panel: "frame 1 differs: 2 of 576 cells moved more than the measured tolerance of 1, up to 3". A single-point
+probe does not bound jitter over a 60-frame pass. So the floor is now sampled at `FLOOR_SAMPLE_POINTS = 3`
+times ACROSS the plan, each duplicated in place, and the worst pair decides. A tolerance has to be measured
+over the same domain the comparison covers.
+
+Worth stating why measuring was the ONLY answer, rather than one of several: detaching was never available.
+`capture()` takes the LARGEST canvas in the document when no selector is given, so it reads an attached,
+visible canvas by construction, which is exactly the case that does not rasterize the same drawing twice. The
+floor is therefore not a workaround for a shortcut and not a concession to a flaky scene; it is the only
+honest verdict the platform leaves available. (Observed while checking this finding against the PWA screenshot
+compositor, which survives for the mirror-image reason: it composites into a DETACHED canvas and re-draws its
+strokes rather than reading the visible one back.)
+
+**Decision 10: a coarse compare, so a jittery platform gets a verdict rather than a shrug.**
+`frameSignature` reduces a frame to a 32x18 luminance grid (576 bytes, so a 60-frame pass costs about 34KB
+rather than 31MB of RGBA, which matters for an edge box), `compareSignatures` and `sameCaptureSignatures`
+compare at an explicit tolerance, and the driver picks: exact on a byte-stable platform, signature at the
+measured tolerance otherwise, inconclusive only when the floor could not be measured at all. Every verdict
+names the method that produced it.
+
+**Verified end to end in the real panel, which is what makes this more than a theory.** Pressing Capture twice
+on the reference scene reports "Capture matches its baseline / Matched by coarse signature at the tolerance
+measured on this machine", tolerance 4. Uncommenting the scene's deliberately nondeterministic renderer and
+re-capturing against the same baseline is CAUGHT: "frame 0 differs: 10 of 576 cells moved more than the
+measured tolerance of 19, up to 33". So the harness now catches the regression it ships an example of.
+
+**A third defect the panel pass exposed:** a capture pressed seconds after a page loads timed out, while the
+same command sent by hand moments later worked. A `postMessage` to a frame whose bridge has not installed its
+listener yet is dropped, and nothing retried it. The panel now pings with the cheapest read there is, up to
+six times, before spending a 60-frame pass, and says "this preview is not answering yet" if it never does.
+
+**The caveat that remains.** The floor cannot distinguish platform jitter from a scene that renders one time
+two ways: both present as "same time, different pixels". A nondeterministic scene therefore inflates its own
+tolerance. The deliberate wobble was still caught comfortably (33 against a tolerance of 19), but a subtler
+instability could hide inside its own floor, and an unusually large measured tolerance is itself evidence
+about the page rather than about LUCID.
+
+**Process note worth keeping.** The headless demo asserted the reference scene's determinism by SEARCHING its
+source for clocks and randomness. That check passed and was structurally incapable of catching any of this,
+because none of it was in the source. A static check can only falsify the hypotheses its author thought of.
+
+### Alternatives rejected
+
+- **Adding three.js and driving `readRenderTargetPixelsAsync`.** ADR-0287 named that API, but taking the
+  dependency back reverses P-MASCOT.2 and buys nothing for a user-authored scene. LUCID captures whatever
+  canvas a page exposes; multi-pass render-target capture stays unbuilt and is now stated as such in the docs.
+- **Injecting a driver into the previewed document.** LUCID does not own that document. A declared hook it
+  opts into is honest; code injected into someone's page is not.
+- **Sampling silently when the hook is absent.** That is the exact lie this increment exists to prevent.
+- **Fingerprinting the PNG bytes instead of decoded pixels.** A browser's encoder is not a contract; decoding
+  first means the fingerprint is over pixels, which is what `compareFrames` and the audit already reason about.
+- **A longer fixed timeout for every inspect query.** `runInspectOnFrame` gained a `timeoutMs` parameter
+  instead: a capture legitimately outlives an inspect, and a fixed 3s clock would abort a valid 60-frame pass
+  and report it as an unresponsive preview.
+
+### Invariants preserved
+
+#2 TypeScript only; #3 fail-closed applied to the capture boundary (a malformed reply judges nothing); #5 the
+reply is untrusted data, shape-gated before it is read; #6 prefix untouched; #11 the new control is a single
+one-line label. The bridge's no-dynamic-code property is unchanged and still enforced by its own demo, which
+caught a forbidden token inside a COMMENT of this very change and was right to.
+
+### See also
+
+ADR-0295 (the increment this closes, and the delta list that named this gap), ADR-0153/P-PREVIEW.6b (the
+bridge and relay this rides), ADR-0287 item 3 (the plan), ADR-0293 (the provenance-labeling discipline reused
+here for time).
+
 ## ADR-0294 -- CREATOR-5: the mixer, and refusing to fix a mix quietly
 
 **Date:** 2026-08-30
@@ -20163,3 +20342,264 @@ tap a word to seek, select a span and drag it, re-render just that span, tune it
    and registers it in the whitelist as an internal-zone entry.
 5. Fail-closed stays fail-closed: a remote worker's bytes are untrusted input, scanned on the way in, and a
    dead scanner blocks.
+
+## ADR-0298 -- P-REMOTE.15: the phone composer is one tidy row, and the disclaimer is a "?" sheet
+
+**Date:** 2026-08-30
+**Status:** Accepted -- implemented.
+
+### Context
+
+On a 390px phone the composer action row had grown to seven controls (attach, hold-to-talk, dictate, Check
+in, Stop, Push now, Queue/Send) plus a two-line 12.5px voice disclaimer underneath it, and Stop rendered
+even when nothing was running. Measured mid-turn, the row overflowed its own width at 360px and 320px. The
+disclaimer was the least readable text in the app while carrying the most important claim in it: that a
+cloud recognizer would hear your voice.
+
+### Decision
+
+1. **One row that never wraps, verified by measurement.** The sizes in the stylesheet ARE the
+   phone-portrait sizes; breakpoints at 374px (tighter gaps) and 344px (the send label drops to its icon,
+   with the words kept in `aria-label`). Measured mid-turn, the widest state, at 320 / 344 / 360 / 375 /
+   390 / 414 CSS px: zero overflow, single line, in the REAL `index.html`, not only in the mockup.
+2. **Same-family controls collapse into menus, not buttons.** Dictate + Check in live under a MORE control;
+   Push now lives under a caret on the send button. A menu control is HIDDEN when its menu would be empty,
+   so neither is ever a dead affordance.
+3. **Send and Queue are ONE button.** They were always the same `PromptFrame` path (the host stages a
+   mid-turn prompt), so the second button was pure duplication. The label and icon flip while a turn runs.
+4. **Stop is icon-only and mid-turn only.** A red square already reads as stop, and an idle composer now
+   carries no control that cannot do anything.
+5. **The long voice disclaimer moves into the "?" sheet**, which is the SAME component as the language-pack
+   and cloud-consent sheets, gaining a third "voice" flavour whose body is built at open time from the live
+   policy decision. Inline text shrinks to a one-line transient status (listening, or it failed). Honesty is
+   not weakened, and rests on four things that all still hold: the cloud consent gate is untouched and still
+   mandatory before any cloud dictation, the "?" turns amber whenever the current path would send audio off
+   the phone, the dictate menu row states the caution at the point of use, and the status line goes amber
+   while a cloud recognizer is listening.
+6. **Menu anchoring is correct by construction, not by tuning.** The left menu hangs off the ROW (a
+   `position: static` wrapper makes `#composer-actions` its containing block) and the right one off its own
+   group, which already ends at the row's right edge. A 240px readable menu therefore cannot run off any
+   phone width; measured margins are 12px on both sides from 320px through 390px.
+7. **One recording animation, still.** The listening pulse moved from the deleted dictate button onto the
+   MORE control that now opens dictation, rather than the app growing a second animation.
+
+### Notes
+
+- `element.hidden = x` is an `HTMLElement` property and a NO-OP on an SVG element: it sets a dead JS field
+  and the `[hidden]` rule never matches. The send/queue icon swap therefore uses
+  `toggleAttribute("hidden", ...)`. Caught by screenshotting the render, not by reading the code.
+- `mockups/pwa_session_preview.html` copies the composer / menu / sheet CSS from
+  `tools/remote-pwa/index.html` VERBATIM (invariant #11) and sizes its phone frame to `min(390px, 100vw)`,
+  so it renders identically in the Preview panel's phone-portrait mode.
+
+## ADR-0299 -- P-PWA-FLEET.2: the phone fleet collapses to 33px, and a lane is driven IN its own lane
+
+**Date:** 2026-08-30
+**Status:** Accepted -- implemented.
+
+### Context
+
+The phone's fleet strip was permanently expanded: an always-on head (a "Fleet" title plus a filter input)
+over a horizontal scroller of 220px cards, costing the transcript real estate whether or not the user was
+working a lane. Driving a lane went THROUGH the master composer: a card's Prompt button staged a
+`#lane-target` chip above the main input, and the submit handler branched on it. And the phone had invented
+its own status colours, which disagreed with the desktop dock on four of seven states: working and starting
+were both green (desktop: cyan and dim), needs-approval and awaiting-input were both amber (desktop: red
+and amber), error and stopped were both red (desktop: red and dim), and `done` had no rule at all.
+
+### Decision
+
+1. **The strip is an auto-collapsed double-decker**, the same pattern as `#procs` / `#botstrip` /
+   `#catchup`. Collapsed it is **33px** and still answers the only question a glance asks - the desktop
+   pill's own count pips plus a roll-up phrase - leaving the transcript **660px** of 844. Expanded it caps
+   at 44vh, which measures to fleet 447 / transcript 246: enough to keep reading the master session while
+   working a lane. It never auto-expands: a red bar and a red pip are the honest signal, and overriding the
+   user's collapse would be the strip taking the screen back by force.
+2. **The bar sits ABOVE its panel.** `#fleet` is anchored to the TOP of the screen, unlike `#botstrip`
+   which hangs off the bottom, so expanding must push content DOWN from under the bar. Cloning botstrip's
+   panel-then-bar order put the panel above its own label; caught by screenshotting it.
+3. **A lane is driven in its own lane.** Every card carries its own composer - input, Check in, Stop, and
+   one send button that reads Send or Queue depending on whether the lane is busy, with Push beside it
+   while it is. `#lane-target`, `setLaneTarget`, the `data-fleet-act="prompt"` button, and both
+   master-composer lane branches are DELETED: the master input now has exactly one destination.
+4. **The lane composer offers exactly what `CollabGuest` can do for a lane, and nothing more:**
+   `fleetPrompt` (text only - the lane wire has no image field), `interject` for Push and Check in,
+   `fleetStop`, and the three `fleetAnswer` scopes. No spawn, no model picker, no queue reorder, because
+   the guest protocol has none of those. A test asserts those four acts are present and that the five the
+   protocol cannot honour are absent, so a future card cannot grow a control that silently does nothing.
+5. **Colour parity is structural, not copied by eye.** Both surfaces key `--lane` / `--lane-dim` off the
+   same `lane-<status>` class, and the phone now uses the desktop's exact hexes and rgba glows
+   (`#ef5f5f` needs-approval, `#e8b23c` awaiting-input, `#46c8dc` working, `#64748b` starting, `#46d27e`
+   done, `#525a70` stopped). The desktop's rule that ONLY the two action-needed states animate is carried
+   over verbatim, with the same `prefers-reduced-motion` guard. A test pins the class on all seven states,
+   because losing it silently reverts the phone to its own palette.
+6. **Order, wording, and counting are shared code, not two lists.** New pure `desktop/collab/fleet_status.ts`
+   owns `LANE_STATUS_ORDER`, `LANE_STATUS_WORDS`, and `laneRollup`; `fleet_grid.ts` imports it and its
+   local `PILL_ORDER` / `STATUS_WORDS` / `lanesByStatus` are deleted. It is DOM-free and import-free so the
+   PWA bundle can take it without dragging in a renderer module. Colours stay in the two stylesheets on
+   purpose - they are keyed by the shared class, which is what prevents drift without coupling the files.
+7. **An unknown status is COUNTED, never dropped.** A newer host reporting a state this build has no copy
+   for sorts after every known state and keeps its raw name, because silently undercounting work in flight
+   is the worst failure a roll-up can have. It never earns attention, though: only a state we can reason
+   about may light the alarm.
+
+### Notes
+
+- A lane card's input is a live DOM node the user may be mid-sentence in, and a fleet snapshot repaints
+  every poll. Drafts are therefore lifted out by lane id before the repaint and written back after (as a
+  property, never interpolated), and focus is restored to the same lane's input.
+- The panel renders LAZILY: while collapsed only the bar is repainted, so a 2.5s snapshot does not rebuild
+  seven cards nobody is looking at.
+- `laneAttention` / `laneBusy` / `laneSummary` started as three one-expression exports and were folded into
+  one `laneRollup` pass, because every caller needs all of them at once and the project bans one-line
+  wrappers that freeze a shape early.
+
+## ADR-0300 -- P-PWA-FOCUS.1: a fleet lane's CONVERSATION reaches the phone, and tapping it takes the composer
+
+**Date:** 2026-08-30
+**Status:** Accepted -- implemented.
+
+### Context
+
+P-PWA-FLEET.2 gave the phone per-lane status and per-lane controls, and the user immediately hit the wall
+behind them: you could see that Stella was working and send her a prompt, but you could not READ her. The
+reason was structural, not cosmetic. `LaneEvent` (the lane engine's stream) and `ChatEvent` (what a guest
+receives) are disjoint unions, `Lane.transcript` was private with no accessor, and `lane.sinks` were added
+and removed per turn by `prompt()`. No lane byte had any path to a guest.
+
+### Decision
+
+1. **One optional field carries the whole feature.** `EventFrame` gains `lane?: string`; absent means the
+   master session, which is exactly what every pre-focus host and guest already meant. `foldEvent` is
+   untouched, so the phone folds a lane's stream with the code it already had.
+2. **The phone SUBSCRIBES; it does not receive a firehose.** A new guest frame `watch { target }` declares
+   the one conversation being looked at, and the host unicasts lane events only to the peers that asked.
+   A fleet of idle lanes therefore streams nothing at a phone on cellular, and the demo asserts that FIRST,
+   at the wire level (frames sent, not just callbacks fired), because it is the property most likely to rot.
+3. **Watching is READ-ONLY and deliberately NOT edit-gated.** It bypasses `#onGuestWrite` on purpose: a view
+   guest may look at a lane, it just cannot drive it. Driving still goes through prompt / fleetPrompt /
+   interject and their own fail-closed checks, so watching buys no authority. A `watch` from a peer that
+   never sent `hello` is ignored, so a lane transcript never replays to an unauthenticated peer.
+4. **Switching to a lane REPLAYS it.** The host answers a lane watch with `lane-sync`, built from the bounded
+   transcript the lane already keeps for its respawn replay. Nothing extra is retained to make this work, and
+   a lane that has been working for ten minutes does not open as an empty conversation.
+5. **A lane crash gets its own name.** `ChatEvent` gains a broadcast-only `lane-error`, and the phone renders
+   it as a `lane-fail` chip: red, but dashed-ruled and labelled "lane failed", NEVER the `block` chip.
+   `block` means the SECURITY GATE refused something. Dressing an ordinary crash in the gate's clothing
+   would teach the user to misread the one signal that must stay unambiguous, so the adapter refuses to map
+   it there and a test pins the distinction.
+6. **The adapter drops what the lane CARD already says.** `permission`, `auto-approved` and `status` translate
+   to null, because each is already on the card (pendingApproval, the status colour) in the fleet snapshot
+   every guest gets. Re-sending them as conversation would double-report one fact in two places that can then
+   disagree, and an approval rendered as a transcript line looks actionable on a surface that cannot answer
+   it. Anything unrecognized also drops: fail-closed beats guessing a wrong ChatEvent.
+7. **A persistent observer, gated on demand.** `FleetLanes.observe()` attaches to all lanes present AND
+   future and survives a turn ending (`prompt()`'s `finally` deletes only the sink IT added). The dev tap
+   checks `laneWatched(laneId)` BEFORE translating, so a fleet running with no phone attached does zero
+   per-event work.
+8. **Focus replaces the lane-target chip.** The master composer has exactly one destination again; the
+   focused target owns the transcript, the composer, Stop, Push now and Check in. A focus bar names the lane
+   with a way back, because a master composer and a lane's conversation are otherwise identical and a user
+   who cannot tell which agent they are typing at will send the wrong prompt to the wrong lane.
+
+### Notes
+
+- Images and audio stay master-bound: the lane wire has no image field, so a staged attachment while a lane
+  is focused is REFUSED with a visible note rather than silently dropped, and push-to-talk hides.
+- The watch subscription is keyed by PEER id, which a reconnect changes, so the guest re-declares its target
+  on every `hello`. Without that, a phone would sit on a silent lane that still looked alive.
+- Per-lane composer drafts are lifted out by lane id and written back across a repaint, because a fleet
+  snapshot repaints every poll and a lane input is a live node the user may be mid-sentence in.
+- NOT in this increment: the cross-screen-lock SYNC (a per-target catch-up that scrolls to the first unseen
+  update). The existing P-REMOTE.11 catch-up remains master-only. Per-target transcripts and the focus model
+  landed here are its prerequisite; it is P-PWA-FOCUS.2.
+
+## ADR-0301 -- P-PWA-FOCUS.2: the sync - what you missed, per conversation, and where you left off
+
+**Date:** 2026-08-30
+**Status:** Accepted -- implemented.
+
+### Context
+
+When the phone auto-locks, updates keep landing and the user comes back with no idea what moved or where they
+stopped reading. The P-REMOTE.11 catch-up only half-addressed it: it was MASTER-only, it fired only on a
+reconnect welcome-replay (so a lock that did not drop the socket produced nothing), and `seenTurns` / `awayAt`
+were global singletons that could not describe more than one conversation.
+
+### Decision
+
+1. **Progress is per target, and only the FOCUSED one is ever marked seen.** `seen: Map<target, number>` holds
+   the rendered stream length the user actually looked at, updated in `render()` only while the page is
+   visible and only for the focused target. That single rule is the whole mechanism: a lane nobody is looking
+   at accumulates a real backlog instead of being forgiven by a repaint the user never saw.
+2. **The unseen math is a pure keystone.** `desktop/collab/sync_state.ts` `planSync(targets, focus, awayMs)`
+   owns ordering (focused first, then descending count, then label), the counts, the auto decision, and the
+   summary wording. DOM-free and import-free, so all of it is unit-tested rather than inferred from a phone.
+3. **Fail closed toward "nothing new".** A target whose `seen` exceeds its `total` yields ZERO unseen and is
+   omitted, because a fresh `lane-sync` replay legitimately SHRINKS a stream and inventing updates is worse
+   than missing them. Non-finite lengths read as fully seen; a negative or non-finite `awayMs` reads as 0, so
+   a clock that went backwards still auto-syncs rather than stranding the user.
+4. **60s or less syncs itself; longer offers the choice.** A glance is not a departure, so it just resumes.
+   After a real absence a `Sync` action appears, because silently yanking the scroll position ten minutes
+   later is as disorienting as losing the place was. The boundary is inclusive at exactly 60000ms.
+5. **The boundary is drawn, not guessed.** `renderTranscript` takes an optional `newFrom` index and emits ONE
+   `[data-sync-mark]` rule, which `applySync` scrolls to with `block: "center"` - landing it at the very top
+   would hide the last thing the user HAD seen, which is the context that makes the new run readable. The
+   marker is positional, not content-matched, so duplicate messages cannot produce two of them, and a
+   non-integer or out-of-range index emits none at all (the phone SCROLLS to this element, so a
+   wrong-place divider is worse than no divider).
+6. **Sync never repoints the composer.** When the focused conversation has a backlog, sync scrolls it. When a
+   DIFFERENT one does, the card lists it as a tappable row instead of switching automatically: silently moving
+   which agent the input is aimed at, because another lane happened to be busier, is exactly how a prompt
+   lands on the wrong agent. One tap is cheap; a misdirected prompt is not.
+7. **Auto-scroll-to-newest yields to the boundary.** `render()` only jumps to the bottom when no marker is
+   showing, since jumping to the newest message is precisely what loses the place the user asked to return to.
+
+### Notes
+
+- The old master-only catch-up body (a list of missed turn TEXT) is deleted. The transcript itself now carries
+  the boundary, so re-printing the missed turns in a card above it was duplicate reading with no navigation.
+  The card's rows answer WHERE instead, which the old one could not.
+- `<button id="sync-go">` was first written INSIDE `<button id="catchup-bar">`. A button inside a button is
+  invalid HTML and the parser hoists it out, which silently broke the row onto two lines; measuring the
+  rendered DOM caught it. The action is now a sibling under a `.cu-head` flex row.
+
+## ADR-0302 -- Nothing on the phone opens itself: no auto-expand on attention
+
+**Date:** 2026-08-30
+**Status:** Accepted -- user decision, asked and answered explicitly.
+
+### Context
+
+P-PWA-FLEET.2 left one question open on purpose: when a fleet lane hits `needs-approval`, should the
+auto-collapsed fleet strip EXPAND itself so the ask is on screen? It is the obvious "helpful" behaviour, and
+it is the kind of thing a later session adds without asking because it looks like an improvement.
+
+Asked directly. The answer was no: "that could be annoying and disruptive."
+
+### Decision
+
+**No panel on the phone ever opens itself.** Attention is communicated by COLOUR and COUNT in the always-
+visible bar, never by taking the screen. Concretely, on a lane that needs a human: the `Fleet` bar tints red,
+the per-state pip is red and glows, and the lane card is red once opened. The panel's `data-open` attribute is
+set in exactly ONE place, the user's own tap on `#fleet-bar`, and that stays true.
+
+### Why this is right, not just deferential
+
+A self-opening panel on a 390px screen costs about 410px, which is most of the transcript. It arrives while
+the user is mid-sentence in the composer or mid-read in a lane, and worse, it MOVES the thing the thumb was
+already travelling toward. The failure is not merely annoyance: a layout shift under an in-flight tap sends
+the tap somewhere the user did not choose, and on this surface the nearby controls include Stop and Deny.
+An interruption that can mis-route a destructive tap has to be worth more than a colour change, and it is not.
+
+### Scope (so this is not re-litigated per-widget)
+
+This applies to every collapsible on the phone: `#fleet`, `#procs`, `#botstrip`, and the sync card. The sync
+card already follows it (`showSyncCard` explicitly removes `data-open`, so even a 12-update backlog opens
+collapsed and the user chooses to look). Any future "just this once" auto-expand needs a superseding ADR and
+the user's word, not a judgement call in a render function.
+
+### Guard
+
+A comment sits at the exact decision site in `renderFleetStrip` where `data-attn` is toggled, naming this ADR
+and the reasoning, because that is the line someone would edit to add the behaviour.

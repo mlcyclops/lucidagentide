@@ -150,8 +150,15 @@ export interface FleetLaneDeps {
   env?: (laneId: string) => Record<string, string>;
 }
 
-/** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time. */
-interface LaneTurnRecord { role: "user" | "assistant"; text: string }
+/** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time.
+ *  P-PWA-FOCUS.1: also the shape laneTranscript() hands out, so a remote guest joining mid-task can be
+ *  seeded with the lane's conversation instead of an empty pane. */
+export interface LaneTurnRecord { role: "user" | "assistant"; text: string }
+
+/** P-PWA-FOCUS.1: one registered cross-lane observer. `sinks` holds the per-lane wrapper that was
+ *  actually added to that lane's sink set, keyed by lane id, so dispose removes exactly what this
+ *  observer added - never another observer's wrapper and never a live turn's own sink. */
+interface LaneObserver { fn: (laneId: string, e: LaneEvent) => void; sinks: Map<string, (e: LaneEvent) => void> }
 
 interface Lane {
   id: string;
@@ -195,6 +202,10 @@ interface Lane {
 
 export class FleetLaneManager {
   readonly #lanes = new Map<string, Lane>();
+  /** P-PWA-FOCUS.1: persistent cross-lane observers, present AND future lanes. Held here rather than in
+   *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
+   *  this set onto every new lane. */
+  readonly #observers = new Set<LaneObserver>();
   readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string> };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
@@ -252,6 +263,9 @@ export class FleetLaneManager {
       queue: [],
     };
     this.#lanes.set(id, lane);
+    // P-PWA-FOCUS.1: BEFORE the handshake, so an observer registered earlier sees this lane's whole life
+    // (including anything #wire's handlers emit while the child is still coming up).
+    for (const obs of this.#observers) this.#attachObserver(obs, lane);
     this.#wire(lane);
     try {
       await this.#handshake(lane);
@@ -481,6 +495,38 @@ export class FleetLaneManager {
   /** How many lanes are actually carrying work right now (metadata; nothing gates on it). */
   liveLanes(): number {
     return [...this.#lanes.values()].filter((l) => l.status !== "stopped" && l.status !== "error").length;
+  }
+
+  // ── P-PWA-FOCUS.1: watching a lane's CONVERSATION, not just its status ────────────────────────────
+
+  /** Register a PERSISTENT event observer across every lane, present and future, and get back its
+   *  disposer. This is how a remote guest (the phone PWA) or any other long-lived watcher follows a
+   *  lane's live conversation without owning a turn.
+   *
+   *  Why it outlives turns: prompt() adds ITS OWN sink and, in its finally, deletes only that exact
+   *  function identity (`lane.sinks.delete(sink)`). A separately-added wrapper has a different identity,
+   *  so a turn ending never unsubscribes an observer - and #recover() rebuilds the CLIENT, never the
+   *  sink set, so a respawn does not either. Verified against both paths.
+   *
+   *  A throwing observer is a dead observer, not a dead lane: #emit try/catches every sink individually,
+   *  so one bad wrapper never starves the sinks after it. Nothing here weakens that. */
+  observe(fn: (laneId: string, e: LaneEvent) => void): () => void {
+    const obs: LaneObserver = { fn, sinks: new Map() };
+    this.#observers.add(obs);
+    for (const lane of this.#lanes.values()) this.#attachObserver(obs, lane);
+    return () => {
+      this.#observers.delete(obs); // first, so a lane spawning during teardown never re-attaches it
+      for (const [laneId, sink] of obs.sinks) this.#lanes.get(laneId)?.sinks.delete(sink);
+      obs.sinks.clear();
+    };
+  }
+
+  /** A COPY of the lane's bounded recovery transcript (empty for an unknown lane) - the catch-up seed a
+   *  guest gets when it starts watching mid-task. Fresh entry objects, not just a fresh array: sharing
+   *  the records would let a caller rewrite a lane's memory, which is what the respawn replay reads. */
+  laneTranscript(laneId: string): LaneTurnRecord[] {
+    const lane = this.#lanes.get(laneId);
+    return lane ? lane.transcript.map((t) => ({ role: t.role, text: t.text })) : [];
   }
 
   // ── internals ─────────────────────────────────────────────────────────────────────────────────────
@@ -724,6 +770,14 @@ export class FleetLaneManager {
     lane.status = status;
     lane.lastActivityAt = this.#deps.now();
     this.#emit(lane, { type: "status", status });
+  }
+
+  /** P-PWA-FOCUS.1: subscribe one observer to one lane. The two writes MUST stay in lockstep - the sink
+   *  set is what delivers, obs.sinks is what dispose walks - so they live in exactly one place. */
+  #attachObserver(obs: LaneObserver, lane: Lane): void {
+    const sink = (e: LaneEvent) => obs.fn(lane.id, e);
+    obs.sinks.set(lane.id, sink);
+    lane.sinks.add(sink);
   }
 
   #emit(lane: Lane, e: LaneEvent): void {

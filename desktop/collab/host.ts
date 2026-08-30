@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/host.ts — P-COLLAB.2 (ADR-0192): the view-only broadcast HOST.
+// desktop/collab/host.ts - P-COLLAB.2 (ADR-0192): the view-only broadcast HOST.
 //
 // The host owns the room and mirrors the LIVE session out to every joined guest. It is transport-agnostic:
 // it drives a `HostTransport` (the real `CollabSocket`, or a mock in tests), so the whole host protocol is
@@ -84,12 +84,16 @@ export interface HostStartOpts {
    *  delivers it OUTSIDE untrusted-content delimiters, marked operator-origin (AGENTS.md #5). */
   onGuestInterject?: (target: string, text: string, guest: CollabParticipant) => void;
   /** P-COLLAB.18 (ADR-0204): a guest joined ("join", on its `hello`) or left ("leave", on relay peer-left).
-   *  Host-authoritative audit hook — the caller records a metadata-only telemetry event. */
+   *  Host-authoritative audit hook: the caller records a metadata-only telemetry event. */
   onParticipant?: (kind: "join" | "leave", guest: CollabParticipant) => void;
   /** P-REMOTE.14: the host's CUI + lockdown stance, read FRESH on every welcome/state push and on every
    *  incoming prompt (so flipping a session's mode lands immediately). Guests use it to decide whether
    *  device speech-to-text is allowed at all. Absent = the strictest posture (fail-closed). */
   posture?: () => { cui: boolean; lockdown: boolean };
+  /** P-PWA-FOCUS.1: a lane's recent turns, for the `lane-sync` replay a guest gets when it starts watching
+   *  that lane. Absent = no replay (the live stream still arrives), so an older wiring degrades to "you see
+   *  it from here on" rather than failing. The provider is expected to hand back a COPY. */
+  laneTranscript?: (laneId: string) => CollabTranscriptTurn[];
 }
 
 const DEFAULT_TRANSCRIPT_LIMIT = 40;
@@ -113,6 +117,7 @@ export class CollabHost {
   #onGuestInterject?: (target: string, text: string, guest: CollabParticipant) => void;
   #options: CollabOptions | null;
   #posture?: () => { cui: boolean; lockdown: boolean };
+  #laneTranscript?: (laneId: string) => CollabTranscriptTurn[];
 
   #participants = new Map<number, CollabParticipant>();
   #transcript: CollabTranscriptTurn[] = [];
@@ -138,6 +143,7 @@ export class CollabHost {
     this.#onGuestInterject = opts.onGuestInterject;
     this.#options = opts.options ?? null;
     this.#posture = opts.posture;
+    this.#laneTranscript = opts.laneTranscript;
   }
 
   /** Wire the transport callbacks and open the relay connection. */
@@ -187,8 +193,17 @@ export class CollabHost {
    * Feed one LUCID session event to the share: broadcast it to guests, and fold `done`/`usage` into the
    * host's transcript + status so a later joiner's `welcome` reflects the current state.
    */
-  pushEvent(event: ChatEvent): void {
+  pushEvent(event: ChatEvent, lane?: string): void {
     if (this.#stopped) return;
+    // P-PWA-FOCUS.1: a LANE-scoped event is a different conversation, so it never folds into the master
+    // transcript or the master's context gauge, and it goes ONLY to guests that asked to watch that lane.
+    // No watcher means no send at all: a fleet of idle lanes must not stream tokens at a phone on cellular.
+    if (lane) {
+      for (const [peerId, target] of this.#watching) {
+        if (target === lane) this.#transport.send({ t: "event", event, lane }, peerId);
+      }
+      return;
+    }
     // Fold state BEFORE broadcasting so a race-y join still gets a consistent welcome.
     if (event.type === "done" && typeof event.text === "string" && event.text.trim()) {
       this.#appendTranscript({ role: "assistant", text: clip(event.text) });
@@ -196,6 +211,12 @@ export class CollabHost {
       this.#contextPct = Math.min(100, Math.round((event.used / event.size) * 100));
     }
     this.#broadcast({ t: "event", event });
+  }
+
+  /** P-PWA-FOCUS.1: is anyone watching this lane? The lane observer asks before doing translation work. */
+  laneWatched(laneId: string): boolean {
+    for (const target of this.#watching.values()) if (target === laneId) return true;
+    return false;
   }
 
   /** End the share: tell guests, drop the roster, close the socket. Idempotent. */
@@ -214,6 +235,10 @@ export class CollabHost {
     if (!isGuestFrame(frame)) return; // a host must never receive a host frame; ignore
     const guest = frame as GuestFrame;
     if (guest.t === "hello") { this.#onHello(guest, fromPeer); return; }
+    // P-PWA-FOCUS.1: `watch` is a SUBSCRIPTION, not a write, so it bypasses the edit gate on purpose: a
+    // view-only guest is allowed to look at a lane, it just cannot drive it. Driving still goes through
+    // #onGuestWrite below and its own fail-closed checks, so watching buys no authority whatsoever.
+    if (guest.t === "watch") { this.#onWatch(guest, fromPeer); return; }
     this.#onGuestWrite(guest, fromPeer); // prompt / abort / set-model / set-workspace (edit-gated + validated)
   }
 
@@ -338,6 +363,7 @@ export class CollabHost {
     if (this.#stopped) return;
     if (msg.t === "peer-left") {
       const gone = this.#participants.get(msg.peer);
+      this.#watching.delete(msg.peer); // P-PWA-FOCUS.1: a departed peer must not keep a lane subscription alive
       if (this.#participants.delete(msg.peer)) {
         if (gone) this.#onParticipant?.("leave", gone); // P-COLLAB.18: host-authoritative leave audit
         this.#broadcastState();
@@ -366,6 +392,23 @@ export class CollabHost {
     // Keep a little more than we replay, so folding recent state stays cheap.
     const cap = this.#transcriptLimit * 2;
     if (this.#transcript.length > cap) this.#transcript.splice(0, this.#transcript.length - cap);
+  }
+
+  /** P-PWA-FOCUS.1: which conversation each guest is looking at, by peerId. Absent or "master" = the master
+   *  session, which is every pre-focus guest, so the default costs nothing. Cleared when the peer leaves. */
+  readonly #watching = new Map<number, string>();
+
+  #onWatch(frame: { target: string }, fromPeer: number): void {
+    if (!this.#participants.has(fromPeer)) return; // never introduced itself: nothing to subscribe
+    const target = (frame.target ?? "").toString().trim();
+    if (!target || target === "master") { this.#watching.delete(fromPeer); return; } // back to the master stream
+    this.#watching.set(fromPeer, target);
+    // Answer with what the lane has SAID so far, not just what it says next: switching to a lane that has
+    // been working for ten minutes must not look like an empty conversation. The lane engine already keeps a
+    // bounded transcript for its respawn replay, so this reuses that memory rather than retaining more.
+    // No provider (an older wiring) means no replay, and the live stream still arrives - never a crash.
+    const transcript = this.#laneTranscript?.(target) ?? [];
+    this.#transport.send({ t: "lane-sync", lane: target, transcript }, fromPeer);
   }
 
   #broadcast(frame: LucidCollabFrame): void {
