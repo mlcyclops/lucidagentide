@@ -21119,7 +21119,14 @@ Two supporting decisions:
   fire (idempotent: same path, one panel).
 - **The activity pill is fixed the same way.** `previewActivityLabel(u.title)` was broken for ALL five
   preview tools by the same intent shadowing, so the routes emit the activity directly instead of
-  hoping the title still says `preview_screenshot`.
+  hoping the title still says `preview_screenshot`. DONE as P-PREVIEW.11b (same day): the labels moved
+  into one exported `PREVIEW_ACTIVITY` map that BOTH paths read, `backend.notePreviewActivity(kind)`
+  emits by kind, and `/api/preview/inspect`, `/api/preview/act`, and `/api/preview/shot` each report
+  their own kind (inspect/act emit BEFORE the held await, so the pill shows during the wait). Emitting
+  on `/api/preview/shot` is unambiguous: only the agent's tool GETs it, since the renderer PUSHES to
+  `/api/preview/shot-cache` and polls the relay routes instead. A drift-guard test pins the by-kind
+  label to what the title path produces for the same tool, because two sources for one user-facing
+  string is precisely how they diverge.
 
 ### Alternatives rejected
 

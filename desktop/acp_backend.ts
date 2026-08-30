@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
-import { previewActivityLabel } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
+import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
 import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
 import { learnFromTurn, recallPreamble } from "./personal.ts";
@@ -411,8 +411,16 @@ class Backend {
     const p = normalizePreviewPath(path ?? "");
     if (!p) return false;
     this.emit({ type: "preview-available", path: absWorkspacePath(p) });
-    this.emit({ type: "preview-activity", label: "Opening the preview" });
+    this.emit({ type: "preview-activity", label: PREVIEW_ACTIVITY.open });
     return true;
+  }
+
+  /** P-PREVIEW.11b (ADR-0308): the panel's glow + "reviewing / testing" pill, reported BY KIND from the
+   *  route the agent's tool actually hit (dev.ts), because the title it used to be inferred from is the
+   *  model's intent prose once intent tracing is on. Visual only - never a gate - so it stays a
+   *  fire-and-forget emit with no return value to check. */
+  notePreviewActivity(kind: PreviewActivityKind): void {
+    this.emit({ type: "preview-activity", label: PREVIEW_ACTIVITY[kind] });
   }
 
   // P-ASKSAGE.1 (ADR-0059): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's

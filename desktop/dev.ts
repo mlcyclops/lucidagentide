@@ -2360,6 +2360,10 @@ const server = Bun.serve({
       // query on the frame (via the postMessage bridge) and posts the result back — or an 8s timeout returns a
       // helpful "no preview open" message. Read-only by construction (the command only describes a query).
       if (p === "/api/preview/inspect") {
+        // P-PREVIEW.11b (ADR-0308): glow the panel from the ROUTE the agent hit. The old title-sniffing
+        // path in acp_backend cannot see a custom tool once intent tracing rewrites the ACP title, so
+        // every preview pill was dark. Emitted BEFORE the await so the pill shows during the wait.
+        backend.notePreviewActivity("inspect");
         const { id, promise } = inspectRelay.enqueue({ selector: url.searchParams.get("selector") ?? undefined, what: url.searchParams.get("what") ?? undefined });
         const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then inspect it" }), 8000);
         const result = await promise; clearTimeout(t);
@@ -2368,6 +2372,7 @@ const server = Bun.serve({
       // P-PREVIEW.6c (ADR-0153): the agent's preview_click / preview_type tools — a STRUCTURED action (a named
       // op on a CSS selector) through the same held relay + bridge. Same fail-closed timeout. No arbitrary JS.
       if (p === "/api/preview/act") {
+        backend.notePreviewActivity("act"); // P-PREVIEW.11b (ADR-0308): as above, before the await
         const { id, promise } = inspectRelay.enqueue({ action: url.searchParams.get("action") ?? undefined, selector: url.searchParams.get("selector") ?? undefined, value: url.searchParams.get("value") ?? undefined });
         const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then act on it" }), 8000);
         const result = await promise; clearTimeout(t);
@@ -2384,6 +2389,10 @@ const server = Bun.serve({
         return json({ ok: true, data: { resolved } });
       }
       if (p === "/api/preview/shot") {
+        // P-PREVIEW.11b (ADR-0308): only the agent's preview_screenshot tool GETs this (the renderer
+        // PUSHES to /api/preview/shot-cache and polls the relay routes), so a hit here is unambiguously
+        // the agent looking at its own work - safe to glow the panel on.
+        backend.notePreviewActivity("screenshot");
         return json({ ok: true, data: { png: latestPreviewShot } });
       }
       // P-PREVIEW.11 (ADR-0308): the agent's `preview_open` tool reports ITSELF here, instead of the
