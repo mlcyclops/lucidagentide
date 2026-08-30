@@ -98,6 +98,9 @@ const RAW: Record<string, string> = {
     + P("M10.4 18.6h3.2") + P("M10.9 20.6h2.2") + P("M12 9.2v2.4") + P("M10.7 10.4h2.6"),
   // double chevron down (jump-to-latest) - two stacked downward carets
   chevronsDown: P("M6.5 7.5 12 13l5.5-5.5") + P("M6.5 13 12 18.5 17.5 13"),
+  // single chevron down (advance ONE page) - same span/centering as chevronsDown so the two stacked
+  // scroll buttons read as a set: one caret steps a page, two carets run to the end.
+  chevronDown: P("M6.5 10 12 15.5 17.5 10"),
   // center / re-fit the graph (crosshair) — P-KG-CODE.1b
   center: P("M12 3.5v3.2") + P("M12 17.3v3.2") + P("M3.5 12h3.2") + P("M17.3 12h3.2")
     + "<circle cx='12' cy='12' r='4.3' fill='none'/>" + "<circle cx='12' cy='12' r='1' fill='currentColor' stroke='none'/>",

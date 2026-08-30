@@ -327,7 +327,13 @@ function buildShell(): void {
           ${icon("shield", 13)}<span><b>CUI MODE</b> - Controlled Unclassified Information - web search disabled (spillage risk)</span>
         </div>
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
-        <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
+        <!-- Two stacked scroll helpers at the right edge, for catching up on a LONG session. The page
+             stepper sits ON TOP (one caret, one viewport at a time, keeps your place with a line of
+             overlap); the run-to-end button sits BELOW it, nearest the composer since it is the one
+             reached for most (two carets = go all the way). Both share .jump-down styling and both
+             appear only when there is more than a screen below the fold. -->
+        <button class="jump-down" id="jumpDown" type="button" aria-label="Scroll down one page" data-tip="Down one page">${icon("chevronDown", 18)}</button>
+        <button class="jump-down" id="jumpEnd" type="button" aria-label="Scroll to the newest message" data-tip="Jump to the end">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
           <!-- P-VISION.1 (ADR-0136): thumbnails of pasted/dropped images, just above the prompt bar; sent
                with the next message only when the user hits Enter/Send. -->
@@ -834,15 +840,22 @@ function lineHeightPx(): number {
   const lh = t ? parseFloat(getComputedStyle(t).lineHeight) : NaN;
   return Number.isFinite(lh) && lh > 0 ? lh : 28;
 }
+const JUMP_BTN_PX = 34;   // .jump-down width/height in styles.css - the stack spacing depends on it
+const JUMP_GAP_PX = 8;    // breathing room between the two stacked buttons
 function updateJump(): void {
-  const c = $("#chat"), b = $("#jumpDown");
-  if (!c || !b) return;
+  const c = $("#chat"), page = $("#jumpDown"), end = $("#jumpEnd");
+  if (!c || !page) return;
   const show = c.scrollHeight - c.scrollTop - c.clientHeight > JUMP_SHOW_PX;
   if (show) {
-    const cw = $(".composer-wrap");
-    b.style.bottom = `${(cw ? cw.getBoundingClientRect().height : 64) + 14}px`;
+    // Both sit just above the composer, whose height changes as the prompt bar grows. The run-to-end
+    // button takes the lower slot (closest to the composer) and the page stepper stacks above it, so
+    // the pair never overlaps the composer or each other at any prompt-bar height.
+    const base = (($(".composer-wrap")?.getBoundingClientRect().height) ?? 64) + 14;
+    if (end) end.style.bottom = `${base}px`;
+    page.style.bottom = `${base + (end ? JUMP_BTN_PX + JUMP_GAP_PX : 0)}px`;
   }
-  b.classList.toggle("show", show);
+  page.classList.toggle("show", show);
+  end?.classList.toggle("show", show);
 }
 const scheduleJump = (): void => { if (jumpRaf) return; jumpRaf = true; requestAnimationFrame(() => { jumpRaf = false; updateJump(); }); };
 function jumpDownOnePage(): void {
@@ -850,6 +863,18 @@ function jumpDownOnePage(): void {
   if (!c) return;
   const step = Math.max(c.clientHeight - lineHeightPx() - 8, 80); // one viewport, minus a line of overlap
   c.scrollTo({ top: Math.min(c.scrollTop + step, c.scrollHeight), behavior: "smooth" });
+}
+/** Run straight to the newest message. Deliberately INSTANT, not smooth: on a long restored session
+ *  the distance is tens of thousands of pixels, and a smooth glide over that is a slow, janky ride to
+ *  somewhere the reader already asked to be. Clearing lastWroteTop drops the "user scrolled up" memory
+ *  (that baseline described a scroll position we just abandoned), so once we land at the bottom the
+ *  normal stick-to-bottom behaviour re-engages and live tokens keep following. */
+function jumpToEnd(): void {
+  const c = $("#chat");
+  if (!c) return;
+  c.scrollTo({ top: c.scrollHeight, behavior: "auto" });
+  lastWroteTop = -1;
+  updateJump();
 }
 
 // P10.1 (ADR-0011) + UI polish: a friendly, honest "what's happening" label. We classify the user's
@@ -13396,6 +13421,7 @@ function wire(): void {
   $("#chat")?.addEventListener("scroll", scheduleJump, { passive: true });
   window.addEventListener("resize", scheduleJump, { passive: true });
   $("#jumpDown")?.addEventListener("click", jumpDownOnePage);
+  $("#jumpEnd")?.addEventListener("click", jumpToEnd);
 
   // P-IDE.4: "View in IDE" on chat code blocks → open the read-only Monaco panel (delegated, one
   // listener for all current + future blocks). Exclusivity: opening the IDE closes Settings + KG.

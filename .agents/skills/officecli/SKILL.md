@@ -169,6 +169,10 @@ about layout, overflow, contrast, and pagination. Close the loop:
 1. **Render into the workspace.** `officecli view deck.pptx html -o deck.html` for structure,
    spacing, and text flow; `officecli view deck.pptx screenshot -o deck.png` for true pixels.
    Write next to the document, inside the workspace - never to a temp path you then cannot show.
+   This is not tidiness, it is a hard constraint: LUCID confines the preview to the workspace (path
+   containment, ADR-0023/0103), so `preview_open` on an OS temp path silently shows nothing. Verified
+   the hard way on 2026-08-30: a deck rendered to `%LOCALAPPDATA%\Temp` would not open, and the same
+   bytes rendered under the workspace did. `.omp/tmp/` is gitignored scratch and a good target.
 2. **Look at it.** Call `preview_open` with the ABSOLUTE path to `deck.html`, then `preview_inspect`
    for the rendered text, headings, and controls, or `preview_screenshot` for the image. For a PNG,
    use `inspect_image` with a specific question ("is the title clipped, does any body text overflow
