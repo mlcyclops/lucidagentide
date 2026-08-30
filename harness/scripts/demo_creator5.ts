@@ -34,8 +34,8 @@
 //      because a conditional key there reads to the pane as no report at all), headroomApplied appears
 //      only when it was asked for AND there was something to recover, a refusal carries its reason and NO
 //      measurement it never made, and the pane's own report gate accepts a report (a silent mix included)
-//      while refusing a refusal. `peak` is 6dp and `headroomApplied` is the raw reciprocal, an asymmetry
-//      pinned here because a decimal literal is safe for one and wrong for the other
+//      while refusing a refusal. A reported peak survives its own 6dp re-rounding, while the headroom
+//      factor is the RAW reciprocal, so it is asserted by identity with headroomGain and never a literal
 //
 // The theme: a mixer's only real promise is that what you hear is what you asked for. Nothing here is
 // automatic, nothing is normalized behind your back, and a silenced track is silent to the byte.
@@ -829,15 +829,20 @@ check("the HEADROOM render's answer carries the exact factor as one extra key, a
   keysOf(fixedBody).join(",") === [...KEYS_CLEAN, "headroomApplied"].sort().join(",")
   && fixedBody.headroomApplied === headroomGain(PRE_PEAK) && fixedBody.clipped === 0,
   `headroomApplied ${String(fixedBody.headroomApplied)} from the pre-headroom peak ${PRE_PEAK}, clipped ${String(fixedBody.clipped)}`);
-// The two numbers are rounded DIFFERENTLY, on purpose, and anything that prints or compares them has to
-// know it: `peak` is 6dp because the core rounds it, while `headroomApplied` is the RAW reciprocal passed
-// straight through. So a 6dp decimal literal is safe for a peak and WRONG for the factor, which is exactly
-// why every factor check here is computed as headroomGain(PRE_PEAK) instead of being written out.
-check("peak is its own 6dp rounding while the FACTOR is the raw reciprocal, so no literal may stand in for it",
-  PRE_PEAK === Number(PRE_PEAK.toFixed(6))
-  && typeof fixedBody.headroomApplied === "number"
-  && fixedBody.headroomApplied !== Number(fixedBody.headroomApplied.toFixed(6)),
-  `peak ${PRE_PEAK} survives 6dp, factor ${String(fixedBody.headroomApplied)} does not: a literal would be off by ${Math.abs(headroomGain(PRE_PEAK) - Number(headroomGain(PRE_PEAK).toFixed(6))).toExponential(1)}`);
+// The two numbers are rounded DIFFERENTLY, on purpose: `peak` is 6dp because the core rounds it, while
+// `headroomApplied` is the RAW reciprocal passed straight through. So a 6dp decimal literal is safe for a
+// peak and WRONG for the factor, which is why every factor check here is computed as headroomGain(PRE_PEAK).
+// That exact identity with the unrounded computation is also what would catch a future "round the factor
+// before reporting it": if such a change moved the value the identity fails, and if it did not move the
+// value there was nothing to catch. Only the PEAK half is asserted below. Whether a reciprocal runs past 6
+// places is a property of THESE amplitudes and not of the mixer (a pre-peak of 1.25 gives exactly 0.8), so
+// the factor's delta is printed as evidence rather than asserted, where it could go red with nothing wrong.
+const factor = headroomGain(PRE_PEAK);
+check("a reported peak survives its own 6dp rounding, which is what makes a 6dp literal safe for a PEAK",
+  PRE_PEAK === Number(PRE_PEAK.toFixed(6)), `${PRE_PEAK} re-rounds to ${Number(PRE_PEAK.toFixed(6))}`);
+console.log(`   the factor, by contrast, is the raw reciprocal ${factor}: on THIS fixture a 6dp literal would`);
+console.log(`   miss it by ${Math.abs(factor - Number(factor.toFixed(6))).toExponential(1)}, and on a fixture whose reciprocal terminates it would be exact. That is why`);
+console.log("   the factor is asserted by identity with headroomGain and never against a written-out number.");
 
 const refusedBody = wireAnswer(refusedRate);
 console.log(`   a refusal's answer, key for key: ${keysOf(refusedBody).join(", ")}`);

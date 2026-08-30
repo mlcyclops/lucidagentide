@@ -354,6 +354,21 @@ describe("rendering and saving a mix", () => {
     expect(foldLibrary(io.ledger())).toHaveLength(4);
   });
 
+  test("a source at the right rate but the wrong depth or channel count refuses in the core's own words", () => {
+    const { io, vox, graph } = twoLayerLibrary();
+    // Both are 8000Hz, so they pass the rate check and reach the checks under test.
+    const deep = seed(io, { name: "deep.wav", bytes: buildWav({ channels: 1, sampleRate: 8000, bitsPerSample: 24 }, new Uint8Array(300)), title: "Deep" });
+    const wide = seed(io, { name: "wide.wav", bytes: buildWav({ channels: 3, sampleRate: 8000, bitsPerSample: 16 }, new Uint8Array(600)), title: "Wide" });
+    const withSource = (id: string): MixGraph =>
+      ({ ...graph, tracks: [mixTrack({ id: "t1", label: "Narration", clips: [clipOf("c1", id, 0, 1000)] })] });
+
+    expect(renderAndSaveMix(io, BASE, { graph: withSource(deep.id), title: "Deep", primaryTrackId: vox.id }).error)
+      .toBe(`source "${deep.id}" is 24-bit; only 16-bit PCM is supported`);
+    expect(renderAndSaveMix(io, BASE, { graph: withSource(wide.id), title: "Wide", primaryTrackId: vox.id }).error)
+      .toBe(`source "${wide.id}" has 3 channels; a mix takes mono or stereo`);
+    expect(foldLibrary(io.ledger())).toHaveLength(4); // neither refusal appended anything
+  });
+
   test("a source whose audio file has gone missing refuses rather than mixing silence into the gap", () => {
     const { io, vox, bed, graph } = twoLayerLibrary();
     io.files.delete(audioPath(bed));
@@ -463,6 +478,32 @@ describe("rendering and saving a mix", () => {
     // by the time the report exists the peak has already been recovered to full scale.
     expect(recovered.peak).not.toBe(plain.peak);
     expect(headroomGain(recovered.peak!)).not.toBe(recovered.headroomApplied);
+  });
+
+  test("headroom on a mix already at full scale reports the factor 1 and changes not one byte", () => {
+    const io = fakeIo();
+    // One layer sitting exactly at the negative rail: peak is 1.0, so headroomGain is exactly 1.
+    const rail = seed(io, { name: "rail.wav", bytes: flatWav(1000, -32768, MONO_8K), title: "Rail" });
+    const graph: MixGraph = {
+      ...emptyMix(8000, 1),
+      tracks: [mixTrack({ id: "t1", label: "Rail", clips: [clipOf("c1", rail.id, 0, 1000)] })],
+    };
+
+    const plain = renderAndSaveMix(io, BASE, { graph, title: "Rail plain", primaryTrackId: rail.id });
+    const asked = renderAndSaveMix(io, BASE, { graph, title: "Rail asked", primaryTrackId: rail.id, applyHeadroom: true });
+
+    expect(plain.peak).toBe(1);
+    expect(plain.clipped).toBe(0); // -32768 IS the rail, not past it
+    expect(plain.headroomApplied).toBeUndefined();
+    // Asked for, and the honest answer is 1: what was applied, not what was intended. The second render is
+    // skipped because multiplying by exactly 1 cannot change a sample, and THAT is the observable claim:
+    // the two saved files are byte-identical.
+    expect(asked.headroomApplied).toBe(1);
+    expect(asked.peak).toBe(1);
+    const rows = foldLibrary(io.ledger());
+    const plainBytes = io.files.get(audioPath(rows.find((t) => t.id === plain.trackId)!))!;
+    const askedBytes = io.files.get(audioPath(rows.find((t) => t.id === asked.trackId)!))!;
+    expect(askedBytes).toEqual(plainBytes);
   });
 
   test("headroom asked for on a silent mix applies nothing, because peak 0 has nothing to recover", () => {

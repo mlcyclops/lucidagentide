@@ -19799,9 +19799,9 @@ this document), ADR-0073 (the STT seam that supplies text but no timings).
 ## ADR-0294 -- CREATOR-5: the mixer, and refusing to fix a mix quietly
 
 **Date:** 2026-08-30
-**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator5.ts` green (9 sections, 84 checks, and
-breaking one claim exits 1 with the named FAIL); new suites mix 35 / creator_mixer 30 / renderer
-creator_mixer 50, 181 pass across the five mixer-adjacent files; root and desktop typechecks clean;
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator5.ts` green (11 sections, 97 checks, and
+breaking one claim exits 1 with the named FAIL); new suites mix 35 / creator_mixer 34 / renderer
+creator_mixer 50, 183 pass across the five mixer-adjacent files; root and desktop typechecks clean;
 renderer bundle builds (126 modules, up from 124); license headers clean; zero em dashes.
 **Increment:** CREATOR-5, planned in ADR-0289. Built after CREATOR-2 (ADR-0293), whose document it consumes.
 
