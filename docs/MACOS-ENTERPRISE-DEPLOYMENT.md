@@ -27,7 +27,7 @@ automatically — nothing else changes.
 
 | Property | Value |
 | --- | --- |
-| Artifact | `LucidAgentIDE-mac-arm64.pkg`, `LucidAgentIDE-mac-x64.pkg` |
+| Artifact | `LucidAgent-mac-arm64.pkg`, `LucidAgent-mac-x64.pkg` |
 | Install location | `/Applications/LucidAgentIDE.app` (fixed; `isRelocatable=false`) |
 | Bundle / package id | `com.lucidagentide.desktop` |
 | Signature | ad-hoc (unsigned for Gatekeeper) |
@@ -42,11 +42,21 @@ architecture.
 
 ```bash
 brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide
-brew install --cask lucidagentide   # installs the .pkg, no Gatekeeper prompt
-brew upgrade --cask lucidagentide   # in-place upgrade, keeps user data
-brew uninstall --cask lucidagentide          # remove app, keep user data
-brew uninstall --zap --cask lucidagentide    # remove app AND user data
+brew trust --cask mlcyclops/lucid/lucidagentide
+brew install --cask lucidagentide
+brew upgrade --cask lucidagentide
+brew uninstall --cask lucidagentide
+brew uninstall --zap --cask lucidagentide
 ```
+
+Line by line: `trust` is required on Homebrew 6+ (which refuses casks from
+untrusted third-party taps; older Homebrew has no such command, skip it),
+`install` places the `.pkg` with no Gatekeeper prompt, `upgrade` replaces the
+app in place and keeps user data, `uninstall` removes the app only, and
+`--zap` also deletes user data. The blocks in this file carry no `#` comments
+on purpose: stock macOS zsh does not strip comments from pasted interactive
+commands, it passes them as extra arguments (which is how a pasted trailing
+comment once broke `brew trust` in the field - keep it that way).
 
 The cask uses `allow_untrusted` (legal in a third-party tap) so `installer`
 accepts the unsigned pkg, and strips any quarantine flag in a `postflight`.
@@ -54,13 +64,20 @@ accepts the unsigned pkg, and strips any quarantine flag in a `postflight`.
 ## 2. Verify the package before fleet deployment
 
 ```bash
-PKG=LucidAgentIDE-mac-arm64.pkg
-pkgutil --check-signature "$PKG"      # expect: no signing certificate (ad-hoc) — that's intended
-pkgutil --payload-files "$PKG" | head # sanity: the .app payload is present
-sudo installer -pkg "$PKG" -target /  # installs (installer(8) bypasses Gatekeeper)
-spctl --assess -vv /Applications/LucidAgentIDE.app 2>&1 || true   # "rejected" is expected for unsigned; it still launches because it's not quarantined
-codesign -dv /Applications/LucidAgentIDE.app 2>&1 | grep -i 'Signature=adhoc'  # confirms it'll run on Apple Silicon
+PKG=LucidAgent-mac-arm64.pkg
+pkgutil --check-signature "$PKG"
+pkgutil --payload-files "$PKG" | head
+sudo installer -pkg "$PKG" -target /
+spctl --assess -vv /Applications/LucidAgentIDE.app 2>&1 || true
+codesign -dv /Applications/LucidAgentIDE.app 2>&1 | grep -i 'Signature=adhoc'
 ```
+
+What to expect: `--check-signature` reports no signing certificate (the build
+is ad-hoc signed, that is intended), `--payload-files` confirms the `.app`
+payload is present, `installer(8)` installs without a Gatekeeper prompt,
+`spctl` says "rejected" (expected for unsigned; the app still launches because
+it is never quarantined), and the `codesign` line confirms the ad-hoc
+signature Apple Silicon requires to execute native arm64 code.
 
 MDM-deployed and `installer(8)`-deployed packages are not quarantined, so the
 unsigned app launches without a prompt — the same reason the Homebrew path works.
@@ -107,7 +124,7 @@ It only ever *adds* constraints — it can never relax the security gate.
 ## 5. Munki
 
 ```bash
-munkiimport LucidAgentIDE-mac-arm64.pkg \
+munkiimport LucidAgent-mac-arm64.pkg \
   --name LucidAgentIDE --displayname "LucidAgentIDE" --catalog testing
 ```
 

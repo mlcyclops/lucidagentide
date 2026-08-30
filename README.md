@@ -868,7 +868,7 @@ lands - ADR-0246 - so Homebrew IS the macOS update channel for now.)
 
 ```bash
 brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide
-brew trust --cask mlcyclops/lucid/lucidagentide   # Homebrew >= 6 gates third-party taps
+brew trust --cask mlcyclops/lucid/lucidagentide
 brew install --cask lucidagentide
 ```
 
