@@ -23,14 +23,42 @@ import { ingestLatency, readLatencyCalls } from "../harness/memory/latency_inges
 import { renderEvalMetricsRollupMarkdown } from "../harness/brief/eval_metrics_report.ts"; // P-EVAL.3 Part B
 import { rollupLatency, renderLatencyRollupMarkdown } from "../harness/brief/evals.ts"; // P-EVAL.1 latency rollup
 import { mkdtempSync, rmSync } from "node:fs"; // P-EVAL.3 Part B: throwaway rollup DB
-import { tmpdir, totalmem, cpus } from "node:os";
+import { appendFileSync, copyFileSync } from "node:fs"; // CREATOR-0 (ADR-0281): the append-only track ledger
+import { execFileSync } from "node:child_process"; // CREATOR-0 (ADR-0283): the fixed-argv GPU query
+import { tmpdir, totalmem, cpus, freemem } from "node:os";
 import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
 import { renderRepoActivityAnnex } from "../harness/brief/repo_activity.ts"; // P-REPORT.9: cross-repo activity annex
 import { addReportRepo, collectRepoActivity, ghAvailable, listReportRepos, type RepoSelection } from "./repo_collect.ts"; // P-REPORT.9 (ADR-0162)
 import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.1: personalized chat background
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
-import { assessSystem, sampleSystem, topProcesses, type ProcGroup, type SystemSnapshot, type SystemVerdict } from "./system_profile.ts"; // P-SYSRES.1: resource guard
+import { assessSystem, sampleSystem, topProcesses, type ProcGroup, type ProfileIo, type SystemSnapshot, type SystemVerdict } from "./system_profile.ts"; // P-SYSRES.1: resource guard
+import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
+import {
+  CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
+  pushCreatorSample, sampleCreatorCpu, sampleLocalGpu, sampleOf, telemetryFromAgentJson, validateRemoteTarget,
+  type CreatorResourcesData, type CreatorSample, type TargetTelemetry,
+} from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): normalized CPU/GPU telemetry + job admission
+import { CREATOR_PROVIDER_IDS, creatorRegistryStatus, type CreatorCapabilityId, type CreatorEndpointDef, type CreatorProviderId, type CreatorProviderStatus } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
+import { addTrack, foldLibrary, libraryLedger, libraryStats, removeTrack, trackAudio, updateTrack, type CreatorTrack, type LibraryIo, type LibraryStats, type TrackOrigin } from "./creator_library.ts"; // CREATOR-0 (ADR-0281)
+import {
+  ComfyClient, applyWorkflowTemplate, artifactDir, artifactLedger, buildGif, buildSpriteSheet, decodePngDataUrl,
+  decodeWireFrames, foldArtifacts, storeArtifact, type ArtifactIo, type ArtifactKind, type CompositionInput,
+  type CreatorArtifact,
+} from "./creator_image.ts"; // CREATOR-IMG (ADR-0291): generation, mixing, sheets, GIFs, memes
+import { decodeTimelineDoc, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
+import { decodeMixGraph, mixerTracks, renderAndSaveMix } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer
+import { openComfyProgress, runRenderPipeline, type PipelineDeps, type ScanVerdict } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the video/3D pipeline + its /ws telemetry
+import { blenderJobNeed, runBlenderRender, type SpawnLike } from "./creator_blender.ts"; // CREATOR-3: Blender background renders
+import { manifestCapabilities, parseModelManifest, reconcileManifest } from "../harness/creator/model_manifest.ts"; // CREATOR-3: declared models, reconciled against the probe
+import type { MediaKind } from "../harness/creator/comfy_stream.ts"; // CREATOR-3: the closed media kinds
+import { scanAndDecide } from "../harness/security/gate.ts"; // CREATOR-3: the fail-closed gate every artifact's metadata passes
+import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
+import {
+  createJob, finishJob, jobStats, listJobs, recordJobArtifact, requestJobCancel, startJob,
+  type CreatorJobKind, type JobAdmissionSnapshot, type JobIo,
+} from "./creator_jobs.ts"; // CREATOR-1 (ADR-0292): the durable job ledger
 import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile, saveSpecTrust, loadSpecTrust, listSpecHistory, loadSpecRevision } from "../harness/agent/file_store.ts"; // P-AGENT.2b/.9/.17: spec persistence + trust sidecar + revisions
 import { validateSpec } from "../harness/agent/spec.ts"; // P-AGENT.1: fail-closed Agent Spec validation
 import { buildAgent } from "../harness/agent/compiler.ts"; // P-AGENT.3: spec -> AgentBundle
@@ -87,6 +115,9 @@ import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalP
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+// CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
+// route reports (both flavors resolve it through the same seam).
+import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreatorEndpoint, removeCreatorTarget, upsertCreatorEndpoint, upsertCreatorTarget, type CreatorRemoteTargetDef } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
 // `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
@@ -305,7 +336,7 @@ if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compre
 // backend; off until the user turns it on. Every start is governance-gated (fail-closed): a managed
 // allowServe:false or a bind outside the absolute allowlist is refused BEFORE any listener opens.
 let collabRelay: RelayHandle | null = null;
-const DEFAULT_RELAY_PORT = 8790;
+const DEFAULT_RELAY_PORT = Number(process.env.LUCID_RELAY_PORT) > 0 ? Number(process.env.LUCID_RELAY_PORT) : 8790;
 
 function relayServeStatus() {
   const mc = managedConfig().config;
@@ -629,6 +660,311 @@ function memorySnapshotMemo(path: string | undefined): ReturnType<typeof memoryS
 // 5s memo for /api/system — the process listing spawns one fixed-argv command (ADR-0182 P-SYSRES.1).
 let sysResCache: { at: number; data: { snap: SystemSnapshot; verdict: SystemVerdict; procs: ProcGroup[] } } | null = null;
 
+// ---- CREATOR-0: the Creator control-plane helpers (ADR-0281/0282/0283) ----
+// Every route below is Creator-build gated; these helpers are plumbing over the pure cores
+// (creator_monitor / creator_registry / creator_library) so the routes stay thin.
+
+const PROFILE_IO: ProfileIo = {
+  // node's CpuInfo.times is a fixed-key struct; ProfileIo takes an index signature so tests can inject
+  // fixtures. Structurally identical, so the cast only bridges what inference cannot unify (same as
+  // system_profile's own REAL_IO).
+  cpus: () => cpus() as unknown as { model: string; speed: number; times: Record<string, number> }[],
+  totalmem,
+  freemem,
+  sleep: (ms) => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, ms);
+    return promise;
+  },
+};
+
+/** The one GPU command, run with a FIXED argv and a hard timeout. Never a shell. */
+const gpuExec = (argv: readonly string[]): string =>
+  execFileSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 4000, windowsHide: true, maxBuffer: 1024 * 1024 });
+
+const libraryIo: LibraryIo = {
+  ensureDir: (dir) => { try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ } },
+  readText: (path) => { try { return readFileSync(path, "utf8"); } catch { return ""; } },
+  appendLine: (path, line) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, line + "\n", { mode: 0o600 }); },
+  copyIn: (src, dest) => { copyFileSync(src, dest); return statSync(dest).size; },
+  readBase64: (path) => readFileSync(path).toString("base64"),
+  removeFile: (path) => { try { rmSync(path, { force: true }); } catch { /* the ledger is the truth */ } },
+  exists: (path) => existsSync(path),
+  now: () => Date.now(),
+  id: () => `trk_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
+};
+
+interface CreatorLibraryData { tracks: CreatorTrack[]; stats: LibraryStats }
+function creatorLibraryData(): CreatorLibraryData {
+  const tracks = foldLibrary(libraryIo.readText(libraryLedger(CREATOR_DIR)));
+  return { tracks, stats: libraryStats(tracks) };
+}
+
+/** Env var per provider that HOLDS its secret at runtime. Settings never carry a secret VALUE. */
+const CREATOR_SECRET_ENV: Record<string, string> = {
+  elevenlabs: "ELEVENLABS_API_KEY",
+  suno: "LUCID_SUNO_TOKEN",
+  comfyui: "LUCID_COMFY_TOKEN",
+};
+
+interface CreatorRegistryData extends CreatorLibraryData {
+  providers: CreatorProviderStatus[];
+  /** CREATOR-1: the last probe per provider, so the UI can show what was proven and how fresh it is. */
+  probes: ProbeResult[];
+}
+// CREATOR-1 (ADR-0292): the last probe per provider. In memory by design - a capability answer goes stale
+// the moment a node is installed or a VPN drops, so it is never persisted as if it were fact.
+const probeCache = new ProbeCache();
+
+function creatorSecretFor(id: CreatorProviderId): string {
+  const env = CREATOR_SECRET_ENV[id];
+  if (env && (process.env[env] ?? "").trim()) return process.env[env]!.trim();
+  const ref = listCreatorEndpoints().find((e) => e.enabled && e.providerId === id && !!e.vaultRef)?.vaultRef;
+  if (!ref) return "";
+  const name = `LUCID_CREATOR_TARGET_${ref.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`;
+  return (process.env[name] ?? "").trim();
+}
+
+const probeDeps: ProbeDeps = {
+  fetchImpl: fetch,
+  exec: (argv) => execFileSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 6000, windowsHide: true, maxBuffer: 512 * 1024 }),
+  exists: (path) => existsSync(path),
+  now: () => Date.now(),
+  secret: creatorSecretFor,
+  timeoutMs: 8000,
+};
+
+function creatorRegistryData(): CreatorRegistryData {
+  const all = listCreatorEndpoints();
+  const now = Date.now();
+  const byProvider: Partial<Record<CreatorProviderId, { endpoints: CreatorEndpointDef[]; secretPresent: boolean; discovered?: readonly CreatorCapabilityId[] }>> = {};
+  for (const id of CREATOR_PROVIDER_IDS) {
+    const mine = all.filter((e) => e.providerId === id);
+    const env = CREATOR_SECRET_ENV[id];
+    // Honest "a credential is registered": either the engine env carries it, or the user stored one in the
+    // vault and the declaration references it by NAME. Nothing here reads a secret value.
+    const secretPresent = !!(env && (process.env[env] ?? "").trim()) || mine.some((e) => e.enabled && !!e.vaultRef);
+    // CREATOR-1: `ready` now requires a LIVE probe that attested something. An expired answer is dropped.
+    byProvider[id] = { endpoints: mine, secretPresent, discovered: probeCache.discovered(id, now) };
+  }
+  return { providers: creatorRegistryStatus(byProvider), probes: probeCache.all(), ...creatorLibraryData() };
+}
+
+// ---- CREATOR-1: jobs ----
+
+const jobIo: JobIo = {
+  ensureDir: (dir) => { try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ } },
+  readText: (path) => { try { return readFileSync(path, "utf8"); } catch { return ""; } },
+  appendLine: (path, line) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, line + "\n", { mode: 0o600 }); },
+  now: () => Date.now(),
+  id: () => `job_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`,
+};
+
+const creatorJobsData = () => { const jobs = listJobs(jobIo, CREATOR_DIR); return { jobs, stats: jobStats(jobs) }; };
+
+/** CREATOR-3: MEASURE ONLY, write no job. The pipeline routes own their own job row (they attach artifacts
+ *  to it), so they take the governor's snapshot and record the job themselves. One measurement path, two
+ *  callers: `admitCreatorJob` below is this plus a job. */
+async function creatorAdmissionSnapshot(label: string, need: { gpu?: boolean; vramMB?: number } = {}): Promise<JobAdmissionSnapshot> {
+  const res = await creatorResources(false);
+  const local = res.targets.find((t) => t.kind === "local");
+  const verdict = creatorAdmission(res.history, { label, ...need }, local?.gpu ?? { available: false, source: "none", devices: [], note: "" });
+  return {
+    ok: verdict.ok, cpuPct: verdict.cpuPct, memPct: verdict.memPct, gpuPct: verdict.gpuPct, vramPct: verdict.vramPct,
+    gpuEvidenceMissing: verdict.gpuEvidenceMissing, reason: verdict.reason,
+  };
+}
+
+/** CREATOR-3: the fail-closed seam the render pipeline scans artifact metadata through. Same sidecar, same
+ *  law as every other import path: a dead or slow scanner returns a BLOCKING decision, never a pass. */
+const creatorScan = (text: string): Promise<ScanVerdict> => scanAndDecide(agentScanner(), text);
+
+/** CREATOR-3: Blender runs as a fixed argument VECTOR through `Bun.spawn`. There is no shell here, and that
+ *  is load-bearing rather than incidental: `ARGV_UNSAFE_CHARS` in blender_cli.ts only refuses what cannot
+ *  ride an argv slot (NUL, newlines, control characters) precisely because nothing re-parses these strings.
+ *  Reintroduce a shell and that guard becomes too weak; creator_blender.test.ts fails if anyone tries. */
+const blenderSpawn: SpawnLike = async (argv, opts) => {
+  const proc = Bun.spawn([...argv], { cwd: opts.cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const timer = setTimeout(() => { try { proc.kill(); } catch { /* already exited */ } }, opts.timeoutMs);
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr };
+  } finally { clearTimeout(timer); }
+};
+
+/** Ask the governor, then record the answer as a job. A refusal becomes a `refused` job carrying the measured
+ *  reason, so the user sees WHY nothing happened instead of a silent no-op. */
+async function admitCreatorJob(kind: CreatorJobKind, label: string, provider: string, need: { gpu?: boolean; vramMB?: number } = {}):
+  Promise<{ ok: boolean; jobId: string; reason: string }> {
+  const snapshot = await creatorAdmissionSnapshot(label, need);
+  const job = createJob(jobIo, CREATOR_DIR, { kind, label, provider, admission: snapshot });
+  if (!snapshot.ok) return { ok: false, jobId: job.id, reason: snapshot.reason };
+  startJob(jobIo, CREATOR_DIR, job.id, snapshot);
+  return { ok: true, jobId: job.id, reason: "" };
+}
+
+// The pressure window lives in memory: it is presentation + admission evidence, never an audit log.
+let creatorHistory: CreatorSample[] = [];
+let creatorResCache: { at: number; data: CreatorResourcesData } | null = null;
+let creatorProcsCache: { at: number; procs: ProcGroup[] } | null = null;
+
+function errorTarget(t: { id: string; label: string }, at: number, reason: string): TargetTelemetry {
+  return {
+    id: t.id, label: t.label, kind: "remote", sampledAt: at, ageMs: 0, freshness: "blind",
+    cpu: null, mem: null, gpu: { available: false, source: "none", devices: [], note: reason }, procs: [], error: reason,
+  };
+}
+
+/** Read one remote target. A token rides an Authorization HEADER (never the URL) and never reaches an
+ *  error string. Any failure is an honest blind target, not a fabricated reading. */
+async function remoteTargetTelemetry(t: CreatorRemoteTargetDef): Promise<TargetTelemetry> {
+  const at = Date.now();
+  const headers: Record<string, string> = { accept: t.kind === "dcgm-exporter" ? "text/plain" : "application/json" };
+  const token = t.vaultRef ? (process.env[`LUCID_CREATOR_TARGET_${t.vaultRef.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`] ?? "").trim() : "";
+  if (token) headers.authorization = `Bearer ${token}`;
+  try {
+    const res = await fetch(t.url, { headers, signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return errorTarget(t, at, `that host answered ${res.status}`);
+    if (t.kind === "dcgm-exporter") {
+      const gpu = gpuFromDcgm(await res.text());
+      return { id: t.id, label: t.label, kind: "remote", sampledAt: at, ageMs: 0, freshness: "fresh", cpu: null, mem: null, gpu, procs: [], error: "" };
+    }
+    return telemetryFromAgentJson(await res.json(), t, at);
+  } catch {
+    return errorTarget(t, at, "no answer from that host");
+  }
+}
+
+async function creatorResources(fresh: boolean): Promise<CreatorResourcesData> {
+  const now = Date.now();
+  if (!fresh && creatorResCache && now - creatorResCache.at < 3000) return agedResources(creatorResCache.data, now);
+  const { cpu, mem } = await sampleCreatorCpu(PROFILE_IO);
+  const gpu = sampleLocalGpu(gpuExec);
+  // The process list spawns a command, so it moves on a slower clock than the cheap CPU/GPU sample.
+  if (fresh || !creatorProcsCache || now - creatorProcsCache.at > 15_000) creatorProcsCache = { at: now, procs: topProcesses() };
+  const local: TargetTelemetry = {
+    id: "local", label: "This machine", kind: "local", sampledAt: now, ageMs: 0, freshness: "fresh",
+    cpu, mem, gpu, procs: creatorProcsCache.procs, error: "",
+  };
+  const remotes = await Promise.all(listCreatorTargets().filter((t) => t.enabled).map(remoteTargetTelemetry));
+  creatorHistory = pushCreatorSample(creatorHistory, sampleOf(local));
+  const data: CreatorResourcesData = {
+    targets: [local, ...remotes],
+    history: creatorHistory,
+    admission: creatorAdmission(creatorHistory, { label: "a Creator job" }, gpu),
+    policy: { pressurePct: CREATOR_PRESSURE_PCT, warmPct: CREATOR_WARM_PCT, sustainMs: CREATOR_SUSTAIN_MS },
+  };
+  creatorResCache = { at: now, data };
+  return data;
+}
+
+// ---- CREATOR-IMG (ADR-0291): generation + artifact plumbing ----
+
+const artifactIo: ArtifactIo = {
+  ensureDir: (dir) => { try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ } },
+  writeBytes: (path, bytes) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes, { mode: 0o600 }); },
+  writeText: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text, { mode: 0o600 }); },
+  appendLine: (path, line) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, line + "\n", { mode: 0o600 }); },
+  readText: (path) => { try { return readFileSync(path, "utf8"); } catch { return ""; } },
+  now: () => Date.now(),
+  id: () => `art_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
+};
+
+const creatorArtifacts = (): CreatorArtifact[] => foldArtifacts(artifactIo.readText(artifactLedger(CREATOR_DIR)));
+
+// CREATOR-2 (ADR-0286): the editor renders a timeline in MEMORY and then hands it to the library's own
+// addTrack, which imports from a path - so it needs the one capability LibraryIo lacks. Same byte writer
+// the artifact store uses; nothing else about the library's IO changes.
+const editorIo: EditorIo = { ...libraryIo, writeBytes: artifactIo.writeBytes };
+
+/** The enabled ComfyUI declaration, or null. Its `workflow` field is the user's own exported graph. */
+function comfyEndpoint(): CreatorEndpointDef | null {
+  return listCreatorEndpoints().find((e) => e.enabled && e.providerId === "comfyui" && !!e.baseUrl) ?? null;
+}
+/** The credential for one Creator endpoint, by NAME: a declaration stores a vault REF, and the value only
+ *  ever arrives through the environment the vault populated. Never inlined, never logged, never in a URL. */
+function creatorEndpointToken(ep: CreatorEndpointDef): string {
+  const envName = ep.vaultRef ? `LUCID_CREATOR_TARGET_${ep.vaultRef.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}` : "";
+  return (envName ? process.env[envName] : "") || process.env.LUCID_COMFY_TOKEN || "";
+}
+
+function comfyClient(ep: CreatorEndpointDef): ComfyClient {
+  return new ComfyClient({ baseUrl: ep.baseUrl!, token: creatorEndpointToken(ep), timeoutMs: 20_000 });
+}
+
+interface GenerateReply { ok: boolean; error?: string; data?: { artifacts: CreatorArtifact[]; produced: CreatorArtifact[] } }
+
+/** Generate through the user's OWN workflow template: upload mixed inputs, substitute, submit, wait, import.
+ *  Refuses with the precise missing piece rather than guessing a graph. */
+async function generateCreatorImage(b: Record<string, unknown>): Promise<GenerateReply> {
+  const ep = comfyEndpoint();
+  if (!ep) return { ok: false, error: "No ComfyUI endpoint is configured. Add one in Creator Studio first." };
+  const templateRaw = typeof b.workflow === "string" && b.workflow.trim() ? b.workflow : ep.workflow;
+  if (!templateRaw || !templateRaw.trim()) {
+    return { ok: false, error: "No workflow template is saved for this endpoint. Export your graph from ComfyUI with Save (API Format) and paste it into the endpoint, using {{prompt}}, {{model}}, {{seed}} and {{image:role}} where LUCID should fill values in." };
+  }
+  let template: unknown;
+  try { template = JSON.parse(templateRaw); }
+  catch { return { ok: false, error: "That workflow template is not valid JSON." }; }
+  const client = comfyClient(ep);
+  const prompt = typeof b.prompt === "string" ? b.prompt.slice(0, 4000) : "";
+  const model = typeof b.model === "string" ? b.model : "";
+  // Mixed inputs: each carries a ROLE, so the template binds them by name rather than by position.
+  const inputs: CompositionInput[] = [];
+  const rawInputs = Array.isArray(b.inputs) ? b.inputs.slice(0, 6) : [];
+  for (const [i, item] of rawInputs.entries()) {
+    if (!item || typeof item !== "object") continue;
+    const rec: Record<string, unknown> = item;
+    const role = typeof rec.role === "string" && rec.role.trim() ? rec.role.trim().slice(0, 40) : `input${i + 1}`;
+    const decoded = decodePngDataUrl(rec.dataUrl);
+    if (!decoded.ok) return { ok: false, error: `Input "${role}": ${decoded.error}` };
+    const up = await client.uploadImage(`lucid-${role.replace(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now()}.png`, decoded.bytes, decoded.mime);
+    if (!up.ok || !up.filename) return { ok: false, error: `Input "${role}" could not be uploaded: ${up.error ?? "unknown reason"}.` };
+    inputs.push({ role, filename: up.filename });
+  }
+  const applied = applyWorkflowTemplate(template, {
+    prompt,
+    negative: typeof b.negative === "string" ? b.negative.slice(0, 2000) : "",
+    model,
+    seed: typeof b.seed === "number" ? b.seed : Math.floor(Math.random() * 2 ** 31),
+    width: typeof b.width === "number" ? b.width : undefined,
+    height: typeof b.height === "number" ? b.height : undefined,
+    inputs,
+  });
+  if (applied.unresolved.length) {
+    return { ok: false, error: `The workflow still needs: ${applied.unresolved.join(", ")}. Fill those fields (or remove the placeholders) before generating.` };
+  }
+  const sub = await client.submit(applied.workflow);
+  if (!sub.ok || !sub.promptId) return { ok: false, error: `ComfyUI did not accept the workflow: ${sub.error ?? "unknown reason"}.` };
+  const done = await client.waitForImages(sub.promptId, { pollMs: 1200, maxWaitMs: 240_000 });
+  if (!done.ok || !done.refs) return { ok: false, error: done.error };
+  const produced: CreatorArtifact[] = [];
+  for (const ref of done.refs.slice(0, 8)) {
+    const img = await client.fetchImage(ref);
+    if (!img.ok || !img.bytes) continue;
+    const stored = storeArtifact(artifactIo, CREATOR_DIR, {
+      kind: "image", bytes: img.bytes, mime: img.mime ?? "image/png",
+      width: typeof b.width === "number" ? b.width : 0, height: typeof b.height === "number" ? b.height : 0,
+      source: `comfyui ${client.baseUrl}`, prompt, model,
+    });
+    if (stored.ok && stored.artifact) produced.push(stored.artifact);
+  }
+  if (!produced.length) return { ok: false, error: "That render finished but no image could be read back from the server." };
+  return { ok: true, data: { produced, artifacts: creatorArtifacts() } };
+}
+
+/** Re-age a memoized payload so a cached reading can never present itself as brand new. */
+function agedResources(data: CreatorResourcesData, now: number): CreatorResourcesData {
+  return {
+    ...data,
+    targets: data.targets.map((t) => ({ ...t, ageMs: Math.max(0, now - t.sampledAt), freshness: t.error ? "blind" : freshnessOf(t.sampledAt, now) })),
+  };
+}
+
 function ompBin(): string {
   // Honor the omp the Electron main process resolved (bundled shim / app-managed install) FIRST — exactly
   // like acp_backend.ts. Without this, the OAuth broker + logout here resolved a DIFFERENT omp (a stale
@@ -646,7 +982,13 @@ function ompBin(): string {
 const DESKTOP_DIR = engineDesktopDir(import.meta.dir, process.execPath, existsSync);
 const REPO_DIR = join(DESKTOP_DIR, "..");
 const ROOT = join(DESKTOP_DIR, "renderer");
-const PORT = Number(process.env.PORT ?? 5319);
+// CREATOR-0 (ADR-0279): the engine serves on its FLAVOR's native port (Agent 5319, Creator 5320) unless
+// PORT overrides it, so both products can run side by side with no launcher gymnastics.
+const BUILD = flavorInfo(resolveBuildFlavor(process.env));
+const PORT = Number(process.env.PORT ?? BUILD.defaultPort);
+// CREATOR-0: the Creator data root (library ledger, artifacts). Falls back beside the settings file so a
+// browser-only dev run still works without Electron having threaded LUCID_CREATOR_DIR.
+const CREATOR_DIR = process.env.LUCID_CREATOR_DIR || join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "creator");
 // ADR-0024: per-launch capability token. Minted once per server process, injected into the served
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
@@ -2267,6 +2609,413 @@ const server = Bun.serve({
         }
         return json({ ok: true, data: sysResCache.data });
       }
+      // CREATOR-0 (ADR-0279): this build's identity - flavor, ports, data roots, and which Creator
+      // surfaces exist. Token-gated like the rest of /api (it names local paths); it NEVER carries a
+      // credential, a vault ref, or decrypted material.
+      if (p === "/api/build-info") {
+        return json({ ok: true, data: buildInfoView(BUILD, {
+          version: APP_VERSION,
+          port: PORT,
+          dataRoot: process.env.LUCID_DATA_ROOT || "",
+          settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
+          personalDir: personalBaseDir(),
+        }) });
+      }
+      // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail. Creator builds
+      // only; a standard build refuses rather than growing a surface it does not ship.
+      if (p === "/api/creator/resources") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator resources are only in the Creator build." });
+        return json({ ok: true, data: await creatorResources(url.searchParams.get("fresh") === "1") });
+      }
+      // CREATOR-0 (ADR-0282): the integration registry - every provider, its honest capability labels,
+      // and whether THIS machine has an endpoint and a credential for it.
+      if (p === "/api/creator/registry") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
+        return json({ ok: true, data: creatorRegistryData() });
+      }
+      // CREATOR-0: upsert / remove one endpoint DECLARATION. Fail-closed: an invalid declaration (shell
+      // string, credential in the URL, pasted secret) is refused with its reasons and nothing is stored.
+      if (p === "/api/creator/endpoint" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
+        const b = await readBody<{ remove?: unknown; endpoint?: unknown }>(req);
+        if (typeof b.remove === "string" && b.remove) {
+          return json({ ok: true, data: { removed: removeCreatorEndpoint(b.remove), registry: creatorRegistryData() } });
+        }
+        const raw = (b.endpoint ?? {}) as Partial<CreatorEndpointDef>;
+        const def: CreatorEndpointDef = {
+          id: String(raw.id ?? "").trim().toLowerCase(),
+          providerId: (CREATOR_PROVIDER_IDS as readonly string[]).includes(String(raw.providerId)) ? String(raw.providerId) as CreatorProviderId : "comfyui",
+          label: String(raw.label ?? "").trim(),
+          baseUrl: raw.baseUrl ? String(raw.baseUrl).trim() : undefined,
+          command: raw.command ? String(raw.command).trim() : undefined,
+          args: Array.isArray(raw.args) ? raw.args.slice(0, 24).map((a) => String(a)) : undefined,
+          zone: raw.zone === "internal" || raw.zone === "external" ? raw.zone : "local",
+          vaultRef: raw.vaultRef ? String(raw.vaultRef).trim() : undefined,
+          workflow: raw.workflow ? String(raw.workflow) : undefined,
+          enabled: raw.enabled !== false,
+        };
+        const r = upsertCreatorEndpoint(def);
+        return json({ ok: r.ok, error: r.ok ? undefined : r.errors.join("; "), data: { registry: creatorRegistryData() } });
+      }
+      // CREATOR-0 (ADR-0283): remote monitoring targets (a DGX Spark, a GPU VM behind the VPN).
+      if (p === "/api/creator/target" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator resources are only in the Creator build." });
+        const b = await readBody<{ remove?: unknown; target?: unknown }>(req);
+        if (typeof b.remove === "string" && b.remove) return json({ ok: true, data: { removed: removeCreatorTarget(b.remove) } });
+        const raw = (b.target ?? {}) as Record<string, unknown>;
+        const def = {
+          id: String(raw.id ?? "").trim().toLowerCase(),
+          label: String(raw.label ?? "").trim(),
+          url: String(raw.url ?? "").trim(),
+          kind: raw.kind === "lucid-agent" ? "lucid-agent" as const : "dcgm-exporter" as const,
+          vaultRef: raw.vaultRef ? String(raw.vaultRef).trim() : undefined,
+          enabled: raw.enabled !== false,
+        };
+        const v = validateRemoteTarget(def);
+        if (!v.ok) return json({ ok: false, error: v.errors.join("; ") });
+        upsertCreatorTarget(def);
+        return json({ ok: true, data: { saved: true } });
+      }
+      // CREATOR-0 (ADR-0281): the local track library - list, import, review, remix, re-prompt, remove.
+      // Every one of these works with no provider API at all.
+      if (p === "/api/creator/library") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator library is only in the Creator build." });
+        if (req.method === "POST") {
+          const b = await readBody<Record<string, unknown>>(req);
+          const op = String(b.op ?? "");
+          const id = typeof b.id === "string" ? b.id : "";
+          if (op === "add" || op === "remix" || op === "reprompt") {
+            const r = addTrack(libraryIo, CREATOR_DIR, {
+              sourcePath: String(b.sourcePath ?? ""),
+              title: typeof b.title === "string" ? b.title : undefined,
+              origin: typeof b.origin === "string" ? b.origin as TrackOrigin : undefined,
+              prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+              lyrics: typeof b.lyrics === "string" ? b.lyrics : undefined,
+              tags: Array.isArray(b.tags) ? b.tags.map((t) => String(t)) : undefined,
+              parentId: op === "add" ? null : id,
+              kind: op === "add" ? "original" : op === "remix" ? "remix" : "reprompt",
+            });
+            return json({ ok: r.ok, error: r.error, data: creatorLibraryData() });
+          }
+          if (op === "update") {
+            const r = updateTrack(libraryIo, CREATOR_DIR, id, {
+              title: typeof b.title === "string" ? b.title : undefined,
+              prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+              lyrics: typeof b.lyrics === "string" ? b.lyrics : undefined,
+              tags: Array.isArray(b.tags) ? b.tags.map((t) => String(t)) : undefined,
+              rating: b.rating === null ? null : typeof b.rating === "number" ? b.rating : undefined,
+              review: typeof b.review === "string" ? b.review : undefined,
+            });
+            return json({ ok: r.ok, error: r.error, data: creatorLibraryData() });
+          }
+          if (op === "remove") {
+            const r = removeTrack(libraryIo, CREATOR_DIR, id);
+            return json({ ok: r.ok, error: r.error, data: creatorLibraryData() });
+          }
+          return json({ ok: false, error: "Unknown library operation." });
+        }
+        return json({ ok: true, data: creatorLibraryData() });
+      }
+      // CREATOR-1 (ADR-0292): probe one provider (or every declared one) and cache what it PROVED. This is
+      // what turns registry state `configured` into a truthful `ready`.
+      if (p === "/api/creator/probe" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator probes are only in the Creator build." });
+        const b = await readBody<{ providerId?: unknown }>(req);
+        const endpoints = listCreatorEndpoints();
+        const wanted = (CREATOR_PROVIDER_IDS as readonly string[]).includes(String(b.providerId))
+          ? [String(b.providerId) as CreatorProviderId]
+          : [...CREATOR_PROVIDER_IDS];
+        for (const id of wanted) {
+          const job = createJob(jobIo, CREATOR_DIR, { kind: "probe", label: `probe ${id}`, provider: id });
+          startJob(jobIo, CREATOR_DIR, job.id);
+          const r = await probeProvider(probeDeps, id, endpoints);
+          probeCache.set(r);
+          finishJob(jobIo, CREATOR_DIR, job.id, r.state === "ready" ? "done" : "failed", r.state === "ready" ? "" : `${r.state}: ${r.detail}`);
+        }
+        return json({ ok: true, data: { registry: creatorRegistryData(), ...creatorJobsData() } });
+      }
+      // CREATOR-1: the job ledger - what ran, what it produced, what the governor measured, what failed.
+      if (p === "/api/creator/jobs") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator jobs are only in the Creator build." });
+        if (req.method === "POST") {
+          const b = await readBody<{ cancel?: unknown }>(req);
+          const r = requestJobCancel(jobIo, CREATOR_DIR, String(b.cancel ?? ""));
+          return json({ ok: r.ok, error: r.error, data: creatorJobsData() });
+        }
+        return json({ ok: true, data: creatorJobsData() });
+      }
+      // CREATOR-IMG (ADR-0291): the model dropdown - a LIVE probe of the configured ComfyUI install's own
+      // loaders. No hardcoded model list, and an unreachable server says so instead of offering fiction.
+      if (p === "/api/creator/models") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const ep = comfyEndpoint();
+        if (!ep) return json({ ok: true, data: { models: [], endpoint: "", note: "Connect a ComfyUI endpoint in Creator Studio to list its models." } });
+        const probe = await comfyClient(ep).probeModels();
+        return json({ ok: true, data: { models: probe.models, endpoint: ep.baseUrl ?? "", note: probe.note } });
+      }
+      // CREATOR-IMG: generate an image from a prompt plus mixed input images, through the USER's own workflow
+      // template. Fail-closed at every step: no endpoint, no template, or an unresolved placeholder refuses
+      // with the exact reason rather than submitting a half-built graph.
+      if (p === "/api/creator/image" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        // CREATOR-1: a generation is a JOB - admitted by the governor, recorded with what it produced.
+        const label = typeof b.prompt === "string" && b.prompt.trim() ? b.prompt.trim().slice(0, 80) : "image generation";
+        const admit = await admitCreatorJob("image", label, "comfyui", { gpu: true });
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { ...creatorJobsData() } });
+        const r = await generateCreatorImage(b);
+        for (const a of r.data?.produced ?? []) recordJobArtifact(jobIo, CREATOR_DIR, admit.jobId, a.id);
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.error ?? "");
+        return json({ ok: r.ok, error: r.error, data: r.data ? { ...r.data, ...creatorJobsData() } : { ...creatorJobsData() } });
+      }
+      // CREATOR-3 (ADR-0287): a VIDEO or 3D render through the user's own workflow. Every gate in one place
+      // and in this order: a live probe must have ATTESTED the capability, the governor must admit the work,
+      // the template must have no holes, the bytes must prove their own type, and the server-supplied
+      // metadata must clear the fail-closed scanner before anything is written. The seam's result object is
+      // returned WHOLE rather than hand-projected, so the pane reads the same fields the tests pin.
+      if (p === "/api/creator/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const kind: MediaKind = b.kind === "model-3d" ? "model-3d" : b.kind === "image" ? "image" : "video";
+        const ep = comfyEndpoint();
+        if (!ep) return json({ ok: false, error: "No ComfyUI endpoint is configured. Add one in Creator Studio first." });
+        const templateRaw = typeof b.workflow === "string" && b.workflow.trim() ? b.workflow : ep.workflow;
+        if (!templateRaw || !templateRaw.trim()) {
+          return json({ ok: false, error: `No workflow template is saved for this endpoint. Export the graph that produces your ${kind} from ComfyUI with Save (API Format) and paste it into the endpoint, using {{prompt}}, {{model}} and {{seed}} where LUCID should fill values in.` });
+        }
+        let template: unknown;
+        try { template = JSON.parse(templateRaw); }
+        catch { return json({ ok: false, error: "That workflow template is not valid JSON." }); }
+        const prompt = typeof b.prompt === "string" ? b.prompt.slice(0, 4000) : "";
+        const label = prompt.trim() ? `${kind}: ${prompt.trim().slice(0, 70)}` : `${kind} render`;
+        const deps: PipelineDeps = { client: comfyClient(ep), artifactIo, jobIo, scan: creatorScan, now: () => Date.now() };
+        // The websocket is opened BEFORE the submit, so the first frames of a fast render are not missed,
+        // and closed in the `finally` whatever happens: an unclosed socket would keep the drain alive past
+        // the response. A server with no reachable socket simply yields no feed and polling decides.
+        const clientId = `lucid-${randomBytes(8).toString("hex")}`;
+        const socket = openComfyProgress(ep.baseUrl ?? "", creatorEndpointToken(ep), clientId);
+        try {
+        const run = await runRenderPipeline(deps, CREATOR_DIR, {
+          kind,
+          workflow: template,
+          clientId,
+          feed: socket?.feed,
+          spec: {
+            prompt,
+            negative: typeof b.negative === "string" ? b.negative.slice(0, 2000) : "",
+            model: typeof b.model === "string" ? b.model : "",
+            seed: typeof b.seed === "number" ? b.seed : Math.floor(Math.random() * 2 ** 31),
+            width: typeof b.width === "number" ? b.width : undefined,
+            height: typeof b.height === "number" ? b.height : undefined,
+          },
+          // The probe cache is the ONLY source of attested capability, and it returns nothing once a probe
+          // has expired, so a stale install refuses here rather than at the server.
+          attested: probeCache.discovered("comfyui", Date.now()) ?? [],
+          admission: await creatorAdmissionSnapshot(label, { gpu: true }),
+          label,
+          maxArtifacts: typeof b.maxArtifacts === "number" ? b.maxArtifacts : undefined,
+          poll: { pollMs: 1200, maxWaitMs: 600_000 },
+        });
+        return json({ ok: run.ok, error: run.error, data: { run, artifacts: creatorArtifacts(), ...creatorJobsData() } });
+        } finally { socket?.close(); }
+      }
+      // CREATOR-3: a Blender BACKGROUND render. Fixed argv, no shell. A user `--python` script is the user's
+      // own code, so it needs `approved: true` (the exec-approval decision) before it will run: LUCID adds no
+      // Python of its own (invariant 2) and never runs someone else's silently.
+      if (p === "/api/creator/blender" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const ep = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "blender" && !!e.command);
+        const exe = typeof b.exe === "string" && b.exe.trim() ? b.exe.trim() : (ep?.command ?? "");
+        if (!exe) return json({ ok: false, error: "No Blender executable is configured. Add it in Creator Studio first." });
+        const range = b.range && typeof b.range === "object"
+          ? { start: Number((b.range as Record<string, unknown>).start), end: Number((b.range as Record<string, unknown>).end) }
+          : undefined;
+        const input = {
+          exe,
+          blend: String(b.blend ?? ""),
+          outPattern: String(b.outPattern ?? ""),
+          format: b.format as "PNG" | "JPEG" | "OPEN_EXR" | "WEBP" | undefined,
+          engine: b.engine as "CYCLES" | "BLENDER_EEVEE_NEXT" | "BLENDER_WORKBENCH" | undefined,
+          scene: typeof b.scene === "string" ? b.scene : undefined,
+          frame: typeof b.frame === "number" ? b.frame : undefined,
+          range,
+          pythonScript: typeof b.pythonScript === "string" ? b.pythonScript : undefined,
+          approved: b.approved === true,
+          label: typeof b.label === "string" ? b.label : undefined,
+          timeoutMs: typeof b.timeoutMs === "number" ? b.timeoutMs : undefined,
+          cwd: typeof b.cwd === "string" ? b.cwd : undefined,
+          admission: null as JobAdmissionSnapshot | null,
+        };
+        const need = blenderJobNeed(input);
+        input.admission = await creatorAdmissionSnapshot(need.label, need);
+        const run = await runBlenderRender({ spawn: blenderSpawn, jobIo, exists: (path) => existsSync(path), now: () => Date.now() }, CREATOR_DIR, input);
+        return json({ ok: run.ok, error: run.error, data: { run, ...creatorJobsData() } });
+      }
+      // CREATOR-3: the model MANIFEST. A declaration of what a given install can do, reconciled against what
+      // the probe actually reported: the probe is the truth and the manifest is only the claim, so a declared
+      // model the server does not list is reported ABSENT rather than offered.
+      if (p === "/api/creator/manifest" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<{ manifest?: unknown }>(req);
+        const parsed = parseModelManifest(b.manifest);
+        if (!parsed.ok) return json({ ok: false, error: parsed.error });
+        const ep = comfyEndpoint();
+        const probe = probeCache.get("comfyui");
+        const models = ep ? (await comfyClient(ep).probeModels()).models : [];
+        const reconciliation = reconcileManifest(parsed.manifest, {
+          models,
+          attested: probe?.attested ?? [],
+          probeState: probe?.state ?? "skipped",
+          ageMs: probe ? Math.max(0, Date.now() - probe.at) : Number.MAX_SAFE_INTEGER,
+        });
+        return json({ ok: true, data: { reconciliation, claimed: manifestCapabilities(parsed.manifest), warnings: parsed.warnings } });
+      }
+      // CREATOR-IMG: store a renderer-encoded PNG (a meme, a markup export, a canvas composite) as an
+      // artifact with its provenance. The data URL is gated: no SVG, no mislabeled bytes.
+      if (p === "/api/creator/artifact" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const decoded = decodePngDataUrl(b.dataUrl);
+        if (!decoded.ok) return json({ ok: false, error: decoded.error });
+        const kinds: Record<string, ArtifactKind> = { image: "image", sheet: "sheet", gif: "gif", meme: "meme", markup: "markup" };
+        const stored = storeArtifact(artifactIo, CREATOR_DIR, {
+          kind: kinds[String(b.kind ?? "image")] ?? "image",
+          bytes: decoded.bytes,
+          mime: decoded.mime,
+          width: typeof b.width === "number" ? b.width : 0,
+          height: typeof b.height === "number" ? b.height : 0,
+          source: typeof b.source === "string" ? b.source : "local",
+          prompt: typeof b.prompt === "string" ? b.prompt : "",
+          model: typeof b.model === "string" ? b.model : "",
+        });
+        return json({ ok: stored.ok, error: stored.error, data: stored.ok ? { artifact: stored.artifact, artifacts: creatorArtifacts() } : null });
+      }
+      // CREATOR-IMG: compose frames into a sprite sheet PNG plus its manifest and a steps() CSS animation.
+      // Pure TypeScript encoding - no provider, no key, no network.
+      if (p === "/api/creator/sheet" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const frames = decodeWireFrames(b.frames);
+        if (!frames.ok) return json({ ok: false, error: frames.error });
+        const admit = await admitCreatorJob("sheet", `sprite sheet - ${frames.frames.length} frames`, "local");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { ...creatorJobsData() } });
+        const r = buildSpriteSheet(artifactIo, CREATOR_DIR, frames.frames, {
+          name: typeof b.name === "string" ? b.name : "sprite",
+          columns: typeof b.columns === "number" ? b.columns : undefined,
+          durationMs: typeof b.durationMs === "number" ? b.durationMs : undefined,
+        });
+        if (r.ok && r.result) recordJobArtifact(jobIo, CREATOR_DIR, admit.jobId, r.result.artifact.id);
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.error ?? "");
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { artifact: r.result!.artifact, css: r.result!.css, manifest: r.result!.manifest, artifacts: creatorArtifacts(), ...creatorJobsData() } : { ...creatorJobsData() } });
+      }
+      // CREATOR-IMG: encode frames into an animated GIF (GIF89a, global palette, LZW) in-process.
+      if (p === "/api/creator/gif" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const frames = decodeWireFrames(b.frames);
+        if (!frames.ok) return json({ ok: false, error: frames.error });
+        const delays = Array.isArray(b.delayMs) ? b.delayMs.filter((d): d is number => typeof d === "number") : undefined;
+        const admit = await admitCreatorJob("gif", `gif - ${frames.frames.length} frames`, "local");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { ...creatorJobsData() } });
+        const r = buildGif(artifactIo, CREATOR_DIR, frames.frames, {
+          delayMs: delays && delays.length ? delays : (typeof b.delayMs === "number" ? b.delayMs : 100),
+          loop: typeof b.loop === "number" ? b.loop : 0,
+        });
+        if (r.ok && r.artifact) recordJobArtifact(jobIo, CREATOR_DIR, admit.jobId, r.artifact.id);
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.error ?? "");
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { artifact: r.artifact, artifacts: creatorArtifacts(), ...creatorJobsData() } : { ...creatorJobsData() } });
+      }
+      // CREATOR-IMG: the artifact list, and one artifact's bytes as a data URL (for inline display and for
+      // the hand-off into the Preview panel's existing markup surface).
+      if (p === "/api/creator/artifacts") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const id = url.searchParams.get("id");
+        if (!id) return json({ ok: true, data: { artifacts: creatorArtifacts() } });
+        const art = creatorArtifacts().find((a) => a.id === id);
+        if (!art) return json({ ok: false, error: "That artifact is not in the library." });
+        try {
+          const bytes = readFileSync(join(artifactDir(CREATOR_DIR), art.file));
+          return json({ ok: true, data: { artifact: art, dataUrl: `data:${art.mime};base64,${bytes.toString("base64")}` } });
+        } catch { return json({ ok: false, error: "That artifact's file is missing." }); }
+      }
+      // CREATOR-0: playable bytes for one track, base64 + mime like the TTS path (the renderer turns it
+      // into one blob URL). Path-confined: the id resolves through the ledger, never a caller path.
+      if (p === "/api/creator/track") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator library is only in the Creator build." });
+        const r = trackAudio(libraryIo, CREATOR_DIR, url.searchParams.get("id") ?? "");
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { audioB64: r.audioB64, mime: r.mime, title: r.title } : null });
+      }
+      // CREATOR-2 (ADR-0286): open one track as a follow-along timeline - its audio, its waveform, the words
+      // bound to it, and the PROVENANCE of that binding (carried verbatim from the aligner, never re-worded).
+      // A container the editor cannot decode is refused by name; there is no transcoder to pretend with.
+      if (p === "/api/creator/editor/open" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator editor is only in the Creator build." });
+        const b = await readBody<{ trackId?: unknown; text?: unknown; buckets?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That editor request was not JSON." });
+        const r = openEditor(libraryIo, CREATOR_DIR, {
+          trackId: typeof b.trackId === "string" ? b.trackId : "",
+          text: typeof b.text === "string" ? b.text : undefined,
+          buckets: typeof b.buckets === "number" ? b.buckets : undefined,
+        });
+        return json({ ok: r.ok, error: r.error, session: r.session });
+      }
+      // CREATOR-2: save an edit. The document is gated off the wire fail-closed (one malformed word refuses
+      // the body), then rendered and APPENDED as a remix - the edited track keeps its bytes and its row.
+      if (p === "/api/creator/editor/save" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator editor is only in the Creator build." });
+        const b = await readBody<{ trackId?: unknown; doc?: unknown; title?: unknown; prompt?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That editor request was not JSON." });
+        const decoded = decodeTimelineDoc(b.doc);
+        if (!decoded.ok) return json({ ok: false, error: decoded.error });
+        const r = saveEdit(editorIo, CREATOR_DIR, {
+          trackId: typeof b.trackId === "string" ? b.trackId : "",
+          doc: decoded.doc,
+          title: typeof b.title === "string" ? b.title : "",
+          prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+        });
+        // The result IS this route's wire shape, so it is returned whole. A hand-written field-by-field
+        // projection here would be a SECOND copy of that contract living in the one file no headless test
+        // can import, where a dropped or renamed field reaches the pane as a report its guard refuses on
+        // every clean save, with the suite still green. Same reasoning as /api/creator/mixer/render.
+        return json(r);
+      }
+      // CREATOR-5 (ADR-0289): the layers a mix can be built from, plus the format the mix will run at (the
+      // MAJORITY WAV format in the library, because this build ships no resampler). Every WAV is listed with
+      // its real sample rate and channel count, so the UI can say WHY a track is not offered instead of
+      // hiding it; nulls mean the format is unknown to this build, never a guess and never 0.
+      if (p === "/api/creator/mixer/tracks") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator mixer is only in the Creator build." });
+        const r = mixerTracks(libraryIo, CREATOR_DIR);
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { tracks: r.tracks, sampleRate: r.sampleRate, channels: r.channels } : null });
+      }
+      // CREATOR-5: render a mix and APPEND it. The graph is untrusted input, gated field by field like a
+      // timeline (one malformed clip refuses the body rather than rendering a layer short), and every source
+      // it names must resolve - a mix that quietly substituted silence would be a lie the rendered file could
+      // not admit. Headroom is opt-in, and the EXACT gain applied comes back in the answer.
+      if (p === "/api/creator/mixer/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator mixer is only in the Creator build." });
+        const b = await readBody<{ graph?: unknown; title?: unknown; prompt?: unknown; primaryTrackId?: unknown; applyHeadroom?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That mixer request was not JSON." });
+        const decoded = decodeMixGraph(b.graph);
+        if (!decoded.ok) return json({ ok: false, error: decoded.error });
+        const r = renderAndSaveMix(editorIo, CREATOR_DIR, {
+          graph: decoded.graph,
+          title: typeof b.title === "string" ? b.title : "",
+          prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+          primaryTrackId: typeof b.primaryTrackId === "string" ? b.primaryTrackId : "",
+          applyHeadroom: b.applyHeadroom === true,
+        });
+        // Deliberately NOT a field-by-field projection like the editor's save above: RenderMixResult IS this
+        // route's wire shape (ok, error and the measurements, all top-level, which is why bridge.ts runs
+        // isRenderMixReport on the body itself), and `error: undefined` drops on serialization. Re-listing
+        // the fields here would put the same invariant in two places, and only the seam's copy is testable:
+        // dev.ts cannot be imported headless, so a key dropped from a re-listing would reach the pane as "a
+        // report this build cannot read" on every clean render with every test still green. One copy, owned
+        // by desktop/creator_mixer.test.ts. The GET above keeps its projection because there the result is
+        // NOT the wire shape: it nests under `data`.
+        return json(r);
+      }
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
@@ -2906,7 +3655,9 @@ const server = Bun.serve({
       // P-ACP.3: the composer's 3-way Plan/Ask/Agent. Ask = omp `default` + per-tool approval prompts.
       if (p === "/api/uimode" && req.method === "POST") {
         const b = await readBody<{ uiMode?: unknown }>(req);
-        const m = b.uiMode === "ask" ? "ask" : b.uiMode === "plan" ? "plan" : "agent";
+        // CREATOR-0 (ADR-0279): `creator` is accepted only in a Creator build; anywhere else it folds to
+        // `agent`, so a forged POST cannot light up a surface this build does not ship.
+        const m: UiMode = normalizeUiMode(b.uiMode, BUILD.creatorBuild);
         return json({ ok: true, data: await backend.setUiMode(m) });
       }
       // P-ACP.3: the renderer's answer to a forwarded tool-permission request (Ask mode). optionId

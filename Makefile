@@ -43,9 +43,29 @@ install-sidecar: ## Create/sync the pinned Python sidecar venv
 .PHONY: test
 test: test-harness test-sidecar ## Run all tests
 
+# The gate's scope is defined by EXCLUSION, never by positional patterns. `bun test desktop harness`
+# reads like a directory scope and is not one: bun treats positional args as SUBSTRING matches against
+# the whole path, so adding `tools` also selects every vendor/oh-my-pi/**/tools/** file. Measured on this
+# repo: exclusion-only 357 files / 11 fail, versus `bun test desktop harness tools` 486 files / 125 fail.
+# Each exclusion is a tree whose tests are not this gate's to run:
+#   desktop/release/**   GENERATED. A packaged copy of this repo, so it double-counts every test in it.
+#   vendor/**            NOT OURS: oh-my-pi's own suite. Gitignored (.gitignore:13), but bun walks it
+#                        regardless. Including it reports 1659 files / 942 fail, which is why the
+#                        documented gate had never once reproduced the numbers PROGRESS.md quotes.
+#   lucidaddon_audit/**  OURS, but 11 independently-installed packages with their own package.json that
+#                        `make install` does not prepare, so its 51 files fail on missing deps (ajv and
+#                        friends) rather than on anything real. Use `make test-audit` after installing
+#                        them. Excluded LOUDLY here rather than silently omitted by a hand-typed scope.
+# See ADR-0303.
+TEST_IGNORES := --path-ignore-patterns='desktop/release/**' --path-ignore-patterns='vendor/**' --path-ignore-patterns='lucidaddon_audit/**'
+
 .PHONY: test-harness
-test-harness: ## Bun test suite (desktop/release is GENERATED — packaged repo copies must never be tested)
-	$(BUN) test --path-ignore-patterns='desktop/release/**'
+test-harness: ## Bun test suite over first-party code (357 files). TEST_IGNORES above is load-bearing.
+	$(BUN) test $(TEST_IGNORES)
+
+.PHONY: test-audit
+test-audit: ## lucidaddon_audit/ (51 files, 11 packages). NOT part of `make test`: needs its own installs first.
+	cd lucidaddon_audit && $(BUN) test
 
 .PHONY: test-sidecar
 test-sidecar: ## Sidecar smoke test: one request in, well-formed response out
@@ -484,6 +504,38 @@ demo-P-FLEET.1: ## P-FLEET.1 (ADR-0268): async job handles through the agent-fir
 .PHONY: demo-P-FLEET.L1
 demo-P-FLEET.L1: ## P-FLEET.L1 (guard evolved by P-FLEET.L2): local lanes - concurrent gated headless LUCID agents under the sustained-pressure guard (a burst is free, a held line is not), fail-closed approvals (needs-approval glow), cancel/stop hygiene, metadata-only fleet status for the master agent
 	$(BUN) run harness/scripts/demo_pfleetl1.ts
+
+.PHONY: creator-backend-plan
+creator-backend-plan: ## Print the exact commands the Creator-backend setup would run against a remote GPU host, executing NOTHING (pass your host: make creator-backend-plan HOST=gpu-box USER=me). Then drop --dry-run to do it for real.
+	$(BUN) run tools/creator-backend/setup-backend.ts --host $(or $(HOST),gpu-box) $(if $(USER_AT),--user $(USER_AT),) --dry-run
+
+.PHONY: verify-creator-comfy
+verify-creator-comfy: ## CREATOR-1/IMG verification: drives the REAL product code (probe -> capability attestation -> upload -> substitute -> submit -> poll -> read back -> store) against a ComfyUI-shaped fixture, so the whole path is provable with no ComfyUI, no GPU and no network. Point it at your own server with: bun run harness/scripts/verify_creator_comfy.ts --url http://host:8188 --workflow ./graph.json
+	$(BUN) run harness/scripts/verify_creator_comfy.ts
+
+.PHONY: demo-CREATOR-5
+demo-CREATOR-5: ## CREATOR-5 (ADR-0289): the mixer - N takes played AT ONCE and summed to one file, where two layers are the EXACT arithmetic sum at every frame, the same graph renders byte-identical audio twice, and a track silenced by mute, by another track's solo, or by a muted bus contributes exactly nothing (byte-identical to the same graph with that track REMOVED, with the reason named). Clip x track x bus x master levels multiply to a predicted sample, fades and envelopes are half their level at their midpoints, equal-power pan holds total power at 1, and a hot mix REPORTS its true peak and every clipped sample instead of quietly normalizing: headroom is applied only when the caller asks and the exact gain comes back. A missing source and a rate mismatch are refused by name, an edited CREATOR-2 timeline lifts onto a mix track, and a saved mix is a NEW remix naming every input while its inputs keep every byte. A library holding nothing decodable claims NO format at all, which the pane's shape gate accepts as honest while refusing half a format, and the render answer is pinned key for key: every measurement present (clipped 0 included), the headroom factor only when it was asked for, and a refusal carrying its reason and nothing it never measured
+	$(BUN) run harness/scripts/demo_creator5.ts
+
+.PHONY: demo-CREATOR-3
+demo-CREATOR-3: ## CREATOR-3 (ADR-0287): the video and 3D pipelines, end to end. A capability no LIVE probe attested is refused before one byte leaves the machine (and an expired probe attests nothing, so staleness refuses through the same gate); a governor refusal is a written-down `refused` job quoting the percent and the duration it held; a workflow with an unfilled placeholder is never submitted. An artifact's type comes from its own MAGIC BYTES, so a server claiming video/mp4 while sending PNG has its output refused by name and stores nothing. THE SCAN GATE IS FAIL-CLOSED: a dead scanner, a quarantining finding, or a malformed verdict each BLOCK the artifact before it touches the disk, and the job says which. Video and 3D outputs are read by output key and extension (an animated webp is a video, not a still), the /ws stream is telemetry that cannot hang, revive, or corrupt a render (a foreign prompt id, a truncated binary frame and a silent socket are all proven harmless), frame capture is reproducible or reports which of the two ways it lied, Blender runs as a fixed argv with no shell and quotes its own failing line, and a model manifest stays a claim until the probe agrees. Four sections run the REAL product code against a REAL server process over real HTTP and a real websocket
+	$(BUN) run harness/scripts/demo_creator3.ts
+
+.PHONY: demo-CREATOR-2
+demo-CREATOR-2: ## CREATOR-2 (ADR-0286): the follow-along audio editor - alignment DERIVED from the take's own energy is labeled derived and capped below vendor confidence with the reason shown verbatim, a deleted word closes the timeline by exactly its span (and the render's byte length follows), a dragged span re-orders audio without creating or destroying a sample, and a re-rendered span changes ONLY the bytes inside it (the audio before and after comes back byte for byte), with undo re-rendering to the original file, a deterministic render, and a missing source refused BY NAME instead of substituted with silence
+	$(BUN) run harness/scripts/demo_creator2.ts
+
+.PHONY: demo-CREATOR-1
+demo-CREATOR-1: ## CREATOR-1 (ADR-0292): capability PROBES (ComfyUI from its installed nodes, ElevenLabs from its documented model flags, a user-run service proves reachability and admits nothing more, a desktop app proves it is on disk) that turn registry `configured` into a truthful `ready` and EXPIRE, plus the durable job ledger - legal transitions only, the governor's measurement recorded per job, a refusal written down with its reason, and a cancel that is a request until the runner confirms
+	$(BUN) run harness/scripts/demo_creator1.ts
+
+.PHONY: demo-CREATOR-IMG
+demo-CREATOR-IMG: ## CREATOR-IMG (ADR-0291): sprite sheets, animated GIFs, and memes encoded INSIDE LUCID (valid PNG chunks, an LZW stream that decodes back to its own indices, text that always fits), a model dropdown that is a live probe of the user's own ComfyUI install, a workflow with an unfilled placeholder REFUSED rather than guessed, and artifacts that carry the prompt/model/sha256 that produced them
+	$(BUN) run harness/scripts/demo_creator_img.ts
+
+.PHONY: demo-CREATOR-0
+demo-CREATOR-0: ## CREATOR-0 (ADR-0279..0284, ADR-0304): the Creator flavor - a second LUCID on its own identity/port/data root, Creator Mode gated to that build with AGENT security semantics, an honest integration registry (Suno generation is bring-your-own-endpoint, ElevenLabs Studio editing is vendor-app-only), evidence-based CPU/GPU admission where unknown is never idle, a local track library (listen/review/remix/re-prompt) that needs no provider API, and a release channel that cannot be crossed with Agent's in either direction (Creator updates from its own fixed-URL feed, and no Creator release can move the repo pointer Agent's installed base resolves through)
+	$(BUN) run harness/scripts/demo_creator0.ts
 
 .PHONY: demo-P-FLEET.L2
 demo-P-FLEET.L2: ## P-FLEET.L2 (ADR-0273): UNLIMITED lanes gated only by SUSTAINED pressure (90% held 30s - a burst never refuses, a blind sample never counts as load, no evidence fails open), lanes spawned from real GitHub/GitLab/Azure DevOps remotes via the OS folder dialog, per-HOST credentials in the OS-encrypted vault (scoped ref -> env round-trip, never offered cross-host, rides an Authorization header not the URL, redacted from errors), and the minimized status-bar snapshot (one colored dot + count per lane state, needs-approval first)

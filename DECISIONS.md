@@ -19226,6 +19226,1371 @@ re-enter the key once instead (simpler, no secret ever transits a script).
 ADR-0135 (Local Providers + vault delivery), ADR-0206 (port-keyed userData / single-instance lock),
 P-KEYS.1/ADR-0107 (vault metadata, last4), invariant 3 (fail-closed).
 
+## ADR-0279 -- CREATOR-0: the Creator product line - one branch, two flavors, side by side
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `make demo-CREATOR-0` green (7 sections, 49 checks); new suites
+build_flavor 15 / creator_monitor 22 / creator_registry 19 / creator_library 14 / creator_preamble 6 /
+renderer creator_monitor 21 / renderer creator_studio 14 / electron-builder.creator 7; root + renderer +
+server typecheck clean apart from the documented pre-existing `dev.ts` `finish(m[1])` TS2345.
+**Increment:** CREATOR-0, on branch `feature/creator-mode`. Sits beside the P-FLEET.P* profile family
+(ADR-0272): profiles are N project-bound instances of ONE product; a flavor is a DIFFERENT product.
+
+### Context
+
+The ask was a Creator build that (a) runs on its own native port so it can sit beside the main app, (b)
+exposes Creator Mode next to Agent Mode only in that build, (c) has its own installer, and (d) still takes
+master's updates without a fork. The existing seams get close but not there: `LUCID_PORT` gives a second
+instance a port (ADR-0206 territory), and ADR-0272 promoted `LUCID_GUI_SETTINGS_FILE` /
+`LUCID_PERSONAL_DIR` to real isolation seams. What they do NOT give is a distinct PRODUCT: one app id, one
+product name, one installer name, one deep-link scheme, one vault. Two instances of the same app id share a
+single-instance lock keyed on userData, and (ADR-0278) share a Windows os_crypt key per profile directory.
+
+### Decision
+
+1. **`desktop/build_flavor.ts` is the single source of product identity.** Pure, electron-free:
+   `BuildFlavor = agent | creator`, `AGENT_FLAVOR` / `CREATOR_FLAVOR` (appId, productName, displayName,
+   artifactStem, defaultPort, defaultRelayPort, defaultWhisperPort, authProtocol, features),
+   `normalizeBuildFlavor` (anything unrecognized is the STANDARD build), `resolveBuildFlavor`
+   (env `LUCID_BUILD_FLAVOR` > packaged `package.json` `lucidBuildFlavor` > agent), `normalizeUiMode`,
+   `uiModePosture`, and `buildInfoView`.
+2. **Creator identity:** appId `com.lucidcreator.desktop`, productName `LucidCreator`, display name
+   "Lucid Creator", port **5320**, relay 8791, managed whisper 9112, scheme `lucid-creator`, artifacts
+   `LucidCreator-*`, output `desktop/release-creator`. The standard build's values are unchanged, and a
+   test pins them so a Creator edit can never move them.
+3. **`main.ts` resolves the flavor FIRST**, then `app.setName()` (Creator only) before anything reads a
+   userData-derived path, so userData, the single-instance lock, and the os_crypt key all separate
+   naturally. `DEFAULT_PORT`, `AUTH_PROTOCOL`, and `CRED_DIR` come from the flavor; the ADR-0278 seeding is
+   untouched and now operates WITHIN a flavor.
+4. **Data isolation by construction.** Creator's engine child gets `LUCID_GUI_SETTINGS_FILE`,
+   `LUCID_PERSONAL_DIR`, `LUCID_CRED_VAULT_DIR`, `LUCID_CREATOR_DIR`, `LUCID_RELAY_PORT`, and
+   `LUCID_WHISPER_PORT` inside its userData. The standard build gets only DESCRIPTIVE vars, so its on-disk
+   layout does not move by a byte. Nothing is migrated: a vault blob from the other identity would not
+   decrypt anyway (ADR-0278's lesson), so Creator starts empty and the user re-enters secrets.
+5. **Packaging is an overlay, not a fork.** `desktop/build/electron-builder.creator.cjs` deep-clones the
+   build config out of `desktop/package.json` and overrides identity only, with
+   `extraMetadata.lucidBuildFlavor = "creator"` so a packaged Creator resolves its flavor with no env var.
+   `desktop/build/build-creator.ts` compiles `dist/main.js` with the flavor baked in as a define (belt and
+   braces), after wiping `dist/` so a stale Agent bundle can never ship as Creator.
+6. **whisper + relay ports move with the flavor.** whisper.cpp binds SO_REUSEPORT, so a shared port would
+   silently split requests across two model loads (the P-STT.5 bug); the relay binds a socket outright.
+7. **`GET /api/build-info`** (token-gated like the rest of /api) reports flavor, creatorBuild, identity,
+   version, ports, data roots, vault scope, and the feature flags. It carries no credential, no vault ref,
+   and no decrypted material - a test asserts the payload contains no credential-shaped field.
+
+### Deliberately shared
+
+omp's own session store and provider OAuth under `~/.omp/agent`. No supported omp home-relocation seam was
+found, and inventing one would mean patching omp (invariant 1). Documented in docs/CREATOR-MODE.md rather
+than quietly implied.
+
+### Alternatives rejected
+
+- **Same appId + a port suffix (today's dev-beside-installed trick).** Shares the NSIS install GUID, the
+  Start-menu entry, the auto-update feed, and per-ADR-0278 the os_crypt key. Two products, one identity.
+- **A forked branch or a second package.json.** Permanent merge pain, and packaging payload would drift.
+- **Creator as a UserRole.** Roles are cosmetic presentation presets (ADR-0088) that a standard build also
+  has; the ask was a separate build with a separate installer and port.
+- **Migrating Agent data into Creator on first launch.** Cross-identity vault blobs cannot decrypt, and
+  silently copying a personal knowledge store is exactly the surprise this project avoids.
+
+### Invariants preserved
+
+#1 extend-not-fork (env seams + additive endpoints; omp untouched), #2 TypeScript only, #3/#4 unchanged
+(the same in-process gate runs in both flavors), #6 frozen prefix untouched, #7/#8/#10 contracts and
+schema untouched, #11 applies to every new surface, BUSL headers on all new files.
+
+### See also
+
+ADR-0272 (fleet profiles: the OTHER multi-instance shape), ADR-0278 (per-identity safeStorage key),
+ADR-0206 (the single-instance lock this re-keys by product), ADR-0135 (vault-by-reference), docs/CREATOR-MODE.md.
+
+## ADR-0280 -- CREATOR-0: Creator Mode is a UI mode with AGENT security semantics
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT (part of CREATOR-0).
+
+### Context
+
+The ask was literally "Creator Mode next to Agent Mode in the settings, but only for that build". LUCID has
+two candidate homes for that: `UserRole` (onboarding presentation, ADR-0088) and the composer's execution
+mode (`agent | ask | plan`, P-ACP.2/.3). The composer control is the one that sits next to "Agent", and it
+is the one users mean.
+
+### Decision
+
+1. `UiMode` becomes `agent | creator | ask | plan` in `build_flavor.ts`. `harness/contracts.ts` AgentMode
+   is NOT touched: it is a frozen provenance contract, not a renderer control.
+2. **`uiModePosture(mode)` is the single mapping** to (omp mode, permission mode). Creator returns exactly
+   what Agent returns: `default` + `auto`. A test asserts the two are byte-identical, so "Creator" can
+   never quietly become a permission grant. Ask stays the only per-tool-approval posture; Plan stays omp's
+   read-only planner.
+3. **Build gating is absent-not-disabled.** The renderer builds the option list with
+   `modeUiOptions(creatorBuild)`; a standard build never emits the Creator button. `POST /api/uimode` and
+   `AcpBackend.setUiMode` independently re-normalize, so a forged request folds to `agent`.
+4. Entering Creator opens the Studio surface. `AgentPrior.uiMode` widened, so a user who was in Creator and
+   used the hands-free LUCID Agent role returns TO Creator rather than being dropped into plain Agent.
+
+### Alternatives rejected
+
+- **A new `AgentMode` in the frozen contracts.** That file is a frozen contract (invariant 7/8); a UI mode
+  does not belong in it, and changing it would be its own increment for no gain.
+- **A Creator UserRole beside `lucid-agent`.** Roles exist in the standard build too, so it could not be
+  build-gated without lying about what a role is.
+- **A separate permission posture for Creator** (for example auto-approving render tools). Rejected on
+  invariant 3: media work is exactly where an untrusted prompt or asset shows up, so it gets the same gate.
+
+### See also
+
+ADR-0027 (P-ACP.2/.3, the mode control), ADR-0088 (roles are cosmetic), ADR-0251 (the one behavioral role),
+ADR-0279 (the flavor that reveals this mode).
+
+## ADR-0281 -- CREATOR-0: Suno, and the local track library that needs no API
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT (the local half). Cloud generation is capability-probed, not claimed.
+
+### Context
+
+The user asked for Suno music generation with local song storage, listing, library updates, remixing,
+re-prompting, listening, reviewing, and editing. The blocking finding: **Suno has no public self-serve API
+as of 2026.** `docs.suno.com` does not resolve; the only official developer signal is a curated partner
+program announced mid-2026 (Music Business Worldwide, 2026-07-02, quoting Suno's CPO), and everything else
+on offer is a third-party reseller that pools accounts.
+
+### Decision
+
+1. **Split the ask honestly.** Generation is a `unverified-endpoint` capability: the user supplies a partner
+   base URL plus the NAME of a vault token, and LUCID probes before it calls. No Suno endpoint is
+   hardcoded, no reseller is registered, and the web product is never automated.
+2. **Everything local ships now**, in `desktop/creator_library.ts`: an append-only JSONL ledger plus the
+   audio files under `<Creator userData>/creator/library`. Import (mp3/wav/flac/ogg/opus/m4a/aac, 200 MB
+   cap), listen, rate 1-5, review notes, tags, prompt and lyrics, remove, and lineage: `remix` (new audio,
+   same chain) and `reprompt` (same idea, new render) each keep their parent, so `lineageOf` reads oldest
+   first and a chain is cycle-safe and bounded.
+3. **The write path is confined by construction.** The destination file name is derived from a generated id,
+   so nothing a caller passes can steer a write out of the audio directory; a rejected oversize import is
+   rolled back rather than half-stored.
+4. **Torn tails cost one record.** `foldLibrary` skips unparseable or unknown lines, exactly like the fleet
+   lane ledger (P-LOC.4 / P-FLEET.L5 pattern).
+5. Playback returns base64 + mime through `GET /api/creator/track`, mirroring the TTS path, so the renderer
+   builds one blob URL and the control plane keeps a single JSON shape.
+
+### Alternatives rejected
+
+- **Wrapping a third-party Suno reseller.** It pools accounts and can break or vanish; registering it would
+  make LUCID lie about what is official.
+- **Browser-automating suno.com.** Scripting a vendor's UI is fragile, likely against their terms, and
+  exactly the "pretend it is an API" behavior the registry labels exist to prevent.
+- **Waiting for the partner API before shipping anything.** The local library is most of the stated value
+  (store, list, listen, review, remix, re-prompt) and needs no API at all.
+
+### See also
+
+ADR-0282 (the registry that carries the honesty label), ADR-0115 (the ElevenLabs voice path), P-LOC.4 /
+ADR-0211 (the GUI-owned append-only ledger pattern), docs/CREATOR-MODE.md.
+
+## ADR-0282 -- CREATOR-0: the Creator integration registry (honest capability labels)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT (the registry, the declarations, and the Studio surface).
+
+### Context
+
+Creator Mode touches seven external surfaces with wildly different maturity: ElevenLabs (rich documented
+API plus a web product that does more), dots.tts (Apache-2.0 local runtime you host), Suno (no public API),
+ComfyUI (documented server whose CAPABILITY depends on which nodes that install has), three.js (a library,
+not a service), Blender (documented CLI), Unreal (documented CLI plus an opt-in editor control plane). The
+failure mode without a registry is an agent that invents an endpoint or claims a feature the vendor only
+ships in their own UI.
+
+### Decision
+
+1. **`desktop/creator_registry.ts` is a pure catalog** with closed provider ids, closed capability ids,
+   closed transports, and per-capability status from a four-value set: `available` (an official documented
+   surface exists TODAY), `unverified-endpoint` (no public API published; user supplies it, probe first),
+   `product-ui-only` (vendor exposes it only inside their own app), `planned` (roadmap).
+2. **Declarations, never secrets.** `CreatorEndpointDef` carries a base URL or an executable plus a
+   `vaultRef` NAME. `validateCreatorEndpoint` refuses: a non-http(s)/ws(s) URL, credentials embedded in a
+   URL, a shell string or metacharacter where an executable belongs, a transport the provider does not
+   have, and a pasted secret in ANY field (the shared `SECRET_SHAPE` guard, ADR-0134/0135 lineage).
+3. **Availability is folded, not assumed.** `foldProviderStatus` yields `built-in` (three.js),
+   `needs-endpoint`, `needs-credential`, `configured`, or `ready`; a capability becomes usable only if it is
+   `available` AND either local/in-runtime or backed by a live probe, and a probe can never introduce a
+   capability the catalog does not list.
+4. **The Studio shows all of it.** Grouped Audio / Video / 3D / Game / Testing, one-line ellipsized labels,
+   block-paragraph notes, one chip per capability carrying its label and its detail on hover (invariant 11).
+
+### Alternatives rejected
+
+- **A free-text capability list per provider.** The agent would pattern-match it into promises.
+- **Auto-discovering providers by scanning the filesystem or HuggingFace.** Noisy, and it would imply
+  support LUCID has not verified. Discovery is an explicit declaration plus a live probe.
+- **One "enabled" boolean per provider.** Hides the difference between "no endpoint", "no credential", and
+  "documented but not wired", which is precisely what a user needs to see.
+
+### See also
+
+ADR-0135 (Local Providers: declaration + vaultRef + egress zone, the pattern this mirrors), ADR-0115
+(ElevenLabs), ADR-0281 (Suno), ADR-0286..0290 (the workflows these labels gate).
+
+## ADR-0283 -- CREATOR-0: normalized CPU/GPU telemetry, evidence-based admission, and the odometer rail
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT (local collectors, remote contracts, admission, and the rail UX).
+
+### Context
+
+ADR-0182 samples aggregate CPU + RAM and fails OPEN; ADR-0273 added sustained-pressure admission for fleet
+lanes (90% held 30s). Neither knows anything about a GPU, and generative media is the first workload that
+can wedge a machine through VRAM rather than cores. The user asked for CPU and GPU odometer chips in the
+right rail with premium hover, a detailed click-through flyout, and remote DGX / GPU-VM monitoring.
+
+### Decision
+
+1. **One normalized contract** in `desktop/creator_monitor.ts`: `CpuTelemetry` (aggregate + PER CORE),
+   `MemTelemetry`, `GpuDeviceTelemetry` (load, VRAM used/total, temp, power, cap), `GpuTelemetry`
+   (available + source + note), `TargetTelemetry` (local or remote, with `sampledAt`, `ageMs`, and a
+   `fresh | stale | blind` label), and `CreatorResourcesData` as the route payload.
+2. **Collectors that only claim what they measure.** Local CPU/memory from two `os.cpus()` readings
+   (per-core included); local GPU from ONE fixed-argv `nvidia-smi` CSV query. Every other vendor reports
+   `available: false` with a platform-specific reason instead of guessing. `[N/A]` and `Not Supported`
+   parse to `null`, never 0.
+3. **Remote targets are plain HTTP reads** of a user-registered URL: a DCGM/Prometheus exporter (a minimal
+   text-exposition parser that drops NaN/Inf) or a LUCID JSON agent whose every field is optional. The
+   token rides an `Authorization` header, never the URL, and never reaches an error string. A dead host is
+   a blind row carrying its reason.
+4. **Telemetry fails open; admission is evidence-based.** `creatorAdmission` refuses only on a MEASURED
+   streak (CPU, memory, or GPU at 90%+ unbroken for 30s - a cool OR blind sample breaks it, a backwards
+   clock resets the window) or a KNOWN VRAM shortfall, and it reports `gpuEvidenceMissing` so a
+   GPU-needing job on an unmeasurable box is admitted WITHOUT being called an all-clear.
+5. **The rail UX** (`desktop/renderer/creator_monitor.ts`, pure builders): two chips, each a 270 degree
+   graduated SVG dial with needle, hub, and a tabular percentage; one CSS custom property drives arc,
+   needle, glow, and text so green/amber/red is state only. `null` renders as a muted face with "no
+   signal" and NO value arc. Clicking a chip expands the detailed flyout in place (per-core strip,
+   per-device GPU rows, memory, processes, and a trend whose line BREAKS across a gap rather than
+   interpolating). Hot pulses, stale dims, blind dashes the needle; all motion is transform/filter/opacity
+   under the global reduced-motion reset.
+
+### Alternatives rejected
+
+- **Averaging cores into one number only.** Hides the single-pegged-core case that actually stalls a render.
+- **Treating a missing counter as 0%.** The dial would tell a human "go ahead", which is the one thing an
+  honest instrument must not do.
+- **Elevated collectors (macOS `powermetrics`, per-process GPU accounting).** Needs privilege LUCID does
+  not ask for; reported as not collected instead.
+- **Persisting the pressure window.** It is presentation and admission evidence, not an audit log, so it
+  stays in memory and bounded (240 samples).
+
+### See also
+
+ADR-0182 (P-SYSRES.1, the fail-open sampler this extends), ADR-0273 (P-FLEET.L2, the sustained-pressure
+shape reused), ADR-0129 (degrade only on evidence), invariant 11 (the chip label discipline).
+
+## ADR-0284 -- CREATOR-0: Creator instructions, skills, and memory boundaries
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT.
+
+### Context
+
+Creator work needs standing guidance (probe before calling, never invent an API, consent before cloning a
+voice, respect resource admission) and it must not touch the frozen prompt prefix (invariant 6) or leak
+creative context into the standard build's memory.
+
+### Decision
+
+1. **`desktop/creator_preamble.ts`** emits ONE `<critical>` block, and only when `creatorBuild && active`.
+   `desktop/preamble.ts` gained a `creatorMode` slot placed after DESIGN.md invariants and before the
+   spoken-reply block, so it is standing guidance that vanishes the turn after the mode is switched off.
+   `harness/prompt/assembler.ts` is untouched: no PREFIX_VERSION bump, no cache bust.
+2. **The block never grants anything.** It restates Agent security semantics, requires capability
+   discovery, forbids invented APIs, declares external media metadata to be DATA, requires honoring
+   resource admission (unknown is not spare capacity), requires scope-matched consent for voice cloning,
+   and forbids weakening a gate.
+3. **`.agents/skills/creator-studio/SKILL.md`** carries the operational craft: the per-provider capability
+   table with its hard limits, the consent rule, the alignment-data rule for the follow-along editor, the
+   library-as-memory habit, and the verify-before-you-claim list. It lives in the operator-curated
+   `.agents` root, so it is discovered read-only and immutable (ADR-0097 posture).
+4. **Memory boundary:** Creator's GUI settings, Personal Knowledge store, CUI store, audit trail, export
+   vault, and credential vault all live under the Creator userData (ADR-0279 env seams). The promotion gate
+   (P4.3) is unchanged, so nothing generated auto-promotes into semantic memory.
+
+### Alternatives rejected
+
+- **Adding Creator rules to the frozen prefix.** Busts the KV cache for every build, and a mode-specific
+  rule is by definition volatile.
+- **A `--append-system-prompt` block.** Same problem as the prefix, and it would persist after the user
+  left Creator Mode.
+- **Bundling the skill as trusted built-in.** `.agents` is the operator-curated root; treating a new skill
+  as bundled-trusted would sidestep the governance the Skills directory exists to provide.
+
+### See also
+
+ADR-0040 (standing guidance is re-delivered every turn), ADR-0154 (the DESIGN.md slot this sits beside),
+ADR-0248 (the spoken-reply block whose lifecycle it mirrors), ADR-0097 (skill roots and trust).
+
+## ADR-0291 -- CREATOR-IMG: image generation, mixing, markup, sprite sheets, GIFs, and memes
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `make demo-CREATOR-IMG` green (5 sections, 34 checks); new suites
+imaging 23 / creator_image 26 / renderer creator_images 17; renderer bundle builds with the meme math and
+ZERO node-only code (`deflateSync` absent from `app.bundle.js`); typechecks clean apart from the documented
+pre-existing `dev.ts` error.
+**Increment:** CREATOR-IMG, on `feature/creator-mode`, immediately after CREATOR-0 (ADR-0279..0284).
+
+### Context
+
+The ask: image generation with a dropdown of specific models, the ability to mix images with prompts, open
+the result in the Preview panel, mark it up, and build sprite sheets for animation, GIFs, and memes
+NATIVELY in the harness.
+
+Two hard constraints shaped the answer. First, LUCID must not invent a provider API: the only local image
+surface with documented HTTP routes is ComfyUI, and its CAPABILITY is per install (a node set, a model
+directory), so a hardcoded model list would be a lie. Second, invariant 2 forbids new Python and the repo
+has no native image dependency, so "natively in the harness" has to mean pure TypeScript.
+
+### Decision
+
+1. **The encoders live in the harness, in pure TypeScript.** `harness/creator/imaging.ts` owns a PNG
+   encoder (deflate via `node:zlib`, one filter-0 scanline per row, CRC-checked chunks), a GIF89a encoder
+   (deterministic global palette, reserved transparent slot, variable-width LZW with sub-blocks, a
+   NETSCAPE2.0 loop block, per-frame GCE delays in ticks), sprite-sheet geometry (near-square packing,
+   per-cell rects, a frame manifest, a `steps()` CSS animation), and deterministic quantization (exact
+   palette when the art fits, else a 6x6x6 cube plus the most frequent exact colours). Meme geometry sits
+   in `harness/creator/meme_layout.ts` - node-free ON PURPOSE, so the renderer can import it without
+   dragging `node:zlib` into the browser bundle (verified: `deflateSync` does not appear in app.bundle.js).
+2. **The renderer owns rasterization, because it is the only side with an image decoder and real fonts.**
+   Canvas decodes sources to RGBA, draws meme text with measured `measureText` metrics, and encodes memes and
+   markup exports with `toDataURL`. Raw RGBA crosses the loopback control plane for sheets and GIFs (a
+   browser cannot encode GIF), gated by `decodeWireFrames`: max 64 frames, max 2048 px per edge, max 48 MB,
+   and a byte-count mismatch refuses the WHOLE request naming the frame.
+3. **Generation runs the user's OWN workflow.** `GET /api/creator/models` probes `/object_info` and reads
+   model names out of `CheckpointLoaderSimple` / `CheckpointLoader` / `UNETLoader` / `VAELoader`; a renamed
+   or missing shape yields NO models rather than a guess. `POST /api/creator/image` substitutes
+   `{{prompt}}`, `{{negative}}`, `{{model}}`, `{{seed}}`, `{{width}}`, `{{height}}`, and `{{image:role}}`
+   into the template the user exported with ComfyUI's "Save (API Format)", then submits `/prompt`, polls
+   `/history` (which lists only FINISHED prompts, so absence means pending, never an error), and imports
+   `/view` bytes. **Any unresolved placeholder refuses the submit and names it.** A whole-string numeric
+   placeholder stays a NUMBER, because ComfyUI type-checks node inputs.
+4. **Mixing is by ROLE, not by position.** Each staged input carries a name (`style`, `composition`,
+   `background`, ...), is uploaded via `/upload/image`, and binds to `{{image:role}}` case-insensitively. Six
+   inputs is the cap.
+5. **Artifacts carry provenance.** Every stored image records kind, mime, bytes, sha256, dimensions, source,
+   prompt, model, and its sidecars, in an append-only ledger under the Creator data root; the write path is
+   derived from a generated id, so no caller can steer it. Sidecars are the sheet manifest and its CSS.
+6. **Markup is not reinvented.** "Open in Preview" hands the artifact to the EXISTING `/api/preview/image`
+   wrapper (P-IMG.1 / ADR-0208), which already renders inside the sandboxed preview frame with the
+   pen/rect/text markup canvas and Screenshot-to-chat (P-PREVIEW.5).
+7. **Everything local works with nothing configured.** With no endpoint and no key, the pane still builds
+   sheets, GIFs, and memes, and it says so in that state rather than looking broken.
+
+### Alternatives rejected
+
+- **A curated model dropdown.** A model list that is not read from the running server is fiction the moment
+  the user installs or renames a checkpoint.
+- **LUCID generating its own ComfyUI workflow graph.** Node availability varies per install; a generated
+  graph would fail in ways the user cannot debug. The user's exported template is the contract.
+- **Shelling out to ffmpeg or ImageMagick for GIF/PNG.** A new native dependency, absent on a clean machine,
+  and a subprocess where a pure function does. The pure encoders also make the output byte-deterministic and
+  therefore testable.
+- **Encoding GIFs in the renderer.** Canvas has no GIF encoder; a WASM one is a new dependency for something
+  ~200 lines of TypeScript does deterministically.
+- **A second markup canvas for images.** The Preview panel already has one, with screenshot-to-chat wired.
+- **Accepting SVG as an input or artifact.** Script risk; refused exactly as P-IMG.1 refuses it.
+
+### Invariants preserved
+
+#2 TypeScript only (no new Python, no native module), #3 fail-closed on every decode/validate path, #5
+external media metadata stays data, #6 frozen prefix untouched, #10 no schema change (the artifact ledger is
+a GUI-owned JSONL, the P-LOC.4 pattern), #11 the artifact grid uses `minmax(224px,1fr)` tracks with
+single-line ellipsized captions, BUSL headers on all new files.
+
+### See also
+
+ADR-0282 (the registry whose ComfyUI entry this drives), ADR-0208/P-IMG.1 (the image data-URL gate and the
+preview wrapper reused), ADR-0096/P-PREVIEW.* (the markup canvas), ADR-0287 (CREATOR-3, where video
+pipelines and deterministic three.js capture continue this arc), docs/CREATOR-MODE.md.
+
+## ADR-0292 -- CREATOR-1: capability probes and the durable job ledger
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `make demo-CREATOR-1` green (4 sections, 33 checks); new suites
+creator_probe 22 / creator_jobs 13, renderer creator_studio grew to 29; renderer bundle builds; typechecks
+clean apart from the documented pre-existing `dev.ts` error.
+**Increment:** CREATOR-1, the first item of the ADR-0285 roadmap, after CREATOR-0 (ADR-0279..0284) and
+CREATOR-IMG (ADR-0291).
+
+### Context
+
+CREATOR-0 could only report `configured`: a declaration exists and a credential is registered. That is not
+the same as "this will work", and the gap is where an agent starts guessing. Two things were missing:
+
+1. **Nothing ever asked the provider.** ComfyUI publishes its node catalog, ElevenLabs publishes model
+   flags, a desktop app either exists on disk or does not - all of that was unread.
+2. **Creative work had no record.** A generation was a fetch that either returned or did not. Nothing showed
+   what ran, what it produced, how long it took, or what the resource governor measured when it started, and
+   a refusal by the governor vanished into a toast.
+
+### Decision
+
+1. **`desktop/creator_probe.ts`: probes that report only what the answer PROVES.** A closed state set
+   (`ready | unauthorized | unreachable | not-installed | no-capabilities | skipped`) plus an `attested`
+   capability list, with one adapter per surface shape:
+   - **ComfyUI** - `/object_info` is REAL capability discovery: `image` needs `SaveImage`/`PreviewImage`,
+     `video` needs an animation/video combine node, `model-3d` needs a 3D save/load node, `workflow-run`
+     needs a sampler. A server with nodes but no output node is `no-capabilities`, not `ready`.
+   - **ElevenLabs** - `/v1/models` validates the key AND maps documented flags
+     (`can_do_text_to_speech`, `can_do_voice_conversion`, ...) to capabilities; TTS implies streaming and
+     alignment because they ride the same endpoint. No key is `skipped`, never a failure.
+   - **A user-run HTTP service** (dots.tts, a Suno partner endpoint) - reachability is all it proves, and the
+     detail line SAYS so. dots.tts attests `tts`; Suno attests nothing, which is the honest answer.
+   - **A desktop app** (Blender, Unreal) - presence of the declared executable is the proof; a version line
+     on a fixed argv is a bonus, and a tool that refuses `--version` is still installed.
+   - **three.js** - ready by construction: it ships in the renderer.
+   Secrets ride headers (`xi-api-key` for ElevenLabs, `Bearer` elsewhere), never a URL, and never appear in
+   a detail line. Every adapter takes injected IO and returns a result object: a dead endpoint is a state.
+2. **`ready` now requires a live probe.** `foldProviderStatus` no longer treats "configured" plus optimism
+   as ready: when a probe exists, ONLY its attested capabilities are usable (a `built-in` needs no probe).
+   `ProbeCache` is in-memory and time-stamped with `fresh | stale | expired`; an expired answer is dropped
+   rather than allowed to keep a provider looking healthy after the user's VPN dropped.
+3. **`desktop/creator_jobs.ts`: an append-only job ledger under the Creator data root.** Closed kind and
+   state sets, a `canTransition` table enforced on WRITE and again on FOLD (so a hand-edited or
+   out-of-order ledger cannot resurrect a settled job), bounded history (200), torn-tail tolerance, and
+   `jobStats` / `jobDurationMs` for the surface.
+4. **Admission is recorded, refusals included.** `admitCreatorJob` samples the governor, snapshots the
+   measured CPU/memory/GPU/VRAM plus `gpuEvidenceMissing`, and writes the job. A refused admission becomes a
+   `refused` JOB carrying the measured reason - the user asked for work, so the ledger says why it did not
+   happen instead of dropping it into a toast. Image, sheet, and GIF routes all run through it and record
+   their artifact ids.
+5. **Cancel is a REQUEST.** `requestJobCancel` records `cancelRequested` immediately and changes nothing
+   else; the job settles as `cancelled` only when its runner confirms. The UI shows "(stopping)" in between
+   rather than claiming a stop it cannot guarantee.
+6. **Surface:** every provider row gets a Probe button, a probe-everything action, and a probe line (verdict,
+   age, latency, the server's own text - escaped); a Recent jobs strip shows kind, label, state, duration,
+   artifact count, the governor's measurement, and a Stop only while stopping is possible.
+
+### Alternatives rejected
+
+- **Trusting the catalog as capability.** The catalog documents what a VENDOR offers; only a probe knows what
+  THIS install has. Shipping the catalog as truth is how an agent ends up calling a node that is not there.
+- **Persisting probe results.** A capability answer is stale the moment a node is installed. Persisting it
+  would make a stale claim look authoritative across restarts.
+- **Marking a job cancelled on the click.** The runner may be mid-write. Recording the request and waiting
+  for confirmation is the only version that cannot lie.
+- **Dropping a refused admission.** A refusal is the most informative event the governor produces; it earns a
+  row more than a success does.
+- **A queue that runs jobs the user cannot see.** The ledger is a record, not a scheduler: work still runs on
+  the request that started it (the P-FLEET.L3 renderer-drain lesson - never run a turn nobody can watch).
+
+### Invariants preserved
+
+#2 TypeScript only; #3 fail-closed (a probe failure narrows capability, never widens it); #5 remote text is
+data and escaped at render; #6 frozen prefix untouched; #10 no schema change (a GUI-owned JSONL, the P-LOC.4
+pattern); #11 the probe line is a BLOCK paragraph with inline chips, job labels are one-line ellipsized.
+
+### See also
+
+ADR-0282 (the registry whose `ready` state this makes truthful), ADR-0283 (the governor whose measurement
+every job records), ADR-0291 (the image routes now wrapped as jobs), ADR-0285 (the roadmap this is the first
+item of), P-FLEET.L3/ADR-0276 (why a queue never runs work nobody can watch).
+
+## ADR-0293 -- CREATOR-2: the follow-along audio editor
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator2.ts` green (9 sections, 55 checks, and
+breaking one claim exits 1 with the named FAIL); new suites timeline 41 / creator_editor 18 / renderer
+creator_editor 37; the four earlier Creator demos and verify-creator-comfy still green; renderer bundle
+builds (124 modules); license headers clean; zero em dashes. Live on this machine: the Creator engine on
+5320 opened a real 24kHz WAV (derived alignment at 0.531 confidence), saved a trimmed edit to exactly
+96044 bytes / 2000ms, recorded it as a remix whose parent kept all 238844 of its bytes, and refused a
+save naming a source the library does not hold.
+**Increment:** CREATOR-2, the second item of the ADR-0285 roadmap, planned in ADR-0286.
+
+### Context
+
+CREATOR-0 shipped a track library: import, listen, rate, tag, remix by lineage. What it could not do was
+touch the INSIDE of a take. The ask (ADR-0286) was the ElevenLabs-style experience: audio that follows the
+text word by word, tap a word to seek, select a span and drag it, delete it, re-render just that span.
+
+Three things made that harder than a waveform widget:
+
+1. **A local engine gives you no word timings.** whisper.cpp's `/inference` returns text
+   (`harness/voice/transcription.ts` returns `{ text, note }` and nothing more), so for the air-gap path
+   there is no vendor alignment to render. Presenting a guess as an engine fact would be exactly the kind
+   of quiet lie this project keeps writing tests against.
+2. **There is no transcoder and there will not be one.** ADR-0291 put the imaging encoders in pure
+   TypeScript on purpose (air-gap safe, byte-deterministic, testable). Audio inherits that: no ffmpeg, no
+   native module.
+3. **"Re-render just that span" is a correctness claim**, not a feature. If a span re-render perturbs one
+   byte outside the span, the user's earlier work is silently damaged.
+
+### Decision
+
+1. **`harness/creator/timeline.ts` is an EDIT DECISION LIST, not a multitrack.** Clips are contiguous and
+   ordered: clip[0] starts at 0, clip[n] starts where clip[n-1] ends, no gaps and no overlaps, and a gap is
+   an explicit `SILENCE_SOURCE` clip. Every span operation is therefore the same shape (split at both
+   boundaries, splice, `reflow`), and render is a straight byte copy in list order. `validateDoc` returns
+   the REASONS a document is broken, so a test failure names the violated invariant instead of asserting
+   `false`.
+2. **Nothing time-stretches.** A clip's timeline length always equals its source region length, so a trim
+   moves `startMs` and `srcStartMs` together and the rendered samples are always the source's own samples.
+   Pitch-preserving stretch is a DSP project, not a checkbox, and pretending otherwise would sound wrong.
+3. **Alignment provenance is data, and the cap is enforced by the validator.** `TimelineItem` carries
+   `source: "vendor" | "derived"` and a confidence. Vendor timings (the ElevenLabs character shape via
+   `alignFromVendor`) get 1. Anything LUCID works out itself is capped at
+   `DERIVED_CONFIDENCE_CEILING = 0.7`, and a derived item claiming more makes the document INVALID, which
+   makes the render refuse. The honesty label is not advisory: it is load-bearing.
+4. **Derived alignment is a measurement plus a distribution, and the note says which is which.**
+   `frameEnergy` takes per-frame RMS from the PCM; `speechRuns` thresholds against the clip's OWN noise
+   floor (its 10th percentile) so a quiet recording is not read as one long silence, merging gaps shorter
+   than a stop consonant and dropping runs shorter than a word. Words are distributed across the measured
+   runs weighted by their own length. The returned note states the run count against the word count, which
+   is exactly the weakness of the estimate, and the confidence falls out of that ratio.
+5. **Undo is a bounded stack of document SNAPSHOTS, not inverse operations.** ADR-0286's keystone was "undo
+   restores the previous clip exactly"; with snapshots that is structural equality, and the test asserts it
+   both ways (the document is equal field for field, and the re-render is byte-identical to the original).
+   Inverse ops would have to reconstruct a dropped clip's `parentClipId` and `prompt`, which is how a
+   history quietly loses lineage.
+6. **Every re-render is a NEW clip carrying `parentClipId` and the `prompt` that produced it**, and a
+   re-render with no prompt is REFUSED. Lineage (ADR-0281) now reaches inside a track, down to the span.
+7. **Render is fail-closed.** A missing source id, or a source whose format does not match the document,
+   REFUSES the render and names the id and both formats. It never substitutes silence, because silence is
+   what a damaged edit sounds like. A source shorter than its clip pads with silence rather than reading
+   past the end of the buffer.
+8. **The ops run in the RENDERER.** The module is pure with no node imports, so the pane imports it
+   directly and a keystroke costs no round trip; the desktop seam (`desktop/creator_editor.ts`) is touched
+   only to OPEN a track (bytes, peaks, derived alignment) and to SAVE a render, which lands as a new
+   library track with `kind: "remix"` and `parentId` set through the library's own `addTrack`, so id
+   minting and path safety stay in one place.
+9. **WAV-only, refused honestly.** A non-WAV or non-16-bit track is refused with a message naming the
+   track's real mime. The editor never claims a conversion it cannot do.
+
+### Alternatives rejected
+
+- **Overlapping multitrack clips.** Every span op would need a conflict policy and render would need a
+  mixer. That is ADR-0289's job; an EDL is the right shape for word-level editing and it makes contiguity a
+  single testable invariant.
+- **Server-side ops.** A round trip per drag, and a doc crossing the wire on every keystroke, to gain
+  nothing: the module is pure and the audio is already in the renderer.
+- **Inferring word timings from a forced aligner.** That is a model, and a model is a dependency plus a
+  second Python surface (invariant 2). Energy runs plus proportional distribution is weaker and says so.
+- **Presenting derived timings without a label** (or with a flattering confidence). The whole point of the
+  ceiling is that the UI cannot accidentally render a guess as a vendor fact.
+- **Reusing the live analyser tap for the waveform** (ADR-0286 item 4 suggested it). The analyser is a
+  real-time tap on a mic stream; the editor needs the whole file's envelope BEFORE playback, so
+  `waveformPeaks` computes it from the same PCM the alignment measured. Delta from the plan, recorded here.
+- **Transcoding mp3 so every track is editable.** No ffmpeg, no native module, no invented decoder.
+
+### Invariants preserved
+
+#2 TypeScript only, and the core has no node imports at all; #3 fail-closed applied to audio assembly (a
+missing source refuses the render); #5 the words being aligned are user text, escaped at render like every
+other untrusted string; #6 frozen prefix untouched; #7/#8 no change to `contracts.ts`; #10 no schema change
+(the library's append-only JSONL absorbs the saved take); #11 word chips are one-line ellipsized with a
+bounded max-width, and the provenance note is a BLOCK paragraph, never flex siblings.
+
+### See also
+
+ADR-0286 (the plan this implements, with the two deltas noted above), ADR-0281 (the lineage model this
+extends from tracks to spans), ADR-0291 (the pure-encoder precedent), ADR-0289 (the mixer that will consume
+this document), ADR-0073 (the STT seam that supplies text but no timings).
+
+## ADR-0295 -- CREATOR-3: the video and 3D render pipelines
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. Authored by a parallel session; the numbers below are the ones VERIFIED
+independently on this machine, not the ones reported. `bun run harness/scripts/demo_creator3.ts` green
+(13 sections, 101 checks, 0 failures) and proven loud (a sabotaged claim exits 1 naming it); 342 new tests
+across comfy_stream / frame_capture / blender_cli / model_manifest / creator_pipeline / creator_blender /
+renderer creator_pipeline, 0 fail; 774 pass across the 24 Creator-adjacent files (the authoring session's
+787 across 25 is the SAME measurement over one more file, `desktop/build_flavor.test.ts` at 13 tests, and
+774 + 13 = 787: a scope difference, NOT another instance of the release-copy inflation below, which is worth
+stating so a later reader who knows about that bug does not go hunting for an error that is not there);
+harness tree 1494 pass /
+2 fail across 136 files and desktop tree 2626 pass / 9 fail across 215 files, every failure a pre-existing
+Windows path-separator or TS-resolution case in `fs_browse`, `symbol_graph` and `lucid_acp`, files this
+increment never touched; `harness/prompt` 11 pass across 2 files (of which `prefix_compaction` is 4), so the
+frozen prefix is untouched; root typecheck clean; license headers clean; renderer bundle 127 modules.
+**Correction, and the lesson in it.** The first version of this ADR published harness 2335 / 3 and desktop
+4947 / 15. Both were inflated: `bun test` matches paths by substring, so omitting
+`--path-ignore-patterns='desktop/release/**'` (which `make test` always passes) pulls in the PACKAGED COPY
+of the repo under `desktop/release` and double-counts it. The authoring session made that omission on its
+harness runs, and this session reproduced the same number with the same omission and called it independent
+confirmation. It was not: **a matching number is not a second measurement when both runs share a wrong
+flag.** The figures above were re-measured here with the flag, and the flag belongs in every tree-wide count
+this repo publishes.
+**NOT verified, deliberately recorded:** `make` is absent on both machines, so the `demo-CREATOR-3` Makefile
+target is structurally checked (tab-prefixed recipe, one recipe line, `.PHONY` above, shape matched against
+its siblings) and UNEXECUTED; the script was run directly. And no real ComfyUI was involved anywhere: the
+end-to-end sections drive a real server PROCESS over real HTTP and a real websocket, but it is the repo's
+own fixture.
+**Increment:** CREATOR-3, the third item of the ADR-0285 roadmap, planned in ADR-0287.
+
+### Context
+
+Four things had been declared but not built. CREATOR-1's probe already attested `video` and `model-3d` from
+installed nodes and nothing consumed it. CREATOR-IMG polled `/history` and read only the `images` key. The
+registry declared `runtime-feedback` as available over `websocket` while no websocket client existed
+anywhere in the tree. And `storeArtifact` wrote unconditionally, so ADR-0287 item 5 (scan and
+provenance-stamp before the library) was unimplemented.
+
+### Decision
+
+1. **Four pure cores in `harness/creator`.** `comfy_stream.ts`: a closed `ComfyEvent` union, the 8-byte
+   binary preview header, a progress state machine that ignores other prompts and treats `error` and
+   `interrupted` as terminal, output parsing by KEY and EXTENSION so an animated webp reads as `video` and
+   not `image`, plus a magic-byte sniff and mismatch check. `frame_capture.ts`: a fixed timestep derived
+   from the frame INDEX, a fingerprint, a comparator, and an audit that names both ways a capture can lie.
+   `blender_cli.ts`: a fixed argv builder plus an output classifier. `model_manifest.ts`: declaration
+   parsing and reconciliation against a probe.
+2. **`desktop/creator_pipeline.ts` is the seam and the keystone**: probe gate, governor, template, submit,
+   telemetry, `/history`, magic-byte proof, fail-closed metadata scan, store, record. The ORDER is the
+   claim and it is tested: the capability and admission gates run before one byte leaves the machine.
+3. **The scan gate.** Every server-supplied string (filename, subfolder, output key, claimed mime) is
+   wrapped in `UNTRUSTED_CONTENT` delimiters and passed to `scanAndDecide` BEFORE the bytes are written; a
+   thrown, missing, or malformed verdict is a BLOCK. The note states what was proven and ADMITS that the
+   media bytes carry a sha256 and not a content scan, because the Unicode scanner cannot read a video frame.
+4. **`/history` is the authority, `/ws` is telemetry.** `openComfyProgress` opens the socket with a
+   `client_id` and the credential on the handshake header; the drain is concurrent and never awaited,
+   bounded by a frame budget and an idle timeout, so a silent, noisy, dead, or foreign-addressed socket
+   cannot hang, fail, or corrupt a render.
+5. **The bytes decide their own type.** A `content-type` contradicted by the magic bytes is refused by name,
+   and unidentifiable bytes are refused rather than stored under a guessed extension.
+6. **Argv is not a shell.** `ARGV_UNSAFE_CHARS` refuses NUL, newline, CR, tab, and control code points
+   only, so `C:\Program Files (x86)\...\blender.exe` is ACCEPTED. The compensating control is that the
+   runner spawns a vector through `Bun.spawn` with no shell, pinned by a test that walks every argv element
+   for `sh`, `bash`, `cmd.exe`, and `-c`. The ADR-0296 guard split is cited in the module.
+7. **A user `--python` script requires `approved: true`** (the exec-approval path). LUCID adds no `.py`
+   (invariant 2).
+8. **The probe is the truth, the manifest is a claim.** Declared-but-unprobed is never usable,
+   probed-but-undeclared is, and a stale or unauthorized probe blesses nothing.
+
+### Alternatives rejected
+
+- **Awaiting the websocket before polling.** A silent socket would become a hung render.
+- **Trusting `content-type`.** That is the entire point of the magic-byte section.
+- **Letting the ws `executed` frame decide outputs.** `/history` is what ComfyUI itself treats as durable.
+- **A browser-side socket.** No custom headers, so the token could not ride a header.
+- **Scanning media bytes with the Unicode scanner and calling it a content scan.**
+- **Refusing shell metacharacters in local argv paths.** A false refusal is as dishonest as a false pass
+  (ADR-0296).
+
+### Deltas from ADR-0287, recorded rather than glossed
+
+- Item 3 ships as the deterministic clock, the fingerprint, the audit, and PNG encoding of a captured frame.
+  Driving a user's own three.js scene through it from the Preview panel is NOT wired, and the docs say so.
+- Item 5's "scan every artifact" is implemented as scanning every server-supplied STRING, with the
+  bytes-are-hashed-not-scanned limit stated in the product surface instead of papered over.
+- `ArtifactKind` gained `video` and `model-3d`; the stored-media map gained `video/webm`, `video/mp4`,
+  `model/gltf-binary`, and `model/gltf+json`.
+
+### Invariants preserved
+
+#2 TypeScript only, and the four cores are node-free; #3 fail-closed extended to media import; #5 every
+remote string delimited, scanned, and escaped at the pane; #6 prefix untouched; #7/#8 `contracts.ts`
+unchanged; #10 no schema change (the append-only JSONL absorbs artifacts and jobs); #11 the pane's rows are
+single-text elements and its prose is block paragraphs, asserted on the emitted markup.
+
+### See also
+
+ADR-0287 (the plan, with the deltas above), ADR-0292 (the probe whose attestation this finally consumes),
+ADR-0291 (the image path this extends), ADR-0296 (the argv-versus-shell guard split this cites), ADR-0002
+(the scanner IPC contract the scan gate rides).
+
+## ADR-0296 -- argv is not a shell: guarding by threat model, and why a false refusal is a bug
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `tools/creator-backend/setup-backend.ts` 23 tests (was 20), pinned in BOTH
+directions; verified by dry run that a Windows key path reaches `ssh -i` intact. Adopted independently by
+CREATOR-3's Blender runner (ADR-0295 decision 6).
+**Scope:** small and cross-cutting. Recorded because it is a SECURITY POSTURE that looks like a bug to
+someone tightening it back up.
+
+### Context
+
+`setup-backend.ts` (the remote GPU backend driver) guarded every user-supplied string with ONE regex that
+refused shell metacharacters, on the sound principle that the driver refuses rather than escapes. The result:
+`--identity C:\Users\me\.ssh\id_ed25519` was REFUSED. That is the only form a Windows user would ever type
+for an SSH key. A parallel session hit the identical posture in a Blender executable path
+(`C:\Program Files (x86)\Blender\blender.exe`) and said so, which is how it surfaced.
+
+### Decision
+
+**One guard per threat model, because there are two.**
+
+1. **`REMOTE_UNSAFE` (unchanged, strict).** For values that reach the remote SHELL. `ssh` joins its trailing
+   arguments into a command string that the far-side login shell parses, so a metacharacter in the host, the
+   user, `--remote-dir`, or the wheel index genuinely can break out. Refused, never escaped.
+2. **`LOCAL_UNSAFE` (new, narrow).** For values that only ever occupy a slot in an argv array THIS process
+   spawns (`--identity`, `--workflow`). No shell parses those, so a backslash, a space, or a parenthesis is
+   an ordinary character in an ordinary path. What stays refused is what could never be a real path and
+   would matter if a future caller ever did build a string: control characters, quotes, backtick, and `$`.
+
+`--workflow` had been unguarded entirely, which was the same inconsistency from the other side, and it now
+takes the local guard.
+
+**A false refusal is as dishonest as a false pass.** It reads as a bug to the first user who hits it, and it
+teaches them the tool is broken rather than careful. This project spends its credibility on refusing things
+that deserve refusal, so refusing `C:\Program Files (x86)\...` spends it on nothing.
+
+**The compensating control is the load-bearing half.** The narrow guard is only honest while the spawn really
+is a fixed vector with no shell. That must be pinned by a TEST that fails if a shell is reintroduced, not by
+a comment: CREATOR-3's Blender runner does this by walking every argv element for `sh`, `bash`, `cmd.exe`,
+and `-c`.
+
+### Alternatives rejected
+
+- **Escaping instead of refusing.** Quoting rules differ per shell and per platform; the original refusal
+  posture is right, and this ADR narrows only WHERE it applies.
+- **Keeping one regex for simplicity.** Simplicity that produces a wrong answer on the maintainer's own
+  operating system is not simplicity.
+- **Allowing everything in a local path.** A newline in a path that a log parser reads back could forge a
+  line; a NUL truncates what the OS receives. Both stay refused for concrete, stated reasons.
+
+### See also
+
+ADR-0295 decision 6 (the same split applied to the Blender runner, with the no-shell test as its
+compensating control), ADR-0157/P-SANDBOX.1 (why argv discipline matters here at all).
+
+## ADR-0297 -- CREATOR-3b: driving a real scene through the deterministic clock
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT, then CORRECTED TWICE by its own on-device pass, which found a real defect and
+then a flaw in the fix's own measurement. See "What the on-device pass found" below. `demo-CREATOR-3` green at
+14 sections / 125 checks (was 13 / 101); `desktop/renderer/capture_driver.test.ts` 27 tests;
+`preview_bridge.test.ts` 5 -> 9; 454 pass across the 11 affected files, 0 fail; `demo-CREATOR-2`,
+`demo-CREATOR-5`, `demo-P-PREVIEW.6b` and `verify-creator-comfy` still green; root and renderer typechecks
+clean, the server program at its documented baseline; license headers clean; renderer bundle 130 modules (was
+127). Every count measured with `--path-ignore-patterns='desktop/release/**'`, per ADR-0295's correction.
+**On-device status: COMPLETE, both halves.** The bridge half was executed under a real headless Chromium
+against the real reference scene, in a real opaque-origin sandboxed iframe served with the real
+`PREVIEW_FRAME_CSP`, through the real driver with real `toDataURL` readback and a real `OffscreenCanvas`
+decode: 60 frames, `driven: true`, 480x270, 0 missing, 0 stuck, 60 distinct fingerprints. The PANEL half was
+then driven through the real UI on a live engine: open the Preview rail, load the scene by path, press
+Capture. First press disabled the button for the duration, unhid the notice with the driven sentence and the
+audit, and toasted "Capture recorded / 60 frames at 30fps, 480x270. Stored as the baseline for this file."
+Second press produced the fix working in situ: a `warn` toast reading "Capture: no verdict / 330 pixel(s)
+differ between two renders of the SAME time here, so a byte compare cannot judge this scene. The capture
+itself is fine.", with the notice carrying the measured reason in full. WITHOUT the fix that second press
+would have read "Capture: not reproducible" and blamed the user's scene for the compositor. Nothing in the
+capture path is now unexercised on this machine; the only unavailable capability is exact regression compare,
+which the platform itself forbids (see below).
+**Increment:** CREATOR-3b, closing the gap ADR-0295 recorded as unbuilt ("driving a user's three.js scene
+through it from the Preview panel is NOT wired"). Requested directly by the user rather than taken off the
+roadmap.
+
+### Context
+
+CREATOR-3 shipped the deterministic clock, the fingerprint, the comparator and the audit, and nothing that
+drove a real scene through them. The pure core could prove its own arithmetic against synthetic fingerprints;
+it could not tell anyone whether a page in the Preview panel actually renders reproducibly. That is the half a
+user can see, so leaving it unbuilt made the feature a claim rather than a capability.
+
+Two facts about this repo shaped the answer. three.js is deliberately NOT a dependency (removed in
+P-MASCOT.2, and the Creator skill states there is no install and no egress for it), so a scene is a
+user-authored document, not a library LUCID drives. And the preview iframe is opaque-origin sandboxed, so the
+renderer cannot touch its DOM at all: everything must cross a `postMessage` boundary that already exists for
+P-PREVIEW.6b's inspect relay.
+
+### Decision
+
+1. **Capture rides the EXISTING bridge.** The responder is added to `PREVIEW_BRIDGE_JS` in
+   `desktop/preview_bridge.ts` and routed ahead of the inspect/action chain, written so P-PREVIEW.6b's pinned
+   routing contract stays a literal substring of the same line. A second channel would have meant a second
+   security surface to review.
+2. **The contract belongs to the SCENE, not to LUCID.** A document defines `window.lucidRenderAt(tMs)`. The
+   bridge calls it behind a `typeof` check and reads the canvas back with `toDataURL` in the SAME synchronous
+   task. LUCID therefore never evaluates scene code: it calls a function the document itself installed, and
+   the file adds no dynamic-code or markup-writing primitive, which `demo_p_preview_6b.ts` enforces by
+   scanning the bridge string.
+3. **DRIVEN versus SAMPLED, labeled on every verdict.** With the hook, the times are LUCID's and a second
+   pass is a real reproducibility result. Without it, the page can only be sampled on its own clock, and the
+   verdict says so and names the hook that would fix it, because two sampled runs agreeing is luck and two
+   disagreeing is not evidence of a change. This is CREATOR-2's vendor-versus-derived discipline applied to
+   time instead of alignment.
+4. **The parent half is a pure-ish driver with injected I/O** (`desktop/renderer/capture_driver.ts`): plan in,
+   verdict out, with `send` and `decode` supplied by the caller, so the whole exchange is unit-tested with no
+   iframe, no canvas and no clock.
+5. **The boundary is untrusted.** The reply arrives as `unknown` and passes a shape gate before any field is
+   read; the bridge's own refusal sentence is passed through verbatim rather than replaced; and ONE malformed,
+   undecodable or oversized frame refuses the WHOLE pass, because a report built from a surviving subset
+   understates its own `missing` count and can read as a clean capture of a shorter animation.
+6. **The caps are pinned equal.** `MAX_CAPTURE_PASS` (driver) and `CAP_MAX_FRAMES` (bridge) are the same
+   number, asserted by a test that greps the bridge string. A driver that asks for more frames than the bridge
+   will ever return would report a phantom missing frame on every capture.
+7. **A baseline is per session and per file, in memory, and only a DRIVEN clean pass earns one.** A baseline
+   that outlived the session would be compared against a scene since edited, which is worse than having none;
+   a sampled baseline would invite a comparison against timings LUCID never controlled.
+8. **A reference scene ships** (`desktop/scripts/capture_scene_example.html`): self-contained, canvas-2D,
+   deterministic by construction, with a deliberately broken variant beside the honest one so a reviewer can
+   watch the compare catch a sub-pixel wobble that looks fine to the eye. The demo asserts the reference
+   honours its own contract, so the teaching material cannot rot into a lie.
+9. **THE PLATFORM IS MEASURED, NOT ASSUMED** (added after the on-device pass, see below). Before judging a
+   baseline the driver asks the page to render one time twice and diffs the readbacks into a `NoiseFloor`. A
+   compare runs only when that floor proves byte-stable; unmeasured is treated as unproven. Otherwise the
+   verdict is `inconclusive`, no regression is claimed in either direction, and `ok` stays true because the
+   scene did nothing wrong. An inconclusive answer is the third honest outcome beside pass and fail.
+
+### What the on-device pass found, and the defect it exposed
+
+The pass ran the real bridge under headless Chromium and immediately failed in a way the headless tests could
+not: two captures of the reference scene at identical planned times DISAGREED. Diagnosis, in order, each step
+ruling out the previous suspect:
+
+1. The same `tMs` rendered twice inside ONE synchronous pass differed, so it was not a between-pass effect and
+   not the scene's live loop interleaving (the capture loop is synchronous, and `lucidRenderAt` paints
+   synchronously).
+2. Four renders of one time all differed, so it was not first-render warmup.
+3. `save`/`restore` were balanced and the only `clip` was properly nested, so it was not leaked canvas state,
+   which had been the leading hypothesis.
+4. A CONTROL in the same browser settled it. Identical drawing code, including a radial-gradient bloom under
+   `lighter` and a `shadowBlur` arc: a fresh DETACHED canvas reproduced byte-identically three times, a reused
+   detached canvas likewise, and an ATTACHED, VISIBLE canvas did NOT, alternating between two bitmaps in a
+   clean 2-cycle. Readback through a detached copy did not help: `drawImage` inherits the source bitmap.
+
+So the scene was never at fault. **Byte equality of a canvas readback is a property of the PLATFORM**, and the
+driver had assumed it: it compared exact fingerprints, so a real panel would have reported a false regression
+on the user's first click, blaming the user's scene for the compositor's rasterization. That is the defect this
+pass existed to find, and it would have shipped.
+
+**The fix (decision 9).** The driver now MEASURES the platform before it judges: it asks for one time twice,
+diffs the two readbacks with `compareFrames`, and records a `NoiseFloor`. A baseline is compared only when the
+floor proves byte-stable. Unmeasured counts as unproven, not as stable. When it cannot be judged the result is
+`inconclusive: true` with no regression verdict at all, the note quotes the measured numbers and points at the
+alternatives, and `ok` is not set false, because the scene did nothing wrong. Verified against the real
+platform afterwards: the floor came back unstable (63 pixels, up to 27 per channel at t=0), no verdict was
+drawn, and the false failure was gone.
+
+**The second correction: the fix's own measurement was too narrow.** With the floor probed at ONE time, the
+tolerance came out as cell delta 0 + 1, and the honest reference scene FAILED its own compare in the real
+panel: "frame 1 differs: 2 of 576 cells moved more than the measured tolerance of 1, up to 3". A single-point
+probe does not bound jitter over a 60-frame pass. So the floor is now sampled at `FLOOR_SAMPLE_POINTS = 3`
+times ACROSS the plan, each duplicated in place, and the worst pair decides. A tolerance has to be measured
+over the same domain the comparison covers.
+
+Worth stating why measuring was the ONLY answer, rather than one of several: detaching was never available.
+`capture()` takes the LARGEST canvas in the document when no selector is given, so it reads an attached,
+visible canvas by construction, which is exactly the case that does not rasterize the same drawing twice. The
+floor is therefore not a workaround for a shortcut and not a concession to a flaky scene; it is the only
+honest verdict the platform leaves available. (Observed while checking this finding against the PWA screenshot
+compositor, which survives for the mirror-image reason: it composites into a DETACHED canvas and re-draws its
+strokes rather than reading the visible one back.)
+
+**Decision 10: a coarse compare, so a jittery platform gets a verdict rather than a shrug.**
+`frameSignature` reduces a frame to a 32x18 luminance grid (576 bytes, so a 60-frame pass costs about 34KB
+rather than 31MB of RGBA, which matters for an edge box), `compareSignatures` and `sameCaptureSignatures`
+compare at an explicit tolerance, and the driver picks: exact on a byte-stable platform, signature at the
+measured tolerance otherwise, inconclusive only when the floor could not be measured at all. Every verdict
+names the method that produced it.
+
+**Verified end to end in the real panel, which is what makes this more than a theory.** Pressing Capture twice
+on the reference scene reports "Capture matches its baseline / Matched by coarse signature at the tolerance
+measured on this machine", tolerance 4. Uncommenting the scene's deliberately nondeterministic renderer and
+re-capturing against the same baseline is CAUGHT: "frame 0 differs: 10 of 576 cells moved more than the
+measured tolerance of 19, up to 33". So the harness now catches the regression it ships an example of.
+
+**A third defect the panel pass exposed:** a capture pressed seconds after a page loads timed out, while the
+same command sent by hand moments later worked. A `postMessage` to a frame whose bridge has not installed its
+listener yet is dropped, and nothing retried it. The panel now pings with the cheapest read there is, up to
+six times, before spending a 60-frame pass, and says "this preview is not answering yet" if it never does.
+
+**The caveat that remains.** The floor cannot distinguish platform jitter from a scene that renders one time
+two ways: both present as "same time, different pixels". A nondeterministic scene therefore inflates its own
+tolerance. The deliberate wobble was still caught comfortably (33 against a tolerance of 19), but a subtler
+instability could hide inside its own floor, and an unusually large measured tolerance is itself evidence
+about the page rather than about LUCID.
+
+**Process note worth keeping.** The headless demo asserted the reference scene's determinism by SEARCHING its
+source for clocks and randomness. That check passed and was structurally incapable of catching any of this,
+because none of it was in the source. A static check can only falsify the hypotheses its author thought of.
+
+### Alternatives rejected
+
+- **Adding three.js and driving `readRenderTargetPixelsAsync`.** ADR-0287 named that API, but taking the
+  dependency back reverses P-MASCOT.2 and buys nothing for a user-authored scene. LUCID captures whatever
+  canvas a page exposes; multi-pass render-target capture stays unbuilt and is now stated as such in the docs.
+- **Injecting a driver into the previewed document.** LUCID does not own that document. A declared hook it
+  opts into is honest; code injected into someone's page is not.
+- **Sampling silently when the hook is absent.** That is the exact lie this increment exists to prevent.
+- **Fingerprinting the PNG bytes instead of decoded pixels.** A browser's encoder is not a contract; decoding
+  first means the fingerprint is over pixels, which is what `compareFrames` and the audit already reason about.
+- **A longer fixed timeout for every inspect query.** `runInspectOnFrame` gained a `timeoutMs` parameter
+  instead: a capture legitimately outlives an inspect, and a fixed 3s clock would abort a valid 60-frame pass
+  and report it as an unresponsive preview.
+
+### Invariants preserved
+
+#2 TypeScript only; #3 fail-closed applied to the capture boundary (a malformed reply judges nothing); #5 the
+reply is untrusted data, shape-gated before it is read; #6 prefix untouched; #11 the new control is a single
+one-line label. The bridge's no-dynamic-code property is unchanged and still enforced by its own demo, which
+caught a forbidden token inside a COMMENT of this very change and was right to.
+
+### See also
+
+ADR-0295 (the increment this closes, and the delta list that named this gap), ADR-0153/P-PREVIEW.6b (the
+bridge and relay this rides), ADR-0287 item 3 (the plan), ADR-0293 (the provenance-labeling discipline reused
+here for time).
+
+## ADR-0294 -- CREATOR-5: the mixer, and refusing to fix a mix quietly
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator5.ts` green (11 sections, 97 checks, and
+breaking one claim exits 1 with the named FAIL); new suites mix 35 / creator_mixer 34 / renderer
+creator_mixer 50, 183 pass across the five mixer-adjacent files; root and desktop typechecks clean;
+renderer bundle builds (126 modules, up from 124); license headers clean; zero em dashes.
+**Increment:** CREATOR-5, planned in ADR-0289. Built after CREATOR-2 (ADR-0293), whose document it consumes.
+
+### Context
+
+CREATOR-2 made one take editable. Layering a narrator over a bed is the other axis, and it is not
+concatenation: two sources occupy the SAME instant and have to sum. That needs overlap, per-track level,
+pan, fades, automation, and one honest answer to the question every mixer eventually faces: what do you do
+when the sum is too loud?
+
+Every consumer tool answers that question by quietly fixing it (normalize, limit, auto-duck). That is the
+one thing this project cannot do, because a silent gain change means the file the user hears is not the file
+they built, and nothing on screen says so.
+
+### Decision
+
+1. **`harness/creator/mix.ts` is the graph as data, and the only place a sample is summed.** Clips (which
+   MAY overlap, unlike the CREATOR-2 timeline) sit on tracks; tracks carry level, pan, mute, solo, and a
+   piecewise-linear envelope; tracks group onto buses; master gain applies last. One level of grouping, not
+   a routing matrix: a matrix is a graph problem with cycles to police and nobody asked for one.
+2. **Pure TypeScript render, not `OfflineAudioContext`** (the delta from ADR-0289 item 1). The plan's own
+   keystone is "the same graph renders byte-identical audio twice", which a Web Audio implementation cannot
+   promise across platforms and cannot be exercised in a unit test at all. Accumulation happens in a
+   `Float64Array` in the graph's own order and quantizes ONCE at the end, so determinism is structural.
+   Same reasoning as ADR-0291's pure encoders and ADR-0293's `renderTimeline`.
+3. **Nothing is automatic. The render REPORTS.** It returns the true `peak` measured before the rail, the
+   exact count of `clipped` samples, which tracks contributed nothing and WHY, and whether a pan had to be
+   ignored by a mono render. `headroomGain(peak)` hands the caller the number that would land the mix at
+   full scale; applying it is an explicit, opt-in act that reports the factor used (`headroomApplied`).
+   Clamping is a clamp, never a wrap: a hot sample reads 32767, not a sudden negative.
+4. **Silence has exactly one reason, and one function produces it.** `trackSilenceReason` returns the
+   sentence or null, and the render uses that same call to decide whether to skip the track. A predicate
+   plus a parallel explainer would eventually disagree, and then the UI would be describing a mix that did
+   not happen.
+5. **A muted, unsoloed, zeroed, or bus-muted track contributes EXACTLY nothing.** Not attenuated: its
+   samples are never added. Proven byte-wise by rendering the graph with the track REMOVED and asserting
+   the two files are identical, for all three silencing paths, with a non-vacuity check that the track is
+   audible otherwise.
+6. **No resampler, so no pretence.** A source whose sample rate differs from the graph's refuses the render
+   naming both rates and saying this build has no resampler. Channels are the exception and deliberately so:
+   `renderMix` folds stereo to mono by averaging and duplicates mono into stereo, so a mono narration under
+   a stereo bed is legal. The seam and the pane both had to be told this, and both were.
+7. **Equal-power pan and linear fades.** Pan uses the sin/cos law so sweeping a track across the image does
+   not make it louder in the middle; fades are linear because a fade the user drew as a straight line should
+   sound like the line they drew.
+8. **A mix has many parents and the ledger has one slot, so the record says so.** `renderAndSaveMix` saves
+   through the library's own `addTrack` as a remix with `parentId` set to the caller's primary track, and
+   writes `mixed from: <id> (Role), ...` for every input as the FIRST line of the saved provenance text.
+   `lyrics` is deliberately left empty: a mix has as many word streams as layers, and concatenating them
+   would claim a timing the file does not have.
+9. **`trackFromTimeline` is the seam ADR-0289 promised.** An edited CREATOR-2 document lifts onto one mix
+   track keeping every clip's position and resolved source region, and the demo proves the lifted track at
+   unity renders byte-identically to `renderTimeline` of the same document. The mixer therefore needs no
+   second notion of an edit.
+
+### Alternatives rejected
+
+- **Normalizing, limiting, or auto-ducking.** The whole point. A mixer that fixes your mix without telling
+  you has replaced your judgment with its own, invisibly.
+- **`OfflineAudioContext`.** Untestable in the runner, not byte-stable, and it would have put the load-bearing
+  math in the one place this repo cannot unit-test.
+- **A full routing matrix with sends and inserts.** Cycle detection, gain staging, and a UI nobody asked
+  for. One bus layer covers "move the beds together".
+- **Refusing a channel mismatch.** The render genuinely folds and duplicates, so refusing would be a FALSE
+  refusal, which these honesty rules forbid as much as a false success.
+- **Reporting a fabricated format when the library holds nothing decodable.** The seam omits the format
+  entirely and the pane says the mixer is not claiming one, rather than defaulting to 44100/2.
+- **Concatenating layer lyrics into the saved record.** It would imply a word timing the mixed file does not
+  have. Empty is the honest value.
+
+### Invariants preserved
+
+#2 TypeScript only, and the core has no node imports; #3 fail-closed (a missing or unusable source refuses
+the render by id, never substitutes silence); #5 track labels and refusal text are escaped at render like
+any other untrusted string; #6 frozen prefix untouched; #7/#8 no change to `contracts.ts`; #10 no schema
+change (the library's append-only JSONL absorbs the mix); #11 track-name cells are one-line ellipsized with
+a bounded max-width and the report is a block paragraph.
+
+### See also
+
+ADR-0289 (the plan, with its one delta), ADR-0293 (the document this consumes), ADR-0281 (the lineage model
+and why a mix's many inputs are recorded as text rather than faked as parents), ADR-0291 (the pure-encoder
+precedent this render follows).
+
+## ADR-0303 -- the gate had never measured what it claimed: scope by exclusion, never by positional pattern
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT in `a4b1d48` (Makefile + package.json). `make test-harness` now reads 357 files
+/ 4256 tests / 4241 pass / 11 fail on this workstation, and the 11 are exactly the documented pre-existing
+set (5 `fs_browse`, 4 `symbol_graph`, 2 `lucid_acp`). Verified through BOTH entry points, make's recipe and
+`bun run test`. CI is deliberately NOT changed by this increment; see the named risk at the end.
+**Increment:** taken from a parallel session that found the defect adjacent to its own release work and
+handed it over rather than folding it into an unrelated increment.
+
+### Context
+
+`make test-harness` was `bun test --path-ignore-patterns='desktop/release/**'` with no path scope, and
+AGENTS.md's session ritual opens with "make test ... the baseline must be green before you change anything".
+Both halves of that sentence were false, and had been for a long time.
+
+### What was measured, in order
+
+1. **Run the documented gate exactly as written and it runs oh-my-pi's test suite.** `vendor/oh-my-pi` is a
+   full vendored copy of omp, tests included: **1659 files, 11466 tests, 9927 pass, 942 FAIL**. `vendor/` is
+   gitignored (`.gitignore:13`) and bun does not care, because gitignore is not a test-discovery boundary.
+   So on any clone with a populated `vendor/`, the documented gate reports 942 failures that are not ours,
+   and it has therefore never once reproduced the numbers PROGRESS.md quotes.
+2. **The habit that grew up around the bug is no better.** Sessions have been running per-tree invocations
+   like `bun test desktop harness`, which LOOKS like a directory scope and is not: bun treats positional args
+   as SUBSTRING matches against the whole path. Naming one more tree proves it, because `tools` also selects
+   every `vendor/oh-my-pi/**/tools/**` file: `bun test desktop harness tools` reports **486 files, 125 fail**
+   against the 357 / 11 the same code actually has. A scope that silently changes meaning when you name one
+   more directory is not a gate.
+3. **That habit was also omitting a tree of ours entirely.** `bun test desktop harness` is 352 files; the
+   exclusion-scoped gate is 357. The five-file difference is all of `tools/`: `build_kg_pack`, `kb_cli`,
+   `creator-backend/setup-backend`, `remote-pwa/device_stt`, `appcontainer/lucid_appcontainer`, **86 tests
+   that no session had ever run**. They are green, which is luck rather than evidence, since nothing was
+   watching them.
+4. **Excluding `vendor/**` then exposes a second tree nobody had gated:** `lucidaddon_audit/`, **51 test
+   files across 11 packages**, each with its own `package.json` and its own dependencies that `make install`
+   does not prepare. Its failures are `Cannot find package 'ajv'` and siblings, environment rather than
+   logic, and they accounted for all 18 extra failures in that run.
+
+### The negative result, which is the better half of the finding
+
+The obvious hypothesis for "352 versus 357" was that the hand-typed scope was silently sweeping in vendored
+files. It is NOT. Measured: `bun test desktop harness` WITH `vendor/**` and `lucidaddon_audit/**` excluded
+returns 352 files / 4170 tests / 4155 pass / 11 fail, byte-identical to the same command without them. So
+`desktop` and `harness` collide with nothing in omp's layout, while `tools` collides badly. The lesson is
+therefore stronger than contamination would have been: **you cannot know which names collide without
+measuring each one**, so an include-by-substring scope is only ever as correct as the last name someone
+tested. Exclusion is the only scope that stays correct under a name nobody tested.
+
+### Decision
+
+Scope is defined by EXCLUSION and never by positional pattern. `TEST_IGNORES` in the Makefile carries the
+three exclusions with a stated reason each, and the comment above it records the substring trap with the
+measured numbers so the next person cannot re-derive the habit. `desktop/release/**` is a generated packaged
+copy of this repo. `vendor/**` is not ours. `lucidaddon_audit/**` IS ours but is independently installed, so
+it gets its own target, `make test-audit`, which `cd`s into the tree instead of filtering by substring,
+because a working directory has no substring semantics to get wrong. It is deliberately not part of
+`make test`: a target that is red by default teaches people to ignore red. `package.json`'s `test` script
+ran `bun test harness` and now runs the same exclusion scope, so the two entry points cannot drift.
+
+**The rule worth keeping.** A gate that names what it INCLUDES will silently change scope as the repo grows
+a sibling directory; a gate that names what it EXCLUDES fails loudly instead, because a new tree arrives as
+new tests rather than as silence. This is the same failure family as the `desktop/release` double-count
+recorded in the CREATOR-3 entry: in both cases a wrong flag produced a plausible number, and a plausible
+number is the hardest kind of wrong to notice.
+
+### Reconciling every number in the record
+
+All four figures in play describe the same code at different scopes, and none of them contradict:
+352 / 4170 / 4155 pass is `desktop harness` on this branch; 355 / 4229 / 4213 pass is that same scope plus
+the three test files added by `8b060b2` (+58 tests) while they were still uncommitted; 357 / 4256 / 4241
+pass is exclusion-only, which is 352 plus the 5 files and 86 tests in `tools/`; and 1659 / 11466 / 942 fail
+is the documented gate with `vendor/` swept in. The 11 real failures are the same 11 in every one of them.
+
+### The CI risk, two thirds of it now closed without a single new run
+
+CI diverges from the Makefile in a third and fourth way, and this increment still leaves it alone.
+`.github/workflows/ci.yml:59` runs `bun test harness`, so the ENTIRE `desktop/` tree is ungated in CI apart
+from the single `desktop/packaged_boot.test.ts` step, while `omp-compat.yml:92` runs `bun test .`, a fourth
+scope again. This ADR originally said classifying the 11 failures needed "one Linux run". It needed none,
+and the argument is recorded here because it is re-derivable rather than remembered:
+`ci.yml:23` is `runs-on: ubuntu-latest`, `ci.yml:59` runs `bun test harness`, CI is green on master, and
+`git diff --stat master HEAD -- harness/launcher/lucid_acp.test.ts` is EMPTY, so that file is byte-identical
+between master and this branch. A green Linux `bun test harness` therefore EXECUTED the same two tests that
+fail on this workstation. Those 2 of the 11 are **Windows-only by observation**, at the cost of one diff.
+
+The remaining 9 are not one kind of problem, which is why the next step is narrower than "widen CI":
+`fs_browse`'s 5 look like genuine path-separator cases, but `symbol_graph`'s 4 are TS-compiler resolution
+against `desktop/node_modules/typescript`, which is an install-LAYOUT failure rather than a separator one and
+may well fail on Linux too, for a reason that is real. So when CI is widened it must be widened with those
+two files named and expected-failing, never blind: a gate that goes red on its first run teaches people to
+ignore it, and a gate that hides a genuine install-layout defect under "known Windows noise" is worse than
+the blind spot it replaced.
+
+### Process note, paid for the hard way
+
+This ADR was written once already and vanished before it was committed. The mechanism was not the amend it
+was first blamed on: `git diff` across that amend touches one path, and an amend cannot alter a path the
+index never held. It was a whole-file write of `DECISIONS.md` from a snapshot that predated the insert. The
+rule that follows is narrower and more useful than "be careful": **never whole-file write a document another
+session is live in; insert into it.** The same hazard cost a demo script earlier the same day. What finally
+worked was not a promise but a boundary: the file changes hands only at a commit, and the holder says so.
+
+**And the reason nobody could name the writer is structural, not careless.** Every commit in this window
+carries the same author AND the same committer, byte for byte: `mlcyclops
+<mlcyclops@users.noreply.github.com>`, verified across six commits with `%an/%ae/%cn/%ce`. Git therefore
+offers NO discriminator between concurrent sessions in one worktree, so every attribution claim made all day
+rested on message text and timing, and several were wrong in both directions. [INFERENCE] It is worse than
+two sessions guessing about each other: two commits in this stretch, `a3bedf4` and `8636db1`, are disclaimed
+by BOTH coordinating sessions, and one of them was found only because a `git commit` returned "nothing to
+commit" against a tree that already matched it. So the actor COUNT was wrong, not just the attribution. The
+practical consequences, in order of cheapness: a session must never infer authorship from `git log`; it must
+announce its own commit hashes, which is the only durable record of who did what; and a shared worktree wants
+distinct `user.name` per session far more than it wants a protocol, because a protocol is a promise and a
+committer field is evidence.
+
+### See also
+
+ADR-0295 (the `desktop/release` double-count, same failure family), and the Creator release-channel ADR, the
+release work this defect was found beside. That one is deliberately cited by TITLE rather than by number: it
+was written as ADR-0302, collided with an ADR-0302 already pushed on the PWA branch, and has since been
+renumbered to 0304. A cross-reference that survives a renumber is worth more than one that is precise today,
+which is the same reason the `compositeShot` guard in `tools/remote-pwa/app.ts` cites ADR-0297 by name and
+not by line.
+
+## ADR-0304 -- LUCID Creator as a separately released product, and the shared update pointer that would have crossed the two
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator0.ts` green (8 sections, 55 checks, up
+from 7 and 48); `desktop/build/electron-builder.creator.test.ts` 11 tests (was 7); scoped
+`bun test desktop harness --path-ignore-patterns='desktop/release/**'` 4155 pass / 11 fail / 4170 tests /
+352 files, where all 11 are the documented pre-existing set (5 `fs_browse`, 4 `symbol_graph`, 2
+`lucid_acp`); root and desktop `tsc` clean; the server program shows only the documented pre-existing
+`dev.ts(1332,103)` plus `symbol_graph.ts` errors; license headers clean.
+
+**Numbering note: written as ADR-0302, renumbered to ADR-0304.** Commit `56438b6`'s message still names
+ADR-0302 and cannot be corrected, so this paragraph is the redirect for anyone who searches the history
+for that string. The collision was real rather than a gap-filling preference: branch
+`feature/pwa-focus-master` (`ab15f57`, branched straight off master, and already pushed) carries its own
+ADR-0302, "Nothing on the phone opens itself: no auto-expand on attention". Renumbering the UNPUSHED side
+was the smaller blast radius, and it leaves the merged sequence contiguous: ADR-0297 here (restored onto
+this branch in `a3bedf4`), ADR-0298 through ADR-0302 arriving with the PWA branch, ADR-0303 the test-gate
+fix, and ADR-0304 this one. ADR-0298 through ADR-0301 are still not in this file.
+
+### Context
+
+Creator is to be an optional companion product to LUCID Agent IDE: its own release cadence, its own
+pipeline mirroring Agent's, and eventually its own marketplace. The question put was whether that needs a
+long-lived branch, or a second repository.
+
+CREATOR-0 (ADR-0279) had already built the hard part: `desktop/build_flavor.ts` resolves identity before
+anything reads an identity-derived path, and `desktop/build/electron-builder.creator.cjs` deep-clones the
+standard build config and overrides only identity fields, so packaging payload changes on master reach
+Creator for free. `desktop/package.json` already had `dist:{win,mac,linux}:creator`. What did not exist
+was any release path at all: no workflow, no tag namespace in use, and, as it turned out, no isolation of
+the update feed.
+
+### Decision
+
+**1. One repository, one branch, two tag namespaces.** Creator ships from trunk behind the existing flavor
+gates. Agent releases on `v*` through `build-desktop.yml`; Creator releases on `creator-v*` through the new
+`build-creator.yml`. `creator-v*` does not match `v*`, so one tag builds exactly one product.
+
+Rejected: a long-lived Creator branch. It buys nothing the flavor does not already provide and it
+guarantees permanent merge cost against a fast-moving master, which directly contradicts the stated goal of
+Creator receiving every Agent improvement. Independent cadence is a tag namespace plus a workflow, not a
+branch.
+
+Rejected for now: a separate repository. Creator imports the shared spine directly (the fail-closed scan,
+`harness/contracts.ts`, the renderer shell, the WAV backend). Splitting today means either duplicating that
+spine, which puts two fail-closed gates on independent drift paths and violates invariant 3 in practice, or
+publishing the harness as a versioned package first. The trigger to revisit is precise: when Creator stops
+importing `desktop/` and `harness/` directly. A marketplace is a distribution surface rather than a product
+surface and gets its own repository when it exists.
+
+**2. Creator's version is its tag.** No second committed version field. `desktop/package.json`'s `version`
+is Agent's line, so a malformed `creator-v*` tag is a hard build failure in the Creator workflow rather
+than the fallback the Agent workflow uses: falling back there would publish a Creator release numbered
+from Agent's cadence. The manual test-build stamp is likewise based on the newest published `creator-v*`
+release only, never on the repo's newest release.
+
+### The defect this increment actually found
+
+The overlay deep-cloned Agent's `publish` block and never overrode it. Reading the installed provider
+(`desktop/node_modules/electron-updater/out/providers/GitHubProvider.js`) rather than assuming: with
+`allowPrerelease` unset, which is our case, `getLatestVersion` takes its tag from `getLatestTagName`, which
+GETs `/<owner>/<repo>/releases/latest`. That is a single latest-release POINTER for the whole repository,
+the one `make_latest` moves. It then fetches `releases/download/<that tag>/latest.yml`. Both products emit
+a file named exactly `latest.yml`, and `desktop/updater.ts` sets `autoDownload` and
+`autoInstallOnAppQuit`. A shipped Creator would have resolved Agent's rolling release, downloaded
+`LucidAgent-Setup.exe`, and installed it on the next quit. The atom feed the same function reads is only
+used to attach release notes.
+
+Renaming the channel does not fix it, which is the trap: selection is still that one shared pointer, so
+Creator would find Agent's release and 404 on its own channel file inside it, i.e. an app that never
+updates again. Selection has to be skipped entirely. Creator now publishes a **generic** provider pinned to
+`releases/download/creator-latest`; `GenericProvider.getLatestVersion` fetches `<url>/<channel>.yml` at a
+fixed URL with no release lookup. Same mechanism `managed_config.ts` already uses for the enterprise
+`feed` channel, and an enterprise `updateFeedUrl` still overrides it at runtime.
+
+**The hazard is bidirectional, and that half is worse.** Agent's installed base resolves through the same
+pointer. A Creator release that ever became the repo's latest would send every installed Agent to Creator's
+feed, breaking users who never installed Creator. So every publish step in `build-creator.yml` passes
+`make_latest: "false"`, and the rolling release is additionally a prerelease, which GitHub excludes from
+that pointer outright. Two independent guarantees, both asserted.
+
+### The gates could never have run on Creator bytes
+
+`airgap-smoke.ts` (ADR-0225) and `pf-boot-smoke.ts` (ADR-0261) both hardcoded `desktop/release`. Creator
+packages into `desktop/release-creator`, so a mirrored workflow would have failed on a missing directory
+or, on a runner that had also built Agent, passed by inspecting Agent's tree and reported green about bytes
+it never opened. That second case is the dangerous one: a gate that proves nothing while looking green.
+
+Both now honor `LUCID_RELEASE_DIR`, restricted to a bare directory name under `desktop/`. A gate that can
+be aimed anywhere is a gate that can be made to pass against bytes nobody is shipping, so a value
+containing a separator or a leading dot is refused outright. Verified behaviorally in both scripts:
+default resolves to `desktop\release` (and the Agent air-gap gate still runs its real checks there, with
+the scanner and omp both answering offline), the override resolves to `desktop\release-creator`, and
+`../release` is refused by name.
+
+### Consequences
+
+1. Creator and Agent versions are independent, and neither can renumber the other.
+2. `desktop/build/electron-builder.creator.d.cts` now types the overlay, because two TypeScript programs
+   read it and the root program has `noImplicitAny`. Only asserted fields are named; an index signature
+   carries the rest of electron-builder's surface so adding an override never edits the declaration.
+3. The overlay test parses the workflow with `Bun.YAML` instead of substring-matching it. An indentation
+   error in a release workflow otherwise surfaces only on a release tag, which is the worst moment to find
+   it. It also asserts the tag baked into the packaged feed and the tag the workflow publishes to are the
+   same string, because drift there fails no build and silently leaves every installed Creator
+   un-updatable.
+4. **The payload split is REFUSED, on measurement.** The standing assumption was that Creator makes the
+   standard installer "bigger than some want", so an entry-point split would eventually be needed to keep
+   Creator out of it. Measured instead of assumed: every Creator source file totals **1,102,176 bytes**
+   (1.05 MB), and that ceiling INCLUDES the tests and demo scripts, which are never packaged. The built
+   Windows installer on this machine is **360,012,432 bytes** (343 MB). So Creator is **0.31% of the
+   download as an absolute upper bound**, and roughly half that for code that actually ships. An
+   entry-point split would buy back a fraction of one percent and cost a permanent second renderer entry,
+   conditional route registration, and a new bug class where a surface works in one flavor and is missing
+   in the other. Refused as a bad trade, not deferred.
+
+   The edge-first constraint points somewhere else entirely, which is the useful half of this measurement.
+   343 MB is dominated by Electron plus the bundled bun, uv, CPython and whisper.cpp runtimes that ADR-0225
+   deliberately vendors so an air-gapped host works cold. Anyone trying to shrink the edge footprint should
+   attack those, where the numbers are two orders of magnitude larger. Creator is noise at this scale, and
+   a split sold as an edge-footprint win would be measuring the wrong thing.
+5. `publish-creator-latest` is pinned to `refs/heads/master`, the same double gate Agent's rolling publish
+   uses. That single line is what would change if Creator ever did move to a release branch.
+
+## ADR-0285 -- CREATOR-1..CREATOR-6: the Creator build arc after the foundation (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN. No code in this ADR. Each increment is its own session and its own demo.
+
+### The increments
+
+- **CREATOR-1 - capability probes + the job spine. BUILT: see ADR-0292.** Delivered as planned, with two
+  deltas: artifact manifests already shipped with CREATOR-IMG (ADR-0291), and a refused admission is
+  recorded as a `refused` JOB rather than only returned to the caller.
+- **CREATOR-2 - the follow-along audio editor. BUILT: see ADR-0293.** Delivered as planned, with two
+  deltas: the waveform is computed from the file's PCM (`waveformPeaks`) rather than reusing the live
+  analyser tap, which only exists for a mic stream; and undo is a bounded stack of document snapshots
+  rather than inverse operations, which is what makes "restores the previous clip exactly" testable.
+- **CREATOR-3 - image, video, and 3D pipelines. BUILT: see ADR-0295.** Built by a parallel session. Two
+  deltas: the three.js frame-capture harness ships as the deterministic clock plus fingerprint plus audit
+  but is not wired into the Preview panel, and "scan every artifact" is implemented as scanning every
+  server-supplied STRING with the bytes-are-hashed-not-scanned limit stated in the product surface.
+- **CREATOR-4 - engines and playable feedback** (ADR-0288).
+- **CREATOR-5 - the mixer. BUILT: see ADR-0294.** Delivered as planned, with one delta: the render is pure
+  TypeScript over PCM rather than `OfflineAudioContext`, because the plan's own keystone (byte-identical
+  twice) is not testable through a Web Audio implementation and is not byte-stable across them.
+- **CREATOR-6 - distributed resources and remote execution** (ADR-0290).
+
+### Ordering rationale
+
+CREATOR-1 first because every later increment needs a probe and a job record; the editor next because it is
+the headline creative surface; engines before the mixer because build/test feedback is the riskier seam.
+
+## ADR-0286 -- CREATOR-2: the follow-along audio editor (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Scope
+
+The ElevenLabs-style experience the user described: audio that follows the text item by item, play/pause,
+tap a word to seek, select a span and drag it, re-render just that span, tune it, and scrub.
+
+### Plan
+
+1. **A pure timeline document** (`harness/creator/timeline.ts`): text items, spans, clips, and an alignment
+   map with a per-item confidence. Operations (split, trim, replace-span, move, lock-to-text) are pure and
+   unit-tested; the renderer only paints.
+2. **Alignment comes from real data.** ElevenLabs character/word timestamps where available; for a local
+   engine with no timestamp output, LUCID derives alignment locally and LABELS it derived. A guessed offset
+   is never presented as vendor-provided.
+3. **Non-destructive by construction.** Every re-render is a new clip with its parent and prompt recorded
+   (the ADR-0281 lineage model extended from tracks to spans).
+4. **Scrubbing + waveform** reuse the existing Web Audio analyser tap (ADR-0248) rather than a new stack.
+5. Keystone test: a span re-render changes ONLY that span's audio, the word map stays aligned to the text,
+   and undo restores the previous clip exactly.
+
+## ADR-0287 -- CREATOR-3: image, video, and 3D pipelines (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Plan
+
+1. **ComfyUI as the substrate.** Submit a workflow, stream progress and previews over the websocket, fetch
+   artifacts from history, and record every input/output in the CREATOR-1 job table. Capability strictly
+   from `/object_info`: LUCID never assumes a node, a checkpoint, or a video model exists.
+2. **Local models are declarations, not discoveries.** A model manifest names what a given ComfyUI install
+   can do; LUCID does not scan disks or scrape model hubs.
+3. **three.js gets deterministic frame capture** (fixed timestep, `readRenderTargetPixelsAsync`) so an
+   animation can be reviewed frame by frame and regression-compared.
+4. **Blender authoring** stays user/project Python through the exec-approval path: LUCID adds no `.py` of
+   its own (invariant 2).
+5. Every artifact is scanned and provenance-stamped before it can enter the library or a prompt.
+
+## ADR-0288 -- CREATOR-4: game engines and playable feedback (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Plan
+
+1. **Unreal headless first:** UnrealBuildTool + commandlets for build/cook, the Automation Test framework
+   for suites, exit code plus the failing log line as the evidence the agent quotes.
+2. **The editor Remote Control API is opt-in, loopback-bound, and announced.** It is an open local control
+   plane; enabling it is a user decision with a warning, never a silent capability.
+3. **three.js is the fast lane** for playable prototypes: the Preview panel already runs them, screenshots
+   already return to chat.
+4. **Playtest feedback loop:** a scripted run produces logs plus captured frames plus a pass/fail, and the
+   agent iterates on evidence rather than vibes.
+5. Resource discipline: a cook is the heaviest job in the product, so it goes through admission and reports
+   progress against the pressure window.
+
+## ADR-0289 -- CREATOR-5: the mixer - layering, tuning, and mastering (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Plan
+
+1. **A pure mix graph** (`harness/creator/mix.ts`): tracks, buses, gain, pan, fades, and envelopes as data;
+   rendering is `OfflineAudioContext` in the renderer, so the math is testable without audio hardware.
+2. **Layering voices** means N clips on N tracks with per-track processing, not string concatenation.
+3. **Deterministic offline render** to WAV, reusing the existing `buildWav` / `concatWav` primitives.
+4. **The mixer is local.** No provider offers our mix graph, so nothing here claims a cloud capability.
+5. Keystone test: the same graph renders byte-identical audio twice, and a muted track contributes nothing.
+
+## ADR-0290 -- CREATOR-6: distributed resources and remote execution (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Plan
+
+1. **Remote render targets** (a DGX Spark, a GPU VM, a second workstation): job submission over the same
+   gated egress path, artifacts pulled back and scanned like any other import.
+2. **Placement by measured capacity**, using the ADR-0283 telemetry: a job that needs more VRAM than the
+   local box measures goes to a target that reports enough, or is refused with both numbers.
+3. **Per-process GPU attribution and richer vendor collectors** (AMD SMI, Apple Metal counters) land here
+   if and only if an unprivileged, documented source exists; otherwise they stay reported as not collected.
+4. **The VPN posture is unchanged** (ADR-0135): the OS client owns the tunnel, LUCID routes to the endpoint
+   and registers it in the whitelist as an internal-zone entry.
+5. Fail-closed stays fail-closed: a remote worker's bytes are untrusted input, scanned on the way in, and a
+   dead scanner blocks.
 ## ADR-0298 -- P-REMOTE.15: the phone composer is one tidy row, and the disclaimer is a "?" sheet
 
 **Date:** 2026-08-30

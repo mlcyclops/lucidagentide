@@ -20,7 +20,6 @@ import { delimiter as PATH_SEP, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // desktop/build
-const RELEASE = join(HERE, "..", "release");
 const PLAT = process.platform; // "win32" | "linux" | "darwin"
 const ARCH = process.arch; // "x64" | "arm64"
 const EXE = PLAT === "win32" ? ".exe" : "";
@@ -30,10 +29,25 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
+/** Which electron-builder output dir under desktop/ to gate, as a bare directory NAME. Creator packages
+ *  into `release-creator` (build/electron-builder.creator.cjs), so this gate has to be pointable at it,
+ *  or a Creator release build would validate whatever stale Agent `release/` tree sat on the runner and
+ *  report green about bytes it never looked at. A NAME, not a path: anchoring resolution inside desktop/
+ *  means a stray value cannot aim the gate at an unrelated tree and pass. */
+function releaseDirName(): string {
+  const raw = (process.env.LUCID_RELEASE_DIR ?? "").trim();
+  if (!raw) return "release";
+  if (raw.includes("/") || raw.includes("\\") || raw.startsWith(".")) {
+    fail(`LUCID_RELEASE_DIR must be a bare directory name under desktop/, got "${raw}"`);
+  }
+  return raw;
+}
+const RELEASE = join(HERE, "..", releaseDirName());
+
 /** Every plausible packaged `…/resources` dir: the `*-unpacked` tree (win/linux) and any `*.app`
  *  bundle's Contents/Resources (mac, possibly one per arch). */
 function candidateResourceDirs(): string[] {
-  if (!existsSync(RELEASE)) fail(`no release dir at ${RELEASE} — did electron-builder run?`);
+  if (!existsSync(RELEASE)) fail(`no release dir at ${RELEASE}: did electron-builder run? (LUCID_RELEASE_DIR selects a non-default output dir)`);
   const out: string[] = [];
   const direct =
     PLAT === "win32" ? join(RELEASE, "win-unpacked", "resources")

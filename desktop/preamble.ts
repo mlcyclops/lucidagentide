@@ -26,6 +26,10 @@ export interface PreambleState {
    *  null/"". STANDING for as long as the mode is on, and it vanishes the turn after it is switched off \u2014 it
    *  is rebuilt from the live voice settings every turn, exactly like the share-awareness block. */
   spokenReply?: string | null;
+  /** CREATOR-0 (ADR-0284): the `<critical>` Creator-mode block, present only while a CREATOR build is in
+   *  CREATOR mode. STANDING while the mode is on and gone the turn after it is switched off, exactly like
+   *  spokenReply - it is rebuilt from the live mode every turn and never enters the frozen prefix. */
+  creatorMode?: string | null;
   /** Cross-session <recalled-memory> block, or null. Delivered once per session. */
   memoryRecall: string | null;
   /** Whether the cross-session recall has already been delivered this session. */
@@ -47,6 +51,9 @@ export function buildUserTurnPreamble(s: PreambleState): PreambleResult {
   if (s.skill) preamble += `${s.skill}\n\n`;
   if (s.profile) preamble += `${s.profile}\n\n`;
   if (s.designInvariants) preamble += `${s.designInvariants}\n\n`; // P-DESIGN.1: honor DESIGN.md every turn
+  // CREATOR-0: the Creator workspace rules sit with the other standing guidance, above the spoken-reply
+  // block so "answer for the ear" stays nearest the user's words.
+  if (s.creatorMode) preamble += `${s.creatorMode}\n\n`;
   // P-VOICE.5: LAST of the standing blocks, so "answer for the ear" is the nearest instruction to the user's
   // own words - it shapes the reply without displacing the persona/skill guidance above it.
   if (s.spokenReply) preamble += `${s.spokenReply}\n\n`;

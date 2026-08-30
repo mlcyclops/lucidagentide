@@ -1,0 +1,257 @@
+# Build the LUCID Creator desktop installers (macOS .zip + Windows .exe + Linux AppImage/.deb/.rpm).
+#
+# Creator is the companion product to LUCID Agent IDE. It shares this repo, this renderer and this
+# security spine, and it is packaged by desktop/build/electron-builder.creator.cjs, which deep-clones
+# the standard build config and overrides only identity fields (ADR-0279). This workflow is the
+# release half of that split: Agent releases on `v*` through build-desktop.yml, Creator releases on
+# `creator-v*` through here, so the two cadences are independent without a second branch or repo.
+#
+# Triggers:
+#   - Manual:  Actions -> "Build Creator installers" -> Run workflow.
+#   - On tag:  push a tag like creator-v0.1.0 and the installers are attached to that tag's Release.
+#
+# WHY Creator releases are never marked "latest"
+#   electron-updater's GitHub provider resolves its tag from GET /<owner>/<repo>/releases/latest, the
+#   single latest-release POINTER for the whole repo (see the comment block in
+#   desktop/build/electron-builder.creator.cjs). Agent's installed base follows that pointer. If a
+#   Creator release ever moved it, every installed Agent would resolve Creator's tag and pull
+#   LucidCreator bytes. So every publish step below passes make_latest: "false", and the rolling
+#   release is additionally a prerelease, which GitHub excludes from that pointer outright. Two
+#   independent guarantees, because this failure is silent and hits users who never asked for Creator.
+#
+# Creator installs update themselves from the rolling `creator-latest` release via the GENERIC
+# provider at a fixed URL, so they never consult the repo pointer at all. The overlay and this file
+# must name the same tag; desktop/build/electron-builder.creator.test.ts fails if they drift.
+
+name: Build Creator installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_latest:
+        description: 'Publish to the rolling "creator-latest" release (pushes to EXISTING Creator users via auto-update). Leave OFF for test builds.'
+        type: boolean
+        default: false
+  push:
+    tags: ["creator-v*"]
+
+permissions:
+  contents: write # needed to attach installers to the tag's Release
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: Creator macOS (.zip, arm64+x64)
+            script: dist:mac:creator
+          - os: windows-latest
+            label: Creator Windows (NSIS + portable, x64)
+            script: dist:win:creator
+          - os: ubuntu-latest
+            label: Creator Linux (AppImage + deb + rpm, x64)
+            script: dist:linux:creator
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Root deps are bundled into the app (extraResources copies node_modules/**), so they must exist
+      # before electron-builder packages. Creator inherits that payload unchanged from the base config.
+      - name: Install repo dependencies
+        run: bun install
+
+      - name: Install desktop dependencies
+        run: bun install
+        working-directory: desktop
+
+      # Creator's version comes from its OWN tag namespace, so its cadence is independent of Agent's
+      # without a second committed version field. desktop/package.json's `version` is Agent's line; a
+      # Creator release must never inherit it, which is why a malformed tag is a hard failure here
+      # rather than the fallback build-desktop.yml uses (there, package.json IS the right fallback).
+      - name: Set build version from the Creator tag
+        shell: bash
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ github.token }} # read-only: find the newest published Creator release
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            # Tolerant of a mistyped prefix, the same way ADR-0213 made the Agent stamp tolerant:
+            # creator-v1.2.3 / creator-v.1.2.3 / 1.2.3 all yield 1.2.3.
+            V="${GITHUB_REF#refs/tags/}"; V="${V#creator-v}"; V="${V#.}"
+            if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+              echo "::error::tag '${GITHUB_REF#refs/tags/}' is not creator-v<semver>. Refusing to build: falling back to package.json would publish a Creator release numbered from AGENT's version line."
+              exit 1
+            fi
+          else
+            # TEST BUILD (manual dispatch): not a release. The stamp must sort ABOVE every published
+            # CREATOR release, or an installed test build auto-updates itself back to the live version
+            # and wipes out what you are testing. Base it on Creator's own releases only. `creator-v`
+            # anchors the match, so the rolling `creator-latest` tag is correctly ignored.
+            LATEST="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name' 2>/dev/null | sed -n 's/^creator-v//p' | head -1 || true)"
+            V="$(BASE="${LATEST:-0.0.0}" RUN="$GITHUB_RUN_NUMBER" node -e 'const p=(process.env.BASE||"0.0.0").split("-")[0].split(".").map(Number);console.log((p[0]||0)+"."+(p[1]||0)+"."+((p[2]||0)+1)+"-test."+(process.env.RUN||"0"))')"
+            echo "test stamp: newest published Creator release=${LATEST:-none} -> $V"
+          fi
+          # Build-time only: package.json in git is untouched.
+          node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
+          echo "Creator build version = $V"
+
+      # electron-builder's deb/rpm targets shell out to fpm; building an .rpm on the Ubuntu runner
+      # needs the `rpm` toolchain (rpmbuild), which isn't installed by default. No-op elsewhere.
+      - name: Install rpm tooling (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      # macOS builds whisper.cpp from source (upstream publishes no prebuilt server binary), so the
+      # runner needs cmake. Creator bundles the same offline-STT binary as Agent.
+      - name: Ensure cmake (macOS, for the whisper.cpp source build)
+        if: runner.os == 'macOS'
+        run: cmake --version || brew install cmake
+
+      # An EMPTY CSC_LINK is not the same as unset: electron-builder treats '' as a cert path and dies.
+      # Export the signing vars ONLY when a real cert secret exists.
+      - name: Configure code-signing (only when a cert secret exists)
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" && -n "$MAC_CSC_LINK" ]]; then
+            { echo "CSC_LINK=$MAC_CSC_LINK"; echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          elif [[ "$RUNNER_OS" == "Windows" && -n "$WIN_CSC_LINK" ]]; then
+            { echo "CSC_LINK=$WIN_CSC_LINK"; echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          fi
+
+      - name: Build Creator installer (${{ matrix.script }})
+        run: bun run ${{ matrix.script }}
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK != '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # softprops attaches the release; don't let electron-builder also upload.
+          GH_TOKEN: ""
+
+      # The two release gates that protect Agent bytes, pointed at CREATOR bytes. Both scripts default
+      # to desktop/release; Creator packages into desktop/release-creator, so without LUCID_RELEASE_DIR
+      # they would either fail on a missing dir or, on a runner that also built Agent, pass by
+      # inspecting Agent's tree and report green about bytes they never opened.
+
+      # Air-gap gate (ADR-0225): prove the PACKAGED app is self-contained, so an air-gapped host works
+      # cold with no `bun add -g` / `uv venv` / network. Fails before any artifact is uploaded.
+      - name: Air-gap smoke test (bundled runtimes resolve offline)
+        run: bun run build/airgap-smoke.ts
+        working-directory: desktop
+        env:
+          LUCID_RELEASE_DIR: release-creator
+
+      # Program Files boot gate (ADR-0261): the gap that shipped the v1.12.0 brick. Creator installs
+      # into the same ACL-protected install tree class, so it needs the same proof.
+      - name: Program Files boot smoke (engine boots from a protected install)
+        if: runner.os == 'Windows'
+        run: bun run build/pf-boot-smoke.ts
+        working-directory: desktop
+        env:
+          LUCID_PF_SMOKE_STRICT: "1"
+          LUCID_RELEASE_DIR: release-creator
+
+      - name: Upload Creator installers as artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: LucidCreator-${{ runner.os }}
+          if-no-files-found: warn
+          path: |
+            desktop/release-creator/*.zip
+            desktop/release-creator/*Setup*.exe
+            desktop/release-creator/*portable*.exe
+            desktop/release-creator/*.AppImage
+            desktop/release-creator/*.deb
+            desktop/release-creator/*.rpm
+            desktop/release-creator/*.blockmap
+            desktop/release-creator/latest*.yml
+
+      - name: Attach Creator installers to the Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          # make_latest false: see the header. A Creator release must never become the repo pointer
+          # that Agent's installed base follows.
+          make_latest: "false"
+          files: |
+            desktop/release-creator/*.zip
+            desktop/release-creator/*Setup*.exe
+            desktop/release-creator/*portable*.exe
+            desktop/release-creator/*.AppImage
+            desktop/release-creator/*.deb
+            desktop/release-creator/*.rpm
+            desktop/release-creator/*.blockmap
+            desktop/release-creator/latest*.yml
+
+  # Rolling "creator-latest" release: the feed every installed Creator actually reads (the generic
+  # provider URL baked into the Creator package points here). Tag pushes get their own versioned
+  # release above; this job is what moves existing Creator users forward.
+  publish-creator-latest:
+    name: Publish rolling "creator-latest" release
+    needs: build
+    # OPT-IN ONLY, and double-gated exactly like Agent's equivalent: this job updates the
+    # electron-updater feed, i.e. it pushes the build at everyone who already has Creator installed.
+    # A plain manual dispatch publishes NOTHING. The branch pin assumes Creator ships from trunk; if
+    # Creator ever moves to a long-lived release branch, this is the one line that changes.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_latest && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v8 # must match upload-artifact's major (artifact format)
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist
+
+      # softprops replaces same-named assets but never deletes ones whose names changed, so clear the
+      # release first and let it hold only the current build.
+      - name: Clear stale assets from the "creator-latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api "repos/${{ github.repository }}/releases/tags/creator-latest" --jq '.assets[].id' 2>/dev/null || true)
+          for id in $ids; do
+            echo "deleting stale asset $id"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true
+          done
+
+      - name: Publish / update the "creator-latest" release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: creator-latest
+          name: LUCID Creator latest build
+          # prerelease AND make_latest false: two independent reasons GitHub can never point
+          # /releases/latest at this release, which is what Agent's installed base resolves through.
+          prerelease: true
+          make_latest: "false"
+          body: |
+            Rolling LUCID Creator build, auto-updated on every successful Creator CI build (commit ${{ github.sha }}).
+            This is the feed installed Creator builds update from. For a pinned version, see the creator-v* releases.
+            Looking for LUCID Agent IDE instead? See the standard releases.
+          files: |
+            dist/*.zip
+            dist/*Setup*.exe
+            dist/*portable*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.blockmap
+            dist/latest*.yml

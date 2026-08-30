@@ -22,6 +22,8 @@ import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0
 import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
+import { flavorInfo, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { creatorModePreamble } from "./creator_preamble.ts"; // CREATOR-0 (ADR-0284): Creator standing guidance
 import { replyMedium, spokenReplyGuidance } from "../harness/voice/spoken_reply.ts"; // P-VOICE.5 (ADR-0248)
 import { ChatGate } from "./chat_gate.ts";
 import { completionPath } from "./util_conn.ts";
@@ -212,6 +214,9 @@ export function interjectChildEnv(target: string): Record<string, string> {
   return env;
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// CREATOR-0 (ADR-0279/0284): this engine's flavor. `creator` is offerable as a UI mode only here; its
+// omp mode and permission posture are IDENTICAL to Agent (uiModePosture), so no gate behavior changes.
+const BUILD_INFO = flavorInfo(resolveBuildFlavor(process.env));
 // getConfig() caps the session warm-up at this bound so the model picker never blocks on a slow/hung
 // omp session init — it returns the current config and the renderer re-polls for the live list.
 const CONFIG_WARM_MS = 6000;
@@ -330,6 +335,9 @@ class Backend {
   // decision instead of being auto-approved. The composer's 3-way Plan/Ask/Agent is derived from
   // (currentModeId, permissionMode). Fail-closed: no decision (timeout / disconnect) ⇒ deny.
   permissionMode: "auto" | "ask" = "auto";
+  // CREATOR-0: true only after setUiMode("creator") in a Creator build. It selects the Creator workspace
+  // + its standing prompt block; it never touches permissionMode (see uiModePosture).
+  private creatorModeActive = false;
   // P-GOAL.2 (ADR-0046): a /goal loop is running, and a request to stop it after the current iteration.
   private goalActive = false;
   private goalCancelled = false;
@@ -902,10 +910,12 @@ class Backend {
     await Promise.race([this.ensureSession().catch(() => {}), sleep(CONFIG_WARM_MS)]);
     return this.configOptions;
   }
-  /** The composer's 3-way control, derived from the omp mode + the client permission posture. */
-  uiMode(): "agent" | "ask" | "plan" {
+  /** The composer's control, derived from the omp mode + the client permission posture (+ the Creator
+   *  workspace flag in a Creator build). */
+  uiMode(): UiMode {
     if (this.currentModeId === "plan") return "plan";
-    return this.permissionMode === "ask" ? "ask" : "agent";
+    if (this.permissionMode === "ask") return "ask";
+    return this.creatorModeActive && BUILD_INFO.creatorBuild ? "creator" : "agent";
   }
   /** P-ACP.2/3: the ACP session modes + the active omp mode + the derived 3-way UI mode. */
   async getModes(): Promise<{ available: any[]; current: string; ui: string; permissionMode: string }> {
@@ -921,9 +931,14 @@ class Backend {
   }
   /** P-ACP.3: set the composer's Plan/Ask/Agent. Plan→omp `plan`; Agent/Ask→omp `default`, with
    *  Ask flipping permission forwarding on (the user approves each tool call). */
-  async setUiMode(uiMode: "agent" | "ask" | "plan"): Promise<{ available: any[]; current: string; ui: string; permissionMode: string }> {
-    this.permissionMode = uiMode === "ask" ? "ask" : "auto";
-    await this.setMode(uiMode === "plan" ? "plan" : "default");
+  async setUiMode(uiMode: UiMode): Promise<{ available: any[]; current: string; ui: string; permissionMode: string }> {
+    // CREATOR-0: normalize first - a `creator` request at a standard build folds to `agent` and can never
+    // activate a surface that build does not ship.
+    const mode = normalizeUiMode(uiMode, BUILD_INFO.creatorBuild);
+    const posture = uiModePosture(mode);
+    this.creatorModeActive = mode === "creator";
+    this.permissionMode = posture.permissionMode;
+    await this.setMode(posture.ompMode);
     return { available: this.availableModes, current: this.currentModeId, ui: this.uiMode(), permissionMode: this.permissionMode };
   }
 
@@ -1156,6 +1171,9 @@ class Backend {
         profile: recallPreamble(), // P9.2: re-read each turn so newly-learned facts show up
         designInvariants: readDesignInvariants(currentWorkspace()), // P-DESIGN.1: honor DESIGN.md every turn
         spokenReply: spokenReplyForTurn(), // P-VOICE.5: hands-free? then answer for the EAR, not the screen
+        // CREATOR-0 (ADR-0284): Creator workspace rules, standing while the mode is on and gone the turn
+        // after it is switched off. Agent security semantics are restated inside the block, not relaxed.
+        creatorMode: creatorModePreamble({ creatorBuild: BUILD_INFO.creatorBuild, active: this.uiMode() === "creator" }),
         memoryRecall: this.memoryRecall,
         memoryRecallDelivered: this.memoryRecallDelivered,
       });

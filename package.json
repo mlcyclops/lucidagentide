@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p desktop/tsconfig.json && tsc --noEmit -p desktop/tsconfig.server.json",
     "typecheck:desktop": "tsc --noEmit -p desktop/tsconfig.json",
     "typecheck:desktop-server": "tsc --noEmit -p desktop/tsconfig.server.json",
-    "test": "bun test harness",
+    "test": "bun test --path-ignore-patterns=\"desktop/release/**\" --path-ignore-patterns=\"vendor/**\" --path-ignore-patterns=\"lucidaddon_audit/**\"",
     "demo-00": "bun run harness/scripts/demo00_omp_echo.ts && bun run harness/scripts/demo00_scanner.ts && bun run harness/scripts/demo00_failclosed.ts",
     "demo-00:echo": "bun run harness/scripts/demo00_omp_echo.ts",
     "demo-00:scanner": "bun run harness/scripts/demo00_scanner.ts",

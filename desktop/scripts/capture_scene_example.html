@@ -1,0 +1,826 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC
+     SPDX-License-Identifier: BUSL-1.1 -->
+<!-- desktop/scripts/capture_scene_example.html - CREATOR-3b (ADR-0287 item 3): the REFERENCE scene for
+     LUCID's deterministic frame capture, and the documentation of the capture contract in the same file.
+
+     Open it in the Preview panel. The capture bridge (desktop/preview_bridge.ts) finds the largest canvas on
+     the page, calls window.lucidRenderAt(tMs) once per planned time, and reads the canvas back with
+     toDataURL in the SAME synchronous task as the render call. Everything painted below is a pure function
+     of tMs, so frame N lands on the same instant on every run and a regression compare means something.
+
+     Self-contained on purpose: inline CSS, inline JS, plain canvas 2D, no library, no external asset, no
+     network. The preview frame sets connect-src 'none', so a fetched byte would never arrive anyway. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LUCID deterministic capture scene</title>
+<style>
+:root{
+  --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b;
+  --line:#252a3a; --line-soft:#1a1e2a; --line-strong:#323a4f;
+  --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90; --txt-4:#525a70;
+  --accent:#c64bd6; --accent-2:#e07bf0; --accent-dim:rgba(198,75,214,.14);
+  --cyan:#46c8dc; --cyan-dim:rgba(70,200,220,.13);
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  --green-dim:rgba(70,210,126,.13); --red-dim:rgba(239,95,95,.13);
+  --r-lg:12px; --r-md:9px; --r-sm:6px;
+  --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --shadow:0 18px 50px -18px rgba(0,0,0,.75),0 2px 10px rgba(0,0,0,.4);
+  --emboss:inset 0 1px 0 rgba(255,255,255,.05);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:var(--font);
+  font-size:14px;
+  line-height:1.62;
+  color:var(--txt-2);
+  background:
+    radial-gradient(90% 60% at 12% -8%,rgba(198,75,214,.16),transparent 60%),
+    radial-gradient(70% 55% at 108% 6%,rgba(70,200,220,.11),transparent 55%),
+    radial-gradient(120% 100% at 50% 120%,rgba(94,141,242,.08),transparent 60%),
+    var(--bg-0);
+  background-attachment:fixed;
+}
+.page{max-width:1000px;margin:0 auto;padding:36px 26px 64px}
+
+/* ---- masthead ---- */
+.masthead{margin-bottom:22px}
+.eyebrow{
+  display:inline-block;margin:0 0 8px;padding:3px 10px;border-radius:999px;
+  background:var(--accent-dim);border:1px solid rgba(198,75,214,.34);color:var(--accent-2);
+  font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;white-space:nowrap;
+}
+h1{margin:0 0 10px;font-size:26px;line-height:1.24;font-weight:700;color:var(--txt);letter-spacing:.2px}
+.lede{margin:0;max-width:74ch;color:var(--txt-2)}
+
+/* ---- cards ---- */
+.card{
+  background:linear-gradient(180deg,rgba(21,24,35,.88),rgba(15,17,23,.88));
+  border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:17px 19px 19px;box-shadow:var(--shadow),var(--emboss);
+}
+.card + .card{margin-top:16px}
+section{margin-top:22px}
+h2{
+  margin:0 0 10px;font-size:12px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+h3{
+  margin:0 0 6px;font-size:14px;font-weight:650;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+p{margin:0 0 10px;max-width:78ch}
+p:last-child{margin-bottom:0}
+b,strong{color:var(--txt);font-weight:650}
+code{
+  font-family:var(--mono);font-size:12.5px;color:var(--cyan);
+  background:var(--cyan-dim);border-radius:4px;padding:1px 5px;
+}
+pre{
+  margin:0 0 12px;padding:12px 14px;overflow-x:auto;
+  background:var(--bg-0);border:1px solid var(--line);border-radius:var(--r-md);
+}
+pre code{background:none;padding:0;color:var(--txt);font-size:12.5px;white-space:pre}
+pre code .k{color:var(--accent-2)}
+pre code .c{color:var(--txt-4)}
+
+/* Marker is absolutely positioned so the item text stays ONE normal block paragraph.
+   A flex row here would shatter every bold phrase into its own narrow column. */
+ul.notes{margin:0;padding:0;list-style:none}
+ul.notes li{position:relative;padding:0 0 0 19px;margin:0 0 7px;max-width:80ch}
+ul.notes li:last-child{margin-bottom:0}
+ul.notes li::before{
+  content:"";position:absolute;left:4px;top:.66em;width:5px;height:5px;border-radius:50%;
+  background:var(--accent);box-shadow:0 0 7px rgba(198,75,214,.75);
+}
+ul.notes.cyan li::before{background:var(--cyan);box-shadow:0 0 7px rgba(70,200,220,.7)}
+
+/* ---- the stage ---- */
+.stage{display:block;text-align:center}
+#scene{
+  display:block;margin:0 auto;width:480px;height:270px;
+  border:1px solid var(--line-strong);border-radius:10px;
+  box-shadow:0 22px 60px -22px rgba(0,0,0,.9),0 0 0 6px rgba(10,11,15,.55);
+  background:var(--bg-0);
+}
+.stage-meta{
+  margin:12px auto 0;font-family:var(--mono);font-size:11px;color:var(--txt-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* Every child here is a whole element: no raw text sits directly in a flex box. */
+.controls{
+  display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;
+  margin:16px auto 0;
+}
+button{
+  flex:none;font:inherit;font-size:12.5px;font-weight:600;white-space:nowrap;cursor:pointer;
+  color:var(--txt);background:linear-gradient(180deg,var(--bg-3),var(--bg-2));
+  border:1px solid var(--line-strong);border-radius:999px;padding:7px 16px;
+  box-shadow:var(--emboss);transition:border-color 160ms ease,color 160ms ease;
+}
+button:hover{border-color:var(--accent);color:var(--accent-2)}
+button:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}
+.scrub{flex:none;display:flex;align-items:center;gap:9px}
+.scrub-label{
+  flex:none;font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--txt-3);white-space:nowrap;
+}
+input[type=range]{flex:none;width:210px;accent-color:var(--accent);cursor:pointer}
+.pill{
+  flex:none;font-family:var(--mono);font-size:11.5px;color:var(--accent-2);white-space:nowrap;
+  background:var(--accent-dim);border:1px solid rgba(198,75,214,.3);border-radius:999px;padding:4px 11px;
+}
+.verdict{
+  margin:14px auto 0;max-width:62ch;padding:9px 14px;border-radius:var(--r-md);
+  font-family:var(--mono);font-size:12px;
+  color:var(--txt-3);background:rgba(10,11,15,.6);border:1px solid var(--line);
+}
+.verdict.ok{color:var(--green);background:var(--green-dim);border-color:rgba(70,210,126,.35)}
+.verdict.bad{color:var(--red);background:var(--red-dim);border-color:rgba(239,95,95,.4)}
+
+/* Generous track so a title never folds into a sliver. */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.grid .card{margin-top:0}
+.breaker h3{color:var(--red)}
+.breaker .tag{
+  display:inline-block;margin:0 0 8px;padding:2px 9px;border-radius:999px;
+  font-family:var(--mono);font-size:10.5px;color:var(--red);white-space:nowrap;
+  background:var(--red-dim);border:1px solid rgba(239,95,95,.32);
+}
+.foot{margin-top:26px;font-size:12px;color:var(--txt-4);max-width:80ch}
+@media (max-width:560px){
+  #scene{width:100%;height:auto;max-width:480px}
+  input[type=range]{width:150px}
+}
+</style>
+</head>
+<body>
+<main class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">CREATOR-3b reference scene</p>
+    <h1>One canvas, one function, the same pixels every run</h1>
+    <p class="lede">
+      The LUCID capture bridge hands this page a plan of times. For each one it calls
+      <code>window.lucidRenderAt(tMs)</code> and reads the canvas straight back. Nothing below consults a
+      clock, rolls a die, carries state between calls, or fetches a byte, so asking for the same millisecond
+      twice paints byte-identical pixels. That is the whole contract, and this file is both the demonstration
+      of it and the thing to copy when you write your own scene.
+    </p>
+  </header>
+
+  <section class="card stage">
+    <canvas id="scene" width="480" height="270" aria-label="Deterministic orrery animation driven by an explicit time value"></canvas>
+    <p class="stage-meta">canvas 480 x 270 &middot; loop 2000 ms &middot; one 30fps pass of 60 frames covers the whole loop</p>
+    <div class="controls">
+      <button id="btn-play" type="button">Pause live loop</button>
+      <label class="scrub" for="scrub"><span class="scrub-label">Scrub tMs</span><input id="scrub" type="range" min="0" max="1999" step="1" value="0" /></label>
+      <span class="pill" id="scrub-read">0000 ms</span>
+      <button id="btn-test" type="button">Render 500 ms twice and compare</button>
+    </div>
+    <p class="verdict" id="verdict">Press compare to hold the scene to its own promise.</p>
+  </section>
+
+  <section class="grid">
+    <article class="card">
+      <h2>The contract</h2>
+      <pre><code><span class="k">window.lucidRenderAt</span> = function (tMs) { <span class="c">/* paint the scene at tMs, return nothing */</span> };</code></pre>
+      <ul class="notes">
+        <li><b>Identical <code>tMs</code> must paint identical pixels.</b> Not similar, not close: the audit
+          compares fingerprints of the raw readback, so one antialiased edge is a difference.</li>
+        <li><b>The time is an argument, never a reading.</b> Your scene is told which instant to paint. It is
+          not asked what time it is.</li>
+        <li><b>Define it before a capture can run.</b> This script sits at the end of the body, and the
+          bridge is injected after it, so the function exists by the time any message arrives.</li>
+        <li><b>Return nothing and finish synchronously.</b> The readback happens in the same task as the
+          call, so a promise resolved later has already missed the frame.</li>
+      </ul>
+    </article>
+
+    <article class="card">
+      <h2>What the bridge does</h2>
+      <ul class="notes cyan">
+        <li>It captures the <b>largest canvas</b> on the page unless it is handed a CSS selector. This page
+          has exactly one canvas, so there is nothing to disambiguate.</li>
+        <li>It reads pixels with <code>toDataURL("image/png")</code> in the <b>same synchronous task</b> as
+          the render call. The live loop below can never slip a frame in between the two.</li>
+        <li>Caps per pass: <b>64 frames</b> and <b>no canvas edge over 2048px</b>. This canvas is 480 by 270,
+          and a 2000 ms pass at 30fps is 60 frames, which fits one whole loop with room to spare.</li>
+        <li>A page with no <code>lucidRenderAt</code> can only be <b>sampled</b> on its own clock, and the
+          result says so rather than pretending to be a driven capture.</li>
+        <li>The audit flags a run of <b>three or more identical consecutive frames</b> as stuck, which is the
+          signature of a scene that ignored the time it was handed.</li>
+      </ul>
+    </article>
+  </section>
+
+  <section>
+    <h2>The four things that break determinism</h2>
+    <div class="grid">
+      <article class="card breaker">
+        <p class="tag">breaker 1</p>
+        <h3>The wall clock</h3>
+        <p><code>Date.now()</code>, <code>performance.now()</code>, <code>new Date()</code>, and the
+          timestamp <code>requestAnimationFrame</code> hands your callback. Each one makes a frame depend on
+          when it was painted instead of which moment it was asked for. The live loop here declares its
+          callback with no parameter at all, so the rAF timestamp is not even in scope.</p>
+      </article>
+      <article class="card breaker">
+        <p class="tag">breaker 2</p>
+        <h3>Randomness</h3>
+        <p><code>Math.random()</code>, <code>crypto.getRandomValues()</code>, any unseeded noise field. If
+          your scene wants noise, derive it from <code>tMs</code> and a fixed seed with a small integer hash
+          so frame 47 is the same speckle pattern on every run. In this file the only call to
+          <code>Math.random</code> lives inside the deliberately broken variant.</p>
+      </article>
+      <article class="card breaker">
+        <p class="tag">breaker 3</p>
+        <h3>Unseeded accumulation</h3>
+        <p>Physics or particles advanced with <code>state += step</code> on every call. Frame N then depends
+          on how many times you were called and in what order, so a pass that renders 500 ms first disagrees
+          with a pass that reaches it fifteenth. Solve for <code>tMs</code> instead of stepping toward it.
+          The comet tails below are drawn by re-evaluating the same pure position function at
+          <code>tMs - k * step</code>, never by remembering where a body used to be.</p>
+      </article>
+      <article class="card breaker">
+        <p class="tag">breaker 4</p>
+        <h3>External assets</h3>
+        <p>Images, webfonts, CDN scripts, <code>fetch</code>. The preview frame sets
+          <code>connect-src 'none'</code>, so they never arrive. Even where they do, a half-loaded asset
+          paints one way on the first pass and another way on the second. Every pixel here is drawn by code,
+          and the canvas is never tainted, which is also why the readback cannot be refused.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>The broken variant, present and disabled</h2>
+    <p>A second renderer ships alongside the honest one so you can watch the harness earn its keep. It adds a
+      sub-pixel <code>Math.random()</code> wobble to the moving layer. That is enough: every antialiased edge
+      shifts, so every fingerprint changes, while to the eye the scene still looks completely right. An
+      invisible failure that a compare catches is exactly the class of bug this harness exists for.</p>
+    <pre><code><span class="c">// Paste in the console, or uncomment the swap at the bottom of the script, then re-run a capture.</span>
+window.lucidRenderAt = window.lucidRenderAtNondeterministic;</code></pre>
+    <p>Captured frames painted through it carry a red <b>NONDETERMINISTIC</b> badge, so a reviewer reading a
+      contact sheet can tell at a glance which renderer produced it. The default export stays the honest one.</p>
+  </section>
+
+  <p class="foot">
+    Determinism here is per machine and per browser build: the same binary asked for the same millisecond
+    always paints the same bytes. Text metrics and antialiasing can differ across GPUs and font stacks, so
+    compare a capture against another run of the same plan on the same machine, not against a screenshot
+    taken somewhere else.
+  </p>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── the scene's fixed geometry and clock ──────────────────────────────────
+  // The backing store is a FIXED 480 x 270. We deliberately do NOT scale it by devicePixelRatio: that would
+  // make the captured pixel dimensions depend on the monitor, and two runs on two screens would disagree
+  // before a single shape was drawn.
+  var W = 480, H = 270;
+  var LOOP_MS = 2000;              // the scene repeats exactly; 2000 ms at 30fps is 60 frames, under the 64 cap
+  var TAU = Math.PI * 2;
+  var CX = 156, CY = 138;          // the orrery core, left of the readout panel
+
+  var INK = {
+    txt3: "#727a90", txt4: "#525a70",
+    accent: "#c64bd6", accent2: "#e07bf0",
+    cyan: "#46c8dc", red: "#ef5f5f"
+  };
+  var SANS = '"Inter","Segoe UI",system-ui,-apple-system,sans-serif';
+  var MONO = 'ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace';
+
+  // Orbits are ellipses with a fixed tilt. `turns` is revolutions per loop, so every body returns to its
+  // exact starting point at the loop boundary and the capture tiles seamlessly.
+  var BODIES = [
+    { turns: 1, rx: 118, ry: 60, tilt: -0.22, phase: 0.00, size: 5.2, tail: 320, color: "#e07bf0", glow: "rgba(224,123,240,.95)" },
+    { turns: 2, rx: 86,  ry: 44, tilt:  0.30, phase: 0.38, size: 4.2, tail: 210, color: "#46c8dc", glow: "rgba(70,200,220,.95)" },
+    { turns: 3, rx: 56,  ry: 29, tilt: -0.62, phase: 0.71, size: 3.4, tail: 140, color: "#5e8df2", glow: "rgba(94,141,242,.95)" }
+  ];
+  var TRAIL_SEGMENTS = 20;
+
+  var canvas = document.getElementById("scene");
+  var ctx = canvas.getContext("2d");
+
+  // ── pure helpers ──────────────────────────────────────────────────────────
+
+  /** Position inside the loop, 0 to 1. Guarded for negative times so trail lookups behind t = 0 still work. */
+  function phaseOf(tMs) {
+    var p = (tMs % LOOP_MS) / LOOP_MS;
+    return p < 0 ? p + 1 : p;
+  }
+
+  function pad(value, width) {
+    var s = String(value);
+    while (s.length < width) { s = "0" + s; }
+    return s;
+  }
+
+  /** roundRect is young enough that a hand-rolled path keeps this file openable in any browser. */
+  function roundRectPath(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  /** Letter-spaced label. ctx.letterSpacing is not portable, so space the glyphs by hand. */
+  function tracked(c, text, x, y, spacing) {
+    var cursor = x;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      c.fillText(ch, cursor, y);
+      cursor += c.measureText(ch).width + spacing;
+    }
+  }
+
+  /** Where body `b` is at `tMs`. Pure: same input, same point, no matter when or how often it is asked. */
+  function bodyAt(b, tMs) {
+    var a = TAU * (b.turns * phaseOf(tMs) + b.phase);
+    var ex = b.rx * Math.cos(a);
+    var ey = b.ry * Math.sin(a);
+    var ct = Math.cos(b.tilt), st = Math.sin(b.tilt);
+    return { x: CX + ex * ct - ey * st, y: CY + ex * st + ey * ct };
+  }
+
+  // ── drawing ───────────────────────────────────────────────────────────────
+
+  /** Canvas state that leaks from one frame into the next is an accumulator wearing a costume. Reset it all. */
+  function resetContext(c) {
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = "source-over";
+    c.shadowBlur = 0;
+    c.shadowColor = "rgba(0,0,0,0)";
+    c.lineCap = "butt";
+    c.lineJoin = "miter";
+    c.lineWidth = 1;
+    c.setLineDash([]);
+    c.textAlign = "left";
+    c.textBaseline = "alphabetic";
+    c.clearRect(0, 0, W, H);
+  }
+
+  function bloom(c, x, y, r, color) {
+    var g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, color);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    c.fillStyle = g;
+    c.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  /** Base gradient, three drifting light blooms, a static grid, a vignette. The blooms move on fixed
+   *  lissajous paths driven only by the loop phase. */
+  function drawBackdrop(c, p) {
+    var base = c.createLinearGradient(0, 0, 0, H);
+    base.addColorStop(0, "#12141d");
+    base.addColorStop(1, "#08090d");
+    c.fillStyle = base;
+    c.fillRect(0, 0, W, H);
+
+    c.save();
+    c.globalCompositeOperation = "lighter";
+    bloom(c, W * 0.30 + 74 * Math.cos(TAU * p),          H * 0.20 + 46 * Math.sin(TAU * 2 * p), 215, "rgba(198,75,214,.30)");
+    bloom(c, W * 0.70 + 62 * Math.sin(TAU * p),          H * 0.88 + 36 * Math.cos(TAU * p),     195, "rgba(70,200,220,.20)");
+    bloom(c, W * 0.48 + 96 * Math.sin(TAU * (p + 0.25)), H * 0.54,                              165, "rgba(94,141,242,.16)");
+    c.restore();
+
+    c.save();
+    c.strokeStyle = "rgba(255,255,255,.030)";
+    c.lineWidth = 1;
+    c.beginPath();
+    for (var x = 24; x < W; x += 24) { c.moveTo(x + 0.5, 0); c.lineTo(x + 0.5, H); }
+    for (var y = 24; y < H; y += 24) { c.moveTo(0, y + 0.5); c.lineTo(W, y + 0.5); }
+    c.stroke();
+    c.restore();
+
+    var vig = c.createRadialGradient(W / 2, H / 2, H * 0.24, W / 2, H / 2, W * 0.72);
+    vig.addColorStop(0, "rgba(0,0,0,0)");
+    vig.addColorStop(1, "rgba(0,0,0,.62)");
+    c.fillStyle = vig;
+    c.fillRect(0, 0, W, H);
+  }
+
+  /** Orbit rings, the loop-phase sweep, three bodies with comet tails, the pulsing core. */
+  function drawOrrery(c, tMs, p) {
+    var i, b;
+
+    c.save();
+    c.lineWidth = 1;
+    for (i = 0; i < BODIES.length; i++) {
+      b = BODIES[i];
+      c.setLineDash(i === 0 ? [2, 6] : []);
+      c.strokeStyle = i === 0 ? "rgba(255,255,255,.075)" : "rgba(255,255,255,.05)";
+      c.beginPath();
+      c.ellipse(CX, CY, b.rx, b.ry, b.tilt, 0, TAU);
+      c.stroke();
+    }
+    c.restore();
+
+    // The progress sweep: a ring around the core that fills once per loop, so a reviewer can read the phase
+    // out of the picture itself without trusting the numeric readout.
+    c.save();
+    c.lineWidth = 3;
+    c.strokeStyle = "rgba(255,255,255,.09)";
+    c.beginPath();
+    c.arc(CX, CY, 31, 0, TAU);
+    c.stroke();
+    if (p > 0) {
+      c.lineCap = "round";
+      c.strokeStyle = INK.accent2;
+      c.shadowColor = "rgba(224,123,240,.85)";
+      c.shadowBlur = 11;
+      c.beginPath();
+      c.arc(CX, CY, 31, -Math.PI / 2, -Math.PI / 2 + TAU * p);
+      c.stroke();
+    }
+    c.restore();
+
+    c.save();
+    c.lineCap = "round";
+    for (i = 0; i < BODIES.length; i++) {
+      b = BODIES[i];
+      var step = b.tail / TRAIL_SEGMENTS;
+      var here = bodyAt(b, tMs);
+
+      // The tail is HISTORY RECOMPUTED, not history remembered. Every segment re-asks the same pure function
+      // for an earlier time, which is why rendering 500 ms cold looks exactly like reaching it mid-pass.
+      for (var k = TRAIL_SEGMENTS; k >= 1; k--) {
+        var from = bodyAt(b, tMs - k * step);
+        var to = bodyAt(b, tMs - (k - 1) * step);
+        var fade = 1 - k / TRAIL_SEGMENTS;
+        c.globalAlpha = 0.05 + 0.55 * fade * fade;
+        c.lineWidth = 0.7 + b.size * 0.8 * fade;
+        c.strokeStyle = b.color;
+        c.beginPath();
+        c.moveTo(from.x, from.y);
+        c.lineTo(to.x, to.y);
+        c.stroke();
+      }
+
+      c.globalAlpha = 0.13;
+      c.lineWidth = 1;
+      c.strokeStyle = b.color;
+      c.beginPath();
+      c.moveTo(CX, CY);
+      c.lineTo(here.x, here.y);
+      c.stroke();
+      c.globalAlpha = 1;
+
+      c.shadowColor = b.glow;
+      c.shadowBlur = 14;
+      c.fillStyle = b.color;
+      c.beginPath();
+      c.arc(here.x, here.y, b.size, 0, TAU);
+      c.fill();
+      c.shadowBlur = 0;
+      c.fillStyle = "rgba(255,255,255,.92)";
+      c.beginPath();
+      c.arc(here.x - b.size * 0.28, here.y - b.size * 0.30, b.size * 0.33, 0, TAU);
+      c.fill();
+    }
+    c.restore();
+
+    var pulse = 11 + 1.8 * Math.sin(TAU * 2 * p);
+    var core = c.createRadialGradient(CX, CY, 0, CX, CY, pulse * 2.6);
+    core.addColorStop(0.00, "rgba(255,255,255,.96)");
+    core.addColorStop(0.28, INK.accent2);
+    core.addColorStop(0.58, "rgba(198,75,214,.34)");
+    core.addColorStop(1.00, "rgba(198,75,214,0)");
+    c.fillStyle = core;
+    c.beginPath();
+    c.arc(CX, CY, pulse * 2.6, 0, TAU);
+    c.fill();
+  }
+
+  /** The readout panel. The frame time is drawn INTO the canvas so a captured PNG says which moment it is,
+   *  with no filename or sidecar metadata to trust. */
+  function drawReadout(c, tMs, p) {
+    var PX = 296, PY = 16, PW = 168, PH = 238;
+    var IX = PX + 14, IW = PW - 28;
+
+    c.save();
+    roundRectPath(c, PX + 0.5, PY + 0.5, PW - 1, PH - 1, 10);
+    c.fillStyle = "rgba(12,14,20,.82)";
+    c.fill();
+    c.strokeStyle = "rgba(255,255,255,.09)";
+    c.lineWidth = 1;
+    c.stroke();
+    c.restore();
+
+    c.save();
+    c.textBaseline = "alphabetic";
+
+    c.fillStyle = INK.txt4;
+    c.font = "700 8.5px " + SANS;
+    tracked(c, "FRAME TIME", IX, PY + 26, 1.7);
+
+    var whole = Math.round(tMs);
+    c.fillStyle = INK.accent2;
+    c.font = "700 31px " + MONO;
+    c.fillText(pad(whole, 4), IX, PY + 62);
+    var digits = c.measureText(pad(whole, 4)).width;
+    c.fillStyle = INK.txt3;
+    c.font = "600 12px " + SANS;
+    c.fillText("ms", IX + digits + 7, PY + 62);
+
+    c.fillStyle = INK.txt3;
+    c.font = "10.5px " + MONO;
+    c.fillText("frame " + pad(Math.round(whole * 30 / 1000), 2) + "/60 @ 30fps", IX, PY + 82);
+
+    c.strokeStyle = "rgba(255,255,255,.08)";
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(IX, PY + 96.5);
+    c.lineTo(IX + IW, PY + 96.5);
+    c.stroke();
+
+    c.fillStyle = INK.txt4;
+    c.font = "700 8.5px " + SANS;
+    tracked(c, "LOOP PHASE", IX, PY + 118, 1.7);
+    c.fillStyle = INK.cyan;
+    c.font = "600 10.5px " + MONO;
+    c.textAlign = "right";
+    c.fillText((p * 100).toFixed(1) + "%", IX + IW, PY + 118);
+    c.textAlign = "left";
+
+    var BY = PY + 128;
+    roundRectPath(c, IX, BY, IW, 7, 3.5);
+    c.fillStyle = "rgba(255,255,255,.07)";
+    c.fill();
+    if (p > 0) {
+      var fill = c.createLinearGradient(IX, 0, IX + IW, 0);
+      fill.addColorStop(0, INK.accent);
+      fill.addColorStop(1, INK.cyan);
+      roundRectPath(c, IX, BY, Math.max(7, IW * p), 7, 3.5);
+      c.fillStyle = fill;
+      c.fill();
+    }
+
+    c.fillStyle = INK.txt4;
+    c.font = "700 8.5px " + SANS;
+    tracked(c, "PHASE SIGNAL", IX, PY + 158, 1.7);
+
+    // Two harmonics scrolled by the loop phase. Sampled left to right from tMs alone, so the waveform is a
+    // picture of the argument rather than a recording of anything.
+    var wx = IX, wy = PY + 166, ww = IW, wh = 46, mid = wy + wh / 2;
+    c.save();
+    roundRectPath(c, wx, wy, ww, wh, 6);
+    c.clip();
+    c.fillStyle = "rgba(70,200,220,.05)";
+    c.fillRect(wx, wy, ww, wh);
+    c.strokeStyle = "rgba(255,255,255,.06)";
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(wx, mid + 0.5);
+    c.lineTo(wx + ww, mid + 0.5);
+    c.stroke();
+
+    var pts = [], s;
+    for (s = 0; s <= ww; s += 2) {
+      var u = s / ww;
+      var v = Math.sin(TAU * (2 * u - p)) * 0.62 + Math.sin(TAU * (4 * u - 2 * p + 0.25)) * 0.24;
+      pts.push([wx + s, mid - v * (wh / 2 - 5)]);
+    }
+    c.beginPath();
+    c.moveTo(pts[0][0], mid + wh / 2);
+    for (s = 0; s < pts.length; s++) { c.lineTo(pts[s][0], pts[s][1]); }
+    c.lineTo(pts[pts.length - 1][0], mid + wh / 2);
+    c.closePath();
+    var under = c.createLinearGradient(0, wy, 0, wy + wh);
+    under.addColorStop(0, "rgba(70,200,220,.30)");
+    under.addColorStop(1, "rgba(70,200,220,0)");
+    c.fillStyle = under;
+    c.fill();
+
+    c.beginPath();
+    c.moveTo(pts[0][0], pts[0][1]);
+    for (s = 1; s < pts.length; s++) { c.lineTo(pts[s][0], pts[s][1]); }
+    c.strokeStyle = INK.cyan;
+    c.lineWidth = 1.6;
+    c.lineJoin = "round";
+    c.shadowColor = "rgba(70,200,220,.8)";
+    c.shadowBlur = 7;
+    c.stroke();
+    c.shadowBlur = 0;
+
+    var headX = wx + ww * p;
+    c.strokeStyle = "rgba(224,123,240,.75)";
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(headX, wy);
+    c.lineTo(headX, wy + wh);
+    c.stroke();
+    c.restore();
+
+    c.fillStyle = INK.cyan;
+    c.font = "600 9.5px " + MONO;
+    c.fillText("same t, same pixels", IX, PY + 230);
+    c.restore();
+  }
+
+  /** Frame border, capture brackets, the title, the signature, and the badge the broken variant wears. */
+  function drawChrome(c, broken) {
+    c.save();
+    c.strokeStyle = "rgba(255,255,255,.10)";
+    c.lineWidth = 1;
+    c.strokeRect(0.5, 0.5, W - 1, H - 1);
+
+    var m = 9, L = 15;
+    c.strokeStyle = "rgba(198,75,214,.5)";
+    c.lineWidth = 1.5;
+    c.beginPath();
+    c.moveTo(m, m + L); c.lineTo(m, m); c.lineTo(m + L, m);
+    c.moveTo(W - m - L, m); c.lineTo(W - m, m); c.lineTo(W - m, m + L);
+    c.moveTo(W - m, H - m - L); c.lineTo(W - m, H - m); c.lineTo(W - m - L, H - m);
+    c.moveTo(m + L, H - m); c.lineTo(m, H - m); c.lineTo(m, H - m - L);
+    c.stroke();
+
+    c.fillStyle = INK.txt3;
+    c.font = "700 8.5px " + SANS;
+    tracked(c, "DETERMINISTIC CAPTURE SCENE", 20, 30, 1.6);
+
+    c.fillStyle = INK.txt4;
+    c.font = "9.5px " + MONO;
+    c.fillText("window.lucidRenderAt(tMs)", 20, H - 18);
+
+    if (broken) {
+      roundRectPath(c, 20, 38, 116, 17, 8.5);
+      c.fillStyle = "rgba(239,95,95,.16)";
+      c.fill();
+      c.strokeStyle = "rgba(239,95,95,.55)";
+      c.lineWidth = 1;
+      c.stroke();
+      c.fillStyle = INK.red;
+      c.font = "700 8.5px " + SANS;
+      tracked(c, "NONDETERMINISTIC", 28, 50, 1.2);
+    }
+    c.restore();
+  }
+
+  /**
+   * The whole scene, as a pure function of `tMs`. `wobble` is null on every honest path; the broken variant
+   * passes a random offset through it so the failure has exactly one home in this file.
+   */
+  function renderScene(c, tMs, wobble) {
+    var p = phaseOf(tMs);
+    resetContext(c);
+    drawBackdrop(c, p);
+    c.save();
+    if (wobble) { c.translate(wobble.x, wobble.y); }
+    drawOrrery(c, tMs, p);
+    c.restore();
+    drawReadout(c, tMs, p);
+    drawChrome(c, !!wobble);
+  }
+
+  // ── the contract ──────────────────────────────────────────────────────────
+
+  /**
+   * THE EXPORT THE HARNESS CALLS. Renders the scene at `tMs` and returns nothing.
+   *
+   * No clock, no randomness, no state carried from the previous call, no external byte. Call it with 500
+   * twice, a thousand calls apart and in any order, and both frames are the same PNG.
+   */
+  window.lucidRenderAt = function lucidRenderAt(tMs) {
+    var t = Number(tMs);
+    // A silent coercion of a bad time to 0 would produce a plausible frame for the wrong moment, which is
+    // worse than a failure. The bridge reports a throw with the offending time attached.
+    if (!isFinite(t)) {
+      throw new TypeError("lucidRenderAt needs a finite time in milliseconds, got " + String(tMs));
+    }
+    renderScene(ctx, t, null);
+  };
+
+  /**
+   * DELIBERATELY BROKEN. Not wired up: the default export above stays the honest one.
+   *
+   * The only Math.random in this file lives here. A sub-pixel offset on the moving layer is all it takes:
+   * the scene still looks right to a human, every antialiased edge moves, so every fingerprint changes and
+   * `sameCapture` reports a regression between two runs of the identical plan. Swap it in with
+   *
+   *     window.lucidRenderAt = window.lucidRenderAtNondeterministic;
+   *
+   * run the capture twice, and watch the compare fail on frames that look identical side by side.
+   */
+  window.lucidRenderAtNondeterministic = function lucidRenderAtNondeterministic(tMs) {
+    var t = Number(tMs);
+    if (!isFinite(t)) {
+      throw new TypeError("lucidRenderAtNondeterministic needs a finite time in milliseconds, got " + String(tMs));
+    }
+    renderScene(ctx, t, { x: Math.random() * 3 - 1.5, y: Math.random() * 3 - 1.5 });
+  };
+
+  // ── the live loop: for human eyes only ────────────────────────────────────
+  // This drives the preview a person watches. It is NEVER the source of truth for a capture: the harness
+  // supplies its own times and calls lucidRenderAt directly, and the readback happens in the same
+  // synchronous task as that call, so this loop cannot slip a frame between a render and its read. Note the
+  // callback takes NO parameter: requestAnimationFrame offers a timestamp and we decline it. The time comes
+  // from a frame COUNTER multiplied out, never from an accumulator that would drift and never from a clock.
+
+  var LIVE_FPS = 60;
+  var LIVE_FRAMES = LOOP_MS * LIVE_FPS / 1000; // 120 frames per loop, an exact integer by construction
+  var liveFrame = 0;
+  var playing = true;
+
+  var btnPlay = document.getElementById("btn-play");
+  var btnTest = document.getElementById("btn-test");
+  var scrub = document.getElementById("scrub");
+  var scrubRead = document.getElementById("scrub-read");
+  var verdict = document.getElementById("verdict");
+
+  scrub.max = String(LOOP_MS - 1);
+
+  function paint(tMs) {
+    window.lucidRenderAt(tMs);
+    scrubRead.textContent = pad(tMs, 4) + " ms";
+  }
+
+  function liveTick() {
+    requestAnimationFrame(liveTick);
+    if (!playing) { return; }
+    liveFrame = (liveFrame + 1) % LIVE_FRAMES;
+    var t = Math.round(liveFrame * 1000 / LIVE_FPS);
+    scrub.value = String(t);
+    paint(t);
+  }
+
+  function setPlaying(next) {
+    playing = next;
+    btnPlay.textContent = playing ? "Pause live loop" : "Resume live loop";
+  }
+
+  btnPlay.addEventListener("click", function () { setPlaying(!playing); });
+
+  scrub.addEventListener("input", function () {
+    setPlaying(false);
+    var t = Number(scrub.value) || 0;
+    liveFrame = Math.round(t * LIVE_FPS / 1000) % LIVE_FRAMES;
+    paint(t);
+  });
+
+  // The same two steps the bridge takes, in the same order: render, then read in the same task.
+  function renderAndRead(tMs) {
+    window.lucidRenderAt(tMs);
+    return canvas.toDataURL("image/png");
+  }
+
+  btnTest.addEventListener("click", function () {
+    var first, apart, second;
+    try {
+      first = renderAndRead(500);
+      apart = renderAndRead(1234);   // move the scene away, so the second 500 is genuinely re-derived
+      second = renderAndRead(500);
+    } catch (err) {
+      verdict.className = "verdict bad";
+      verdict.textContent = "the scene threw: " + String(err && err.message || err);
+      return;
+    }
+    if (first !== second) {
+      var at = 0;
+      while (at < first.length && at < second.length && first.charAt(at) === second.charAt(at)) { at++; }
+      verdict.className = "verdict bad";
+      verdict.textContent = "DIFFERS: two renders of 500 ms disagree from character " + at +
+        ". A capture of this scene would not survive a regression compare.";
+    } else if (first === apart) {
+      // The other half of the audit: a scene that ignores its argument is perfectly repeatable and
+      // perfectly useless, which is the stuck run that captureReport refuses to read as a pass.
+      verdict.className = "verdict bad";
+      verdict.textContent = "STUCK: 500 ms and 1234 ms painted the same pixels, so the scene is ignoring " +
+        "the time it is handed.";
+    } else {
+      verdict.className = "verdict ok";
+      verdict.textContent = "identical and advancing: both renders of 500 ms are the same " + first.length +
+        " character PNG, and 1234 ms in between painted a different one (" + apart.length + " characters).";
+    }
+    paint(Number(scrub.value) || 0);
+  });
+
+  // Paint frame zero immediately. A capture must never depend on rAF having fired: a backgrounded tab stops
+  // the live loop, and the harness would still expect a real frame back.
+  paint(0);
+
+  var reduced = typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  setPlaying(!reduced);   // affects the live loop only, never lucidRenderAt
+  requestAnimationFrame(liveTick);
+
+  // Uncomment to ship the regression on purpose and watch the harness catch it:
+  // window.lucidRenderAt = window.lucidRenderAtNondeterministic;
+})();
+</script>
+</body>
+</html>

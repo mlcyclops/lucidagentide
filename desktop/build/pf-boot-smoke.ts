@@ -13,7 +13,7 @@
 // bin/lucid-engine to answer /api/health and serve the prebuilt renderer bundle from that tree.
 //
 // Modes (auto-detected):
-//   packaged - desktop/release/<plat>-unpacked (or the mac .app) carries repo/bin/lucid-engine:
+//   packaged - desktop/<release dir>/<plat>-unpacked (or the mac .app) carries repo/bin/lucid-engine:
 //              stage THAT repo tree verbatim. This is what CI runs right after dist:<os>.
 //   source   - no packaged engine on disk (a dev box): compile the engine + renderer into a minimal
 //              skeleton (bin/ + desktop/renderer/ + the native-addon packages) and stage that.
@@ -21,6 +21,8 @@
 //   LUCID_PF_SMOKE_STRICT=1  CI: REQUIRE the real Program Files tree AND the packaged layout; any
 //                            fallback is a build failure, never a silent downgrade.
 //   LUCID_PF_SMOKE_DIR=<dir> debugging: stage under <dir> instead (still hardened).
+//   LUCID_RELEASE_DIR=<name> which electron-builder output dir under desktop/ to gate. Default
+//                            `release`; the Creator build writes `release-creator`.
 //
 // Run with: bun run build/pf-boot-smoke.ts   (cwd = desktop/, like airgap-smoke.ts)
 
@@ -34,7 +36,6 @@ import { bootVerdict, hardenPlan, pickSmokeRoot, requiredLayout, restorePlan } f
 const HERE = dirname(fileURLToPath(import.meta.url)); // desktop/build
 const DESKTOP = join(HERE, "..");
 const REPO = join(DESKTOP, "..");
-const RELEASE = join(DESKTOP, "release");
 const PLAT = process.platform;
 const STRICT = process.env.LUCID_PF_SMOKE_STRICT === "1";
 
@@ -45,6 +46,21 @@ function fail(msg: string): never {
 function ok(msg: string): void {
   console.log(`  \u2713 ${msg}`);
 }
+
+/** Which electron-builder output dir under desktop/ to gate, as a bare directory NAME. Creator packages
+ *  into `release-creator` (build/electron-builder.creator.cjs), so this gate has to be pointable at it,
+ *  or a Creator release build would stage whatever stale Agent `release/` tree sat on the runner and
+ *  report green about bytes it never looked at. A NAME, not a path: anchoring resolution inside desktop/
+ *  means a stray value cannot aim the gate at an unrelated tree and pass. */
+function releaseDirName(): string {
+  const raw = (process.env.LUCID_RELEASE_DIR ?? "").trim();
+  if (!raw) return "release";
+  if (raw.includes("/") || raw.includes("\\") || raw.startsWith(".")) {
+    fail(`LUCID_RELEASE_DIR must be a bare directory name under desktop/, got "${raw}"`);
+  }
+  return raw;
+}
+const RELEASE = join(DESKTOP, releaseDirName());
 
 function run(argv: string[], opts: { cwd?: string; okCodes?: number[] } = {}): void {
   const r = Bun.spawnSync(argv, { cwd: opts.cwd ?? REPO, stdout: "pipe", stderr: "pipe" });
@@ -111,7 +127,7 @@ function buildSourceSkeleton(dst: string): void {
 console.log("== P-WINBOOT.2C (ADR-0261): engine boots from a Program Files-ACL install ==\n");
 console.log("[1] resolve what to stage");
 const packaged = packagedRepoDir();
-if (STRICT && !packaged) fail("strict mode requires the PACKAGED repo (dist output with bin/lucid-engine) and none was found under desktop/release");
+if (STRICT && !packaged) fail(`strict mode requires the PACKAGED repo (dist output with bin/lucid-engine) and none was found under ${relative(REPO, RELEASE)}`);
 console.log(`  mode: ${packaged ? `packaged (${relative(REPO, packaged)})` : "source-built skeleton"}`);
 
 // --- 2) pick + create the staging root ---------------------------------------------------------------
