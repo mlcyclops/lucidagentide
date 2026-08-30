@@ -398,9 +398,13 @@ bun run tools/creator-backend/setup-backend.ts --host gpu-box --user me --dcgm
 bun run tools/creator-backend/setup-backend.ts --host gpu-box --skip-provision --workflow ./graph.json
 ```
 
-What the driver refuses to do: build a shell string (every remote call is a fixed argv, and a host, user, or
-path containing shell metacharacters is rejected rather than escaped), prompt for a password
-(`BatchMode=yes`, keys only), expose the remote port to the network, or put a credential on a command line.
+What the driver refuses to do: build a shell string (every remote call is a fixed argv), prompt for a
+password (`BatchMode=yes`, keys only), expose the remote port to the network, or put a credential on a
+command line. Values that reach the REMOTE shell (the host, the user, `--remote-dir`, the wheel index) are
+refused outright when they carry a shell metacharacter, never escaped and hoped for. Values that only ever
+occupy a slot in an argv array this script spawns itself (`--identity`, `--workflow`) take an ordinary local
+path as written, so `C:\Users\me\.ssh\id_ed25519` and `C:\Program Files (x86)\...` work: refusing those was
+a false refusal, which is as dishonest as a false pass, and it is pinned by test in both directions.
 
 ### Two operators, one backend
 

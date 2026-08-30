@@ -50,8 +50,19 @@ export interface SetupOptions {
   readonly lucidPort: number;
 }
 
-/** Anything that could break out of an argv slot or a remote command. Refused, never escaped. */
-const UNSAFE = /[;&|`$(){}<>\n\r\t"'\\*?[\]!#]/;
+// TWO guards, because there are two threat models here and one regex for both produces a FALSE refusal,
+// which is as dishonest as a false success.
+//
+// REMOTE_UNSAFE guards values that reach the remote SHELL: ssh joins its trailing arguments into a command
+// string that the remote login shell parses, so a metacharacter in a host, user, remote path, or index URL
+// really can break out. Those are refused, never escaped.
+const REMOTE_UNSAFE = /[;&|`$(){}<>\n\r\t"'\\*?[\]!#]/;
+// LOCAL_UNSAFE guards values that only ever occupy a slot in an argv array WE spawn (an SSH key path, a
+// workflow file). No shell parses those, so a backslash, a parenthesis, or a space is an ordinary character
+// in an ordinary Windows path: `C:\Users\me\.ssh\id_ed25519` and `C:\Program Files (x86)\...` are VALID.
+// Refusing them was a bug, not caution. What stays refused is what could never be a real path and would
+// matter if a future caller ever did build a string: control characters, quotes, backtick, and `$`.
+const LOCAL_UNSAFE = /[\n\r\t\0"'`$]/;
 
 export type ParseResult = { ok: true; options: SetupOptions } | { ok: false; error: string };
 
@@ -64,9 +75,9 @@ export function parseArgs(argv: readonly string[]): ParseResult {
 
   const host = value("host").trim();
   if (!host) return { ok: false, error: "--host is required (the SSH host or alias of the GPU machine)" };
-  if (UNSAFE.test(host)) return { ok: false, error: "--host contains characters that are not valid in a hostname" };
+  if (REMOTE_UNSAFE.test(host)) return { ok: false, error: "--host contains characters that are not valid in a hostname" };
   const user = value("user").trim();
-  if (user && UNSAFE.test(user)) return { ok: false, error: "--user contains characters that are not valid in a username" };
+  if (user && REMOTE_UNSAFE.test(user)) return { ok: false, error: "--user contains characters that are not valid in a username" };
 
   const portRaw = value("port", "8188");
   const port = Number(portRaw);
@@ -76,13 +87,18 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   const lucidPort = Number(lucidRaw);
   if (!Number.isInteger(lucidPort) || lucidPort < 1 || lucidPort > 65535) return { ok: false, error: `--lucid-port must be an integer between 1 and 65535 (got ${lucidRaw})` };
 
+  // The remote directory is interpolated into the provisioner's command line on the far side, so it keeps
+  // the strict guard.
   const remoteDir = value("remote-dir", "").trim();
-  if (remoteDir && UNSAFE.test(remoteDir)) return { ok: false, error: "--remote-dir must be a plain path with no shell characters" };
+  if (remoteDir && REMOTE_UNSAFE.test(remoteDir)) return { ok: false, error: "--remote-dir is a path on the REMOTE machine and must carry no shell characters" };
+  // The key and the workflow are LOCAL paths that only ever sit in an argv slot, so a Windows path with
+  // backslashes, spaces, or parentheses is accepted as written.
   const identity = value("identity", "").trim();
-  if (identity && UNSAFE.test(identity)) return { ok: false, error: "--identity must be a plain path with no shell characters" };
+  if (identity && LOCAL_UNSAFE.test(identity)) return { ok: false, error: "--identity must be a plain local file path (no quotes or control characters)" };
   const torchIndex = value("torch-index", "https://download.pytorch.org/whl/cu130").trim();
   if (!/^https:\/\/[A-Za-z0-9./_-]+$/.test(torchIndex)) return { ok: false, error: "--torch-index must be a plain https URL" };
   const workflow = value("workflow", "").trim();
+  if (workflow && LOCAL_UNSAFE.test(workflow)) return { ok: false, error: "--workflow must be a plain local file path (no quotes or control characters)" };
 
   return {
     ok: true,

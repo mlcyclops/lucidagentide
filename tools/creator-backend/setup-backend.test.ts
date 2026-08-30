@@ -28,7 +28,6 @@ describe("argument parsing is fail-closed", () => {
       ["--host", "box|nc evil 1"],
       ["--host", "ok", "--user", "me;id"],
       ["--host", "ok", "--remote-dir", "/tmp/$(id)"],
-      ["--host", "ok", "--identity", "~/.ssh/id;rm"],
     ]) {
       const r = parseArgs(argv);
       expect(r.ok).toBe(false);
@@ -58,6 +57,44 @@ describe("argument parsing is fail-closed", () => {
     expect(parseArgs(["--host", "h", "--torch-index", "http://insecure/whl"]).ok).toBe(false);
     expect(parseArgs(["--host", "h", "--torch-index", "https://example.com/whl/cu130; rm"]).ok).toBe(false);
     expect(parseArgs(["--host", "h", "--torch-index", "https://download.pytorch.org/whl/cu130"]).ok).toBe(true);
+  });
+
+  // A LOCAL path never reaches a shell: it occupies one slot in an argv array this script spawns itself.
+  // Refusing an ordinary Windows path there was a FALSE refusal, which is as dishonest as a false pass.
+  test("a Windows key path with backslashes, spaces, and parentheses is ACCEPTED, not refused", () => {
+    for (const path of [
+      "C:\\Users\\me\\.ssh\\id_ed25519",
+      "C:\\Program Files (x86)\\OpenSSH\\my key",
+      "/home/me/.ssh/id_ed25519",
+      "~/.ssh/id_ed25519",
+    ]) {
+      const r = parseArgs(["--host", "ok", "--identity", path]);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.options.identity).toBe(path);
+    }
+    const wf = parseArgs(["--host", "ok", "--workflow", "C:\\Users\\me\\graphs\\my graph (v2).json"]);
+    expect(wf.ok).toBe(true);
+  });
+
+  test("a local path still refuses what could never BE a path: quotes and control characters", () => {
+    for (const argv of [
+      ["--host", "ok", "--identity", 'C:\\keys\\id"x'],
+      ["--host", "ok", "--identity", "C:\\keys\\id`whoami`"],
+      ["--host", "ok", "--identity", "C:\\keys\\id$HOME"],
+      ["--host", "ok", "--workflow", "g\n.json"],
+    ]) {
+      const r = parseArgs(argv);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/plain local file path/);
+    }
+  });
+
+  // The remote directory is the opposite case: it IS interpolated into a command the remote shell parses.
+  test("a REMOTE path keeps the strict guard, and says it is the remote machine's path", () => {
+    const r = parseArgs(["--host", "ok", "--remote-dir", "/opt/comfy (new)"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/REMOTE machine/);
+    expect(parseArgs(["--host", "ok", "--remote-dir", "/opt/comfyui"]).ok).toBe(true);
   });
 
   test("flags land where they belong and defaults are sane", () => {
