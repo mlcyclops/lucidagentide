@@ -68,7 +68,10 @@ export interface WhisperStatusView {
   install: WhisperInstallState;
 }
 
-const DEFAULT_PORT = 9111;
+// CREATOR-0 (ADR-0279): whisper.cpp binds SO_REUSEPORT, so two LUCID flavors sharing this port would
+// silently split requests across two model loads (the P-STT.5 bug). Each flavor gets its own default,
+// threaded down as LUCID_WHISPER_PORT by main.ts; a bad value folds back to the standard port.
+const DEFAULT_PORT = Number(process.env.LUCID_WHISPER_PORT) > 0 ? Number(process.env.LUCID_WHISPER_PORT) : 9111;
 // The single running server (module-scoped: one managed Whisper at a time).
 let proc: WhisperProc | null = null;
 let running: { port: number; tier: WhisperTier | null } = { port: DEFAULT_PORT, tier: null };

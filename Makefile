@@ -485,6 +485,30 @@ demo-P-FLEET.1: ## P-FLEET.1 (ADR-0268): async job handles through the agent-fir
 demo-P-FLEET.L1: ## P-FLEET.L1 (guard evolved by P-FLEET.L2): local lanes - concurrent gated headless LUCID agents under the sustained-pressure guard (a burst is free, a held line is not), fail-closed approvals (needs-approval glow), cancel/stop hygiene, metadata-only fleet status for the master agent
 	$(BUN) run harness/scripts/demo_pfleetl1.ts
 
+.PHONY: creator-backend-plan
+creator-backend-plan: ## Print the exact commands the Creator-backend setup would run against a remote GPU host, executing NOTHING (pass your host: make creator-backend-plan HOST=gpu-box USER=me). Then drop --dry-run to do it for real.
+	$(BUN) run tools/creator-backend/setup-backend.ts --host $(or $(HOST),gpu-box) $(if $(USER_AT),--user $(USER_AT),) --dry-run
+
+.PHONY: verify-creator-comfy
+verify-creator-comfy: ## CREATOR-1/IMG verification: drives the REAL product code (probe -> capability attestation -> upload -> substitute -> submit -> poll -> read back -> store) against a ComfyUI-shaped fixture, so the whole path is provable with no ComfyUI, no GPU and no network. Point it at your own server with: bun run harness/scripts/verify_creator_comfy.ts --url http://host:8188 --workflow ./graph.json
+	$(BUN) run harness/scripts/verify_creator_comfy.ts
+
+.PHONY: demo-CREATOR-2
+demo-CREATOR-2: ## CREATOR-2 (ADR-0286): the follow-along audio editor - alignment DERIVED from the take's own energy is labeled derived and capped below vendor confidence with the reason shown verbatim, a deleted word closes the timeline by exactly its span (and the render's byte length follows), a dragged span re-orders audio without creating or destroying a sample, and a re-rendered span changes ONLY the bytes inside it (the audio before and after comes back byte for byte), with undo re-rendering to the original file, a deterministic render, and a missing source refused BY NAME instead of substituted with silence
+	$(BUN) run harness/scripts/demo_creator2.ts
+
+.PHONY: demo-CREATOR-1
+demo-CREATOR-1: ## CREATOR-1 (ADR-0292): capability PROBES (ComfyUI from its installed nodes, ElevenLabs from its documented model flags, a user-run service proves reachability and admits nothing more, a desktop app proves it is on disk) that turn registry `configured` into a truthful `ready` and EXPIRE, plus the durable job ledger - legal transitions only, the governor's measurement recorded per job, a refusal written down with its reason, and a cancel that is a request until the runner confirms
+	$(BUN) run harness/scripts/demo_creator1.ts
+
+.PHONY: demo-CREATOR-IMG
+demo-CREATOR-IMG: ## CREATOR-IMG (ADR-0291): sprite sheets, animated GIFs, and memes encoded INSIDE LUCID (valid PNG chunks, an LZW stream that decodes back to its own indices, text that always fits), a model dropdown that is a live probe of the user's own ComfyUI install, a workflow with an unfilled placeholder REFUSED rather than guessed, and artifacts that carry the prompt/model/sha256 that produced them
+	$(BUN) run harness/scripts/demo_creator_img.ts
+
+.PHONY: demo-CREATOR-0
+demo-CREATOR-0: ## CREATOR-0 (ADR-0279..0284): the Creator flavor - a second LUCID on its own identity/port/data root, Creator Mode gated to that build with AGENT security semantics, an honest integration registry (Suno generation is bring-your-own-endpoint, ElevenLabs Studio editing is vendor-app-only), evidence-based CPU/GPU admission where unknown is never idle, and a local track library (listen/review/remix/re-prompt) that needs no provider API
+	$(BUN) run harness/scripts/demo_creator0.ts
+
 .PHONY: demo-P-FLEET.L2
 demo-P-FLEET.L2: ## P-FLEET.L2 (ADR-0273): UNLIMITED lanes gated only by SUSTAINED pressure (90% held 30s - a burst never refuses, a blind sample never counts as load, no evidence fails open), lanes spawned from real GitHub/GitLab/Azure DevOps remotes via the OS folder dialog, per-HOST credentials in the OS-encrypted vault (scoped ref -> env round-trip, never offered cross-host, rides an Authorization header not the URL, redacted from errors), and the minimized status-bar snapshot (one colored dot + count per lane state, needs-approval first)
 	$(BUN) run harness/scripts/demo_pfleetl2.ts

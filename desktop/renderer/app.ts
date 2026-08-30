@@ -109,8 +109,24 @@ import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./li
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
 // streaming text/thinking deltas (output only; never the system prompt).
 import { TokenSpeedEngine } from "../../harness/metrics/token_speed.ts";
+// CREATOR-0 (ADR-0282/0283): the Creator surfaces. Both modules are PURE builders that own their view
+// types (the layering rule), so nothing here drags node-side code into the renderer.
+import { creatorFlyoutHtml, pressureRailHtml, type CreatorResourcesView } from "./creator_monitor.ts";
+import { creatorStudioHtml, type CreatorStudioView } from "./creator_studio.ts";
+import { creatorImagesHtml, type ArtifactView, type CreatorImagesView, type MixInputView } from "./creator_images.ts";
+import {
+  creatorEditorHtml, dropTargetMs, formatClock, isWavTrack, msAtX, playheadX, selectionRange, waveformBars,
+  type CreatorEditorView, type EditorSession,
+} from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along editor pane + its gesture semantics
+import { memeLayout } from "../../harness/creator/meme_layout.ts"; // CREATOR-IMG: node-free meme geometry
+import {
+  canRedo, canUndo, commit, deleteSpan, docDurationMs, itemAt, moveSpan, newHistory, redo, replaceSpan,
+  setItemLock, spanOf, splitItem, undo, type EditHistory, type OpResult,
+} from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline core - every edit is a call into it
+import type { BuildInfoView, CreatorLibraryOp } from "./bridge.ts";
 
-type Tab = "security" | "memory" | "dev";
+// CREATOR-0: `resources` is the Creator build's third inspector tab (CPU + GPU odometers).
+type Tab = "security" | "memory" | "dev" | "resources";
 const state = {
   inspectorTab: "memory" as Tab, // ADR-0021: default to Memory; overridden to Security when active blocks exist
   lastPreviewablePath: "" as string, // P-PREVIEW.2 (ADR-0096): the agent's most recent browser-previewable write
@@ -125,7 +141,16 @@ const state = {
   config: [] as ConfigOption[],
   configCached: false, // P-IDE.1d: current config came from the local cache; live refresh pending
   configWarming: false, // P-IDE.1d: a warm cycle is in flight (session still starting); picker shows the spinner
-  uiMode: "agent" as "agent" | "ask" | "plan", // P-ACP.2/3: composer Plan/Ask/Agent (derived from backend)
+  uiMode: "agent" as "agent" | "creator" | "ask" | "plan", // P-ACP.2/3 + CREATOR-0: composer mode (derived from backend)
+  // CREATOR-0 (ADR-0279): this build's identity. Null until /api/build-info answers, and the ONLY thing
+  // that may reveal a Creator surface - never a persisted setting, never a role.
+  buildInfo: null as BuildInfoView | null,
+  creatorRes: null as CreatorResourcesView | null, // CREATOR-0 (ADR-0283): live CPU/GPU telemetry
+  creatorStudio: null as CreatorStudioView | null, // CREATOR-0 (ADR-0282/0281): registry + track library
+  creatorDetail: "" as "" | "cpu" | "gpu", // which odometer's detailed flyout is expanded in the rail
+  creatorImages: null as CreatorImagesView | null, // CREATOR-IMG (ADR-0291): generator + builders + artifacts
+  creatorEditor: null as CreatorEditorView | null, // CREATOR-2 (ADR-0286): the follow-along audio editor
+  studioTab: "integrations" as "integrations" | "images" | "editor", // which Studio pane is showing
   commands: [] as OmpCommand[],
   skills: [] as SkillView[], // P-SKILL.4 (ADR-0097): discovered skills, widened with root/trust/removable/scan verdict
   userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
@@ -259,6 +284,8 @@ function buildShell(): void {
         <button class="rail-btn" id="railMarket" data-tip="Plugin Marketplace|Curated integrations ordered by community popularity - Excalidraw, Git, Remotely Save & more" data-tip-icon="market">${icon("market", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="share">${icon("share", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
+        <!-- CREATOR-0 (ADR-0282): Creator Studio. Present ONLY in a Creator build (revealed by /api/build-info). -->
+        <button class="rail-btn" id="railStudio" hidden data-tip="Creator Studio|Audio, video, 3D and game integrations, their real capabilities, and your local track library" data-tip-icon="volume">${icon("volume", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn rail-about" id="railAbout" data-tip="About LUCID Agent IDE|Version, license & credits" data-tip-icon="info">${readmeMark()}</button>
@@ -328,6 +355,8 @@ function buildShell(): void {
         <div class="insp-tabs">
           <button class="insp-tab sec" data-insp="security">${icon("shield", 15)} Security</button>
           <button class="insp-tab mem active" data-insp="memory">${icon("savings", 15)} Memory</button>
+          <!-- CREATOR-0 (ADR-0283): CPU + GPU pressure odometers. Creator build only. -->
+          <button class="insp-tab res" data-insp="resources" id="inspResTab" hidden>${icon("gauge", 15)} Resources</button>
           <button class="insp-collapse" id="inspCollapse" data-tip="Collapse to metrics|Slide into a live quick-metrics rail" data-tip-side="bottom">${icon("collapse", 16)}</button>
         </div>
         <div class="insp-body" id="inspBody"></div>
@@ -351,6 +380,16 @@ function buildShell(): void {
           <button class="set-close" id="skillsClose" data-tip="Close">${icon("close", 16)}</button>
         </div>
         <div class="set-body" id="skillsBody"></div>
+      </aside>
+
+      <!-- CREATOR-0 (ADR-0282/0281): the Creator Studio aside - integrations above, track library below.
+           Mutually exclusive with the other right-edge surfaces, exactly like Settings and Skills. -->
+      <aside class="settings creator-studio" id="creatorStudio" hidden>
+        <div class="set-head">
+          <div class="set-title">${icon("volume", 17)} Creator Studio <span class="set-sub">integrations &amp; library</span></div>
+          <button class="set-close" id="studioClose" data-tip="Close">${icon("close", 16)}</button>
+        </div>
+        <div class="set-body" id="studioBody"></div>
       </aside>
 
       <aside class="kg" id="knowledge" hidden>
@@ -2015,7 +2054,32 @@ function inspSkeleton(): string {
   return `<div class="skel-chips">${Array.from({ length: 4 }, () => `<div class="skel skel-chip"></div>`).join("")}</div>`
     + `<div class="skel-group">${Array.from({ length: 5 }, () => `<div class="skel skel-row"></div>`).join("")}</div>`;
 }
+// ── CREATOR-0 (ADR-0283): the Resources tab - two odometer chips, one expandable detail flyout ──
+// The chips are always visible; clicking one expands the DETAILED panel (per-core bars, per-GPU load and
+// VRAM, thermals, power, processes, and the pressure trend) in place, the same in-rail disclosure the
+// context-window and prompt-cache cards use. Null readings render as "no signal", never as 0%.
+function creatorResourcesHtml(): string {
+  const rail = pressureRailHtml(state.creatorRes);
+  const detail = state.creatorDetail ? creatorFlyoutHtml(state.creatorRes) : "";
+  return `<div class="cod-wrap" data-cod-open="${state.creatorDetail}">${rail}${detail}</div>`;
+}
+async function refreshCreatorResources(fresh = false): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const v = await bridge.creatorResources(fresh).catch(() => null);
+  state.creatorRes = v;
+  if (state.inspectorTab === "resources" && !state.inspectorRail) { lastInspHash = ""; renderInspector(); }
+}
 function renderInspector(): void {
+  // CREATOR-0: the Resources tab paints from the telemetry poll (its own hash, so an unchanged reading
+  // does not thrash the DOM while the odometer animates).
+  if (state.inspectorTab === "resources") {
+    const html = creatorResourcesHtml();
+    const hash = "res" + html.length + state.creatorDetail + html.slice(0, 96);
+    if (hash === lastInspHash) return;
+    lastInspHash = hash;
+    const body = $("#inspBody")!; const top = body.scrollTop; body.innerHTML = html; body.scrollTop = top;
+    return;
+  }
   if (state.inspectorTab === "dev") {
     const html = devHtml(state.dev);
     const hash = "dev" + html.length + html.slice(0, 80);
@@ -3755,6 +3819,747 @@ function closeSettings(): void {
 // (event-delegated below) inspects / re-scans / removes / enables each skill. The enable toggle is the
 // SAME decision the delivery path uses (skills.ts isSkillEnabled), so disabling here truly stops a skill
 // being offered/loaded; a flagged skill's toggle is locked (invariant #3, keystone #2).
+// ---- CREATOR-0 (ADR-0282/0281): the Creator Studio fly-out ----
+// A right-edge aside, mutually exclusive with the other surfaces (same discipline as Settings/Skills).
+// It shows every integration with its HONEST capability labels, and the local track library beneath.
+let studioOpen = false;
+function openCreatorStudio(): void {
+  if (!state.buildInfo?.creatorBuild) return; // absent in a standard build, not merely disabled
+  studioOpen = true;
+  closeSettings(); closeKnowledge(); closePreview(); closeSkills(); closeIde();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#creatorStudio")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", b.id === "railStudio"));
+  void renderCreatorStudio();
+}
+function closeCreatorStudio(): void {
+  if (!studioOpen) return;
+  studioOpen = false;
+  stopEditorAudio(); // CREATOR-2: never leave the editor's clip playing behind a closed pane
+  $("#creatorStudio")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+/** The Studio is three panes behind one tab strip: integrations + library, the image tools, and the
+ *  follow-along audio editor. */
+function studioTabsHtml(): string {
+  const tab = (id: "integrations" | "images" | "editor", label: string, ic: string) =>
+    `<button type="button" class="cst-tab${state.studioTab === id ? " on" : ""}" data-studio-tab="${id}">${icon(ic, 13)}<span>${esc(label)}</span></button>`;
+  return `<div class="cst-tabs">${tab("integrations", "Integrations", "market")}${tab("images", "Images", "eye")}${tab("editor", "Editor", "volume")}</div>`;
+}
+async function renderCreatorStudio(): Promise<void> {
+  const body = $("#studioBody");
+  if (!body) return;
+  if (state.studioTab === "editor") {
+    body.innerHTML = studioTabsHtml() + creatorEditorHtml(state.creatorEditor);
+    paintEditorWave();
+    return;
+  }
+  if (state.studioTab === "images") {
+    body.innerHTML = studioTabsHtml() + creatorImagesHtml(state.creatorImages);
+    paintCreatorImageSources();
+    return;
+  }
+  const view = await bridge.creatorStudio().catch(() => null);
+  state.creatorStudio = view;
+  body.innerHTML = studioTabsHtml() + creatorStudioHtml(view);
+}
+
+// ---- CREATOR-IMG (ADR-0291): the image tools ----
+// Pixels live in a canvas here, because the browser is the only side of this app with an image decoder and
+// real fonts. The harness owns the ENCODERS (PNG, GIF, sprite geometry) so a sheet or a GIF is byte-identical
+// whether it came from this pane or from an agent script.
+
+async function loadCreatorImages(fresh = false): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const prev = state.creatorImages;
+  const models = await bridge.creatorModels().catch(() => null);
+  const arts = await bridge.creatorArtifacts().catch(() => null);
+  state.creatorImages = {
+    endpoint: models?.endpoint ?? "",
+    models: models?.models ?? [],
+    note: models?.note ?? "",
+    artifacts: arts ?? [],
+    inputs: prev?.inputs ?? [],
+    selected: (prev?.selected ?? []).filter((id) => (arts ?? []).some((a) => a.id === id)),
+    model: prev?.model || (models?.models[0]?.id ?? ""),
+    prompt: fresh ? "" : prev?.prompt ?? "",
+    negative: fresh ? "" : prev?.negative ?? "",
+    busy: "",
+  };
+  if (studioOpen && state.studioTab === "images") void renderCreatorStudio();
+}
+
+/** Set every thumbnail's bytes as a DOM PROPERTY (never interpolated into HTML - the P-VISION.1 idiom). */
+function paintCreatorImageSources(): void {
+  const v = state.creatorImages;
+  if (!v) return;
+  v.inputs.forEach((input, i) => {
+    const img = $(`[data-mix-src="${i}"]`) as HTMLImageElement | null;
+    if (img) img.src = input.dataUrl;
+  });
+  for (const a of v.artifacts) {
+    const img = $(`[data-art-src="${a.id}"]`) as HTMLImageElement | null;
+    if (!img || img.dataset.loaded === "1") continue;
+    img.dataset.loaded = "1";
+    void bridge.creatorArtifactData(a.id).then((r) => { if (r?.dataUrl) img.src = r.dataUrl; });
+  }
+}
+
+function patchCreatorImages(patch: Partial<CreatorImagesView>): void {
+  if (!state.creatorImages) return;
+  state.creatorImages = { ...state.creatorImages, ...patch };
+  void renderCreatorStudio();
+}
+
+/** Read the generator fields straight off the DOM, so a re-render never loses what the user typed. */
+function creatorImageFields(): { prompt: string; negative: string; model: string; width: number; height: number; seed?: number } {
+  const val = (id: string) => ($(`#${id}`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value ?? "";
+  const num = (id: string, fallback: number) => { const n = Number(val(id)); return Number.isFinite(n) && n > 0 ? Math.trunc(n) : fallback; };
+  const seedRaw = Number(val("cimSeed"));
+  return {
+    prompt: val("cimPrompt").trim(),
+    negative: val("cimNegative").trim(),
+    model: val("cimModel"),
+    width: num("cimWidth", 1024),
+    height: num("cimHeight", 1024),
+    seed: Number.isFinite(seedRaw) && val("cimSeed").trim() ? Math.trunc(seedRaw) : undefined,
+  };
+}
+
+/** Decode one image data URL into RGBA through a canvas - the browser's decoder, not ours. */
+async function decodeToRgba(dataUrl: string): Promise<{ width: number; height: number; rgbaB64: string } | null> {
+  const img = new Image();
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  img.onload = () => resolve(true);
+  img.onerror = () => resolve(false);
+  img.src = dataUrl;
+  if (!(await promise)) return null;
+  const w = Math.max(1, Math.min(2048, img.naturalWidth)), h = Math.max(1, Math.min(2048, img.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, w, h);
+  const data = ctx.getImageData(0, 0, w, h).data;
+  let binary = "";
+  for (let i = 0; i < data.length; i += 8192) binary += String.fromCharCode(...data.subarray(i, i + 8192));
+  return { width: w, height: h, rgbaB64: btoa(binary) };
+}
+
+/** Every selected artifact as RGBA frames, resized to the FIRST one so a sheet or GIF is uniform. */
+async function selectedFrames(): Promise<{ ok: true; frames: { width: number; height: number; rgbaB64: string }[] } | { ok: false; error: string }> {
+  const v = state.creatorImages;
+  if (!v?.selected.length) return { ok: false, error: "Select at least one image first." };
+  const frames: { width: number; height: number; rgbaB64: string }[] = [];
+  let size: { w: number; h: number } | null = null;
+  for (const id of v.selected) {
+    const data = await bridge.creatorArtifactData(id).catch(() => null);
+    if (!data?.dataUrl) return { ok: false, error: "One of those artifacts could not be read." };
+    const frame = await decodeRgbaAt(data.dataUrl, size);
+    if (!frame) return { ok: false, error: "One of those images could not be decoded." };
+    size ??= { w: frame.width, h: frame.height };
+    frames.push(frame);
+  }
+  return { ok: true, frames };
+}
+
+/** Decode to RGBA, drawn into `size` when one is set - GIF and sheet frames must share a size. */
+async function decodeRgbaAt(dataUrl: string, size: { w: number; h: number } | null): Promise<{ width: number; height: number; rgbaB64: string } | null> {
+  if (!size) return decodeToRgba(dataUrl);
+  const img = new Image();
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  img.onload = () => resolve(true);
+  img.onerror = () => resolve(false);
+  img.src = dataUrl;
+  if (!(await promise)) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = size.w; canvas.height = size.h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, size.w, size.h);
+  const data = ctx.getImageData(0, 0, size.w, size.h).data;
+  let binary = "";
+  for (let i = 0; i < data.length; i += 8192) binary += String.fromCharCode(...data.subarray(i, i + 8192));
+  return { width: size.w, height: size.h, rgbaB64: btoa(binary) };
+}
+
+async function generateCreatorImage(): Promise<void> {
+  const v = state.creatorImages;
+  if (!v) return;
+  const f = creatorImageFields();
+  if (!f.prompt) { showToast({ tone: "warn", title: "Nothing to generate", desc: "Write a prompt first.", actions: [{ label: "OK" }], timeout: 3200 }); return; }
+  patchCreatorImages({ prompt: f.prompt, negative: f.negative, model: f.model, busy: "Generating..." });
+  const r = await bridge.creatorGenerateImage({ ...f, inputs: v.inputs.map((i) => ({ role: i.role, dataUrl: i.dataUrl })) });
+  if (!r.ok) {
+    patchCreatorImages({ busy: "" });
+    showToast({ tone: "danger", title: "Generation refused", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 9000 });
+    return;
+  }
+  await loadCreatorImages();
+  const first = r.produced?.[0];
+  if (first) void openArtifactInPreview(first.id);
+  showToast({ title: "Image generated", desc: `${r.produced?.length ?? 0} artifact(s) stored with the prompt and model that made them.`, timeout: 4200 });
+}
+
+async function buildCreatorSheet(): Promise<void> {
+  const got = await selectedFrames();
+  if (!got.ok) { showToast({ tone: "warn", title: "Sprite sheet", desc: got.error, actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  const vals = await creatorPrompt("Build a sprite sheet", "Frames are packed left to right into a PNG grid, with a frame manifest and a steps() CSS animation written beside it.", [
+    { name: "name", label: "Name", kind: "text", value: "sprite" },
+    { name: "columns", label: "Columns", kind: "text", value: String(got.frames.length) },
+    { name: "durationMs", label: "Full cycle (ms)", kind: "text", value: String(got.frames.length * 100) },
+  ]);
+  if (!vals) return;
+  patchCreatorImages({ busy: "Packing..." });
+  const r = await bridge.creatorBuildSheet({ frames: got.frames, name: vals.name, columns: Number(vals.columns) || undefined, durationMs: Number(vals.durationMs) || undefined });
+  patchCreatorImages({ busy: "" });
+  if (!r.ok) { showToast({ tone: "danger", title: "Sprite sheet", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  await loadCreatorImages();
+  if (r.artifact) void openArtifactInPreview(r.artifact.id);
+  showToast({ title: "Sprite sheet built", desc: "PNG, frame manifest, and CSS animation are in the artifact grid.", timeout: 4200 });
+}
+
+async function buildCreatorGif(): Promise<void> {
+  const got = await selectedFrames();
+  if (!got.ok) { showToast({ tone: "warn", title: "GIF", desc: got.error, actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  const vals = await creatorPrompt("Build an animated GIF", "Encoded in LUCID: one global palette, LZW compression, and a Netscape loop block. No provider is involved.", [
+    { name: "delayMs", label: "Frame delay (ms)", kind: "text", value: "120" },
+    { name: "loop", label: "Extra loops (0 = forever)", kind: "text", value: "0" },
+  ]);
+  if (!vals) return;
+  patchCreatorImages({ busy: "Encoding..." });
+  const r = await bridge.creatorBuildGif({ frames: got.frames, delayMs: Number(vals.delayMs) || 120, loop: Number(vals.loop) || 0 });
+  patchCreatorImages({ busy: "" });
+  if (!r.ok) { showToast({ tone: "danger", title: "GIF", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  await loadCreatorImages();
+  if (r.artifact) void openArtifactInPreview(r.artifact.id);
+  showToast({ title: "GIF encoded", desc: `${got.frames.length} frames, looping.`, timeout: 4200 });
+}
+
+/** Meme: real fonts, real measurement, the harness's fit-and-wrap math, then a canvas PNG. */
+async function buildCreatorMeme(): Promise<void> {
+  const v = state.creatorImages;
+  const id = v?.selected[0];
+  if (!id) { showToast({ tone: "warn", title: "Meme", desc: "Select an image first.", actions: [{ label: "OK" }], timeout: 3200 }); return; }
+  const vals = await creatorPrompt("Build a meme", "Top and bottom text are auto-fitted, wrapped, and stroked in the classic style. The picture stays untouched underneath.", [
+    { name: "top", label: "Top text", kind: "text" },
+    { name: "bottom", label: "Bottom text", kind: "text" },
+  ]);
+  if (!vals || (!vals.top && !vals.bottom)) return;
+  const data = await bridge.creatorArtifactData(id).catch(() => null);
+  if (!data?.dataUrl) { showToast({ tone: "danger", title: "Meme", desc: "That image could not be read.", actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  const img = new Image();
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  img.onload = () => resolve(true);
+  img.onerror = () => resolve(false);
+  img.src = data.dataUrl;
+  if (!(await promise)) return;
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.drawImage(img, 0, 0);
+  const font = (px: number) => `700 ${px}px Impact, "Anton", "Arial Black", system-ui, sans-serif`;
+  const layout = memeLayout({
+    width: w, height: h, top: vals.top, bottom: vals.bottom,
+    measure: (text, px) => { ctx.font = font(px); return ctx.measureText(text).width; },
+  });
+  ctx.textAlign = "center";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#000";
+  ctx.fillStyle = "#fff";
+  for (const block of [layout.top, layout.bottom]) {
+    if (!block) continue;
+    ctx.font = font(block.fontPx);
+    ctx.lineWidth = layout.strokePx;
+    block.lines.forEach((line, i) => {
+      const text = line.toUpperCase();
+      const y = block.y + i * block.lineHeight;
+      ctx.strokeText(text, w / 2, y);
+      ctx.fillText(text, w / 2, y);
+    });
+  }
+  const r = await bridge.creatorStoreArtifact({ kind: "meme", dataUrl: canvas.toDataURL("image/png"), width: w, height: h, source: `meme over ${id}` });
+  if (!r.ok) { showToast({ tone: "danger", title: "Meme", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  await loadCreatorImages();
+  if (r.artifact) void openArtifactInPreview(r.artifact.id);
+  showToast({ title: "Meme built", desc: "Open it in the Preview panel to mark it up or send it to chat.", timeout: 4200 });
+}
+
+/** Hand an artifact to the Preview panel, which already owns markup and Screenshot to chat (P-IMG.1). */
+async function openArtifactInPreview(id: string): Promise<void> {
+  const data = await bridge.creatorArtifactData(id).catch(() => null);
+  if (!data?.dataUrl) { showToast({ tone: "warn", title: "Preview", desc: "That artifact could not be read.", actions: [{ label: "OK" }], timeout: 3600 }); return; }
+  const r = await bridge.previewImage(data.dataUrl);
+  if (!r?.path) { showToast({ tone: "warn", title: "Preview", desc: "The preview could not be prepared.", actions: [{ label: "OK" }], timeout: 3600 }); return; }
+  openPreview();
+  await loadPreview(r.path);
+}
+
+/** Stage an existing artifact as a named generation input. */
+async function useArtifactAsInput(id: string): Promise<void> {
+  const v = state.creatorImages;
+  if (!v) return;
+  if (v.inputs.length >= 6) { showToast({ tone: "warn", title: "Mixer full", desc: "Six input images is the cap for one generation.", actions: [{ label: "OK" }], timeout: 3600 }); return; }
+  const data = await bridge.creatorArtifactData(id).catch(() => null);
+  if (!data?.dataUrl) return;
+  const roles = ["style", "composition", "background", "mask", "detail", "extra"];
+  const role = roles[v.inputs.length] ?? `input${v.inputs.length + 1}`;
+  patchCreatorImages({ inputs: [...v.inputs, { role, name: `${id.slice(0, 10)}.png`, dataUrl: data.dataUrl } satisfies MixInputView] });
+}
+/** CREATOR-1: probe one provider or every declared one, then repaint from the server's fresh registry. */
+async function runCreatorProbe(providerId?: string): Promise<void> {
+  const body = $("#studioBody");
+  if (body) body.innerHTML = studioTabsHtml() + `<p class="cst-empty">${esc(providerId ? `Probing ${providerId}...` : "Probing every declared provider...")}</p>`;
+  const r = await bridge.creatorProbe(providerId);
+  if (!r.ok) showToast({ tone: "danger", title: "Probe", desc: r.error ?? "That probe did not run.", actions: [{ label: "OK" }], timeout: 5200 });
+  await renderCreatorStudio();
+  const proven = (r.registry?.probes ?? []).filter((p) => p.state === "ready").length;
+  if (r.ok) showToast({ title: "Probe complete", desc: `${proven} provider(s) proved a capability. Anything unproven stays unusable.`, timeout: 4200 });
+}
+
+/** CREATOR-1: request a stop. The job settles when the runner confirms, never on the click alone. */
+async function cancelCreatorJob(id: string): Promise<void> {
+  const r = await bridge.creatorCancelJob(id);
+  if (!r.ok) { showToast({ tone: "warn", title: "Stop", desc: r.error ?? "That job could not be stopped.", actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  showToast({ title: "Stop requested", desc: "The job settles once the runner confirms it stopped.", timeout: 3600 });
+  await renderCreatorStudio();
+}
+
+/** One library mutation, then repaint from the server's fresh view (never an optimistic guess). */
+async function creatorLibraryOp(op: CreatorLibraryOp): Promise<void> {
+  const r = await bridge.creatorLibrary(op);
+  if (!r.ok) showToast({ tone: "danger", title: "Library", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 4200 });
+  const body = $("#studioBody");
+  if (r.view) { state.creatorStudio = r.view; if (body) body.innerHTML = creatorStudioHtml(r.view); }
+  else if (r.ok) void renderCreatorStudio();
+}
+/** Play one track from a blob URL built out of the base64 the control plane returns (the TTS idiom). */
+let studioAudio: HTMLAudioElement | null = null;
+let studioAudioUrl = "";
+async function playCreatorTrack(id: string): Promise<void> {
+  const clip = await bridge.creatorTrackAudio(id).catch(() => null);
+  if (!clip) { showToast({ tone: "warn", title: "Cannot play that track", desc: "Its audio file is missing from the library.", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+  if (studioAudio) { studioAudio.pause(); studioAudio = null; }
+  if (studioAudioUrl) { URL.revokeObjectURL(studioAudioUrl); studioAudioUrl = ""; }
+  const bytes = Uint8Array.from(atob(clip.audioB64), (c) => c.charCodeAt(0));
+  studioAudioUrl = URL.createObjectURL(new Blob([bytes], { type: clip.mime }));
+  studioAudio = new Audio(studioAudioUrl);
+  studioAudio.addEventListener("ended", () => { if (studioAudioUrl) { URL.revokeObjectURL(studioAudioUrl); studioAudioUrl = ""; } });
+  void studioAudio.play().catch(() => showToast({ tone: "warn", title: "Playback blocked", desc: "The browser refused to start audio. Click play again.", actions: [{ label: "OK" }], timeout: 4000 }));
+}
+
+// CREATOR-0: one small modal for the Studio's text entry (import a track, review it, declare an
+// endpoint). Deliberately plain: it collects strings and hands them to a server route that validates
+// fail-closed, so the UI never has to be the authority on what is acceptable.
+// CREATOR-2 adds `select`, for choosing among things the server already listed (a replacement source):
+// the user picks from real ids, so the modal cannot produce a source that does not exist.
+interface CreatorPromptField {
+  name: string; label: string; kind: "text" | "textarea" | "select"; value?: string; placeholder?: string;
+  options?: readonly { value: string; label: string }[];
+}
+function creatorPrompt(title: string, note: string, fields: CreatorPromptField[]): Promise<Record<string, string> | null> {
+  const { promise, resolve } = Promise.withResolvers<Record<string, string> | null>();
+  const field = (f: CreatorPromptField) => f.kind === "select"
+    ? `<select class="prov-key" data-cst-field="${esc(f.name)}">${(f.options ?? []).map((o) => `<option value="${esc(o.value)}"${o.value === f.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
+    : f.kind === "textarea"
+    ? `<textarea class="prov-key" rows="3" data-cst-field="${esc(f.name)}" placeholder="${esc(f.placeholder ?? "")}">${esc(f.value ?? "")}</textarea>`
+    : `<input class="prov-key" data-cst-field="${esc(f.name)}" value="${esc(f.value ?? "")}" placeholder="${esc(f.placeholder ?? "")}" spellcheck="false" />`;
+  const ov = el(`<div class="mkt-scrim cst-scrim"><div class="cst-modal" role="dialog" aria-label="${esc(title)}">
+    <div class="cst-modal-h"><span class="cst-modal-t">${esc(title)}</span>
+      <button class="mkt-close" data-cst-cancel aria-label="Close">${icon("close", 14)}</button></div>
+    <p class="cst-modal-note">${esc(note)}</p>
+    ${fields.map((f) => `<label class="cst-field"><span class="cst-field-lbl">${esc(f.label)}</span>${field(f)}</label>`).join("")}
+    <div class="cst-modal-acts"><button class="btn-mini" data-cst-cancel>Cancel</button><button class="btn-mini ok" data-cst-ok>Save</button></div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } };
+  const done = (out: Record<string, string> | null) => { document.removeEventListener("keydown", onKey, true); ov.remove(); resolve(out); };
+  document.addEventListener("keydown", onKey, true);
+  ov.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t === ov || t.closest("[data-cst-cancel]")) { done(null); return; }
+    if (!t.closest("[data-cst-ok]")) return;
+    const out: Record<string, string> = {};
+    for (const f of fields) out[f.name] = ($(`[data-cst-field="${f.name}"]`, ov) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value.trim() ?? "";
+    done(out);
+  });
+  ($("[data-cst-field]", ov) as HTMLInputElement | null)?.focus();
+  return promise;
+}
+const splitTags = (raw: string): string[] => raw.split(",").map((s) => s.trim()).filter(Boolean);
+
+async function openTrackAddPrompt(link?: { parentId: string; kind: "remix" | "reprompt" }): Promise<void> {
+  const parent = link ? state.creatorStudio?.tracks.find((t) => t.id === link.parentId) ?? null : null;
+  const vals = await creatorPrompt(
+    link ? (link.kind === "remix" ? "Add a remix" : "Add a re-prompt") : "Add audio to the library",
+    link
+      ? `Point at the new render. It keeps ${parent?.title ?? "the parent track"} as its parent, so the whole chain stays reviewable.`
+      : "Point at an audio file on this machine (mp3, wav, flac, ogg, opus, m4a, aac). It is copied into the Creator library with the prompt and tags you give it.",
+    [
+      { name: "sourcePath", label: "File path", kind: "text", placeholder: "the full path to the audio file" },
+      { name: "title", label: "Title", kind: "text", value: parent ? `${parent.title} (${link!.kind})` : "" },
+      { name: "origin", label: "Made with", kind: "text", value: parent?.origin ?? "suno", placeholder: "suno, elevenlabs, dots-tts, comfyui, local" },
+      { name: "prompt", label: "Prompt", kind: "textarea", value: parent?.prompt ?? "" },
+      { name: "tags", label: "Tags", kind: "text", value: (parent?.tags ?? []).join(", "), placeholder: "synthwave, demo" },
+    ],
+  );
+  if (!vals?.sourcePath) return;
+  await creatorLibraryOp({
+    op: link ? link.kind : "add",
+    id: link?.parentId,
+    sourcePath: vals.sourcePath,
+    title: vals.title,
+    origin: vals.origin,
+    prompt: vals.prompt,
+    tags: splitTags(vals.tags ?? ""),
+  });
+}
+
+async function openTrackReviewPrompt(id: string): Promise<void> {
+  const t = state.creatorStudio?.tracks.find((x) => x.id === id);
+  const vals = await creatorPrompt("Review this track", "Notes stay on this machine beside the track, so the next revision starts from what you actually heard.", [
+    { name: "review", label: "Notes", kind: "textarea", value: t?.review ?? "" },
+    { name: "prompt", label: "Prompt", kind: "textarea", value: t?.prompt ?? "" },
+    { name: "tags", label: "Tags", kind: "text", value: (t?.tags ?? []).join(", ") },
+  ]);
+  if (!vals) return;
+  await creatorLibraryOp({ op: "update", id, review: vals.review, prompt: vals.prompt, tags: splitTags(vals.tags ?? "") });
+}
+
+async function openCreatorEndpointPrompt(providerId: string): Promise<void> {
+  const vals = await creatorPrompt(`Connect ${providerId}`,
+    "LUCID stores a DECLARATION only: the endpoint or executable plus the NAME of a vault credential. The secret itself never lands in settings, and a pasted secret is refused.",
+    [
+      { name: "id", label: "Id", kind: "text", value: `${providerId}-local`, placeholder: "lowercase-id" },
+      { name: "label", label: "Label", kind: "text", placeholder: "what you call this box" },
+      { name: "baseUrl", label: "Base URL", kind: "text", placeholder: "http://127.0.0.1:8188 (network providers)" },
+      { name: "command", label: "Executable", kind: "text", placeholder: "the app binary (Blender, Unreal)" },
+      { name: "vaultRef", label: "Vault credential name", kind: "text", placeholder: "comfyui_token" },
+      { name: "zone", label: "Zone", kind: "text", value: "local", placeholder: "local, internal, external" },
+    ]);
+  if (!vals) return;
+  const endpoint: Record<string, unknown> = { providerId, enabled: true };
+  for (const [k, v] of Object.entries(vals)) if (v) endpoint[k] = v;
+  const r = await bridge.creatorEndpoint({ endpoint });
+  if (!r.ok) { showToast({ tone: "danger", title: "Refused", desc: r.error ?? "That declaration was not accepted.", actions: [{ label: "OK" }], timeout: 5600 }); return; }
+  showToast({ title: "Declaration saved", desc: "Stored by reference. Add the secret itself in the vault.", timeout: 2800 });
+  void renderCreatorStudio();
+}
+
+// ---- CREATOR-2 (ADR-0286): the follow-along audio editor ----
+// Every EDIT is a call into harness/creator/timeline.ts, in this process. The server is touched exactly
+// twice - once to OPEN a track (document + audio + waveform + the provenance line), once to SAVE the
+// render - so an edit is instant, undo restores the previous document exactly, and a refusal arrives as
+// the core's OWN sentence instead of a round trip that lost it.
+//
+// The <audio> element and the undo history are JS-owned, never markup, so a repaint of the pane never
+// restarts playback or drops the stack. The follow-along loop touches only the three nodes that change
+// per frame (canvas, clock, lit chip); a full repaint at 60fps would fight the odometer it sits beside.
+
+const EDITOR_PEAK_BUCKETS = 420;
+let editorAudio: HTMLAudioElement | null = null;
+let editorAudioUrl = "";
+let editorRaf = 0;
+let editorHistory: EditHistory | null = null;
+let editorAnchor = ""; // the chip a shift-click extends the selection from
+let editorDrag: string[] = []; // the span currently in flight between two chips
+
+/** Seed the pane from the library the Studio already holds (fetching it once if the user landed here
+ *  first). Anything the user had typed or opened survives the reseed. */
+async function loadCreatorEditor(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  if (!state.creatorStudio) state.creatorStudio = await bridge.creatorStudio().catch(() => null);
+  const tracks = (state.creatorStudio?.tracks ?? []).map((t) => ({ id: t.id, title: t.title, mime: t.mime }));
+  const prev = state.creatorEditor;
+  state.creatorEditor = {
+    tracks,
+    trackId: prev?.trackId || (tracks.find(isWavTrack)?.id ?? ""),
+    text: prev?.text ?? "",
+    session: prev?.session ?? null,
+    doc: prev?.doc ?? null,
+    selected: prev?.selected ?? [],
+    playheadMs: prev?.playheadMs ?? 0,
+    playing: false,
+    canUndo: !!editorHistory && canUndo(editorHistory),
+    canRedo: !!editorHistory && canRedo(editorHistory),
+    title: prev?.title ?? "",
+    status: prev?.status ?? "",
+    statusTone: prev?.statusTone ?? "",
+    busy: "",
+  };
+  if (studioOpen && state.studioTab === "editor") void renderCreatorStudio();
+}
+
+function setEditorStatus(status: string, tone: "" | "ok" | "error"): void {
+  if (!state.creatorEditor) return;
+  state.creatorEditor = { ...state.creatorEditor, status, statusTone: tone };
+  void renderCreatorStudio();
+}
+
+/** The waveform strip: the peaks the server measured, plus the playhead, in device pixels so the line is
+ *  crisp on a HiDPI screen. NO peaks draws an empty trough - never a flat line, which reads as silence. */
+function paintEditorWave(): void {
+  const v = state.creatorEditor;
+  const cv = $("[data-ced-wave]") as HTMLCanvasElement | null;
+  if (!cv || !v?.session || !v.doc) return;
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = Math.max(1, Math.round(cv.clientWidth));
+  const h = Math.max(1, Math.round(cv.clientHeight || 56));
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+  }
+  const ctx = cv.getContext("2d");
+  if (!ctx) return;
+  const cs = getComputedStyle(cv);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const bars = waveformBars(v.session.peaks, w, h - 4);
+  if (bars.length === 0) {
+    ctx.fillStyle = cs.getPropertyValue("--line").trim() || "#2a2f3a";
+    ctx.fillRect(0, h / 2 - 1, w, 2);
+  } else {
+    ctx.fillStyle = cs.getPropertyValue("--accent").trim() || "#7ebeff";
+    ctx.globalAlpha = 0.5;
+    for (const b of bars) ctx.fillRect(b.x, (h - b.h) / 2, Math.max(0.75, b.w - 0.5), b.h);
+    ctx.globalAlpha = 1;
+  }
+  const x = playheadX(v.playheadMs, Math.max(docDurationMs(v.doc), v.session.durationMs), w);
+  ctx.fillStyle = cs.getPropertyValue("--amber").trim() || "#e8b23c";
+  ctx.fillRect(Math.min(w - 2, Math.max(0, x - 1)), 0, 2, h);
+}
+
+/** The three nodes that change as the audio plays: the playhead, the clock, and the lit word. */
+function syncEditorPlayhead(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session) return;
+  paintEditorWave();
+  const clock = $("[data-ced-clock]");
+  if (clock) clock.textContent = `${formatClock(v.playheadMs)} / ${formatClock(Math.max(docDurationMs(v.doc), v.session.durationMs))}`;
+  const scrub = $("[data-ced-scrub]") as HTMLInputElement | null;
+  if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round(v.playheadMs));
+  const lit = itemAt(v.doc, v.playheadMs)?.id ?? "";
+  for (const node of $$("[data-ced-chip]")) node.classList.toggle("on", (node as HTMLElement).dataset.cedChip === lit);
+}
+
+function editorTick(): void {
+  const v = state.creatorEditor;
+  if (!v || !editorAudio || !v.doc || !v.session) { editorRaf = 0; return; }
+  v.playheadMs = editorAudio.currentTime * 1000;
+  syncEditorPlayhead();
+  editorRaf = requestAnimationFrame(editorTick);
+}
+
+function paintEditorPlayButton(playing: boolean): void {
+  const btn = $("[data-ced-play]");
+  if (!btn) return;
+  btn.innerHTML = icon(playing ? "square" : "chevron", 13);
+  btn.setAttribute("aria-label", playing ? "Pause" : "Play");
+}
+
+/** Paused or ended: drop the animation frame. An idle editor must not burn a frame budget. */
+function onEditorStopped(): void {
+  if (editorRaf) { cancelAnimationFrame(editorRaf); editorRaf = 0; }
+  if (state.creatorEditor) state.creatorEditor.playing = false;
+  paintEditorPlayButton(false);
+}
+
+function stopEditorAudio(): void {
+  if (editorRaf) { cancelAnimationFrame(editorRaf); editorRaf = 0; }
+  if (editorAudio) { editorAudio.pause(); editorAudio = null; }
+  if (editorAudioUrl) { URL.revokeObjectURL(editorAudioUrl); editorAudioUrl = ""; }
+  if (state.creatorEditor) state.creatorEditor.playing = false;
+}
+
+/** One <audio> fed a blob URL built from the session's base64 - the same convention playCreatorTrack uses. */
+function attachEditorAudio(session: EditorSession): void {
+  stopEditorAudio();
+  const bytes = Uint8Array.from(atob(session.audioB64), (c) => c.charCodeAt(0));
+  editorAudioUrl = URL.createObjectURL(new Blob([bytes], { type: session.mime }));
+  editorAudio = new Audio(editorAudioUrl);
+  editorAudio.addEventListener("pause", onEditorStopped);
+  editorAudio.addEventListener("ended", onEditorStopped);
+}
+
+function toggleEditorPlay(): void {
+  const v = state.creatorEditor;
+  if (!v || !editorAudio) return;
+  if (!editorAudio.paused) { editorAudio.pause(); return; } // the pause listener stops the loop
+  void editorAudio.play().then(() => {
+    v.playing = true;
+    paintEditorPlayButton(true);
+    if (!editorRaf) editorRaf = requestAnimationFrame(editorTick);
+  }).catch(() => setEditorStatus("The browser refused to start audio. Click play again.", "error"));
+}
+
+function seekEditor(ms: number): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session) return;
+  v.playheadMs = Math.max(0, Math.min(Math.max(docDurationMs(v.doc), v.session.durationMs), ms));
+  if (editorAudio) editorAudio.currentTime = v.playheadMs / 1000;
+  syncEditorPlayhead();
+}
+
+async function openCreatorEditorSession(): Promise<void> {
+  const v = state.creatorEditor;
+  if (!v) return;
+  const trackId = ($("#cedTrack") as HTMLSelectElement | null)?.value ?? v.trackId;
+  const text = ($("#cedText") as HTMLTextAreaElement | null)?.value ?? v.text;
+  if (!trackId) { setEditorStatus("Pick a WAV track first. The editor cannot align words to audio it does not have.", "error"); return; }
+  state.creatorEditor = { ...v, trackId, text, busy: "Opening...", status: "", statusTone: "" };
+  void renderCreatorStudio();
+  const r = await bridge.creatorEditorOpen({ trackId, text: text.trim() || undefined, buckets: EDITOR_PEAK_BUCKETS });
+  const cur = state.creatorEditor;
+  if (!cur) return;
+  if (!r?.ok || !r.session) {
+    // The route's own words, verbatim: they name what it refused and why.
+    state.creatorEditor = { ...cur, busy: "", status: r?.error ?? "The audio editor did not answer.", statusTone: "error" };
+    void renderCreatorStudio();
+    return;
+  }
+  const session = r.session;
+  editorHistory = newHistory(session.doc);
+  editorAnchor = "";
+  editorDrag = [];
+  attachEditorAudio(session);
+  state.creatorEditor = {
+    ...cur, busy: "", session, doc: session.doc, selected: [], playheadMs: 0, playing: false,
+    title: cur.title || `${session.title} (edit)`,
+    canUndo: false, canRedo: false,
+    status: `${session.doc.items.length} word${session.doc.items.length === 1 ? "" : "s"} over ${formatClock(session.durationMs)} of audio.`,
+    statusTone: "ok",
+  };
+  void renderCreatorStudio();
+}
+
+/** Apply one pure operation. A refusal keeps the core's own sentence - it names the item, the lock, or
+ *  the impossible span, which no generic message could. A success commits so undo restores it exactly. */
+function applyEditorOp(r: OpResult, done: string, selected?: readonly string[]): void {
+  const v = state.creatorEditor;
+  if (!v) return;
+  if (!r.ok) { setEditorStatus(r.error, "error"); return; }
+  editorHistory = editorHistory ? commit(editorHistory, r.doc) : newHistory(r.doc);
+  state.creatorEditor = {
+    ...v, doc: r.doc, selected: selected ?? v.selected,
+    playheadMs: Math.min(v.playheadMs, docDurationMs(r.doc)),
+    canUndo: canUndo(editorHistory), canRedo: canRedo(editorHistory),
+    status: done, statusTone: "ok",
+  };
+  void renderCreatorStudio();
+}
+
+/** Tap a word to seek to it; shift-click to extend the selection from the anchor into a span. */
+function onEditorChip(id: string, shift: boolean): void {
+  const v = state.creatorEditor;
+  if (!v?.doc) return;
+  if (shift && editorAnchor) {
+    state.creatorEditor = { ...v, selected: selectionRange(v.doc, editorAnchor, id) };
+    void renderCreatorStudio();
+    return;
+  }
+  editorAnchor = id;
+  const at = v.doc.items.find((it) => it.id === id)?.startMs ?? v.playheadMs;
+  if (editorAudio) editorAudio.currentTime = at / 1000;
+  state.creatorEditor = { ...v, selected: [id], playheadMs: at };
+  void renderCreatorStudio();
+}
+
+function editorDeleteSpan(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || v.selected.length === 0) return;
+  const n = v.selected.length;
+  applyEditorOp(deleteSpan(v.doc, v.selected), `Deleted ${n} word${n === 1 ? "" : "s"}; the timeline closed up behind them.`, []);
+}
+
+/** One button for both directions: a span with any unlocked word locks, an all-locked span releases. */
+function editorToggleLock(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || v.selected.length === 0) return;
+  const sel = new Set(v.selected);
+  const lock = v.doc.items.some((it) => sel.has(it.id) && !it.locked);
+  let doc = v.doc;
+  for (const id of v.selected) {
+    const r = setItemLock(doc, id, lock);
+    if (!r.ok) { setEditorStatus(r.error, "error"); return; }
+    doc = r.doc;
+  }
+  applyEditorOp({ ok: true, doc }, `${lock ? "Locked" : "Unlocked"} ${v.selected.length} word${v.selected.length === 1 ? "" : "s"}.`);
+}
+
+function editorSplitAtPlayhead(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc) return;
+  const here = itemAt(v.doc, v.playheadMs);
+  if (!here) { setEditorStatus("No word sits under the playhead. Move it into a word and split again.", "error"); return; }
+  applyEditorOp(splitItem(v.doc, here.id, v.playheadMs), `Split "${here.text}" at ${formatClock(v.playheadMs)}.`, [here.id]);
+}
+
+/** Re-render exactly this span: a prompt plus a replacement source from the library the session listed.
+ *  Audio outside the span is untouched, which is what makes the edit reviewable. */
+async function editorRerenderSpan(): Promise<void> {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session || v.selected.length === 0) return;
+  const span = spanOf(v.doc, v.selected);
+  if (!span) { setEditorStatus("That selection is no longer in the document. Pick the words again.", "error"); return; }
+  const sources = v.session.sources;
+  if (sources.length === 0) { setEditorStatus("The library has no other track to take replacement audio from. Import the new render first.", "error"); return; }
+  const vals = await creatorPrompt("Re-render this span",
+    `Only ${formatClock(span.startMs)} to ${formatClock(span.endMs)} is replaced. The new clip records the prompt and the clip it replaced, so this span's history stays reviewable.`,
+    [
+      { name: "prompt", label: "Prompt", kind: "textarea", placeholder: "what produced the replacement audio" },
+      { name: "sourceId", label: "Replacement source", kind: "select", options: sources.map((s) => ({ value: s.id, label: `${s.title}${s.durationMs === null ? " (length unknown)" : ` (${formatClock(s.durationMs)})`}` })) },
+      { name: "durationMs", label: "Length in ms", kind: "text", value: String(Math.round(span.endMs - span.startMs)) },
+    ]);
+  if (!vals?.sourceId) return;
+  const durationMs = Number(vals.durationMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) { setEditorStatus("A replacement needs a positive length in milliseconds.", "error"); return; }
+  const cur = state.creatorEditor;
+  if (!cur?.doc) return;
+  applyEditorOp(replaceSpan(cur.doc, cur.selected, { sourceId: vals.sourceId, durationMs, prompt: vals.prompt ?? "" }),
+    `Replaced ${formatClock(span.startMs)} to ${formatClock(span.endMs)} from ${vals.sourceId}.`);
+}
+
+function stepEditorHistory(back: boolean): void {
+  const v = state.creatorEditor;
+  if (!v || !editorHistory) return;
+  editorHistory = back ? undo(editorHistory) : redo(editorHistory);
+  state.creatorEditor = {
+    ...v, doc: editorHistory.present, selected: [],
+    canUndo: canUndo(editorHistory), canRedo: canRedo(editorHistory),
+    status: back ? "Undone." : "Redone.", statusTone: "ok",
+  };
+  void renderCreatorStudio();
+}
+
+async function saveCreatorEdit(): Promise<void> {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session) return;
+  const title = (($("#cedTitle") as HTMLInputElement | null)?.value ?? v.title).trim();
+  if (!title) { setEditorStatus("Give the saved render a title first.", "error"); return; }
+  state.creatorEditor = { ...v, title, busy: "Rendering...", status: "", statusTone: "" };
+  void renderCreatorStudio();
+  const r = await bridge.creatorEditorSave({ trackId: v.session.trackId, doc: v.doc, title });
+  const cur = state.creatorEditor;
+  if (!cur) return;
+  if (!r?.ok) {
+    state.creatorEditor = { ...cur, busy: "", status: r?.error ?? "The audio editor did not answer.", statusTone: "error" };
+    void renderCreatorStudio();
+    return;
+  }
+  state.creatorEditor = {
+    ...cur, busy: "",
+    status: r.trackId ? `Saved as library track ${r.trackId}.` : "Saved, but the server did not name the new track.",
+    statusTone: r.trackId ? "ok" : "error",
+  };
+  state.creatorStudio = await bridge.creatorStudio().catch(() => state.creatorStudio);
+  await loadCreatorEditor();
+}
+
 let skillsOpen = false;
 // P-SKILL.6 (ADR-0243): signature of the last-painted Skills directory, so the SWR revalidation repaints only
 // on a real change (a toggle, a re-scan verdict, an added/removed skill) - never a needless flicker.
@@ -11171,6 +11976,171 @@ function wire(): void {
   $("#cmdkBtn")?.addEventListener("click", () => palette.show());
   $("#railAbout")?.addEventListener("click", () => openAbout());
   $("#railMarket")?.addEventListener("click", () => openMarketplace()); // P-MARKET.1 (ADR-0158)
+  // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
+  $("#railStudio")?.addEventListener("click", () => openCreatorStudio());
+  $("#studioClose")?.addEventListener("click", () => closeCreatorStudio());
+  $("#creatorStudio")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const play = t.closest("[data-track-play]") as HTMLElement | null;
+    if (play) { void playCreatorTrack(play.dataset.trackPlay!); return; }
+    const add = t.closest("[data-track-add]");
+    if (add) { void openTrackAddPrompt(); return; }
+    const row = t.closest("[data-track]") as HTMLElement | null;
+    const id = row?.dataset.track ?? "";
+    const star = t.closest("[data-track-rate]") as HTMLElement | null;
+    if (star && id) { void creatorLibraryOp({ op: "update", id, rating: Number(star.dataset.trackRate) }); return; }
+    const review = t.closest("[data-track-review]") as HTMLElement | null;
+    if (review) { void openTrackReviewPrompt(review.dataset.trackReview!); return; }
+    const remix = t.closest("[data-track-remix]") as HTMLElement | null;
+    if (remix) { void openTrackAddPrompt({ parentId: remix.dataset.trackRemix!, kind: "remix" }); return; }
+    const reprompt = t.closest("[data-track-reprompt]") as HTMLElement | null;
+    if (reprompt) { void openTrackAddPrompt({ parentId: reprompt.dataset.trackReprompt!, kind: "reprompt" }); return; }
+    const remove = t.closest("[data-track-remove]") as HTMLElement | null;
+    if (remove) { void creatorLibraryOp({ op: "remove", id: remove.dataset.trackRemove! }); return; }
+    const ep = t.closest("[data-creator-endpoint]") as HTMLElement | null;
+    if (ep) { void openCreatorEndpointPrompt(ep.dataset.creatorEndpoint!); return; }
+    // CREATOR-1 (ADR-0292): probe a provider (or all of them), and stop a running job.
+    const probe = t.closest("[data-creator-probe]") as HTMLElement | null;
+    if (probe) { void runCreatorProbe(probe.dataset.creatorProbe!); return; }
+    if (t.closest("[data-creator-probe-all]")) { void runCreatorProbe(); return; }
+    const cancel = t.closest("[data-job-cancel]") as HTMLElement | null;
+    if (cancel) { void cancelCreatorJob(cancel.dataset.jobCancel!); return; }
+    // CREATOR-IMG (ADR-0291): the Studio tab strip + the image tools.
+    const tab = t.closest("[data-studio-tab]") as HTMLElement | null;
+    if (tab) {
+      const want = tab.dataset.studioTab;
+      state.studioTab = want === "images" ? "images" : want === "editor" ? "editor" : "integrations";
+      if (state.studioTab !== "editor") stopEditorAudio(); // CREATOR-2: leaving the pane stops its clip
+      if (state.studioTab === "images" && !state.creatorImages) { void loadCreatorImages(); return; }
+      if (state.studioTab === "editor" && !state.creatorEditor) { void loadCreatorEditor(); return; }
+      void renderCreatorStudio();
+      return;
+    }
+    // CREATOR-2 (ADR-0286): the follow-along editor. Chips first - they are the surface the user lives on.
+    const chip = t.closest("[data-ced-chip]") as HTMLElement | null;
+    if (chip) { onEditorChip(chip.dataset.cedChip!, (e as MouseEvent).shiftKey); return; }
+    const wave = t.closest("[data-ced-wave]") as HTMLCanvasElement | null;
+    const ed = state.creatorEditor;
+    if (wave && ed?.doc && ed.session) {
+      const box = wave.getBoundingClientRect();
+      const total = Math.max(docDurationMs(ed.doc), ed.session.durationMs);
+      seekEditor(msAtX((e as MouseEvent).clientX - box.left, total, box.width));
+      return;
+    }
+    if (t.closest("[data-ced-open]")) { void openCreatorEditorSession(); return; }
+    if (t.closest("[data-ced-play]")) { toggleEditorPlay(); return; }
+    if (t.closest("[data-ced-split]")) { editorSplitAtPlayhead(); return; }
+    if (t.closest("[data-ced-lock]")) { editorToggleLock(); return; }
+    if (t.closest("[data-ced-delete]")) { editorDeleteSpan(); return; }
+    if (t.closest("[data-ced-rerender]")) { void editorRerenderSpan(); return; }
+    if (t.closest("[data-ced-undo]")) { stepEditorHistory(true); return; }
+    if (t.closest("[data-ced-redo]")) { stepEditorHistory(false); return; }
+    if (t.closest("[data-ced-save]")) { void saveCreatorEdit(); return; }
+    if (t.closest("[data-cim-refresh]")) { void loadCreatorImages(); return; }
+    if (t.closest("[data-cim-generate]")) { void generateCreatorImage(); return; }
+    if (t.closest("[data-cim-sheet]")) { void buildCreatorSheet(); return; }
+    if (t.closest("[data-cim-gif]")) { void buildCreatorGif(); return; }
+    if (t.closest("[data-cim-meme]")) { void buildCreatorMeme(); return; }
+    if (t.closest("[data-cim-clear]")) { patchCreatorImages({ selected: [] }); return; }
+    const drop = t.closest("[data-mix-drop]") as HTMLElement | null;
+    if (drop && state.creatorImages) {
+      const i = Number(drop.dataset.mixDrop);
+      patchCreatorImages({ inputs: state.creatorImages.inputs.filter((_, idx) => idx !== i) });
+      return;
+    }
+    const pick = t.closest("[data-art-pick]") as HTMLElement | null;
+    if (pick && state.creatorImages) {
+      const id = pick.dataset.artPick!;
+      const sel = state.creatorImages.selected;
+      patchCreatorImages({ selected: sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id] });
+      return;
+    }
+    const prev = t.closest("[data-art-preview]") as HTMLElement | null;
+    if (prev) { void openArtifactInPreview(prev.dataset.artPreview!); return; }
+    const asInput = t.closest("[data-art-input]") as HTMLElement | null;
+    if (asInput) { void useArtifactAsInput(asInput.dataset.artInput!); return; }
+  });
+  // CREATOR-IMG: a role rename is a field edit, not a click.
+  $("#creatorStudio")?.addEventListener("change", (e) => {
+    const t = e.target as HTMLElement;
+    const role = t.closest("[data-mix-role]") as HTMLInputElement | null;
+    if (role && state.creatorImages) {
+      const i = Number(role.dataset.mixRole);
+      const next = state.creatorImages.inputs.map((input, idx) => (idx === i ? { ...input, role: role.value.trim() || input.role } : input));
+      state.creatorImages = { ...state.creatorImages, inputs: next };
+      return;
+    }
+    // CREATOR-2: hold what the user typed/picked, so the next repaint does not throw it away.
+    const ed = state.creatorEditor;
+    if (!ed) return;
+    const pick = t.closest("#cedTrack") as HTMLSelectElement | null;
+    if (pick) { state.creatorEditor = { ...ed, trackId: pick.value }; return; }
+    const words = t.closest("#cedText") as HTMLTextAreaElement | null;
+    if (words) { state.creatorEditor = { ...ed, text: words.value }; return; }
+    const name = t.closest("#cedTitle") as HTMLInputElement | null;
+    if (name) state.creatorEditor = { ...ed, title: name.value };
+  });
+  // CREATOR-2: the scrub bar is continuous - it seeks while dragged, not only on release.
+  $("#creatorStudio")?.addEventListener("input", (e) => {
+    const scrub = (e.target as HTMLElement).closest("[data-ced-scrub]") as HTMLInputElement | null;
+    if (scrub) seekEditor(Number(scrub.value));
+  });
+  // CREATOR-2: drag a SELECTED span onto another chip to move it there. A chip outside the selection is
+  // not draggable, and a drop back inside the span resolves to null (no move, no history churn).
+  $("#creatorStudio")?.addEventListener("dragstart", (e) => {
+    const chip = (e.target as HTMLElement).closest("[data-ced-chip]") as HTMLElement | null;
+    const v = state.creatorEditor;
+    if (!chip || !v) return;
+    if (!v.selected.includes(chip.dataset.cedChip!)) { e.preventDefault(); return; }
+    editorDrag = [...v.selected];
+    (e as DragEvent).dataTransfer?.setData("text/plain", chip.dataset.cedChip!);
+  });
+  $("#creatorStudio")?.addEventListener("dragover", (e) => {
+    if (editorDrag.length && (e.target as HTMLElement).closest("[data-ced-chip]")) e.preventDefault();
+  });
+  $("#creatorStudio")?.addEventListener("drop", (e) => {
+    const chip = (e.target as HTMLElement).closest("[data-ced-chip]") as HTMLElement | null;
+    const v = state.creatorEditor;
+    if (!chip || !v?.doc || editorDrag.length === 0) return;
+    e.preventDefault();
+    const moving = editorDrag;
+    editorDrag = [];
+    const targetMs = dropTargetMs(v.doc, chip.dataset.cedChip!, moving);
+    if (targetMs === null) return;
+    applyEditorOp(moveSpan(v.doc, moving, targetMs), `Moved ${moving.length} word${moving.length === 1 ? "" : "s"} to ${formatClock(targetMs)}.`, moving);
+  });
+  $("#creatorStudio")?.addEventListener("dragend", () => { editorDrag = []; });
+  // CREATOR-IMG: paste an image straight into the Images pane to stage it as an input.
+  $("#creatorStudio")?.addEventListener("paste", (e) => {
+    const v = state.creatorImages;
+    if (state.studioTab !== "images" || !v) return;
+    const items = [...((e as ClipboardEvent).clipboardData?.items ?? [])].filter((i) => i.type.startsWith("image/"));
+    if (!items.length) return;
+    e.preventDefault();
+    const file = items[0]!.getAsFile();
+    if (!file || v.inputs.length >= 6) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result ?? "");
+      if (!url.startsWith("data:image/")) return;
+      const roles = ["style", "composition", "background", "mask", "detail", "extra"];
+      patchCreatorImages({ inputs: [...v.inputs, { role: roles[v.inputs.length] ?? "extra", name: file.name || "pasted.png", dataUrl: url }] });
+    };
+    reader.readAsDataURL(file);
+  });
+  // CREATOR-0 (ADR-0283): the odometer chips - click to expand the detailed flyout in place, click the
+  // same chip again to collapse it. Refresh re-samples fresh rather than serving the 3s memo.
+  $("#inspBody")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const chip = t.closest("[data-cod-chip]") as HTMLElement | null;
+    if (chip) {
+      const metric = chip.dataset.codChip === "gpu" ? "gpu" : "cpu";
+      state.creatorDetail = state.creatorDetail === metric ? "" : metric;
+      lastInspHash = ""; renderInspector();
+      return;
+    }
+    if (t.closest("[data-cod-refresh]")) { void refreshCreatorResources(true); }
+  });
   $("#railReports")?.addEventListener("click", () => openReportsPanel()); // P-REPORT.1 (ADR-0116)
   $("#railShare")?.addEventListener("click", () => openSharePanel()); // P-COLLAB.3 (ADR-0192)
   void refreshShareDot(); // reflect any already-live share in the rail glyph
@@ -12262,11 +13232,15 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
   // P-ACP.2/3: the mode control is the client 3-way Plan/Ask/Agent; it sets omp's session mode +
   // the permission posture in one call, not an omp config option.
   if (configId === "mode") {
-    const ui = (value === "ask" || value === "plan" ? value : "agent") as "agent" | "ask" | "plan";
+    // CREATOR-0: `creator` is only reachable in a Creator build; anywhere else it folds to `agent`, and
+    // the backend re-normalizes independently (a forged POST cannot open a surface this build lacks).
+    const creatorBuild = !!state.buildInfo?.creatorBuild;
+    const ui = value === "ask" || value === "plan" ? value : value === "creator" && creatorBuild ? "creator" : "agent";
     state.uiMode = ui; // optimistic
     try { const m = await bridge.setUiMode(ui); if (m?.ui) state.uiMode = m.ui; } catch { /* keep optimistic */ }
     updateComposerTools();
-    showToast({ title: `Mode → ${MODE_UI_OPTS.find((o) => o.value === state.uiMode)?.name ?? state.uiMode}`, desc: MODE_DESC[state.uiMode] ?? "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
+    if (state.uiMode === "creator") openCreatorStudio();
+    showToast({ title: `Mode \u2192 ${modeUiOptions(creatorBuild).find((o) => o.value === state.uiMode)?.name ?? state.uiMode}`, desc: MODE_DESC[state.uiMode] ?? "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
     return;
   }
   const opt = state.config.find((c) => c.id === configId);
@@ -12605,11 +13579,19 @@ const THINK_DESC: Record<string, string> = {
 };
 // P-ACP.2/3: the composer's 3-way edit mode (Claude-Code-style). "Ask" is a client posture, not an
 // omp mode - see acp_backend.setUiMode. Order: Agent (autonomous) · Ask (approve each) · Plan (read-only).
-const MODE_UI_OPTS: { value: "agent" | "ask" | "plan"; name: string }[] = [
+type UiModeOption = { value: "agent" | "creator" | "ask" | "plan"; name: string };
+const MODE_UI_OPTS: UiModeOption[] = [
   { value: "agent", name: "Agent" }, { value: "ask", name: "Ask" }, { value: "plan", name: "Plan" },
 ];
+// CREATOR-0 (ADR-0280): Creator sits immediately AFTER Agent, and only in a Creator build. Its security
+// posture is identical to Agent (uiModePosture); what changes is the workspace it opens.
+const CREATOR_MODE_OPT: UiModeOption = { value: "creator", name: "Creator" };
+function modeUiOptions(creatorBuild: boolean): UiModeOption[] {
+  return creatorBuild ? [MODE_UI_OPTS[0]!, CREATOR_MODE_OPT, ...MODE_UI_OPTS.slice(1)] : MODE_UI_OPTS;
+}
 const MODE_DESC: Record<string, string> = {
   agent: "Edits files and runs tools autonomously.",
+  creator: "Agent autonomy plus the Creator studio, integrations, and live resource limits.",
   ask: "Asks you to approve each tool call before it runs.",
   plan: "Read-only - drafts a plan, makes no changes.",
 };
@@ -12843,7 +13825,7 @@ function openConfigPopover(anchor: HTMLElement): void {
       <div class="cfg-list" id="cfgModelList"></div>
       <button class="cfg-provhub" id="cfgAddProv" type="button" data-tip="Connect a provider|Open the Provider Hub - sign in (OAuth) or paste a key. New providers' models show up here." data-tip-side="top">${icon("expand", 13)} Add or manage providers</button></div>` : "";
   const modeSec = `<div class="cfg-sec"><div class="cfg-lbl">Mode</div>
-      <div class="seg" data-cfg="mode">${MODE_UI_OPTS.map((o) =>
+      <div class="seg" data-cfg="mode">${modeUiOptions(!!state.buildInfo?.creatorBuild).map((o) =>
         `<button class="${o.value === state.uiMode ? "on" : ""}" data-val="${esc(o.value)}" data-tip="${esc(o.name)}|${esc(MODE_DESC[o.value] ?? "")}" data-tip-side="top">${esc(o.name)}</button>`).join("")}</div></div>`;
   const thinkCur = think?.options.find((o) => o.value === think.currentValue);
   const thinkSec = think ? `<div class="cfg-sec"><div class="cfg-lbl">Thinking</div>
@@ -13060,6 +14042,20 @@ try {
     if (handleAuthCallback(url)) showToast({ title: "Signed in", desc: "You're signed in - click a pack to install it.", timeout: 5000 });
   });
 } catch { /* not in Electron */ }
+// CREATOR-0 (ADR-0279): learn this build's identity FIRST, then reveal the Creator surfaces (mode option,
+// rail entry, Resources tab). A standard build never renders them, and a failed call reveals nothing.
+void bridge.buildInfo().then((info) => {
+  state.buildInfo = info;
+  if (!info?.creatorBuild) return;
+  const tab = $("#inspResTab"); if (tab) tab.hidden = false;
+  const studio = $("#railStudio"); if (studio) studio.hidden = false;
+  void refreshCreatorResources(true);
+  // The odometers poll on their own slow clock while the Resources tab (or the Studio) is on screen.
+  window.setInterval(() => {
+    if (document.hidden) return;
+    if (state.inspectorTab === "resources" && !state.inspectorRail) void refreshCreatorResources();
+  }, 3000);
+});
 void loadWorkspace();
 void loadAsksage();
 void loadSkills();

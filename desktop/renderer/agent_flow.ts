@@ -104,7 +104,9 @@ export function nextGap(items: readonly ReadyItem[], vaultAskedAlready: boolean)
 }
 
 /** What entering the role must remember, so leaving restores the user's world exactly. */
-export interface AgentPrior { model: string; uiMode: "agent" | "ask" | "plan"; autoSpeak: boolean; conversation: boolean }
+// CREATOR-0 (ADR-0280): `creator` joins the mode union, so leaving the hands-free role restores a user
+// who was in Creator Mode back INTO Creator Mode rather than dropping them to plain Agent.
+export interface AgentPrior { model: string; uiMode: "agent" | "creator" | "ask" | "plan"; autoSpeak: boolean; conversation: boolean }
 
 /** The model to restore on exit: the prior one, but only if it is still accessible (a provider may have
  *  been disconnected mid-session) and an actual change. Null = leave the model alone. */

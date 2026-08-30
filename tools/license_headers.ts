@@ -21,7 +21,11 @@ const ROOTS = ["harness", "desktop", "tools", "scanner-sidecar"];
 // "runtimes" holds the bundled third-party binaries + relocatable CPython that fetch-runtimes.ts fetches
 // (bun/uv/python-build-standalone, ADR-0225) — a vendored tree that keeps its OWN licenses, never relicensed.
 const EXCLUDE_SEGMENTS = new Set(["node_modules", "vendor", ".venv", "__pycache__", "dist", ".git", "runtimes"]);
-const EXCLUDE_PREFIXES = ["desktop/release/"]; // packaged build (bundles a copy of the repo + node_modules)
+const EXCLUDE_PREFIXES = [
+  "desktop/release/",              // packaged build (bundles a copy of the repo + node_modules)
+  "desktop/renderer/app.bundle.js", // build-renderer output (gitignored); its inputs carry the header
+  "tools/remote-pwa/dist/",        // PWA bundle output (gitignored)
+];
 const HASH_EXT = new Set([".py"]);             // "#" comment style
 const SLASH_EXT = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]); // "//" comment style
 

@@ -20,9 +20,11 @@ import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config
 import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
 import { validateLocalProvider, type LocalProviderDef } from "./local_providers.ts";
+import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 
-// LUCID_GUI_SETTINGS_FILE: test seam - point the store at a temp file (never set in production).
-// Read per call (not at module init) so the seam is immune to module-cache order in the test runner.
+// LUCID_GUI_SETTINGS_FILE is a supported instance-isolation seam. Creator and Fleet builds point it at
+// their own settings file; tests use the same seam for temporary stores. Read per call so environment
+// changes made before engine startup are honored without a module-cache dependency.
 const settingsFile = (): string => process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json");
 
 // P-MCP.1 (ADR-0020): one configured MCP server. The token is a bearer credential sent as an
@@ -181,14 +183,32 @@ export interface GuiSettings {
   collabIceUrls?: string[];         // stun:/turn: server URLs for NAT traversal
   collabTurnUsername?: string;      // TURN long-term credential (user-local file; not a high-value secret)
   collabTurnCredential?: string;
+  // CREATOR-0 (ADR-0282): Creator integration endpoints (ComfyUI, a dots.tts server, a Suno partner base
+  // URL, Blender, Unreal). DECLARATIONS only - each carries an opaque `vaultRef`; the token itself lives
+  // in the OS-encrypted vault, exactly like localProviders. Only a Creator build ever writes these.
+  creatorEndpoints?: CreatorEndpointDef[];
+  // CREATOR-0 (ADR-0283): remote monitoring targets (a DGX Spark, a GPU VM) - a DCGM/Prometheus exporter
+  // or a LUCID JSON agent URL plus an optional vault credential NAME. Never a secret value.
+  creatorTargets?: CreatorRemoteTargetDef[];
+}
+
+/** CREATOR-0: the stored shape of a remote monitoring target. Mirrors creator_monitor's RemoteTargetDef
+ *  without importing that module (it pulls node child_process in through system_profile). */
+export interface CreatorRemoteTargetDef {
+  id: string;
+  label: string;
+  url: string;
+  kind: "dcgm-exporter" | "lucid-agent";
+  vaultRef?: string;
+  enabled: boolean;
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 
 /** Base directory for all personalization artifacts. Defaults to `~/.omp`; `LUCID_PERSONAL_DIR`
- *  relocates the whole set (store, CUI store, audit, exports) as one unit — for tests and isolated
- *  demos that must NOT touch the real encrypted store. Override-only; it changes WHERE the encrypted
- *  file lives, never WHETHER content is gated (the security gate is independent of this path). */
+ *  relocates the whole set (store, CUI store, audit, exports) as one unit for isolated Creator/Fleet
+ *  instances and tests. It changes WHERE the encrypted file lives, never WHETHER content is gated.
+ *  The security gate is independent of this path. */
 export function personalBaseDir(): string {
   return process.env.LUCID_PERSONAL_DIR || join(homedir(), ".omp");
 }
@@ -538,6 +558,56 @@ export function setChosenModel(model: string): GuiSettings {
   if (m) s.chosenModel = m; else delete s.chosenModel;
   save(s); return s;
 }
+// ── CREATOR-0 (ADR-0282/0283): Creator endpoint + remote-target declarations ──
+// Storage only, and fail-closed on write: an invalid declaration is REFUSED rather than saved half-formed,
+// and no path here ever accepts a secret value (the vault owns those; these carry a `vaultRef` NAME).
+
+export function listCreatorEndpoints(): CreatorEndpointDef[] {
+  const raw = load().creatorEndpoints;
+  return Array.isArray(raw) ? raw : [];
+}
+export function upsertCreatorEndpoint(def: CreatorEndpointDef): { ok: boolean; errors: string[] } {
+  const v = validateCreatorEndpoint(def);
+  if (!v.ok) return v;
+  const s = load();
+  const list = Array.isArray(s.creatorEndpoints) ? s.creatorEndpoints : [];
+  const i = list.findIndex((e) => e.id === def.id);
+  if (i >= 0) list[i] = def; else list.push(def);
+  s.creatorEndpoints = list;
+  save(s);
+  return { ok: true, errors: [] };
+}
+export function removeCreatorEndpoint(id: string): boolean {
+  const s = load();
+  const list = Array.isArray(s.creatorEndpoints) ? s.creatorEndpoints : [];
+  const next = list.filter((e) => e.id !== id);
+  if (next.length === list.length) return false;
+  s.creatorEndpoints = next;
+  save(s);
+  return true;
+}
+export function listCreatorTargets(): CreatorRemoteTargetDef[] {
+  const raw = load().creatorTargets;
+  return Array.isArray(raw) ? raw : [];
+}
+export function upsertCreatorTarget(def: CreatorRemoteTargetDef): void {
+  const s = load();
+  const list = Array.isArray(s.creatorTargets) ? s.creatorTargets : [];
+  const i = list.findIndex((t) => t.id === def.id);
+  if (i >= 0) list[i] = def; else list.push(def);
+  s.creatorTargets = list;
+  save(s);
+}
+export function removeCreatorTarget(id: string): boolean {
+  const s = load();
+  const list = Array.isArray(s.creatorTargets) ? s.creatorTargets : [];
+  const next = list.filter((t) => t.id !== id);
+  if (next.length === list.length) return false;
+  s.creatorTargets = next;
+  save(s);
+  return true;
+}
+
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }
 /** ADR-0221: the stored embeddings config (non-secret), or null when semantic search was never set up. */

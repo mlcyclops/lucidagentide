@@ -29,8 +29,27 @@ import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
+import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
 
-const DEFAULT_PORT = 5319;
+// CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
+// Order: an explicit env var (launcher / dev run), then the packaged package.json's `lucidBuildFlavor`
+// (electron-builder extraMetadata), then the standard Agent build. Renaming the app is what actually
+// separates the two products on disk (userData, the single-instance lock, and the Windows os_crypt key
+// all key on the app name), so it happens FIRST and only for the Creator flavor - the standard build's
+// paths must not move by a single byte.
+const packagedBuildFlavor = ((): string => {
+  try {
+    const meta = JSON.parse(readFileSync(join(app.getAppPath(), "package.json"), "utf8")) as { lucidBuildFlavor?: unknown };
+    return typeof meta.lucidBuildFlavor === "string" ? meta.lucidBuildFlavor : "";
+  } catch { return ""; }
+})();
+const BUILD = flavorInfo(resolveBuildFlavor(process.env, packagedBuildFlavor));
+if (BUILD.creatorBuild) {
+  app.setName(BUILD.productName);
+  if (process.platform === "win32") { try { app.setAppUserModelId(BUILD.appId); } catch { /* taskbar grouping only */ } }
+}
+
+const DEFAULT_PORT = BUILD.defaultPort;
 const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
 // A LUCID on a NON-DEFAULT port is a deliberately separate instance: LucidAgentIDE.bat rolls a free port
 // when 5319 is taken, precisely so a dev build can run beside an installed one. Electron's single-instance
@@ -79,7 +98,9 @@ let engineTail = "";
 // that URL to this app, which forwards it to the renderer (market_boot.handleAuthCallback). On Windows/Linux a
 // cold or second launch delivers it as an argv entry (caught by the single-instance handler); on macOS it
 // arrives via "open-url". A URL that lands before the window is ready is queued and flushed on did-finish-load.
-const AUTH_PROTOCOL = "lucid";
+// CREATOR-0: Creator claims `lucid-creator://`, NEVER `lucid://` - stealing the standard build's scheme
+// would hand it the OAuth callback for a sign-in the user started in the other app.
+const AUTH_PROTOCOL = BUILD.authProtocol;
 let pendingAuthUrl: string | null = null;
 const firstAuthUrl = (argv: string[]): string | null => argv.find((a) => a.startsWith(`${AUTH_PROTOCOL}://`)) ?? null;
 function forwardAuthUrl(url: string | null): void {
@@ -148,6 +169,26 @@ function startDevServer(): void {
   // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
   const gitEnv = prepareGitToken();
   const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
+  // CREATOR-0 (ADR-0279): the engine child learns its own identity and its own data roots. The standard
+  // build gets ONLY the descriptive vars (no path relocation), so its on-disk layout is untouched; the
+  // Creator build additionally isolates GUI settings, Personal Knowledge, the creator data root, and the
+  // auxiliary ports (relay + managed whisper both bind, so two flavors cannot share them).
+  const flavorEnv: Record<string, string> = {
+    LUCID_BUILD_FLAVOR: BUILD.flavor,
+    LUCID_APP_ID: BUILD.appId,
+    LUCID_PRODUCT_NAME: BUILD.productName,
+    LUCID_DISPLAY_NAME: BUILD.displayName,
+    LUCID_AUTH_PROTOCOL: BUILD.authProtocol,
+    LUCID_DATA_ROOT: app.getPath("userData"),
+    LUCID_CRED_VAULT_DIR: CRED_DIR(),
+    ...(BUILD.creatorBuild ? {
+      LUCID_GUI_SETTINGS_FILE: process.env.LUCID_GUI_SETTINGS_FILE || join(app.getPath("userData"), "lucid-gui.json"),
+      LUCID_PERSONAL_DIR: process.env.LUCID_PERSONAL_DIR || join(app.getPath("userData"), "personal"),
+      LUCID_CREATOR_DIR: process.env.LUCID_CREATOR_DIR || join(app.getPath("userData"), "creator"),
+      LUCID_RELAY_PORT: process.env.LUCID_RELAY_PORT || String(BUILD.defaultRelayPort),
+      LUCID_WHISPER_PORT: process.env.LUCID_WHISPER_PORT || String(BUILD.defaultWhisperPort),
+    } : {}),
+  };
   // P-WINBOOT.2 (ADR-0260): packaged builds spawn the COMPILED engine (bin/lucid-engine) - it embeds
   // dev.ts so Bun never module-loads a .ts from a protected install dir (the P-WINBOOT.1 EPERM brick).
   // Dev runs, and any package cut before compile-engine existed, fall back to `bun run desktop/dev.ts`.
@@ -160,7 +201,7 @@ function startDevServer(): void {
     // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
     // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
     // its agent-browser poll loop against the child's /api/browser routes.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -279,7 +320,12 @@ ipcMain.handle("lucid:pickFile", async (e, opts: unknown) => {
 // Electron's safeStorage is main-only. The renderer can STORE, LIST, and DELETE secrets; it can never READ a
 // plaintext back (decrypt stays here, for future request injection). storeCredential FAIL-CLOSES if OS
 // encryption is unavailable - the handler surfaces { error } rather than ever writing plaintext.
-const CRED_DIR = () => join(homedir(), ".omp", "lucid-cred-vault");
+// CREATOR-0 (ADR-0279): the Creator flavor gets its OWN vault root inside its userData. Two reasons:
+// a standard-build provider key must not silently become creative-media egress credit, and on Windows
+// the safeStorage key lives per profile directory, so a shared vault path across two app identities
+// would fail closed on every read anyway (the ADR-0278 lesson).
+const CRED_DIR = () => process.env.LUCID_CRED_VAULT_DIR
+  || (BUILD.creatorBuild ? join(app.getPath("userData"), "lucid-cred-vault") : join(homedir(), ".omp", "lucid-cred-vault"));
 const ELECTRON_SAFE_STORAGE: SafeStorageLike = {
   isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
   encryptString: (s) => safeStorage.encryptString(s),

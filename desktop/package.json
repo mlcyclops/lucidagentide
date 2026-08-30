@@ -20,12 +20,18 @@
     "build-renderer": "bun build renderer/app.ts --target=browser --outfile renderer/app.bundle.js --sourcemap=inline",
     "natives": "bun run build/copy-natives.ts",
     "start": "bun run build && electron .",
+    "build:creator": "bun run build/build-creator.ts",
+    "start:creator": "bun run build:creator && electron .",
+    "web:creator": "bun run creator_dev.ts",
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
     "dist:mac": "bun run runtimes:mac && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
     "dist:win": "bun run runtimes:win && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --win --publish never",
     "dist:linux": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --publish never",
-    "dist": "bun run runtimes && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --publish never"
+    "dist": "bun run runtimes && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --publish never",
+    "dist:win:creator": "bun run runtimes:win && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --win --config build/electron-builder.creator.cjs --publish never",
+    "dist:mac:creator": "bun run runtimes:mac && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac zip --arm64 --x64 --config build/electron-builder.creator.cjs --publish never",
+    "dist:linux:creator": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --config build/electron-builder.creator.cjs --publish never"
   },
   "build": {
     "appId": "com.lucidagentide.desktop",

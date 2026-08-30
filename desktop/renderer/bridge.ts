@@ -15,6 +15,60 @@ import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-A
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13: run traces
 import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1: resource guard view (types owned there - layering rule)
+import { isCreatorResources, type CreatorResourcesView } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): odometer view types live there
+import { isCreatorStudio, type CreatorStudioView } from "./creator_studio.ts"; // CREATOR-0 (ADR-0282): Studio view types live there
+import { isEditorSession, type EditorSession } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): editor session view type lives there
+import type { TimelineDoc } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline document, edited in the renderer
+
+/** CREATOR-0 (ADR-0279): what `GET /api/build-info` returns. `creatorBuild` is the ONLY thing that may
+ *  reveal a Creator surface - never a persisted setting, never a role. */
+export interface BuildInfoView {
+  flavor: "agent" | "creator";
+  creatorBuild: boolean;
+  appId: string;
+  productName: string;
+  displayName: string;
+  version: string;
+  defaultPort: number;
+  port: number;
+  authProtocol: string;
+  dataRoot: string;
+  settingsFile: string;
+  personalDir: string;
+  vaultScope: string;
+  features: { creatorMode: boolean; integrationRegistry: boolean; localMonitoring: boolean; cpuGpuOdometer: boolean; creatorLibrary: boolean };
+}
+
+/** CREATOR-IMG (ADR-0291): one model a live probe found on the configured image server. */
+export interface CreatorModelView { id: string; kind: string; node: string }
+/** CREATOR-IMG: a stored image artifact with the provenance that produced it. */
+export interface CreatorArtifactView {
+  id: string; kind: string; file: string; mime: string; bytes: number; sha256: string;
+  createdAt: number; width: number; height: number; source: string; prompt: string; model: string;
+  sidecars: string[];
+}
+/** CREATOR-IMG: raw RGBA on the wire, straight out of a canvas `getImageData()`. */
+export interface WireFrameView { width: number; height: number; rgbaB64: string }
+/** CREATOR-IMG: a generation request - the prompt pair, the model, the size, and named input images. */
+export interface CreatorGenerateInput {
+  prompt: string; negative?: string; model?: string; width?: number; height?: number; seed?: number;
+  inputs?: { role: string; dataUrl: string }[];
+}
+
+/** CREATOR-0: one library mutation. `add` imports a picked file; `remix`/`reprompt` do the same and record
+ *  lineage from `id`; `update` edits title/prompt/tags/rating/review; `remove` drops the track. */
+export interface CreatorLibraryOp {
+  op: "add" | "update" | "remix" | "reprompt" | "remove";
+  id?: string;
+  sourcePath?: string;
+  title?: string;
+  origin?: string;
+  prompt?: string;
+  lyrics?: string;
+  tags?: string[];
+  rating?: number | null;
+  review?: string;
+}
 
 /** P-AGENT.12: an MCP-discovered catalog entry (name is the omp runtime name: mcp__<server>_<tool>). */
 export interface McpCatalogTool {
@@ -301,7 +355,7 @@ export interface EvalReportTurn {
 }
 export interface EvalReportResult { kind: string; id: string; rel: string | null; title: string }
 export interface ModeOption { id: string; name: string; description?: string }
-export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
+export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "creator" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest" }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
@@ -765,8 +819,9 @@ export interface LucidBridge {
   // P-ACP.2 (ADR-0027): ACP session modes (Plan / Agent), switched via session/set_mode.
   modes(): Promise<ModeState | null>;
   setMode(modeId: string): Promise<ModeState | null>;
-  // P-ACP.3: the composer's 3-way Plan/Ask/Agent + answering a forwarded permission request.
-  setUiMode(uiMode: "agent" | "ask" | "plan"): Promise<ModeState | null>;
+  // P-ACP.3: the composer's Plan/Ask/Agent + answering a forwarded permission request.
+  // CREATOR-0: `creator` is offered only in a Creator build; the backend folds it to `agent` elsewhere.
+  setUiMode(uiMode: "agent" | "creator" | "ask" | "plan"): Promise<ModeState | null>;
   respondPermission(id: string, optionId: string | null): Promise<unknown>;
   // P-ACP.4: Stop the in-flight turn (interrupt reply + tool calls).
   cancelChat(): Promise<unknown>;
@@ -1015,6 +1070,42 @@ export interface LucidBridge {
   subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
   systemStatus(fresh?: boolean): Promise<SystemStatusView | null>;
+  // CREATOR-0 (ADR-0279): this build's identity + which Creator surfaces exist. Null in an old backend.
+  buildInfo(): Promise<BuildInfoView | null>;
+  // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail (Creator build only).
+  creatorResources(fresh?: boolean): Promise<CreatorResourcesView | null>;
+  // CREATOR-0 (ADR-0282/0281): the integration registry + the local track library, in one payload.
+  creatorStudio(): Promise<CreatorStudioView | null>;
+  // CREATOR-0: mutate the library (import, review, remix, re-prompt, remove) and get the fresh view back.
+  creatorLibrary(op: CreatorLibraryOp): Promise<{ ok: boolean; error?: string; view: CreatorStudioView | null }>;
+  // CREATOR-0: playable bytes for one track (base64 + mime, like the TTS path).
+  creatorTrackAudio(id: string): Promise<{ audioB64: string; mime: string; title: string } | null>;
+  // CREATOR-0: save or remove one endpoint declaration. Refused server-side when it is not well formed.
+  creatorEndpoint(input: { endpoint?: Record<string, unknown>; remove?: string }): Promise<{ ok: boolean; error?: string }>;
+  // CREATOR-0: save or remove a remote monitoring target (a DGX Spark, a GPU VM).
+  creatorTarget(input: { target?: Record<string, unknown>; remove?: string }): Promise<{ ok: boolean; error?: string }>;
+  // CREATOR-1 (ADR-0292): probe one provider (or all) and get the refreshed registry + job list back.
+  creatorProbe(providerId?: string): Promise<{ ok: boolean; error?: string; registry: CreatorStudioView | null }>;
+  // CREATOR-1: request a stop. The job settles only when its runner confirms.
+  creatorCancelJob(id: string): Promise<{ ok: boolean; error?: string }>;
+  // CREATOR-IMG (ADR-0291): the model dropdown - a LIVE probe of the configured image server.
+  creatorModels(): Promise<{ models: CreatorModelView[]; endpoint: string; note: string } | null>;
+  // CREATOR-IMG: generate through the user's own workflow template, mixing prompt + named input images.
+  creatorGenerateImage(input: CreatorGenerateInput): Promise<{ ok: boolean; error?: string; produced?: CreatorArtifactView[] }>;
+  // CREATOR-IMG: the artifact grid, and one artifact's bytes as a data URL (inline display + preview).
+  creatorArtifacts(): Promise<CreatorArtifactView[] | null>;
+  creatorArtifactData(id: string): Promise<{ artifact: CreatorArtifactView; dataUrl: string } | null>;
+  // CREATOR-IMG: store a renderer-encoded PNG (a meme, a markup export) with its provenance.
+  creatorStoreArtifact(input: { kind: string; dataUrl: string; width: number; height: number; source: string; prompt?: string; model?: string }): Promise<{ ok: boolean; error?: string; artifact?: CreatorArtifactView }>;
+  // CREATOR-IMG: the provider-free builders - a sprite sheet PNG plus sidecars, and an animated GIF.
+  creatorBuildSheet(input: { frames: WireFrameView[]; name?: string; columns?: number; durationMs?: number }): Promise<{ ok: boolean; error?: string; artifact?: CreatorArtifactView; css?: string; manifest?: string }>;
+  creatorBuildGif(input: { frames: WireFrameView[]; delayMs?: number | number[]; loop?: number }): Promise<{ ok: boolean; error?: string; artifact?: CreatorArtifactView }>;
+  // CREATOR-2 (ADR-0286): open ONE track as an editable timeline (document + audio + waveform + the
+  // alignment provenance note), and save the rendered edit back as a new library track. Everything
+  // between those two calls happens in the renderer against the pure core - the server never sees a
+  // half-finished edit.
+  creatorEditorOpen(opts: { trackId: string; text?: string; buckets?: number }): Promise<{ ok: boolean; error?: string; session?: EditorSession } | null>;
+  creatorEditorSave(opts: { trackId: string; doc: TimelineDoc; title: string; prompt?: string }): Promise<{ ok: boolean; error?: string; trackId?: string } | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -1535,6 +1626,127 @@ export const bridge: LucidBridge = {
   systemStatus: async (fresh) => { // P-SYSRES.1: fail-open - malformed/missing reads as null (never blocks)
     const v: unknown = await getData(`/api/system${fresh ? "?fresh=1" : ""}`).catch(() => null);
     return isSystemStatus(v) ? v : null;
+  },
+  // CREATOR-0 (ADR-0279): identity + feature reveal. A null (old backend, failed call) means NO Creator
+  // surface renders - absent, never a greyed hint.
+  buildInfo: async () => {
+    const v: unknown = await getData("/api/build-info").catch(() => null);
+    const o = v as BuildInfoView | null;
+    return o && typeof o.creatorBuild === "boolean" && !!o.features ? o : null;
+  },
+  creatorResources: async (fresh) => {
+    const v: unknown = await getData(`/api/creator/resources${fresh ? "?fresh=1" : ""}`).catch(() => null);
+    return isCreatorResources(v) ? v : null;
+  },
+  creatorStudio: async () => {
+    const v: unknown = await getData("/api/creator/registry").catch(() => null);
+    return isCreatorStudio(v) ? v : null;
+  },
+  creatorLibrary: async (op) => {
+    try {
+      const res = await fetch("/api/creator/library", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(op) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: unknown };
+      return { ok: !!body.ok, error: body.error, view: isCreatorStudio(body.data) ? body.data : null };
+    } catch { return { ok: false, error: "The Creator library did not answer.", view: null }; }
+  },
+  creatorTrackAudio: async (id) => {
+    const v = await getData(`/api/creator/track?id=${encodeURIComponent(id)}`).catch(() => null) as { audioB64?: unknown; mime?: unknown; title?: unknown } | null;
+    return v && typeof v.audioB64 === "string" && typeof v.mime === "string"
+      ? { audioB64: v.audioB64, mime: v.mime, title: typeof v.title === "string" ? v.title : "" }
+      : null;
+  },
+  creatorEndpoint: async (input) => {
+    try {
+      const res = await fetch("/api/creator/endpoint", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      return { ok: !!body.ok, error: body.error };
+    } catch { return { ok: false, error: "The Creator registry did not answer." }; }
+  },
+  creatorTarget: async (input) => {
+    try {
+      const res = await fetch("/api/creator/target", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      return { ok: !!body.ok, error: body.error };
+    } catch { return { ok: false, error: "The Creator monitor did not answer." }; }
+  },
+  // CREATOR-1 (ADR-0292): capability probes + job control.
+  creatorProbe: async (providerId) => {
+    try {
+      const res = await fetch("/api/creator/probe", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(providerId ? { providerId } : {}) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { registry?: unknown } };
+      const registry = body.data?.registry;
+      return { ok: !!body.ok, error: body.error, registry: isCreatorStudio(registry) ? registry : null };
+    } catch { return { ok: false, error: "The probe service did not answer.", registry: null }; }
+  },
+  creatorCancelJob: async (id) => {
+    try {
+      const res = await fetch("/api/creator/jobs", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ cancel: id }) });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      return { ok: !!body.ok, error: body.error };
+    } catch { return { ok: false, error: "The job service did not answer." }; }
+  },
+  // CREATOR-IMG (ADR-0291): image generation, artifacts, and the provider-free builders.
+  creatorModels: async () => {
+    const v = await getData("/api/creator/models").catch(() => null) as { models?: unknown; endpoint?: unknown; note?: unknown } | null;
+    return v && Array.isArray(v.models)
+      ? { models: v.models as CreatorModelView[], endpoint: typeof v.endpoint === "string" ? v.endpoint : "", note: typeof v.note === "string" ? v.note : "" }
+      : null;
+  },
+  creatorGenerateImage: async (input) => {
+    try {
+      const res = await fetch("/api/creator/image", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { produced?: CreatorArtifactView[] } };
+      return { ok: !!body.ok, error: body.error, produced: body.data?.produced };
+    } catch { return { ok: false, error: "The image service did not answer." }; }
+  },
+  creatorArtifacts: async () => {
+    const v = await getData("/api/creator/artifacts").catch(() => null) as { artifacts?: unknown } | null;
+    return v && Array.isArray(v.artifacts) ? v.artifacts as CreatorArtifactView[] : null;
+  },
+  creatorArtifactData: async (id) => {
+    const v = await getData(`/api/creator/artifacts?id=${encodeURIComponent(id)}`).catch(() => null) as { artifact?: unknown; dataUrl?: unknown } | null;
+    return v && typeof v.dataUrl === "string" && v.artifact ? { artifact: v.artifact as CreatorArtifactView, dataUrl: v.dataUrl } : null;
+  },
+  creatorStoreArtifact: async (input) => {
+    try {
+      const res = await fetch("/api/creator/artifact", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { artifact?: CreatorArtifactView } };
+      return { ok: !!body.ok, error: body.error, artifact: body.data?.artifact };
+    } catch { return { ok: false, error: "The image service did not answer." }; }
+  },
+  creatorBuildSheet: async (input) => {
+    try {
+      const res = await fetch("/api/creator/sheet", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { artifact?: CreatorArtifactView; css?: string; manifest?: string } };
+      return { ok: !!body.ok, error: body.error, artifact: body.data?.artifact, css: body.data?.css, manifest: body.data?.manifest };
+    } catch { return { ok: false, error: "The image service did not answer." }; }
+  },
+  creatorBuildGif: async (input) => {
+    try {
+      const res = await fetch("/api/creator/gif", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { artifact?: CreatorArtifactView } };
+      return { ok: !!body.ok, error: body.error, artifact: body.data?.artifact };
+    } catch { return { ok: false, error: "The image service did not answer." }; }
+  },
+  // CREATOR-2 (ADR-0286): the session payload carries audio bytes + peaks, so it is returned TOP-LEVEL
+  // (never mirrored under `data` as well - that would double a multi-MB body). The shape gate keeps a
+  // malformed answer from opening a half-document.
+  creatorEditorOpen: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/editor/open", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string; session?: unknown };
+      if (!body.ok) return { ok: false, error: body.error };
+      return isEditorSession(body.session)
+        ? { ok: true, session: body.session }
+        : { ok: false, error: "The editor answered with a session this build cannot read." };
+    } catch { return { ok: false, error: "The audio editor did not answer." }; }
+  },
+  creatorEditorSave: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/editor/save", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string; trackId?: string };
+      return { ok: !!body.ok, error: body.error, trackId: body.trackId };
+    } catch { return { ok: false, error: "The audio editor did not answer." }; }
   },
   // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects + the unified Processes list.
   interject: (target, text) => post("/api/interject", { target, text }),
