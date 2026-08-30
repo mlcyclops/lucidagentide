@@ -851,6 +851,12 @@ demo-P-WINBOOT.2C: ## P-WINBOOT.2C (ADR-0261): the Program Files boot GATE - sta
 .PHONY: demo-portguard
 demo-portguard: ## P-PORTGUARD.1 (ADR-0305): the engine port handshake - main only renders a health answer carrying its per-launch nonce, so a foreign process squatting the engine port fails LOUDLY with a copy/paste incident report (process name, pid, start date/time, command line), never a silent roll onto a stranger's UI
 	$(BUN) run desktop/scripts/demo_portguard.ts
+.PHONY: demo-release-identity
+demo-release-identity: ## P-RELEASE.4 (ADR-0307): the release-identity gate - CI reads each artifact's EMBEDDED identity before upload (pkg bundle id + payload .app path + version out of the xar Distribution/PackageInfo, deb package name out of the gunzipped ar control member, rpm name out of the 96-byte lead, the updater feed's declared path because both flavors emit a file named latest.yml, filename stem for the rest) and FAILS the build on a mismatch; the demo proves the swap case - correct Agent filenames wrapping Creator bytes, invisible to every name check - plus fail-closed on an empty/missing dir and an unaccounted-for file
+	$(BUN) run desktop/scripts/demo_release_identity.ts
+.PHONY: demo-office
+demo-office: ## P-OFFICE.1 (ADR-0306): Word/Excel/PowerPoint through the pinned OfficeCLI binary as a GATED skill - the skill is version-pinned and forbids the piped `curl | bash` installer (which exec_policy independently classifies T4 always-prompt), exec_policy grades officecli by subcommand (view/get safe T0, create/add/set/remove/close T1, install/watch T2, an unknown verb fail-closed T3), and the live create -> add -> view outline -> view html -> close round-trip runs wherever the pinned binary is installed and prints a VISIBLE skip where it is not
+	$(BUN) run desktop/scripts/demo_office.ts
 .PHONY: demo-P-KG-INGEST.5
 demo-P-KG-INGEST.5: ## P-KG-INGEST.5 (ADR-0264): the chat-history ingest can no longer hang and Stop always stops - ACP requests are bounded (timeout + signal) and drained when the omp child exits (an unanswered `initialize` used to freeze the import at 0/500 forever), cancel is checked per MESSAGE and reaches the extractor so an in-flight model call is interrupted rather than awaited, a wedged job is force-cancelled after a grace period so single-flight releases and the user can retry without restarting, and the pill reports a silent run as STALLED instead of rendering a healthy-looking bar
 	$(BUN) run desktop/scripts/demo_p_kg_ingest_5.ts

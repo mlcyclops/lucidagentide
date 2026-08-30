@@ -199,6 +199,87 @@ describe("classifyCommand — graded tier ladder", () => {
   test("eval is T3", () => { expect(classifyEval().tier).toBe("T3"); });
 });
 
+// ── P-OFFICE.1 (ADR-0306, decision 3): officecli is tiered by SUBCOMMAND ─────────────────────────────
+// officecli is an external binary, so before this it fail-closed to T3 for EVERY call - a document read
+// weighed the same as `rm`. The table splits it: read (view/get) T0, workspace document write T1,
+// escapes-the-workspace (install/watch) T2, anything unrecognized STILL T3.
+describe("classifyCommand: officecli subcommand tiers (ADR-0306)", () => {
+  test("view / get are read-only (safe, T0) like cat", () => {
+    for (const cmd of [
+      "officecli view report.docx",
+      "officecli view deck.pptx outline",
+      "officecli view report.docx html",
+      "officecli get deck.pptx /slide[1]/shape[1]",
+    ]) {
+      const c = classifyCommand(cmd);
+      expect(c).toMatchObject({ risk: "safe", tier: "T0", key: "officecli", alwaysPrompt: false });
+    }
+    expect(classifyCommand("officecli view report.docx").tier).toBe(classifyCommand("cat report.docx").tier);
+  });
+
+  test("create / add / set / remove / close are local-mutate (risky, T1) like cp", () => {
+    for (const cmd of [
+      "officecli create report.docx",
+      "officecli add deck.pptx / --type slide",
+      "officecli set book.xlsx /sheet[1]/A1 42",
+      "officecli remove deck.pptx /slide[2]",
+      "officecli close report.docx",
+    ]) {
+      const c = classifyCommand(cmd);
+      expect(c).toMatchObject({ risk: "risky", tier: "T1", key: "officecli", alwaysPrompt: false });
+      expect(c.tier).toBe(classifyCommand("cp a b").tier); // same weight as the LOCAL_MUTATE set
+    }
+  });
+
+  test("install / watch escape the workspace, so T2 (not T1)", () => {
+    for (const cmd of ["officecli install", "officecli install --agent claude", "officecli watch report.docx"]) {
+      const c = classifyCommand(cmd);
+      expect(c).toMatchObject({ risk: "risky", tier: "T2", key: "officecli", alwaysPrompt: false });
+    }
+    // T2 means a T1 loop dial will NOT auto-run them, which is the whole point of not calling them T1.
+    expect(loopVerdict("T1", classifyCommand("officecli install").tier)).toBe("block");
+    expect(loopVerdict("T1", classifyCommand("officecli add deck.pptx / --type slide").tier)).toBe("auto");
+  });
+
+  test("an unrecognized subcommand keeps the fail-closed T3 default", () => {
+    for (const cmd of ["officecli frobnicate report.docx", "officecli exec ./x.sh", "officecli", "officecli --help"]) {
+      const c = classifyCommand(cmd);
+      expect(c).toMatchObject({ risk: "risky", tier: "T3", key: "officecli", alwaysPrompt: false });
+    }
+    // unchanged: an unknown PROGRAM is still T3 too (the table must not have widened the safe set)
+    expect(classifyCommand("unknownbinary --flag").tier).toBe("T3");
+  });
+
+  test("a leading flag before the subcommand still resolves it", () => {
+    expect(classifyCommand("officecli --json view report.docx").tier).toBe("T0");
+  });
+
+  test("argv0 path + case are normalized, as for every other program", () => {
+    expect(classifyCommand("/usr/local/bin/OfficeCLI view report.docx").risk).toBe("safe");
+  });
+
+  test("regression: a COMPOUND command containing officecli is still compound/T3, un-pinnable", () => {
+    for (const cmd of [
+      "officecli view report.docx | grep Heading",
+      "officecli create a.docx && officecli add a.docx / --type paragraph",
+      "officecli view report.docx > out.html",
+      "officecli view report.docx; rm report.docx",
+    ]) {
+      const c = classifyCommand(cmd);
+      expect(c.risk).toBe("risky");
+      expect(c.tier).toBe("T3");
+      expect(c.key).toBeNull();
+      expect(c.alwaysPrompt).toBe(false);
+      expect(c.reason).toBe("compound or redirecting command");
+    }
+  });
+
+  test("regression: a CATASTROPHIC pattern still wins over the officecli table", () => {
+    const c = classifyCommand("sudo officecli install");
+    expect(c).toMatchObject({ risk: "risky", tier: "T4", alwaysPrompt: true });
+  });
+});
+
 describe("loopVerdict — every tier × every dial (T4 always blocks)", () => {
   const tiers: RiskTier[] = ["T0", "T1", "T2", "T3", "T4"];
   const order: Record<RiskTier, number> = { T0: 0, T1: 1, T2: 2, T3: 3, T4: 4 };

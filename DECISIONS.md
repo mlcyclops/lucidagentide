@@ -20978,9 +20978,9 @@ PROGRESS entry 2026-08-30 (incident forensics), ADR-0022 (loopback control plane
 flavor-crossing hazard class this generalizes), desktop/main.ts, desktop/port_guard.ts, desktop/dev.ts,
 desktop/scripts/demo_portguard.ts, desktop/build_flavor.ts.
 
-## ADR-0306 -- P-OFFICE.1: first-class Word/Excel/PowerPoint via OfficeCLI, as a gated skill (SCOPE/PLAN) (2026-08-30)
+## ADR-0306 -- P-OFFICE.1: first-class Word/Excel/PowerPoint via OfficeCLI, as a gated skill (2026-08-30)
 
-**Status:** Accepted -- SCOPE/PLAN (not built).
+**Status:** Accepted -- BUILT (same day; see Verification below).
 
 ### Context
 
@@ -21030,3 +21030,120 @@ classification. No fork, no new tool surface, no Python (invariants 1 and 2 unto
 
 github.com/iOfficeAI/OfficeCLI (README + SKILL.md + releases), ADR-0305 (port trust rule),
 desktop/exec_policy.ts, .agents/skills/, desktop/build/fetch-runtimes.ts (the pinned-fetch pattern).
+
+### Verification (BUILT, 2026-08-30)
+
+Shipped as three pieces. (1) `.agents/skills/officecli/SKILL.md`, pinned to the upstream release
+verified that day (v1.0.145, published 2026-08-25): detection first, then the command surface, then
+the render-look-fix loop wired to the existing `preview_open` / `preview_inspect` tools. It PROHIBITS
+both upstream one-liners (`curl | bash`, `irm | iex`) and `officecli install`, because LUCID owns its
+own skill directory and a third-party binary must never write into it. (2) `desktop/exec_policy.ts`
+grades officecli by SUBCOMMAND through a lookup table read in `classifyCommand` (a new step 4), with
+`riskyTier` left byte-identical so the unknown-program fail-closed path is untouched: view/get safe
+T0 (parity-asserted against `cat`), create/add/set/remove/close risky T1 (parity-asserted against
+`cp`), install/watch risky T2 (install rewrites PATH and other harnesses' config; watch BINDS a
+localhost server, which is a reach-out posture, not a one-shot write), and any unrecognized verb
+falls through to T3. (3) `make demo-office`.
+
+Evidence: `bun test desktop/exec_policy.test.ts` 336 pass / 0 fail across both files, so the 8 new
+officecli tests landed with ZERO regressions to the existing SAFE/RISKY/CATASTROPHIC corpora;
+`make demo-office` exits 0, asserting the skill's pinned version and its installer prohibition (the
+demo greps for that exact line, so deleting it fails the gate), every tier above, and that upstream's
+piped installer independently classifies T4 always-prompt. The live create -> add -> view outline ->
+view html -> close round-trip is CONDITIONAL on the binary being on PATH and printed a visible
+SKIPPED block here (not installed on this machine), exiting 0 on purpose: an optional external tool
+must not fail CI, but a skip must never masquerade as a pass.
+
+## ADR-0307 -- P-RELEASE.4: the release-identity gate - CI reads the shipped bytes before upload (2026-08-30)
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+The 2026-08-30 field report ("v1.14.1 installed the Tactical GenAI Trainer instead of LUCID") was
+disproved by hand: range-reading the released pkg's xar TOC, parsing Distribution and PackageInfo,
+walking the deb's ar members for its control file, reading the rpm lead. The release was genuine and
+the real cause was elsewhere (ADR-0305). But the cost of proving innocence was a full session, and
+the reason is structural: **no gate had ever looked INSIDE an artifact.** CI verified that builds
+succeeded, that runtimes resolved offline (ADR-0225), and that the engine boots from a protected
+install (ADR-0261) - never that the bytes about to be uploaded belong to the product being released.
+
+That gap is not hypothetical for this repo specifically: ONE branch and ONE electron-builder config
+tree build TWO products (ADR-0279 Agent + Creator), their tags can be cut minutes apart from the same
+commit (v1.14.1 and creator-v0.1.0 were), and ADR-0304 already caught one flavor-crossing hazard in
+the shared update pointer. Filenames are the only thing separating the two upload sets, and a
+filename is exactly what a mis-set config gets right while the payload is wrong.
+
+### Decision
+
+A fail-closed identity gate runs on every runner AFTER the existing gates and BEFORE any upload step,
+in both workflows. Structure follows the house pattern (pure decision core + thin IO shell):
+
+1. **`desktop/build/release_identity.ts`** - pure, no fs/zlib/network/electron. Format parsers over
+   caller-supplied bytes and strings (xar header, Distribution/PackageInfo XML, ar members, deb
+   control, rpm lead), `classifyArtifact`, `checkArtifact`, `summarize`. Every parse and every verdict
+   is unit-tested here rather than improvised inside a script that only executes on a release tag.
+2. **`desktop/build/release-identity-gate.ts`** - owns the IO: ranged reads (never loads a 500MB
+   installer), zlib inflate, a minimal tar walk. Builds the expectation from `build_flavor.ts` plus
+   the version in `desktop/package.json` (which the CI version-stamp step rewrites, so it is the
+   right source of truth) and derives the deb/rpm name from the effective electron-builder
+   `artifactName` pattern rather than hardcoding it a second time.
+3. **Workflow wiring** - `--flavor agent` in build-desktop.yml, `--flavor creator` plus
+   `LUCID_RELEASE_DIR: release-creator` in build-creator.yml, placed between the boot gates and the
+   upload/attach steps. The placement is the point: a mis-identified artifact fails the build instead
+   of reaching a Release.
+
+Fail-closed rules, each one a lesson from an earlier ADR: an empty or missing release dir is a
+FAILURE, never a vacuous green (ADR-0303); a kind we should be able to parse but cannot is a FAILURE,
+never a skip; an unrecognized file in the release dir is a FAILURE, because an unexpected file in an
+upload set is the shape of the bug being guarded; a misspelled `--flavor` is a hard failure rather
+than a silent fold to `agent`; and the full report prints on SUCCESS too, so a green CI log carries
+the evidence instead of just a check mark.
+
+### Deltas found while building (all kept)
+
+- **The updater feed is READ, not stem-checked.** Both flavors emit a file named exactly `latest.yml`
+  (electron-builder.creator.cjs), so the filename can never separate them; the feed's declared
+  `path:` is the only real evidence, and it is the auto-update self-replacement path ADR-0304 warned
+  about. A leading `v` on the version is normalized (a formatting difference, not a flavor one).
+- **`rpmNameFromLead` returns the raw name-version-release string.** The package name itself contains
+  hyphens, so only the expectation knows where to cut; `checkArtifact` prefix-matches instead.
+- **`.blockmap` companions inherit their parent artifact's finding** rather than being classified
+  (they are in the upload globs but carry no identity). An ORPHAN companion fails: a blockmap with no
+  installer is a broken upload set.
+- **electron-builder byproducts** (`builder-debug.yml`, `builder-effective-config.yaml`) are skipped
+  by exact name; without that the gate red-lights every real build.
+- **`summarize` is fail-closed on zero findings** - "every finding ok" over an empty list is
+  vacuously true, which is precisely how a green check comes to mean nothing.
+
+### Honest coverage limits
+
+Deep identity is read for **mac-pkg, deb, rpm, and the updater feed**. `mac-zip`, Windows NSIS,
+Windows portable, and AppImage are checked on FILENAME only, because their identity lives in formats
+this increment does not parse (PE version resources; squashfs `.desktop`). So a swapped payload inside
+a correctly named `.exe` would still pass. That is a real gap, deliberately scoped out rather than
+papered over: the pkg is the artifact the Homebrew cask installs and the one the field report was
+about, and the deb/rpm carry their identity cheaply. Extending to PE resources and squashfs is a
+follow-up increment, not a claim made here.
+
+### Verification
+
+`bun test desktop/build/release_identity.test.ts` 63 pass / 0 fail (synthetic byte fixtures built in
+the test: hand-assembled xar headers, ar archives with an odd-sized member to exercise even padding,
+a 96-byte rpm lead - no binaries committed). `make demo-release-identity` exits 0 across 25 checks,
+building REAL xar framing (28-byte header + zlib TOC + inflatable members) so the actual parse path
+runs, and proving: a correct Agent set passes with every artifact inspected by name AND bytes; **THE
+SWAP** (correct Agent filenames wrapping Creator payload) fails with the report naming both sides,
+with not one filename check firing; an empty dir, a missing dir, an unaccounted-for file, and an
+orphan blockmap each fail; gating the same dir as `--flavor creator` fails, proving the expectation
+is really derived per flavor. Workflow steps were placed by anchored-column check against neighbouring
+steps in each file. NOT exercised: the gate inside a real tag build - that runs on the next release
+cut, which is the honest boundary (same boundary ADR-0258's CI job had).
+
+### Links
+
+ADR-0305 (the sibling increment from the same incident: the port handshake), the 2026-08-30 PROGRESS
+forensics entry, ADR-0279/0304 (one branch, two products - the hazard class), ADR-0303 (the vacuous
+green), ADR-0225/0261 (the existing pre-upload gates this sits beside), ADR-0246 (signing, still
+open), `desktop/build/release_identity.ts`, `desktop/build/release-identity-gate.ts`,
+`.github/workflows/build-desktop.yml`, `.github/workflows/build-creator.yml`.

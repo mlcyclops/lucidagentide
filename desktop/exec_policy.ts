@@ -114,6 +114,35 @@ const LOCAL_MUTATE = new Set(["mkdir", "touch", "ln", "cp", "mv", "tee", "sed", 
 const PKG = /^(npm|pnpm|yarn|pip|pip3|pipx|apt|apt-get|yum|dnf|brew|gem|cargo|go|bundle|composer)$/;
 const PKG_MUTATE = /\b(install|add|upgrade|update|i|get|remove|uninstall)\b/;
 
+// P-OFFICE.1 (ADR-0306, decision 3): `officecli` (iOfficeAI/OfficeCLI) is an EXTERNAL binary, so it hits
+// the unknown-program path and fail-closes EVERY call to T3 destructive. Right as a default, wrong in
+// practice - reading a .docx must not weigh the same as `rm`. So the tier is keyed by SUBCOMMAND, the
+// same shape GIT_READONLY uses for git: one lookup consulted from the classifier, not special cases
+// sprinkled around it. A subcommand ABSENT from this table (unrecognized, or added by a future upstream
+// release) deliberately falls through to the unknown-program path and keeps its fail-closed T3.
+interface OfficeSub { tier: RiskTier; why: string }
+const OFFICECLI_SUBS: Record<string, OfficeSub> = {
+  // T0 - pure inspection. `view` (including `view html` / `view outline`) and `get` only READ a document
+  // and print/emit structure, which is the read the ladder already calls T0 for `cat`.
+  view: { tier: "T0", why: "read-only inspection (html/outline/text)" },
+  get: { tier: "T0", why: "read-only element query" },
+  // T1 - they WRITE document files, but only inside the workspace the agent was already given: exactly
+  // the weight the ladder gives `cp` / `mv` / `sed` (LOCAL_MUTATE).
+  create: { tier: "T1", why: "creates a document file in the workspace" },
+  add: { tier: "T1", why: "writes elements into a workspace document" },
+  set: { tier: "T1", why: "edits elements in a workspace document" },
+  remove: { tier: "T1", why: "deletes elements from a workspace document" },
+  close: { tier: "T1", why: "finalizes and closes a workspace document" },
+  // T2, NOT T1 - both escape the workspace, which is what separates reach-out from local-mutate:
+  //   `install` copies the binary onto PATH and injects skill files into detected agent config dirs,
+  //   i.e. it mutates the MACHINE and other harnesses (ADR-0306 non-goals bar it from touching LUCID's
+  //   own skill set at all, so it must never auto-run at the local-mutate dial);
+  //   `watch` BINDS a localhost live-preview server (:26315) and keeps serving workspace files for as
+  //   long as it runs - a listening socket is a network posture, not a one-shot file write (ADR-0305).
+  install: { tier: "T2", why: "copies a binary onto PATH and writes agent config dirs outside the workspace" },
+  watch: { tier: "T2", why: "binds a localhost live-preview server" },
+};
+
 /** Tier for a RISKY (non-catastrophic) single program. Fail-closed: an unknown program is T3. */
 function riskyTier(prog: string, raw: string): RiskTier {
   if (REACH_OUT.has(prog)) return "T2";
@@ -142,7 +171,7 @@ export function classifyCommand(cmd: string): ExecClass {
   if (COMPOUND.test(raw)) return { risk: "risky", tier: "T3", key: null, alwaysPrompt: false, reason: "compound or redirecting command" };
 
   const tokens = tokenize(raw);
-  const { prog } = realArgv0(tokens);
+  const { prog, rest } = realArgv0(tokens);
   if (!prog) return { risk: "risky", tier: "T3", key: null, alwaysPrompt: false, reason: "no resolvable program" };
 
   // 3. git — only the read-only subcommands are safe; push/pull/fetch/clone reach out (T2), else local (T1).
@@ -153,14 +182,27 @@ export function classifyCommand(cmd: string): ExecClass {
     return { risk: "risky", tier, key: "git", alwaysPrompt: false, reason: `git ${sub || "(subcommand)"} may mutate the repo` };
   }
 
-  // 4. A safe program — unless it trips its dangerous-flag table (find→destructive T3, else local T1).
+  // 4. officecli (ADR-0306): tier by SUBCOMMAND via OFFICECLI_SUBS, so a read (`view`/`get`) is T0 like
+  //    `cat` while a document write is T1 like `cp`. An unrecognized subcommand matches NOTHING here and
+  //    falls through to step 6, keeping the fail-closed T3 default the unknown path already gives it.
+  if (prog === "officecli") {
+    const sub = (rest.find((t) => !t.startsWith("-")) ?? "").toLowerCase();
+    const hit = OFFICECLI_SUBS[sub];
+    if (hit) return {
+      risk: hit.tier === "T0" ? "safe" : "risky",
+      tier: hit.tier, key: prog, alwaysPrompt: false,
+      reason: `officecli ${sub}: ${hit.why}`,
+    };
+  }
+
+  // 5. A safe program — unless it trips its dangerous-flag table (find→destructive T3, else local T1).
   if (SAFE_PROGRAMS.has(prog)) {
     const danger = DANGEROUS_FLAGS[prog];
     if (danger && danger.test(raw)) return { risk: "risky", tier: prog === "find" ? "T3" : "T1", key: prog, alwaysPrompt: false, reason: `${prog} with a writing/executing flag` };
     return { risk: "safe", tier: "T0", key: prog, alwaysPrompt: false, reason: `read-only ${prog}` };
   }
 
-  // 5. Everything else is risky (fail-closed) but pinnable by program.
+  // 6. Everything else is risky (fail-closed) but pinnable by program.
   return { risk: "risky", tier: riskyTier(prog, raw), key: prog, alwaysPrompt: false, reason: `${prog} is not a known read-only command` };
 }
 

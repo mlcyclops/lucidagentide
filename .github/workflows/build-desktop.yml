@@ -187,6 +187,23 @@ jobs:
         env:
           LUCID_PF_SMOKE_STRICT: "1"
 
+      # Release identity gate (ADR-0307): make flavor identity a machine-checked precondition of the
+      # upload instead of something a human confirms after the fact. A user reported that v1.14.1
+      # installed a different product entirely ("Tactical GenAI Trainer") rather than LUCID. The
+      # release turned out to be genuine, but proving that cost a full forensic session of
+      # hand-parsing xar/ar/rpm headers out of the published assets, because no gate had ever looked
+      # INSIDE an artifact - CI only ever checked that files with the right NAMES existed.
+      # So this reads each artifact's EMBEDDED identity: the .pkg's bundle id, payload .app path and
+      # version from Distribution/PackageInfo, the .deb package name from its ar control member, the
+      # .rpm name from the lead, and the filename stem for the formats that carry no readable identity
+      # (.zip, NSIS/portable .exe, .AppImage, latest*.yml). Fail-closed: any mismatch against the
+      # flavor being built, or any unrecognized file sitting in the release dir, fails the build.
+      # Placement is load-bearing - after the air-gap and Program Files gates, before every upload -
+      # so a mis-flavored or mis-versioned artifact can never reach an artifact bundle or a Release.
+      - name: Release identity gate (embedded identity matches the flavor)
+        run: bun run build/release-identity-gate.ts --flavor agent
+        working-directory: desktop
+
       - name: Upload installers as artifacts
         uses: actions/upload-artifact@v7
         with:

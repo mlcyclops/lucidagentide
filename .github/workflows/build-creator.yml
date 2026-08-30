@@ -142,10 +142,10 @@ jobs:
           # softprops attaches the release; don't let electron-builder also upload.
           GH_TOKEN: ""
 
-      # The two release gates that protect Agent bytes, pointed at CREATOR bytes. Both scripts default
-      # to desktop/release; Creator packages into desktop/release-creator, so without LUCID_RELEASE_DIR
-      # they would either fail on a missing dir or, on a runner that also built Agent, pass by
-      # inspecting Agent's tree and report green about bytes they never opened.
+      # The three release gates that protect Agent bytes, pointed at CREATOR bytes. All three scripts
+      # default to desktop/release; Creator packages into desktop/release-creator, so without
+      # LUCID_RELEASE_DIR they would either fail on a missing dir or, on a runner that also built
+      # Agent, pass by inspecting Agent's tree and report green about bytes they never opened.
 
       # Air-gap gate (ADR-0225): prove the PACKAGED app is self-contained, so an air-gapped host works
       # cold with no `bun add -g` / `uv venv` / network. Fails before any artifact is uploaded.
@@ -163,6 +163,21 @@ jobs:
         working-directory: desktop
         env:
           LUCID_PF_SMOKE_STRICT: "1"
+          LUCID_RELEASE_DIR: release-creator
+
+      # Release identity gate (ADR-0307): flavor identity as a machine-checked precondition of the
+      # upload, and the gate Creator needs most - one repo building two products from one config tree
+      # is exactly how an Agent-identified artifact ends up in a Creator upload set. Reads each
+      # artifact's EMBEDDED identity (.pkg bundle id + payload .app path + version, .deb/.rpm package
+      # name) plus the filename stem for the formats that carry none (.zip, NSIS/portable .exe,
+      # .AppImage, latest*.yml), and fails the build rather than uploading a mis-flavored or
+      # mis-versioned artifact. Motivated by a field report of v1.14.1 installing a different product
+      # entirely: the release was genuine, but disproving it cost a full forensic session of
+      # hand-parsing xar/ar/rpm headers, because no gate had ever looked INSIDE an artifact.
+      - name: Release identity gate (embedded identity matches the flavor)
+        run: bun run build/release-identity-gate.ts --flavor creator
+        working-directory: desktop
+        env:
           LUCID_RELEASE_DIR: release-creator
 
       - name: Upload Creator installers as artifacts
