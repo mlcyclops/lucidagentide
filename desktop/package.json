@@ -71,6 +71,7 @@
           "!desktop/node_modules/**",
           "desktop/node_modules/monaco-editor/min/**/*",
           "!desktop/release/**",
+          "!desktop/release-creator/**",
           "!desktop/dist/**",
           "!**/.git/**",
           "!node_modules/**/*.map",

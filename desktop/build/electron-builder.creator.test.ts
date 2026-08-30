@@ -105,6 +105,25 @@ describe("Creator packaging overlay (CREATOR-0, ADR-0279)", () => {
     expect(cfg.nsis?.oneClick).toBe(base.nsis?.oneClick);
   });
 
+  // The defect that killed the first creator-v0.1.0 tag build: electron-builder streams the repo copy
+  // into <output>/.../resources/repo while the filter walks the live tree, so an output directory the
+  // filter does not exclude gets copied INTO itself (repo/desktop/release-creator/.../repo/...) until
+  // the OS refuses with ENAMETOOLONG. Agent was protected by `!desktop/release/**`; the overlay moved
+  // the output to release-creator and inherited a filter that had never heard of it.
+  test("the repo copy excludes EVERY flavor's output dir, so no build can package itself", () => {
+    const repoFilter = (c: BuilderConfig): string[] =>
+      ((c.extraResources ?? []).find((r) => (r as { to?: string }).to === "repo") as { filter?: string[] } | undefined)
+        ?.filter ?? [];
+    for (const flavor of [base, cfg]) {
+      const filter = repoFilter(flavor);
+      // Rename-proof: derived from the flavor's own output setting, not a hardcoded twin list.
+      expect(filter).toContain(`!desktop/${flavor.directories?.output}/**`);
+      // And both output trees stay excluded for both flavors, since one checkout can hold both.
+      expect(filter).toContain("!desktop/release/**");
+      expect(filter).toContain("!desktop/release-creator/**");
+    }
+  });
+
   test("the Creator dist scripts exist and use the overlay, and the standard ones are untouched", () => {
     const scripts = pkg.scripts as Record<string, string>;
     for (const s of ["dist:win:creator", "dist:mac:creator", "dist:linux:creator"]) {
