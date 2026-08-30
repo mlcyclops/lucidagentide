@@ -100,8 +100,15 @@ try {
 }
 
 // --- 2) omp agent: bundled shim resolves + launches with ONLY bundled bun on PATH ---------------------
+// WHY THIS BREAKS, and it has: electron-builder 26 does NOT descend into dot-directories from a parent
+// glob, so `node_modules/**/*` can never reach `node_modules/.bin`. Under builder 25 the pairing of
+// `!node_modules/.bin/**` with a later `node_modules/.bin/omp*` re-include worked; under 26 the directory
+// is simply never walked, and removing the exclusion entirely does not help either (verified against
+// builder 26's own FileMatcher + copyFiles). The shims therefore get their OWN extraResources entry in
+// desktop/package.json whose `from` points AT the dot-directory, which builder 26 does copy. If this
+// assertion fires again, check that entry still exists before touching the filter patterns.
 const ompShim = join(res, "repo", "node_modules", ".bin", `omp${EXE}`);
-if (!existsSync(ompShim)) fail(`bundled omp shim missing: ${ompShim} (is node_modules/.bin/omp* re-included?)`);
+if (!existsSync(ompShim)) fail(`bundled omp shim missing: ${ompShim} (is the ../node_modules/.bin extraResources entry still present?)`);
 
 const bunBin = join(res, "runtimes", `bun-${PLAT}-${ARCH}${EXE}`);
 if (!existsSync(bunBin)) fail(`bundled bun missing: ${bunBin}`);
