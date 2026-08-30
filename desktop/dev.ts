@@ -1405,6 +1405,7 @@ function ndjsonStream(label: string, run: (emit: (e: unknown) => void) => Promis
 const server = Bun.serve({
   port: PORT,
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
+  // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
   idleTimeout: 60,
   async fetch(req) {
     const url = new URL(req.url);
@@ -1619,7 +1620,10 @@ const server = Bun.serve({
           codeActivityCache = { at: now, data: codeActivity() };
         return json({ ok: true, data: codeActivityCache.data });
       }
-      if (p === "/api/health") return json({ ok: true });
+      // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
+      // trusts a health answer carrying it, so a squatter on the port can never win the window. The
+      // nonce gates nothing else, so echoing it leaks nothing (unlike LUCID_MAIN_TOKEN: NEVER here).
+      if (p === "/api/health") return json({ ok: true, nonce: process.env.LUCID_ENGINE_NONCE ?? null });
       // P-ENT.2 (ADR-0069): the unified security-event stream (metadata-only, OCSF-ready) + per-sink
       // delivery status, for the in-app dashboard. Read-only; the file sink is the SIEM export source.
       if (p === "/api/audit") return json({ ok: true, data: { events: audit.recent(100), sinks: audit.sinkStatuses() } });

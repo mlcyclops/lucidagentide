@@ -848,6 +848,9 @@ demo-P-WINBOOT.2: ## P-WINBOOT.2 (ADR-0260): the permanent fix - the engine ship
 .PHONY: demo-P-WINBOOT.2C
 demo-P-WINBOOT.2C: ## P-WINBOOT.2C (ADR-0261): the Program Files boot GATE - stages the packaged repo (or a source-built skeleton) into a Program Files-ACL location, denies the current user the specific write/delete rights (never generic W - that denies SYNCHRONIZE and EPERMs CreateProcess itself), PROVES the denial took, then requires the compiled bin/lucid-engine to answer /api/health and serve the prebuilt renderer bundle from the protected tree; wired STRICT into build-desktop.yml's Windows runner so the v1.12.0 brick class fails the build, never a user
 	$(BUN) run desktop/scripts/demo_p_winboot_2c.ts
+.PHONY: demo-portguard
+demo-portguard: ## P-PORTGUARD.1 (ADR-0305): the engine port handshake - main only renders a health answer carrying its per-launch nonce, so a foreign process squatting the engine port fails LOUDLY with a copy/paste incident report (process name, pid, start date/time, command line), never a silent roll onto a stranger's UI
+	$(BUN) run desktop/scripts/demo_portguard.ts
 .PHONY: demo-P-KG-INGEST.5
 demo-P-KG-INGEST.5: ## P-KG-INGEST.5 (ADR-0264): the chat-history ingest can no longer hang and Stop always stops - ACP requests are bounded (timeout + signal) and drained when the omp child exits (an unanswered `initialize` used to freeze the import at 0/500 forever), cancel is checked per MESSAGE and reaches the extractor so an in-flight model call is interrupted rather than awaited, a wedged job is force-cancelled after a grace period so single-flight releases and the user can retry without restarting, and the pill reports a silent run as STALLED instead of rendering a healthy-looking bar
 	$(BUN) run desktop/scripts/demo_p_kg_ingest_5.ts

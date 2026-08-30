@@ -10,8 +10,8 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
-import { spawn, type ChildProcess } from "node:child_process";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -24,6 +24,7 @@ import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDir
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
+import { formatPortIncident, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
@@ -92,6 +93,9 @@ let runtimeEnv: Record<string, string> = {};
 // diagnosed the instant it dies (see classifyEngineFailure) rather than after the full 30s health timeout.
 let engineExit: { code: number | null } | null = null;
 let engineTail = "";
+// P-PORTGUARD.1 (ADR-0305): what startDevServer actually spawned, so the foreign-port incident block
+// can name the EXPECTED engine next to the observed squatter.
+let engineDesc = "";
 
 // ── P-KGMARKET.4 (ADR-0206): lucid://auth deep link for hosted marketplace sign-in ──────────────────
 // After the user signs in on the hosted page, the browser redirects to lucid://auth?token=...; the OS hands
@@ -193,7 +197,8 @@ function startDevServer(): void {
   // dev.ts so Bun never module-loads a .ts from a protected install dir (the P-WINBOOT.1 EPERM brick).
   // Dev runs, and any package cut before compile-engine existed, fall back to `bun run desktop/dev.ts`.
   const engineSpec = resolveEngineSpawn({ packaged: app.isPackaged, repoRoot: REPO, bun: findBun(), exists: existsSync, platform: process.platform });
-  console.log(`[main] engine: ${engineSpec.compiled ? "compiled bin/lucid-engine" : "bun run desktop/dev.ts"}`);
+  engineDesc = engineSpec.compiled ? "compiled bin/lucid-engine" : "bun run desktop/dev.ts"; // ADR-0305: the incident block's "expected engine"
+  console.log(`[main] engine: ${engineDesc}`);
   dev = spawn(engineSpec.cmd, engineSpec.args, {
     cwd: REPO,
     // LUCID_RESOURCES lets the dev child resolve the bundled whisper.cpp binary under <resources>/whisper
@@ -201,7 +206,7 @@ function startDevServer(): void {
     // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
     // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
     // its agent-browser poll loop against the child's /api/browser routes.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -228,18 +233,46 @@ function startDevServer(): void {
     engineExit = { code: null };
   });
 }
-// Returns true once the dev server answers /api/health, false if it never does within the window.
+// Resolves "ready" once the dev server answers /api/health WITH this launch's nonce, "down" if it never
+// does within the window, "foreign" the instant something else answers.
 // 30s headroom: the server's own init (DuckDB open + omp acp spawn) can outlast a slow first launch;
 // the splash already covered the longer omp/scanner provisioning before we got here.
-async function waitForServer(timeoutMs = 30000): Promise<boolean> {
+// P-PORTGUARD.1 (ADR-0305): "someone answered health" is not "my engine is up" - the field incident was a
+// stranger's server squatting the port and getting rendered. A foreign verdict returns IMMEDIATELY: the
+// squatter holds the bind, so our engine can never become the answerer within this launch; polling on
+// would only delay the diagnosis by the full timeout.
+type ServerWait = { status: "ready" } | { status: "foreign"; verdict: HealthVerdict } | { status: "down" };
+async function waitForServer(timeoutMs = 30000): Promise<ServerWait> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try { if ((await fetch(`http://localhost:${PORT}/api/health`)).ok) return true; } catch { /* retry */ }
+    try {
+      const res = await fetch(`http://localhost:${PORT}/api/health`);
+      const text = await res.text();
+      let body: unknown = text;
+      try { body = JSON.parse(text); } catch { /* healthVerdict fails closed on the raw text */ }
+      const verdict = healthVerdict(ENGINE_NONCE, res.ok, body);
+      if (verdict === "ours") return { status: "ready" };
+      if (verdict !== "not-ready") return { status: "foreign", verdict };
+    } catch { /* retry: nothing listening yet */ }
     // P-WINBOOT.1 (ADR-0259): a dead engine will never answer - stop waiting the moment it exits.
-    if (engineExit) return false;
+    if (engineExit) return { status: "down" };
     await sleep(180);
   }
-  return false;
+  return { status: "down" };
+}
+
+// P-PORTGUARD.1 (ADR-0305): best-effort attribution of the process squatting the port - the incident
+// block must name the process (name, pid, start time, command), not just a verdict. A failed probe
+// degrades to null and formatPortIncident says attribution failed explicitly.
+async function probePortOwner(): Promise<SquatterInfo | null> {
+  const spec = ownerProbeSpec(process.platform, PORT);
+  if (!spec) return null;
+  try {
+    const stdout = await new Promise<string>((res, rej) => {
+      execFile(spec.cmd, spec.args, { timeout: 3000 }, (err, out) => (err ? rej(err) : res(out)));
+    });
+    return parseOwnerProbe(process.platform, stdout);
+  } catch { return null; }
 }
 
 function createWindow(): void {
@@ -483,6 +516,10 @@ ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
 // AUTH: this parent cannot read the child's token, so it MINTS the per-launch token itself and hands it
 // down via the spawn env (LUCID_MAIN_TOKEN, adopted by dev.ts as TOKEN); every call sends x-lucid-token.
 const MAIN_TOKEN = randomBytes(32).toString("hex");
+// P-PORTGUARD.1 (ADR-0305): per-launch engine identity. Handed to the spawned engine via env; the engine
+// echoes it in /api/health, and waitForServer only trusts a health answer carrying THIS value. A squatter
+// that won the port bind race cannot know it, so the window never renders a stranger.
+const ENGINE_NONCE = randomBytes(16).toString("hex");
 let agentWin: BrowserWindow | null = null;
 let agentCloseByCommand = false; // distinguishes the agent's own close from the user's X (kill switch)
 let agentPollBusy = false;
@@ -813,6 +850,37 @@ app.whenReady().then(async () => {
   }
   startDevServer();
   const serverUp = await waitForServer();
+  // P-PORTGUARD.1 (ADR-0305): a FOREIGN process answered the engine port. Never render it - the window
+  // would paint a stranger's UI (in the field incident, another app's sign-in page) inside LUCID's
+  // trusted chrome. And never roll to a free port silently: userData is port-keyed identity (ADR-0278),
+  // so a silent roll would move the user onto a suffixed profile and "lose" their settings and vault.
+  // Fail loudly with forensics instead; the user quits the squatter or deliberately picks another port.
+  if (serverUp.status === "foreign") {
+    const observed = await probePortOwner();
+    const block = formatPortIncident({
+      port: PORT,
+      productName: BUILD.productName,
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      engineDescription: engineDesc,
+      verdict: serverUp.verdict,
+      observed,
+    });
+    appendEngineLog(`\n--- ${new Date().toISOString()} foreign port incident (ADR-0305) ---\n${block}\n`);
+    splash?.close();
+    const { response } = await dialog.showMessageBox({
+      type: "error",
+      title: "Another program is using LUCID's port",
+      message: `Another program on this computer is already listening on port ${PORT}, the port ${BUILD.productName}'s engine uses. ${BUILD.productName} refuses to display a foreign program and never renders it. To fix this, quit that program and relaunch ${BUILD.productName}, or launch a separate ${BUILD.productName} instance on another port.`,
+      detail: block,
+      buttons: ["Copy report and quit", "Quit"],
+      defaultId: 0,
+    });
+    if (response === 0) clipboard.writeText(block);
+    try { dev?.kill(); } catch { /* best-effort: app.exit skips the "quit" handler that normally kills it */ }
+    app.exit(1);
+    return;
+  }
   createWindow();
   // P-BROWSER.1 (wave 2): start the agent-browser command poll once the server answered /api/health.
   // Started even on a timeout - the loop is fail-quiet and a late-starting server self-heals into it.
@@ -821,7 +889,7 @@ app.whenReady().then(async () => {
   // Don't leave the user staring at a black window with no explanation: if the local engine never
   // came up (e.g. no usable bun runtime), say so. The window keeps retrying via did-fail-load, so a
   // late start still recovers; this only fires when it genuinely failed to answer in time.
-  if (!serverUp) {
+  if (serverUp.status === "down") {
     // P-WINBOOT.1 (ADR-0259): classify the failure into an ACTIONABLE dialog. The dominant field case is
     // a Program Files install where Bun's loader EPERMs on dev.ts; waitForServer already returned early on
     // the child's exit, so this fires immediately (not 30s later) and tells the user how to recover.

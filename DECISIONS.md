@@ -20854,7 +20854,7 @@ and the reasoning, because that is the line someone would edit to add the behavi
 
 ## ADR-0305 -- P-PORTGUARD.1: the engine port handshake - the window must never render a stranger (SCOPE/PLAN) (2026-08-30)
 
-**Status:** Accepted -- SCOPE/PLAN (drafted from a live field incident; build is the next increment).
+**Status:** Accepted -- BUILT (same day; see Verification below).
 
 ### The incident that proved it
 
@@ -20940,11 +20940,29 @@ binding the port first. For a security-first product that is a trust-boundary ho
 - The Trainer fork's own appId/port split - external repo hygiene, not this codebase.
 - Any change to rolling-port semantics or the port picker UX.
 
+### Verification (BUILT, 2026-08-30)
+
+Shipped as planned with two deltas. (1) The loopback item was ALREADY satisfied: dev.ts's single
+Bun.serve has hardcoded hostname 127.0.0.1 (ADR-0022), and the ADR-0199 bind picker feeds only the
+separate fail-closed collab relay - so that item became a load-bearing comment, not a change.
+(2) healthVerdict is stricter than drafted: ANY 200 whose body is not `{ ok: true, nonce: <match> }`
+is foreign (even a matching nonce inside a wrong-shaped body), because a wrong shape already proves
+the answerer is not this build's engine. Evidence: `desktop/port_guard.test.ts` 20 pass / 0 fail;
+`make demo-portguard` green end-to-end against LIVE squatter servers (missing nonce, wrong nonce,
+compliant echo, incident-block forensics incl. the attribution-failed branch, both probe parsers);
+desktop `tsc --noEmit` clean; full harness suite 4324 pass with exactly the pre-existing 11
+environmental failures (fs_browse 5, symbol_graph 4, lucid_acp assets 2 - byte-identical list to the
+pre-change baseline run); sidecar 57 pass; and the REAL engine booted with
+`LUCID_ENGINE_NONCE=fable-test-nonce-42` answered `/api/health` with that exact nonce. NOT exercised
+here: the Electron error dialog itself on a real foreign boot (needs a GUI launch against a live
+squatter on the default port) - the user's on-device ritual.
+
 ### Links
 
 PROGRESS entry 2026-08-30 (incident forensics), ADR-0022 (loopback control plane), ADR-0177/0259
 (diagnosable boot failures), ADR-0206/0278 (port-keyed identity + safeStorage), ADR-0279/0304 (the
-flavor-crossing hazard class this generalizes), desktop/main.ts, desktop/build_flavor.ts.
+flavor-crossing hazard class this generalizes), desktop/main.ts, desktop/port_guard.ts, desktop/dev.ts,
+desktop/scripts/demo_portguard.ts, desktop/build_flavor.ts.
 
 ## ADR-0306 -- P-OFFICE.1: first-class Word/Excel/PowerPoint via OfficeCLI, as a gated skill (SCOPE/PLAN) (2026-08-30)
 
