@@ -25,8 +25,9 @@ import { icon } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
 import { isPreviewablePath } from "./preview_tabs.ts";
-import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneStatus, LaneToolCode, LaneView, LucidBridge } from "./bridge.ts";
+import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneToolCode, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
+import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
@@ -59,21 +60,6 @@ const FLEET_DOCK_KEY = "lucid.fleetDock.v1";
 const FLEET_DOCK_OPEN_KEY = "lucid.fleetDock.open";
 const POLL_MS = 2500;
 const UP_ARROW = `<svg class="sd-up" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg>`;
-
-/** The MINIMIZED snapshot's dot order: what needs a human first, then what is running, then what has
- *  settled. The dots reuse the cards' own `lane-<status>` classes, so the pill and the open panel can never
- *  disagree about what amber means. */
-const PILL_ORDER: LaneStatus[] = ["needs-approval", "awaiting-input", "working", "starting", "done", "error", "stopped"];
-/** Hover wording per state, phrased as a count reads: "2 need approval", "1 waiting on you". */
-const STATUS_WORDS: Record<LaneStatus, string> = {
-  "needs-approval": "need approval",
-  "awaiting-input": "waiting on you",
-  working: "working",
-  starting: "starting",
-  done: "done",
-  error: "errored",
-  stopped: "stopped",
-};
 
 interface LaneTool { name: string; detail: string; code?: LaneToolCode }
 interface LaneTurn { role: "user" | "assistant"; text: string; thinking?: string; tools?: LaneTool[]; error?: string; images?: string[] }
@@ -277,45 +263,27 @@ export function mountFleetPill(): void {
   if (dockState?.minimized) mountPill();
 }
 
-/** Lane names grouped by state, for the minimized snapshot. */
-function lanesByStatus(): Map<LaneStatus, string[]> {
-  const by = new Map<LaneStatus, string[]>();
-  for (const r of runs.values()) {
-    const names = by.get(r.view.status) ?? [];
-    names.push(r.view.name || r.view.id);
-    by.set(r.view.status, names);
-  }
-  return by;
-}
-
 /** The minimized snapshot: one colored dot per state present, its lane COUNT beside it, and a hover that
  *  names the lanes - enough to keep working in the main window and still know a lane is blocked on you.
+ *  Order, wording, and counting come from the shared `laneRollup` (P-PWA-FLEET.2), so this pill and the
+ *  phone's collapsed fleet bar can never disagree; the dots reuse the cards' own `lane-<status>` classes,
+ *  so neither can drift from the panel's colours either.
  *  The markup is compared before it is written, because an identical repaint every 2.5s is precisely what
  *  made the pulse animation stutter. */
 function paintPill(): void {
   if (!pill) return;
-  const by = lanesByStatus();
-  const pips: string[] = [];
-  const lines: string[] = [];
-  let working = false, attn = false;
-  for (const st of PILL_ORDER) {
-    const names = by.get(st);
-    if (!names?.length) continue;
-    if (st === "needs-approval" || st === "awaiting-input") attn = true;
-    if (st === "working" || st === "starting") working = true;
-    const line = `${names.length} ${STATUS_WORDS[st]}: ${names.join(", ")}`;
-    pips.push(`<span class="fleet-pip lane-${st}" title="${esc(line)}"><i aria-hidden="true"></i><b>${names.length}</b></span>`);
-    lines.push(line);
-  }
+  const roll = laneRollup([...runs.values()].map((r) => r.view));
   const box = $("[data-fleet-pips]", pill) as HTMLElement | null;
   if (box) {
-    const html = pips.join("") || `<span class="fleet-pip lane-idle" title="No lanes running"><i aria-hidden="true"></i><b>0</b></span>`;
+    const html = roll.counts
+      .map((c, i) => `<span class="fleet-pip lane-${c.status}" title="${esc(roll.lines[i] ?? "")}"><i aria-hidden="true"></i><b>${c.count}</b></span>`)
+      .join("") || `<span class="fleet-pip lane-idle" title="No lanes running"><i aria-hidden="true"></i><b>0</b></span>`;
     if (box.innerHTML !== html) box.innerHTML = html;
   }
-  const tip = lines.length ? lines.join(" \u00b7 ") : "no lanes running";
+  const tip = roll.lines.length ? roll.lines.join(" \u00b7 ") : "no lanes running";
   pill.title = `LUCID Fleet - ${tip}. Click to reopen; lanes keep running either way.`;
-  pill.classList.toggle("live", working);
-  pill.classList.toggle("attn", attn);
+  pill.classList.toggle("live", roll.busy);
+  pill.classList.toggle("attn", roll.attention);
 }
 
 // ---------------------------------------------------------------- polling + reconciliation
