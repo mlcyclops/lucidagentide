@@ -48,6 +48,7 @@ import {
   type CreatorArtifact,
 } from "./creator_image.ts"; // CREATOR-IMG (ADR-0291): generation, mixing, sheets, GIFs, memes
 import { decodeTimelineDoc, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
+import { decodeMixGraph, mixerTracks, renderAndSaveMix } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer
 import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
 import {
   createJob, finishJob, jobStats, listJobs, recordJobArtifact, requestJobCancel, startJob,
@@ -2808,7 +2809,47 @@ const server = Bun.serve({
           title: typeof b.title === "string" ? b.title : "",
           prompt: typeof b.prompt === "string" ? b.prompt : undefined,
         });
-        return json({ ok: r.ok, error: r.error, trackId: r.trackId, bytes: r.bytes, durationMs: r.durationMs });
+        // The result IS this route's wire shape, so it is returned whole. A hand-written field-by-field
+        // projection here would be a SECOND copy of that contract living in the one file no headless test
+        // can import, where a dropped or renamed field reaches the pane as a report its guard refuses on
+        // every clean save, with the suite still green. Same reasoning as /api/creator/mixer/render.
+        return json(r);
+      }
+      // CREATOR-5 (ADR-0289): the layers a mix can be built from, plus the format the mix will run at (the
+      // MAJORITY WAV format in the library, because this build ships no resampler). Every WAV is listed with
+      // its real sample rate and channel count, so the UI can say WHY a track is not offered instead of
+      // hiding it; nulls mean the format is unknown to this build, never a guess and never 0.
+      if (p === "/api/creator/mixer/tracks") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator mixer is only in the Creator build." });
+        const r = mixerTracks(libraryIo, CREATOR_DIR);
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { tracks: r.tracks, sampleRate: r.sampleRate, channels: r.channels } : null });
+      }
+      // CREATOR-5: render a mix and APPEND it. The graph is untrusted input, gated field by field like a
+      // timeline (one malformed clip refuses the body rather than rendering a layer short), and every source
+      // it names must resolve - a mix that quietly substituted silence would be a lie the rendered file could
+      // not admit. Headroom is opt-in, and the EXACT gain applied comes back in the answer.
+      if (p === "/api/creator/mixer/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator mixer is only in the Creator build." });
+        const b = await readBody<{ graph?: unknown; title?: unknown; prompt?: unknown; primaryTrackId?: unknown; applyHeadroom?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That mixer request was not JSON." });
+        const decoded = decodeMixGraph(b.graph);
+        if (!decoded.ok) return json({ ok: false, error: decoded.error });
+        const r = renderAndSaveMix(editorIo, CREATOR_DIR, {
+          graph: decoded.graph,
+          title: typeof b.title === "string" ? b.title : "",
+          prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+          primaryTrackId: typeof b.primaryTrackId === "string" ? b.primaryTrackId : "",
+          applyHeadroom: b.applyHeadroom === true,
+        });
+        // Deliberately NOT a field-by-field projection like the editor's save above: RenderMixResult IS this
+        // route's wire shape (ok, error and the measurements, all top-level, which is why bridge.ts runs
+        // isRenderMixReport on the body itself), and `error: undefined` drops on serialization. Re-listing
+        // the fields here would put the same invariant in two places, and only the seam's copy is testable:
+        // dev.ts cannot be imported headless, so a key dropped from a re-listing would reach the pane as "a
+        // report this build cannot read" on every clean render with every test still green. One copy, owned
+        // by desktop/creator_mixer.test.ts. The GET above keeps its projection because there the result is
+        // NOT the wire shape: it nests under `data`.
+        return json(r);
       }
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });

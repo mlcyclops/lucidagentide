@@ -309,6 +309,34 @@ What the editor will and will not claim about timing is the important part:
 Edits are non-destructive by construction: the track you opened keeps every one of its bytes and its row in
 the ledger, and the save is an append. Proof: `make demo-CREATOR-2`.
 
+## Mixing: layering takes into one file
+
+Studio -> **Mixer**. Add library tracks as layers, set each one's level, pan, fades, mute and solo, ramp a
+track's level over time, group beds onto a bus, then Render. The result is appended as a new track.
+
+A mix is a sum, so the interesting question is what happens when the sum is too loud. Every consumer tool
+quietly fixes that. This one does not:
+
+- **The render reports, it never repairs.** You get the true peak measured BEFORE the rail, the exact count
+  of samples that hit it, which tracks contributed nothing and why, and whether a pan had to be ignored
+  because the mix is mono. If it clipped, it says so and shows you the number.
+- **Headroom is opt-in.** Tick apply headroom and LUCID applies exactly `1 / peak` and tells you the factor
+  it used. Leave it off and your mix renders exactly as you built it, clipping included. Nothing is
+  normalized, limited, or ducked behind your back.
+- **A muted track contributes exactly nothing.** Not attenuated to near-silence: its samples are never
+  added. Same for a track silenced by another track's solo, a track at zero, and a track on a muted bus,
+  and each one tells you which of those it was.
+- **No resampler, so no pretence.** A track at a different sample rate refuses the render and names both
+  rates. Channels are different: a mono narration under a stereo bed is fine, because the render really does
+  fold stereo down and duplicate mono up.
+- **A mix has many inputs and the library has one parent slot**, so the saved record names every input
+  (`mixed from: <id> (Narration), <id> (Bed)`) instead of implying a single ancestor. Its lyrics field stays
+  empty on purpose: a mix has as many word streams as layers, and merging them would claim a timing the
+  file does not have.
+
+An edited take goes straight in: a CREATOR-2 timeline lifts onto a mix track keeping every clip's position,
+and at unity it renders byte-identically to what the editor would have produced. Proof: `make demo-CREATOR-5`.
+
 ## Verifying the image path (and your backend)
 
 `make verify-creator-comfy` drives the **real product code** against a ComfyUI-shaped fixture
@@ -473,10 +501,11 @@ refuses to extrapolate a number it cannot measure.
 
 ## What is NOT built yet
 
-Multi-track audio mixing and layering, mastering, cloud voice-clone flows end to end, deterministic three.js
-frame capture, Blender scene authoring, Unreal editor remote control, and per-process GPU attribution are
-roadmap items (ADR-0285, ADR-0287 to ADR-0290). Inside the editor specifically: there is no time-stretch, no
-transcoder, and no per-word re-synthesis loop yet (a span re-render takes audio you already have).
+Cloud voice-clone flows end to end, deterministic three.js frame capture, Blender scene authoring, Unreal
+editor remote control, and per-process GPU attribution are roadmap items (ADR-0285, ADR-0287, ADR-0288,
+ADR-0290). Inside the audio tools specifically: there is no time-stretch, no resampler, no transcoder, no
+per-word re-synthesis loop yet (a span re-render takes audio you already have), and no EQ, compression, or
+reverb (the mixer does levels, pan, fades, and automation, and claims nothing more).
 
 Built so far on this branch:
 
@@ -492,6 +521,11 @@ Built so far on this branch:
   lineage; alignment that is labeled `vendor` or `derived` and capped when derived; a deterministic render
   that refuses a missing source instead of substituting silence; and a save that appends a remix without
   touching the original. Proof: `make demo-CREATOR-2`.
+- **CREATOR-5** (ADR-0294) - the mixer: a pure mix graph (overlapping clips, per-track level, pan, fades,
+  envelopes, buses, master) summed by a deterministic pure-TypeScript render that REPORTS the true peak and
+  the clipped-sample count instead of quietly normalizing, where a muted track contributes exactly nothing
+  and a sample-rate mismatch refuses because there is no resampler. An edited CREATOR-2 timeline lifts
+  straight onto a track. Proof: `make demo-CREATOR-5`.
 - **CREATOR-1** (ADR-0292) - capability probes that make `ready` mean something and expire when stale, plus
   the durable job ledger with per-job admission snapshots, recorded refusals, and request-then-confirm
   cancellation. Proof: `make demo-CREATOR-1`.

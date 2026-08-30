@@ -4384,3 +4384,51 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .ced-act-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
 .ced-count{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--txt-3)}
 .ced-title{flex:1;min-width:120px;font-size:11.5px}
+
+/* CREATOR-5 (ADR-0289): the mixer - N takes at once, each with its own level, pan, fades, and ramp.
+   Invariant 11, same discipline as the editor above: every flex child holds ONE text node, and a track's
+   primary label (.cmx-name) is a single nowrap line with an ellipsis and a hard max-width, so a
+   pathological title cannot blow a row out. Prose (a silence reason, a validation problem, the render
+   report) is always a BLOCK paragraph, never a flex sibling of a tag. */
+.cmx-body{display:flex;flex-direction:column;gap:13px}
+.cmx-status,.cmx-fmt,.cmx-note,.cmx-silent{position:relative;margin:0;padding:8px 10px 8px 28px;font-size:11.5px;
+  line-height:1.55;color:var(--txt-3);border:1px solid var(--line-soft);border-radius:10px;background:var(--bg-2)}
+.cmx-status .ic,.cmx-fmt .ic,.cmx-note .ic,.cmx-silent .ic{position:absolute;left:9px;top:9px;color:var(--txt-4)}
+.cmx-status.ok{border-color:rgba(70,210,126,.28);color:var(--txt-2)}
+.cmx-status.ok .ic{color:#8ee8ad}
+.cmx-status.error{border-color:rgba(239,95,95,.32);color:#ffb0b0}
+.cmx-status.error .ic{color:#ffb0b0}
+.cmx-fmt{border-style:dashed;margin-top:9px}
+.cmx-note{margin-top:8px}
+/* a track that contributes nothing says WHY, in the core's own words, and reads as a warning not an error */
+.cmx-silent{margin-top:8px;border-color:rgba(232,178,60,.32);color:#f2d08a}
+.cmx-silent .ic{color:#e8b23c}
+.cmx-master,.cmx-add,.cmx-render,.cmx-report{padding:11px;border:1px solid var(--line);border-radius:12px;background:var(--bg-1)}
+.cmx-ctl{display:flex;align-items:center;gap:8px;min-width:0}
+.cmx-ctl+.cmx-ctl{margin-top:8px}
+.cmx-lbl{flex:none;font-size:11px;color:var(--txt-3);white-space:nowrap}
+.cmx-range{flex:1;min-width:60px;accent-color:var(--accent,#7ebeff);cursor:pointer}
+.cmx-val{flex:none;white-space:nowrap;font-size:11px;font-family:var(--mono);color:var(--txt-3)}
+.cmx-pick{flex:1;min-width:0}
+.cmx-num{flex:none;width:72px;font-size:11.5px}
+.cmx-title{flex:1;min-width:120px;font-size:11.5px}
+.cmx-hint{margin:8px 0 0;font-size:11.5px;line-height:1.55;color:var(--txt-4)}
+.cmx-body>.cmx-hint{margin:0}
+/* one row per mix track */
+.cmx-rows{display:flex;flex-direction:column;gap:9px}
+.cmx-row{padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--bg-1);
+  transition:opacity var(--t),border-color var(--t)}
+/* a row that would contribute nothing is visibly quieter, but never hidden: it still says why */
+.cmx-row.quiet{opacity:.72;border-style:dashed}
+.cmx-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;margin-bottom:9px}
+.cmx-name{display:block;flex:1;max-width:170px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:12.5px;font-weight:600;color:var(--txt-2)}
+.cmx-check{display:flex;align-items:center;gap:7px;margin-top:9px;cursor:pointer;font-size:11.5px;color:var(--txt-3)}
+.cmx-check input{accent-color:var(--accent,#7ebeff);cursor:pointer}
+.cmx-check span{white-space:nowrap}
+.cmx-problems{display:flex;flex-direction:column;gap:0}
+.cmx-problems .cmx-silent{border-color:rgba(239,95,95,.32);color:#ffb0b0}
+.cmx-problems .cmx-silent .ic{color:#ffb0b0}
+/* the render report: one measurement per line, so nothing is summarised away */
+.cmx-report{display:flex;flex-direction:column;gap:5px}
+.cmx-line{margin:0;font-size:11.5px;line-height:1.55;font-family:var(--mono);color:var(--txt-2)}

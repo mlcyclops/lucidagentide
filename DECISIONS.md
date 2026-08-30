@@ -19698,9 +19698,9 @@ item of), P-FLEET.L3/ADR-0276 (why a queue never runs work nobody can watch).
 ## ADR-0293 -- CREATOR-2: the follow-along audio editor
 
 **Date:** 2026-08-30
-**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator2.ts` green (9 sections, 54 checks, and
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator2.ts` green (9 sections, 55 checks, and
 breaking one claim exits 1 with the named FAIL); new suites timeline 41 / creator_editor 18 / renderer
-creator_editor 31; the four earlier Creator demos and verify-creator-comfy still green; renderer bundle
+creator_editor 37; the four earlier Creator demos and verify-creator-comfy still green; renderer bundle
 builds (124 modules); license headers clean; zero em dashes. Live on this machine: the Creator engine on
 5320 opened a real 24kHz WAV (derived alignment at 0.531 confidence), saved a trimmed edit to exactly
 96044 bytes / 2000ms, recorded it as a remix whose parent kept all 238844 of its bytes, and refused a
@@ -19796,6 +19796,96 @@ ADR-0286 (the plan this implements, with the two deltas noted above), ADR-0281 (
 extends from tracks to spans), ADR-0291 (the pure-encoder precedent), ADR-0289 (the mixer that will consume
 this document), ADR-0073 (the STT seam that supplies text but no timings).
 
+## ADR-0294 -- CREATOR-5: the mixer, and refusing to fix a mix quietly
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator5.ts` green (9 sections, 84 checks, and
+breaking one claim exits 1 with the named FAIL); new suites mix 35 / creator_mixer 30 / renderer
+creator_mixer 50, 181 pass across the five mixer-adjacent files; root and desktop typechecks clean;
+renderer bundle builds (126 modules, up from 124); license headers clean; zero em dashes.
+**Increment:** CREATOR-5, planned in ADR-0289. Built after CREATOR-2 (ADR-0293), whose document it consumes.
+
+### Context
+
+CREATOR-2 made one take editable. Layering a narrator over a bed is the other axis, and it is not
+concatenation: two sources occupy the SAME instant and have to sum. That needs overlap, per-track level,
+pan, fades, automation, and one honest answer to the question every mixer eventually faces: what do you do
+when the sum is too loud?
+
+Every consumer tool answers that question by quietly fixing it (normalize, limit, auto-duck). That is the
+one thing this project cannot do, because a silent gain change means the file the user hears is not the file
+they built, and nothing on screen says so.
+
+### Decision
+
+1. **`harness/creator/mix.ts` is the graph as data, and the only place a sample is summed.** Clips (which
+   MAY overlap, unlike the CREATOR-2 timeline) sit on tracks; tracks carry level, pan, mute, solo, and a
+   piecewise-linear envelope; tracks group onto buses; master gain applies last. One level of grouping, not
+   a routing matrix: a matrix is a graph problem with cycles to police and nobody asked for one.
+2. **Pure TypeScript render, not `OfflineAudioContext`** (the delta from ADR-0289 item 1). The plan's own
+   keystone is "the same graph renders byte-identical audio twice", which a Web Audio implementation cannot
+   promise across platforms and cannot be exercised in a unit test at all. Accumulation happens in a
+   `Float64Array` in the graph's own order and quantizes ONCE at the end, so determinism is structural.
+   Same reasoning as ADR-0291's pure encoders and ADR-0293's `renderTimeline`.
+3. **Nothing is automatic. The render REPORTS.** It returns the true `peak` measured before the rail, the
+   exact count of `clipped` samples, which tracks contributed nothing and WHY, and whether a pan had to be
+   ignored by a mono render. `headroomGain(peak)` hands the caller the number that would land the mix at
+   full scale; applying it is an explicit, opt-in act that reports the factor used (`headroomApplied`).
+   Clamping is a clamp, never a wrap: a hot sample reads 32767, not a sudden negative.
+4. **Silence has exactly one reason, and one function produces it.** `trackSilenceReason` returns the
+   sentence or null, and the render uses that same call to decide whether to skip the track. A predicate
+   plus a parallel explainer would eventually disagree, and then the UI would be describing a mix that did
+   not happen.
+5. **A muted, unsoloed, zeroed, or bus-muted track contributes EXACTLY nothing.** Not attenuated: its
+   samples are never added. Proven byte-wise by rendering the graph with the track REMOVED and asserting
+   the two files are identical, for all three silencing paths, with a non-vacuity check that the track is
+   audible otherwise.
+6. **No resampler, so no pretence.** A source whose sample rate differs from the graph's refuses the render
+   naming both rates and saying this build has no resampler. Channels are the exception and deliberately so:
+   `renderMix` folds stereo to mono by averaging and duplicates mono into stereo, so a mono narration under
+   a stereo bed is legal. The seam and the pane both had to be told this, and both were.
+7. **Equal-power pan and linear fades.** Pan uses the sin/cos law so sweeping a track across the image does
+   not make it louder in the middle; fades are linear because a fade the user drew as a straight line should
+   sound like the line they drew.
+8. **A mix has many parents and the ledger has one slot, so the record says so.** `renderAndSaveMix` saves
+   through the library's own `addTrack` as a remix with `parentId` set to the caller's primary track, and
+   writes `mixed from: <id> (Role), ...` for every input as the FIRST line of the saved provenance text.
+   `lyrics` is deliberately left empty: a mix has as many word streams as layers, and concatenating them
+   would claim a timing the file does not have.
+9. **`trackFromTimeline` is the seam ADR-0289 promised.** An edited CREATOR-2 document lifts onto one mix
+   track keeping every clip's position and resolved source region, and the demo proves the lifted track at
+   unity renders byte-identically to `renderTimeline` of the same document. The mixer therefore needs no
+   second notion of an edit.
+
+### Alternatives rejected
+
+- **Normalizing, limiting, or auto-ducking.** The whole point. A mixer that fixes your mix without telling
+  you has replaced your judgment with its own, invisibly.
+- **`OfflineAudioContext`.** Untestable in the runner, not byte-stable, and it would have put the load-bearing
+  math in the one place this repo cannot unit-test.
+- **A full routing matrix with sends and inserts.** Cycle detection, gain staging, and a UI nobody asked
+  for. One bus layer covers "move the beds together".
+- **Refusing a channel mismatch.** The render genuinely folds and duplicates, so refusing would be a FALSE
+  refusal, which these honesty rules forbid as much as a false success.
+- **Reporting a fabricated format when the library holds nothing decodable.** The seam omits the format
+  entirely and the pane says the mixer is not claiming one, rather than defaulting to 44100/2.
+- **Concatenating layer lyrics into the saved record.** It would imply a word timing the mixed file does not
+  have. Empty is the honest value.
+
+### Invariants preserved
+
+#2 TypeScript only, and the core has no node imports; #3 fail-closed (a missing or unusable source refuses
+the render by id, never substitutes silence); #5 track labels and refusal text are escaped at render like
+any other untrusted string; #6 frozen prefix untouched; #7/#8 no change to `contracts.ts`; #10 no schema
+change (the library's append-only JSONL absorbs the mix); #11 track-name cells are one-line ellipsized with
+a bounded max-width and the report is a block paragraph.
+
+### See also
+
+ADR-0289 (the plan, with its one delta), ADR-0293 (the document this consumes), ADR-0281 (the lineage model
+and why a mix's many inputs are recorded as text rather than faked as parents), ADR-0291 (the pure-encoder
+precedent this render follows).
+
 ## ADR-0285 -- CREATOR-1..CREATOR-6: the Creator build arc after the foundation (SCOPE/PLAN)
 
 **Date:** 2026-08-30
@@ -19812,7 +19902,9 @@ this document), ADR-0073 (the STT seam that supplies text but no timings).
   rather than inverse operations, which is what makes "restores the previous clip exactly" testable.
 - **CREATOR-3 - image, video, and 3D pipelines** (ADR-0287).
 - **CREATOR-4 - engines and playable feedback** (ADR-0288).
-- **CREATOR-5 - the mixer** (ADR-0289).
+- **CREATOR-5 - the mixer. BUILT: see ADR-0294.** Delivered as planned, with one delta: the render is pure
+  TypeScript over PCM rather than `OfflineAudioContext`, because the plan's own keystone (byte-identical
+  twice) is not testable through a Web Audio implementation and is not byte-stable across them.
 - **CREATOR-6 - distributed resources and remote execution** (ADR-0290).
 
 ### Ordering rationale

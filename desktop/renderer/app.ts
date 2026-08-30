@@ -118,6 +118,11 @@ import {
   creatorEditorHtml, dropTargetMs, formatClock, isWavTrack, msAtX, playheadX, selectionRange, waveformBars,
   type CreatorEditorView, type EditorSession,
 } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along editor pane + its gesture semantics
+import {
+  addLibraryTrack, creatorMixerHtml, formatGain, panWords, patchTrack, primarySourceId, removeTrack,
+  setMasterGain, setTwoPointEnvelope, type CreatorMixerView, type TrackPatch,
+} from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer pane + its immutable graph edits
+import { emptyMix, soloedTrackIds, validateMix, type MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix core
 import { memeLayout } from "../../harness/creator/meme_layout.ts"; // CREATOR-IMG: node-free meme geometry
 import {
   canRedo, canUndo, commit, deleteSpan, docDurationMs, itemAt, moveSpan, newHistory, redo, replaceSpan,
@@ -150,7 +155,8 @@ const state = {
   creatorDetail: "" as "" | "cpu" | "gpu", // which odometer's detailed flyout is expanded in the rail
   creatorImages: null as CreatorImagesView | null, // CREATOR-IMG (ADR-0291): generator + builders + artifacts
   creatorEditor: null as CreatorEditorView | null, // CREATOR-2 (ADR-0286): the follow-along audio editor
-  studioTab: "integrations" as "integrations" | "images" | "editor", // which Studio pane is showing
+  creatorMixer: null as CreatorMixerView | null, // CREATOR-5 (ADR-0289): the mixer (N takes into one file)
+  studioTab: "integrations" as "integrations" | "images" | "editor" | "mixer", // which Studio pane is showing
   commands: [] as OmpCommand[],
   skills: [] as SkillView[], // P-SKILL.4 (ADR-0097): discovered skills, widened with root/trust/removable/scan verdict
   userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
@@ -3842,12 +3848,12 @@ function closeCreatorStudio(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** The Studio is three panes behind one tab strip: integrations + library, the image tools, and the
- *  follow-along audio editor. */
+/** The Studio is four panes behind one tab strip: integrations + library, the image tools, the
+ *  follow-along audio editor, and the mixer that layers several takes into one file. */
 function studioTabsHtml(): string {
-  const tab = (id: "integrations" | "images" | "editor", label: string, ic: string) =>
+  const tab = (id: "integrations" | "images" | "editor" | "mixer", label: string, ic: string) =>
     `<button type="button" class="cst-tab${state.studioTab === id ? " on" : ""}" data-studio-tab="${id}">${icon(ic, 13)}<span>${esc(label)}</span></button>`;
-  return `<div class="cst-tabs">${tab("integrations", "Integrations", "market")}${tab("images", "Images", "eye")}${tab("editor", "Editor", "volume")}</div>`;
+  return `<div class="cst-tabs">${tab("integrations", "Integrations", "market")}${tab("images", "Images", "eye")}${tab("editor", "Editor", "volume")}${tab("mixer", "Mixer", "sliders")}</div>`;
 }
 async function renderCreatorStudio(): Promise<void> {
   const body = $("#studioBody");
@@ -3855,6 +3861,10 @@ async function renderCreatorStudio(): Promise<void> {
   if (state.studioTab === "editor") {
     body.innerHTML = studioTabsHtml() + creatorEditorHtml(state.creatorEditor);
     paintEditorWave();
+    return;
+  }
+  if (state.studioTab === "mixer") {
+    body.innerHTML = studioTabsHtml() + creatorMixerHtml(state.creatorMixer);
     return;
   }
   if (state.studioTab === "images") {
@@ -4558,6 +4568,200 @@ async function saveCreatorEdit(): Promise<void> {
   };
   state.creatorStudio = await bridge.creatorStudio().catch(() => state.creatorStudio);
   await loadCreatorEditor();
+}
+
+// ---- CREATOR-5 (ADR-0289): the mixer ----
+// Several takes at once, each with its own level, pan, fades, and automation, summed to one file. The
+// server is touched EXACTLY twice: once to list which library tracks can play together (and the format
+// they share), once to render. Every control move in between is a call into creator_mixer.ts's immutable
+// helpers against harness/creator/mix.ts - the SAME core the render runs - so a level move is instant and
+// this pane can never disagree with the file it produces.
+//
+// A slider is the one place a full repaint would be a bug: replacing the control mid-drag drops the
+// gesture. So `input` rewrites only the readout beside it, and the release repaints the pane, where a new
+// silence reason or a validation problem becomes visible.
+
+/** Seed the pane from the server's list of mixable tracks. The mix format is whatever the server
+ *  reported: this pane never guesses a sample rate, because a guessed rate is how a mixer silently
+ *  resamples. An open mix keeps its tracks across a reseed, unless the reported format moved under it. */
+async function loadCreatorMixer(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const prev = state.creatorMixer;
+  const payload = await bridge.creatorMixerTracks().catch(() => null);
+  if (!payload) {
+    state.creatorMixer = {
+      library: prev?.library ?? [], sampleRate: prev?.sampleRate ?? null, channels: prev?.channels ?? null,
+      graph: prev?.graph ?? null, addId: prev?.addId ?? "", title: prev?.title ?? "",
+      applyHeadroom: prev?.applyHeadroom ?? false, report: prev?.report ?? null,
+      status: "The mixer route did not answer properly, so nothing was repainted. Nothing on the mix was changed.",
+      statusTone: "error", busy: "",
+    };
+    if (studioOpen && state.studioTab === "mixer") void renderCreatorStudio();
+    return;
+  }
+  // The route omits the format entirely when nothing in the library is decodable. That is an honest
+  // answer, not a malformed one: there is no mix to build until something readable exists, and this pane
+  // will not invent a rate to build one at.
+  const rate = payload.sampleRate ?? null;
+  const channels = payload.channels ?? null;
+  const held = prev?.graph ?? null;
+  const keep = !!held && held.tracks.length > 0 && held.sampleRate === rate && held.channels === channels;
+  const rebuilt = !keep && !!held && held.tracks.length > 0;
+  state.creatorMixer = {
+    library: payload.tracks,
+    sampleRate: rate,
+    channels,
+    graph: keep && held ? held : (rate !== null && channels !== null ? emptyMix(rate, channels) : null),
+    addId: prev?.addId || (payload.tracks[0]?.id ?? ""),
+    title: prev?.title ?? "",
+    applyHeadroom: prev?.applyHeadroom ?? false,
+    report: prev?.report ?? null,
+    status: rate === null || channels === null
+      ? "The library holds nothing this build can decode, so the mixer is not claiming a format to mix at. Import a 16-bit PCM WAV render and open this tab again."
+      : rebuilt
+      ? `The library's shared format is now ${rate}Hz, ${channels === 1 ? "mono" : "stereo"}, so the mix was rebuilt empty at that format rather than rendering at one nobody reported.`
+      : prev?.status ?? "",
+    statusTone: rate === null || channels === null || rebuilt ? "error" : prev?.statusTone ?? "",
+    busy: "",
+  };
+  if (studioOpen && state.studioTab === "mixer") void renderCreatorStudio();
+}
+
+function setMixerStatus(status: string, tone: "" | "ok" | "error"): void {
+  if (!state.creatorMixer) return;
+  state.creatorMixer = { ...state.creatorMixer, status, statusTone: tone };
+  void renderCreatorStudio();
+}
+
+/** Commit a new graph. Every edit goes through here, so a repaint can never observe a half-applied change
+ *  and the status always names what just happened. */
+function commitMixerGraph(graph: MixGraph, done: string): void {
+  const v = state.creatorMixer;
+  if (!v) return;
+  state.creatorMixer = { ...v, graph, status: done, statusTone: "ok" };
+  void renderCreatorStudio();
+}
+
+/** A slider move: patch the graph and rewrite ONLY the readout beside the control, so the drag survives. */
+function dragMixerSlider(input: HTMLInputElement): void {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const value = Number(input.value);
+  const gainId = input.dataset.cmxGain;
+  const panId = input.dataset.cmxPan;
+  let graph = v.graph;
+  let words = "";
+  if (input.dataset.cmxMaster !== undefined) {
+    graph = setMasterGain(v.graph, value);
+    words = formatGain(graph.masterGain);
+  } else if (gainId !== undefined) {
+    graph = patchTrack(v.graph, gainId, { gain: value });
+    words = formatGain(graph.tracks.find((t) => t.id === gainId)?.gain ?? 0);
+  } else if (panId !== undefined) {
+    graph = patchTrack(v.graph, panId, { pan: value });
+    words = panWords(graph.tracks.find((t) => t.id === panId)?.pan ?? 0, graph.channels);
+  } else {
+    return;
+  }
+  state.creatorMixer = { ...v, graph };
+  const out = input.parentElement?.querySelector(".cmx-val");
+  if (out) out.textContent = words;
+}
+
+/** Add the picked library track. A refusal keeps the helper's OWN sentence - it names the real sample
+ *  rate, the unmeasured length, or the track ceiling, which no generic message could. */
+function addMixerTrack(): void {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const id = ($("#cmxAdd") as HTMLSelectElement | null)?.value ?? v.addId;
+  const picked = v.library.find((t) => t.id === id);
+  if (!picked) { setMixerStatus("Pick a library track first. The mixer only offers tracks the server listed.", "error"); return; }
+  const r = addLibraryTrack(v.graph, picked);
+  if (!r.ok) { setMixerStatus(r.error, "error"); return; }
+  state.creatorMixer = {
+    ...v, addId: id, graph: r.graph,
+    status: `Added ${picked.title || picked.id} as ${r.trackId}, at unity gain and centred.`,
+    statusTone: "ok",
+  };
+  void renderCreatorStudio();
+}
+
+function removeMixerTrack(trackId: string): void {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const label = v.graph.tracks.find((t) => t.id === trackId)?.label ?? trackId;
+  commitMixerGraph(removeTrack(v.graph, trackId), `Removed ${label} from the mix.`);
+}
+
+function toggleMixerTrack(trackId: string, which: "muted" | "solo"): void {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const track = v.graph.tracks.find((t) => t.id === trackId);
+  if (!track) return;
+  const on = which === "muted" ? !track.muted : !track.solo;
+  const patch: TrackPatch = which === "muted" ? { muted: on } : { solo: on };
+  const verb = which === "muted" ? (on ? "muted" : "unmuted") : (on ? "soloed" : "unsoloed");
+  commitMixerGraph(patchTrack(v.graph, trackId, patch), `${track.label} ${verb}.`);
+}
+
+/** A two-point gain ramp across the track's own span. Two points is the whole vocabulary here, because
+ *  the core interpolates linearly and a ramp is the automation people actually draw. */
+async function rampMixerTrack(trackId: string): Promise<void> {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const track = v.graph.tracks.find((t) => t.id === trackId);
+  if (!track) return;
+  const vals = await creatorPrompt(`Ramp ${track.label}`,
+    "Two points across this track's own span: the level where its audio starts, and the level where it ends. The core interpolates linearly between them, and nothing else on the mix is touched.",
+    [
+      { name: "from", label: "Level at the start", kind: "text", value: String(track.envelope[0]?.gain ?? track.gain) },
+      { name: "to", label: "Level at the end", kind: "text", value: String(track.envelope[track.envelope.length - 1]?.gain ?? track.gain) },
+    ]);
+  if (!vals) return;
+  const from = Number(vals.from);
+  const to = Number(vals.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < 0) {
+    setMixerStatus("A ramp needs two levels of zero or greater. Nothing was changed.", "error");
+    return;
+  }
+  const cur = state.creatorMixer;
+  if (!cur?.graph) return;
+  commitMixerGraph(setTwoPointEnvelope(cur.graph, trackId, from, to),
+    `Ramped ${track.label} from x${from.toFixed(2)} to x${to.toFixed(2)} across its own span.`);
+}
+
+/** Render the mix. The server is touched here for the second and last time: it loads the sources the
+ *  graph names, runs the same pure core this pane has been editing, and saves the file. Headroom is
+ *  applied ONLY when the checkbox asked for it, and the report prints the exact gain it used. */
+async function renderCreatorMix(): Promise<void> {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const graph = v.graph;
+  const problems = validateMix(graph);
+  if (problems.length > 0) { setMixerStatus(problems[0]!, "error"); return; }
+  const title = (($("#cmxTitle") as HTMLInputElement | null)?.value ?? v.title).trim();
+  if (!title) { setMixerStatus("Give the saved mix a title first.", "error"); return; }
+  const primaryTrackId = primarySourceId(graph, soloedTrackIds(graph));
+  if (!primaryTrackId) { setMixerStatus("Nothing on this mix names a source, so there is no parent track to record it under.", "error"); return; }
+  const applyHeadroom = ($("#cmxHeadroom") as HTMLInputElement | null)?.checked ?? v.applyHeadroom;
+  state.creatorMixer = { ...v, title, applyHeadroom, report: null, busy: "Rendering...", status: "", statusTone: "" };
+  void renderCreatorStudio();
+  const r = await bridge.creatorMixerRender({ graph, title, primaryTrackId, applyHeadroom });
+  const cur = state.creatorMixer;
+  if (!cur) return;
+  if (!r?.ok) {
+    // The route's own words, verbatim: they name what it refused and why.
+    state.creatorMixer = { ...cur, busy: "", report: null, status: r?.error ?? "The mixer did not answer.", statusTone: "error" };
+    void renderCreatorStudio();
+    return;
+  }
+  state.creatorMixer = {
+    ...cur, busy: "", report: r,
+    status: r.trackId ? `Saved as library track ${r.trackId}. The full report is below.` : "Rendered, but the mixer did not name the saved track.",
+    statusTone: r.trackId ? "ok" : "error",
+  };
+  state.creatorStudio = await bridge.creatorStudio().catch(() => state.creatorStudio);
+  await loadCreatorMixer();
 }
 
 let skillsOpen = false;
@@ -12009,10 +12213,11 @@ function wire(): void {
     const tab = t.closest("[data-studio-tab]") as HTMLElement | null;
     if (tab) {
       const want = tab.dataset.studioTab;
-      state.studioTab = want === "images" ? "images" : want === "editor" ? "editor" : "integrations";
+      state.studioTab = want === "images" ? "images" : want === "editor" ? "editor" : want === "mixer" ? "mixer" : "integrations";
       if (state.studioTab !== "editor") stopEditorAudio(); // CREATOR-2: leaving the pane stops its clip
       if (state.studioTab === "images" && !state.creatorImages) { void loadCreatorImages(); return; }
       if (state.studioTab === "editor" && !state.creatorEditor) { void loadCreatorEditor(); return; }
+      if (state.studioTab === "mixer" && !state.creatorMixer) { void loadCreatorMixer(); return; } // CREATOR-5
       void renderCreatorStudio();
       return;
     }
@@ -12036,6 +12241,18 @@ function wire(): void {
     if (t.closest("[data-ced-undo]")) { stepEditorHistory(true); return; }
     if (t.closest("[data-ced-redo]")) { stepEditorHistory(false); return; }
     if (t.closest("[data-ced-save]")) { void saveCreatorEdit(); return; }
+    // CREATOR-5 (ADR-0289): the mixer. Every control move is a pure graph edit in this process; only Add
+    // (which needs the server's list) and Render ever leave it.
+    if (t.closest("[data-cmx-add]")) { addMixerTrack(); return; }
+    const cmxMute = t.closest("[data-cmx-mute]") as HTMLElement | null;
+    if (cmxMute) { toggleMixerTrack(cmxMute.dataset.cmxMute!, "muted"); return; }
+    const cmxSolo = t.closest("[data-cmx-solo]") as HTMLElement | null;
+    if (cmxSolo) { toggleMixerTrack(cmxSolo.dataset.cmxSolo!, "solo"); return; }
+    const cmxRamp = t.closest("[data-cmx-env]") as HTMLElement | null;
+    if (cmxRamp) { void rampMixerTrack(cmxRamp.dataset.cmxEnv!); return; }
+    const cmxDrop = t.closest("[data-cmx-remove]") as HTMLElement | null;
+    if (cmxDrop) { removeMixerTrack(cmxDrop.dataset.cmxRemove!); return; }
+    if (t.closest("[data-cmx-render]")) { void renderCreatorMix(); return; }
     if (t.closest("[data-cim-refresh]")) { void loadCreatorImages(); return; }
     if (t.closest("[data-cim-generate]")) { void generateCreatorImage(); return; }
     if (t.closest("[data-cim-sheet]")) { void buildCreatorSheet(); return; }
@@ -12084,6 +12301,37 @@ function wire(): void {
   $("#creatorStudio")?.addEventListener("input", (e) => {
     const scrub = (e.target as HTMLElement).closest("[data-ced-scrub]") as HTMLInputElement | null;
     if (scrub) seekEditor(Number(scrub.value));
+    // CREATOR-5: a level/pan/master drag rewrites only its own readout. A full repaint here would replace
+    // the control under the user's finger and drop the gesture.
+    const slider = (e.target as HTMLElement).closest("[data-cmx-master],[data-cmx-gain],[data-cmx-pan]") as HTMLInputElement | null;
+    if (slider) dragMixerSlider(slider);
+  });
+  // CREATOR-5 (ADR-0289): the mixer's fields. A slider RELEASE repaints the pane, because that is when a
+  // new silence reason or a validation problem becomes visible; a text field only stores what was typed.
+  $("#creatorStudio")?.addEventListener("change", (e) => {
+    const v = state.creatorMixer;
+    if (!v) return;
+    const t = e.target as HTMLElement;
+    const slider = t.closest("[data-cmx-master],[data-cmx-gain],[data-cmx-pan]") as HTMLInputElement | null;
+    if (slider) { dragMixerSlider(slider); void renderCreatorStudio(); return; }
+    const add = t.closest("#cmxAdd") as HTMLSelectElement | null;
+    if (add) { state.creatorMixer = { ...v, addId: add.value }; void renderCreatorStudio(); return; }
+    const mixTitle = t.closest("#cmxTitle") as HTMLInputElement | null;
+    if (mixTitle) { state.creatorMixer = { ...v, title: mixTitle.value }; return; }
+    const headroom = t.closest("[data-cmx-headroom]") as HTMLInputElement | null;
+    if (headroom) { state.creatorMixer = { ...v, applyHeadroom: headroom.checked }; void renderCreatorStudio(); return; }
+    if (!v.graph) return;
+    const fadeIn = t.closest("[data-cmx-fadein]") as HTMLInputElement | null;
+    if (fadeIn) {
+      const ms = Number(fadeIn.value);
+      commitMixerGraph(patchTrack(v.graph, fadeIn.dataset.cmxFadein!, { fadeInMs: ms }), `Fade in set to ${ms}ms.`);
+      return;
+    }
+    const fadeOut = t.closest("[data-cmx-fadeout]") as HTMLInputElement | null;
+    if (fadeOut) {
+      const ms = Number(fadeOut.value);
+      commitMixerGraph(patchTrack(v.graph, fadeOut.dataset.cmxFadeout!, { fadeOutMs: ms }), `Fade out set to ${ms}ms.`);
+    }
   });
   // CREATOR-2: drag a SELECTED span onto another chip to move it there. A chip outside the selection is
   // not draggable, and a drop back inside the span resolves to null (no move, no history churn).

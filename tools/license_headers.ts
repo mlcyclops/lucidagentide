@@ -8,8 +8,8 @@
 //   bun run tools/license_headers.ts <file> [<file>…] # operate ONLY on the given files (used by the
 //                                                       # pre-commit hook to header just-staged source)
 //
-// Excludes vendored / third-party / generated trees (vendor/, node_modules/, desktop/release/, .venv,
-// __pycache__, dist/) — those keep their OWN licenses and must NOT be relicensed. Explicitly-named files
+// Excludes vendored / third-party / generated trees and generated bundles (vendor/, node_modules/,
+// desktop/release/, .venv, __pycache__, dist/, renderer/app.bundle.js, tools/remote-pwa/dist/) — those keep their OWN licenses and must NOT be relicensed. Explicitly-named files
 // are still filtered by the same comment-style + exclusion rules, so passing a vendored path is a no-op.
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";

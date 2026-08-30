@@ -18,7 +18,9 @@ import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-
 import { isCreatorResources, type CreatorResourcesView } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): odometer view types live there
 import { isCreatorStudio, type CreatorStudioView } from "./creator_studio.ts"; // CREATOR-0 (ADR-0282): Studio view types live there
 import { isEditorSession, type EditorSession } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): editor session view type lives there
+import { isMixerTracksPayload, isRenderMixReport, type MixerTracksPayload, type RenderMixResult } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): mixer view types live there
 import type { TimelineDoc } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline document, edited in the renderer
+import type { MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix graph, edited in the renderer
 
 /** CREATOR-0 (ADR-0279): what `GET /api/build-info` returns. `creatorBuild` is the ONLY thing that may
  *  reveal a Creator surface - never a persisted setting, never a role. */
@@ -1106,6 +1108,12 @@ export interface LucidBridge {
   // half-finished edit.
   creatorEditorOpen(opts: { trackId: string; text?: string; buckets?: number }): Promise<{ ok: boolean; error?: string; session?: EditorSession } | null>;
   creatorEditorSave(opts: { trackId: string; doc: TimelineDoc; title: string; prompt?: string }): Promise<{ ok: boolean; error?: string; trackId?: string } | null>;
+  // CREATOR-5 (ADR-0289): the mixer touches the server exactly twice - once to LIST which library tracks
+  // can play together (plus the format the mix will run at, which the pane never guesses), once to
+  // RENDER. Every level, pan, fade, and ramp in between is applied in the renderer against the same pure
+  // core the render uses, so a control move is instant and no half-built graph ever crosses the wire.
+  creatorMixerTracks(): Promise<MixerTracksPayload | null>;
+  creatorMixerRender(opts: { graph: MixGraph; title: string; prompt?: string; primaryTrackId: string; applyHeadroom?: boolean }): Promise<RenderMixResult | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -1747,6 +1755,21 @@ export const bridge: LucidBridge = {
       const body = await res.json() as { ok?: boolean; error?: string; trackId?: string };
       return { ok: !!body.ok, error: body.error, trackId: body.trackId };
     } catch { return { ok: false, error: "The audio editor did not answer." }; }
+  },
+  // CREATOR-5 (ADR-0289): both gates are fail-closed. A tracks payload this build cannot read paints
+  // NOTHING (null), rather than a mixer sitting on a format nobody reported; a report missing its own
+  // measurements becomes a named refusal, rather than blanks where a peak and a clip count belong.
+  creatorMixerTracks: async () => {
+    const v: unknown = await getData("/api/creator/mixer/tracks").catch(() => null);
+    return isMixerTracksPayload(v) ? v : null;
+  },
+  creatorMixerRender: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/mixer/render", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      if (!body.ok) return { ok: false, error: body.error ?? "The mixer refused the render and did not say why." };
+      return isRenderMixReport(body) ? body : { ok: false, error: "The mixer answered with a report this build cannot read." };
+    } catch { return { ok: false, error: "The mixer did not answer." }; }
   },
   // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects + the unified Processes list.
   interject: (target, text) => post("/api/interject", { target, text }),
