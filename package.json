@@ -72,7 +72,7 @@
     "@oh-my-pi/pi-coding-agent": "16.1.20",
     "@oh-my-pi/pi-utils": "16.1.20",
     "arktype": "^2.2.1",
-    "dompurify": "^3.4.11",
+    "dompurify": "^3.4.14",
     "katex": "^0.17.0",
     "marked": "^18.0.5",
     "unpdf": "^1.6.2"

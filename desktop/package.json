@@ -187,8 +187,8 @@
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.1.8",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
     "png-to-ico": "^3.0.1",
     "typescript": "^7.0.2"
   }
