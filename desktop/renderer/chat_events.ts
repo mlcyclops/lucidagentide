@@ -59,4 +59,9 @@ export type ChatEvent =
   // into the collab share by the engine's fleet-status broadcaster, never emitted into the local chat
   // stream, so the desktop renderer never receives them.
   | { type: "fleet-status"; lanes: FleetLaneStatus[] }
-  | { type: "process-list"; processes: ProcessView[] };
+  | { type: "process-list"; processes: ProcessView[] }
+  // P-PWA-FOCUS.1: a fleet lane's turn failed. Broadcast-only, like the two above. Deliberately NOT the
+  // `block` variant: `block` means the SECURITY GATE refused something, and a phone showing a lane crash in
+  // the gate's clothing would teach the user to misread the one signal that must never be ambiguous. A lane
+  // error is an ordinary failure, so it gets its own name and its own (red, but distinct) chip.
+  | { type: "lane-error"; message: string };

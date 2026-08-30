@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/guest.ts — P-COLLAB.4 (ADR-0192): the read-only GUEST.
+// desktop/collab/guest.ts - P-COLLAB.4 (ADR-0192): the read-only GUEST.
 //
 // The guest joins a shared room and renders the host's live session. It is the mirror of CollabHost and, like
 // it, transport-agnostic: it drives a `GuestTransport` (the real `CollabSocket`, or a mock in tests), so the
@@ -64,6 +64,13 @@ export interface GuestCallbacks {
   onWelcome?: (w: WelcomeFrame) => void;
   /** A live session event to render read-only, in order. */
   onEvent?: (e: ChatEvent) => void;
+  /** P-PWA-FOCUS.1: a live event belonging to a FLEET LANE's conversation, arriving only for the lane this
+   *  guest asked to watch. Separate from `onEvent` so an app cannot accidentally fold a lane's tokens into
+   *  the master transcript: the lane id is not optional here. */
+  onLaneEvent?: (laneId: string, e: ChatEvent) => void;
+  /** P-PWA-FOCUS.1: the replay for a lane the guest just started watching, so switching to a lane that has
+   *  been working for a while shows what it already said rather than an empty conversation. */
+  onLaneSync?: (laneId: string, transcript: CollabTranscriptTurn[]) => void;
   /** Roster / model / context changed. */
   onState?: (participants: CollabParticipant[], model: string, contextPct: number | null) => void;
   /** The share ended (host stopped, room closed, or a fatal socket close). */
@@ -104,6 +111,9 @@ export class CollabGuest {
   #note: string | null = null;
   #reconnecting = false; // P-REMOTE.8: a transient "connection lost - retrying" note is in #note; cleared on recovery
   #ended = false;
+  // P-PWA-FOCUS.1: the conversation this guest is looking at. "master" is the default and the pre-focus
+  // behaviour; a lane id means the host is also streaming that lane to us.
+  #watching = "master";
 
   constructor(transport: GuestTransport, opts: GuestStartOpts, cb: GuestCallbacks = {}) {
     this.#transport = transport;
@@ -144,6 +154,22 @@ export class CollabGuest {
     this.#transport.send({ t: "prompt", text, ...(imgs.length ? { images: imgs } : {}), ...(clip ? { audio: clip } : {}), ...(src ? { sttSource: src } : {}) }, 0); // 0 = the host
     return true;
   }
+
+  /** P-PWA-FOCUS.1: declare which conversation this guest is LOOKING at, so the host streams that one and no
+   *  other. `target` is "master" (or "") for the master session, else a lane id. Watching is READ-ONLY, so
+   *  unlike every other method here it is NOT gated on edit access: a view guest may look at a lane, it just
+   *  cannot drive it. Idempotent-safe to call on every focus change; the host answers a lane watch with a
+   *  `lane-sync` replay. Returns false only when the session has ended. */
+  watch(target: string): boolean {
+    if (this.#ended) return false;
+    this.#watching = target && target !== "master" ? target : "master";
+    this.#transport.send({ t: "watch", target: this.#watching }, 0);
+    return true;
+  }
+
+  /** P-PWA-FOCUS.1: the conversation this guest last asked to watch ("master" until it asks otherwise).
+   *  Re-sent after a reconnect, because the host's per-peer subscription does not survive a new peer id. */
+  watching(): string { return this.#watching; }
 
   /** P-COLLAB.12: stop the host's in-flight turn (EDIT access only). */
   abort(): boolean {
@@ -232,6 +258,10 @@ export class CollabGuest {
       { t: "hello", protocol: COLLAB_PROTOCOL_VERSION, name: this.#name, ...(this.#writeTokenB64 ? { writeToken: this.#writeTokenB64 } : {}) },
       0, // to the host
     );
+    // P-PWA-FOCUS.1: the host keys its watch subscriptions by PEER ID, and a reconnect earns a new one, so a
+    // lane the user was watching before the drop must be re-declared or the phone would sit on a silent lane
+    // that looks alive. Cheap and idempotent, so it rides every hello rather than only the reconnecting ones.
+    if (this.#watching !== "master") this.#transport.send({ t: "watch", target: this.#watching }, 0);
   }
 
   #onFrame(frame: LucidCollabFrame): void {
@@ -255,6 +285,11 @@ export class CollabGuest {
       case "event":
         // P-REMOTE.8: live traffic proves the socket recovered - clear the stale "reconnecting" banner.
         if (this.#clearReconnectNote()) this.#emit();
+        // P-PWA-FOCUS.1: a LANE-scoped event belongs to that lane's conversation, so it is handed over with
+        // its lane id and NEVER folded into the master transcript or the master's context gauge. The host
+        // only sends these to a guest that asked to watch the lane, so an unrequested one is a host bug: it
+        // is still routed by lane rather than silently absorbed into the master stream.
+        if (f.lane) { this.#cb.onLaneEvent?.(f.lane, f.event); break; }
         this.#cb.onEvent?.(f.event);
         // fold done/usage so a late view() reflects the current state, mirroring the host
         if (f.event.type === "done" && typeof f.event.text === "string" && f.event.text.trim()) {
@@ -264,6 +299,11 @@ export class CollabGuest {
           this.#contextPct = Math.min(100, Math.round((f.event.used / f.event.size) * 100));
           this.#emit();
         }
+        break;
+      case "lane-sync":
+        // P-PWA-FOCUS.1: the replay for a lane we just started watching. Kept OUT of #transcript (that is the
+        // master's) and handed to the app, which owns the per-target item lists.
+        this.#cb.onLaneSync?.(f.lane, Array.isArray(f.transcript) ? f.transcript : []);
         break;
       case "state":
         this.#clearReconnectNote(); // P-REMOTE.8: recovered - the emit below repaints the status

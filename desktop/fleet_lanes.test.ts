@@ -405,3 +405,77 @@ test("a DENY with scope 'session' records NOTHING - the next ask still lands nee
   expect(live.answer(id, false).ok).toBe(true);
   await turn2;
 }, TIMEOUT);
+
+// ── P-PWA-FOCUS.1: watching a lane's CONVERSATION - cross-lane observers + the catch-up transcript ──
+
+test("an observer follows lanes spawned AFTER it registers, tagged by lane id", async () => {
+  live = manager();
+  const seen: { lane: string; type: string }[] = [];
+  live.observe((laneId, e) => seen.push({ lane: laneId, type: e.type }));
+  // Registered before ANY lane exists: spawn() is what has to attach it.
+  const a = await live.spawn({ cwd: import.meta.dir, name: "watched-a" });
+  await live.prompt(a.lane!.id, "alpha", () => {});
+  expect(seen.some((s) => s.lane === a.lane!.id && s.type === "token")).toBe(true);
+  // A SECOND lane, spawned later still, joins the same observer - "all lanes, present and future".
+  const b = await live.spawn({ cwd: import.meta.dir, name: "watched-b" });
+  await live.prompt(b.lane!.id, "beta", () => {});
+  expect(seen.some((s) => s.lane === b.lane!.id && s.type === "token")).toBe(true);
+  expect(new Set(seen.map((s) => s.lane))).toEqual(new Set([a.lane!.id, b.lane!.id]));
+}, TIMEOUT);
+
+test("an observer survives a turn ending - prompt()'s finally drops only ITS OWN sink - until dispose", async () => {
+  live = manager();
+  const seen: LaneEvent[] = [];
+  const dispose = live.observe((_laneId, e) => seen.push(e));
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  await live.prompt(id, "first", () => {});
+  const afterFirst = seen.length;
+  expect(afterFirst).toBeGreaterThan(0);
+
+  // Turn two on the SAME lane: the observer was never unsubscribed by turn one's teardown.
+  await live.prompt(id, "second", () => {});
+  const secondTurn = seen.slice(afterFirst);
+  expect(secondTurn.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).toContain("You said: second");
+  expect(secondTurn.some((e) => e.type === "done")).toBe(true);
+
+  dispose();
+  const afterDispose = seen.length;
+  const turn: LaneEvent[] = [];
+  await live.prompt(id, "third", (e) => turn.push(e));
+  expect(turn.some((e) => e.type === "done")).toBe(true); // the lane still streams to its own sink
+  expect(seen.length).toBe(afterDispose);                 // the observer heard nothing more
+}, TIMEOUT);
+
+test("a THROWING observer never breaks the lane nor starves the sinks behind it", async () => {
+  live = manager();
+  const bad: string[] = [];
+  live.observe((_laneId, e) => { bad.push(e.type); throw new Error("observer exploded"); });
+  const good: string[] = [];
+  live.observe((_laneId, e) => good.push(e.type)); // registered AFTER the thrower, so it is emitted second
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const turn: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "ping", (e) => turn.push(e));
+  expect(turn.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).toContain("You said: ping");
+  expect(turn.some((e) => e.type === "done")).toBe(true);
+  expect(bad.length).toBeGreaterThan(0);   // it really was called, and really did throw every time
+  expect(good.length).toBe(bad.length);    // every event still reached the sink behind it
+  expect((await live.status()).lanes[0]!.status).toBe("done");
+}, TIMEOUT);
+
+test("laneTranscript hands out a COPY of the lane's memory, and [] for an unknown lane", async () => {
+  live = manager();
+  expect(live.laneTranscript("lane-does-not-exist")).toEqual([]);
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  await live.prompt(id, "remember: OTTER", () => {});
+  const first = live.laneTranscript(id);
+  expect(first.length).toBeGreaterThanOrEqual(2); // the user turn plus the folded assistant turn
+  expect(first[0]).toEqual({ role: "user", text: "remember: OTTER" });
+  // Tampering with the copy must not reach lane state - #resumePreamble replays that same array.
+  first[0]!.text = "tampered";
+  first.length = 0;
+  const again = live.laneTranscript(id);
+  expect(again.length).toBeGreaterThanOrEqual(2);
+  expect(again[0]).toEqual({ role: "user", text: "remember: OTTER" });
+}, TIMEOUT);
