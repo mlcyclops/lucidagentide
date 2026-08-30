@@ -19803,12 +19803,19 @@ this document), ADR-0073 (the STT seam that supplies text but no timings).
 independently on this machine, not the ones reported. `bun run harness/scripts/demo_creator3.ts` green
 (13 sections, 101 checks, 0 failures) and proven loud (a sabotaged claim exits 1 naming it); 342 new tests
 across comfy_stream / frame_capture / blender_cli / model_manifest / creator_pipeline / creator_blender /
-renderer creator_pipeline, 0 fail; 774 pass across the 24 Creator-adjacent files; harness tree 2335 pass /
-3 fail and desktop tree 4947 pass / 15 fail, every failure a pre-existing Windows path-separator or
-TS-resolution case in `fs_browse`, `symbol_graph` and `lucid_acp`, files this increment never touched (the
-authoring session measured 9 desktop failures rather than 15 because `make test` ignores
-`desktop/release/**`, where 6 of them are duplicates of the same two files); prefix-compaction suite green;
-root typecheck clean; license headers clean; renderer bundle 127 modules.
+renderer creator_pipeline, 0 fail; 774 pass across the 24 Creator-adjacent files; harness tree 1494 pass /
+2 fail across 136 files and desktop tree 2626 pass / 9 fail across 215 files, every failure a pre-existing
+Windows path-separator or TS-resolution case in `fs_browse`, `symbol_graph` and `lucid_acp`, files this
+increment never touched; `harness/prompt` 11 pass across 2 files (of which `prefix_compaction` is 4), so the
+frozen prefix is untouched; root typecheck clean; license headers clean; renderer bundle 127 modules.
+**Correction, and the lesson in it.** The first version of this ADR published harness 2335 / 3 and desktop
+4947 / 15. Both were inflated: `bun test` matches paths by substring, so omitting
+`--path-ignore-patterns='desktop/release/**'` (which `make test` always passes) pulls in the PACKAGED COPY
+of the repo under `desktop/release` and double-counts it. The authoring session made that omission on its
+harness runs, and this session reproduced the same number with the same omission and called it independent
+confirmation. It was not: **a matching number is not a second measurement when both runs share a wrong
+flag.** The figures above were re-measured here with the flag, and the flag belongs in every tree-wide count
+this repo publishes.
 **NOT verified, deliberately recorded:** `make` is absent on both machines, so the `demo-CREATOR-3` Makefile
 target is structurally checked (tab-prefixed recipe, one recipe line, `.PHONY` above, shape matched against
 its siblings) and UNEXECUTED; the script was run directly. And no real ComfyUI was involved anywhere: the
