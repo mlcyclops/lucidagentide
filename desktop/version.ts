@@ -326,4 +326,17 @@
 //            to the canonical lucid-agents.com (the PWA and sign-in origin stay on lucid-agent.web.app,
 //            where the OAuth authDomain is registered) (P-FLEET.L6, P-WSSETUP,
 //            P-INTERJECT.1, P-BROWSER.1..3, P-REMOTE.14, P-TL.2/.3, ADR-0278).
-export const APP_VERSION = "1.14.0";
+// v1.14.1 = the phone follow-through + the honest gate: the PWA composer collapses to ONE row (same-family
+//            controls fold into menus, Queue and Send merge, the voice caution moves behind an amber-aware ?),
+//            the fleet strip costs 33px collapsed (double-decker with the desktop pill's own count pips,
+//            per-lane composers, desktop-matched lane colours), a lane's CONVERSATION reaches the phone
+//            (subscribe-only watch frames unicast to peers that asked, bounded lane-sync replay, a distinct
+//            lane-error chip), per-target seen counters draw a "new since you looked away" boundary that
+//            Sync scrolls to, and no phone panel ever opens itself (P-REMOTE.15, P-PWA-FLEET.2,
+//            P-PWA-FOCUS.1/.2, ADR-0298..0302). The Preview panel gains deterministic CAPTURE (a scene
+//            defining lucidRenderAt is stepped on LUCID's clock, fingerprinted against a measured readback
+//            noise floor, and compared to its baseline with the method named; ADR-0297). The test gate now
+//            measures what it claims (scope by exclusion, ADR-0303). And the Creator flavor lands on trunk
+//            behind build_flavor gates with its own creator-v* release channel that can never cross-install
+//            with Agent (ADR-0279..0296, 0304).
+export const APP_VERSION = "1.14.1";
