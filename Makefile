@@ -43,9 +43,29 @@ install-sidecar: ## Create/sync the pinned Python sidecar venv
 .PHONY: test
 test: test-harness test-sidecar ## Run all tests
 
+# The gate's scope is defined by EXCLUSION, never by positional patterns. `bun test desktop harness`
+# reads like a directory scope and is not one: bun treats positional args as SUBSTRING matches against
+# the whole path, so adding `tools` also selects every vendor/oh-my-pi/**/tools/** file. Measured on this
+# repo: exclusion-only 357 files / 11 fail, versus `bun test desktop harness tools` 486 files / 125 fail.
+# Each exclusion is a tree whose tests are not this gate's to run:
+#   desktop/release/**   GENERATED. A packaged copy of this repo, so it double-counts every test in it.
+#   vendor/**            NOT OURS: oh-my-pi's own suite. Gitignored (.gitignore:13), but bun walks it
+#                        regardless. Including it reports 1659 files / 942 fail, which is why the
+#                        documented gate had never once reproduced the numbers PROGRESS.md quotes.
+#   lucidaddon_audit/**  OURS, but 11 independently-installed packages with their own package.json that
+#                        `make install` does not prepare, so its 51 files fail on missing deps (ajv and
+#                        friends) rather than on anything real. Use `make test-audit` after installing
+#                        them. Excluded LOUDLY here rather than silently omitted by a hand-typed scope.
+# See ADR-0303.
+TEST_IGNORES := --path-ignore-patterns='desktop/release/**' --path-ignore-patterns='vendor/**' --path-ignore-patterns='lucidaddon_audit/**'
+
 .PHONY: test-harness
-test-harness: ## Bun test suite (desktop/release is GENERATED — packaged repo copies must never be tested)
-	$(BUN) test --path-ignore-patterns='desktop/release/**'
+test-harness: ## Bun test suite over first-party code (357 files). TEST_IGNORES above is load-bearing.
+	$(BUN) test $(TEST_IGNORES)
+
+.PHONY: test-audit
+test-audit: ## lucidaddon_audit/ (51 files, 11 packages). NOT part of `make test`: needs its own installs first.
+	cd lucidaddon_audit && $(BUN) test
 
 .PHONY: test-sidecar
 test-sidecar: ## Sidecar smoke test: one request in, well-formed response out
