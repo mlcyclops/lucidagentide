@@ -20043,6 +20043,114 @@ ADR-0289 (the plan, with its one delta), ADR-0293 (the document this consumes), 
 and why a mix's many inputs are recorded as text rather than faked as parents), ADR-0291 (the pure-encoder
 precedent this render follows).
 
+## ADR-0302 -- LUCID Creator as a separately released product, and the shared update pointer that would have crossed the two
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator0.ts` green (8 sections, 55 checks, up
+from 7 and 48); `desktop/build/electron-builder.creator.test.ts` 11 tests (was 7); scoped
+`bun test desktop harness --path-ignore-patterns='desktop/release/**'` 4155 pass / 11 fail / 4170 tests /
+352 files, where all 11 are the documented pre-existing set (5 `fs_browse`, 4 `symbol_graph`, 2
+`lucid_acp`); root and desktop `tsc` clean; the server program shows only the documented pre-existing
+`dev.ts(1332,103)` plus `symbol_graph.ts` errors; license headers clean.
+
+**Numbering note.** ADR-0297 through ADR-0301 are not in this file. They were authored in a parallel
+session and live on branch `feature/pwa-focus` (commit `8b060b2`), including ADR-0297, which was written
+here and carried there. The gap closes when that branch merges. This ADR took 0302 rather than reusing a
+number that already exists elsewhere.
+
+### Context
+
+Creator is to be an optional companion product to LUCID Agent IDE: its own release cadence, its own
+pipeline mirroring Agent's, and eventually its own marketplace. The question put was whether that needs a
+long-lived branch, or a second repository.
+
+CREATOR-0 (ADR-0279) had already built the hard part: `desktop/build_flavor.ts` resolves identity before
+anything reads an identity-derived path, and `desktop/build/electron-builder.creator.cjs` deep-clones the
+standard build config and overrides only identity fields, so packaging payload changes on master reach
+Creator for free. `desktop/package.json` already had `dist:{win,mac,linux}:creator`. What did not exist
+was any release path at all: no workflow, no tag namespace in use, and, as it turned out, no isolation of
+the update feed.
+
+### Decision
+
+**1. One repository, one branch, two tag namespaces.** Creator ships from trunk behind the existing flavor
+gates. Agent releases on `v*` through `build-desktop.yml`; Creator releases on `creator-v*` through the new
+`build-creator.yml`. `creator-v*` does not match `v*`, so one tag builds exactly one product.
+
+Rejected: a long-lived Creator branch. It buys nothing the flavor does not already provide and it
+guarantees permanent merge cost against a fast-moving master, which directly contradicts the stated goal of
+Creator receiving every Agent improvement. Independent cadence is a tag namespace plus a workflow, not a
+branch.
+
+Rejected for now: a separate repository. Creator imports the shared spine directly (the fail-closed scan,
+`harness/contracts.ts`, the renderer shell, the WAV backend). Splitting today means either duplicating that
+spine, which puts two fail-closed gates on independent drift paths and violates invariant 3 in practice, or
+publishing the harness as a versioned package first. The trigger to revisit is precise: when Creator stops
+importing `desktop/` and `harness/` directly. A marketplace is a distribution surface rather than a product
+surface and gets its own repository when it exists.
+
+**2. Creator's version is its tag.** No second committed version field. `desktop/package.json`'s `version`
+is Agent's line, so a malformed `creator-v*` tag is a hard build failure in the Creator workflow rather
+than the fallback the Agent workflow uses: falling back there would publish a Creator release numbered
+from Agent's cadence. The manual test-build stamp is likewise based on the newest published `creator-v*`
+release only, never on the repo's newest release.
+
+### The defect this increment actually found
+
+The overlay deep-cloned Agent's `publish` block and never overrode it. Reading the installed provider
+(`desktop/node_modules/electron-updater/out/providers/GitHubProvider.js`) rather than assuming: with
+`allowPrerelease` unset, which is our case, `getLatestVersion` takes its tag from `getLatestTagName`, which
+GETs `/<owner>/<repo>/releases/latest`. That is a single latest-release POINTER for the whole repository,
+the one `make_latest` moves. It then fetches `releases/download/<that tag>/latest.yml`. Both products emit
+a file named exactly `latest.yml`, and `desktop/updater.ts` sets `autoDownload` and
+`autoInstallOnAppQuit`. A shipped Creator would have resolved Agent's rolling release, downloaded
+`LucidAgent-Setup.exe`, and installed it on the next quit. The atom feed the same function reads is only
+used to attach release notes.
+
+Renaming the channel does not fix it, which is the trap: selection is still that one shared pointer, so
+Creator would find Agent's release and 404 on its own channel file inside it, i.e. an app that never
+updates again. Selection has to be skipped entirely. Creator now publishes a **generic** provider pinned to
+`releases/download/creator-latest`; `GenericProvider.getLatestVersion` fetches `<url>/<channel>.yml` at a
+fixed URL with no release lookup. Same mechanism `managed_config.ts` already uses for the enterprise
+`feed` channel, and an enterprise `updateFeedUrl` still overrides it at runtime.
+
+**The hazard is bidirectional, and that half is worse.** Agent's installed base resolves through the same
+pointer. A Creator release that ever became the repo's latest would send every installed Agent to Creator's
+feed, breaking users who never installed Creator. So every publish step in `build-creator.yml` passes
+`make_latest: "false"`, and the rolling release is additionally a prerelease, which GitHub excludes from
+that pointer outright. Two independent guarantees, both asserted.
+
+### The gates could never have run on Creator bytes
+
+`airgap-smoke.ts` (ADR-0225) and `pf-boot-smoke.ts` (ADR-0261) both hardcoded `desktop/release`. Creator
+packages into `desktop/release-creator`, so a mirrored workflow would have failed on a missing directory
+or, on a runner that had also built Agent, passed by inspecting Agent's tree and reported green about bytes
+it never opened. That second case is the dangerous one: a gate that proves nothing while looking green.
+
+Both now honor `LUCID_RELEASE_DIR`, restricted to a bare directory name under `desktop/`. A gate that can
+be aimed anywhere is a gate that can be made to pass against bytes nobody is shipping, so a value
+containing a separator or a leading dot is refused outright. Verified behaviorally in both scripts:
+default resolves to `desktop\release` (and the Agent air-gap gate still runs its real checks there, with
+the scanner and omp both answering offline), the override resolves to `desktop\release-creator`, and
+`../release` is refused by name.
+
+### Consequences
+
+1. Creator and Agent versions are independent, and neither can renumber the other.
+2. `desktop/build/electron-builder.creator.d.cts` now types the overlay, because two TypeScript programs
+   read it and the root program has `noImplicitAny`. Only asserted fields are named; an index signature
+   carries the rest of electron-builder's surface so adding an override never edits the declaration.
+3. The overlay test parses the workflow with `Bun.YAML` instead of substring-matching it. An indentation
+   error in a release workflow otherwise surfaces only on a release tag, which is the worst moment to find
+   it. It also asserts the tag baked into the packaged feed and the tag the workflow publishes to are the
+   same string, because drift there fails no build and silently leaves every installed Creator
+   un-updatable.
+4. Still unbuilt, and deliberately not in this increment: the payload split. Both installers carry all
+   Creator source today, inert behind flavor gates. Making Creator genuinely absent from the standard
+   installer is an entry-point split, not a branching or release change.
+5. `publish-creator-latest` is pinned to `refs/heads/master`, the same double gate Agent's rolling publish
+   uses. That single line is what would change if Creator ever did move to a release branch.
+
 ## ADR-0285 -- CREATOR-1..CREATOR-6: the Creator build arc after the foundation (SCOPE/PLAN)
 
 **Date:** 2026-08-30

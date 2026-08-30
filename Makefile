@@ -514,7 +514,7 @@ demo-CREATOR-IMG: ## CREATOR-IMG (ADR-0291): sprite sheets, animated GIFs, and m
 	$(BUN) run harness/scripts/demo_creator_img.ts
 
 .PHONY: demo-CREATOR-0
-demo-CREATOR-0: ## CREATOR-0 (ADR-0279..0284): the Creator flavor - a second LUCID on its own identity/port/data root, Creator Mode gated to that build with AGENT security semantics, an honest integration registry (Suno generation is bring-your-own-endpoint, ElevenLabs Studio editing is vendor-app-only), evidence-based CPU/GPU admission where unknown is never idle, and a local track library (listen/review/remix/re-prompt) that needs no provider API
+demo-CREATOR-0: ## CREATOR-0 (ADR-0279..0284, ADR-0302): the Creator flavor - a second LUCID on its own identity/port/data root, Creator Mode gated to that build with AGENT security semantics, an honest integration registry (Suno generation is bring-your-own-endpoint, ElevenLabs Studio editing is vendor-app-only), evidence-based CPU/GPU admission where unknown is never idle, a local track library (listen/review/remix/re-prompt) that needs no provider API, and a release channel that cannot be crossed with Agent's in either direction (Creator updates from its own fixed-URL feed, and no Creator release can move the repo pointer Agent's installed base resolves through)
 	$(BUN) run harness/scripts/demo_creator0.ts
 
 .PHONY: demo-P-FLEET.L2

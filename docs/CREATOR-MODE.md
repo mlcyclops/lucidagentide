@@ -39,6 +39,8 @@ Conflicts are confined to the seams listed in ADR-0279's "Files touched" section
 | Managed whisper port | 9111 | 9112 |
 | Installer | `LucidAgent-Setup.exe` | `LucidCreator-Setup.exe` |
 | Output directory | `desktop/release` | `desktop/release-creator` |
+| Release tag namespace | `v*` | `creator-v*` |
+| Update feed | GitHub provider, shared repo pointer | generic provider, `creator-latest` |
 | Electron userData | `...\LucidAgentIDE` | `...\LucidCreator` |
 | GUI settings | `~/.omp/lucid-gui.json` | `<Creator userData>/lucid-gui.json` |
 | Personal knowledge | `~/.omp` | `<Creator userData>/personal` |
@@ -72,6 +74,57 @@ puts the Agent bundle back. Never interleave the two in one packaging run.
 
 Overrides for a one-off run: `LUCID_BUILD_FLAVOR=creator`, `LUCID_PORT`, `LUCID_GUI_SETTINGS_FILE`,
 `LUCID_PERSONAL_DIR`, `LUCID_CRED_VAULT_DIR`, `LUCID_CREATOR_DIR`, `LUCID_RELAY_PORT`, `LUCID_WHISPER_PORT`.
+
+## Releasing Creator
+
+Creator releases on its own cadence, from the same branch, with no second repo and no long-lived branch:
+
+| | Agent | Creator |
+| --- | --- | --- |
+| Workflow | `.github/workflows/build-desktop.yml` | `.github/workflows/build-creator.yml` |
+| Release tag | `v1.14.0` | `creator-v0.1.0` |
+| Rolling release | `latest` | `creator-latest` |
+| Homebrew cask | `Casks/lucidagentide.rb` | none, mac ships `.zip` only |
+
+`creator-v*` does not match `v*`, so the two triggers never overlap: one tag builds exactly one product.
+Creator's version comes from its tag, which is why a malformed `creator-v*` tag is a hard build failure
+rather than falling back to `desktop/package.json` the way the Agent workflow does. That field is Agent's
+version line, and a Creator release must never inherit it.
+
+### The update-feed hazard, in both directions
+
+electron-updater's GitHub provider resolves its tag from `GET /<owner>/<repo>/releases/latest`, which is
+one latest-release **pointer** shared by the whole repository, the one `make_latest` moves. Both products
+emit a feed file named exactly `latest.yml`, and `desktop/updater.ts` sets `autoDownload` and
+`autoInstallOnAppQuit`. That produces two failure modes, both silent:
+
+- **Creator pulling Agent.** Until this was fixed the Creator overlay inherited Agent's `publish` block,
+  so a shipped Creator resolved Agent's rolling release and would have installed LucidAgent bytes over
+  itself on the next quit. Creator now publishes a **generic** provider pinned to
+  `releases/download/creator-latest`, which fetches its feed at a fixed URL with no release lookup at all.
+  Renaming the channel would not have been enough: selection is still that one shared pointer, so Creator
+  would have found Agent's release and merely 404'd looking for its own channel file inside it, which is
+  an app that never updates again.
+- **Agent pulling Creator.** The same pointer means a Creator release that ever became "latest" would send
+  every installed Agent to Creator's feed, breaking users who never installed Creator. So every publish
+  step in `build-creator.yml` passes `make_latest: "false"`, and the rolling release is additionally a
+  prerelease, which GitHub excludes from that pointer outright. Two independent guarantees.
+
+`desktop/build/electron-builder.creator.test.ts` asserts all of this against the parsed workflow, including
+that the tag baked into the packaged feed and the tag the workflow publishes to are the same string. Drift
+there fails no build; it just leaves every installed Creator permanently un-updatable.
+
+An enterprise `updateFeedUrl` (ADR-A009) still overrides the whole mechanism at runtime, unchanged.
+
+### Both release gates run on Creator bytes
+
+`airgap-smoke.ts` (ADR-0225) and `pf-boot-smoke.ts` (ADR-0261) are what stop a broken Agent installer from
+shipping. Both defaulted to `desktop/release`, so neither could ever have inspected a Creator build. They
+now honor `LUCID_RELEASE_DIR`, and `build-creator.yml` sets it to `release-creator` for both. The value
+must be a bare directory name under `desktop/`, because a gate that can be aimed anywhere is a gate that
+can be made to pass against bytes nobody is shipping. Left unset, the Creator jobs would either fail on a
+missing directory or, on a runner that had also built Agent, pass by inspecting Agent's tree and report
+green about bytes they never opened. The second case is the dangerous one.
 
 ## Creator Mode, next to Agent Mode
 

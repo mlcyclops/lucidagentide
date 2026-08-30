@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_creator0.ts - CREATOR-0 (ADR-0279..0284): the runnable proof.
 //
-// Seven checks, no Electron, no packaging, no network:
+// Eight checks, no Electron, no packaging, no network:
 //   1. two flavors that can genuinely coexist (identity, ports, scheme, artifacts)
 //   2. Creator Mode is offered ONLY in a Creator build, and its security posture equals Agent's
 //   3. Creator standing guidance is tail-only and appears only in Creator build + Creator mode
@@ -11,6 +11,7 @@
 //   5. endpoint declarations are fail-closed and never carry a secret
 //   6. telemetry is honest: unknown is never zero, and a burst never refuses a job
 //   7. the local track library works end to end with NO provider API at all
+//   8. the Creator release channel and Agent's cannot be crossed, in EITHER direction
 
 import {
   AGENT_FLAVOR, CREATOR_FLAVOR, normalizeUiMode, resolveBuildFlavor, uiModePosture,
@@ -30,6 +31,9 @@ import {
 } from "../../desktop/creator_library.ts";
 import { pressureRailHtml, creatorFlyoutHtml } from "../../desktop/renderer/creator_monitor.ts";
 import { creatorIntegrationsHtml, creatorLibraryHtml } from "../../desktop/renderer/creator_studio.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import creatorPackaging from "../../desktop/build/electron-builder.creator.cjs";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -172,7 +176,37 @@ check("the audio bytes live under the Creator library root", `${libraryAudioDir(
 check("the Studio renders the registry with its honesty labels",
   creatorIntegrationsHtml([sunoStatus]).includes("cst-cap-unverified-endpoint"));
 
+console.log("8) the Creator release channel cannot be crossed with Agent's, in either direction");
+interface WfStep { run?: string; uses?: string; env?: Record<string, string>; with?: Record<string, unknown> }
+// Parsed, not substring-matched: an indentation error would otherwise surface only on a release tag.
+const relWf = Bun.YAML.parse(
+  readFileSync(join(import.meta.dir, "..", "..", ".github", "workflows", "build-creator.yml"), "utf8"),
+) as Record<string, unknown>;
+// YAML 1.1 reads a bare `on` as boolean true; GitHub's parser reads the string. Accept either.
+const relTriggers = (relWf.on ?? relWf.true) as { push?: { tags?: string[] } } | undefined;
+const relSteps = Object.values((relWf.jobs ?? {}) as Record<string, { steps?: WfStep[] }>).flatMap((j) => j.steps ?? []);
+const relPublishes = relSteps.filter((s) => (s.uses ?? "").startsWith("softprops/action-gh-release"));
+const relRolling = relPublishes.find((s) => s.with?.tag_name === "creator-latest");
+const relFeed = creatorPackaging.publish?.[0];
+check("one Creator tag namespace, and it never overlaps Agent's `v*`",
+  JSON.stringify(relTriggers?.push?.tags) === '["creator-v*"]', JSON.stringify(relTriggers?.push?.tags));
+check("Creator's packaged feed skips release lookup entirely: generic provider at a fixed URL",
+  relFeed?.provider === "generic" && relFeed.repo === undefined, String(relFeed?.url));
+check("it points at Creator's OWN rolling tag, never Agent's `latest`",
+  relFeed?.url?.endsWith("/releases/download/creator-latest") === true);
+check("the workflow publishes to exactly that tag, so an installed Creator stays updatable",
+  relRolling !== undefined);
+check("no Creator release can move the repo pointer AGENT's installed base resolves through",
+  relPublishes.length === 2 && relPublishes.every((s) => s.with?.make_latest === "false"),
+  `${relPublishes.length} publish step(s)`);
+check("the rolling release is also a prerelease, which that pointer excludes outright",
+  relRolling?.with?.prerelease === true);
+const relGates = relSteps.filter((s) => (s.run ?? "").includes("-smoke.ts"));
+check("both release gates run, and against CREATOR bytes rather than desktop/release",
+  relGates.length === 2 && relGates.every((s) => s.env?.LUCID_RELEASE_DIR === "release-creator"),
+  relGates.map((s) => s.run?.replace("bun run build/", "")).join(" + "));
+
 console.log(failures === 0
-  ? "\ndemo_creator0 OK - a second LUCID flavor on its own port and identity, Creator Mode gated to that build with Agent security semantics, an honest integration registry (Suno generation is bring-your-own-endpoint, ElevenLabs Studio editing is vendor-app-only), evidence-based CPU/GPU admission where unknown is never idle, and a local track library that listens, reviews, remixes, and re-prompts with no provider API at all."
+  ? "\ndemo_creator0 OK - a second LUCID flavor on its own port and identity, Creator Mode gated to that build with Agent security semantics, an honest integration registry (Suno generation is bring-your-own-endpoint, ElevenLabs Studio editing is vendor-app-only), evidence-based CPU/GPU admission where unknown is never idle, a local track library that listens, reviews, remixes, and re-prompts with no provider API at all, and a release channel that cannot be crossed with Agent's in either direction."
   : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
