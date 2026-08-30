@@ -19803,7 +19803,11 @@ this document), ADR-0073 (the STT seam that supplies text but no timings).
 independently on this machine, not the ones reported. `bun run harness/scripts/demo_creator3.ts` green
 (13 sections, 101 checks, 0 failures) and proven loud (a sabotaged claim exits 1 naming it); 342 new tests
 across comfy_stream / frame_capture / blender_cli / model_manifest / creator_pipeline / creator_blender /
-renderer creator_pipeline, 0 fail; 774 pass across the 24 Creator-adjacent files; harness tree 1494 pass /
+renderer creator_pipeline, 0 fail; 774 pass across the 24 Creator-adjacent files (the authoring session's
+787 across 25 is the SAME measurement over one more file, `desktop/build_flavor.test.ts` at 13 tests, and
+774 + 13 = 787: a scope difference, NOT another instance of the release-copy inflation below, which is worth
+stating so a later reader who knows about that bug does not go hunting for an error that is not there);
+harness tree 1494 pass /
 2 fail across 136 files and desktop tree 2626 pass / 9 fail across 215 files, every failure a pre-existing
 Windows path-separator or TS-resolution case in `fs_browse`, `symbol_graph` and `lucid_acp`, files this
 increment never touched; `harness/prompt` 11 pass across 2 files (of which `prefix_compaction` is 4), so the
