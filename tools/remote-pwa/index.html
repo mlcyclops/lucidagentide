@@ -99,6 +99,13 @@
     .chip.subagent .chip-name { color: var(--cyan); font-weight: 600; }
     .chip-detail { color: var(--txt2); word-break: break-all; }
     .chip.block { background: rgba(239, 68, 68, 0.05); border-color: rgba(239, 68, 68, 0.2); color: var(--red); }
+    /* P-PWA-FOCUS.1: a lane's turn FAILED. Red, because it is a failure, but deliberately NOT the `block`
+       chip: `block` means the security gate refused something, and the one signal that must stay
+       unambiguous cannot be shared with ordinary crashes. Dashed left rule + its own label carry the
+       difference even if the palette is restyled later. */
+    .chip.lane-fail { background: rgba(239, 95, 95, 0.06); border-color: rgba(239, 95, 95, 0.3); border-left: 3px dashed #ef5f5f; color: #ef5f5f; }
+    .chip.lane-fail .chip-name { color: #ef5f5f; font-weight: 700; }
+    .chip.lane-fail .chip-detail { color: var(--txt2); }
     .chip.block.sev-high { font-weight: 600; background: rgba(239, 68, 68, 0.1); }
     
     #controls { display: flex; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; flex-wrap: wrap; }
@@ -113,22 +120,49 @@
     .cx-thumb-img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .cx-thumb-x { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; border: none; background: rgba(0,0,0,0.6); color: #fff; font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
 
-    /* P-REMOTE.11: two-row composer - row 1 is the full-width input; row 2 is the actions row
-       ([+] ... Stop Send), auto-collapsed while idle (the global [hidden] rule hides it) so reading
-       keeps the vertical space. app.ts shows it on focus/text/attachments/streaming. */
+    /* P-REMOTE.11: two-row composer - row 1 is the full-width input; row 2 is the actions row,
+       auto-collapsed while idle (the global [hidden] rule hides it) so reading keeps the vertical space.
+       app.ts shows it on focus/text/attachments/streaming/an open menu. */
     #composer { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
-    #composer-actions { display: flex; align-items: center; gap: 10px; }
+    /* P-REMOTE.15: ONE tidy row that never wraps - two icon controls, a MORE menu holding the same-family
+       extras, a "?" for the voice explanation, then the turn controls. The spacer absorbs all slack. */
+    #composer-actions { position: relative; display: flex; align-items: center; gap: 7px; flex-wrap: nowrap; }
     /* P-REMOTE.12: push-to-talk. Held = red ring + fill; disabled while read-only (composer hidden anyway). */
-    #ptt-btn { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--txt); -webkit-touch-callout: none; user-select: none; touch-action: none; }
-    #ptt-btn.rec, #stt-btn.rec { color: #ff5f5f; border-color: #ff5f5f; box-shadow: 0 0 0 3px rgba(255,95,95,.25); animation: pttpulse 1.2s ease-in-out infinite; }
+    #ptt-btn { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--txt); -webkit-touch-callout: none; user-select: none; touch-action: none; }
+    #ptt-btn.rec, #more-btn.rec { color: #ff5f5f; border-color: #ff5f5f; box-shadow: 0 0 0 3px rgba(255,95,95,.25); animation: pttpulse 1.2s ease-in-out infinite; }
     @keyframes pttpulse { 0%,100% { box-shadow: 0 0 0 3px rgba(255,95,95,.25); } 50% { box-shadow: 0 0 0 6px rgba(255,95,95,.12); } }
-    /* P-REMOTE.14: device-native dictation - the button beside push-to-talk (idle / offer / caution states),
-       its one-line note under the composer, and the consent sheet. The listening pulse REUSES the
-       push-to-talk animation above: this app has exactly one recording animation, on purpose. */
-    #stt-btn { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--txt); -webkit-touch-callout: none; user-select: none; }
-    #stt-btn[data-stt=offer] { color: var(--cyan); border-color: rgba(45, 212, 191, 0.45); }
-    #stt-btn[data-stt=cloud] { color: var(--amber); border-color: rgba(245, 158, 11, 0.45); }
-    #stt-note { font-size: 12px; line-height: 1.45; color: var(--txt3); }
+
+    /* P-REMOTE.15: the two small round controls - the MORE menu (dictate / check in: the extras that used to
+       stand as their own buttons) and the "?" that opens the full voice-and-privacy sheet. The "?" turns
+       amber whenever the current voice path would send audio off the phone, so the caution stays visible
+       even though the sentences moved into the sheet. The listening pulse REUSES push-to-talk's animation:
+       this app has exactly one recording animation, on purpose. */
+    #more-btn, #help-btn { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--txt2); font-size: 15px; font-weight: 700; line-height: 1; padding: 0; }
+    #more-btn[data-stt=cloud] { color: var(--amber); border-color: rgba(245, 158, 11, 0.45); }
+    #help-btn[data-tone=warn] { color: var(--amber); border-color: rgba(245, 158, 11, 0.45); }
+
+    /* P-REMOTE.15: the composer popup menus (More, and the Send split). Anchored above the row - the
+       composer sits at the bottom of the screen. Every menu row is a COLUMN flex whose children are two
+       whole elements, so prose never shatters into flex items (AGENTS.md #11). */
+    .cx-wrap { position: relative; flex: none; display: flex; align-items: center; }
+    /* A menu wide enough to read would run off the right edge if it hung from a button sitting mid-row, so the
+       LEFT-hand menu hangs from the row itself (static wrapper -> #composer-actions is the containing block)
+       and the right-hand one hangs from its own group, which already ends at the row's right edge. Both then
+       fit any phone width by construction. */
+    .cx-wrap.row-anchor { position: static; }
+    .cx-menu { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40; width: max-content; min-width: 216px; max-width: min(264px, calc(100vw - 28px)); background: var(--bg2); border: 1px solid var(--line); border-radius: 14px; padding: 6px; box-shadow: 0 14px 34px rgba(0,0,0,.6); display: flex; flex-direction: column; gap: 2px; }
+    .cx-menu.right { left: auto; right: 0; }
+    .cx-mi { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 46px; padding: 8px 12px; border-radius: 10px; background: transparent; color: var(--txt); text-align: left; }
+    .cx-mi:active { background: var(--bg1); }
+    .cx-mi-l { display: block; max-width: 100%; font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cx-mi-d { display: block; max-width: 100%; font-size: 12px; line-height: 1.35; font-weight: 400; color: var(--txt3); }
+    .cx-mi[data-stt=offer] .cx-mi-l { color: var(--cyan); }
+    .cx-mi[data-stt=cloud] .cx-mi-l { color: var(--amber); }
+
+    /* P-REMOTE.15: the voice line under the composer is now a SHORT, one-line transient status (listening /
+       failed). The long explanation lives in the "?" sheet, where it has room to be read. */
+    #voice-status { font-size: 12.5px; line-height: 1.4; color: var(--cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #voice-status[data-tone=warn] { color: var(--amber); }
     #stt-sheet { position: fixed; inset: 0; z-index: 55; background: var(--bg); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
     .stt-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
     .stt-title { flex: 1; font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -137,7 +171,7 @@
     #stt-sheet-note { padding: 0 16px 10px; font-size: 13px; color: var(--amber); }
     .stt-acts { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
     .stt-acts button { height: 44px; min-height: 44px; padding: 0 18px; width: auto; max-width: max-content; font-size: 14px; }
-    .composer-spacer { flex: 1; }
+    .composer-spacer { flex: 1 1 0; min-width: 0; }
     #prompt-input { display: block; width: 100%; resize: none; background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font: inherit; min-height: 44px; max-height: 160px; overflow-y: auto; transition: border-color 0.2s; -webkit-appearance: none; line-height: 1.4; }
     #prompt-input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
     #prompt-input::placeholder { color: var(--txt3); }
@@ -167,8 +201,20 @@
     .cu-chev { flex: none; transition: transform 0.15s ease; }
     #catchup[data-open] .cu-chev { transform: rotate(180deg); }
     #catchup-body { max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
-    .cu-turn { font-size: 13px; line-height: 1.45; color: var(--txt2); white-space: pre-wrap; word-break: break-word; }
-    .cu-role { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--txt3); margin-right: 6px; }
+    /* P-PWA-FOCUS.2: the sync card. One row per conversation with a backlog, tappable to jump to ITS unseen
+       boundary, plus the Sync action for a long absence. */
+    .cu-head { display: flex; align-items: center; gap: 8px; padding-right: 12px; }
+    .cu-head #catchup-bar { flex: 1; min-width: 0; }
+    #sync-go { flex: none; height: 26px; min-height: 0; padding: 0 12px; font-size: 12px; font-weight: 700; border-radius: 99px; background: var(--cyan); color: #0a0b0f; border: none; white-space: nowrap; }
+    .cu-jump { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); color: var(--txt); text-align: left; }
+    .cu-jump:active { background: var(--bg2); }
+    .cu-jump-n { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cu-jump-c { flex: none; font-size: 12px; font-weight: 700; color: var(--cyan); font-variant-numeric: tabular-nums; }
+    /* the boundary renderTranscript draws, and the thing applySync scrolls to. A rule with a label, not a
+       message bubble: it marks a POSITION in the conversation rather than pretending to be part of it. */
+    .sync-mark { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+    .sync-mark::before, .sync-mark::after { content: ""; flex: 1; height: 1px; background: rgba(45, 212, 191, 0.35); }
+    .sync-mark-l { flex: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--cyan); white-space: nowrap; }
 
     /* P-PREVIEW-PWA.1: a preview snapshot the host sent - thumbnail in the transcript + a fullscreen viewer */
     .msg.shot { align-self: flex-start; max-width: 92%; padding: 0; background: none; border: none; }
@@ -195,12 +241,35 @@
     #install-btn { min-height: 40px; font-size: 13px; }
     /* off-screen but RENDERED (never display:none) so a tap on the <label for> opens the iOS file picker */
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-    #attach-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex-shrink: 0; background: var(--bg); color: var(--txt2); border: 1px solid var(--line); border-radius: 12px; -webkit-appearance: none; cursor: pointer; user-select: none; -webkit-user-select: none; }
+    #attach-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: none; background: var(--bg); color: var(--txt2); border: 1px solid var(--line); border-radius: 12px; -webkit-appearance: none; cursor: pointer; user-select: none; -webkit-user-select: none; }
     #attach-btn:active { color: var(--cyan); border-color: var(--cyan); transform: scale(0.98); }
 
-    #abort-btn { background: rgba(239, 68, 68, 0.05); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.2); height: 44px; min-height: 44px; padding: 0 18px; font-weight: 600; }
+    /* P-REMOTE.15: Stop is icon-only (the red square already reads as "stop") and shows ONLY while a turn is
+       running, so an idle composer carries no dead controls. */
+    #abort-btn { display: grid; place-items: center; width: 38px; height: 38px; min-height: 0; flex: none; padding: 0; background: rgba(239, 68, 68, 0.06); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.28); border-radius: 12px; }
     #abort-btn:hover { background: rgba(239, 68, 68, 0.1); }
-    #composer button[type="submit"] { height: 44px; min-height: 44px; padding: 0 22px; width: auto; font-size: 15px; }
+    /* P-REMOTE.15: ONE send control. Its label flips Send -> Queue while a turn is running (both go down the
+       same PromptFrame path; the host stages a mid-turn one), and a caret appears beside it holding the
+       alternative in that same family, Push now. */
+    #composer button[type="submit"] { height: 40px; min-height: 0; padding: 0 14px; width: auto; max-width: none; font-size: 14.5px; box-shadow: none; }
+    #send-group[data-split] #send-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 10px; }
+    #send-more { width: 28px; height: 40px; flex: none; padding: 0; border-radius: 0 12px 12px 0; border: none; border-left: 1px solid rgba(10, 11, 15, 0.28); background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #0a0b0f; }
+    /* The sizes above ARE the phone-portrait sizes: the row is measured mid-turn (its widest state - Stop,
+       Queue, and the caret all present) at 320 / 360 / 375 / 390 CSS px and must never exceed its own width.
+       360px (Android compacts, iPhone 12 mini) needs a few px back, and below ~344px there is nothing left to
+       trim but the send LABEL - the icon still reads as send/queue and the button's aria-label (set per state
+       in app.ts) still says it in full. */
+    @media (max-width: 374px) {
+      #composer-actions { gap: 6px; }
+      #more-btn, #help-btn { width: 30px; height: 30px; }
+      #composer button[type="submit"] { padding: 0 12px; }
+      #send-group[data-split] #send-btn { padding-right: 9px; }
+      #send-more { width: 26px; }
+    }
+    @media (max-width: 344px) {
+      #composer-actions { gap: 5px; }
+      #send-label { display: none; }
+    }
 
     /* P-REMOTE.9: tool-chip +/- diffstat + the end-of-run report */
     .chip.tool { align-items: center; }
@@ -245,34 +314,103 @@
     .reconnect-input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
     #reconnect-status { min-height: 20px; font-size: 13px; color: var(--txt2); max-width: 320px; }
 
-    /* P-PWA-FLEET.1: FLEET strip (above the transcript) - lane cards in a horizontal scroller */
+    /* P-PWA-FLEET.2: the FLEET strip - an auto-collapsed double-decker above the transcript.
+
+       COLOUR PARITY WITH THE DESKTOP IS THE POINT. The five lane colours, the two animations, and the rule
+       that ONLY the two action-needed states animate are lifted from desktop/renderer/styles.css
+       (.fleet-card.lane-*), keyed off the SAME `lane-<status>` class, so a lane that is red in the desktop
+       dock is red here. The phone's own hues are used where the desktop's palette has an equivalent, and
+       the desktop's exact rgba glows are kept so the two surfaces read identically at a glance. */
     #fleet { flex-shrink: 0; border-bottom: 1px solid var(--line); background: var(--bg1); }
-    .fleet-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px 0; }
+    #fleet-bar { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 14px; background: transparent; border: none; color: var(--txt2); font-size: 12px; text-align: left; border-radius: 0; }
+    #fleet-bar:active { transform: none; }
     .fleet-title { flex: none; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--txt3); white-space: nowrap; }
-    #fleet-filter { flex: 1; min-width: 0; background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; font-size: 13px; min-height: 32px; -webkit-appearance: none; }
+    .fleet-sum { flex: 1; min-width: 0; font-size: 12px; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fl-chev { flex: none; color: var(--txt3); transition: transform 0.15s ease; }
+    #fleet[data-open] .fl-chev { transform: rotate(180deg); }
+    /* attention tint on the COLLAPSED bar: a lane blocked on you must be visible without expanding */
+    #fleet[data-attn] .fleet-title { color: var(--red); }
+    #fleet[data-attn] .fleet-sum { color: var(--txt); }
+
+    /* the collapsed bar's count pips - one per state present, coloured by the same lane-<status> mapping
+       as the desktop's minimized dock pill (.fleet-pip there, identical structure: dot + count) */
+    .fleet-pips { display: inline-flex; align-items: center; gap: 7px; flex: none; white-space: nowrap; }
+    .fleet-pip { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+    .fleet-pip i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--lane, var(--txt3)); box-shadow: 0 0 6px var(--lane-dim, transparent); }
+    .fleet-pip b { font-size: 10.5px; font-weight: 700; color: var(--txt2); font-variant-numeric: tabular-nums; }
+    .fleet-pip.lane-needs-approval b, .fleet-pip.lane-awaiting-input b { color: var(--txt); }
+    .fleet-pip.lane-needs-approval i { animation: fleetGlowRed 1.6s ease-in-out infinite; }
+    .fleet-pip.lane-working i { animation: lanePulse 2.2s ease-in-out infinite; }
+    .fleet-pip.lane-stopped, .fleet-pip.lane-idle { opacity: .55; }
+
+    /* the bar sits ABOVE its panel: #fleet is anchored to the TOP of the screen (unlike #botstrip, which
+       hangs off the bottom), so expanding must push content DOWN from under the bar, never above it */
+    #fleet-panel { border-top: 1px solid var(--line); }
+    .fleet-head { display: flex; align-items: center; padding: 8px 14px 0; }
+    #fleet-filter { flex: 1; min-width: 0; background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; font-size: 13px; min-height: 34px; -webkit-appearance: none; }
     #fleet-filter:focus { outline: none; border-color: var(--cyan); }
-    #fleet-body { display: flex; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 8px 14px 10px; }
+    /* VERTICAL, full-width cards (was a 220px horizontal scroller): a lane you can drive needs the width */
+    /* 44vh caps the open panel so the transcript keeps ~250px on a 390x844 phone: enough to still read the
+       master session's last exchange while working a lane. Measured; the body scrolls past the cap. */
+    #fleet-body { display: flex; flex-direction: column; gap: 8px; max-height: 44vh; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 14px 10px; }
     .fleet-lanes { display: contents; }
     .fleet-empty { font-size: 12.5px; color: var(--txt3); padding: 4px 0; }
-    .lane-card { flex: 0 0 auto; width: 220px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+
+    /* THE LANE COLOUR MAPPING - desktop parity, one custom property per state */
+    .lane-card { --lane: var(--txt3); --lane-dim: transparent; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; }
+    .lane-card.lane-starting { --lane: #64748b; }
+    .lane-card.lane-working { --lane: #46c8dc; --lane-dim: rgba(70,200,220,.35); border-color: rgba(70,200,220,.5); }
+    .lane-card.lane-awaiting-input { --lane: #e8b23c; --lane-dim: rgba(232,178,60,.4); border-color: #e8b23c; animation: fleetGlowAmber 2.6s ease-in-out infinite; }
+    .lane-card.lane-needs-approval { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.5); border-color: #ef5f5f; animation: fleetGlowRed 1.6s ease-in-out infinite; }
+    .lane-card.lane-done { --lane: #46d27e; --lane-dim: rgba(70,210,126,.35); border-color: rgba(70,210,126,.55); }
+    .lane-card.lane-error { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.4); border-color: #ef5f5f; }
+    .lane-card.lane-stopped { --lane: #525a70; opacity: .55; }
+    /* the pips share the mapping by class, exactly as the desktop pill shares it with its cards */
+    .fleet-pip.lane-starting { --lane: #64748b; }
+    .fleet-pip.lane-working { --lane: #46c8dc; --lane-dim: rgba(70,200,220,.45); }
+    .fleet-pip.lane-awaiting-input { --lane: #e8b23c; --lane-dim: rgba(232,178,60,.5); }
+    .fleet-pip.lane-needs-approval { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.6); }
+    .fleet-pip.lane-done { --lane: #46d27e; --lane-dim: rgba(70,210,126,.45); }
+    .fleet-pip.lane-error { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.4); }
+    @keyframes fleetGlowAmber { 0%,100% { box-shadow: 0 0 0 0 rgba(232,178,60,0); } 50% { box-shadow: 0 0 14px 2px rgba(232,178,60,.4); } }
+    @keyframes fleetGlowRed { 0%,100% { box-shadow: 0 0 2px 0 rgba(239,95,95,.3); } 50% { box-shadow: 0 0 18px 3px rgba(239,95,95,.6); } }
+    @keyframes lanePulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+    /* the desktop honours this; so does the phone. Only the two attention states animate at all. */
+    @media (prefers-reduced-motion: reduce) {
+      .lane-card.lane-awaiting-input, .lane-card.lane-needs-approval,
+      .fleet-pip.lane-needs-approval i, .fleet-pip.lane-working i { animation: none; }
+    }
+
     .lane-row { display: flex; align-items: center; gap: 8px; }
-    .lane-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--txt3); flex: none; }
-    .lane-dot[data-status=working], .lane-dot[data-status=starting] { background: var(--green); box-shadow: 0 0 6px var(--green); }
-    .lane-dot[data-status=needs-approval], .lane-dot[data-status=awaiting-input] { background: var(--amber); }
-    .lane-dot[data-status=error], .lane-dot[data-status=stopped] { background: var(--red); }
-    .lane-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .lane-status { flex: none; font-size: 11px; color: var(--txt3); white-space: nowrap; }
+    .lane-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--lane); box-shadow: 0 0 7px var(--lane-dim); }
+    .lane-card.lane-working .lane-dot { animation: lanePulse 2.2s ease-in-out infinite; }
+    .lane-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lane-status { flex: none; font-size: 11px; font-weight: 600; color: var(--lane); white-space: nowrap; }
     .lane-meta { display: flex; align-items: center; gap: 8px; }
     .lane-cwd { flex: 1; min-width: 0; font-size: 12px; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .lane-turns { flex: none; font-size: 11px; color: var(--txt3); white-space: nowrap; }
-    .lane-pend { display: flex; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 6px 8px; }
-    .lane-pend-sum { flex: 1; min-width: 0; font-size: 12px; color: var(--amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .lane-approve, .lane-act { display: flex; gap: 6px; }
-    .lane-btn { flex: 1; min-height: 32px; padding: 0 8px; font-size: 12px; font-weight: 600; border-radius: 8px; background: var(--bg2); color: var(--txt); border: 1px solid var(--line); white-space: nowrap; }
+    .lane-pend { display: flex; background: rgba(239, 95, 95, 0.08); border: 1px solid rgba(239, 95, 95, 0.28); border-radius: 8px; padding: 6px 8px; }
+    .lane-pend-sum { flex: 1; min-width: 0; font-size: 12px; color: #ef5f5f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lane-approve { display: flex; gap: 6px; }
+    .lane-btn { min-height: 34px; padding: 0 10px; font-size: 12.5px; font-weight: 600; border-radius: 8px; background: var(--bg2); color: var(--txt); border: 1px solid var(--line); white-space: nowrap; }
+    .lane-approve .lane-btn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .lane-btn.allow { color: var(--green); border-color: rgba(16, 185, 129, 0.3); }
     .lane-btn.deny { color: var(--red); border-color: rgba(239, 68, 68, 0.3); }
+
+    /* P-PWA-FLEET.2: the lane's OWN composer - drive the lane in its lane, not through the master input.
+       Offers exactly what CollabGuest can do for a lane: send/queue, push, check in, stop. */
+    .lane-drive { display: flex; flex-direction: column; gap: 7px; border-top: 1px solid var(--line); padding-top: 8px; }
+    .lane-input { display: block; width: 100%; resize: none; background: var(--bg1); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13.5px; line-height: 1.4; min-height: 38px; max-height: 96px; overflow-y: auto; -webkit-appearance: none; }
+    .lane-input:focus { outline: none; border-color: var(--lane); }
+    .lane-input::placeholder { color: var(--txt3); }
+    .lane-acts { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+    .lane-spacer { flex: 1 1 0; min-width: 0; }
+    .lane-ico { display: grid; place-items: center; width: 34px; height: 34px; flex: none; padding: 0; font-size: 12px; border-radius: 8px; background: var(--bg2); color: var(--txt2); border: 1px solid var(--line); }
+    .lane-ico.stop { background: rgba(239, 68, 68, 0.06); color: var(--red); border-color: rgba(239, 68, 68, 0.28); }
+    .lane-send { height: 34px; flex: none; padding: 0 14px; font-size: 13px; font-weight: 600; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #0a0b0f; border: none; white-space: nowrap; }
+    .lane-send.push { background: rgba(245, 158, 11, 0.1); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.35); }
     /* view guests see status only - the guest core + host refuse their sends anyway (fail-closed) */
-    #fleet[data-readonly] .lane-act, #fleet[data-readonly] .lane-approve { display: none; }
+    #fleet[data-readonly] .lane-drive, #fleet[data-readonly] .lane-approve { display: none; }
 
     /* P-PWA-FLEET.1: PROCESSES strip - collapsed by default, same double-decker pattern as botstrip */
     #procs { flex-shrink: 0; border-bottom: 1px solid var(--line); background: var(--bg1); }
@@ -289,14 +427,35 @@
     .proc-label { flex: 1; min-width: 0; font-size: 12.5px; color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .proc-status { flex: none; font-size: 11px; color: var(--txt3); white-space: nowrap; }
 
-    /* P-PWA-FLEET.1: composer lane-target chip + streaming send split (Queue / Push now) + Check in */
-    #lane-target { display: flex; align-items: center; gap: 8px; background: rgba(14, 165, 233, 0.08); border: 1px solid rgba(14, 165, 233, 0.3); border-radius: 10px; padding: 5px 10px; }
-    #lane-target-label { flex: 1; min-width: 0; font-size: 12.5px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    #lane-target-x { flex: none; width: 22px; height: 22px; border-radius: 50%; background: transparent; color: var(--accent); border: none; font-size: 15px; padding: 0; }
-    #checkin-btn, #push-btn, #queue-btn { height: 44px; min-height: 44px; padding: 0 14px; font-size: 13.5px; font-weight: 600; }
-    #checkin-btn { background: var(--bg2); color: var(--cyan); border: 1px solid rgba(45, 212, 191, 0.3); }
-    #push-btn { background: rgba(245, 158, 11, 0.08); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.3); }
-    #queue-btn { background: var(--bg2); color: var(--txt); border: 1px solid var(--line); }
+    /* P-PWA-FOCUS.1: WHICH conversation the transcript and the composer point at. A lane's conversation and
+       the master's are the SAME widget, so without this bar the user cannot tell which agent the next prompt
+       reaches, and a prompt sent to the wrong lane cannot be taken back. Master hides the bar (that is the
+       default state, and a permanent banner would only cost reading space). */
+    #focusbar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-bottom: 1px solid var(--line); background: rgba(14, 165, 233, 0.09); }
+    .fb-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 7px rgba(14, 165, 233, 0.55); }
+    .fb-kick { flex: none; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); white-space: nowrap; }
+    #focus-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #focus-back { flex: none; min-height: 32px; padding: 0 10px; gap: 5px; font-size: 12px; font-weight: 600; border-radius: 8px; background: var(--bg2); color: var(--cyan); border: 1px solid var(--line); white-space: nowrap; }
+    #focus-back:active { transform: scale(0.98); }
+    .fb-back-l { white-space: nowrap; }
+    /* Only a row that maps to a real target carries the affordance: a tap that cannot do anything must not
+       look tappable. app.ts sets data-focus on exactly those rows after the shared renderer runs. */
+    .proc-row[data-focus] { cursor: pointer; }
+    .proc-row[data-focus] .proc-label { color: var(--cyan); }
+    .proc-row[data-focus]:active { background: rgba(45, 212, 191, 0.08); }
+    .proc-row[data-focus]:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+    /* A lane card's header is the same switch. The underline is the only cue a status row can carry without
+       growing a button that would compete with the card's own controls. */
+    .lane-row[role=button] { cursor: pointer; }
+    .lane-row[role=button] .lane-name { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; text-decoration-color: var(--lane); }
+    .lane-row[role=button]:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 6px; }
+    /* the card the composer is currently driving, so the fleet panel agrees with the focus bar */
+    .lane-card[data-focused] { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.55); }
+
+    /* P-REMOTE.15: Check in + Push now moved into the composer menus, so the row no longer grows a button
+       per mid-turn action. The amber Push now keeps its caution colour as a menu row. */
+    #mi-push .cx-mi-l { color: var(--amber); }
+    #mi-checkin .cx-mi-l { color: var(--cyan); }
   </style>
 </head>
 <body>
@@ -335,21 +494,39 @@
     <!-- P-REMOTE.11: the transcript takes the whole screen; the status/account controls move to a condensed,
          auto-collapsed strip UNDER the composer (double-decker) to free up maximum reading space. -->
     <div id="catchup" hidden>
-      <button id="catchup-bar" type="button" aria-expanded="false" aria-controls="catchup-body">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg>
-        <span id="catchup-label"></span>
-        <svg class="cu-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-      </button>
+      <!-- The Sync action is a SIBLING of the toggle, never nested inside it: a button inside a button is
+           invalid HTML and the parser hoists it out, which silently broke this row onto two lines. -->
+      <div class="cu-head">
+        <button id="catchup-bar" type="button" aria-expanded="false" aria-controls="catchup-body">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg>
+          <span id="catchup-label"></span>
+          <svg class="cu-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <!-- P-PWA-FOCUS.2: shown only after a LONG absence. A glance (60s or less) syncs itself, so offering
+             a button then would be asking permission for something already done. -->
+        <button type="button" id="sync-go" hidden>Sync</button>
+      </div>
       <div id="catchup-body" hidden></div>
     </div>
-    <!-- P-PWA-FLEET.1: the FLEET strip renders the LATEST fleet-status snapshot; the filter is client-side.
-         Lane controls hide for view guests (data-readonly); their sends are refused fail-closed anyway. -->
+    <!-- P-PWA-FLEET.2: the FLEET strip is an AUTO-COLLAPSED double-decker, like #procs and #botstrip - a
+         thin bar carrying the desktop pill's own count pips (shared order/wording via fleet_status.ts) that
+         taps open into full-width, individually drivable lane cards. Collapsed by default whenever lanes
+         exist, so a fleet never costs the transcript its screen. The name filter lives in the panel, not in
+         a row that is always on screen. Lane driving hides for view guests (data-readonly); their sends are
+         refused fail-closed by the guest core and again by the host. -->
     <div id="fleet" hidden>
-      <div class="fleet-head">
+      <button id="fleet-bar" type="button" aria-expanded="false" aria-controls="fleet-panel">
         <span class="fleet-title">Fleet</span>
-        <input id="fleet-filter" type="search" placeholder="Filter lanes" autocomplete="off" aria-label="Filter lanes by name" />
+        <span id="fleet-pips" class="fleet-pips"></span>
+        <span id="fleet-sum" class="fleet-sum"></span>
+        <svg class="fl-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div id="fleet-panel" hidden>
+        <div class="fleet-head">
+          <input id="fleet-filter" type="search" placeholder="Filter lanes" autocomplete="off" aria-label="Filter lanes by name" />
+        </div>
+        <div id="fleet-body"></div>
       </div>
-      <div id="fleet-body"></div>
     </div>
     <!-- P-PWA-FLEET.1: the PROCESSES strip renders the LATEST process-list snapshot, collapsed by default. -->
     <div id="procs" hidden>
@@ -359,36 +536,72 @@
       </button>
       <div id="procs-body" hidden></div>
     </div>
+    <!-- P-PWA-FOCUS.1: the focus bar - shown ONLY while a lane owns the transcript and the composer. It names
+         the lane you are typing at and holds the one way back, because the two conversations are otherwise
+         indistinguishable. Invariant #11: each text node has its own element, so the row never shatters. -->
+    <div id="focusbar" hidden>
+      <span class="fb-dot" aria-hidden="true"></span>
+      <span class="fb-kick">Lane</span>
+      <span id="focus-name" aria-live="polite"></span>
+      <button id="focus-back" type="button" aria-label="Back to the main session">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        <span class="fb-back-l">Back to main session</span>
+      </button>
+    </div>
     <div id="transcript"></div>
     <div id="cx-thumbs" hidden></div>
     <form id="composer" hidden>
-      <!-- P-PWA-FLEET.1: a lane target set by a lane card's Prompt button - the next send goes to that lane. -->
-      <div id="lane-target" hidden>
-        <span id="lane-target-label"></span>
-        <button id="lane-target-x" type="button" aria-label="Clear lane target">&times;</button>
-      </div>
       <textarea id="prompt-input" rows="1" placeholder="Message your agent…" autocomplete="off" aria-label="Message your agent"></textarea>
-      <!-- Auto-collapsed actions row: shown while composing (focus/text/attachments) or streaming (Stop). -->
+      <!-- P-REMOTE.15: ONE auto-collapsed actions row, shown while composing (focus/text/attachments), while
+           streaming (Stop stays reachable), or while a menu is open. Same-family extras live in the menus
+           instead of standing as their own buttons: Dictate + Check in under the MORE control, Push now under
+           the Send caret. The "?" opens the full voice-and-privacy sheet. -->
       <div id="composer-actions" hidden>
-        <label id="attach-btn" for="file-input" title="Attach image" role="button" tabindex="0" aria-label="Attach image"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></label>
-        <!-- P-REMOTE.12 (ADR-0251): push-to-talk - HOLD to record, release to send; the host transcribes. -->
-        <button type="button" id="ptt-btn" title="Hold to talk" aria-label="Hold to talk"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
-        <!-- P-REMOTE.14: OPTIONAL device dictation - the phone's own recognizer types into the composer for
-             review; app.ts shows this button only when the policy allows it, and never as a dead control. -->
-        <button type="button" id="stt-btn" hidden aria-pressed="false" title="Dictate on this phone" aria-label="Dictate on this phone"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg></button>
+        <label id="attach-btn" for="file-input" title="Attach image" role="button" tabindex="0" aria-label="Attach image"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></label>
         <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="sr-only" />
-        <!-- P-PWA-FLEET.1: mid-turn check-in - asks the agent for a brief status update, then it continues. -->
-        <button type="button" id="checkin-btn" hidden>Check in</button>
+        <!-- P-REMOTE.12 (ADR-0251): push-to-talk - HOLD to record, release to send; the host transcribes. -->
+        <button type="button" id="ptt-btn" title="Hold to talk" aria-label="Hold to talk"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <!-- The MORE menu. app.ts hides the control entirely when both rows are unavailable, so it is never a
+             dead "...": Dictate appears only when device_stt_policy allows it, Check in only mid-turn. -->
+        <div class="cx-wrap row-anchor">
+          <button type="button" id="more-btn" hidden aria-haspopup="true" aria-expanded="false" title="More" aria-label="More composer options"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+          <div class="cx-menu" id="more-menu" role="menu" aria-label="More composer options" hidden>
+            <!-- P-REMOTE.14: OPTIONAL device dictation - the phone's own recognizer types into the composer
+                 for review. The row's label + caution line are written by app.ts from the policy decision. -->
+            <button type="button" class="cx-mi" id="mi-dictate" role="menuitem" aria-pressed="false" hidden>
+              <span class="cx-mi-l" id="mi-dictate-l">Dictate on this phone</span>
+              <span class="cx-mi-d" id="mi-dictate-d"></span>
+            </button>
+            <!-- P-PWA-FLEET.1: mid-turn check-in - asks for a brief status update, then the agent continues. -->
+            <button type="button" class="cx-mi" id="mi-checkin" role="menuitem" hidden>
+              <span class="cx-mi-l">Check in</span>
+              <span class="cx-mi-d">ask for a brief status, then it carries on</span>
+            </button>
+          </div>
+        </div>
+        <!-- P-REMOTE.15: the voice-and-privacy explanation, one tap away with room to read it. -->
+        <button type="button" id="help-btn" data-tone="info" aria-haspopup="dialog" title="How your voice is handled" aria-label="How your voice is handled">?</button>
         <span class="composer-spacer"></span>
-        <button type="button" id="abort-btn" title="Stop the current turn" aria-label="Stop"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg>Stop</button>
-        <!-- P-PWA-FLEET.1: while streaming, Send splits into Queue (stage for after the turn - the existing
-             PromptFrame path) vs Push now (interject into the running turn). Idle keeps the single Send. -->
-        <button type="button" id="push-btn" hidden>Push now</button>
-        <button type="submit" id="queue-btn" hidden>Queue</button>
-        <button type="submit" id="send-btn" class="btn-primary" aria-label="Send message"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4a1 1 0 0 0 1.4 1.1l16.4-8a1 1 0 0 0 0-1.8L4.8 3.6a1 1 0 0 0-1.4 1.1L5 12z"/></svg>Send</button>
+        <button type="button" id="abort-btn" hidden title="Stop the current turn" aria-label="Stop the current turn"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg></button>
+        <div class="cx-wrap" id="send-group">
+          <button type="submit" id="send-btn" class="btn-primary" aria-label="Send message">
+            <svg id="send-icon-send" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4a1 1 0 0 0 1.4 1.1l16.4-8a1 1 0 0 0 0-1.8L4.8 3.6a1 1 0 0 0-1.4 1.1L5 12z"/></svg>
+            <svg id="send-icon-queue" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" hidden><path d="M4 6h11M4 12h7M4 18h7M17 12v8M13 16h8"/></svg>
+            <span id="send-label">Send</span>
+          </button>
+          <!-- While a turn is running the caret holds the other member of the send family: Push now. -->
+          <button type="button" id="send-more" hidden aria-haspopup="true" aria-expanded="false" aria-label="Other ways to send"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button>
+          <div class="cx-menu right" id="send-menu" role="menu" aria-label="Other ways to send" hidden>
+            <button type="button" class="cx-mi" id="mi-push" role="menuitem">
+              <span class="cx-mi-l">Push now</span>
+              <span class="cx-mi-d">interject the running turn</span>
+            </button>
+          </div>
+        </div>
       </div>
-      <!-- P-REMOTE.14: the voice status line - why dictation is unavailable, or what the current mode does. -->
-      <p id="stt-note" role="status" hidden></p>
+      <!-- P-REMOTE.15: a SHORT, one-line transient voice status (listening / it failed). The long
+           explanation belongs to the "?" sheet, never to a wall of 12px text under the composer. -->
+      <p id="voice-status" role="status" hidden></p>
     </form>
     <div id="botstrip">
       <div id="botstrip-panel" hidden>
@@ -475,8 +688,10 @@
     <div id="report-body" class="rp-scroll"></div>
   </div>
 
-  <!-- P-REMOTE.14: the device-dictation sheets - the one-time language-pack offer, and the cloud-transcription
-       consent. app.ts fills the body with whole <p> blocks, one explanation each (AGENTS.md #11). -->
+  <!-- P-REMOTE.14/15: the voice sheet, in three flavours - the one-time language-pack offer, the
+       cloud-transcription consent, and (behind the composer's "?") the full voice-and-privacy explanation
+       that used to be crammed under the composer. app.ts fills the body with whole <p> blocks, one
+       explanation each (AGENTS.md #11), and hides the alternative-action button when there is none. -->
   <div id="stt-sheet" hidden>
     <div class="stt-head">
       <span class="stt-title" id="stt-sheet-title">Dictate on this phone</span>

@@ -193,6 +193,7 @@ import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watc
 import { parseShareLink } from "./collab/link.ts";
 import { importRoomKey } from "./collab/crypto.ts";
 import type { CollabOptions, SttSource } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks; P-REMOTE.14: voice provenance
+import { laneEventToChatEvent } from "./collab/lane_event_adapter.ts"; // P-PWA-FOCUS.1: lane engine event -> guest-facing ChatEvent (pure)
 import { MAX_FAVS, offeredModels } from "./renderer/model_favorites.ts"; // P-REMOTE.11b (ADR-0238): favorites-filtered guest picker (pure, DOM-free)
 import { accessCounts, buildShareAwareness, type ShareCounts } from "./collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness preamble
 import { recordCollabShareStarted, recordCollabShareStopped, recordCollabGuestJoined, recordCollabGuestLeft, recordCollabAudit } from "./collab/collab_audit.ts"; // P-COLLAB.18 (ADR-0204)
@@ -538,6 +539,14 @@ const collabManager = new CollabManager({
   // Target is "master" or a laneId; the store trims/caps the note (8 per target, 4000 chars). Delivery
   // to the omp child lands OUTSIDE untrusted-content delimiters, marked operator-origin (AGENTS.md #5).
   onGuestInterject: (target, text) => { addInterject(String(target).slice(0, 64), String(text)); },
+  // P-PWA-FOCUS.1: catch-up for a guest that taps a lane - the host answers its `watch` with the lane's
+  // conversation so far, so the phone opens a populated transcript instead of an empty pane awaiting the
+  // next token. The lane manager already returns a COPY; the explicit per-turn map is the deliberate part.
+  // LaneTurnRecord and CollabTranscriptTurn are structurally compatible TODAY, so passing the array
+  // straight through would typecheck - and would silently ship any future ENGINE-only field (cwd, model,
+  // internal ids) to a remote guest the moment someone widens LaneTurnRecord. Naming role+text here is
+  // what stops that: a new engine field cannot ride along, it has to be added on purpose.
+  laneTranscript: (laneId) => fleet.laneTranscript(laneId).map((t) => ({ role: t.role, text: t.text })),
   // P-COLLAB.18 (ADR-0204): host-authoritative audit — a guest joined/left the RELAY share. Metadata only.
   onParticipant: (kind, guest) => {
     const meta = { transport: "relay" as const, access: guest.access, roomId: collabManager.status().roomId, guest: guest.name };
@@ -657,6 +666,21 @@ const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => bac
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-PWA-FOCUS.1: the lane-to-guest tap. ONE persistent observer, registered here at module scope right
+// after the lane manager exists (this file is evaluated once per engine process, and this statement sits
+// outside every route handler and every poll tick) - so it is installed exactly once and covers all lanes
+// present AND future, unlike a per-spawn sink that would need re-attaching. It is deliberately NOT next to
+// the collab broadcaster above: `fleet` is still in its const TDZ up there, and observe() is an immediate
+// call, not a closure like the deps and the 5s poll.
+// The laneWatched() guard comes FIRST on purpose: a fleet grinding through turns with no phone attached
+// must do ZERO per-event work - no translation, no allocation, no frame - so the guard has to precede the
+// adapter, not follow it. It is false whenever the share is inactive, so the common case is one map lookup.
+fleet.observe((laneId, e) => {
+  if (!collabManager.laneWatched(laneId)) return; // nobody is looking at this lane
+  const ev = laneEventToChatEvent(e);
+  if (!ev) return; // deliberately untranslatable (permission/status already ride the lane card)
+  collabManager.tapEvent(ev, laneId); // scoped: only the guests watching THIS lane
+});
 
 // P-INTERJECT.1: the unified Processes list - everything "running" in this app right now, assembled
 // from the live sources this server already holds. One builder, two consumers: GET /api/processes

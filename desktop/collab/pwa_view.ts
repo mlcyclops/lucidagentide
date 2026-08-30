@@ -1,11 +1,11 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/pwa_view.ts — P-REMOTE.3 (ADR-0226/0227): the phone guest's PURE, DOM-free viewer core.
+// desktop/collab/pwa_view.ts - P-REMOTE.3 (ADR-0226/0227): the phone guest's PURE, DOM-free viewer core.
 //
 // The phone PWA (tools/remote-pwa/) drives CollabGuest exactly like the desktop, but renders on a small
 // screen without the desktop renderer. This is the compact viewer: a PURE reducer that folds the host's
-// ChatEvent stream into a list of view items, plus HTML renderers for each. No DOM, no globals — so the phone
+// ChatEvent stream into a list of view items, plus HTML renderers for each. No DOM, no globals, so the phone
 // UI stays testable headless and the same logic the desktop guest shows (thinking + tool chips + subagents,
 // ADR-0222) renders faithfully on mobile.
 //
@@ -42,9 +42,13 @@ export type ViewItem =
   // fill up with stale status blocks.
   | { kind: "fleet-lanes"; lanes: FleetLaneStatus[] }
   | { kind: "processes"; processes: ProcessView[] }
+  // P-PWA-FOCUS.1: a fleet lane's turn failed. Its own kind, NOT `block`: `block` means the security gate
+  // refused something, and a lane crash wearing the gate's clothing would teach the user to misread the one
+  // signal that must stay unambiguous. Rendered red, but visibly a different thing.
+  | { kind: "lane-error"; message: string }
   | { kind: "note"; text: string };
 
-/** Fold one host ChatEvent into the item list (PURE — returns a new list). Token/thinking deltas coalesce
+/** Fold one host ChatEvent into the item list (PURE - returns a new list). Token/thinking deltas coalesce
  *  into the trailing item of their kind; `done` finalizes the streaming answer with its authoritative text. */
 export function foldEvent(items: ViewItem[], e: ChatEvent): ViewItem[] {
   const out = items.slice();
@@ -102,6 +106,11 @@ export function foldEvent(items: ViewItem[], e: ChatEvent): ViewItem[] {
       return upsertSnapshot(out, "fleet-lanes", { kind: "fleet-lanes", lanes: e.lanes });
     case "process-list":
       return upsertSnapshot(out, "processes", { kind: "processes", processes: e.processes });
+    // P-PWA-FOCUS.1: a watched lane's turn failed. Appended like any other block so it lands in the lane's
+    // conversation in order, at the point the failure happened.
+    case "lane-error":
+      out.push({ kind: "lane-error", message: e.message });
+      return out;
     // Desktop-only / non-viewer events (preview, design, goal, usage, slow, …) are ignored on the phone.
     default:
       return out;
@@ -137,12 +146,27 @@ export function laneCwdName(cwd: string): string {
   return parts[parts.length - 1] || trimmed;
 }
 
-/** P-PWA-FLEET.1: one fleet lane card (all host strings escaped, including data attributes). Approval
- *  buttons render ONLY with a pendingApproval; the Prompt/Stop row is always in the markup - the PWA hides
- *  it for view guests (guest.ts refuses their sends anyway, and the host re-refuses, fail-closed).
- *  Invariant #11: every flex row is spans-with-one-text-child; labels get nowrap+ellipsis in the CSS. */
+/**
+ * P-PWA-FLEET.2: one fleet lane card - a lane you can actually DRIVE, in its own lane rather than through
+ * the master composer. All host strings escaped, including data attributes.
+ *
+ * The card carries `lane-<status>` so the phone's CSS can reuse the DESKTOP fleet colour mapping verbatim
+ * (cyan working, amber waiting, red needs-approval, green done, dim starting/stopped) instead of inventing
+ * a second palette; `data-status` stays for the dot.
+ *
+ * Its composer offers EXACTLY what `CollabGuest` can do for a lane and nothing more (a dead control is
+ * worse than no control): Send/Queue (`fleetPrompt`, text only - images stay master-bound because the
+ * lane wire has no image field), Push now + Check in (`interject` with the lane id), Stop (`fleetStop`),
+ * and the three approval answers (`fleetAnswer`). No spawn, no model picker, no queue reorder: the guest
+ * protocol has none of those, so the phone must not pretend.
+ *
+ * The whole `.lane-drive` block is hidden for view guests by CSS (`#fleet[data-readonly]`); guest.ts
+ * refuses their sends anyway and the host re-refuses, fail-closed.
+ * Invariant #11: every flex row holds controls or spans-with-one-text-child; labels nowrap+ellipsis.
+ */
 export function renderLaneCard(lane: FleetLaneStatus): string {
   const id = escapeHtml(lane.id);
+  const status = escapeHtml(lane.status);
   const pend = lane.pendingApproval
     ? `<div class="lane-pend"><span class="lane-pend-sum">${escapeHtml(lane.pendingApproval.kind)}: ${escapeHtml(lane.pendingApproval.summary)}</span></div>` +
       `<div class="lane-approve">` +
@@ -151,18 +175,36 @@ export function renderLaneCard(lane: FleetLaneStatus): string {
       `<button type="button" class="lane-btn deny" data-lane="${id}" data-fleet-answer="deny">Deny</button>` +
       `</div>`
     : "";
-  return `<div class="lane-card" data-lane="${id}">` +
-    `<div class="lane-row"><span class="lane-dot" data-status="${escapeHtml(lane.status)}"></span><span class="lane-name">${escapeHtml(lane.name)}</span><span class="lane-status">${escapeHtml(lane.status)}</span></div>` +
+  // The lane's own composer, mirroring the master composer's shipped shape: one input, small icon controls,
+  // and a single send button whose label flips while the lane is busy (the host stages a mid-turn prompt).
+  const busy = lane.status === "working" || lane.status === "starting";
+  const drive = `<div class="lane-drive">` +
+    `<textarea class="lane-input" rows="1" data-lane-input="${id}" placeholder="Message ${escapeHtml(lane.name)}\u2026" aria-label="Message lane ${escapeHtml(lane.name)}"></textarea>` +
+    `<div class="lane-acts">` +
+    `<button type="button" class="lane-btn" data-lane="${id}" data-fleet-act="checkin" aria-label="Ask lane ${escapeHtml(lane.name)} for a brief status">Check in</button>` +
+    `<span class="lane-spacer"></span>` +
+    `<button type="button" class="lane-ico stop" data-lane="${id}" data-fleet-act="stop" title="Stop this lane" aria-label="Stop lane ${escapeHtml(lane.name)}">\u25a0</button>` +
+    `<button type="button" class="lane-send" data-lane="${id}" data-fleet-act="send">${busy ? "Queue" : "Send"}</button>` +
+    `<button type="button" class="lane-send push" data-lane="${id}" data-fleet-act="push" title="Interject the running turn"${busy ? "" : " hidden"}>Push</button>` +
+    `</div></div>`;
+  return `<div class="lane-card lane-${status}" data-lane="${id}">` +
+    // P-PWA-FOCUS.1: the header row IS the focus control - tap the lane's name to watch its conversation.
+    // role/tabindex ship in the markup rather than being hydrated afterwards, so the row is reachable by
+    // keyboard on the very first paint.
+    `<div class="lane-row" role="button" tabindex="0" data-focus-lane="${id}" aria-label="Watch lane ${escapeHtml(lane.name)}"><span class="lane-dot" data-status="${status}"></span><span class="lane-name">${escapeHtml(lane.name)}</span><span class="lane-status">${status}</span></div>` +
     `<div class="lane-meta"><span class="lane-cwd">${escapeHtml(laneCwdName(lane.cwd))}</span><span class="lane-turns">${lane.turns} turn${lane.turns === 1 ? "" : "s"}</span></div>` +
     pend +
-    `<div class="lane-act"><button type="button" class="lane-btn" data-lane="${id}" data-fleet-act="prompt">Prompt</button><button type="button" class="lane-btn" data-lane="${id}" data-fleet-act="stop">Stop</button></div>` +
+    drive +
     `</div>`;
 }
 
 /** P-PWA-FLEET.1: one process row (kind badge + label + status; the detail rides as a title tooltip).
  *  All host strings escaped. Invariant #11: three label spans, each a single text child. */
 export function renderProcessRow(p: ProcessView): string {
-  return `<div class="proc-row" title="${escapeHtml(p.detail)}">` +
+  // P-PWA-FOCUS.1: `data-proc-id`/`data-proc-kind` let the PWA turn a row into a focus target WITHOUT
+  // index-matching it back against the snapshot array. A kind of "lane" means the id IS a lane id; the PWA
+  // decides what is focusable, so this renderer stays presentation-only.
+  return `<div class="proc-row" data-proc-id="${escapeHtml(p.id)}" data-proc-kind="${escapeHtml(p.kind)}" title="${escapeHtml(p.detail)}">` +
     `<span class="proc-kind">${escapeHtml(p.kind)}</span>` +
     `<span class="proc-label">${escapeHtml(p.label)}</span>` +
     `<span class="proc-status">${escapeHtml(p.status)}</span>` +
@@ -213,22 +255,43 @@ export function renderItem(item: ViewItem, i = 0, activeThinking = false): strin
       return `<div class="fleet-lanes">${item.lanes.map(renderLaneCard).join("")}</div>`;
     case "processes":
       return `<div class="proc-list">${item.processes.map(renderProcessRow).join("")}</div>`;
+    case "lane-error":
+      // Its own class, never `.chip.block`: the phone must not show a lane crash in the security gate's
+      // clothing. Labelled in words too, so the distinction survives someone restyling the CSS.
+      return `<div class="chip lane-fail"><span class="chip-name">lane failed</span><span class="chip-detail">${escapeHtml(item.message)}</span></div>`;
     case "note":
       return `<div class="msg note">${escapeHtml(item.text)}</div>`;
   }
 }
 
-/** Render the whole transcript (prior turns from `welcome`, then the folded live items). */
-export function renderTranscript(prior: CollabTranscriptTurn[], items: ViewItem[]): string {
+// P-PWA-FOCUS.2: the "you were away" divider. Not styled here (that is the PWA's index.html); `data-sync-mark`
+// is the hook the phone scrolls to after a cross-screen-lock sync.
+const SYNC_MARK = `<div class="sync-mark" data-sync-mark><span class="sync-mark-l">new since you looked away</span></div>`;
+
+/** Render the whole transcript (prior turns from `welcome`, then the folded live items).
+ *  P-PWA-FOCUS.2: `newFrom` is a position in the COMBINED stream (`prior` entries first, then `items`) - the
+ *  first entry the user had not seen when the screen locked. When it lands strictly inside that stream, ONE
+ *  divider is drawn immediately before that entry. */
+export function renderTranscript(prior: CollabTranscriptTurn[], items: ViewItem[], newFrom?: number): string {
+  const total = prior.length + items.length;
+  // Only an in-range INTEGER boundary draws a divider, because out of range there is no boundary to draw:
+  // `<= 0` means everything is new, which reads exactly like arriving fresh, and a rule above the very first
+  // line is noise; `>= total` means the user is already caught up. A non-integer or non-finite value is
+  // rejected outright rather than rounded or clamped, because the phone SCROLLS to this element - a divider
+  // in the WRONG place is worse than no divider at all. `mark` stays -1 (matching no index) otherwise, which
+  // is also what guarantees at most ONE marker per render: it is a single position, not a predicate.
+  const mark = typeof newFrom === "number" && Number.isInteger(newFrom) && newFrom > 0 && newFrom < total ? newFrom : -1;
   const priorHtml = prior
-    .map((t) => `<div class="msg ${t.role === "user" ? "user" : "answer"}">${escapeHtml(t.text)}</div>`)
+    .map((t, i) => (i === mark ? SYNC_MARK : "") + `<div class="msg ${t.role === "user" ? "user" : "answer"}">${escapeHtml(t.text)}</div>`)
     .join("");
   // A thinking block that is still the TRAILING item is the live reasoning - render it open (it collapses
   // naturally when the first answer token / tool chip lands after it). data-think = the item index.
-  return priorHtml + items.map((it, i) => renderItem(it, i, it.kind === "thinking" && i === items.length - 1)).join("");
+  return priorHtml + items
+    .map((it, i) => (prior.length + i === mark ? SYNC_MARK : "") + renderItem(it, i, it.kind === "thinking" && i === items.length - 1))
+    .join("");
 }
 
-/** The header line (title + model + host) for the top bar. Metadata only — no credentials, no paths. */
+/** The header line (title + model + host) for the top bar. Metadata only: no credentials, no paths. */
 export function renderHeader(header: CollabSessionHeader | null): string {
   if (!header) return `<span class="hdr-title">Connecting…</span>`;
   return `<span class="hdr-title">${escapeHtml(header.title || "LUCID session")}</span>` +
