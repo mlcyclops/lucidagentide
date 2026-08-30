@@ -20222,6 +20222,105 @@ ADR-0289 (the plan, with its one delta), ADR-0293 (the document this consumes), 
 and why a mix's many inputs are recorded as text rather than faked as parents), ADR-0291 (the pure-encoder
 precedent this render follows).
 
+## ADR-0303 -- the gate had never measured what it claimed: scope by exclusion, never by positional pattern
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT in `a4b1d48` (Makefile + package.json). `make test-harness` now reads 357 files
+/ 4256 tests / 4241 pass / 11 fail on this workstation, and the 11 are exactly the documented pre-existing
+set (5 `fs_browse`, 4 `symbol_graph`, 2 `lucid_acp`). Verified through BOTH entry points, make's recipe and
+`bun run test`. CI is deliberately NOT changed by this increment; see the named risk at the end.
+**Increment:** taken from a parallel session that found the defect adjacent to its own release work and
+handed it over rather than folding it into an unrelated increment.
+
+### Context
+
+`make test-harness` was `bun test --path-ignore-patterns='desktop/release/**'` with no path scope, and
+AGENTS.md's session ritual opens with "make test ... the baseline must be green before you change anything".
+Both halves of that sentence were false, and had been for a long time.
+
+### What was measured, in order
+
+1. **Run the documented gate exactly as written and it runs oh-my-pi's test suite.** `vendor/oh-my-pi` is a
+   full vendored copy of omp, tests included: **1659 files, 11466 tests, 9927 pass, 942 FAIL**. `vendor/` is
+   gitignored (`.gitignore:13`) and bun does not care, because gitignore is not a test-discovery boundary.
+   So on any clone with a populated `vendor/`, the documented gate reports 942 failures that are not ours,
+   and it has therefore never once reproduced the numbers PROGRESS.md quotes.
+2. **The habit that grew up around the bug is no better.** Sessions have been running per-tree invocations
+   like `bun test desktop harness`, which LOOKS like a directory scope and is not: bun treats positional args
+   as SUBSTRING matches against the whole path. Naming one more tree proves it, because `tools` also selects
+   every `vendor/oh-my-pi/**/tools/**` file: `bun test desktop harness tools` reports **486 files, 125 fail**
+   against the 357 / 11 the same code actually has. A scope that silently changes meaning when you name one
+   more directory is not a gate.
+3. **That habit was also omitting a tree of ours entirely.** `bun test desktop harness` is 352 files; the
+   exclusion-scoped gate is 357. The five-file difference is all of `tools/`: `build_kg_pack`, `kb_cli`,
+   `creator-backend/setup-backend`, `remote-pwa/device_stt`, `appcontainer/lucid_appcontainer`, **86 tests
+   that no session had ever run**. They are green, which is luck rather than evidence, since nothing was
+   watching them.
+4. **Excluding `vendor/**` then exposes a second tree nobody had gated:** `lucidaddon_audit/`, **51 test
+   files across 11 packages**, each with its own `package.json` and its own dependencies that `make install`
+   does not prepare. Its failures are `Cannot find package 'ajv'` and siblings, environment rather than
+   logic, and they accounted for all 18 extra failures in that run.
+
+### The negative result, which is the better half of the finding
+
+The obvious hypothesis for "352 versus 357" was that the hand-typed scope was silently sweeping in vendored
+files. It is NOT. Measured: `bun test desktop harness` WITH `vendor/**` and `lucidaddon_audit/**` excluded
+returns 352 files / 4170 tests / 4155 pass / 11 fail, byte-identical to the same command without them. So
+`desktop` and `harness` collide with nothing in omp's layout, while `tools` collides badly. The lesson is
+therefore stronger than contamination would have been: **you cannot know which names collide without
+measuring each one**, so an include-by-substring scope is only ever as correct as the last name someone
+tested. Exclusion is the only scope that stays correct under a name nobody tested.
+
+### Decision
+
+Scope is defined by EXCLUSION and never by positional pattern. `TEST_IGNORES` in the Makefile carries the
+three exclusions with a stated reason each, and the comment above it records the substring trap with the
+measured numbers so the next person cannot re-derive the habit. `desktop/release/**` is a generated packaged
+copy of this repo. `vendor/**` is not ours. `lucidaddon_audit/**` IS ours but is independently installed, so
+it gets its own target, `make test-audit`, which `cd`s into the tree instead of filtering by substring,
+because a working directory has no substring semantics to get wrong. It is deliberately not part of
+`make test`: a target that is red by default teaches people to ignore red. `package.json`'s `test` script
+ran `bun test harness` and now runs the same exclusion scope, so the two entry points cannot drift.
+
+**The rule worth keeping.** A gate that names what it INCLUDES will silently change scope as the repo grows
+a sibling directory; a gate that names what it EXCLUDES fails loudly instead, because a new tree arrives as
+new tests rather than as silence. This is the same failure family as the `desktop/release` double-count
+recorded in the CREATOR-3 entry: in both cases a wrong flag produced a plausible number, and a plausible
+number is the hardest kind of wrong to notice.
+
+### Reconciling every number in the record
+
+All four figures in play describe the same code at different scopes, and none of them contradict:
+352 / 4170 / 4155 pass is `desktop harness` on this branch; 355 / 4229 / 4213 pass is that same scope plus
+the three test files added by `8b060b2` (+58 tests) while they were still uncommitted; 357 / 4256 / 4241
+pass is exclusion-only, which is 352 plus the 5 files and 86 tests in `tools/`; and 1659 / 11466 / 942 fail
+is the documented gate with `vendor/` swept in. The 11 real failures are the same 11 in every one of them.
+
+### Named risk, NOT fixed here
+
+CI diverges from the Makefile in a third and fourth way, and this increment leaves it alone on purpose.
+`.github/workflows/ci.yml:59` runs `bun test harness`, so the ENTIRE `desktop/` tree is ungated in CI apart
+from the single `desktop/packaged_boot.test.ts` step, while `omp-compat.yml:92` runs `bun test .`, a fourth
+scope again. The reason for not widening CI here is honest rather than tidy: the 11 remaining failures are
+described as Windows path-separator and TS-resolution cases, and this workstation cannot tell whether they
+pass on Linux. Widening CI blind would either fix nothing or turn the pipeline red for everyone, and one CI
+run settles it. That run is the next increment.
+
+### Process note, paid for the hard way
+
+This ADR was written once already and vanished before it was committed. The mechanism was not the amend it
+was first blamed on: `git diff` across that amend touches one path, and an amend cannot alter a path the
+index never held. It was a whole-file write of `DECISIONS.md` from a snapshot that predated the insert, by a
+second session working the same tree. The rule that follows is narrower and more useful than "be careful":
+**never whole-file write a document another session is live in; insert into it.** The same hazard cost a demo
+script earlier the same day. What finally worked was not a promise but a boundary: the file changes hands
+only at a commit, and the holder says so explicitly.
+
+### See also
+
+ADR-0295 (the `desktop/release` double-count, same failure family), ADR-0302 (the release work this was
+found beside).
+
 ## ADR-0302 -- LUCID Creator as a separately released product, and the shared update pointer that would have crossed the two
 
 **Date:** 2026-08-30
