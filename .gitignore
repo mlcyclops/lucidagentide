@@ -121,3 +121,5 @@ tools/remote-pwa/config.js
 lucidaddon_audit/
 # pasted-image scratch from chat sessions (runtime artifacts)
 .omp/images/
+# P-MAINT.1: maintainer-agent SBOM baselines (per-workspace runtime state, never source)
+.omp/maintainer/
