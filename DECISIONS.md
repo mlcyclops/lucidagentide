@@ -20318,8 +20318,11 @@ only at a commit, and the holder says so explicitly.
 
 ### See also
 
-ADR-0295 (the `desktop/release` double-count, same failure family), ADR-0302 (the release work this was
-found beside).
+ADR-0295 (the `desktop/release` double-count, same failure family), and the Creator release-channel ADR, the
+release work this defect was found beside. That one is deliberately cited by TITLE rather than by number: it
+was written as ADR-0302, collides with an ADR-0302 already pushed on the PWA branch, and is being renumbered
+to 0304. A cross-reference that survives a renumber is worth more than one that is precise today, which is
+the same reason the `compositeShot` guard in `tools/remote-pwa/app.ts` cites ADR-0297 by name and not by line.
 
 ## ADR-0302 -- LUCID Creator as a separately released product, and the shared update pointer that would have crossed the two
 
