@@ -851,6 +851,9 @@ demo-P-WINBOOT.2C: ## P-WINBOOT.2C (ADR-0261): the Program Files boot GATE - sta
 .PHONY: demo-portguard
 demo-portguard: ## P-PORTGUARD.1 (ADR-0305): the engine port handshake - main only renders a health answer carrying its per-launch nonce, so a foreign process squatting the engine port fails LOUDLY with a copy/paste incident report (process name, pid, start date/time, command line), never a silent roll onto a stranger's UI
 	$(BUN) run desktop/scripts/demo_portguard.ts
+.PHONY: demo-preview-open
+demo-preview-open: ## P-PREVIEW.11 (ADR-0308): the agent's `preview_open` opens the panel again - omp's intent tracing rewrites a custom tool's ACP call title to the model's intent prose (and the update carries no tool-name field at all), so the old title match silently swallowed every preview; the tool now REPORTS ITSELF over its own token'd channel like preview_screenshot/inspect/act, best-effort so an unreachable or older desktop degrades instead of failing, and fail-closed so a refused target is never reported
+	$(BUN) run desktop/scripts/demo_preview_open.ts
 .PHONY: demo-release-identity
 demo-release-identity: ## P-RELEASE.4 (ADR-0307): the release-identity gate - CI reads each artifact's EMBEDDED identity before upload (pkg bundle id + payload .app path + version out of the xar Distribution/PackageInfo, deb package name out of the gunzipped ar control member, rpm name out of the 96-byte lead, the updater feed's declared path because both flavors emit a file named latest.yml, filename stem for the rest) and FAILS the build on a mismatch; the demo proves the swap case - correct Agent filenames wrapping Creator bytes, invisible to every name check - plus fail-closed on an empty/missing dir and an unaccounted-for file
 	$(BUN) run desktop/scripts/demo_release_identity.ts

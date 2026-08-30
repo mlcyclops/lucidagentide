@@ -59,7 +59,7 @@ import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts"; //
 import { startAgentRun } from "./agent_run.ts"; // P-AGENT.14: same gated pipeline as the Builder's Run
 import { type EgressChoice, egressDecisionDetailed, egressPosture, extractHost, isLocalFileTarget, recordEgress } from "./egress_policy.ts";
 import { withinCallBudget } from "./network_whitelist.ts";
-import { previewOpenPath, previewablePath } from "./preview_resolve.ts";
+import { normalizePreviewPath, previewOpenPath, previewablePath } from "./preview_resolve.ts";
 import { agentBuilderOpenSpec } from "../harness/agent/handoff.ts"; // P-AGENT.8.2: chat -> Agent Builder handoff
 import type { AgentSpec } from "../harness/agent/spec.ts";
 import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-CMD.1: chat -> user slash command
@@ -298,6 +298,15 @@ export type ChatEvent =
   | { type: "no-response"; model: string; stopReason?: string; reason?: string }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
+// The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in). Preview +
+// "Open in editor" need an ABSOLUTE path, so resolve any relative path against the workspace (a path that
+// is already file://, a URL, or OS-absolute is left untouched). Module-level since P-PREVIEW.11
+// (ADR-0308): both the tool_call stream handler and openPreview() resolve paths the SAME way.
+function absWorkspacePath(p: string): string {
+  if (!p || /^(file:\/\/|https?:\/\/|[A-Za-z]:[\\/]|\/|\\\\|~[\\/])/i.test(p)) return p;
+  try { return join(currentWorkspace(), p); } catch { return p; }
+}
+
 class Backend {
   private acp: ACPClient | null = null;
   private sessionId: string | null = null;
@@ -385,6 +394,26 @@ class Backend {
   // thinking/tool/failure steps into the per-session sidecar (survives session switches). Cheap for
   // hot token chunks (noteStepEvent returns immediately on any other type) and never throws.
   private emit(e: ChatEvent): void { noteStepEvent(this.sessionId, e); this.listener?.(e); }
+
+  /** P-PREVIEW.11 (ADR-0308): open the Preview panel on `path`, driven by the `preview_open` tool's OWN
+   *  HTTP call (dev.ts /api/preview/open) instead of pattern-matching omp's ACP call title.
+   *
+   *  WHY this exists: with intent tracing on (omp sdk.ts injects an `i` field into every tool schema),
+   *  acp-event-mapper's buildToolTitle returns the model's INTENT prose as the title, shadowing the
+   *  `"preview_open: <path>"` form the title match keyed on - and buildToolCallStartUpdate carries no
+   *  tool-name field at all, so no title/kind inspection can identify a custom tool. The tool therefore
+   *  reports itself, exactly like preview_screenshot / preview_inspect / preview_act already do.
+   *
+   *  Emits into the ACTIVE turn's event stream (the same one /api/chat is draining), which is where the
+   *  renderer listens. The path is still re-gated by resolvePreview + readPreviewFile before anything
+   *  renders, so this adds a trigger, never a trust bypass. Returns false when there is nothing to open. */
+  openPreview(path: string): boolean {
+    const p = normalizePreviewPath(path ?? "");
+    if (!p) return false;
+    this.emit({ type: "preview-available", path: absWorkspacePath(p) });
+    this.emit({ type: "preview-activity", label: "Opening the preview" });
+    return true;
+  }
 
   // P-ASKSAGE.1 (ADR-0059): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's
   // `[ASKSAGE_DIAG]` stderr lines. Surfaced (developer-mode only) in the Logs panel so the non-streamed
@@ -555,10 +584,7 @@ class Backend {
                 // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in).
                 // Preview + "Open in editor" need an ABSOLUTE path, so resolve any relative path against the
                 // workspace here (a path that's already file://, a URL, or OS-absolute is left untouched).
-                const absPath = (p: string): string => {
-                  if (!p || /^(file:\/\/|https?:\/\/|[A-Za-z]:[\\/]|\/|\\\\|~[\\/])/i.test(p)) return p;
-                  try { return join(currentWorkspace(), p); } catch { return p; }
-                };
+                const absPath = absWorkspacePath; // P-PREVIEW.11 (ADR-0308): shared with openPreview() below
                 const codePath = absPath(typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "");
                 let code: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } | undefined;
                 if (typeof ri.content === "string") code = { path: codePath, content: clip(ri.content) };

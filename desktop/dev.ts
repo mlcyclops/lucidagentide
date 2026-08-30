@@ -1434,7 +1434,7 @@ const server = Bun.serve({
       // browser_* tools (via the token'd LUCID_BROWSER_URL it inherits), same ?t= convention. The two
       // main-process endpoints (/commands, /result) and the status push stay header-only: main MINTED the
       // token (LUCID_MAIN_TOKEN) and sends it as x-lucid-token on every poll.
-      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve" || p === "/api/fleet/status" || p === "/api/interject/pending" || p === "/api/browser/open" || p === "/api/browser/capture" || p === "/api/browser/scroll" || p === "/api/browser/close" || p === "/api/browser/shot" || p === "/api/browser/click" || p === "/api/browser/type" || p === "/api/browser/drag" || p === "/api/browser/keys";
+      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/open" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve" || p === "/api/fleet/status" || p === "/api/interject/pending" || p === "/api/browser/open" || p === "/api/browser/capture" || p === "/api/browser/scroll" || p === "/api/browser/close" || p === "/api/browser/shot" || p === "/api/browser/click" || p === "/api/browser/type" || p === "/api/browser/drag" || p === "/api/browser/keys";
       const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
       if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
     }
@@ -2385,6 +2385,20 @@ const server = Bun.serve({
       }
       if (p === "/api/preview/shot") {
         return json({ ok: true, data: { png: latestPreviewShot } });
+      }
+      // P-PREVIEW.11 (ADR-0308): the agent's `preview_open` tool reports ITSELF here, instead of the
+      // desktop pattern-matching omp's ACP call title. With intent tracing on (omp injects an `i` field
+      // into every tool schema), buildToolTitle returns the model's intent prose, so the
+      // `"preview_open: <path>"` title the old detection keyed on never arrives - and the ACP update
+      // carries no tool-name field at all. Same shape as the shot/inspect/act channels beside it: the omp
+      // child inherits a ready token'd URL (LUCID_PREVIEW_OPEN_URL) and POSTs the path. backend.openPreview
+      // emits into the ACTIVE turn stream, and the renderer still re-gates the path through resolvePreview
+      // + readPreviewFile before anything renders, so this is a trigger, never a trust bypass.
+      if (p === "/api/preview/open" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        const target = typeof b.path === "string" ? b.path : "";
+        const opened = backend.openPreview(target);
+        return json({ ok: true, data: { opened } });
       }
       // ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ──────────────────────────
       // The Electron MAIN owns the real BrowserWindow (compositor-level capturePage defeats DOM-locking
@@ -4136,6 +4150,10 @@ process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/previe
 process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${TOKEN}`;
 // P-PREVIEW.6c (ADR-0153): preview_click / preview_type GET this (with ?action=&selector=&value=) to act.
 process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${TOKEN}`;
+// P-PREVIEW.11 (ADR-0308): preview_open POSTs {path} here so the panel opens from the TOOL's own call.
+// The old path (acp_backend matching "preview_open: <path>" in the ACP title) is dead under intent
+// tracing, which rewrites that title to the model's intent prose; it stays only as a fallback.
+process.env.LUCID_PREVIEW_OPEN_URL = `http://127.0.0.1:${server.port}/api/preview/open?t=${TOKEN}`;
 // ADR-0220: the `knowledge_search` tool (omp subprocess) POSTs the user's query here to ground on the local
 // compiled knowledge base. Token'd URL, same pattern as the preview tools; retrieval returns delimited untrusted DATA.
 process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${TOKEN}`;

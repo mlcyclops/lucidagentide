@@ -99,7 +99,25 @@ export default function previewExtension(pi: any): void {
           return { content: [{ type: "text", text: `preview_open: "${path}" is not a local .html/.svg file — nothing to preview.` }], isError: true };
         }
         const name = path.split(/[\\/]/).pop() || path;
-        // The desktop opens the panel from this tool_call (acp_backend → renderer). The tool just confirms.
+        // P-PREVIEW.11 (ADR-0308): REPORT OURSELVES to the desktop. The panel used to open purely as a
+        // side effect of acp_backend matching "preview_open: <path>" in omp's ACP call title - which
+        // intent tracing kills, because buildToolTitle returns the model's intent prose instead and the
+        // ACP update carries no tool-name field at all. So the tool now drives the panel the same way
+        // preview_screenshot / preview_inspect / preview_act already do: through the token'd URL the
+        // desktop published in our env. Best-effort by design - an older desktop simply has no
+        // LUCID_PREVIEW_OPEN_URL, and the title fallback still covers the intent-tracing-off case, so a
+        // miss here degrades to the previous behavior instead of failing the call.
+        const openUrl = process.env.LUCID_PREVIEW_OPEN_URL;
+        if (openUrl) {
+          try {
+            await fetch(openUrl, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ path }),
+              signal: AbortSignal.timeout(4000),
+            });
+          } catch { /* the panel just does not surface; never fail the tool over it */ }
+        }
         return { content: [{ type: "text", text: `Opening ${name} in the Preview panel for the user.` }] };
       },
     });

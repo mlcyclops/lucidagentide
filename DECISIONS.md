@@ -21049,10 +21049,103 @@ Evidence: `bun test desktop/exec_policy.test.ts` 336 pass / 0 fail across both f
 officecli tests landed with ZERO regressions to the existing SAFE/RISKY/CATASTROPHIC corpora;
 `make demo-office` exits 0, asserting the skill's pinned version and its installer prohibition (the
 demo greps for that exact line, so deleting it fails the gate), every tier above, and that upstream's
-piped installer independently classifies T4 always-prompt. The live create -> add -> view outline ->
-view html -> close round-trip is CONDITIONAL on the binary being on PATH and printed a visible
-SKIPPED block here (not installed on this machine), exiting 0 on purpose: an optional external tool
-must not fail CI, but a skip must never masquerade as a pass.
+piped installer independently classifies T4 always-prompt.
+
+The live round-trip was then EXERCISED, not skipped (2026-08-30, Windows). The binary was installed
+exactly the way the skill prescribes - pinned release asset, digest-verified, no piped installer:
+`officecli-win-x64.exe` from the v1.0.145 release, sha256
+`760696b262f3d6bd2cd174577220d54541b6e1e04ec58dee051f1897395638b8` agreeing across THREE independent
+sources (the skill's pinned table, the GitHub API asset digest, and the release's own SHA256SUMS),
+size 33,386,408 matching the API, installed to `~/.local/bin/officecli.exe` with that directory added
+to the user PATH (durably, via the .NET environment API rather than `setx`, which truncates long
+PATHs). The binary self-reports 1.0.145. `make demo-office` then passed part 3 for real: create
+produced a valid .pptx with no Office installed, add appended a path-addressed slide, `view outline`
+read the title back OUT of the saved OOXML (so the write really landed), `view html` rendered 21,777
+bytes, and close flushed the resident session. A three-slide deck was then built end to end and
+rendered to 25,279 bytes of HTML carrying all six authored strings.
+
+One real constraint found by doing it: the render-look-fix loop only works when the render lands
+INSIDE the workspace. `preview_open` on `%LOCALAPPDATA%\Temp` silently shows nothing (path
+containment, ADR-0023/0103); the same bytes under `.omp/tmp/` are fine. The skill said "render into
+the workspace" already but did not say WHY, so the reason and the observed failure are now recorded
+there - a rule with its reason survives editing, a bare rule does not.
+
+## ADR-0308 -- P-PREVIEW.11: `preview_open` gets an explicit channel - intent tracing silently broke title-matching (2026-08-30)
+
+**Status:** Accepted -- BUILT.
+
+### The bug, and why it hid
+
+The agent's `preview_open` tool stopped opening the Preview panel. Observed live: the tool returns its
+ack, no panel appears, and a following `preview_inspect` times out with "no preview is open (or it
+didn't respond)". The workspace sits in a OneDrive path with spaces, which made that the obvious
+suspect. It was not: `/api/preview/serve` was proven to return HTTP 200 and 34,409 bytes for the exact
+space-bearing, dot-dir path (`.../Apps AI Vibe/.../.omp/tmp/hardening.html`), with the inspect bridge
+injected. Containment, `isLocalFileTarget`, and `toFileUrl` percent-encoding all handle it.
+
+The real cause is a chain through omp's ACP mapper, read in the vendored source:
+
+1. `sdk.ts:2125` - when `tools.intentTracing` (or `PI_INTENT_TRACING`) is on, omp injects an intent
+   field (`i`) into EVERY tool schema, and the system prompt instructs the model to fill it.
+2. `agent-session.ts:3763` - that argument rides the tool-start event as `intent`.
+3. `acp-event-mapper.ts:413` -> `buildToolTitle(toolName, args, intent)` at 513: **when an intent is
+   present it is returned as the title**, short-circuiting the `` `${toolName}: ${subject}` `` form.
+4. `desktop/acp_backend.ts:600` matched `/\bpreview_open\b/i` against that title. With intent tracing
+   the title is prose like "Opening rendered deck in preview", so the match fails, no
+   `preview-available` event is emitted, the panel never opens, `startPreviewInspectRelay()` never
+   runs, and every later `preview_inspect` / `preview_screenshot` reports nothing open.
+
+Critically, `buildToolCallStartUpdate` (mapper 403-427) carries NO tool-name field at all: only
+`toolCallId`, the intent-polluted `title`, `kind` (which `mapToolKind` collapses to "other" for any
+custom tool), `rawInput`, `content`, `locations`. So title-matching a custom tool is not merely
+fragile, it is structurally unavailable once intent tracing is on. Auto-preview-on-write was never
+affected, because `previewablePath` keys on `kind` ("edit"/"write"), which survives - which is exactly
+why this looked like "the preview works sometimes" and went unnoticed.
+
+### Decision
+
+Stop inferring the tool from the ACP stream. Give `preview_open` the SAME explicit channel the other
+four preview tools already use (`LUCID_PREVIEW_SHOT_URL` / `_INSPECT_URL` / `_ACT_URL`, dev.ts
+4134-4138): dev.ts publishes `LUCID_PREVIEW_OPEN_URL` (real bound port + per-launch token), the
+extension POSTs the path to it from `execute()`, and the route drives the panel by calling into the
+same `backend` singleton whose event stream `/api/chat` is already draining. No string matching, no
+dependence on omp's title policy, and the path is still re-gated by `resolvePreview` /
+`readPreviewFile` before anything renders, so the security posture is unchanged.
+
+Two supporting decisions:
+
+- **The title match STAYS as a fallback.** It is correct when intent tracing is off and costs one
+  regex; removing it would break older configurations for no gain. The direct channel wins when both
+  fire (idempotent: same path, one panel).
+- **The activity pill is fixed the same way.** `previewActivityLabel(u.title)` was broken for ALL five
+  preview tools by the same intent shadowing, so the routes emit the activity directly instead of
+  hoping the title still says `preview_screenshot`.
+
+### Alternatives rejected
+
+- **Match `rawInput` shape** (kind "other" + a previewable `path` + no foreign keys): works, but it is
+  a heuristic that silently mis-fires the day another tool takes an `.html` path (`inspect_image`
+  already takes `path`), and it would rot invisibly.
+- **Patch omp's `buildToolTitle`**: forbidden by AGENTS.md invariant 1 (extend, never fork), and it is
+  omp's legitimate behavior - the intent IS a better human title.
+- **Turn intent tracing off**: it improves every other tool's readability in the transcript. Trading
+  that away to fix one detection path is backwards.
+
+### Verification
+
+See the PROGRESS entry of 2026-08-30. Unit tests cover the pure detection (an intent-polluted title
+no longer defeats the open path) and `make demo-preview-open` drives the real route end to end.
+HONEST BOUNDARY: the running desktop instance loads dev.ts + the extension at launch, so the fix is
+not live in an already-running app - confirming it on-device requires a restart, which is the user's
+call since a restart ends the live agent session.
+
+### Links
+
+ADR-0096 (P-PREVIEW.1-3, the panel + `preview_open`), ADR-0153 (P-PREVIEW.6b/6c, the inspect/act
+channels this mirrors), ADR-0023/0103 (path containment - exonerated here), ADR-0041 (omp version-pin
+policy: this is the class of behavior change a pin bump can introduce), vendor `sdk.ts:2125`,
+`agent-session.ts:3763`, `acp-event-mapper.ts:413/513`, `desktop/acp_backend.ts`, `desktop/dev.ts`,
+`harness/omp/preview_extension.ts`.
 
 ## ADR-0307 -- P-RELEASE.4: the release-identity gate - CI reads the shipped bytes before upload (2026-08-30)
 

@@ -174,3 +174,75 @@ describe("preview_screenshot execute (P-PREVIEW.3a-shot): fetch the cached shot 
     expect(r.content[0].type).toBe("text");
   });
 });
+
+// P-PREVIEW.11 (ADR-0308): preview_open must REPORT ITSELF to the desktop. The panel used to open only as a
+// side effect of acp_backend matching "preview_open: <path>" in omp's ACP call title, which intent tracing
+// shadows with the model's intent prose (and the ACP tool_call update carries no tool-name field at all, so
+// no title/kind inspection can recover it). These tests pin the reporting channel and - just as important -
+// that a missing or failing channel NEVER fails the tool: the panel simply does not surface, as before.
+describe("preview_open execute (P-PREVIEW.11): the tool reports itself to the desktop", () => {
+  const realFetch = globalThis.fetch;
+  const realUrl = process.env.LUCID_PREVIEW_OPEN_URL;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realUrl === undefined) delete process.env.LUCID_PREVIEW_OPEN_URL;
+    else process.env.LUCID_PREVIEW_OPEN_URL = realUrl;
+  });
+  const openTool = () => { const { pi, tools } = capture(); previewExtension(pi); return byName(tools, "preview_open"); };
+  const HTML = "C:/Users/n/OneDrive/Apps AI Vibe/proj/.omp/tmp/deck.html";
+
+  test("POSTs the path to LUCID_PREVIEW_OPEN_URL and still returns the ack", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), method: String(init?.method), body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ ok: true, data: { opened: true } }), { headers: { "content-type": "application/json" } });
+    }) as any;
+    const r = await openTool().execute("id", { path: HTML });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toContain("/api/preview/open");
+    // The PATH is what drives the panel, so it must survive verbatim - spaces and dot-dirs included.
+    expect(calls[0]!.body).toEqual({ path: HTML });
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0].text).toContain("deck.html");
+  });
+
+  test("a quoted path is normalized BEFORE it is reported (the desktop gets a usable path)", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    const bodies: unknown[] = [];
+    globalThis.fetch = (async (_u: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    }) as any;
+    await openTool().execute("id", { path: `"${HTML}"` });
+    expect(bodies).toEqual([{ path: HTML }]);
+  });
+
+  test("no LUCID_PREVIEW_OPEN_URL (older desktop) - no fetch, no throw, ack unchanged", async () => {
+    delete process.env.LUCID_PREVIEW_OPEN_URL;
+    let fetched = false;
+    globalThis.fetch = (async () => { fetched = true; return new Response("{}"); }) as any;
+    const r = await openTool().execute("id", { path: HTML });
+    expect(fetched).toBe(false);
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0].text).toContain("Preview panel");
+  });
+
+  test("a channel that REJECTS never fails the tool (the panel just does not surface)", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as any;
+    const r = await openTool().execute("id", { path: HTML });
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0].text).toContain("deck.html");
+  });
+
+  test("an INVALID target is rejected without ever reporting it", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    let fetched = false;
+    globalThis.fetch = (async () => { fetched = true; return new Response("{}"); }) as any;
+    const r = await openTool().execute("id", { path: "https://example.com/app.html" });
+    expect(r.isError).toBe(true);
+    expect(fetched).toBe(false); // never ask the desktop to open something the gate already refused
+  });
+});

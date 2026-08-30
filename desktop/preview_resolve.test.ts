@@ -25,10 +25,27 @@ describe("previewOpenPath (P-PREVIEW.3a, ADR-0096): the agent's preview_open too
     expect(previewOpenPath("write", { path: "game.html" })).toBeNull();
     expect(previewOpenPath("bash", { path: "x.html" })).toBeNull();
   });
-  test("missing/empty path → null", () => {
+  test("missing/empty path \u2192 null", () => {
     expect(previewOpenPath("preview_open", {})).toBeNull();
     expect(previewOpenPath("preview_open", { path: "  " })).toBeNull();
     expect(previewOpenPath(null, { path: "x.html" })).toBeNull();
+  });
+
+  // P-PREVIEW.11 (ADR-0308): THE FIELD BUG, pinned so nobody "fixes" the panel by trusting the title again.
+  // omp's acp-event-mapper buildToolTitle returns the model's INTENT as the ACP call title whenever intent
+  // tracing is on (sdk.ts injects an `i` field into every tool schema), shadowing the "preview_open: <path>"
+  // form this function keys on - and buildToolCallStartUpdate carries NO tool-name field, so the tool is
+  // simply not identifiable from the stream. That is why preview_open now reports itself over its own
+  // channel (LUCID_PREVIEW_OPEN_URL -> /api/preview/open -> backend.openPreview) and this title match is
+  // only a fallback for the intent-tracing-off case.
+  test("an INTENT-shadowed title no longer identifies the call (why the direct channel exists)", () => {
+    const ri = { path: "C:/Users/n/deck.html", i: "Opening rendered deck in preview" };
+    // Real titles observed with intent tracing on: prose, no tool name anywhere.
+    expect(previewOpenPath("Opening rendered deck in preview", ri)).toBeNull();
+    expect(previewOpenPath("Opening the preview", ri)).toBeNull();
+    expect(previewOpenPath("Showing the user the rendered page", ri)).toBeNull();
+    // The fallback still works when intent tracing is OFF and omp builds the name-based title.
+    expect(previewOpenPath("preview_open: C:/Users/n/deck.html", ri)).toBe("C:/Users/n/deck.html");
   });
 });
 
