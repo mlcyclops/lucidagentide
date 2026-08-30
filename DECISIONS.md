@@ -20851,3 +20851,87 @@ the user's word, not a judgement call in a render function.
 
 A comment sits at the exact decision site in `renderFleetStrip` where `data-attn` is toggled, naming this ADR
 and the reasoning, because that is the line someone would edit to add the behaviour.
+
+## ADR-0305 -- P-PORTGUARD.1: the engine port handshake - the window must never render a stranger (SCOPE/PLAN) (2026-08-30)
+
+**Status:** Accepted -- SCOPE/PLAN (drafted from a live field incident; build is the next increment).
+
+### The incident that proved it
+
+Field report, 2026-08-30: "the v1.14.1 update installed the Tactical GenAI Trainer instead of LUCID
+Agent IDE on macOS via the cask." Full forensics (PROGRESS entry of the same date) proved every
+distribution surface genuine byte-for-byte: cask SHAs matched the release asset digests, the pkg's
+xar Distribution/PackageInfo carried the right identity and payload, deb/rpm and both feeds were
+clean, and the concurrent creator-v0.1.0 build never cross-uploaded. A checksum-verified
+`brew reinstall` plus `rm -rf` of every colliding bundle STILL showed the Trainer UI inside a window
+whose menu bar said LucidAgentIDE.
+
+The actual cause: an orphaned `bun server.ts` from the user's Trainer fork (a scaffold clone of this
+repo) had been LISTENING on `*:5319` since Aug 27, pid 40409. Killing it and relaunching restored the
+real v1.14.1 instantly.
+
+### The defect
+
+`desktop/main.ts` boots by spawning the engine child, then `waitForServer()` polls
+`http://localhost:${PORT}/api/health` and accepts ANY 200. The BrowserWindow then renders whatever
+answers that port. Three gaps compound:
+
+1. **No identity check.** Any local process bound to 5319 first wins the window. The genuine spawned
+   engine loses the bind race and its exit is irrelevant - health is answered by the stranger.
+2. **No roll on macOS/Linux.** Only `LucidAgentIDE.bat` rolls to a free port when 5319 is taken
+   (main.ts comment, ADR-0278 era). The mac .app trusts the port unconditionally - which is exactly
+   why "Windows seems fine" while the Mac rendered the Trainer through two upgrades and a reinstall.
+3. **Bind width is unpoliced.** The squatter listened on `*` (LAN-wide). Our own engine's bind
+   address must be provably loopback (ADR-0022 did this for the control plane; assert it for the
+   engine too).
+
+Threat shape beyond the benign accident: any local process can paint arbitrary UI - including a fake
+auth page, which is literally what the Trainer's sign-in card was - inside LUCID's trusted chrome by
+binding the port first. For a security-first product that is a trust-boundary hole, not a UX nit.
+
+### The decision
+
+1. **Per-launch nonce handshake.** Main mints a random nonce (crypto, per launch) and passes it to
+   the spawned engine via env (`LUCID_ENGINE_NONCE`, alongside the existing flavorEnv block). The
+   engine includes that nonce in its `/api/health` JSON. `waitForServer()` accepts a health response
+   ONLY when the nonce matches what main minted. Missing or mismatched nonce = foreign server. Only
+   the child main spawned can know the value; a squatter answering first cannot fake it, and a
+   forwarding proxy has no bound genuine engine to forward to.
+2. **Fail loudly on a foreign port. Never roll silently.** Per-port userData is a deliberate
+   identity (main.ts ADR-0206/ADR-0278 seams: suffixed userData, safeStorage key seeding, lucid://
+   focus). Auto-rolling the primary launch would silently move the user onto a suffixed profile and
+   "lose" their settings/vault - the ADR-0278 failure class reintroduced. Instead: the ADR-0177/0259
+   pattern - a diagnosable error dialog naming the port, the squatting process (best-effort pid and
+   command via lsof/netstat), and the remediation (quit the other program, or deliberately launch on
+   another port via the control panel), plus an engine.log line. Fail-closed is law (AGENTS.md
+   invariant 3): "someone answered health" is not "my engine is up."
+3. **Loopback bind, asserted.** The engine binds 127.0.0.1 explicitly; a regression test asserts the
+   listen address. Review relay (8790) and managed whisper (9111) binds in the same pass.
+4. **Both flavors inherit.** Agent 5319 and Creator 5320 flow through the same code path; the nonce
+   and dialog are flavor-agnostic. `LucidAgentIDE.bat` keeps its pre-spawn roll for the dev-beside-
+   installed case - the handshake makes the roll safe rather than replacing it.
+
+### Increment plan (P-PORTGUARD.1)
+
+- `desktop/main.ts`: mint nonce, add to the engine child env, extend `waitForServer()` to verify it,
+  add the foreign-port dialog branch (reuse the engineExit fast-bail structure).
+- Engine health handler (`server.ts` / compiled `bin/lucid-engine` source): echo
+  `process.env.LUCID_ENGINE_NONCE` in the health payload; bind loopback explicitly.
+- Tests (pure where possible, loop_preflight style): (a) a fixture server answering 200 with no/wrong
+  nonce makes the wait logic return "foreign", (b) matching nonce passes, (c) bind-address assertion.
+  Packaged gates (air-gap, pf-boot-smoke) keep passing - pf-boot-smoke boots the engine WITH a nonce.
+- `make demo-portguard`: spin a squatter on a free test port, prove boot refuses it with the named
+  error; kill squatter, prove boot succeeds.
+
+### Non-goals
+
+- CI release-identity gate (assert pkg Distribution/PackageInfo per flavor before upload) - separate
+  increment; the incident proved distribution was NOT the failing surface.
+- The Trainer fork's own appId/port split - external repo hygiene, not this codebase.
+- Any change to rolling-port semantics or the port picker UX.
+
+### Links
+
+PROGRESS entry 2026-08-30 (incident forensics), ADR-0022 (loopback control plane), ADR-0177/0259
+(diagnosable boot failures), ADR-0206/0278 (port-keyed identity + safeStorage), ADR-0279/0304 (the
+flavor-crossing hazard class this generalizes), desktop/main.ts, desktop/build_flavor.ts.
