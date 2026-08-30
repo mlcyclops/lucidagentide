@@ -20334,10 +20334,14 @@ from 7 and 48); `desktop/build/electron-builder.creator.test.ts` 11 tests (was 7
 `lucid_acp`); root and desktop `tsc` clean; the server program shows only the documented pre-existing
 `dev.ts(1332,103)` plus `symbol_graph.ts` errors; license headers clean.
 
-**Numbering note.** ADR-0297 through ADR-0301 are not in this file. They were authored in a parallel
-session and live on branch `feature/pwa-focus` (commit `8b060b2`), including ADR-0297, which was written
-here and carried there. The gap closes when that branch merges. This ADR took 0304 rather than reusing a
-number that already exists elsewhere.
+**Numbering note: written as ADR-0302, renumbered to ADR-0304.** Commit `56438b6`'s message still names
+ADR-0302 and cannot be corrected, so this paragraph is the redirect for anyone who searches the history
+for that string. The collision was real rather than a gap-filling preference: branch
+`feature/pwa-focus-master` (`ab15f57`, branched straight off master, and already pushed) carries its own
+ADR-0302, "Nothing on the phone opens itself: no auto-expand on attention". Renumbering the UNPUSHED side
+was the smaller blast radius, and it leaves the merged sequence contiguous: ADR-0297 here (restored onto
+this branch in `a3bedf4`), ADR-0298 through ADR-0302 arriving with the PWA branch, ADR-0303 the test-gate
+fix, and ADR-0304 this one. ADR-0298 through ADR-0301 are still not in this file.
 
 ### Context
 
@@ -20426,9 +20430,21 @@ the scanner and omp both answering offline), the override resolves to `desktop\r
    it. It also asserts the tag baked into the packaged feed and the tag the workflow publishes to are the
    same string, because drift there fails no build and silently leaves every installed Creator
    un-updatable.
-4. Still unbuilt, and deliberately not in this increment: the payload split. Both installers carry all
-   Creator source today, inert behind flavor gates. Making Creator genuinely absent from the standard
-   installer is an entry-point split, not a branching or release change.
+4. **The payload split is REFUSED, on measurement.** The standing assumption was that Creator makes the
+   standard installer "bigger than some want", so an entry-point split would eventually be needed to keep
+   Creator out of it. Measured instead of assumed: every Creator source file totals **1,102,176 bytes**
+   (1.05 MB), and that ceiling INCLUDES the tests and demo scripts, which are never packaged. The built
+   Windows installer on this machine is **360,012,432 bytes** (343 MB). So Creator is **0.31% of the
+   download as an absolute upper bound**, and roughly half that for code that actually ships. An
+   entry-point split would buy back a fraction of one percent and cost a permanent second renderer entry,
+   conditional route registration, and a new bug class where a surface works in one flavor and is missing
+   in the other. Refused as a bad trade, not deferred.
+
+   The edge-first constraint points somewhere else entirely, which is the useful half of this measurement.
+   343 MB is dominated by Electron plus the bundled bun, uv, CPython and whisper.cpp runtimes that ADR-0225
+   deliberately vendors so an air-gapped host works cold. Anyone trying to shrink the edge footprint should
+   attack those, where the numbers are two orders of magnitude larger. Creator is noise at this scale, and
+   a split sold as an edge-footprint win would be measuring the wrong thing.
 5. `publish-creator-latest` is pinned to `refs/heads/master`, the same double gate Agent's rolling publish
    uses. That single line is what would change if Creator ever did move to a release branch.
 
