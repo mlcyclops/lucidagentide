@@ -20324,7 +20324,7 @@ was written as ADR-0302, collides with an ADR-0302 already pushed on the PWA bra
 to 0304. A cross-reference that survives a renumber is worth more than one that is precise today, which is
 the same reason the `compositeShot` guard in `tools/remote-pwa/app.ts` cites ADR-0297 by name and not by line.
 
-## ADR-0302 -- LUCID Creator as a separately released product, and the shared update pointer that would have crossed the two
+## ADR-0304 -- LUCID Creator as a separately released product, and the shared update pointer that would have crossed the two
 
 **Date:** 2026-08-30
 **Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator0.ts` green (8 sections, 55 checks, up
@@ -20336,7 +20336,7 @@ from 7 and 48); `desktop/build/electron-builder.creator.test.ts` 11 tests (was 7
 
 **Numbering note.** ADR-0297 through ADR-0301 are not in this file. They were authored in a parallel
 session and live on branch `feature/pwa-focus` (commit `8b060b2`), including ADR-0297, which was written
-here and carried there. The gap closes when that branch merges. This ADR took 0302 rather than reusing a
+here and carried there. The gap closes when that branch merges. This ADR took 0304 rather than reusing a
 number that already exists elsewhere.
 
 ### Context
