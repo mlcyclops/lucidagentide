@@ -20905,6 +20905,13 @@ binding the port first. For a security-first product that is a trust-boundary ho
    command via lsof/netstat), and the remediation (quit the other program, or deliberately launch on
    another port via the control panel), plus an engine.log line. Fail-closed is law (AGENTS.md
    invariant 3): "someone answered health" is not "my engine is up."
+   The dialog and engine.log MUST carry actionable forensics, not just a verdict (user requirement,
+   2026-08-30): the squatting process NAME, PID, START DATE/TIME, listen address, and the port - and a
+   preformatted COPY/PASTE INCIDENT BLOCK (markdown: app version, OS, port, expected engine, observed
+   process name/pid/start-time/command line, health-nonce verdict) suitable for pasting into an email
+   to a contributor or a GitHub issue verbatim. Best-effort process attribution: `lsof -t` /
+   Get-NetTCPConnection + process query; when attribution fails the block says so explicitly rather
+   than omitting the section.
 3. **Loopback bind, asserted.** The engine binds 127.0.0.1 explicitly; a regression test asserts the
    listen address. Review relay (8790) and managed whisper (9111) binds in the same pass.
 4. **Both flavors inherit.** Agent 5319 and Creator 5320 flow through the same code path; the nonce
@@ -20915,6 +20922,9 @@ binding the port first. For a security-first product that is a trust-boundary ho
 
 - `desktop/main.ts`: mint nonce, add to the engine child env, extend `waitForServer()` to verify it,
   add the foreign-port dialog branch (reuse the engineExit fast-bail structure).
+- A pure `formatPortIncident()` helper (unit-tested) that renders the copy/paste incident block from
+  `{ port, expected, observed: { pid, name, startedAt, cmd } | null, nonceVerdict }`; the dialog and
+  engine.log both consume it, so the report text is tested, not hand-rolled at the callsite.
 - Engine health handler (`server.ts` / compiled `bin/lucid-engine` source): echo
   `process.env.LUCID_ENGINE_NONCE` in the health payload; bind loopback explicitly.
 - Tests (pure where possible, loop_preflight style): (a) a fixture server answering 200 with no/wrong
@@ -20935,3 +20945,56 @@ binding the port first. For a security-first product that is a trust-boundary ho
 PROGRESS entry 2026-08-30 (incident forensics), ADR-0022 (loopback control plane), ADR-0177/0259
 (diagnosable boot failures), ADR-0206/0278 (port-keyed identity + safeStorage), ADR-0279/0304 (the
 flavor-crossing hazard class this generalizes), desktop/main.ts, desktop/build_flavor.ts.
+
+## ADR-0306 -- P-OFFICE.1: first-class Word/Excel/PowerPoint via OfficeCLI, as a gated skill (SCOPE/PLAN) (2026-08-30)
+
+**Status:** Accepted -- SCOPE/PLAN (not built).
+
+### Context
+
+The user wants LUCID agents to be genuinely good at Microsoft Office files. `iOfficeAI/OfficeCLI`
+(Apache-2.0, C#, ~29.5k stars, v1.0.145 as of this writing) is a single self-contained binary that
+reads, edits, and creates `.docx`/`.xlsx`/`.pptx` with no Office installation, addresses elements by
+path (`/slide[1]/shape[1]`), emits structured JSON, and renders documents to HTML/PNG - which closes
+the render -> look -> fix loop that makes agents actually good at documents. Upstream even ships a
+`SKILL.md` and an `officecli install` that injects skills into detected agent harnesses.
+
+### Decision
+
+Integrate as a GATED EXTERNAL TOOL through the seams we already have - a skill plus exec-policy
+classification. No fork, no new tool surface, no Python (invariants 1 and 2 untouched).
+
+1. **Skill, LUCID-authored, version-pinned.** `.agents/skills/officecli/SKILL.md` wraps upstream's
+   command surface (create / view / get / add / set / remove / close), pinned to a named upstream
+   release. It teaches the render-look-fix loop explicitly: render HTML/PNG into the workspace and
+   open it in the Preview panel (existing preview seam, zero new UI).
+2. **Acquisition is verified, never piped.** Upstream's `curl | bash` and `irm | iex` installers are
+   PROHIBITED under our posture. v1: the skill detects `officecli` on PATH and otherwise walks the
+   user through installing the pinned GitHub release manually (egress approval applies). v2
+   (optional, own increment): a fetch-runtimes.ts-style SHA-256-pinned fetch.
+3. **exec_policy.ts classifies `officecli` explicitly.** Unknown programs are already fail-closed T3;
+   add read-only subcommands (view / get) at a low tier and mutating subcommands (create / add / set
+   / remove / close) at the LOCAL_MUTATE-equivalent tier so per-action approvals read sanely.
+4. **Its ports are not our ports.** `officecli watch` runs a live-preview server on localhost:26315,
+   browser-facing only. The ADR-0305 rule holds: LUCID's window only ever renders its own
+   nonce-verified engine.
+5. **License hygiene.** Apache-2.0 is compatible; if v2 ever bundles the binary, NOTICE attribution
+   ships with it and the vendored tree keeps its own license (AGENTS.md licensing rules).
+
+### Increment plan (P-OFFICE.1)
+
+- The skill file + a parity check that its documented commands exist in the pinned upstream release.
+- exec_policy tier entries + tests beside the existing tier tests.
+- `make demo-office`: with the binary present, create a deck, add a slide, view outline, render HTML,
+  assert artifacts; cleanly SKIP (not fail) when the binary is absent so CI stays green.
+
+### Non-goals
+
+- AionUi or any GUI dependency; COM automation of installed Office; bundling the binary in v1;
+- upstream's auto-injection (`officecli install`) writing into LUCID's skill directories - LUCID owns
+  its skill set (the skill is authored here, not installed by a third-party binary).
+
+### Links
+
+github.com/iOfficeAI/OfficeCLI (README + SKILL.md + releases), ADR-0305 (port trust rule),
+desktop/exec_policy.ts, .agents/skills/, desktop/build/fetch-runtimes.ts (the pinned-fetch pattern).
