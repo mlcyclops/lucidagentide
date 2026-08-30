@@ -70,12 +70,17 @@
           "!node_modules/**/*.map",
           "!node_modules/**/*.d.ts",
           "!node_modules/.bin/**",
-          "node_modules/.bin/omp*",
           "!node_modules/onnxruntime-node/**",
           "!node_modules/onnxruntime-web/**",
           "!node_modules/date-fns/**",
           "!node_modules/lucide-react/**"
         ]
+      },
+      {
+        "//": "electron-builder 26 does NOT walk into dot-directories from a parent glob, so node_modules/**/* can never reach node_modules/.bin and the old '!node_modules/.bin/** then node_modules/.bin/omp*' re-include silently shipped nothing (the air-gap smoke caught it: bundled omp shim missing). An explicit `from` pointing AT the dot-directory still copies it, so the omp shims get their own entry. Verified against builder 26's own FileMatcher + copyFiles walker, not assumed.",
+        "from": "../node_modules/.bin",
+        "to": "repo/node_modules/.bin",
+        "filter": ["omp*"]
       }
     ],
     "mac": {
