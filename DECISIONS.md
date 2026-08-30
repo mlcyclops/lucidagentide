@@ -20296,33 +20296,56 @@ the three test files added by `8b060b2` (+58 tests) while they were still uncomm
 pass is exclusion-only, which is 352 plus the 5 files and 86 tests in `tools/`; and 1659 / 11466 / 942 fail
 is the documented gate with `vendor/` swept in. The 11 real failures are the same 11 in every one of them.
 
-### Named risk, NOT fixed here
+### The CI risk, two thirds of it now closed without a single new run
 
-CI diverges from the Makefile in a third and fourth way, and this increment leaves it alone on purpose.
+CI diverges from the Makefile in a third and fourth way, and this increment still leaves it alone.
 `.github/workflows/ci.yml:59` runs `bun test harness`, so the ENTIRE `desktop/` tree is ungated in CI apart
 from the single `desktop/packaged_boot.test.ts` step, while `omp-compat.yml:92` runs `bun test .`, a fourth
-scope again. The reason for not widening CI here is honest rather than tidy: the 11 remaining failures are
-described as Windows path-separator and TS-resolution cases, and this workstation cannot tell whether they
-pass on Linux. Widening CI blind would either fix nothing or turn the pipeline red for everyone, and one CI
-run settles it. That run is the next increment.
+scope again. This ADR originally said classifying the 11 failures needed "one Linux run". It needed none,
+and the argument is recorded here because it is re-derivable rather than remembered:
+`ci.yml:23` is `runs-on: ubuntu-latest`, `ci.yml:59` runs `bun test harness`, CI is green on master, and
+`git diff --stat master HEAD -- harness/launcher/lucid_acp.test.ts` is EMPTY, so that file is byte-identical
+between master and this branch. A green Linux `bun test harness` therefore EXECUTED the same two tests that
+fail on this workstation. Those 2 of the 11 are **Windows-only by observation**, at the cost of one diff.
+
+The remaining 9 are not one kind of problem, which is why the next step is narrower than "widen CI":
+`fs_browse`'s 5 look like genuine path-separator cases, but `symbol_graph`'s 4 are TS-compiler resolution
+against `desktop/node_modules/typescript`, which is an install-LAYOUT failure rather than a separator one and
+may well fail on Linux too, for a reason that is real. So when CI is widened it must be widened with those
+two files named and expected-failing, never blind: a gate that goes red on its first run teaches people to
+ignore it, and a gate that hides a genuine install-layout defect under "known Windows noise" is worse than
+the blind spot it replaced.
 
 ### Process note, paid for the hard way
 
 This ADR was written once already and vanished before it was committed. The mechanism was not the amend it
 was first blamed on: `git diff` across that amend touches one path, and an amend cannot alter a path the
-index never held. It was a whole-file write of `DECISIONS.md` from a snapshot that predated the insert, by a
-second session working the same tree. The rule that follows is narrower and more useful than "be careful":
-**never whole-file write a document another session is live in; insert into it.** The same hazard cost a demo
-script earlier the same day. What finally worked was not a promise but a boundary: the file changes hands
-only at a commit, and the holder says so explicitly.
+index never held. It was a whole-file write of `DECISIONS.md` from a snapshot that predated the insert. The
+rule that follows is narrower and more useful than "be careful": **never whole-file write a document another
+session is live in; insert into it.** The same hazard cost a demo script earlier the same day. What finally
+worked was not a promise but a boundary: the file changes hands only at a commit, and the holder says so.
+
+**And the reason nobody could name the writer is structural, not careless.** Every commit in this window
+carries the same author AND the same committer, byte for byte: `mlcyclops
+<mlcyclops@users.noreply.github.com>`, verified across six commits with `%an/%ae/%cn/%ce`. Git therefore
+offers NO discriminator between concurrent sessions in one worktree, so every attribution claim made all day
+rested on message text and timing, and several were wrong in both directions. [INFERENCE] It is worse than
+two sessions guessing about each other: two commits in this stretch, `a3bedf4` and `8636db1`, are disclaimed
+by BOTH coordinating sessions, and one of them was found only because a `git commit` returned "nothing to
+commit" against a tree that already matched it. So the actor COUNT was wrong, not just the attribution. The
+practical consequences, in order of cheapness: a session must never infer authorship from `git log`; it must
+announce its own commit hashes, which is the only durable record of who did what; and a shared worktree wants
+distinct `user.name` per session far more than it wants a protocol, because a protocol is a promise and a
+committer field is evidence.
 
 ### See also
 
 ADR-0295 (the `desktop/release` double-count, same failure family), and the Creator release-channel ADR, the
 release work this defect was found beside. That one is deliberately cited by TITLE rather than by number: it
-was written as ADR-0302, collides with an ADR-0302 already pushed on the PWA branch, and is being renumbered
-to 0304. A cross-reference that survives a renumber is worth more than one that is precise today, which is
-the same reason the `compositeShot` guard in `tools/remote-pwa/app.ts` cites ADR-0297 by name and not by line.
+was written as ADR-0302, collided with an ADR-0302 already pushed on the PWA branch, and has since been
+renumbered to 0304. A cross-reference that survives a renumber is worth more than one that is precise today,
+which is the same reason the `compositeShot` guard in `tools/remote-pwa/app.ts` cites ADR-0297 by name and
+not by line.
 
 ## ADR-0304 -- LUCID Creator as a separately released product, and the shared update pointer that would have crossed the two
 
