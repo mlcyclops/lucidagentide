@@ -70,16 +70,12 @@
           "!node_modules/**/*.map",
           "!node_modules/**/*.d.ts",
           "!node_modules/.bin/**",
+          "node_modules/.bin/omp*",
           "!node_modules/onnxruntime-node/**",
           "!node_modules/onnxruntime-web/**",
           "!node_modules/date-fns/**",
           "!node_modules/lucide-react/**"
         ]
-      },
-      {
-        "from": "../node_modules/.bin",
-        "to": "repo/node_modules/.bin",
-        "filter": ["omp*"]
       }
     ],
     "mac": {
@@ -142,9 +138,7 @@
     "linux": {
       "icon": "build/icon.png",
       "desktop": {
-        "entry": {
-          "Name": "Lucid Agent"
-        }
+        "Name": "Lucid Agent"
       },
       "category": "Development",
       "maintainer": "TechLead 187 LLC <support@lucidagentide.com>",
@@ -194,7 +188,7 @@
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "electron": "^44.0.0",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^25.1.8",
     "png-to-ico": "^3.0.1",
     "typescript": "^7.0.2"
   }
