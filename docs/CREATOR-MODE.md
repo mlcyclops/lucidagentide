@@ -385,6 +385,15 @@ scene rather than silently picking one.
 2000ms pass at 30fps (60 frames, inside the 64-frame cap), reads each frame back, fingerprints it, and shows
 the audit. The first clean driven pass of a file becomes its BASELINE.
 
+**It is documented here but it is NOT gated to the Creator build, and that is deliberate.** Capture touches no
+Creator infrastructure at all: no provider, no endpoint, no credential, no egress, no probe, no job ledger, no
+Creator data root. It rides the Preview panel, which is a standard surface, and the bridge responder that does
+the work is injected into every served preview document in BOTH builds unconditionally. So the capability
+already exists wherever the Preview panel does, and hiding the button in the standard build would hide a
+capability that is still there and still reachable, which is worse than showing it. Everything the feature
+promises is stated at the point of use as well: the button's own tooltip carries the contract, and every
+verdict names the method that produced it.
+
 **How a second press is judged is MEASURED, not assumed.** Before comparing against a baseline, LUCID asks the
 page to render three times across the plan, each one twice, and diffs the readbacks. Two things come out of
 that: whether this platform repeats a byte-identical render, and if not, how much movement is its own noise.
