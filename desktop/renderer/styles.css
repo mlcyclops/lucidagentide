@@ -4432,3 +4432,64 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* the render report: one measurement per line, so nothing is summarised away */
 .cmx-report{display:flex;flex-direction:column;gap:5px}
 .cmx-line{margin:0;font-size:11.5px;line-height:1.55;font-family:var(--mono);color:var(--txt-2)}
+
+/* ---- CREATOR-3 (ADR-0287): the video / 3D render pane ----
+   Invariant 11 throughout: every `cpl-*-row` is a flex row of single-text elements, the label that can be
+   long takes the slack and ellipsizes, chips stay nowrap, and every explanation is a BLOCK paragraph with an
+   absolutely-positioned icon so a sentence never shatters into stacked slivers. */
+.cpl-pane{display:flex;flex-direction:column;gap:10px}
+.cpl-kinds{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.cpl-kind-chip{padding:5px 11px;border:1px solid var(--line);border-radius:999px;background:transparent;
+  color:var(--txt-3);font-size:11.5px;font-weight:600;white-space:nowrap;cursor:pointer;transition:all var(--t) var(--ease)}
+.cpl-kind-chip:hover{color:var(--txt-2);border-color:var(--line-2)}
+.cpl-kind-chip.on{color:var(--txt);border-color:var(--accent,#7ebeff);background:rgba(126,190,255,.10)}
+/* the gate: stated BEFORE the button, as prose, with the shield tucked into the padding */
+.cpl-gate{position:relative;margin:0;padding:9px 11px 9px 30px;border:1px solid rgba(255,196,84,.30);
+  border-radius:var(--r-2);background:rgba(255,196,84,.07);font-size:11.5px;line-height:1.55;color:#ffd79a}
+.cpl-gate .ic{position:absolute;left:9px;top:10px;color:#ffd79a}
+.cpl-prompt-in{width:100%;min-width:0;resize:vertical;padding:9px 11px;border:1px solid var(--line);
+  border-radius:var(--r-2);background:var(--bg-1);color:var(--txt);font:inherit;font-size:12.5px;line-height:1.5}
+.cpl-form-row{display:flex;align-items:center;gap:8px;min-width:0}
+.cpl-model-in{flex:1;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:var(--r-3);
+  background:var(--bg-1);color:var(--txt);font-size:12px}
+.cpl-go{flex:none;padding:7px 15px;border:1px solid var(--accent,#7ebeff);border-radius:var(--r-3);
+  background:rgba(126,190,255,.14);color:var(--txt);font-size:12px;font-weight:650;white-space:nowrap;cursor:pointer}
+.cpl-go:disabled{opacity:.45;cursor:not-allowed;border-color:var(--line)}
+.cpl-endpoint,.cpl-note,.cpl-status{margin:0;font-size:11px;line-height:1.55;color:var(--txt-3)}
+.cpl-status.ok{color:#8fe3b0}
+.cpl-status.error{color:#ffb0b0}
+/* the report */
+.cpl-run{display:flex;flex-direction:column;gap:7px;padding:11px;border:1px solid var(--line);
+  border-radius:var(--r-2);background:var(--bg-1)}
+.cpl-run.ok{border-color:rgba(143,227,176,.30)}
+.cpl-run.bad{border-color:rgba(239,95,95,.30)}
+.cpl-run-row,.cpl-card-row,.cpl-refused-row{display:flex;align-items:center;gap:8px;min-width:0}
+.cpl-run-verdict{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:13px;font-weight:650;color:var(--txt)}
+.cpl-run-kind,.cpl-run-job,.cpl-run-stage,.cpl-run-prompt-id{white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:210px;font-size:11px;font-family:var(--mono);color:var(--txt-3)}
+.cpl-run-error{position:relative;margin:0;padding:9px 11px 9px 30px;border:1px solid rgba(239,95,95,.32);
+  border-radius:var(--r-2);background:rgba(239,95,95,.07);font-size:11.5px;line-height:1.55;color:#ffb0b0}
+.cpl-run-error .ic{position:absolute;left:9px;top:10px;color:#ffb0b0}
+.cpl-run-progress,.cpl-run-unresolved,.cpl-run-note,.cpl-run-empty{margin:0;font-size:11px;line-height:1.55;color:var(--txt-3)}
+.cpl-run-unresolved{color:#ffd79a}
+.cpl-media{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.cpl-card{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--line);
+  border-radius:var(--r-3);background:var(--bg-2)}
+.cpl-file{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:12px;font-weight:600;color:var(--txt)}
+.cpl-kind,.cpl-mime,.cpl-bytes,.cpl-sha{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  max-width:120px;font-size:10.5px;font-family:var(--mono);color:var(--txt-3)}
+.cpl-model,.cpl-prompt,.cpl-scan{margin:0;font-size:11px;line-height:1.5;color:var(--txt-3)}
+.cpl-prompt{color:var(--txt-2)}
+/* refusals are SHOWN: a dropped output that nobody sees reads as a render that worked */
+.cpl-refused{display:flex;flex-direction:column;gap:6px;padding:9px;border:1px solid rgba(255,196,84,.26);
+  border-radius:var(--r-2);background:rgba(255,196,84,.05)}
+.cpl-refused-h{position:relative;margin:0;padding-left:20px;font-size:11.5px;font-weight:650;color:#ffd79a}
+.cpl-refused-h .ic{position:absolute;left:0;top:1px;color:#ffd79a}
+.cpl-refused-h-t{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cpl-refused-item{display:flex;flex-direction:column;gap:3px}
+.cpl-refused-file{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:11.5px;font-weight:600;color:var(--txt-2)}
+.cpl-refused-tag{flex:none;white-space:nowrap;font-size:10px;font-family:var(--mono);color:#ffd79a}
+.cpl-refused-why{margin:0;font-size:11px;line-height:1.55;color:var(--txt-3)}

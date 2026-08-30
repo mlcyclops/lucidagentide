@@ -337,6 +337,58 @@ quietly fixes that. This one does not:
 An edited take goes straight in: a CREATOR-2 timeline lifts onto a mix track keeping every clip's position,
 and at unity it renders byte-identically to what the editor would have produced. Proof: `make demo-CREATOR-5`.
 
+## Video and 3D: the render pipeline
+
+The **Render** tab in Creator Studio asks your own ComfyUI workflow for a video, a 3D file, or a still. It is
+the same conversation the Images tab has, carried through to the outputs a modern install actually produces,
+plus two gates the still path did not have.
+
+**The probe decides what the button can do.** The kind chips (Video, 3D model, Still image) are checked
+against what a LIVE probe attested on your install, from its own installed nodes: `video` needs one of
+`SaveAnimatedWEBP`, `SaveAnimatedPNG`, `VHS_VideoCombine` or `SaveWEBM`; `model-3d` needs `SaveGLB`, `Load3D`
+or `Preview3D`. Unproven means the request is disabled and the pane says what WAS proved, before you spend a
+render. A probe older than 15 minutes has expired and attests nothing, so a stale install refuses the same
+way an unequipped one does.
+
+**The bytes decide their own type.** A server's `content-type` is a claim. LUCID reads the magic bytes, and a
+contradiction is refused by name: a server that sends PNG while calling it `video/mp4` gets that output
+rejected and nothing is written. Bytes LUCID cannot identify are refused too, rather than stored under a
+guessed extension.
+
+**The metadata is scanned, fail-closed.** Every string a render server hands back travels with the artifact
+into the library and later into a prompt: the filename, the subfolder, the output key, the content type it
+claimed. Those are untrusted input, so they are wrapped in the usual delimiters and scanned BEFORE the bytes
+are written. A scanner that is dead, slow, or malformed BLOCKS the artifact; there is no path where "could
+not scan" reads as "fine". What is NOT claimed: the media bytes themselves carry a sha256, not a content
+scan. The Unicode scanner reads text and cannot read a video frame, and the pane says so.
+
+**`/history` is the authority; the websocket is telemetry.** LUCID opens ComfyUI's `/ws` with a `client_id`
+so frames are addressed to your render, and reports the node and step count as they arrive. That stream can
+never decide the outcome: a socket that goes silent, floods, dies, or carries another client's frames cannot
+hang the render, fail it, or corrupt its progress. The credential rides the handshake header, never the URL.
+
+**Blender** renders in the background as a fixed argument vector (`-b`, `-o`, `-F`, then `-f` or `-s/-e/-a`).
+No shell is involved, so a path with parentheses or spaces is fine, while a NUL byte or a newline is refused
+because one truncates what the OS receives and the other would forge a `Saved:` line in the log LUCID parses
+back. Exit code plus Blender's own `Saved:` lines are the evidence: exit 0 with nothing saved is reported as
+a failure, and a failing run quotes its `Error:` line. Scene authoring stays YOUR Python through the
+exec-approval path: `--python` runs only when you approve it, and LUCID ships no `.py` of its own.
+
+**Frame capture** (for a three.js scene in the Preview panel) is a fixed timestep derived from the frame
+INDEX, never an accumulator, so nothing drifts: at 30fps the 3600th frame lands on 119967ms where an
+accumulator would say 118767ms. Two runs of the same plan fingerprint identically, and both ways a capture
+can lie are caught: a scene animating off the wall clock fails the regression compare with the first
+disagreeing frame named, and a scene that ignores the time it is handed is reported as a stuck run, which
+the report refuses to distinguish from a genuinely static scene rather than silently picking one.
+
+**A model manifest is a declaration, not a discovery.** You can declare what an install holds; LUCID never
+scans disks or scrapes model hubs, and a path-shaped model id is refused for exactly that reason. The probe
+is the truth: a declared model the server does not list is reported absent and never offered, a model the
+server has but the manifest omits is still usable, and a stale or unauthorized probe blesses nothing.
+
+Proof: `make demo-CREATOR-3`, whose last four sections run this code against a real server process over real
+HTTP and a real websocket.
+
 ## Verifying the image path (and your backend)
 
 `make verify-creator-comfy` drives the **real product code** against a ComfyUI-shaped fixture
@@ -505,10 +557,12 @@ refuses to extrapolate a number it cannot measure.
 
 ## What is NOT built yet
 
-Cloud voice-clone flows end to end, deterministic three.js frame capture, Blender scene authoring, Unreal
-editor remote control, and per-process GPU attribution are roadmap items (ADR-0285, ADR-0287, ADR-0288,
-ADR-0290). Inside the audio tools specifically: there is no time-stretch, no resampler, no transcoder, no
-per-word re-synthesis loop yet (a span re-render takes audio you already have), and no EQ, compression, or
+Cloud voice-clone flows end to end, Unreal headless builds and editor remote control, and per-process GPU
+attribution are roadmap items (ADR-0285, ADR-0288, ADR-0290). Frame capture ships as the deterministic clock,
+fingerprint, and audit (CREATOR-3), but the renderer-side harness that drives a user's three.js scene through
+it frame by frame is not wired into the Preview panel yet, and Blender scene AUTHORING stays the user's own
+Python through exec approval by design rather than as a gap. Inside the audio tools specifically: there is no
+time-stretch, no resampler, no transcoder, no per-word re-synthesis loop yet (a span re-render takes audio you already have), and no EQ, compression, or
 reverb (the mixer does levels, pan, fades, and automation, and claims nothing more).
 
 Built so far on this branch:
@@ -533,6 +587,13 @@ Built so far on this branch:
 - **CREATOR-1** (ADR-0292) - capability probes that make `ready` mean something and expire when stale, plus
   the durable job ledger with per-job admission snapshots, recorded refusals, and request-then-confirm
   cancellation. Proof: `make demo-CREATOR-1`.
+- **CREATOR-3** (ADR-0295) - the video and 3D pipelines: a render gated on a live probe's attestation and on
+  the governor before anything leaves the machine, video and 3D outputs read by output key and extension, an
+  artifact whose type comes from its own magic bytes (a lying content-type is refused by name), a fail-closed
+  scan of every server-supplied string before the bytes are written, `/ws` progress that is telemetry and can
+  never hang or corrupt a render, deterministic frame capture that reports which of the two ways a capture
+  lied, a fixed-argv Blender runner with no shell, and a model manifest that stays a claim until the probe
+  agrees. Proof: `make demo-CREATOR-3`.
 
 ## Checking that the Creator engine actually works
 

@@ -49,6 +49,11 @@ import {
 } from "./creator_image.ts"; // CREATOR-IMG (ADR-0291): generation, mixing, sheets, GIFs, memes
 import { decodeTimelineDoc, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
 import { decodeMixGraph, mixerTracks, renderAndSaveMix } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer
+import { openComfyProgress, runRenderPipeline, type PipelineDeps, type ScanVerdict } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the video/3D pipeline + its /ws telemetry
+import { blenderJobNeed, runBlenderRender, type SpawnLike } from "./creator_blender.ts"; // CREATOR-3: Blender background renders
+import { manifestCapabilities, parseModelManifest, reconcileManifest } from "../harness/creator/model_manifest.ts"; // CREATOR-3: declared models, reconciled against the probe
+import type { MediaKind } from "../harness/creator/comfy_stream.ts"; // CREATOR-3: the closed media kinds
+import { scanAndDecide } from "../harness/security/gate.ts"; // CREATOR-3: the fail-closed gate every artifact's metadata passes
 import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
 import {
   createJob, finishJob, jobStats, listJobs, recordJobArtifact, requestJobCancel, startJob,
@@ -748,19 +753,47 @@ const jobIo: JobIo = {
 
 const creatorJobsData = () => { const jobs = listJobs(jobIo, CREATOR_DIR); return { jobs, stats: jobStats(jobs) }; };
 
+/** CREATOR-3: MEASURE ONLY, write no job. The pipeline routes own their own job row (they attach artifacts
+ *  to it), so they take the governor's snapshot and record the job themselves. One measurement path, two
+ *  callers: `admitCreatorJob` below is this plus a job. */
+async function creatorAdmissionSnapshot(label: string, need: { gpu?: boolean; vramMB?: number } = {}): Promise<JobAdmissionSnapshot> {
+  const res = await creatorResources(false);
+  const local = res.targets.find((t) => t.kind === "local");
+  const verdict = creatorAdmission(res.history, { label, ...need }, local?.gpu ?? { available: false, source: "none", devices: [], note: "" });
+  return {
+    ok: verdict.ok, cpuPct: verdict.cpuPct, memPct: verdict.memPct, gpuPct: verdict.gpuPct, vramPct: verdict.vramPct,
+    gpuEvidenceMissing: verdict.gpuEvidenceMissing, reason: verdict.reason,
+  };
+}
+
+/** CREATOR-3: the fail-closed seam the render pipeline scans artifact metadata through. Same sidecar, same
+ *  law as every other import path: a dead or slow scanner returns a BLOCKING decision, never a pass. */
+const creatorScan = (text: string): Promise<ScanVerdict> => scanAndDecide(agentScanner(), text);
+
+/** CREATOR-3: Blender runs as a fixed argument VECTOR through `Bun.spawn`. There is no shell here, and that
+ *  is load-bearing rather than incidental: `ARGV_UNSAFE_CHARS` in blender_cli.ts only refuses what cannot
+ *  ride an argv slot (NUL, newlines, control characters) precisely because nothing re-parses these strings.
+ *  Reintroduce a shell and that guard becomes too weak; creator_blender.test.ts fails if anyone tries. */
+const blenderSpawn: SpawnLike = async (argv, opts) => {
+  const proc = Bun.spawn([...argv], { cwd: opts.cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const timer = setTimeout(() => { try { proc.kill(); } catch { /* already exited */ } }, opts.timeoutMs);
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr };
+  } finally { clearTimeout(timer); }
+};
+
 /** Ask the governor, then record the answer as a job. A refusal becomes a `refused` job carrying the measured
  *  reason, so the user sees WHY nothing happened instead of a silent no-op. */
 async function admitCreatorJob(kind: CreatorJobKind, label: string, provider: string, need: { gpu?: boolean; vramMB?: number } = {}):
   Promise<{ ok: boolean; jobId: string; reason: string }> {
-  const res = await creatorResources(false);
-  const local = res.targets.find((t) => t.kind === "local");
-  const verdict = creatorAdmission(res.history, { label, ...need }, local?.gpu ?? { available: false, source: "none", devices: [], note: "" });
-  const snapshot: JobAdmissionSnapshot = {
-    ok: verdict.ok, cpuPct: verdict.cpuPct, memPct: verdict.memPct, gpuPct: verdict.gpuPct, vramPct: verdict.vramPct,
-    gpuEvidenceMissing: verdict.gpuEvidenceMissing, reason: verdict.reason,
-  };
+  const snapshot = await creatorAdmissionSnapshot(label, need);
   const job = createJob(jobIo, CREATOR_DIR, { kind, label, provider, admission: snapshot });
-  if (!verdict.ok) return { ok: false, jobId: job.id, reason: verdict.reason };
+  if (!snapshot.ok) return { ok: false, jobId: job.id, reason: snapshot.reason };
   startJob(jobIo, CREATOR_DIR, job.id, snapshot);
   return { ok: true, jobId: job.id, reason: "" };
 }
@@ -843,10 +876,15 @@ const editorIo: EditorIo = { ...libraryIo, writeBytes: artifactIo.writeBytes };
 function comfyEndpoint(): CreatorEndpointDef | null {
   return listCreatorEndpoints().find((e) => e.enabled && e.providerId === "comfyui" && !!e.baseUrl) ?? null;
 }
-function comfyClient(ep: CreatorEndpointDef): ComfyClient {
+/** The credential for one Creator endpoint, by NAME: a declaration stores a vault REF, and the value only
+ *  ever arrives through the environment the vault populated. Never inlined, never logged, never in a URL. */
+function creatorEndpointToken(ep: CreatorEndpointDef): string {
   const envName = ep.vaultRef ? `LUCID_CREATOR_TARGET_${ep.vaultRef.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}` : "";
-  const token = (envName ? process.env[envName] : "") || process.env.LUCID_COMFY_TOKEN || "";
-  return new ComfyClient({ baseUrl: ep.baseUrl!, token, timeoutMs: 20_000 });
+  return (envName ? process.env[envName] : "") || process.env.LUCID_COMFY_TOKEN || "";
+}
+
+function comfyClient(ep: CreatorEndpointDef): ComfyClient {
+  return new ComfyClient({ baseUrl: ep.baseUrl!, token: creatorEndpointToken(ep), timeoutMs: 20_000 });
 }
 
 interface GenerateReply { ok: boolean; error?: string; data?: { artifacts: CreatorArtifact[]; produced: CreatorArtifact[] } }
@@ -2705,6 +2743,109 @@ const server = Bun.serve({
         for (const a of r.data?.produced ?? []) recordJobArtifact(jobIo, CREATOR_DIR, admit.jobId, a.id);
         finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.error ?? "");
         return json({ ok: r.ok, error: r.error, data: r.data ? { ...r.data, ...creatorJobsData() } : { ...creatorJobsData() } });
+      }
+      // CREATOR-3 (ADR-0287): a VIDEO or 3D render through the user's own workflow. Every gate in one place
+      // and in this order: a live probe must have ATTESTED the capability, the governor must admit the work,
+      // the template must have no holes, the bytes must prove their own type, and the server-supplied
+      // metadata must clear the fail-closed scanner before anything is written. The seam's result object is
+      // returned WHOLE rather than hand-projected, so the pane reads the same fields the tests pin.
+      if (p === "/api/creator/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const kind: MediaKind = b.kind === "model-3d" ? "model-3d" : b.kind === "image" ? "image" : "video";
+        const ep = comfyEndpoint();
+        if (!ep) return json({ ok: false, error: "No ComfyUI endpoint is configured. Add one in Creator Studio first." });
+        const templateRaw = typeof b.workflow === "string" && b.workflow.trim() ? b.workflow : ep.workflow;
+        if (!templateRaw || !templateRaw.trim()) {
+          return json({ ok: false, error: `No workflow template is saved for this endpoint. Export the graph that produces your ${kind} from ComfyUI with Save (API Format) and paste it into the endpoint, using {{prompt}}, {{model}} and {{seed}} where LUCID should fill values in.` });
+        }
+        let template: unknown;
+        try { template = JSON.parse(templateRaw); }
+        catch { return json({ ok: false, error: "That workflow template is not valid JSON." }); }
+        const prompt = typeof b.prompt === "string" ? b.prompt.slice(0, 4000) : "";
+        const label = prompt.trim() ? `${kind}: ${prompt.trim().slice(0, 70)}` : `${kind} render`;
+        const deps: PipelineDeps = { client: comfyClient(ep), artifactIo, jobIo, scan: creatorScan, now: () => Date.now() };
+        // The websocket is opened BEFORE the submit, so the first frames of a fast render are not missed,
+        // and closed in the `finally` whatever happens: an unclosed socket would keep the drain alive past
+        // the response. A server with no reachable socket simply yields no feed and polling decides.
+        const clientId = `lucid-${randomBytes(8).toString("hex")}`;
+        const socket = openComfyProgress(ep.baseUrl ?? "", creatorEndpointToken(ep), clientId);
+        try {
+        const run = await runRenderPipeline(deps, CREATOR_DIR, {
+          kind,
+          workflow: template,
+          clientId,
+          feed: socket?.feed,
+          spec: {
+            prompt,
+            negative: typeof b.negative === "string" ? b.negative.slice(0, 2000) : "",
+            model: typeof b.model === "string" ? b.model : "",
+            seed: typeof b.seed === "number" ? b.seed : Math.floor(Math.random() * 2 ** 31),
+            width: typeof b.width === "number" ? b.width : undefined,
+            height: typeof b.height === "number" ? b.height : undefined,
+          },
+          // The probe cache is the ONLY source of attested capability, and it returns nothing once a probe
+          // has expired, so a stale install refuses here rather than at the server.
+          attested: probeCache.discovered("comfyui", Date.now()) ?? [],
+          admission: await creatorAdmissionSnapshot(label, { gpu: true }),
+          label,
+          maxArtifacts: typeof b.maxArtifacts === "number" ? b.maxArtifacts : undefined,
+          poll: { pollMs: 1200, maxWaitMs: 600_000 },
+        });
+        return json({ ok: run.ok, error: run.error, data: { run, artifacts: creatorArtifacts(), ...creatorJobsData() } });
+        } finally { socket?.close(); }
+      }
+      // CREATOR-3: a Blender BACKGROUND render. Fixed argv, no shell. A user `--python` script is the user's
+      // own code, so it needs `approved: true` (the exec-approval decision) before it will run: LUCID adds no
+      // Python of its own (invariant 2) and never runs someone else's silently.
+      if (p === "/api/creator/blender" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const ep = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "blender" && !!e.command);
+        const exe = typeof b.exe === "string" && b.exe.trim() ? b.exe.trim() : (ep?.command ?? "");
+        if (!exe) return json({ ok: false, error: "No Blender executable is configured. Add it in Creator Studio first." });
+        const range = b.range && typeof b.range === "object"
+          ? { start: Number((b.range as Record<string, unknown>).start), end: Number((b.range as Record<string, unknown>).end) }
+          : undefined;
+        const input = {
+          exe,
+          blend: String(b.blend ?? ""),
+          outPattern: String(b.outPattern ?? ""),
+          format: b.format as "PNG" | "JPEG" | "OPEN_EXR" | "WEBP" | undefined,
+          engine: b.engine as "CYCLES" | "BLENDER_EEVEE_NEXT" | "BLENDER_WORKBENCH" | undefined,
+          scene: typeof b.scene === "string" ? b.scene : undefined,
+          frame: typeof b.frame === "number" ? b.frame : undefined,
+          range,
+          pythonScript: typeof b.pythonScript === "string" ? b.pythonScript : undefined,
+          approved: b.approved === true,
+          label: typeof b.label === "string" ? b.label : undefined,
+          timeoutMs: typeof b.timeoutMs === "number" ? b.timeoutMs : undefined,
+          cwd: typeof b.cwd === "string" ? b.cwd : undefined,
+          admission: null as JobAdmissionSnapshot | null,
+        };
+        const need = blenderJobNeed(input);
+        input.admission = await creatorAdmissionSnapshot(need.label, need);
+        const run = await runBlenderRender({ spawn: blenderSpawn, jobIo, exists: (path) => existsSync(path), now: () => Date.now() }, CREATOR_DIR, input);
+        return json({ ok: run.ok, error: run.error, data: { run, ...creatorJobsData() } });
+      }
+      // CREATOR-3: the model MANIFEST. A declaration of what a given install can do, reconciled against what
+      // the probe actually reported: the probe is the truth and the manifest is only the claim, so a declared
+      // model the server does not list is reported ABSENT rather than offered.
+      if (p === "/api/creator/manifest" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<{ manifest?: unknown }>(req);
+        const parsed = parseModelManifest(b.manifest);
+        if (!parsed.ok) return json({ ok: false, error: parsed.error });
+        const ep = comfyEndpoint();
+        const probe = probeCache.get("comfyui");
+        const models = ep ? (await comfyClient(ep).probeModels()).models : [];
+        const reconciliation = reconcileManifest(parsed.manifest, {
+          models,
+          attested: probe?.attested ?? [],
+          probeState: probe?.state ?? "skipped",
+          ageMs: probe ? Math.max(0, Date.now() - probe.at) : Number.MAX_SAFE_INTEGER,
+        });
+        return json({ ok: true, data: { reconciliation, claimed: manifestCapabilities(parsed.manifest), warnings: parsed.warnings } });
       }
       // CREATOR-IMG: store a renderer-encoded PNG (a meme, a markup export, a canvas composite) as an
       // artifact with its provenance. The data URL is gated: no SVG, no mislabeled bytes.

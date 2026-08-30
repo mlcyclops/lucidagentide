@@ -18,6 +18,7 @@ import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-
 import { isCreatorResources, type CreatorResourcesView } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): odometer view types live there
 import { isCreatorStudio, type CreatorStudioView } from "./creator_studio.ts"; // CREATOR-0 (ADR-0282): Studio view types live there
 import { isEditorSession, type EditorSession } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): editor session view type lives there
+import { isPipelineRunView, type PipelineRunView } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the render run view + its fail-closed shape gate
 import { isMixerTracksPayload, isRenderMixReport, type MixerTracksPayload, type RenderMixResult } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): mixer view types live there
 import type { TimelineDoc } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline document, edited in the renderer
 import type { MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix graph, edited in the renderer
@@ -1114,6 +1115,11 @@ export interface LucidBridge {
   // core the render uses, so a control move is instant and no half-built graph ever crosses the wire.
   creatorMixerTracks(): Promise<MixerTracksPayload | null>;
   creatorMixerRender(opts: { graph: MixGraph; title: string; prompt?: string; primaryTrackId: string; applyHeadroom?: boolean }): Promise<RenderMixResult | null>;
+  // CREATOR-3 (ADR-0287): a video or 3D render. Fail-closed at the boundary as well as at the server: a run
+  // payload this build cannot read becomes a named refusal rather than a half-painted report, because the
+  // pane's whole job is to say what was PROVEN and a malformed run proves nothing.
+  creatorRender(opts: { kind: string; prompt: string; model?: string; negative?: string; seed?: number; width?: number; height?: number; workflow?: string; maxArtifacts?: number }):
+    Promise<{ ok: boolean; error?: string; run?: PipelineRunView } | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -1770,6 +1776,16 @@ export const bridge: LucidBridge = {
       if (!body.ok) return { ok: false, error: body.error ?? "The mixer refused the render and did not say why." };
       return isRenderMixReport(body) ? body : { ok: false, error: "The mixer answered with a report this build cannot read." };
     } catch { return { ok: false, error: "The mixer did not answer." }; }
+  },
+  creatorRender: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/render", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { run?: unknown } };
+      // A refusal that never reached the pipeline (no endpoint, no template) carries no run object at all,
+      // so the error stands on its own; a run that came back malformed is refused rather than painted.
+      if (!isPipelineRunView(body.data?.run)) return { ok: false, error: body.error ?? "The render service answered with a run this build cannot read." };
+      return { ok: !!body.ok, error: body.error, run: body.data.run };
+    } catch { return { ok: false, error: "The render service did not answer." }; }
   },
   // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects + the unified Processes list.
   interject: (target, text) => post("/api/interject", { target, text }),

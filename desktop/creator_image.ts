@@ -19,6 +19,9 @@
 
 import { createHash } from "node:crypto";
 import { composeSpriteSheet, encodeGif, encodePng, sheetManifest, spriteCss, type RgbaFrame } from "../harness/creator/imaging.ts";
+// CREATOR-3 (ADR-0287): still images are one output key among several. `parseHistoryOutputs` reads the
+// animation and 3D keys too, so a video render is not silently read as "no output".
+import { parseHistoryOutputs, type ComfyOutputRef, type MediaKind } from "../harness/creator/comfy_stream.ts";
 
 // ── ComfyUI capability probe ─────────────────────────────────────────────────
 
@@ -193,7 +196,7 @@ export function isPromptFinished(historyRaw: unknown, promptId: string): boolean
 
 // ── artifacts ────────────────────────────────────────────────────────────────
 
-export type ArtifactKind = "image" | "sheet" | "gif" | "meme" | "markup";
+export type ArtifactKind = "image" | "sheet" | "gif" | "meme" | "markup" | "video" | "model-3d";
 
 export interface CreatorArtifact {
   readonly id: string;
@@ -243,7 +246,14 @@ export function foldArtifacts(jsonl: string): CreatorArtifact[] {
   return out.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-const EXT: Record<string, string> = { "image/png": "png", "image/gif": "gif", "image/jpeg": "jpg", "image/webp": "webp" };
+// CREATOR-3 (ADR-0287): the video and 3D types a ComfyUI install can actually hand back through /view.
+// An unknown mime is still REFUSED rather than stored under a guessed extension, which is what keeps the
+// artifacts directory readable by name.
+const EXT: Record<string, string> = {
+  "image/png": "png", "image/gif": "gif", "image/jpeg": "jpg", "image/webp": "webp",
+  "video/webm": "webm", "video/mp4": "mp4",
+  "model/gltf-binary": "glb", "model/gltf+json": "gltf",
+};
 
 export interface StoreArtifactInput {
   readonly kind: ArtifactKind;
@@ -262,7 +272,7 @@ export interface StoreArtifactInput {
  *  id, so nothing a caller passes can steer the write out of the artifacts directory. */
 export function storeArtifact(io: ArtifactIo, base: string, input: StoreArtifactInput): { ok: boolean; error?: string; artifact?: CreatorArtifact; path?: string } {
   const ext = EXT[input.mime];
-  if (!ext) return { ok: false, error: `${input.mime} is not an image type LUCID stores.` };
+  if (!ext) return { ok: false, error: `${input.mime} is not a media type LUCID stores.` };
   if (!input.bytes.length) return { ok: false, error: "That artifact has no bytes." };
   const dir = artifactDir(base);
   io.ensureDir(dir);
@@ -414,9 +424,14 @@ export class ComfyClient {
     }
   }
 
-  /** Queue a workflow. Returns the prompt id ComfyUI assigned. */
-  async submit(workflow: unknown): Promise<{ ok: boolean; promptId?: string; error?: string }> {
-    const r = await this.#json("/prompt", { method: "POST", body: JSON.stringify({ prompt: workflow }), headers: { "content-type": "application/json" } });
+  /** Queue a workflow. Returns the prompt id ComfyUI assigned.
+   *
+   *  `clientId` is how ComfyUI addresses websocket frames back to ONE caller: without it the server
+   *  broadcasts, and a progress reader cannot tell its own render from someone else's. Optional, because a
+   *  caller that never opens a socket should not have to invent one. */
+  async submit(workflow: unknown, opts: { clientId?: string } = {}): Promise<{ ok: boolean; promptId?: string; error?: string }> {
+    const payload = opts.clientId ? { prompt: workflow, client_id: opts.clientId } : { prompt: workflow };
+    const r = await this.#json("/prompt", { method: "POST", body: JSON.stringify(payload), headers: { "content-type": "application/json" } });
     if (!r.ok) return { ok: false, error: r.error };
     const body = r.body;
     if (body && typeof body === "object" && "prompt_id" in body && typeof body.prompt_id === "string") return { ok: true, promptId: body.prompt_id };
@@ -447,7 +462,41 @@ export class ComfyClient {
     }
   }
 
-  /** Read one produced image back. */
+  /** CREATOR-3: the same poll as `waitForImages`, but it reads EVERY documented output key (stills,
+   *  animations, videos, 3D files) and can be narrowed to the kind the caller actually asked for. Kept
+   *  beside `waitForImages` rather than replacing it: that method's contract is pinned by CREATOR-IMG's
+   *  tests, and a still-image caller should not have to reason about video keys.
+   *
+   *  `want` is a REFUSAL filter, not a preference: a workflow that finished with only stills when the
+   *  caller asked for video says exactly that, because storing a PNG as the answer to a video request is
+   *  the kind of quiet substitution this project keeps writing tests against. */
+  async waitForOutputs(promptId: string, opts: { want?: MediaKind; pollMs?: number; maxWaitMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number } = {}):
+    Promise<{ ok: boolean; refs?: readonly ComfyOutputRef[]; error?: string }> {
+    const pollMs = Math.max(250, opts.pollMs ?? 1000);
+    const maxWaitMs = Math.max(pollMs, opts.maxWaitMs ?? 180_000);
+    const now = opts.now ?? (() => Date.now());
+    const sleep = opts.sleep ?? ((ms: number) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, ms);
+      return promise;
+    });
+    const deadline = now() + maxWaitMs;
+    for (;;) {
+      const r = await this.#json(`/history/${encodeURIComponent(promptId)}`);
+      if (r.ok && isPromptFinished(r.body, promptId)) {
+        const all = parseHistoryOutputs(r.body, promptId);
+        const refs = opts.want ? all.filter((o) => o.kind === opts.want) : all;
+        if (refs.length) return { ok: true, refs };
+        const saw = all.length ? `it produced ${all.map((o) => o.kind).join(", ")} instead` : "it produced no output at all";
+        return { ok: false, error: opts.want ? `that workflow finished but produced no ${opts.want} output: ${saw}` : "that workflow finished but produced no output" };
+      }
+      if (now() >= deadline) return { ok: false, error: `that render did not finish within ${Math.round(maxWaitMs / 1000)}s` };
+      await sleep(pollMs);
+    }
+  }
+
+  /** Read one produced image back. A `ComfyOutputRef` satisfies this shape, so video and 3D bytes come back
+   *  through the same documented `/view` route. */
   async fetchImage(ref: ComfyImageRef): Promise<{ ok: boolean; bytes?: Uint8Array; mime?: string; error?: string }> {
     try {
       const res = await this.#fetch(viewUrl(this.#base, ref), { headers: this.#headers(), signal: AbortSignal.timeout(this.#timeout) });

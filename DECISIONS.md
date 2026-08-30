@@ -19796,6 +19796,152 @@ ADR-0286 (the plan this implements, with the two deltas noted above), ADR-0281 (
 extends from tracks to spans), ADR-0291 (the pure-encoder precedent), ADR-0289 (the mixer that will consume
 this document), ADR-0073 (the STT seam that supplies text but no timings).
 
+## ADR-0295 -- CREATOR-3: the video and 3D render pipelines
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. Authored by a parallel session; the numbers below are the ones VERIFIED
+independently on this machine, not the ones reported. `bun run harness/scripts/demo_creator3.ts` green
+(13 sections, 101 checks, 0 failures) and proven loud (a sabotaged claim exits 1 naming it); 342 new tests
+across comfy_stream / frame_capture / blender_cli / model_manifest / creator_pipeline / creator_blender /
+renderer creator_pipeline, 0 fail; 774 pass across the 24 Creator-adjacent files; harness tree 2335 pass /
+3 fail and desktop tree 4947 pass / 15 fail, every failure a pre-existing Windows path-separator or
+TS-resolution case in `fs_browse`, `symbol_graph` and `lucid_acp`, files this increment never touched (the
+authoring session measured 9 desktop failures rather than 15 because `make test` ignores
+`desktop/release/**`, where 6 of them are duplicates of the same two files); prefix-compaction suite green;
+root typecheck clean; license headers clean; renderer bundle 127 modules.
+**NOT verified, deliberately recorded:** `make` is absent on both machines, so the `demo-CREATOR-3` Makefile
+target is structurally checked (tab-prefixed recipe, one recipe line, `.PHONY` above, shape matched against
+its siblings) and UNEXECUTED; the script was run directly. And no real ComfyUI was involved anywhere: the
+end-to-end sections drive a real server PROCESS over real HTTP and a real websocket, but it is the repo's
+own fixture.
+**Increment:** CREATOR-3, the third item of the ADR-0285 roadmap, planned in ADR-0287.
+
+### Context
+
+Four things had been declared but not built. CREATOR-1's probe already attested `video` and `model-3d` from
+installed nodes and nothing consumed it. CREATOR-IMG polled `/history` and read only the `images` key. The
+registry declared `runtime-feedback` as available over `websocket` while no websocket client existed
+anywhere in the tree. And `storeArtifact` wrote unconditionally, so ADR-0287 item 5 (scan and
+provenance-stamp before the library) was unimplemented.
+
+### Decision
+
+1. **Four pure cores in `harness/creator`.** `comfy_stream.ts`: a closed `ComfyEvent` union, the 8-byte
+   binary preview header, a progress state machine that ignores other prompts and treats `error` and
+   `interrupted` as terminal, output parsing by KEY and EXTENSION so an animated webp reads as `video` and
+   not `image`, plus a magic-byte sniff and mismatch check. `frame_capture.ts`: a fixed timestep derived
+   from the frame INDEX, a fingerprint, a comparator, and an audit that names both ways a capture can lie.
+   `blender_cli.ts`: a fixed argv builder plus an output classifier. `model_manifest.ts`: declaration
+   parsing and reconciliation against a probe.
+2. **`desktop/creator_pipeline.ts` is the seam and the keystone**: probe gate, governor, template, submit,
+   telemetry, `/history`, magic-byte proof, fail-closed metadata scan, store, record. The ORDER is the
+   claim and it is tested: the capability and admission gates run before one byte leaves the machine.
+3. **The scan gate.** Every server-supplied string (filename, subfolder, output key, claimed mime) is
+   wrapped in `UNTRUSTED_CONTENT` delimiters and passed to `scanAndDecide` BEFORE the bytes are written; a
+   thrown, missing, or malformed verdict is a BLOCK. The note states what was proven and ADMITS that the
+   media bytes carry a sha256 and not a content scan, because the Unicode scanner cannot read a video frame.
+4. **`/history` is the authority, `/ws` is telemetry.** `openComfyProgress` opens the socket with a
+   `client_id` and the credential on the handshake header; the drain is concurrent and never awaited,
+   bounded by a frame budget and an idle timeout, so a silent, noisy, dead, or foreign-addressed socket
+   cannot hang, fail, or corrupt a render.
+5. **The bytes decide their own type.** A `content-type` contradicted by the magic bytes is refused by name,
+   and unidentifiable bytes are refused rather than stored under a guessed extension.
+6. **Argv is not a shell.** `ARGV_UNSAFE_CHARS` refuses NUL, newline, CR, tab, and control code points
+   only, so `C:\Program Files (x86)\...\blender.exe` is ACCEPTED. The compensating control is that the
+   runner spawns a vector through `Bun.spawn` with no shell, pinned by a test that walks every argv element
+   for `sh`, `bash`, `cmd.exe`, and `-c`. The ADR-0296 guard split is cited in the module.
+7. **A user `--python` script requires `approved: true`** (the exec-approval path). LUCID adds no `.py`
+   (invariant 2).
+8. **The probe is the truth, the manifest is a claim.** Declared-but-unprobed is never usable,
+   probed-but-undeclared is, and a stale or unauthorized probe blesses nothing.
+
+### Alternatives rejected
+
+- **Awaiting the websocket before polling.** A silent socket would become a hung render.
+- **Trusting `content-type`.** That is the entire point of the magic-byte section.
+- **Letting the ws `executed` frame decide outputs.** `/history` is what ComfyUI itself treats as durable.
+- **A browser-side socket.** No custom headers, so the token could not ride a header.
+- **Scanning media bytes with the Unicode scanner and calling it a content scan.**
+- **Refusing shell metacharacters in local argv paths.** A false refusal is as dishonest as a false pass
+  (ADR-0296).
+
+### Deltas from ADR-0287, recorded rather than glossed
+
+- Item 3 ships as the deterministic clock, the fingerprint, the audit, and PNG encoding of a captured frame.
+  Driving a user's own three.js scene through it from the Preview panel is NOT wired, and the docs say so.
+- Item 5's "scan every artifact" is implemented as scanning every server-supplied STRING, with the
+  bytes-are-hashed-not-scanned limit stated in the product surface instead of papered over.
+- `ArtifactKind` gained `video` and `model-3d`; the stored-media map gained `video/webm`, `video/mp4`,
+  `model/gltf-binary`, and `model/gltf+json`.
+
+### Invariants preserved
+
+#2 TypeScript only, and the four cores are node-free; #3 fail-closed extended to media import; #5 every
+remote string delimited, scanned, and escaped at the pane; #6 prefix untouched; #7/#8 `contracts.ts`
+unchanged; #10 no schema change (the append-only JSONL absorbs artifacts and jobs); #11 the pane's rows are
+single-text elements and its prose is block paragraphs, asserted on the emitted markup.
+
+### See also
+
+ADR-0287 (the plan, with the deltas above), ADR-0292 (the probe whose attestation this finally consumes),
+ADR-0291 (the image path this extends), ADR-0296 (the argv-versus-shell guard split this cites), ADR-0002
+(the scanner IPC contract the scan gate rides).
+
+## ADR-0296 -- argv is not a shell: guarding by threat model, and why a false refusal is a bug
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `tools/creator-backend/setup-backend.ts` 23 tests (was 20), pinned in BOTH
+directions; verified by dry run that a Windows key path reaches `ssh -i` intact. Adopted independently by
+CREATOR-3's Blender runner (ADR-0295 decision 6).
+**Scope:** small and cross-cutting. Recorded because it is a SECURITY POSTURE that looks like a bug to
+someone tightening it back up.
+
+### Context
+
+`setup-backend.ts` (the remote GPU backend driver) guarded every user-supplied string with ONE regex that
+refused shell metacharacters, on the sound principle that the driver refuses rather than escapes. The result:
+`--identity C:\Users\me\.ssh\id_ed25519` was REFUSED. That is the only form a Windows user would ever type
+for an SSH key. A parallel session hit the identical posture in a Blender executable path
+(`C:\Program Files (x86)\Blender\blender.exe`) and said so, which is how it surfaced.
+
+### Decision
+
+**One guard per threat model, because there are two.**
+
+1. **`REMOTE_UNSAFE` (unchanged, strict).** For values that reach the remote SHELL. `ssh` joins its trailing
+   arguments into a command string that the far-side login shell parses, so a metacharacter in the host, the
+   user, `--remote-dir`, or the wheel index genuinely can break out. Refused, never escaped.
+2. **`LOCAL_UNSAFE` (new, narrow).** For values that only ever occupy a slot in an argv array THIS process
+   spawns (`--identity`, `--workflow`). No shell parses those, so a backslash, a space, or a parenthesis is
+   an ordinary character in an ordinary path. What stays refused is what could never be a real path and
+   would matter if a future caller ever did build a string: control characters, quotes, backtick, and `$`.
+
+`--workflow` had been unguarded entirely, which was the same inconsistency from the other side, and it now
+takes the local guard.
+
+**A false refusal is as dishonest as a false pass.** It reads as a bug to the first user who hits it, and it
+teaches them the tool is broken rather than careful. This project spends its credibility on refusing things
+that deserve refusal, so refusing `C:\Program Files (x86)\...` spends it on nothing.
+
+**The compensating control is the load-bearing half.** The narrow guard is only honest while the spawn really
+is a fixed vector with no shell. That must be pinned by a TEST that fails if a shell is reintroduced, not by
+a comment: CREATOR-3's Blender runner does this by walking every argv element for `sh`, `bash`, `cmd.exe`,
+and `-c`.
+
+### Alternatives rejected
+
+- **Escaping instead of refusing.** Quoting rules differ per shell and per platform; the original refusal
+  posture is right, and this ADR narrows only WHERE it applies.
+- **Keeping one regex for simplicity.** Simplicity that produces a wrong answer on the maintainer's own
+  operating system is not simplicity.
+- **Allowing everything in a local path.** A newline in a path that a log parser reads back could forge a
+  line; a NUL truncates what the OS receives. Both stay refused for concrete, stated reasons.
+
+### See also
+
+ADR-0295 decision 6 (the same split applied to the Blender runner, with the no-shell test as its
+compensating control), ADR-0157/P-SANDBOX.1 (why argv discipline matters here at all).
+
 ## ADR-0294 -- CREATOR-5: the mixer, and refusing to fix a mix quietly
 
 **Date:** 2026-08-30
@@ -19900,7 +20046,10 @@ precedent this render follows).
   deltas: the waveform is computed from the file's PCM (`waveformPeaks`) rather than reusing the live
   analyser tap, which only exists for a mic stream; and undo is a bounded stack of document snapshots
   rather than inverse operations, which is what makes "restores the previous clip exactly" testable.
-- **CREATOR-3 - image, video, and 3D pipelines** (ADR-0287).
+- **CREATOR-3 - image, video, and 3D pipelines. BUILT: see ADR-0295.** Built by a parallel session. Two
+  deltas: the three.js frame-capture harness ships as the deterministic clock plus fingerprint plus audit
+  but is not wired into the Preview panel, and "scan every artifact" is implemented as scanning every
+  server-supplied STRING with the bytes-are-hashed-not-scanned limit stated in the product surface.
 - **CREATOR-4 - engines and playable feedback** (ADR-0288).
 - **CREATOR-5 - the mixer. BUILT: see ADR-0294.** Delivered as planned, with one delta: the render is pure
   TypeScript over PCM rather than `OfflineAudioContext`, because the plan's own keystone (byte-identical

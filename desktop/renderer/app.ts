@@ -123,6 +123,7 @@ import {
   setMasterGain, setTwoPointEnvelope, type CreatorMixerView, type TrackPatch,
 } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer pane + its immutable graph edits
 import { emptyMix, soloedTrackIds, validateMix, type MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix core
+import { creatorRenderHtml, type CreatorRenderView } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the video/3D render pane
 import { memeLayout } from "../../harness/creator/meme_layout.ts"; // CREATOR-IMG: node-free meme geometry
 import {
   canRedo, canUndo, commit, deleteSpan, docDurationMs, itemAt, moveSpan, newHistory, redo, replaceSpan,
@@ -156,7 +157,8 @@ const state = {
   creatorImages: null as CreatorImagesView | null, // CREATOR-IMG (ADR-0291): generator + builders + artifacts
   creatorEditor: null as CreatorEditorView | null, // CREATOR-2 (ADR-0286): the follow-along audio editor
   creatorMixer: null as CreatorMixerView | null, // CREATOR-5 (ADR-0289): the mixer (N takes into one file)
-  studioTab: "integrations" as "integrations" | "images" | "editor" | "mixer", // which Studio pane is showing
+  creatorRender: null as CreatorRenderView | null, // CREATOR-3 (ADR-0287): the video/3D render pane
+  studioTab: "integrations" as "integrations" | "images" | "editor" | "mixer" | "render", // which Studio pane is showing
   commands: [] as OmpCommand[],
   skills: [] as SkillView[], // P-SKILL.4 (ADR-0097): discovered skills, widened with root/trust/removable/scan verdict
   userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
@@ -3851,9 +3853,9 @@ function closeCreatorStudio(): void {
 /** The Studio is four panes behind one tab strip: integrations + library, the image tools, the
  *  follow-along audio editor, and the mixer that layers several takes into one file. */
 function studioTabsHtml(): string {
-  const tab = (id: "integrations" | "images" | "editor" | "mixer", label: string, ic: string) =>
+  const tab = (id: "integrations" | "images" | "editor" | "mixer" | "render", label: string, ic: string) =>
     `<button type="button" class="cst-tab${state.studioTab === id ? " on" : ""}" data-studio-tab="${id}">${icon(ic, 13)}<span>${esc(label)}</span></button>`;
-  return `<div class="cst-tabs">${tab("integrations", "Integrations", "market")}${tab("images", "Images", "eye")}${tab("editor", "Editor", "volume")}${tab("mixer", "Mixer", "sliders")}</div>`;
+  return `<div class="cst-tabs">${tab("integrations", "Integrations", "market")}${tab("images", "Images", "eye")}${tab("render", "Render", "play")}${tab("editor", "Editor", "volume")}${tab("mixer", "Mixer", "sliders")}</div>`;
 }
 async function renderCreatorStudio(): Promise<void> {
   const body = $("#studioBody");
@@ -3865,6 +3867,10 @@ async function renderCreatorStudio(): Promise<void> {
   }
   if (state.studioTab === "mixer") {
     body.innerHTML = studioTabsHtml() + creatorMixerHtml(state.creatorMixer);
+    return;
+  }
+  if (state.studioTab === "render") {
+    body.innerHTML = studioTabsHtml() + creatorRenderHtml(state.creatorRender);
     return;
   }
   if (state.studioTab === "images") {
@@ -3900,6 +3906,75 @@ async function loadCreatorImages(fresh = false): Promise<void> {
     busy: "",
   };
   if (studioOpen && state.studioTab === "images") void renderCreatorStudio();
+}
+
+// ---- CREATOR-3 (ADR-0287): the video and 3D render pane ----
+// The pane's honesty is the probe: `attested` comes from the SAME cache the server gates on, so the button
+// is disabled for the same reason the route would refuse, and the user reads that reason before spending a
+// render rather than after.
+
+async function loadCreatorRender(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const prev = state.creatorRender;
+  const models = await bridge.creatorModels().catch(() => null);
+  const studio = state.creatorStudio ?? await bridge.creatorStudio().catch(() => null);
+  if (studio) state.creatorStudio = studio;
+  const comfy = (studio?.probes ?? []).find((p) => p.providerId === "comfyui");
+  state.creatorRender = {
+    kind: prev?.kind ?? "video",
+    prompt: prev?.prompt ?? "",
+    model: prev?.model || (models?.models[0]?.id ?? ""),
+    models: (models?.models ?? []).map((m) => m.id),
+    endpoint: models?.endpoint ?? "",
+    // A probe that is not `ready` proves nothing, so its capability list is deliberately ignored rather
+    // than shown as if it were current.
+    attested: comfy?.state === "ready" ? comfy.attested : [],
+    note: models?.note ?? "",
+    busy: "",
+    status: prev?.status ?? "",
+    statusTone: prev?.statusTone ?? "",
+    run: prev?.run ?? null,
+    progress: prev?.progress ?? null,
+  };
+  if (studioOpen && state.studioTab === "render") void renderCreatorStudio();
+}
+
+/** Read the pane's fields off the DOM before a submit, so a repaint never loses what the user typed (the
+ *  CREATOR-IMG idiom). */
+function readRenderFields(): void {
+  const v = state.creatorRender;
+  if (!v) return;
+  const prompt = ($("#cplPrompt") as HTMLTextAreaElement | null)?.value;
+  const model = ($("#cplModel") as HTMLSelectElement | null)?.value;
+  state.creatorRender = { ...v, prompt: prompt ?? v.prompt, model: model ?? v.model };
+}
+
+async function runCreatorRender(): Promise<void> {
+  readRenderFields();
+  const v = state.creatorRender;
+  if (!v || v.busy) return;
+  state.creatorRender = { ...v, busy: "Rendering...", status: "", statusTone: "", run: null, progress: null };
+  void renderCreatorStudio();
+  const r = await bridge.creatorRender({ kind: v.kind, prompt: v.prompt, model: v.model || undefined });
+  const cur = state.creatorRender;
+  if (!cur) return;
+  if (!r || !r.run) {
+    state.creatorRender = { ...cur, busy: "", status: r?.error ?? "The render service did not answer.", statusTone: "error" };
+    void renderCreatorStudio();
+    return;
+  }
+  // The run object is shown WHOLE, refusals included: a stored-some-and-refused-some render reads as what
+  // it was, never as a clean success.
+  state.creatorRender = {
+    ...cur,
+    busy: "",
+    run: r.run,
+    progress: r.run.progress ?? null,
+    status: r.run.ok ? "" : r.run.error,
+    statusTone: r.run.ok ? "ok" : "error",
+  };
+  void renderCreatorStudio();
+  if (r.run.ok) void loadCreatorImages(); // a stored artifact belongs in the grid immediately
 }
 
 /** Set every thumbnail's bytes as a DOM PROPERTY (never interpolated into HTML - the P-VISION.1 idiom). */
@@ -12213,14 +12288,26 @@ function wire(): void {
     const tab = t.closest("[data-studio-tab]") as HTMLElement | null;
     if (tab) {
       const want = tab.dataset.studioTab;
-      state.studioTab = want === "images" ? "images" : want === "editor" ? "editor" : want === "mixer" ? "mixer" : "integrations";
+      state.studioTab = want === "images" ? "images" : want === "editor" ? "editor" : want === "mixer" ? "mixer" : want === "render" ? "render" : "integrations";
       if (state.studioTab !== "editor") stopEditorAudio(); // CREATOR-2: leaving the pane stops its clip
       if (state.studioTab === "images" && !state.creatorImages) { void loadCreatorImages(); return; }
       if (state.studioTab === "editor" && !state.creatorEditor) { void loadCreatorEditor(); return; }
       if (state.studioTab === "mixer" && !state.creatorMixer) { void loadCreatorMixer(); return; } // CREATOR-5
+      if (state.studioTab === "render" && !state.creatorRender) { void loadCreatorRender(); return; } // CREATOR-3
       void renderCreatorStudio();
       return;
     }
+    // CREATOR-3 (ADR-0287): the render pane. Switching kind re-reads the fields first, so a typed prompt
+    // survives the repaint, and re-evaluates the probe gate for the NEW kind.
+    const renderKind = t.closest("[data-cpl-kind]") as HTMLElement | null;
+    if (renderKind && state.creatorRender) {
+      readRenderFields();
+      const v = state.creatorRender;
+      state.creatorRender = { ...v, kind: renderKind.dataset.cplKind ?? v.kind, status: "", statusTone: "" };
+      void renderCreatorStudio();
+      return;
+    }
+    if (t.closest("#cplRun")) { void runCreatorRender(); return; }
     // CREATOR-2 (ADR-0286): the follow-along editor. Chips first - they are the surface the user lives on.
     const chip = t.closest("[data-ced-chip]") as HTMLElement | null;
     if (chip) { onEditorChip(chip.dataset.cedChip!, (e as MouseEvent).shiftKey); return; }
