@@ -138,7 +138,9 @@
     "linux": {
       "icon": "build/icon.png",
       "desktop": {
-        "Name": "Lucid Agent"
+        "entry": {
+          "Name": "Lucid Agent"
+        }
       },
       "category": "Development",
       "maintainer": "TechLead 187 LLC <support@lucidagentide.com>",
