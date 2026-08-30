@@ -61,11 +61,57 @@ export const PREVIEW_BRIDGE_JS = `(function(){
       return { error:'unknown action: '+action+' (allowed: click, type, focus, scroll)' };
     }catch(e){ return { error:String(e&&e.message||e) }; }
   }
+  // CREATOR-3b (ADR-0287 item 3): deterministic FRAME CAPTURE. The parent hands a plan of TIMES; for each
+  // one this asks the page to render that time and reads its canvas back. Two honesty rules live here:
+  //
+  //   * A scene exposing window.lucidRenderAt(tMs) is DRIVEN: the times are LUCID's, so the capture is
+  //     reproducible and a regression compare means something. A page without it can only be SAMPLED on its
+  //     own clock, and the answer says "sampled", so nobody reads a wall-clock animation as a deterministic
+  //     capture.
+  //   * NOTHING HERE EVALUATES A STRING. lucidRenderAt is a function the PREVIEWED DOCUMENT defined, called
+  //     only behind a typeof check; this block adds no dynamic-code primitive and no markup-writing path of
+  //     any kind, and the read is the plain canvas API. A scene that throws is reported, never swallowed.
+  //     The demo asserts that absence by scanning this very string, which is why the forbidden spellings do
+  //     not appear even inside a comment.
+  //
+  // WebGL note, stated rather than left to be discovered: the readback happens in the SAME synchronous task
+  // as the render call, before compositing can clear the drawing buffer. A WebGL scene with no
+  // lucidRenderAt and no preserveDrawingBuffer reads back blank, which the audit surfaces as a stuck
+  // capture rather than as a pass. Backticks are avoided in this comment on purpose: the whole bridge is a
+  // template literal, so one would end the string.
+  var CAP_MAX_FRAMES=64, CAP_MAX_EDGE=2048;
+  function capture(cmd){
+    try{
+      var sel=cmd&&cmd.selector, cv=null;
+      if(sel){ try{ cv=document.querySelector(sel); }catch(e){ return { error:'bad selector: '+String(e&&e.message||e) }; } }
+      else { var all=document.querySelectorAll('canvas');
+        for(var i=0;i<all.length;i++){ var c=all[i]; if(!cv || (c.width*c.height)>(cv.width*cv.height)) cv=c; } }
+      if(!cv || String(cv.tagName||'').toLowerCase()!=='canvas') return { error: sel ? 'no canvas matches '+clip(sel,80) : 'this page has no canvas to capture' };
+      var w=cv.width|0, h=cv.height|0;
+      if(!w||!h) return { error:'that canvas is '+w+'x'+h+', so there are no pixels to read' };
+      if(w>CAP_MAX_EDGE||h>CAP_MAX_EDGE) return { error:'that canvas is '+w+'x'+h+', over the '+CAP_MAX_EDGE+'px capture limit' };
+      var plan=(cmd&&cmd.plan)||[];
+      if(!plan.length) return { error:'a capture needs a frame plan' };
+      if(plan.length>CAP_MAX_FRAMES) return { error:plan.length+' frames is over the '+CAP_MAX_FRAMES+'-frame limit for one capture pass' };
+      var driven = typeof window.lucidRenderAt==='function';
+      var frames=[];
+      for(var j=0;j<plan.length;j++){
+        var p=plan[j]||{}, t=Number(p.tMs);
+        if(!isFinite(t)) return { error:'frame '+j+' carries no usable time' };
+        if(driven){ try{ window.lucidRenderAt(t); }catch(e){ return { error:'the scene threw while rendering '+t+'ms: '+String(e&&e.message||e) }; } }
+        var url; try{ url=cv.toDataURL('image/png'); }catch(e){ return { error:'this canvas refuses readback (it may be tainted): '+String(e&&e.message||e) }; }
+        frames.push({ index: isFinite(Number(p.index))?Number(p.index):j, tMs:t, dataUrl:url });
+      }
+      return { ok:true, driven:driven, width:w, height:h, frames:frames };
+    }catch(e){ return { error:String(e&&e.message||e) }; }
+  }
   window.addEventListener('message', function(ev){
     var d=ev.data;
     if(!d || d.__lucid!=='inspect' || ev.source!==window.parent) return;
     var cmd=d.cmd||{};
-    var res = cmd.action ? act(cmd) : inspect(cmd); // STRUCTURED action (click/type/focus/scroll) vs read
+    // CAPTURE first, then the structured action allowlist, then the read. Written as one chain so the routing
+    // contract pinned by preview_bridge.test.ts stays a literal substring of this line.
+    var res = cmd.capture ? capture(cmd) : cmd.action ? act(cmd) : inspect(cmd); // STRUCTURED action (click/type/focus/scroll) vs read
     try{ window.parent.postMessage({ __lucid:'inspect-result', id:d.id, result:res }, '*'); }catch(_){}
   });
   // P-PREVIEW.7 (ADR-0179): proactive HEALTH report - a page whose script died (e.g. an Electron

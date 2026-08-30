@@ -111,6 +111,8 @@ import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./li
 import { TokenSpeedEngine } from "../../harness/metrics/token_speed.ts";
 // CREATOR-0 (ADR-0282/0283): the Creator surfaces. Both modules are PURE builders that own their view
 // types (the layering rule), so nothing here drags node-side code into the renderer.
+import { runCapture, type FrameDecoder } from "./capture_driver.ts"; // CREATOR-3b (ADR-0287 item 3): drive a previewed scene through the fixed timestep
+import { framePlan } from "../../harness/creator/frame_capture.ts"; // CREATOR-3: the deterministic plan the capture steps
 import { creatorFlyoutHtml, pressureRailHtml, type CreatorResourcesView } from "./creator_monitor.ts";
 import { creatorStudioHtml, type CreatorStudioView } from "./creator_studio.ts";
 import { creatorImagesHtml, type ArtifactView, type CreatorImagesView, type MixInputView } from "./creator_images.ts";
@@ -442,6 +444,7 @@ function buildShell(): void {
             <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)} Reload</button>
             <button class="btn-mini" id="prevDevice" data-tip="Device viewport|Preview at phone or tablet size (portrait / landscape) - for reviewing a PWA or a mobile / responsive layout.">${devSvg("phone-portrait", 14)}${icon("chevron", 10)}</button>
             <button class="btn-mini" id="prevMarkup" data-tip="Markup tools|Draw on the preview - pen, rectangle, text - then send the marked-up screenshot to chat.">${icon("markup", 14)} Markup ${icon("chevron", 10)}</button>
+            <button class="btn-mini" id="prevCapture" data-tip="Capture frames|Step an animated scene through a FIXED timestep and audit it: the same times must paint the same pixels. Needs the scene to define window.lucidRenderAt(tMs); without it LUCID can only sample the page's own clock and says so.">${icon("play", 13)} Capture</button>
             <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview (with your markup) and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot \u2192 chat</button>
             <button class="btn-mini" id="prevToPhone" data-tip="Send to phone|Broadcast this preview to your connected phone guests (Session Share) - they can view + save it. Needs a live share; desktop app only.">${icon("phone", 13)} To phone</button>
             <button class="set-close" id="prevClose" data-tip="Close">${icon("close", 16)}</button>
@@ -5925,13 +5928,16 @@ async function pollPreviewInspect(): Promise<void> {
   const tagged = result && typeof result === "object" && !Array.isArray(result) ? { ...(result as Record<string, unknown>), viewport: currentViewportInfo() } : result;
   await bridge.previewInspectResult(next.id, tagged).catch(() => { /* the tool will time out */ });
 }
-/** Ask the sandboxed preview's bridge to run a read-only query; resolve with its result (or a timeout note). */
-function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknown): Promise<unknown> {
+/** Ask the sandboxed preview's bridge to run a read-only query; resolve with its result (or a timeout note).
+ *  `timeoutMs` is a parameter because CREATOR-3b's frame capture reads a canvas back once per planned frame,
+ *  which legitimately takes longer than an inspect query: a fixed 3s clock would abort a valid 60-frame pass
+ *  and report it as an unresponsive preview. */
+function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknown, timeoutMs = 3000): Promise<unknown> {
   return new Promise((resolve) => {
     const win = frame.contentWindow;
     if (!win) { resolve({ error: "the preview isn't ready" }); return; }
     const done = (r: unknown) => { window.removeEventListener("message", onMsg); window.clearTimeout(to); resolve(r); };
-    const to = window.setTimeout(() => done({ error: "the preview didn't respond (no inspect bridge, or it's still loading)" }), 3000);
+    const to = window.setTimeout(() => done({ error: "the preview didn't respond (no inspect bridge, or it's still loading)" }), timeoutMs);
     function onMsg(ev: MessageEvent): void {
       const d = ev.data as { __lucid?: string; id?: string; result?: unknown } | null;
       if (ev.source !== win || !d || d.__lucid !== "inspect-result" || d.id !== id) return;
@@ -5940,6 +5946,118 @@ function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknow
     window.addEventListener("message", onMsg);
     win.postMessage({ __lucid: "inspect", id, cmd: command }, "*");
   });
+}
+
+// ── CREATOR-3b (ADR-0287 item 3): deterministic frame capture in the Preview panel ───────────────
+// The pure clock, fingerprint and audit shipped with CREATOR-3; this is what finally drives a real scene
+// through them. The plan is one loop at a fixed rate, the pixels come back over the same postMessage bridge
+// the inspect relay uses, and the FIRST pass of a file becomes its baseline so a second pass is a regression
+// compare rather than a fresh opinion.
+
+/** Fingerprints of the first capture of a given file, keyed by path: the baseline a later pass is judged
+ *  against. In memory on purpose - a baseline that outlived the session would be compared against a scene
+ *  that has since been edited, which is worse than having none. */
+interface CaptureBaseline { readonly fingerprints: readonly string[]; readonly signatures: readonly Uint8Array[] }
+const captureBaselines = new Map<string, CaptureBaseline>();
+const CAPTURE_MS = 2000;
+const CAPTURE_FPS = 30; // 2000ms at 30fps is 60 frames, inside the bridge's 64-frame pass cap
+
+/** Decode one PNG data URL to raw RGBA. Base64 is decoded in-process rather than re-fetched, so the
+ *  renderer's own connect-src can never turn a local decode into a blocked request. */
+const decodeCaptureFrame: FrameDecoder = async (dataUrl) => {
+  try {
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) return null;
+    const raw = atob(dataUrl.slice(comma + 1));
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const bmp = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const cv = new OffscreenCanvas(bmp.width, bmp.height);
+    const cx = cv.getContext("2d");
+    if (!cx) return null;
+    cx.drawImage(bmp, 0, 0);
+    const img = cx.getImageData(0, 0, bmp.width, bmp.height);
+    return { width: img.width, height: img.height, rgba: new Uint8Array(img.data) };
+  } catch { return null; }
+};
+/** Wait until the previewed document's bridge actually answers.
+ *
+ *  A capture pressed seconds after a page loads was observed timing out while the SAME command sent by hand
+ *  moments later succeeded: a `postMessage` to a frame whose listener is not installed yet is dropped on the
+ *  floor, and nothing retries it. So the panel pings first with the cheapest read there is, and only then
+ *  spends a 60-frame pass. Returns false when the frame never answers, which the caller reports as such
+ *  instead of blaming the capture. */
+async function previewBridgeReady(frame: HTMLIFrameElement, tries = 6): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    const r = await runInspectOnFrame(frame, `rdy_${Date.now().toString(36)}_${i}`, { what: "title" }, 1200);
+    const ok = !!r && typeof r === "object" && "title" in (r as Record<string, unknown>);
+    if (ok) return true;
+    await new Promise<void>((resolve) => { window.setTimeout(resolve, 400); });
+  }
+  return false;
+}
+
+async function captureCurrentPreview(): Promise<void> {
+  const frame = laneFrame();
+  const path = prevPathByLane[prevLane] ?? "";
+  if (!frame || !path) {
+    showToast({ tone: "danger", title: "Capture", desc: "Open a local page in this lane first.", actions: [{ label: "OK" }], timeout: 4200 });
+    return;
+  }
+  const btn = $("#prevCapture") as HTMLButtonElement | null;
+  if (btn) btn.disabled = true;
+  const notice = $("#prevNotice") as HTMLElement | null;
+  try {
+    const plan = framePlan({ durationMs: CAPTURE_MS, fps: CAPTURE_FPS });
+    if (!plan.ok) { showToast({ tone: "danger", title: "Capture", desc: plan.error, actions: [{ label: "OK" }], timeout: 5200 }); return; }
+    if (!await previewBridgeReady(frame)) {
+      showToast({ tone: "danger", title: "Capture", desc: "This preview is not answering yet. Give the page a moment to finish loading, then press Capture again.", actions: [{ label: "OK" }], timeout: 6200 });
+      return;
+    }
+    const baseline = captureBaselines.get(path);
+    const verdict = await runCapture({
+      plan: plan.frames,
+      // One capture command per pass; the bridge renders and reads every planned frame synchronously, so the
+      // timeout scales with the plan rather than sitting at the inspect default.
+      send: (cmd) => runInspectOnFrame(frame, `cap_${Date.now().toString(36)}`, cmd, 2000 + plan.frames.length * 400),
+      decode: decodeCaptureFrame,
+      baseline: baseline?.fingerprints,
+      baselineSignatures: baseline?.signatures,
+    });
+    if (notice) {
+      notice.hidden = false;
+      notice.textContent = verdict.note;
+    }
+    if (!verdict.ok) {
+      showToast({ tone: "danger", title: verdict.driven ? "Capture: not reproducible" : "Capture: sampled only", desc: verdict.error || verdict.note, actions: [{ label: "OK" }], timeout: 7200 });
+      return;
+    }
+    // A baseline existed and NEITHER compare could run, which now means the floor probe itself failed.
+    // Saying "matches" here would be luck dressed as a result, so the toast reports that and stops.
+    if (verdict.inconclusive) {
+      showToast({
+        tone: "warn",
+        title: "Capture: no verdict",
+        desc: "This platform's readback stability could not be measured, so no baseline verdict was drawn. The capture itself is fine.",
+        actions: [{ label: "OK" }],
+        timeout: 7200,
+      });
+      return;
+    }
+    // Only a DRIVEN, clean pass earns a baseline, and BOTH forms are kept: the fingerprints for a platform
+    // that repeats itself byte for byte, the signatures for one that does not.
+    if (verdict.driven && !baseline) captureBaselines.set(path, { fingerprints: verdict.fingerprints, signatures: verdict.signatures });
+    const how = verdict.regression?.method === "signature"
+      ? `Matched by coarse signature at the tolerance measured on this machine (${verdict.noiseFloor?.changedPixels ?? 0} pixel(s) of readback jitter), because it does not repeat a byte-identical render.`
+      : "Frame for frame identical.";
+    showToast({
+      title: baseline ? "Capture matches its baseline" : "Capture recorded",
+      desc: `${verdict.fingerprints.length} frames at ${CAPTURE_FPS}fps, ${verdict.width}x${verdict.height}. ${baseline ? how : verdict.driven ? "Stored as the baseline for this file." : "Sampled, so nothing was stored as a baseline."}`,
+      timeout: 5200,
+    });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ── P-AGENT.2b (ADR-0133): the Agent Builder workflow canvas ─────────────────────────────────────────────
@@ -12152,6 +12270,7 @@ function wire(): void {
   $("#prevBrowse")?.addEventListener("click", () => void browsePreviewFile()); // P-PREVIEW.5: open cwd file
   $("#prevDevice")?.addEventListener("click", (e) => openDeviceMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.9: device viewports
   $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.5: markup tools
+  $("#prevCapture")?.addEventListener("click", () => void captureCurrentPreview()); // CREATOR-3b: deterministic frame capture
   $("#prevShot")?.addEventListener("click", () => void screenshotPreviewToChat());
   $("#prevToPhone")?.addEventListener("click", () => void sendPreviewToPhone()); // P-PREVIEW-PWA.1 (ADR-0237)
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)

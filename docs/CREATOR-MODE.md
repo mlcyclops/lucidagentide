@@ -374,12 +374,64 @@ back. Exit code plus Blender's own `Saved:` lines are the evidence: exit 0 with 
 a failure, and a failing run quotes its `Error:` line. Scene authoring stays YOUR Python through the
 exec-approval path: `--python` runs only when you approve it, and LUCID ships no `.py` of its own.
 
-**Frame capture** (for a three.js scene in the Preview panel) is a fixed timestep derived from the frame
-INDEX, never an accumulator, so nothing drifts: at 30fps the 3600th frame lands on 119967ms where an
-accumulator would say 118767ms. Two runs of the same plan fingerprint identically, and both ways a capture
-can lie are caught: a scene animating off the wall clock fails the regression compare with the first
-disagreeing frame named, and a scene that ignores the time it is handed is reported as a stuck run, which
-the report refuses to distinguish from a genuinely static scene rather than silently picking one.
+**Frame capture** is a fixed timestep derived from the frame INDEX, never an accumulator, so nothing drifts:
+at 30fps the 3600th frame lands on 119967ms where an accumulator would say 118767ms. Two runs of the same
+plan fingerprint identically, and both ways a capture can lie are caught: a scene animating off the wall
+clock fails the regression compare with the first disagreeing frame named, and a scene that ignores the time
+it is handed is reported as a stuck run, which the report refuses to distinguish from a genuinely static
+scene rather than silently picking one.
+
+**Capture in the Preview panel.** Open an animated page and press **Capture**. LUCID steps it through one
+2000ms pass at 30fps (60 frames, inside the 64-frame cap), reads each frame back, fingerprints it, and shows
+the audit. The first clean driven pass of a file becomes its BASELINE.
+
+**How a second press is judged is MEASURED, not assumed.** Before comparing against a baseline, LUCID asks the
+page to render three times across the plan, each one twice, and diffs the readbacks. Two things come out of
+that: whether this platform repeats a byte-identical render, and if not, how much movement is its own noise.
+
+- **Byte-stable platform:** the compare is exact, frame for frame.
+- **Jittery platform:** the compare runs on a 32x18 luminance signature per frame, at a tolerance taken from
+  the jitter just measured. The verdict always says which method ran, so a coarse match is never read as byte
+  equality.
+- **Floor could not be measured at all:** no verdict is drawn, and the panel says that rather than guessing.
+
+This is not a hedge, it is the observed behaviour. A canvas that is attached and visible does not necessarily
+rasterize the same drawing to the same pixels twice. Measured in headless Chromium against a scene whose logic
+is provably pure, two readbacks of one identical render alternate between two bitmaps in a clean 2-cycle,
+differing on a few hundred pixels with channel deltas up to 71 but only 3 or 4 per signature cell. Reading back
+through a detached copy does not help, because `drawImage` inherits the source bitmap; a canvas that is never
+attached IS byte-stable, which is where the difference comes from. Sampling the floor at ONE time was not
+enough either: it measured a cell delta of 0 while the real 60-frame pass reached 3, so the tolerance it
+produced was too tight and the honest scene failed its own compare. The floor is sampled across the plan for
+that reason.
+
+End to end on this machine: pressing Capture twice on the reference scene reports "matches its baseline" at a
+measured tolerance of 4, and swapping in the scene's deliberately nondeterministic renderer is caught, naming
+frame 0 with 10 of 576 cells beyond tolerance.
+
+One caveat worth knowing. The floor cannot tell platform jitter from a scene that renders the same time
+differently: both look like "same time, different pixels". A nondeterministic scene therefore raises its own
+tolerance. The deliberate wobble above was still caught comfortably, but a subtler instability could hide
+inside its own floor, and a suspiciously large measured tolerance is itself evidence about the page.
+
+The contract your scene implements is one line:
+
+```js
+window.lucidRenderAt = function (tMs) { /* paint the scene at tMs, return nothing */ };
+```
+
+A scene that defines it is **driven**: the times are LUCID's, so the pass is reproducible and a compare means
+something. A page WITHOUT it can only be **sampled** on its own clock, and every verdict says which happened,
+because two sampled runs agreeing is luck and two disagreeing is not evidence of a change. Identical `tMs`
+must paint identical pixels: no `Date.now()`, no `performance.now()`, no `requestAnimationFrame` timestamp,
+no unseeded randomness, no state carried between calls. `desktop/scripts/capture_scene_example.html` is a
+working reference to copy, and it ships a deliberately broken variant next to the honest one so you can watch
+the compare catch a wobble that looks fine to the eye.
+
+Two limits worth knowing before you blame the tool. The bridge reads the canvas in the SAME synchronous task
+as your render call, so a WebGL scene with no `lucidRenderAt` and no `preserveDrawingBuffer` reads back blank
+and shows up as a stuck capture. And a baseline lives in memory for the session only: one that outlived the
+session would be compared against a scene you have since edited, which is worse than having none.
 
 **A model manifest is a declaration, not a discovery.** You can declare what an install holds; LUCID never
 scans disks or scrapes model hubs, and a path-shaped model id is refused for exactly that reason. The probe
@@ -558,12 +610,14 @@ refuses to extrapolate a number it cannot measure.
 ## What is NOT built yet
 
 Cloud voice-clone flows end to end, Unreal headless builds and editor remote control, and per-process GPU
-attribution are roadmap items (ADR-0285, ADR-0288, ADR-0290). Frame capture ships as the deterministic clock,
-fingerprint, and audit (CREATOR-3), but the renderer-side harness that drives a user's three.js scene through
-it frame by frame is not wired into the Preview panel yet, and Blender scene AUTHORING stays the user's own
-Python through exec approval by design rather than as a gap. Inside the audio tools specifically: there is no
-time-stretch, no resampler, no transcoder, no per-word re-synthesis loop yet (a span re-render takes audio you already have), and no EQ, compression, or
-reverb (the mixer does levels, pan, fades, and automation, and claims nothing more).
+attribution are roadmap items (ADR-0285, ADR-0288, ADR-0290). Blender scene AUTHORING stays the user's own
+Python through exec approval by design rather than as a gap. Frame capture is now wired end to end
+(CREATOR-3b), with two honest limits: LUCID captures whatever canvas a page exposes rather than reaching into
+a three.js renderer's own render targets, so `readRenderTargetPixelsAsync` and multi-pass captures are not
+used; and a capture baseline is per session, in memory. Inside the audio tools specifically: there is no
+time-stretch, no resampler, no transcoder, no per-word re-synthesis loop yet (a span re-render takes audio you
+already have), and no EQ, compression, or reverb (the mixer does levels, pan, fades, and automation, and
+claims nothing more).
 
 Built so far on this branch:
 

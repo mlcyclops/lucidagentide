@@ -19,6 +19,8 @@ import {
 } from "../creator/comfy_stream.ts";
 import { captureReport, compareFrames, frameFingerprint, framePlan, sameCapture } from "../creator/frame_capture.ts";
 import { encodePng } from "../creator/imaging.ts"; // the same pure encoder the imaging tools use, so a reviewed frame is a real file
+import { FLOOR_SAMPLE_POINTS, MAX_CAPTURE_PASS, runCapture } from "../../desktop/renderer/capture_driver.ts"; // CREATOR-3b: the Preview-panel capture driver
+import { PREVIEW_BRIDGE_JS } from "../../desktop/preview_bridge.ts"; // CREATOR-3b: the injected bridge whose caps the driver pins itself to
 import { blenderRenderArgv, classifyBlenderOutput } from "../creator/blender_cli.ts";
 import { manifestCapabilities, parseModelManifest, reconcileManifest } from "../creator/model_manifest.ts";
 import { foldArtifacts, artifactDir, type ArtifactIo } from "../../desktop/creator_image.ts";
@@ -640,11 +642,130 @@ console.log("13) a noisy shared socket cannot corrupt this render's progress");
   check("a feed that never ends is bounded by the frame budget rather than spinning forever", state.status === "queued");
 }
 
+
+// ── 14) the capture harness: a real scene, stepped by LUCID's clock ─────────
+
+console.log("14) CREATOR-3b: the Preview-panel capture harness, and the reference scene it drives");
+{
+  // The driver is the real product module. The transport is scripted here because the other end is a
+  // sandboxed iframe: what a headless run CAN prove is that the driver judges every reply correctly, that
+  // its caps match the bridge's, and that the shipped reference scene actually honours the contract.
+  const plan = framePlan({ durationMs: 2000, fps: 30 });
+  if (!plan.ok) stop("the panel's default plan is buildable", plan.error);
+  check("the panel's default pass is 60 frames, inside the bridge's 64-frame cap",
+    plan.frames.length === 60 && plan.frames.length <= MAX_CAPTURE_PASS, `${plan.frames.length} frames, cap ${MAX_CAPTURE_PASS}`);
+  check("the driver's cap is the SAME literal the bridge enforces, so no capture reports phantom gaps",
+    PREVIEW_BRIDGE_JS.includes(`CAP_MAX_FRAMES=${MAX_CAPTURE_PASS}`));
+
+  // A scene whose pixels are a pure function of the time it is handed, and a decoder that reverses the
+  // fixture's encoding, so fingerprints come from real bytes through the real pure fingerprint.
+  const px = (tMs: number): Uint8Array => {
+    const b = new Uint8Array(2 * 2 * 4);
+    for (let i = 0; i < b.length; i += 4) { b[i] = tMs % 256; b[i + 1] = 70; b[i + 2] = 120; b[i + 3] = 255; }
+    return b;
+  };
+  const urlFor = (tMs: number): string => `data:image/png;base64,${btoa(`f${tMs}`)}`;
+  const decode = async (dataUrl: string) => {
+    const t = Number(atob(dataUrl.slice(dataUrl.indexOf(",") + 1)).slice(1));
+    return Number.isFinite(t) ? { width: 2, height: 2, rgba: px(t) } : null;
+  };
+  // A fake bridge answers the plan it was ACTUALLY given, which matters because the driver now probes the
+  // platform with a two-frame plan at one time before it will judge a baseline.
+  const reply = (over: Record<string, unknown> = {}) =>
+    ({ driven: true, width: 2, height: 2, frames: plan.frames.map((f) => ({ index: f.index, tMs: f.tMs, dataUrl: urlFor(f.tMs) })), ...over });
+  const replyFor = (cmd: { readonly plan: readonly { readonly index: number; readonly tMs: number }[] }, over: Record<string, unknown> = {}) =>
+    ({ driven: true, width: 2, height: 2, frames: cmd.plan.map((f) => ({ index: f.index, tMs: f.tMs, dataUrl: urlFor(f.tMs) })), ...over });
+  // The probe asks for several times across the plan, each duplicated in place. Detected by that shape rather
+  // than by a frame count, so widening FLOOR_SAMPLE_POINTS cannot silently break this fake.
+  const isFloorProbe = (cmd: { readonly plan: readonly { readonly tMs: number }[] }): boolean =>
+    cmd.plan.length >= 2 && cmd.plan.length % 2 === 0 && cmd.plan.length !== plan.frames.length
+    && cmd.plan.every((f, i) => (i % 2 === 1 ? f.tMs === cmd.plan[i - 1]?.tMs : true));
+
+  const first = await runCapture({ plan: plan.frames, send: async () => reply(), decode });
+  check("a driven pass fingerprints every planned frame and passes its own audit",
+    first.ok && first.fingerprints.length === 60 && first.report?.missing === 0, first.note.slice(0, 80));
+  const again = await runCapture({ plan: plan.frames, send: async (cmd) => replyFor(cmd), decode, baseline: first.fingerprints });
+  check("a second pass of the same scene matches the baseline frame for frame", again.regression?.equal === true);
+
+  const drifted = plan.frames.map((f) => ({ index: f.index, tMs: f.tMs, dataUrl: urlFor(f.tMs >= 500 ? f.tMs + 3 : f.tMs) }));
+  const changed = await runCapture({ plan: plan.frames, send: async (cmd) => (isFloorProbe(cmd) ? replyFor(cmd) : reply({ frames: drifted })), decode, baseline: first.fingerprints });
+  check("a scene that changed fails the compare and names the FIRST differing frame",
+    !changed.ok && changed.regression?.equal === false && changed.regression?.firstDiff === 15,
+    `first diff at frame ${changed.regression?.firstDiff}`);
+
+  const sampled = await runCapture({ plan: plan.frames, send: async () => reply({ driven: false }), decode });
+  check("a page with NO render hook is labeled sampled, never sold as deterministic",
+    !sampled.driven && sampled.note.includes("SAMPLED on its own clock") && !sampled.note.includes("reproducibility result"),
+    sampled.note.slice(0, 90));
+  check("and the sampled verdict names the hook that would make it reproducible",
+    sampled.note.includes("window.lucidRenderAt"));
+
+  const noCanvas = await runCapture({ plan: plan.frames, send: async () => ({ error: "this page has no canvas to capture" }), decode });
+  check("the bridge's own refusal reaches the user verbatim", noCanvas.error === "this page has no canvas to capture");
+  const junk = await runCapture({ plan: plan.frames, send: async () => ({ driven: true, width: 2, height: 2 }), decode });
+  check("a malformed reply paints NOTHING rather than a partial report", !junk.ok && junk.report === null);
+  const svg = plan.frames.map((f, i) => ({ index: f.index, tMs: f.tMs, dataUrl: i === 4 ? "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" : urlFor(f.tMs) }));
+  const refusedPass = await runCapture({ plan: plan.frames, send: async () => reply({ frames: svg }), decode });
+  check("ONE frame that is not a raster image refuses the WHOLE pass, naming it",
+    !refusedPass.ok && refusedPass.error.includes("Frame 4") && refusedPass.fingerprints.length === 0,
+    refusedPass.error.slice(0, 70));
+
+  // The shipped reference scene has to honour the contract it documents, or it teaches the wrong thing.
+  const scenePath = join(import.meta.dir, "..", "..", "desktop", "scripts", "capture_scene_example.html");
+  const sceneHtml = readFileSync(scenePath, "utf8");
+  const scriptAt = sceneHtml.lastIndexOf("<script>");
+  const body = sceneHtml.slice(scriptAt).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+  check("the reference scene defines the documented hook", body.includes("window.lucidRenderAt = function"));
+  check("its canvas is well inside the bridge's edge cap", /width="480"\s+height="270"/.test(sceneHtml));
+  for (const clock of ["Date.now(", "performance.now(", "new Date("]) {
+    check(`its executable code never reads ${clock}), so a frame cannot depend on when it was painted`, !body.includes(clock));
+  }
+  const randomAt = body.indexOf("Math.random");
+  const brokenAt = body.indexOf("lucidRenderAtNondeterministic");
+  check("the ONLY randomness in its code sits inside the deliberately broken variant",
+    randomAt > 0 && brokenAt > 0 && randomAt > brokenAt, `random at ${randomAt}, broken variant at ${brokenAt}`);
+  // THE FLOOR IS MEASURED, AND THE TOLERANCE COMES OUT OF IT. This is the bug the on-device pass found: an
+  // exact-fingerprint compare against a live composited canvas reports a regression the scene did not cause,
+  // because two readbacks of ONE identical render are not byte-identical on that platform.
+  const sent: number[][] = [];
+  const jittery = async (cmd: { readonly plan: readonly { readonly index: number; readonly tMs: number }[] }) => {
+    sent.push(cmd.plan.map((f) => f.tMs));
+    if (isFloorProbe(cmd)) {
+      // Each half of every duplicated pair reads back slightly differently, exactly as a live canvas does.
+      return { driven: true, width: 2, height: 2, frames: cmd.plan.map((f, i) => ({ index: f.index, tMs: f.tMs, dataUrl: urlFor(f.tMs + (i % 2)) })) };
+    }
+    return reply();
+  };
+  const unstable = await runCapture({ plan: plan.frames, send: jittery, decode, baseline: first.fingerprints, baselineSignatures: first.signatures });
+  const probeSent = sent.find((p) => p.length !== plan.frames.length) ?? [];
+  check("the floor is sampled at SEVERAL times across the plan, not just the first frame",
+    probeSent.length === FLOOR_SAMPLE_POINTS * 2 && probeSent[0] === 0 && probeSent[probeSent.length - 1] === plan.frames[plan.frames.length - 1]?.tMs,
+    `probe asked for ${probeSent.join(", ")}`);
+  check("each sampled time is asked for TWICE, so every pair is two readbacks of one identical render",
+    probeSent.every((t, i) => i % 2 === 1 ? t === probeSent[i - 1] : true));
+  check("a platform that cannot read one render back twice the same way is MEASURED, not assumed",
+    unstable.noiseFloor?.byteStable === false && (unstable.noiseFloor?.changedPixels ?? 0) > 0,
+    unstable.noiseFloor?.reason.slice(0, 95) ?? "no floor measured");
+  check("the compare still returns a REAL verdict, by coarse signature at the measured tolerance",
+    unstable.regression?.method === "signature" && !unstable.inconclusive,
+    `method ${unstable.regression?.method ?? "none"}, inconclusive ${unstable.inconclusive}`);
+  check("and the note says WHICH compare ran, so a coarse match is never read as byte equality",
+    unstable.note.includes("luminance signature at a tolerance of") && unstable.note.includes("measured from this platform's own readback jitter"));
+  const noFallback = await runCapture({ plan: plan.frames, send: jittery, decode, baseline: first.fingerprints });
+  check("with NO signature baseline to fall back on, an unjudgeable compare is inconclusive rather than a false regression",
+    noFallback.inconclusive && noFallback.regression === null && noFallback.ok,
+    `inconclusive ${noFallback.inconclusive}, regression ${String(noFallback.regression)}`);
+  const stable = await runCapture({ plan: plan.frames, send: async (cmd) => replyFor(cmd), decode, baseline: first.fingerprints });
+  check("a byte-stable platform gets the EXACT compare instead", stable.noiseFloor?.byteStable === true && stable.regression?.method === "exact",
+    `${stable.regression?.method ?? "none"}: ${stable.noiseFloor?.reason.slice(0, 60) ?? "unmeasured"}`);
+  check("and the honest renderer is what the file exports by default, with the swap left commented out",
+    /^\s*\/\/\s*window\.lucidRenderAt = window\.lucidRenderAtNondeterministic;\s*$/m.test(sceneHtml));
+}
 rmSync(root, { recursive: true, force: true });
 
 console.log(
   failures === 0
-    ? "\ndemo_creator3 OK - a capability no live probe attested is refused before a byte leaves the machine, a governor refusal is a written-down job, a workflow with a hole is never submitted, an artifact's type comes from its own bytes rather than the server's label, a dead scanner BLOCKS the artifact and writes nothing, a video and a 3D output are read as what they are, a frame capture is reproducible or says why not, Blender runs as a fixed vector with no shell and reports its own failing line, a manifest is only a claim until the probe agrees, and end to end against a real server the render lands a webm with its sha256, prompt, model and job row while a lying server stores nothing, a silent socket cannot hang the render, and a noisy shared socket cannot corrupt it."
+    ? "\ndemo_creator3 OK - a capability no live probe attested is refused before a byte leaves the machine, a governor refusal is a written-down job, a workflow with a hole is never submitted, an artifact's type comes from its own bytes rather than the server's label, a dead scanner BLOCKS the artifact and writes nothing, a video and a 3D output are read as what they are, a frame capture is reproducible or says why not, Blender runs as a fixed vector with no shell and reports its own failing line, a manifest is only a claim until the probe agrees, and end to end against a real server the render lands a webm with its sha256, prompt, model and job row while a lying server stores nothing, a silent socket cannot hang the render, and a noisy shared socket cannot corrupt it. The Preview panel now DRIVES a real scene through that clock: a second pass of the shipped reference scene matches frame for frame, a changed scene fails the compare naming the first differing frame, a page with no render hook is labeled sampled rather than sold as deterministic, and one frame that is not a raster image refuses the whole pass."
     : `\n${failures} CHECK(S) FAILED`,
 );
 process.exit(failures === 0 ? 0 : 1);

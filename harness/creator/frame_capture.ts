@@ -434,3 +434,131 @@ function quote(value: unknown): string {
   }
   return `"${out}${value.length > 48 ? "..." : ""}"`;
 }
+
+// ── signatures: comparing frames on a platform that will not repeat itself ──
+//
+// Exact fingerprints answer "are these the same bytes". On a canvas that is ATTACHED and VISIBLE, that is the
+// wrong question: measured in a real browser, two readbacks of ONE identical render alternate between two
+// bitmaps, differing on a few hundred pixels with channel deltas up to 71. Byte equality is a property of the
+// platform, not of the scene, so a compare built on it reports a regression nobody caused.
+//
+// A SIGNATURE asks a question the platform can answer: coarse cell means. Each cell averages a block of
+// pixels, so a handful of jittering antialiased edges move a cell mean by a level or two while a real visual
+// change moves many pixels in the same cell and shifts it far more. The grid is small on purpose: 32x18 is
+// 576 bytes per frame, about 34KB for a 60-frame pass, which is the difference between a feature that fits on
+// an edge box and one that holds 31MB of RGBA per capture.
+//
+// The tolerance is NOT a guess. The caller measures this platform's own jitter (two renders of one time) and
+// passes the observed cell delta, so the threshold is empirical.
+
+export const SIGNATURE_COLS = 32;
+export const SIGNATURE_ROWS = 18;
+
+/**
+ * Coarse luminance signature of one frame: `SIGNATURE_COLS * SIGNATURE_ROWS` cell means, 0..255.
+ *
+ * Luminance rather than per-channel so a signature stays one byte per cell; the Rec. 601 weights are used
+ * because they match how a viewer perceives a change. Alpha is folded in (a transparent pixel contributes
+ * nothing) so a scene that clears to transparent does not read as black.
+ *
+ * Returns an empty array when the buffer does not match its dimensions, which callers treat as unusable
+ * rather than as a frame of zeroes.
+ */
+export function frameSignature(rgba: Uint8Array, width: number, height: number): Uint8Array {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return new Uint8Array(0);
+  if (rgba.length !== width * height * 4) return new Uint8Array(0);
+  const out = new Uint8Array(SIGNATURE_COLS * SIGNATURE_ROWS);
+  for (let cy = 0; cy < SIGNATURE_ROWS; cy++) {
+    const y0 = Math.floor((cy * height) / SIGNATURE_ROWS);
+    const y1 = Math.max(y0 + 1, Math.floor(((cy + 1) * height) / SIGNATURE_ROWS));
+    for (let cx = 0; cx < SIGNATURE_COLS; cx++) {
+      const x0 = Math.floor((cx * width) / SIGNATURE_COLS);
+      const x1 = Math.max(x0 + 1, Math.floor(((cx + 1) * width) / SIGNATURE_COLS));
+      let sum = 0;
+      let n = 0;
+      for (let y = y0; y < y1 && y < height; y++) {
+        for (let x = x0; x < x1 && x < width; x++) {
+          const o = (y * width + x) * 4;
+          const a = (rgba[o + 3] ?? 0) / 255;
+          sum += (0.299 * (rgba[o] ?? 0) + 0.587 * (rgba[o + 1] ?? 0) + 0.114 * (rgba[o + 2] ?? 0)) * a;
+          n++;
+        }
+      }
+      out[cy * SIGNATURE_COLS + cx] = n === 0 ? 0 : Math.round(sum / n);
+    }
+  }
+  return out;
+}
+
+export interface SignatureDiff {
+  readonly equal: boolean;
+  readonly changedCells: number;
+  readonly maxCellDelta: number;
+  /** Index of the first cell over tolerance, or -1 when none is. */
+  readonly firstCell: number;
+  readonly reason: string;
+}
+
+/**
+ * Compare two signatures with an explicit per-cell tolerance.
+ *
+ * `tolerance` is a cell-mean delta the caller MEASURED, not a constant this module invented. A mismatched
+ * length is not equal and says both lengths, never a crash.
+ */
+export function compareSignatures(a: Uint8Array, b: Uint8Array, opts: { tolerance: number }): SignatureDiff {
+  const tolerance = Math.max(0, Math.min(MAX_TOLERANCE, Math.trunc(opts.tolerance)));
+  if (!a.length || !b.length) {
+    return { equal: false, changedCells: 0, maxCellDelta: 0, firstCell: -1, reason: "one of these frames produced no signature, so they cannot be compared" };
+  }
+  if (a.length !== b.length) {
+    return { equal: false, changedCells: 0, maxCellDelta: 0, firstCell: -1, reason: `signature lengths differ (${a.length} vs ${b.length})` };
+  }
+  let changed = 0;
+  let maxDelta = 0;
+  let firstCell = -1;
+  for (let i = 0; i < a.length; i++) {
+    const d = Math.abs((a[i] ?? 0) - (b[i] ?? 0));
+    if (d > maxDelta) maxDelta = d;
+    if (d > tolerance) {
+      changed++;
+      if (firstCell < 0) firstCell = i;
+    }
+  }
+  return changed === 0
+    ? { equal: true, changedCells: 0, maxCellDelta: maxDelta, firstCell: -1, reason: `every cell is within the measured tolerance of ${tolerance} (largest delta seen: ${maxDelta})` }
+    : { equal: false, changedCells: changed, maxCellDelta: maxDelta, firstCell, reason: `${changed} of ${a.length} cells moved more than the measured tolerance of ${tolerance}, up to ${maxDelta}, first at cell ${firstCell}` };
+}
+
+export interface SignatureComparison {
+  readonly equal: boolean;
+  readonly firstDiff: number;
+  readonly changedCells: number;
+  readonly maxCellDelta: number;
+  readonly reason: string;
+}
+
+/**
+ * Compare two whole captures cell by cell, frame by frame, at a measured tolerance. The frame-level answer a
+ * regression check actually wants: WHICH frame first moved, and by how much.
+ *
+ * Two empty runs are NOT equal: nothing compared is not agreement. Different lengths are not equal either.
+ */
+export function sameCaptureSignatures(
+  a: readonly Uint8Array[], b: readonly Uint8Array[], opts: { tolerance: number },
+): SignatureComparison {
+  if (!a.length || !b.length) {
+    return { equal: false, firstDiff: -1, changedCells: 0, maxCellDelta: 0, reason: "nothing to compare: one of these captures has no frames" };
+  }
+  if (a.length !== b.length) {
+    return { equal: false, firstDiff: Math.min(a.length, b.length), changedCells: 0, maxCellDelta: 0, reason: `these captures are different lengths (${a.length} vs ${b.length} frames)` };
+  }
+  let worstDelta = 0;
+  for (let i = 0; i < a.length; i++) {
+    const d = compareSignatures(a[i] ?? new Uint8Array(0), b[i] ?? new Uint8Array(0), opts);
+    if (d.maxCellDelta > worstDelta) worstDelta = d.maxCellDelta;
+    if (!d.equal) {
+      return { equal: false, firstDiff: i, changedCells: d.changedCells, maxCellDelta: d.maxCellDelta, reason: `frame ${i} differs: ${d.reason}` };
+    }
+  }
+  return { equal: true, firstDiff: -1, changedCells: 0, maxCellDelta: worstDelta, reason: `all ${a.length} frames are within the measured tolerance of ${Math.trunc(opts.tolerance)} (largest cell delta seen: ${worstDelta})` };
+}

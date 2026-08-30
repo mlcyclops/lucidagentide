@@ -33,6 +33,26 @@ describe("injectPreviewBridge", () => {
     expect(PREVIEW_BRIDGE_JS).toContain("el.value=v");
     expect(PREVIEW_BRIDGE_JS).toContain("el.textContent=v");
   });
+  test("CREATOR-3b: capture is routed BEFORE the action allowlist, and both older routes still read", () => {
+    // The chain is written so the pre-existing routing contract stays a literal substring of the same line.
+    expect(PREVIEW_BRIDGE_JS).toContain("cmd.capture ? capture(cmd) : cmd.action ? act(cmd) : inspect(cmd)");
+    expect(PREVIEW_BRIDGE_JS).toContain("cmd.action ? act(cmd) : inspect(cmd)");
+  });
+  test("CREATOR-3b: the capture path calls only a hook the DOCUMENT defined, behind a typeof check", () => {
+    // This is the security line for the whole feature: LUCID never evaluates scene code, it calls a function
+    // the previewed document itself installed. The absence assertions above cover the rest of the surface.
+    expect(PREVIEW_BRIDGE_JS).toContain("typeof window.lucidRenderAt==='function'");
+    expect(PREVIEW_BRIDGE_JS).toContain("window.lucidRenderAt(t)");
+    expect(PREVIEW_BRIDGE_JS).toContain("toDataURL('image/png')");
+  });
+  test("CREATOR-3b: the capture caps are literal in the bridge, so the driver can pin itself to them", () => {
+    expect(PREVIEW_BRIDGE_JS).toContain("CAP_MAX_FRAMES=64");
+    expect(PREVIEW_BRIDGE_JS).toContain("CAP_MAX_EDGE=2048");
+  });
+  test("CREATOR-3b: a sampled capture is LABELED rather than presented as driven", () => {
+    // `driven` rides every reply, which is what lets the parent refuse to call a sampled pass reproducible.
+    expect(PREVIEW_BRIDGE_JS).toContain("driven:driven");
+  });
   test("P-PREVIEW.7: the one-shot health report is present, read-only, and parent-only", () => {
     expect(PREVIEW_BRIDGE_JS).toContain("preview-health");
     expect(PREVIEW_BRIDGE_JS).toContain("emptyBody: bodyEmpty()");
