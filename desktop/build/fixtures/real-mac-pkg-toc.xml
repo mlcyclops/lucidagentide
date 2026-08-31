@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xar>
+ <toc>
+  <creation-time>2026-08-30T18:09:07</creation-time>
+  <checksum style="sha1">
+   <offset>0</offset>
+   <size>20</size>
+  </checksum>
+  <file id="5">
+   <data>
+    <length>522</length>
+    <offset>540063975</offset>
+    <size>1437</size>
+    <encoding style="application/x-gzip"/>
+    <extracted-checksum style="sha1">5597c08f1f32206c050fa1e0020dca8fa523f662</extracted-checksum>
+    <archived-checksum style="sha1">69ec3ad4cc013b0d8011d76aac536f9be820f688</archived-checksum>
+   </data>
+   <type>file</type>
+   <name>Distribution</name>
+  </file>
+  <file id="1">
+   <ctime>1970-01-01T00:00:00Z</ctime>
+   <mtime>1970-01-01T00:00:00Z</mtime>
+   <atime>1970-01-01T00:00:00Z</atime>
+   <group>wheel</group>
+   <gid>0</gid>
+   <user>root</user>
+   <uid>0</uid>
+   <mode>0700</mode>
+   <deviceno>0</deviceno>
+   <inode>0</inode>
+   <type>directory</type>
+   <name>com.lucidagentide.desktop.pkg</name>
+   <file id="2">
+    <data>
+     <length>1612328</length>
+     <offset>20</offset>
+     <size>6470097</size>
+     <encoding style="application/x-gzip"/>
+     <extracted-checksum style="sha1">b297a04ef2ba86d7232d89d5de6f135c83f79a66</extracted-checksum>
+     <archived-checksum style="sha1">184f7c963f8100844624d067dcaf21c3f889c66f</archived-checksum>
+    </data>
+    <FinderCreateTime>
+     <nanoseconds>0</nanoseconds>
+     <time>1900-01-00T16:25:36</time>
+    </FinderCreateTime>
+    <ctime>2026-08-30T18:07:46Z</ctime>
+    <mtime>2026-08-30T18:07:46Z</mtime>
+    <atime>2026-08-30T18:07:44Z</atime>
+    <group>staff</group>
+    <gid>20</gid>
+    <user>runner</user>
+    <uid>501</uid>
+    <mode>0644</mode>
+    <deviceno>16777229</deviceno>
+    <inode>3018737</inode>
+    <type>file</type>
+    <name>Bom</name>
+    <name>Bom</name>
+   </file>
+   <file id="3">
+    <data>
+     <length>538451253</length>
+     <encoding style="application/octet-stream"/>
+     <offset>1612348</offset>
+     <size>538451253</size>
+     <extracted-checksum style="sha1">744a20abde15bf409e49af287d762cc312f642a0</extracted-checksum>
+     <archived-checksum style="sha1">744a20abde15bf409e49af287d762cc312f642a0</archived-checksum>
+    </data>
+    <FinderCreateTime>
+     <nanoseconds>0</nanoseconds>
+     <time>1900-01-00T20:52:16</time>
+    </FinderCreateTime>
+    <ctime>2026-08-30T18:09:04Z</ctime>
+    <mtime>2026-08-30T18:09:04Z</mtime>
+    <atime>2026-08-30T18:07:50Z</atime>
+    <group>staff</group>
+    <gid>20</gid>
+    <user>runner</user>
+    <uid>501</uid>
+    <mode>0644</mode>
+    <deviceno>16777229</deviceno>
+    <inode>3018752</inode>
+    <type>file</type>
+    <name>Payload</name>
+    <name>Payload</name>
+   </file>
+   <file id="4">
+    <data>
+     <length>374</length>
+     <offset>540063601</offset>
+     <size>839</size>
+     <encoding style="application/x-gzip"/>
+     <extracted-checksum style="sha1">474e8e9c83681785fc04a481e41b87d70bbd1c7c</extracted-checksum>
+     <archived-checksum style="sha1">00b398539472f54c3df8736319f95463ed74af02</archived-checksum>
+    </data>
+    <type>file</type>
+    <name>PackageInfo</name>
+    <name>PackageInfo</name>
+   </file>
+  </file>
+ </toc>
+</xar>

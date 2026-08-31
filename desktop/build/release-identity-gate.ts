@@ -53,6 +53,7 @@ import {
   pkgIdentityFromXml,
   rpmNameFromLead,
   summarize,
+  xarHeapMembers,
 } from "./release_identity.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // desktop/build
@@ -196,41 +197,10 @@ function expectationFor(flavor: BuildFlavor): FlavorExpectation {
 
 // --- pure byte/text decisions ------------------------------------------------------------------------
 
-/** One heap-backed `<file>` entry as recorded in a xar TOC. */
-interface XarHeapMember {
-  readonly name: string;
-  readonly offset: number;
-  readonly length: number;
-}
-
-/** Locate every heap-backed member in a xar TOC.
- *
- *  The TOC is nested XML: a directory is a `<file>` holding child `<file>` elements, and a heap-backed
- *  entry is exactly a `<file>` that owns a `<data>` block. So the walk pairs each `<data>` with the
- *  nearest PRECEDING `<name>` - a directory's own name is always displaced by its children's names
- *  before any of their `<data>` appears, which makes that pairing correct without tracking depth.
- *  Regex over a machine-generated, never-user-authored TOC is the right tool; pulling an XML parser
- *  into a build gate is not. `<length>` is the archived (compressed) byte count in the heap, which is
- *  what a range read needs; `<size>` is the extracted size and is deliberately ignored. */
-function xarHeapMembers(toc: string): XarHeapMember[] {
-  const names: { at: number; name: string }[] = [];
-  for (const m of toc.matchAll(/<name>([^<]*)<\/name>/g)) names.push({ at: m.index ?? 0, name: m[1] ?? "" });
-  const out: XarHeapMember[] = [];
-  for (const d of toc.matchAll(/<data>([\s\S]*?)<\/data>/g)) {
-    const at = d.index ?? 0;
-    let owner = "";
-    for (const n of names) {
-      if (n.at >= at) break;
-      owner = n.name;
-    }
-    const body = d[1] ?? "";
-    const offset = /<offset>(\d+)<\/offset>/.exec(body);
-    const length = /<length>(\d+)<\/length>/.exec(body);
-    if (!owner || !offset || !length) continue;
-    out.push({ name: owner, offset: Number(offset[1]), length: Number(length[1]) });
-  }
-  return out;
-}
+// The xar TOC walk lives in release_identity.ts with the other parsers, and is pinned against a REAL
+// installer's TOC. The version that used to live here paired each `<data>` with the nearest preceding
+// `<name>`, which a real TOC breaks in two ways at once (`<data>` precedes `<name>`; `<name>` repeats),
+// and it refused a perfectly good installer on the first v1.14.2 tag build. See xarHeapMembers.
 
 /** xar records deflated members as `application/x-gzip` - a historical misnomer, the bytes are a raw
  *  zlib stream and not a gzip container - and productbuild also stores some small members uncompressed.
@@ -413,6 +383,12 @@ async function updaterFeedIdentity(file: string, name: string): Promise<Extracte
  *  fail-closed rule 3 sharp: every other artifact-shaped file still has to classify. */
 const BUILD_BYPRODUCTS: readonly string[] = ["builder-debug.yml", "builder-effective-config.yaml"];
 
+/** The pkg target also leaves a component property list named after the appId
+ *  (`com.lucidagentide.desktop.plist`). It is in no upload glob and carries no identity a range read can
+ *  compare, so it is skipped BY DERIVED NAME rather than by a `*.plist` wildcard: a plist this gate did
+ *  not expect should still fail rule 3 and be looked at. Flavor-aware, so Creator's own appId works too. */
+const pkgComponentPlist = (appId: string): string => `${appId}.plist`;
+
 const BLOCKMAP_SUFFIX = ".blockmap";
 
 /** Which kinds we open rather than judge by name. */
@@ -439,7 +415,7 @@ if (!statSync(RELEASE).isDirectory()) fail(`${RELEASE} exists but is not a direc
 // Files only. The `*-unpacked` trees and `*.app` bundles are directories, are in no upload glob, and are
 // already gated by airgap-smoke.ts and pf-boot-smoke.ts; this gate is about the bytes that ship.
 const present = readdirSync(RELEASE, { withFileTypes: true })
-  .filter((e) => e.isFile() && !e.name.startsWith(".") && !BUILD_BYPRODUCTS.includes(e.name))
+  .filter((e) => e.isFile() && !e.name.startsWith(".") && !BUILD_BYPRODUCTS.includes(e.name) && e.name !== pkgComponentPlist(expected.appId))
   .map((e) => e.name)
   .sort();
 

@@ -13,6 +13,8 @@
 // installer. Its filename is right, its bytes are wrong, and only the embedded identity can tell.
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { AGENT_FLAVOR, CREATOR_FLAVOR } from "../build_flavor.ts";
 import {
   type ArtifactIdentity,
@@ -27,6 +29,7 @@ import {
   pkgIdentityFromXml,
   rpmNameFromLead,
   summarize,
+  xarHeapMembers,
 } from "./release_identity.ts";
 
 // --- fixtures ----------------------------------------------------------------------------------
@@ -177,7 +180,48 @@ test("the expectation fixture mirrors the shipping flavor identities", () => {
   expect(AGENT_FLAVOR.artifactStem).not.toBe(CREATOR_FLAVOR.artifactStem);
 });
 
-// --- parseXarHeader ----------------------------------------------------------------------------
+// --- xarHeapMembers ----------------------------------------------------------------------------
+
+// THE REGRESSION THAT SHIPPED. The first v1.14.2 tag build refused a perfectly good mac installer:
+// the walk paired each `<data>` with the nearest PRECEDING `<name>`, and a real xar TOC breaks that
+// two ways at once - `<data>` comes BEFORE `<name>` inside a `<file>`, and `<name>` is repeated. The
+// result was `saw: com.lucidagentide.desktop.pkg, Bom, Payload` for an archive whose members are
+// Distribution, Bom, Payload and PackageInfo: every label shifted by one and the first member lost.
+// Synthetic fixtures could not catch it (they were written in the shape the parser expected), so this
+// suite reads the TOC of an ACTUAL shipped installer, captured from the v1.14.1 mac pkg.
+const REAL_TOC = readFileSync(join(import.meta.dir, "fixtures", "real-mac-pkg-toc.xml"), "utf8");
+
+describe("xarHeapMembers (against a REAL shipped pkg TOC)", () => {
+  const members = xarHeapMembers(REAL_TOC);
+  const byName = (n: string) => members.find((m) => m.name === n);
+
+  test("finds Distribution, which the shipped bug lost entirely (nothing precedes the first member)", () => {
+    expect(byName("Distribution")).toEqual({ name: "Distribution", offset: 540063975, length: 522 });
+  });
+  test("finds PackageInfo with its own offset, not the previous file's", () => {
+    expect(byName("PackageInfo")).toEqual({ name: "PackageInfo", offset: 540063601, length: 374 });
+  });
+  test("labels Bom and Payload correctly (the shifted labels the bug produced)", () => {
+    expect(byName("Bom")?.offset).toBe(20);
+    expect(byName("Payload")?.offset).toBe(1612348);
+    // `length` is the ARCHIVED byte count a range read needs, never the extracted `size`.
+    expect(byName("Bom")?.length).toBe(1612328);
+  });
+  test("the component DIRECTORY is not a member - it owns no heap bytes", () => {
+    expect(byName("com.lucidagentide.desktop.pkg")).toBeUndefined();
+    expect(members.map((m) => m.name).sort()).toEqual(["Bom", "Distribution", "PackageInfo", "Payload"]);
+  });
+  test("a repeated <name> does not create a duplicate member", () => {
+    // Bom, Payload and PackageInfo each carry <name> TWICE in the real TOC.
+    expect(members.filter((m) => m.name === "Bom")).toHaveLength(1);
+    expect(members).toHaveLength(4);
+  });
+  test("empty / non-TOC input yields nothing rather than throwing", () => {
+    expect(xarHeapMembers("")).toEqual([]);
+    expect(xarHeapMembers("<xar><toc/></xar>")).toEqual([]);
+    expect(xarHeapMembers("not xml at all")).toEqual([]);
+  });
+});
 
 describe("parseXarHeader", () => {
   test("reads headerSize and the compressed TOC length as big-endian", () => {

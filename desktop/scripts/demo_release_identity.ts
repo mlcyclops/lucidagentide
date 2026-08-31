@@ -55,9 +55,16 @@ const CREATOR = { appId: "com.lucidcreator.desktop", app: "LucidCreator.app", ti
  *  zlib-deflated XML; heap offsets are relative to the end of that compressed TOC. Members are
  *  deflated too, which is what xar's `application/x-gzip` encoding actually means (raw zlib, not a
  *  gzip container). PackageInfo sits inside a `<file type="directory">` on purpose: that is how
- *  productbuild nests a component package, and it is the case the gate's TOC walk has to get right by
- *  pairing each `<data>` with the nearest PRECEDING `<name>`. The 20-byte heap prefix stands in for
- *  the TOC checksum a real xar puts at heap offset 0, so the member offsets are non-trivial. */
+ *  productbuild nests a component package, and it is the case the gate's TOC walk has to get right.
+ *  The 20-byte heap prefix stands in for the TOC checksum a real xar puts at heap offset 0, so the
+ *  member offsets are non-trivial.
+ *
+ *  ELEMENT ORDER HERE IS COPIED FROM A REAL INSTALLER, and that is load-bearing. This fixture used to
+ *  emit `<name>` before `<data>`, which is backwards: xar writes `<data>` FIRST and repeats `<name>`
+ *  twice. Because the fixture was written in the shape the parser expected, it passed while the parser
+ *  was wrong, and the first v1.14.2 tag build refused a genuine installer. A fixture that only proves
+ *  the parser agrees with itself proves nothing. The authoritative pin is the captured TOC in
+ *  build/fixtures/real-mac-pkg-toc.xml; this one now at least fails honestly. */
 function fakePkg(id: typeof AGENT, version: string): Buffer {
   const distribution = [
     '<?xml version="1.0" encoding="utf-8" standalone="no"?>',
@@ -92,12 +99,17 @@ function fakePkg(id: typeof AGENT, version: string): Buffer {
     "<xar>",
     " <toc>",
     '  <checksum style="sha1"><offset>0</offset><size>20</size></checksum>',
-    '  <file id="1"><name>Distribution</name><type>file</type>',
+    // Real ordering: <data> first, then <type>, then <name> (twice). Distribution is a TOP-LEVEL
+    // member listed BEFORE the component directory, so it is the first <data> in the document and has
+    // no <name> of any kind before it - the exact shape that broke the shipped walk.
+    '  <file id="1">',
     `   ${data(distZ.byteLength, distAt, Buffer.byteLength(distribution))}`,
+    "   <type>file</type><name>Distribution</name>",
     "  </file>",
-    '  <file id="2"><name>payload.pkg</name><type>directory</type>',
-    '   <file id="3"><name>PackageInfo</name><type>file</type>',
+    '  <file id="2"><type>directory</type><name>payload.pkg</name>',
+    '   <file id="3">',
     `    ${data(infoZ.byteLength, infoAt, Buffer.byteLength(packageInfo))}`,
+    "    <type>file</type><name>PackageInfo</name><name>PackageInfo</name>",
     "   </file>",
     "  </file>",
     " </toc>",

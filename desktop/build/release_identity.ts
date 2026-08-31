@@ -367,6 +367,50 @@ const XAR_HEADER_BYTES = 28;
  * wrong magic (the exact case where the "pkg" is actually some other file), a header that claims to
  * be smaller than the fields it must contain, or a TOC length of zero or beyond safe-integer range.
  */
+/** One heap-backed `<file>` entry as recorded in a xar TOC. */
+export interface XarHeapMember {
+  readonly name: string;
+  readonly offset: number;
+  readonly length: number;
+}
+
+/** Locate every heap-backed member in a xar TOC.
+ *
+ *  ELEMENT-SCOPED on purpose. A xar TOC is nested XML: a directory is a `<file>` holding child `<file>`
+ *  elements, and a heap-backed entry is a `<file>` that owns a `<data>` block. Two real-world details
+ *  make global proximity matching wrong, both verified against a shipped installer's TOC
+ *  (fixtures/real-mac-pkg-toc.xml, captured from the v1.14.1 mac pkg):
+ *    1. `<data>` comes BEFORE `<name>` inside a `<file>`. Pairing each `<data>` with the nearest
+ *       PRECEDING `<name>` therefore labels every member with the PREVIOUS file's name and drops the
+ *       first member entirely, since nothing precedes it. That is not hypothetical: it shipped, and the
+ *       mac job of the first v1.14.2 tag build refused a perfectly good installer, reporting
+ *       `saw: com.lucidagentide.desktop.pkg, Bom, Payload` for an archive whose real members are
+ *       Distribution, Bom, Payload and PackageInfo.
+ *    2. `<name>` is commonly repeated twice for the same file, so take the first and stop.
+ *  So each `<file>` is read within its OWN header region - everything up to its first nested `<file>`,
+ *  which is where xar puts a file's `<data>` and a directory's `<name>`. A directory owns no `<data>` in
+ *  that region and is correctly not a member.
+ *
+ *  `<length>` is the ARCHIVED (compressed) byte count in the heap, which is what a range read needs;
+ *  `<size>` is the extracted size and is deliberately ignored. Regex over machine-generated,
+ *  never-user-authored markup is the right tool here; pulling an XML parser into a build gate is not. */
+export function xarHeapMembers(toc: string): XarHeapMember[] {
+  const starts: number[] = [];
+  for (const m of toc.matchAll(/<file\b/g)) starts.push(m.index ?? 0);
+  const out: XarHeapMember[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const region = toc.slice(starts[i]!, starts[i + 1] ?? toc.length);
+    const data = /<data>([\s\S]*?)<\/data>/.exec(region);
+    if (!data) continue; // a directory owns no heap bytes
+    const name = /<name>([^<]*)<\/name>/.exec(region);
+    const offset = /<offset>(\d+)<\/offset>/.exec(data[1] ?? "");
+    const length = /<length>(\d+)<\/length>/.exec(data[1] ?? "");
+    if (!name?.[1] || !offset || !length) continue;
+    out.push({ name: name[1], offset: Number(offset[1]), length: Number(length[1]) });
+  }
+  return out;
+}
+
 export function parseXarHeader(head: Uint8Array): { headerSize: number; tocCompressedLength: number } | null {
   if (head.byteLength < XAR_HEADER_BYTES) return null;
   const dv = new DataView(head.buffer, head.byteOffset, head.byteLength);
