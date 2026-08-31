@@ -339,4 +339,19 @@
 //            measures what it claims (scope by exclusion, ADR-0303). And the Creator flavor lands on trunk
 //            behind build_flavor gates with its own creator-v* release channel that can never cross-install
 //            with Agent (ADR-0279..0296, 0304).
-export const APP_VERSION = "1.14.1";
+// v1.14.2 = the trust-boundary pass, all four increments traced back to ONE field report ("v1.14.1 installed
+//            a different product"): the window can no longer render a STRANGER - main mints a per-launch
+//            nonce, the engine echoes it on /api/health, and a foreign process squatting the engine port
+//            fails LOUDLY with a pasteable incident report naming the process, pid, start time and command
+//            line, never a silent roll onto someone else's UI (P-PORTGUARD.1, ADR-0305); CI now reads each
+//            artifact's EMBEDDED identity before upload (pkg bundle id + payload .app path, deb package
+//            name, rpm lead, the updater feed's declared path) so a mis-flavored or mis-versioned build
+//            fails the build instead of reaching a Release (P-RELEASE.4, ADR-0307); agents get real
+//            Word/Excel/PowerPoint through a pinned, digest-verified OfficeCLI as a GATED skill with the
+//            render-look-fix loop on the existing Preview tools, graded per subcommand by exec_policy
+//            (P-OFFICE.1, ADR-0306); and the Preview panel obeys the agent again - preview_open reports
+//            itself over its own channel instead of relying on an ACP call title that omp's intent tracing
+//            rewrites to the model's prose, which had also left every preview activity pill dark
+//            (P-PREVIEW.11/.11b, ADR-0308). Plus two stacked chat scroll helpers for long sessions (step a
+//            page, or run to the end) and paste-safe Homebrew docs (stock zsh does not strip # comments).
+export const APP_VERSION = "1.14.2";
