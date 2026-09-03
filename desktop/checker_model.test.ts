@@ -9,7 +9,7 @@
 // excluded; and that resolveCheckerModel honors a valid override but fails safe past a stale one.
 
 import { describe, expect, test } from "bun:test";
-import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
 
 const opt = (value: string): ModelOption => ({ value });
 // A realistic slice of the live picker (multiple providers, snapshots + aliases).
@@ -96,5 +96,43 @@ describe("resolveLockdownModel", () => {
     const r = resolveLockdownModel(true, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.5"]);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/AskSage API key|lockdown/i);
+  });
+});
+
+// R-07 (#347): the managed allowed/denied lists, wired fail-closed on top of the lockdown clamp.
+describe("resolveGovernedModel", () => {
+  const values = ["anthropic/claude-opus-4-8", "asksage-openai/gpt-5.6-luna", "openai/gpt-5.5"];
+  test("unmanaged + unlocked => the current model passes through", () => {
+    expect(resolveGovernedModel(false, undefined, "openai/gpt-5.5", values)).toEqual({ ok: true, model: "openai/gpt-5.5" });
+  });
+  test("a denied current model switches to the first permitted option", () => {
+    const r = resolveGovernedModel(false, { denied: ["openai"] }, "openai/gpt-5.5", values);
+    expect(r).toEqual({ ok: true, model: "anthropic/claude-opus-4-8" });
+  });
+  test("a non-empty allow-list restricts: non-matching current swaps to a matching option", () => {
+    const r = resolveGovernedModel(false, { allowed: ["asksage"] }, "anthropic/claude-opus-4-8", values);
+    expect(r).toEqual({ ok: true, model: "asksage-openai/gpt-5.6-luna" });
+  });
+  test("deny wins over allow (the ADR-0068 rule holds through the resolver)", () => {
+    const r = resolveGovernedModel(false, { allowed: ["claude"], denied: ["opus"] }, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8"]);
+    expect(r.ok).toBe(false);
+  });
+  test("everything denied => FAIL-CLOSED block, never a silent pass", () => {
+    const r = resolveGovernedModel(false, { denied: ["anthropic", "asksage", "openai"] }, "openai/gpt-5.5", values);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/organization's model policy/);
+  });
+  test("lockdown + policy must BOTH hold: only an AskSage-routed AND allowed model qualifies", () => {
+    const r = resolveGovernedModel(true, { denied: ["gpt-5.6"] }, "anthropic/claude-opus-4-8", [...values, "asksage-anthropic/google-claude-sonnet-5"]);
+    expect(r).toEqual({ ok: true, model: "asksage-anthropic/google-claude-sonnet-5" });
+  });
+  test("lockdown on + policy denies every gov model => blocks (never routes direct even if allowed)", () => {
+    const r = resolveGovernedModel(true, { denied: ["asksage"] }, "anthropic/claude-opus-4-8", values);
+    expect(r.ok).toBe(false);
+  });
+  test("the lockdown failure surfaces first (no gov model available)", () => {
+    const r = resolveGovernedModel(true, undefined, "openai/gpt-5.5", ["openai/gpt-5.5"]);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/AskSage/);
   });
 });
