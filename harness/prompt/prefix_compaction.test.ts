@@ -27,7 +27,7 @@ const joinBlocks = (blocks: readonly string[]): string => blocks.join("\u0000");
 // The omp version this regression is pinned to (R-02). A silent dependency bump trips the assertion
 // below; R-01's scheduled omp-compat CI reruns the suite against candidate versions before adopting.
 const SUPPORTED_OMP = "16.1.20";
-const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-utils"] as const;
+const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-catalog", "@oh-my-pi/pi-utils"] as const;
 
 const PkgDeps = (() => {
 	const raw: unknown = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));

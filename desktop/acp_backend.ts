@@ -30,13 +30,13 @@ import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; 
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel } from "./settings_store.ts";
-import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
+import { managedAsksageOnly, managedConfig, managedRequireIsolation, modelAllowed } from "./managed_config.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { caps } from "../harness/runs/profiles.ts";
-import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
@@ -701,11 +701,12 @@ class Backend {
         if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
         await sleep(350); // let available_commands_update arrive
         this.syncModelEnv();
-        // ADR-0217: on a FRESH session (launch / respawn), apply the AskSage lockdown so the picker + status
-        // reflect the gov model. FIRE-AND-FORGET (never awaited): a slow/hung model switch must NOT block
-        // session init — which getConfig()/loadConfig() lean on — else the picker freezes on "updating…". The
-        // prompt() clamp (before every turn) is the authoritative fail-closed guarantee; this is best-effort UI sync.
-        if (this.asksageLocked()) void this.enforceAsksageLock().catch(() => ({ ok: false }));
+        // ADR-0217 + R-07 (#347): on a FRESH session (launch / respawn), apply the model policy (AskSage
+        // lockdown + managed allowed/denied) so the picker + status reflect a permitted model. FIRE-AND-FORGET
+        // (never awaited): a slow/hung model switch must NOT block session init - which getConfig()/loadConfig()
+        // lean on - else the picker freezes on "updating...". The prompt() clamp (before every turn) is the
+        // authoritative fail-closed guarantee; this is best-effort UI sync. No-op when unlocked + unmanaged.
+        void this.enforceModelPolicy().catch(() => ({ ok: false }));
       })().finally(() => { this.sessioning = null; });
     }
     await this.sessioning;
@@ -984,11 +985,12 @@ class Backend {
     this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
       await this.ensureSession();
-      // ADR-0217: FAIL-CLOSED AskSage lockdown. Force the model to the gov gateway before sending; if the lock
-      // is on but no gov model exists, REFUSE the turn rather than route to a direct provider. This is the
-      // authoritative enforcement (the renderer's toggle-time switch does not survive an omp respawn / relaunch).
-      const lock = await this.enforceAsksageLock();
-      if (!lock.ok) { lockBlocked = true; throw new Error(lock.error ?? "AskSage lockdown could not be satisfied."); }
+      // ADR-0217 + R-07 (#347): FAIL-CLOSED model policy. Force the model to one permitted by the AskSage
+      // lockdown AND the managed allowed/denied lists before sending; when nothing qualifies, REFUSE the turn
+      // rather than route to a denied provider. This is the authoritative enforcement (the renderer's
+      // toggle-time switch and picker filtering do not survive an omp respawn / relaunch).
+      const lock = await this.enforceModelPolicy();
+      if (!lock.ok) { lockBlocked = true; throw new Error(lock.error ?? "The managed model policy could not be satisfied."); }
       beginStepTurn(this.sessionId); // P-RESUME.1: anchor this turn's recorded steps to the new user message
       // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
       // persona + skill + the live <user-profile> profile are STANDING guidance re-delivered every
@@ -1393,28 +1395,33 @@ class Backend {
     return (Array.isArray(opt?.options) ? opt!.options : []).map((o: any) => String(o?.value ?? "")).filter(Boolean);
   }
 
-  /** ADR-0217: FAIL-CLOSED server-side enforcement of AskSage lockdown. When the lock is on, force omp's active
-   *  model to an AskSage-routed (gov-gateway) one BEFORE a turn is sent. Returns { ok:false, error } when the
-   *  lock is on but no gov model exists (lockdown enabled without a configured gateway) so the caller can BLOCK
-   *  the turn - a turn must NEVER route to a direct provider under lockdown. No-op when the lock is off. This is
-   *  the authoritative guarantee: the renderer's toggle-time switch + picker hiding are cosmetic and do not
-   *  survive an omp respawn or a fresh launch with lockdown already persisted ON. */
-  private async enforceAsksageLock(): Promise<{ ok: boolean; error?: string }> {
-    const r = resolveLockdownModel(this.asksageLocked(), this.activeModel(), this.modelOptionValues());
+  /** ADR-0217 + R-07 (#347): FAIL-CLOSED server-side enforcement of the model policy: the AskSage lockdown
+   *  AND the managed allowed/denied model lists (ADR-0068, schema-only until #347 wired it here). When the
+   *  active model is not permitted, switch omp to the first option satisfying BOTH constraints BEFORE a turn
+   *  is sent. Returns { ok:false, error } when nothing qualifies so the caller can BLOCK the turn - a turn
+   *  must NEVER route to a denied provider. No-op when unlocked and unmanaged. This is the authoritative
+   *  guarantee: renderer-side picker filtering is cosmetic and does not survive an omp respawn or a fresh
+   *  launch with policy already persisted. */
+  private async enforceModelPolicy(): Promise<{ ok: boolean; error?: string }> {
+    const managed = managedConfig().config?.models;
+    const r = resolveGovernedModel(this.asksageLocked(), managed, this.activeModel(), this.modelOptionValues());
     if (!r.ok) return { ok: false, error: r.error };
     if (r.model && r.model !== this.activeModel()) {
       await this.setConfig("model", r.model).catch(() => {});
-      if (!isAsksageRouted(this.activeModel())) return { ok: false, error: "Could not switch to an AskSage gov model for lockdown." };
+      const now = this.activeModel();
+      if (this.asksageLocked() && !isAsksageRouted(now)) return { ok: false, error: "Could not switch to an AskSage gov model for lockdown." };
+      if (!modelAllowed(now, managed)) return { ok: false, error: "Could not switch to a model permitted by your organization's policy." };
     }
     return { ok: true };
   }
 
-  /** ADR-0218: resolve the model a BUILT-AGENT run must use, honoring AskSage lockdown. PUBLIC so the dev.ts
-   *  Builder "Run" route can clamp before spawning a run (the scheduled-automation path calls it too). Under
-   *  lockdown a direct model is swapped for a gov one; `{ ok:false }` ⇒ the caller must REFUSE, never route
-   *  direct. Lock off ⇒ the desired model passes through unchanged. */
+  /** ADR-0218 + R-07: resolve the model a BUILT-AGENT run must use, honoring the AskSage lockdown AND the
+   *  managed allowed/denied lists. PUBLIC so the dev.ts Builder "Run" route can clamp before spawning a run
+   *  (the scheduled-automation path calls it too). A denied model is swapped for a permitted one;
+   *  `{ ok:false }` ⇒ the caller must REFUSE, never route denied. Unlocked + unmanaged ⇒ the desired model
+   *  passes through unchanged. */
   resolveAgentRunModel(desired: string): { ok: boolean; model?: string; error?: string } {
-    return resolveLockdownModel(this.asksageLocked(), desired || "haiku", this.modelOptionValues());
+    return resolveGovernedModel(this.asksageLocked(), managedConfig().config?.models, desired || "haiku", this.modelOptionValues());
   }
 
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
@@ -1422,7 +1429,7 @@ class Backend {
   private accessibleModels(): ModelOption[] {
     const opt = this.configOptions.find((c) => c?.id === "model");
     const list = Array.isArray(opt?.options) ? opt!.options : [];
-    const models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    let models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
     // P-GOAL.6.1: when the AskSage lock is on, the checker must use a model routed through the AskSage gateway.
     // Fail-safe: only narrow if such models exist (never empty the list, which would drop the picker / the
     // recommendation to the maker model). ADR-0217: match on the `asksage` provider prefix - real gov ids like
@@ -1430,7 +1437,14 @@ class Backend {
     // checker silently fell through to ALL models, including direct providers).
     if (this.asksageLocked()) {
       const gov = models.filter((m: ModelOption) => isAsksageRouted(m.value));
-      if (gov.length) return gov;
+      if (gov.length) models = gov;
+    }
+    // R-07 (#347): the managed allowed/denied lists narrow the pickers too. Same fail-safe shape as the
+    // AskSage narrowing (only narrow when non-empty); enforceModelPolicy's pre-turn clamp stays authoritative.
+    const managed = managedConfig().config?.models;
+    if (managed) {
+      const permitted = models.filter((m: ModelOption) => modelAllowed(m.value, managed));
+      if (permitted.length) models = permitted;
     }
     return models;
   }
