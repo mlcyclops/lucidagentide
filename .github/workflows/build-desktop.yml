@@ -1,8 +1,9 @@
-# Build the LucidAgentIDE desktop installers (macOS .zip+.pkg + Windows .exe + Linux AppImage/.deb/.rpm).
+# Build the LucidAgentIDE desktop installers (macOS .zip+.pkg + Windows .exe/.msi/.appx + Linux AppImage/.deb/.rpm).
 #
 # electron-builder can't cross-build/sign a mac app from Windows, so this runs
 # the real packaging on native runners: macOS for the .zip bundle, Windows for the
-# NSIS installer + portable .exe, and Ubuntu for the AppImage. All bundle the repo
+# NSIS installer + portable .exe + enterprise MSI (SCCM) and AppX/MSIX (Intune), and
+# Ubuntu for the AppImage. All bundle the repo
 # into the app (extraResources) per desktop/package.json.
 #
 # (macOS ships .zip, not .dmg: the default DMG layout drives a Finder/AppleScript
@@ -39,7 +40,7 @@ jobs:
             label: macOS (.zip, arm64+x64)
             script: dist:mac
           - os: windows-latest
-            label: Windows (NSIS + portable, x64)
+            label: Windows (NSIS + portable + MSI + AppX, x64)
             script: dist:win
           - os: ubuntu-latest
             label: Linux (AppImage + deb + rpm, x64)
@@ -153,6 +154,8 @@ jobs:
             desktop/release/*.pkg
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
+            desktop/release/*.msi
+            desktop/release/*.appx
             desktop/release/*.AppImage
             desktop/release/*.deb
             desktop/release/*.rpm
@@ -171,6 +174,8 @@ jobs:
             desktop/release/*.pkg
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
+            desktop/release/*.msi
+            desktop/release/*.appx
             desktop/release/*.AppImage
             desktop/release/*.deb
             desktop/release/*.rpm
@@ -227,6 +232,8 @@ jobs:
             dist/*.dmg
             dist/*Setup*.exe
             dist/*portable*.exe
+            dist/*.msi
+            dist/*.appx
             dist/*.AppImage
             dist/*.deb
             dist/*.rpm
