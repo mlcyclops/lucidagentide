@@ -107,6 +107,14 @@
         {
           "target": "portable",
           "arch": ["x64"]
+        },
+        {
+          "target": "msi",
+          "arch": ["x64"]
+        },
+        {
+          "target": "appx",
+          "arch": ["x64"]
         }
       ]
     },
@@ -125,6 +133,25 @@
     },
     "portable": {
       "artifactName": "LucidAgent-portable.${ext}"
+    },
+    "msi": {
+      "oneClick": false,
+      "perMachine": true,
+      "runAfterFinish": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Lucid Agent",
+      "upgradeCode": "2568ebca-6784-4546-9463-9765440afaf3",
+      "warningsAsErrors": false,
+      "artifactName": "LucidAgent-${version}-x64.${ext}"
+    },
+    "appx": {
+      "identityName": "TechLead187.LucidAgent",
+      "publisher": "CN=TechLead 187 LLC",
+      "publisherDisplayName": "TechLead 187 LLC",
+      "applicationId": "LucidAgent",
+      "displayName": "Lucid Agent",
+      "artifactName": "LucidAgent-${version}-x64.${ext}"
     },
     "linux": {
       "icon": "build/icon.png",
