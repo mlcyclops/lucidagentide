@@ -9,6 +9,7 @@
         "@huggingface/transformers": "^4.2.0",
         "@oh-my-pi/pi-agent-core": "16.1.20",
         "@oh-my-pi/pi-ai": "16.1.20",
+        "@oh-my-pi/pi-catalog": "16.1.20",
         "@oh-my-pi/pi-coding-agent": "16.1.20",
         "@oh-my-pi/pi-utils": "16.1.20",
         "arktype": "^2.2.1",

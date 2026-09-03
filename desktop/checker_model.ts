@@ -15,6 +15,12 @@
 // credentials/billing they're already using; (2) prefer the small-but-capable tier (haiku / flash /
 // mini) over both ultra-cheap-but-weak (nano / lite / oss) and flagship overkill (opus / sonnet / pro /
 // full gpt); (3) prefer the NEWEST version; (4) prefer a clean "latest" alias over a date-pinned id.
+//
+// R-07 (#347): resolveGovernedModel extends the ADR-0217 lockdown clamp with the managed
+// allowed/denied model policy (ADR-0068). Still pure: the policy arrives as a parameter, never read
+// from ambient config here.
+
+import { modelAllowed, type ManagedModels } from "./managed_config.ts";
 
 /** A model option as omp reports it in the `model` config (provider-prefixed value + display name). */
 export interface ModelOption { value: string; name?: string; description?: string }
@@ -36,6 +42,22 @@ export function resolveLockdownModel(locked: boolean, current: string, optionVal
   const gov = optionValues.filter(isAsksageRouted);
   if (!gov.length) return { ok: false, error: "AskSage lockdown is ON but no AskSage gov model is available. Add your AskSage API key in Settings, or turn lockdown off." };
   return { ok: true, model: gov[0]! };
+}
+
+/** R-07 (#347): FAIL-CLOSED resolution of the model a turn MUST use under the FULL model policy:
+ *  the AskSage lockdown (ADR-0217) AND the managed allowed/denied lists (ADR-0068, previously
+ *  schema-only). The lock resolves first (sovereignty routing), then the allowlist; when the resolved
+ *  model is denied, the first option satisfying BOTH constraints wins; nothing qualifies -> { ok:false }
+ *  so the caller BLOCKS the turn rather than routing to a denied provider. Unmanaged + unlocked ->
+ *  the current model stands. Pure + unit-tested. */
+export function resolveGovernedModel(locked: boolean, models: ManagedModels | undefined, current: string, optionValues: string[]): { ok: boolean; model?: string; error?: string } {
+	const lock = resolveLockdownModel(locked, current, optionValues);
+	if (!lock.ok) return lock;
+	const resolved = lock.model ?? current;
+	if (modelAllowed(resolved, models)) return { ok: true, model: resolved };
+	const candidate = optionValues.find((v) => modelAllowed(v, models) && (!locked || isAsksageRouted(v)));
+	if (candidate) return { ok: true, model: candidate };
+	return { ok: false, error: "Your organization's model policy denies the current model, and no permitted model is available in the picker. Ask your admin to adjust the managed models policy or add a permitted provider." };
 }
 
 /** Checker fitness tier of a model name. Higher = better fit for a frequent, cheap judgement call. */
