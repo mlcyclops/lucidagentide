@@ -228,6 +228,29 @@ function checkPkg(expected: FlavorExpectation, got: ArtifactIdentity): string | 
   return null;
 }
 
+/**
+ * The semver being built, expressed the way DEBIAN and RPM are allowed to express it.
+ *
+ * Neither format may contain `-` in the version field: Debian reads `-` as the separator before the
+ * Debian revision, and RPM reads it as the separator before the release. So fpm (via electron-builder)
+ * correctly rewrites a semver PRERELEASE separator to `~`, which is also the character both ecosystems
+ * sort BEFORE the plain release, exactly matching prerelease semantics. `2.1.1-test.101` therefore ships
+ * as `2.1.1~test.101`, and it is the artifact that is right, not the expectation.
+ *
+ * This gate compared the embedded string literally, so EVERY prerelease build failed its deb and rpm
+ * checks. Tag builds carry a clean version with no `-` and passed, which hid it: the only path that
+ * stamps a prerelease is the manual `workflow_dispatch` that refreshes the rolling `latest` release, so
+ * that job could never once have run to completion. That is why the rolling downloads (and the website
+ * links pointing at them) went stale.
+ *
+ * Deliberately narrow: ONLY the prerelease separator is translated. A genuine version mismatch, a stale
+ * payload republished under a new tag, or a mis-stamped build all still fail, which is the whole point
+ * of ADR-0307.
+ */
+export function debRpmVersion(semver: string): string {
+  return (semver ?? "").replace(/-/g, "~");
+}
+
 function checkDeb(expected: FlavorExpectation, got: ArtifactIdentity): string | null {
   if (got.packageName === null) {
     return "could not read Package: from the deb's control file - an unverifiable package does not ship";
@@ -238,8 +261,9 @@ function checkDeb(expected: FlavorExpectation, got: ArtifactIdentity): string | 
   if (got.version === null) {
     return "could not read Version: from the deb's control file - an unverifiable package does not ship";
   }
-  if (got.version !== expected.version) {
-    return `version mismatch: building ${expected.version}, control says ${got.version}`;
+  const wantDeb = debRpmVersion(expected.version);
+  if (got.version !== wantDeb) {
+    return `version mismatch: building ${expected.version} (deb form ${wantDeb}), control says ${got.version}`;
   }
   return null;
 }
@@ -268,8 +292,9 @@ function checkRpm(expected: FlavorExpectation, got: ArtifactIdentity): string | 
   if (observed === null) {
     return `could not determine the rpm version (lead: "${nvr}") - an unverifiable package does not ship`;
   }
-  if (observed !== expected.version) {
-    return `version mismatch: building ${expected.version}, the rpm says ${observed}`;
+  const wantRpm = debRpmVersion(expected.version);
+  if (observed !== wantRpm) {
+    return `version mismatch: building ${expected.version} (rpm form ${wantRpm}), the rpm says ${observed}`;
   }
   return null;
 }

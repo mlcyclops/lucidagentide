@@ -604,6 +604,45 @@ describe("checkArtifact", () => {
     expect(checkArtifact(AGENT, { ...AGENT_RPM, packageName: null }).problem).toContain("could not read");
   });
 
+  // P-RELEASE.5: the bug that made the rolling `latest` release unreachable. Debian and RPM may not
+  // carry `-` in a version (it separates the revision / release), so fpm rewrites a semver PRERELEASE
+  // separator to `~`. The gate compared literally, so every prerelease build failed its deb and rpm
+  // checks. Only the manual dispatch that refreshes the rolling `latest` stamps a prerelease, so that
+  // job could never complete, and the rolling downloads (plus the website links pointing at them) went
+  // stale. Tag builds have no `-` at all, which is exactly why this hid.
+  test("P-RELEASE.5: a PRERELEASE build passes with the ~ form deb and rpm are required to use", () => {
+    const PRE = { ...AGENT, version: "2.1.1-test.101" };
+    // What fpm actually writes, and what the gate rejected.
+    expect(checkArtifact(PRE, { ...AGENT_DEB, file: "lucidagentide-desktop_2.1.1-test.101_amd64.deb", version: "2.1.1~test.101" }).ok).toBe(true);
+    expect(checkArtifact(PRE, {
+      ...AGENT_RPM,
+      file: "lucidagentide-desktop-2.1.1-test.101.x86_64.rpm",
+      packageName: "lucidagentide-desktop-2.1.1~test.101-1",
+      version: "2.1.1~test.101",
+    }).ok).toBe(true);
+  });
+
+  test("P-RELEASE.5: the translation is ONLY the separator, so a real mismatch still fails", () => {
+    const PRE = { ...AGENT, version: "2.1.1-test.101" };
+    // A DIFFERENT prerelease, correctly ~-formed, must still be caught: this is the stale-payload case
+    // ADR-0307 exists for, and loosening the check would have quietly retired it.
+    expect(checkArtifact(PRE, { ...AGENT_DEB, version: "2.1.1~test.100" }).ok).toBe(false);
+    expect(checkArtifact(PRE, { ...AGENT_DEB, version: "2.0.0~test.101" }).ok).toBe(false);
+    // A literal `-` where the format forbids it is not the version being built either.
+    expect(checkArtifact(PRE, { ...AGENT_DEB, version: "2.1.1-test.101" }).ok).toBe(false);
+    // And a clean (non-prerelease) build is untouched by any of this.
+    expect(checkArtifact(AGENT, AGENT_DEB).ok).toBe(true);
+    expect(checkArtifact(AGENT, { ...AGENT_DEB, version: "1.14.0" }).ok).toBe(false);
+  });
+
+  test("P-RELEASE.5: the failure message names BOTH forms, so a human can act on it", () => {
+    const PRE = { ...AGENT, version: "2.1.1-test.101" };
+    const p = checkArtifact(PRE, { ...AGENT_DEB, version: "9.9.9" }).problem ?? "";
+    expect(p).toContain("2.1.1-test.101"); // what we are building
+    expect(p).toContain("2.1.1~test.101"); // what the deb is required to say
+    expect(p).toContain("9.9.9");          // what it actually says
+  });
+
   test("filename-only kinds: all-null is normal and passes, a wrong stem does not", () => {
     for (const [file, kind] of [
       ["LucidAgent-mac-arm64.zip", "mac-zip"],
