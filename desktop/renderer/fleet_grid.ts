@@ -25,6 +25,8 @@ import { icon } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
 import { isAutoPreviewPath } from "./preview_tabs.ts";
+// P-FLEET.L13: the catch-up scroll math, shared with the main chat thread so the two cannot drift.
+import { LANE_JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
@@ -191,6 +193,11 @@ export function openFleetGrid(): void {
   dock.addEventListener("input", onInput);
   dock.addEventListener("paste", onPaste); // P-FLEET.L3: paste an image into a lane composer
   dock.addEventListener("pointerdown", onDockPointerDown); // P-FLEET.L9: per-card resize + drag-to-reorder
+  // P-FLEET.L13: catch-up buttons + their visibility. Both are DELEGATED on the dock: lane cards are
+  // built and destroyed on every poll, so per-card listeners would leak with them (the same reason
+  // onDockPointerDown is delegated). `scroll` does not bubble, so it is captured instead.
+  dock.addEventListener("click", onLaneJumpClick);
+  dock.addEventListener("scroll", onLaneScroll, true);
   window.addEventListener("resize", onWinResize);
   document.addEventListener("keydown", onKey);
   paintEmpty();
@@ -443,6 +450,28 @@ function startCardDrag(e: PointerEvent, head: HTMLElement): void {
   window.addEventListener("pointercancel", up);
 }
 
+/** A lane's catch-up button. `page` advances one viewport minus a line of overlap (smooth: the reader is
+ *  following along); `end` is deliberately INSTANT, because a long transcript is a slow ride to somewhere
+ *  the reader already asked to be. Same reasoning, and same math, as the main chat's pair. */
+function onLaneJumpClick(ev: Event): void {
+  const btn = (ev.target as HTMLElement | null)?.closest("[data-lane-jump]") as HTMLElement | null;
+  if (!btn) return;
+  const out = btn.closest("[data-fleet-out]") as HTMLElement | null;
+  if (!out) return;
+  ev.preventDefault();
+  ev.stopPropagation(); // never let a jump click reach the card header's drag-to-reorder gesture
+  if (btn.dataset.laneJump === "end") out.scrollTo({ top: out.scrollHeight, behavior: "auto" });
+  else out.scrollTo({ top: pageDownTarget(out, laneLineHeight(out)), behavior: "smooth" });
+  syncLaneJump(out);
+}
+
+/** Keep each lane's buttons in step with its own scroll position. Captured (scroll does not bubble) and
+ *  filtered to transcripts, so an unrelated scroller inside the dock costs nothing. */
+function onLaneScroll(ev: Event): void {
+  const t = ev.target as HTMLElement | null;
+  if (t?.hasAttribute?.("data-fleet-out")) syncLaneJump(t);
+}
+
 const onWinResize = (): void => {
   if (!dock || !dockState) return;
   dockState.shape = clampToViewport(dockState.shape, window.innerWidth, window.innerHeight);
@@ -621,6 +650,12 @@ function buildCard(run: LaneRun): HTMLElement {
     </div>
     <div class="fleet-card-main">
       <div class="fleet-out" data-fleet-out>
+        <!-- P-FLEET.L13: the same catch-up pair the main composer carries. Single chevron steps ONE page
+             keeping a line of overlap, double chevron runs to the newest line. They are inside the
+             scroller (which is position:relative) so they float over the transcript, and they stay
+             hidden until there is more than a lane-sized threshold below the fold. -->
+        <button class="fleet-jump fleet-jump-page" data-lane-jump="page" type="button" aria-label="Scroll down one page" title="Down one page">${icon("chevronDown", 13)}</button>
+        <button class="fleet-jump fleet-jump-end" data-lane-jump="end" type="button" aria-label="Scroll to the newest line" title="Jump to the end">${icon("chevronsDown", 13)}</button>
         <div class="fleet-out-empty" data-lane-empty hidden><span data-lane-empty-txt></span></div>
         <div data-lane-live hidden>
           <div class="fleet-think" data-lane-think hidden></div>
@@ -1002,6 +1037,23 @@ function paintOutput(run: LaneRun): void {
     if (bare) { const t = $("[data-lane-empty-txt]", empty) as HTMLElement | null; if (t) t.textContent = idleLabel(run); }
   }
   if (nearBottom) out.scrollTop = out.scrollHeight; // keep the latest in view, but never fight a user scroll
+  syncLaneJump(out);
+}
+
+/** P-FLEET.L13: show or hide a lane's catch-up buttons. Driven by the SHARED rule (scroll_jump.ts) that
+ *  the main chat thread uses, on the lane threshold: a 180px transcript would essentially never clear the
+ *  chat's 140px bar, so the pair would have been dead weight. */
+function syncLaneJump(out: HTMLElement): void {
+  const show = shouldShowJump(out, LANE_JUMP_SHOW_PX);
+  for (const b of out.querySelectorAll<HTMLElement>("[data-lane-jump]")) b.classList.toggle("show", show);
+}
+
+/** The transcript's own line height, for the page step's line of overlap. Measured off a real rendered
+ *  row rather than assumed, and falling back to the lane font's ~18px when nothing has painted yet. */
+function laneLineHeight(out: HTMLElement): number {
+  const row = out.querySelector(".fleet-text, .fleet-turn-user, .fleet-think") as Element | null;
+  const lh = row ? Number.parseFloat(getComputedStyle(row).lineHeight) : Number.NaN;
+  return Number.isFinite(lh) && lh > 0 ? lh : 18;
 }
 
 /** Find a tool row by its minted id - the delegated chevron handler remembers `open` on the RECORD, so the

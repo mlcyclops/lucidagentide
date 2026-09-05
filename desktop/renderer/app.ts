@@ -107,6 +107,8 @@ import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
 // P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
 import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
+// P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
+import { JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -900,7 +902,9 @@ const scrollChat = (): void => {
 // A double-down-arrow in the LucidAgent accent appears, tucked just inside the scrollbar, whenever
 // there's a screen-plus of content below the fold. Clicking advances ONE viewport but overlaps the
 // last visible line, so a reader resumes exactly where they left off rather than losing their place.
-const JUMP_SHOW_PX = 140; // content below the fold before the catch-up button shows
+// P-FLEET.L13: the arithmetic moved to renderer/scroll_jump.ts so a fleet lane transcript runs the
+// IDENTICAL rule. Two copies of "one viewport minus a line of overlap" is how the chat would get a
+// tuning pass the lanes never saw.
 let jumpRaf = false;
 function lineHeightPx(): number {
   const t = $("#thread")?.querySelector(".msg .text") as Element | null;
@@ -912,7 +916,7 @@ const JUMP_GAP_PX = 8;    // breathing room between the two stacked buttons
 function updateJump(): void {
   const c = $("#chat"), page = $("#jumpDown"), end = $("#jumpEnd");
   if (!c || !page) return;
-  const show = c.scrollHeight - c.scrollTop - c.clientHeight > JUMP_SHOW_PX;
+  const show = shouldShowJump(c, JUMP_SHOW_PX);
   if (show) {
     // Both sit just above the composer, whose height changes as the prompt bar grows. The run-to-end
     // button takes the lower slot (closest to the composer) and the page stepper stacks above it, so
@@ -928,8 +932,7 @@ const scheduleJump = (): void => { if (jumpRaf) return; jumpRaf = true; requestA
 function jumpDownOnePage(): void {
   const c = $("#chat");
   if (!c) return;
-  const step = Math.max(c.clientHeight - lineHeightPx() - 8, 80); // one viewport, minus a line of overlap
-  c.scrollTo({ top: Math.min(c.scrollTop + step, c.scrollHeight), behavior: "smooth" });
+  c.scrollTo({ top: pageDownTarget(c, lineHeightPx()), behavior: "smooth" }); // one viewport, minus a line of overlap
 }
 /** Run straight to the newest message. Deliberately INSTANT, not smooth: on a long restored session
  *  the distance is tens of thousands of pixels, and a smooth glide over that is a slow, janky ride to

@@ -4191,7 +4191,33 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* P-FLEET.L7/L9: `user-select:text` is load-bearing, not cosmetic. The card header is a drag surface and
    a dragging ancestor kills selection inside it, so the transcript re-grants it explicitly - that plus
    the incremental repaint is what finally makes copy/paste out of a live lane work. */
-.fleet-out{min-height:64px;max-height:180px;overflow-y:auto;padding:7px 9px;display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:1.5;color:var(--txt);user-select:text;cursor:auto}
+.fleet-out{min-height:64px;max-height:180px;overflow-y:auto;padding:7px 9px;display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:1.5;color:var(--txt);user-select:text;cursor:auto;position:relative}
+/* P-FLEET.L13: a GRABBABLE scrollbar. The global thumb is an 11px track with a 3px transparent border and
+   `background-clip:content-box`, so the pointer target is only 5px wide. That is fine down the edge of a
+   full-height chat and unusable inside a 300px lane card, which is what the user reported: the bar could
+   not be grabbed. Widened to a 14px track with a 2px border (a 10px thumb, double the target) and given a
+   visible resting colour so the bar reads as draggable before you hover it. Scoped to the lane transcript
+   on purpose: the global bar stays slim everywhere else. */
+.fleet-out{scrollbar-width:auto;scrollbar-color:var(--scroll-thumb) transparent}
+.fleet-out::-webkit-scrollbar{width:14px}
+.fleet-out::-webkit-scrollbar-track{background:transparent}
+.fleet-out::-webkit-scrollbar-thumb{background:var(--scroll-thumb-h);border:2px solid transparent;background-clip:content-box;border-radius:8px}
+.fleet-out::-webkit-scrollbar-thumb:hover{background:var(--scroll-thumb-a);background-clip:content-box}
+.fleet-out::-webkit-scrollbar-thumb:active{background:var(--accent);background-clip:content-box}
+/* P-FLEET.L13: per-lane catch-up buttons, the same pair the main composer carries (single chevron steps a
+   page and keeps a line of overlap, double chevron runs to the newest line). Smaller than the chat's 34px
+   because they float inside a card, and inset from the right so they never sit on top of the widened
+   scrollbar above. They live in the transcript's own stacking context (.fleet-out is position:relative). */
+.fleet-jump{position:absolute;right:20px;z-index:5;width:24px;height:24px;border-radius:50%;
+  display:grid;place-items:center;cursor:pointer;color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));background:var(--bg-2);
+  box-shadow:0 3px 10px rgb(var(--sh-rgb) / .4);opacity:0;transform:translateY(4px);pointer-events:none;
+  transition:opacity var(--t) var(--ease-out),transform var(--t) var(--ease-out),background var(--t),color var(--t)}
+.fleet-jump.show{opacity:1;transform:none;pointer-events:auto}
+.fleet-jump:hover{background:var(--accent);color:var(--on-fill);border-color:var(--accent)}
+.fleet-jump:active{transform:scale(.94)}
+.fleet-jump-page{bottom:38px}
+.fleet-jump-end{bottom:10px}
 /* A card the user has sized by its TOP edge sets an inline height; the transcript then owns the slack
    instead of staying pinned at 180px, which is the whole point of dragging the edge. */
 .fleet-card[style*="height"] .fleet-out{max-height:none;flex:1}
