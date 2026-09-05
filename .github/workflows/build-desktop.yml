@@ -94,8 +94,19 @@ jobs:
               echo "::warning::tag '${GITHUB_REF#refs/tags/}' is not a clean semver — using package.json version"
               V="$(node -p "require('./package.json').version")"
             fi
+          elif [ "${{ inputs.publish_latest }}" = "true" ]; then
+            # PUBLISHING dispatch: this is a RELEASE, not a test. It refreshes the rolling `latest`
+            # release, whose artifacts the website's version-pinned .deb/.rpm links resolve through
+            # (/releases/latest/download/...) and whose latest*.yml the in-app updater reads. A
+            # -test.<run> stamp here does two bad things at once: it puts a test-versioned build in
+            # front of every existing user via auto-update, and it leaves the site's pinned filenames
+            # 404ing because they name the real version. Both happened on the first publish that ever
+            # completed (it shipped 2.1.1-test.102). So a publish carries the COMMITTED release version
+            # verbatim, which is the same string the matching tag build used.
+            V="$(node -p "require('./package.json').version")"
+            echo "publish stamp: refreshing the rolling latest at the committed release version -> $V"
           else
-            # TEST BUILD (manual dispatch): not a release. The stamp must sort ABOVE every PUBLISHED
+            # TEST BUILD (manual dispatch, publish OFF): not a release. The stamp must sort ABOVE every PUBLISHED
             # release, or the installed test build auto-updates itself back to the live version and wipes
             # out what you are testing. The old 0.1.<run#> failed that outright, and package.json can LAG
             # the real releases (it said 1.11.10 while v1.11.11 was live), so the committed version alone
