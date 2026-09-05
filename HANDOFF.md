@@ -13,22 +13,24 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-08-25, v1.13.1)
+## Current state (2026-09-05, v2.2.0)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
 now product increments, one per session, each with its own ADR. Newest:
-**ADR-0273 / P-FLEET.L2** - fleet lanes are unlimited and admitted by *sustained*
-pressure (refuse only at 90%+ held 30 unbroken seconds), lanes can be spawned
-from a GitHub / GitLab / Azure DevOps / self-hosted remote with a per-host token
-in the OS-encrypted vault, and the minimized fleet pill is a per-state snapshot
-that no longer flickers.
+**ADR-0339 / P-PREVIEW.19** - the Preview panel no longer follows the user into
+the next conversation (an unresolvable target was remembered exactly like a
+success and outlived the session boundary), shipped alongside the fleet-lane
+approval fix (**ADR-0337 / ADR-0338**: a lane answered omp's per-tool gate
+without ever advertising it could, so omp never asked and every `bash` and
+`eval` in a lane was denied) in the **v2.2.0** cut.
 
-Measured, not estimated:
+Measured, not estimated (2026-09-05, both suites with `desktop/release/**`
+excluded per ADR-0303):
 
-- **1,041 harness tests** across 122 files (`bun test harness` on a clean
-  checkout; CI run 32838505161: 1,037 pass / 4 skip / 0 fail).
-- **2,036 desktop tests** across 185 files (`bun test desktop`, the generated
-  `desktop/release/` copy excluded).
+- **1,615 harness tests** across 139 files (1,609 pass / 2 fail, both the
+  standing Windows POSIX-path assumptions below).
+- **3,322 desktop tests** across 239 files (3,317 pass / 5 fail, all
+  `fs_browse` resolving a Windows HOME against a POSIX fixture).
 - **57 sidecar tests** (pytest). **207 `demo-*` targets** in the `Makefile`.
 - `tsc --noEmit` clean at the root and in `desktop/`; BUSL-1.1 headers complete.
 - 11 numbered DuckDB migration files (`harness/memory/migrations/`).
@@ -43,7 +45,10 @@ audited evidence.
 **Known local reds on Windows (pre-existing, green on the Linux CI runner) -
 do not chase them:** `harness/launcher/lucid_acp.test.ts` (2, asserts POSIX
 asset paths), `desktop/fs_browse.test.ts` (5, resolves a Windows HOME against a
-POSIX fixture), `desktop/symbol_graph.test.ts` (4, needs the TS compiler).
+POSIX fixture). `desktop/symbol_graph.test.ts` (4, needed the TS compiler) no
+longer fails here. Note that a bare `bun test harness` also picks up the
+generated `desktop/release/win-unpacked/.../harness` copy and roughly doubles
+every count: always pass `--path-ignore-patterns='desktop/release/**'`.
 
 ## How to run
 
@@ -132,3 +137,15 @@ sharing `lucid-gui.json`.
   remote PWA, AppContainer sandbox helper).
 - `extensions/` - VS Code, Neovim, JetBrains clients.
 - `scanner-sidecar/` - the only Python; the Unicode scanner + fixtures.
+
+## Cross-repo briefs
+
+- `DGX-FLEET-INTEGRATION.md` (repo root) - what the TL187 DGX Loader fleet
+  ships for LUCID (OpenAI-compatible serving, A2A agent card registry, model
+  provenance and trust states, LoRA candidates, corpus lake), how to
+  build-and-test against it today over SSH tunnels with zero hardcoded box
+  names, and five proposed ADRs (fleet endpoints as configuration, A2A card
+  consumption with a trust gate, local-first routing, provenance in the
+  selection UX, single-endpoint readiness). Written 2026-09-05 by the DGX
+  Loader's agent; source of truth for wire contracts lives in that repo's
+  ADRs 0001 to 0014 and `docs/LUCID-INTEGRATION.md`.

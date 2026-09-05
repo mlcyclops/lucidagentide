@@ -407,4 +407,31 @@
 //            a page keeping a line of overlap, or run to the newest line). The arithmetic moved to
 //            renderer/scroll_jump.ts and BOTH the chat and the lanes read it, so the chat can never get a
 //            tuning pass the lanes miss (11 tests, aimed at the NaN scroll target that fails invisibly).
-export const APP_VERSION = "2.1.0";
+// v2.2.0 = the reported fixes, plus the two surfaces that had no way in.
+//            FLEET: a lane could not run bash or eval AT ALL. There are TWO approval gates in front of a
+//            tool call: ours (ACP `session/request_permission`, which lane auto-approve resolves with no
+//            human) and omp's own per-tool gate, which it raises as an `elicitation/create` request. The
+//            lane had a handler for that request and had never ADVERTISED the capability, so omp never
+//            sent it and denied every bash and eval regardless of what the user had configured
+//            (ADR-0337). Fixing the advertisement exposed the second half: the handler read the offered
+//            options from the wrong path and answered in the wrong shape, so waking it up still resolved
+//            to nothing (ADR-0338). Both halves now live in exec_policy.ts and BOTH interactive clients
+//            import them, so a third client gets it right by construction. Confirmed on a live DGX lane.
+//            PREVIEW: a FAILED preview was photographed and published to a phone guest, toast baked into
+//            the shot and captioned with a file from an unrelated session, because /api/preview/serve
+//            answers a failure with HTTP 200 and an HTML body that says so, so every guard read it as a
+//            working page. The gate now PROBES the target, hides the toast for the capture, and claims
+//            the rate-limit slot only once a send is authorized (ADR-0335). Separately, the panel no
+//            longer follows the user into the next conversation: an unresolvable target was remembered
+//            exactly like a success and outlived the session boundary (ADR-0339). A file the user opened
+//            by hand is still left alone, broken or not.
+//            KG + MARKET: the Role KG Packs storefront gets a button in the KG header (until now the only
+//            way in was typing its name into the command palette), a purchase RESUMES the exact pack after
+//            the sign-in detour under a 15-minute one-shot intent (the deep link is shared with LUCID
+//            Remote and Drive, so it must not turn every future sign-in into a payment page), and the
+//            Personalization card is rebuilt for a user with MANY named KGs: a hero row opening the
+//            existing picker plus a two-row stat strip (ADR-0333, ADR-0336).
+//            RELEASE: the rolling `latest` channel can publish at all. The identity gate compared deb and
+//            rpm versions literally, so every prerelease failed it (`~` is the only legal separator in
+//            those formats), and a publishing dispatch stamped itself as a test build (ADR-0332).
+export const APP_VERSION = "2.2.0";

@@ -15,8 +15,8 @@ describe("version is single-sourced", () => {
     expect(pkg.version).toBe(APP_VERSION);
   });
 
-  test("app version is v2.1.0", () => {
-    expect(APP_VERSION).toBe("2.1.0");
+  test("app version is v2.2.0", () => {
+    expect(APP_VERSION).toBe("2.2.0");
   });
 });
 
@@ -25,7 +25,7 @@ describe("aboutHtml", () => {
 
   test("shows the dynamic version with a v prefix", () => {
     expect(html).toContain(`v${APP_VERSION}`);
-    expect(html).toContain("v2.1.0");
+    expect(html).toContain("v2.2.0");
   });
 
   test("carries the product + company identity", () => {
