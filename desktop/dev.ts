@@ -83,7 +83,7 @@ import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
-import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
+import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
@@ -1397,7 +1397,9 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
     };
     // Match a COMPLETE url (followed by whitespace) so a chunk boundary mid-URL can't resolve a truncated
     // link; scan BOTH streams — omp prints the URL to stdout today, but tolerate a future move to stderr.
-    const scan = () => { const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/); if (m) finish(m[1]); };
+    // `m[1]` is `string | undefined` under noUncheckedIndexedAccess, and finish() takes a string: an
+    // unguarded m[1] fails the desktop server typecheck AND would hand the caller `undefined` as a URL.
+    const scan = () => { const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/); if (m?.[1]) finish(m[1]); };
     // Drain stdout + stderr fully (never stop) so the broker can't block on a full pipe; grab the URL when it appears.
     (async () => {
       try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { out += dec.decode(c); scan(); } } catch { /* stream ended */ }
@@ -1545,6 +1547,8 @@ const server = Bun.serve({
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
       if (p === "/api/security/dismiss" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: dismissBlock(String(b.id ?? "")) }); }
+      // Bulk acknowledge: same acknowledge-without-release for the whole active queue (releases NOTHING).
+      if (p === "/api/security/dismiss-all" && req.method === "POST") return json({ ok: true, data: dismissAllBlocks() });
       // P-SECACK.1 (ADR-0170): mark DB-backed security rows reviewed. GUI-owned ack ledger ONLY -
       // the provenance DB is never written and nothing is released; rows just leave the active view.
       if (p === "/api/security/ack" && req.method === "POST") {

@@ -1,7 +1,7 @@
 {
   "name": "lucidagentide-desktop",
   "private": true,
-  "version": "1.14.2",
+  "version": "2.0.0",
   "trustedDependencies": ["electron", "@resvg/resvg-js"],
   "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
   "homepage": "https://github.com/mlcyclops/lucidagentide",
@@ -197,6 +197,6 @@
     "electron": "^44.0.0",
     "electron-builder": "^25.1.8",
     "png-to-ico": "^3.0.1",
-    "typescript": "^7.0.2"
+    "typescript": "^6.0.3"
   }
 }

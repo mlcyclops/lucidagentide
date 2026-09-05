@@ -16,12 +16,16 @@ import {
   type HealthEpisode,
   type HealthInput,
   type HealthVerdict,
+  RESUME_MAX_PER_RUN,
+  RecoverMarker,
+  buildResumeNote,
   healthLabel,
   healthVerdict,
   newEpisode,
   onActivity,
   onProbe,
   onRecover,
+  resumeVerdict,
 } from "./health_watch.ts";
 
 const NOW = 1_700_000_000_000;
@@ -38,6 +42,140 @@ function ep(over: Partial<HealthEpisode> = {}): HealthEpisode {
 function silent(ms: number, over: Partial<HealthInput> = {}): HealthInput {
   return { busy: true, dead: false, lastActivityAt: NOW - ms, now: NOW, openCalls: 0, episode: ep(), ...over };
 }
+
+describe("P-HEALTH.2: the recovered run is resumed, not silently dropped", () => {
+  test("a recovery with a live session resumes, and SAYS so in the words the user reads", () => {
+    const v = resumeVerdict({ recovered: true, sessionAlive: true, resumesSoFar: 0 });
+    expect(v.resume).toBe(true);
+    // The bug being fixed was silence: the session healed itself and the work vanished with no explanation.
+    expect(v.reason).toMatch(/restarting the stalled session/i);
+    expect(v.reason).toMatch(/picking up where it left off/i);
+    expect(v.reason).toMatch(/restart 1 of 2/);
+  });
+
+  test("a USER Stop is never resumed", () => {
+    const v = resumeVerdict({ recovered: false, sessionAlive: true, resumesSoFar: 0 });
+    expect(v.resume).toBe(false);
+    expect(v.reason).toMatch(/nothing to resume/i);
+  });
+
+  test("a session that failed to reload is never resumed (no talking to a phantom session)", () => {
+    const v = resumeVerdict({ recovered: true, sessionAlive: false, resumesSoFar: 0 });
+    expect(v.resume).toBe(false);
+    expect(v.reason).toMatch(/could not be reloaded/i);
+  });
+
+  test("the budget is spendable exactly RESUME_MAX_PER_RUN times, then it stops for good", () => {
+    for (let spent = 0; spent < RESUME_MAX_PER_RUN; spent++) {
+      expect(resumeVerdict({ recovered: true, sessionAlive: true, resumesSoFar: spent }).resume).toBe(true);
+    }
+    const spentOut = resumeVerdict({ recovered: true, sessionAlive: true, resumesSoFar: RESUME_MAX_PER_RUN });
+    expect(spentOut.resume).toBe(false);
+    // It must say the work is not lost, because "stopped" is the one outcome that looks like the old bug.
+    expect(spentOut.reason).toMatch(/leaving it stopped/i);
+    expect(spentOut.reason).toMatch(/saved in this session/i);
+    expect(resumeVerdict({ recovered: true, sessionAlive: true, resumesSoFar: 99 }).resume).toBe(false);
+  });
+
+  test("a garbage counter or budget cannot authorize an extra restart", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      // An unusable spend counts as 0 spent, which is safe; an unusable MAX must not become permission.
+      expect(resumeVerdict({ recovered: true, sessionAlive: true, resumesSoFar: 0, max: bad }).resume).toBe(false);
+      expect(resumeVerdict({ recovered: true, sessionAlive: true, resumesSoFar: bad }).resume).toBe(true);
+    }
+  });
+
+  test("every refusal still explains itself in one plain non-empty sentence", () => {
+    const all = [
+      resumeVerdict({ recovered: false, sessionAlive: true, resumesSoFar: 0 }),
+      resumeVerdict({ recovered: true, sessionAlive: false, resumesSoFar: 0 }),
+      resumeVerdict({ recovered: true, sessionAlive: true, resumesSoFar: RESUME_MAX_PER_RUN }),
+      resumeVerdict({ recovered: true, sessionAlive: true, resumesSoFar: 0 }),
+    ];
+    for (const v of all) {
+      expect(v.reason.trim().length).toBeGreaterThan(20);
+      expect(v.reason).not.toContain("\u2014"); // house rule: no em dashes in anything a user reads
+    }
+  });
+});
+
+describe("P-HEALTH.2: the recovery marker authorizes exactly one resume", () => {
+  const mark = { reason: "stalled", at: NOW, silentMs: 420_000, pending: ["write x.ts"] };
+
+  test("nothing is authorized until the watchdog sets it", () => {
+    expect(new RecoverMarker().take()).toBeNull();
+  });
+
+  test("THE INVARIANT: taken exactly once, so a second failure cannot reuse one authorization", () => {
+    const m = new RecoverMarker();
+    m.set(mark);
+    expect(m.take()).toEqual(mark);
+    expect(m.take()).toBeNull(); // an infinite restart loop lives right here if this ever returns the mark
+  });
+
+  test("a user Stop clears it: stopping means stop, never restart automatically", () => {
+    const m = new RecoverMarker();
+    m.set(mark);
+    m.clear();
+    expect(m.take()).toBeNull();
+  });
+
+  test("a fresh run cannot inherit the previous run's authorization", () => {
+    const m = new RecoverMarker();
+    m.set(mark);
+    m.clear(); // what prompt() does at turn start
+    m.set({ ...mark, reason: "a later stall" });
+    expect(m.take()?.reason).toBe("a later stall"); // only the CURRENT recovery counts
+  });
+});
+
+describe("P-HEALTH.2: the note that orients the resumed agent", () => {
+  const note = (over: Partial<Parameters<typeof buildResumeNote>[0]> = {}) => buildResumeNote({
+    request: "add a health endpoint to the server",
+    progress: "I have added the route and was about to write the test",
+    pending: ["write src/server.ts", "bash: bun test"],
+    stalledMs: 420_000, attempt: 1, max: RESUME_MAX_PER_RUN, ...over,
+  });
+
+  test("it is harness-authored operator origin, like the probe note", () => {
+    expect(note()).toStartWith("Operator note from the LUCID harness:");
+  });
+
+  test("THE POINT: it forbids starting over and demands re-verifying a half-written file", () => {
+    const n = note();
+    expect(n).toMatch(/do not start over/i);
+    expect(n).toMatch(/read it first and verify/i);
+  });
+
+  test("it carries the original request, the last output, and what was open", () => {
+    const n = note();
+    expect(n).toContain("add a health endpoint to the server");
+    expect(n).toContain("about to write the test");
+    expect(n).toContain("write src/server.ts");
+    expect(n).toContain("bash: bun test");
+    expect(n).toContain("restart 1 of 2");
+  });
+
+  test("it stays SHORT: session/load already restored the conversation", () => {
+    // A long request + a long reply must not turn the resume into a re-paste of the whole turn.
+    const n = note({ request: "q".repeat(5000), progress: "a".repeat(5000) });
+    expect(n.length).toBeLessThan(1400);
+    expect(n).toContain("..."); // both quotes were clipped
+  });
+
+  test("missing pieces are omitted rather than rendered as empty quotes", () => {
+    const n = note({ request: "", progress: "", pending: [] });
+    expect(n).not.toContain('""');
+    expect(n).not.toMatch(/waiting on:\s*\./);
+    expect(n).toMatch(/Continue from where you left off/i);
+  });
+
+  test("blank pending labels are dropped, and an unusable clock does not print NaN", () => {
+    const n = note({ pending: ["  ", "real work"], stalledMs: Number.NaN });
+    expect(n).toContain("real work");
+    expect(n).not.toContain("NaN");
+  });
+});
 
 describe("an idle session is not a stalled session", () => {
   test("not busy is `ok` whatever the silence", () => {

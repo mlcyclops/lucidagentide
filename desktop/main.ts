@@ -30,6 +30,7 @@ import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
+import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
 
 // CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
@@ -283,7 +284,12 @@ function createWindow(): void {
     width: 1320, height: 860, minWidth: 940, minHeight: 600,
     frame: false, backgroundColor: "#0a0b0f", show: false, title: "Lucid Agent",
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
-    webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false },
+    // `plugins` enables Chromium's BUILT-IN PDF viewer, and nothing else: NPAPI and PPAPI are long gone
+    // from Chromium, so the internal PDF reader is the only "plugin" this flag can still turn on. It
+    // defaults to FALSE, which is why a .pdf opened in the Preview panel rendered as a blank white frame
+    // even though the bytes were served correctly with the right MIME (P-PREVIEW.17). The previewed
+    // document stays inside the same opaque-origin, egress-blocked sandbox as every other preview kind.
+    webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false, plugins: true },
   });
   win.once("ready-to-show", () => { firstWindowRendered = true; win!.show(); }); // ADR-0246: past here a GPU death is not the boot brick
   // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
@@ -493,12 +499,18 @@ ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?:
 // P-PREVIEW.1 (ADR-0096): capture the preview region of the window into a PNG data URL. Crops the live
 // window capture to the iframe's rect (sent by the renderer), so the agent/user gets just the previewed
 // page. Metadata-safe (shows only what is already on screen); returns null on any failure, never throws.
+//
+// The renderer measures that rect in CSS pixels (`getBoundingClientRect`), but `capturePage` crops in DIP,
+// and the two only coincide at zoom 1.0. Unscaled, a zoomed window (LUCID's zoom control, 118% here) cropped
+// at 1/zoom of the box: the origin sat LEFT of the preview so the snip bled into the chat/composer column,
+// and the box was short so the right/bottom of the previewed app was sliced off. captureCropFromCssRect does
+// the conversion; the zoom is read HERE because this process owns the authoritative value.
 ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (!w) return null;
-  const r = (rect ?? {}) as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
-  const n = (v: unknown) => (typeof v === "number" && isFinite(v) && v >= 0 ? Math.round(v) : 0);
-  const crop = { x: n(r.x), y: n(r.y), width: n(r.width), height: n(r.height) };
+  let zoomFactor = 1;
+  try { zoomFactor = e.sender.getZoomFactor(); } catch { /* destroyed/detached contents: capture unscaled */ }
+  const crop = captureCropFromCssRect(rect, zoomFactor);
   try {
     const img = crop.width > 0 && crop.height > 0 ? await w.webContents.capturePage(crop) : await w.webContents.capturePage();
     return img.isEmpty() ? null : img.toDataURL();

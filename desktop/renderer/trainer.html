@@ -168,29 +168,10 @@
   color-scheme:dark;
 }
 
-/* @palette-osfallback lucid-light - first-paint guard, see styles.css for the full
-   reasoning. Identical to the lucid-light block above; theme.test.ts pins that. */
-@media (prefers-color-scheme: light){
-  :root:not([data-theme]){
-    /* surfaces + hairlines */
-    --bg-0:#f6f7fb; --bg-1:#ffffff; --bg-2:#f1f2f8; --bg-3:#e8eaf2; --line:#d7dae6;
-    --line-soft:#e7e9f2; --line-strong:#b8bfd2;
-    /* text ramp */
-    --txt:#14161f; --txt-2:#464c60; --txt-3:#697084; --txt-4:#949aab;
-    /* brand + state hues */
-    --accent:#a324b4; --accent-2:#c332d6; --accent-deep:#7a1b8a; --cyan:#0f7d92;
-    --cyan-2:#0d6f85; --green:#1c7f45; --amber:#8a5a04; --red:#c02626; --blue:#2b52c8;
-    /* ink ON a saturated gradient fill (see the note above) */
-    --btn-text-dark:#ffffff; --btn-text-cyan:#ffffff; --state-correct-text:#ffffff;
-    --state-wrong-text:#ffffff;
-    /* channel triplets: the only way to build an alpha variant of a themed colour */
-    --accent-rgb:163 36 180; --cyan-rgb:15 125 146; --green-rgb:28 127 69;
-    --amber-rgb:138 90 4; --red-rgb:192 38 38; --blue-rgb:43 82 200; --tint-rgb:255 255 255;
-    --sh-rgb:60 66 92; --scrim-rgb:30 32 48; --bg-0-rgb:246 247 251; --bg-1-rgb:255 255 255;
-    --bg-2-rgb:241 242 248;
-    color-scheme:light;
-  }
-}
+/* P-THEME.2: no prefers-color-scheme first-paint block here any more, matching styles.css. An unset
+   preference means Lucid Dark, not the OS hint, so the bare `:root` above (which IS lucid-dark) is the
+   correct no-attribute paint. The head script below still mirrors the parent's [data-theme] before first
+   paint, and app.ts always stamps a real id, so this frame follows the app exactly as before. */
 
 /* @derived - built FROM the palette; one definition for every theme. */
 :root{

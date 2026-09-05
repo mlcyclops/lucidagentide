@@ -106,7 +106,7 @@ import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type Gr
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
 // P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
-import { DEFAULT_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
+import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -165,11 +165,12 @@ function applyTheme(pref: string): void {
 }
 function bootTheme(): void {
   applyTheme(themePref());
-  // "Follow the OS" has to keep following it: re-resolve when the system flips, but ONLY while the user
-  // has no explicit choice, so a deliberate pick is never overridden by a system setting change.
+  // "Match system" has to keep matching it: re-resolve when the system flips, but ONLY for the user who
+  // CHOSE that, so a deliberate theme pick is never overridden by a system setting change. P-THEME.2: an
+  // unset preference no longer follows the OS at all, so it must not re-paint here either.
   try {
     window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
-      if (!themePref()) applyTheme("");
+      if (themePref() === SYSTEM_THEME_ID) applyTheme(SYSTEM_THEME_ID);
     });
   } catch { /* older engine without addEventListener on MediaQueryList: the boot paint still stands */ }
 }
@@ -3786,18 +3787,23 @@ function themeTile(id: string, label: string, blurb: string, swatch: readonly st
 function secTheme(): string {
   const pref = themePref();
   const active = resolveTheme(pref, osPrefersLight());
-  // "Match system" is selected only when there is NO explicit preference. Its swatch deliberately shows
-  // one chip from each side so it reads as "either", and it previews what the OS currently resolves to.
-  const sys = themeTile("", "Match system", `Follows your OS. Currently ${active.scheme}.`, ["#0a0b0f", "#c64bd6", "#edeff6"], pref === "");
+  // P-THEME.2: "Match system" is now an EXPLICIT choice with its own stored id, not the empty default.
+  // While the two shared one value, a user who had never opened this panel was silently following their
+  // OS, so a light-mode machine moved a long-time user off the dark UI they had always had. Unset now
+  // resolves to Lucid Dark (resolveTheme owns that), and following the OS is opted INTO here.
+  // Its swatch deliberately shows one chip from each side so it reads as "either", and it previews what
+  // the OS currently resolves to.
+  const sys = themeTile(SYSTEM_THEME_ID, "Match system", `Follows your OS. Currently ${active.scheme}.`, ["#0a0b0f", "#c64bd6", "#edeff6"], pref === SYSTEM_THEME_ID);
   const groups = themeGroups().map(({ scheme, themes }) => `
     <div class="theme-grp-lbl">${scheme === "light" ? "Light" : "Dark"}</div>
     <div class="theme-grid">${themes.map((t: ThemeDef) => themeTile(t.id, t.label, t.blurb, t.swatch, pref === t.id)).join("")}</div>`).join("");
   const inner = `<div class="theme-grid">${sys}</div>${groups}
-    <div class="set-note">${icon("info", 12)} Applies instantly across the app, the code editor, and the trainer. <b>Match system</b> follows your OS light/dark setting; picking a theme explicitly pins it, so a change to your OS setting will no longer move it.</div>`;
+    <div class="set-note">${icon("info", 12)} Applies instantly across the app, the code editor, and the trainer. LUCID defaults to <b>Lucid Dark</b>. <b>Match system</b> follows your OS light/dark setting; picking a theme explicitly pins it, so a change to your OS setting will no longer move it.</div>`;
   const count = themeGroups().reduce((n, g) => n + g.themes.length, 0);
   return setCard("theme", "Theme", `${count} themes · light &amp; dark`, inner, true);
 }
-/** Persist + apply a theme choice. "" clears the choice back to following the OS. Optimistic: the paint
+/** Persist + apply a theme choice. P-THEME.2: "" clears the choice back to the DEFAULT (Lucid Dark), and
+ *  `system` is the explicit "follow my OS" pick. Optimistic: the paint
  *  is instant and the localStorage mirror is written first, so the next boot is correct even if the
  *  server write fails (a cosmetic setting must never block on the network). */
 async function pickTheme(pref: string): Promise<void> {
@@ -6123,6 +6129,13 @@ function loadPreview(target: string, lane: PrevLane = prevLane): void {
   const active = lane === prevLane; // only the visible lane drives the shared header / empty / notice chrome
   const kind = active ? $("#prevKind") : null;
   prevPathByLane[lane] = target;
+  // P-PREVIEW.16: the path bar follows the file that is actually SHOWING. It used to be written only by
+  // switchPrevLane and openPreviewFile, so an agent load into the ALREADY-VISIBLE lane left the previous
+  // path sitting in the field. That field is not decoration: it IS the Open input and the Show-in-folder
+  // target, so pressing Enter re-opened a file that was not the one on screen. Skipped while the field has
+  // focus, so a live agent load can never eat a path you are mid-way through typing.
+  const pathField = $("#prevPath") as HTMLInputElement | null;
+  if (active && document.activeElement !== pathField) syncPrevPathField(target);
   // P-PREVIEW.7: a fresh load clears any stale health overlay (the new page reports its own).
   const notice = $("#prevNotice") as HTMLElement | null;
   if (active && notice) { notice.hidden = true; notice.innerHTML = ""; }
@@ -8085,6 +8098,12 @@ function securityHtml(d: SecuritySnapshot | null): string {
             <button class="btn-mini dismiss" data-dismiss="${esc(b.id)}" data-tip="Dismiss|Acknowledge this block and move it to the Dismissed section. The call STAYS blocked - this only clears it from the active queue. The audit record is kept.">${icon("close", 13)} Dismiss</button></div>
         </div>`).join("")
       : `<div class="empty">No active blocks - everything released, dismissed, or clean.</div>`;
+    // Bulk acknowledge, above the queue and only when there is more than one active block (a single row
+    // already carries its own Dismiss, so a bulk control there is noise). Two-step: arm, then confirm.
+    // The row is a flex box holding ONE element (invariant 11) and the button is icon + one text run.
+    const bulkDismiss = live.quarantined.length > 1
+      ? `<div class="row-actions lb-bulk"><button class="btn-mini dismiss" data-dismiss-all="1" data-tip="Dismiss all ${live.quarantined.length}|Acknowledges every active block at once and moves them to the Dismissed section. Nothing is released: all ${live.quarantined.length} calls STAY blocked and every audit record is kept. Click once to arm it, again to confirm.">${icon("close", 13)} Dismiss all ${live.quarantined.length}</button></div>`
+      : "";
     const approvedNote = live.approved.length ? `<div class="lb-approved">${icon("check", 12)} ${live.approved.length} released this session · audited</div>` : "";
     // Dismissed: reviewed + acknowledged, STILL blocked. Muted + collapsed, out of the active count.
     const dismissedNote = live.dismissed.length
@@ -8096,7 +8115,7 @@ function securityHtml(d: SecuritySnapshot | null): string {
           </div>`).join("")
         + `</details>`
       : "";
-    h += accordion("sec.live", "Live blocks", "this session · gate-enforced", rows + approvedNote + dismissedNote, true, String(live.quarantined.length));
+    h += accordion("sec.live", "Live blocks", "this session · gate-enforced", bulkDismiss + rows + approvedNote + dismissedNote, true, String(live.quarantined.length));
   }
   if (!d && !live.total) { h += `<div class="empty">Nothing has tripped the scanner yet. The moment a tool call carries hidden-Unicode or another injection, the finding, the quarantine queue, and the audit trail appear right here.</div>`; return h; }
   // P-SECACK.1: shared by the Quarantine-review + Approval-queue sections so their ack affordances
@@ -13748,6 +13767,34 @@ function wire(): void {
           title: "Dismissed · still blocked",
           desc: "Moved to the Dismissed section. The call stays blocked; the audit record is kept.",
           meta: `tool=${r.tool} · dismissed`,
+          actions: [{ label: "OK" }], timeout: 4000,
+        });
+      })();
+      return;
+    }
+    // Dismiss all: the bulk form of the same acknowledge-without-release, for an unusable 100-row queue.
+    // TWO-STEP, matching the fleet lane's stop-then-dismiss precedent (ADR-0313): the first click arms
+    // the button and re-labels it with the count, the second executes. Clicking any other Dismiss /
+    // Approve button, or any refresh(), re-renders the section and disarms it, so an armed button is
+    // never left lying around. Nothing is released here either: every call stays blocked, audit kept.
+    const dismissAll = (e.target as HTMLElement).closest("[data-dismiss-all]") as HTMLButtonElement | null;
+    if (dismissAll) {
+      const n = state.security?.live?.quarantined.length ?? 0;
+      if (!n) { showToast({ title: "Already handled", desc: "There are no active blocks left to dismiss.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+      if (dismissAll.dataset.armed !== "1") {
+        dismissAll.dataset.armed = "1"; // second click executes; a re-render drops the flag with the node
+        dismissAll.innerHTML = `${icon("close", 13)} Confirm: dismiss ${n}?`;
+        return;
+      }
+      dismissAll.disabled = true;
+      void (async () => {
+        const r = await bridge.securityDismissAll();
+        await refresh(); // drops them from the active list + counts, into the Dismissed section
+        if (!r || !r.dismissed) { showToast({ title: "Already handled", desc: "Those blocks were already released or dismissed.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+        showToast({
+          title: `${r.dismissed} dismissed \u00b7 still blocked`,
+          desc: "Moved to the Dismissed section. Every one of those calls stays blocked; all audit records are kept.",
+          meta: `${r.dismissed} acknowledged \u00b7 nothing released`,
           actions: [{ label: "OK" }], timeout: 4000,
         });
       })();

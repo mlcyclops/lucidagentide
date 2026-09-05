@@ -15,7 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_THEME_ID, monacoThemeFor, resolveTheme, THEMES, themeAttr, themeGroups } from "./theme.ts";
+import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, monacoThemeFor, resolveTheme, THEMES, themeAttr, themeGroups } from "./theme.ts";
 
 const HERE = import.meta.dir;
 const CSS = readFileSync(join(HERE, "styles.css"), "utf8");
@@ -77,11 +77,25 @@ describe("THEMES registry", () => {
 // ── resolve precedence ────────────────────────────────────────────────────────────────
 
 describe("resolveTheme", () => {
-  test("falls back on the OS hint only when nothing is stored", () => {
-    expect(resolveTheme(undefined, true).id).toBe("lucid-light");
+  test("P-THEME.2: UNSET means Lucid Dark, and never the OS hint", () => {
+    // THE REGRESSION THIS PINS: "never chosen" and "follow the OS" used to be the same stored value, so
+    // a long-time user whose machine prefers light and who had never opened the theme panel was moved off
+    // the dark UI they had always had, the day light mode shipped. An install nobody configured must not
+    // change appearance because of a system setting the user never pointed at LUCID.
+    expect(resolveTheme(undefined, true).id).toBe("lucid-dark");
     expect(resolveTheme(undefined, false).id).toBe("lucid-dark");
-    expect(resolveTheme(null, true).id).toBe("lucid-light");
+    expect(resolveTheme(null, true).id).toBe("lucid-dark");
+    expect(resolveTheme("", true).id).toBe("lucid-dark");
     expect(resolveTheme("", false).id).toBe("lucid-dark");
+    expect(resolveTheme(undefined, true).id).toBe(DEFAULT_THEME_ID);
+  });
+
+  test("P-THEME.2: following the OS is an EXPLICIT choice, and it still works", () => {
+    // Nothing was taken away: a user who wants their app to track the system asks for it by id.
+    expect(resolveTheme(SYSTEM_THEME_ID, true).id).toBe("lucid-light");
+    expect(resolveTheme(SYSTEM_THEME_ID, false).id).toBe("lucid-dark");
+    // The sentinel is deliberately NOT a palette id, so it can never collide with a real theme.
+    expect(THEMES.map((t) => t.id)).not.toContain(SYSTEM_THEME_ID);
   });
 
   test("lets an explicit choice beat the OS preference, in both directions", () => {
@@ -96,10 +110,14 @@ describe("resolveTheme", () => {
     }
   });
 
-  test("treats a retired or corrupt stored id as no choice at all", () => {
+  test("treats a retired or corrupt stored id as the DEFAULT, not as the OS hint", () => {
+    // Same direction as unset, and for the same reason: a theme we retired must not silently hand the
+    // user's appearance to their OS setting. Dark is also the safe direction, because the bare `:root`
+    // palette IS lucid-dark, so the CSS and the attribute agree even if JS never runs.
     expect(resolveTheme("nonsense", false).id).toBe("lucid-dark");
-    expect(resolveTheme("nonsense", true).id).toBe("lucid-light");
+    expect(resolveTheme("nonsense", true).id).toBe("lucid-dark");
     expect(resolveTheme("LUCID-DARK", false).id).toBe("lucid-dark"); // ids are case-sensitive
+    expect(resolveTheme("LUCID-DARK", true).id).toBe("lucid-dark");
   });
 });
 
@@ -145,13 +163,6 @@ function decls(block: string): Record<string, string> {
   return out;
 }
 
-/** The `@media (prefers-color-scheme: light) { :root:not([data-theme]) { ... } }` first-paint guard. */
-function osFallback(css: string): Record<string, string> {
-  const m = css.match(/@palette-osfallback ([a-z0-9-]+)[\s\S]*?@media \(prefers-color-scheme: light\)\s*\{\s*\n\s*:root:not\(\[data-theme\]\)\s*\{([\s\S]*?)\n\s*\}\n\}/);
-  expect(m, "the prefers-color-scheme first-paint guard is missing").not.toBeNull();
-  expect(m![1]).toBe("lucid-light");
-  return decls(m![2]!);
-}
 
 function rgbOf(hex: string): [number, number, number] {
   const h = hex.trim().replace(/^#/, "");
@@ -206,10 +217,17 @@ describe("styles.css palette blocks", () => {
     }
   });
 
-  test("keeps the prefers-color-scheme first-paint guard identical to lucid-light", () => {
-    // CSS cannot share a declaration block across an @media boundary, so the light palette is
-    // duplicated there. This assertion is the only thing keeping the copy honest.
-    expect(osFallback(CSS)).toEqual(byId.get("lucid-light")!.tokens);
+  test("P-THEME.2: has NO prefers-color-scheme fallback, because unset means Lucid Dark", () => {
+    // The inverse of the assertion this replaces. P-THEME.1 duplicated the lucid-light palette into an
+    // `@media (prefers-color-scheme: light) { :root:not([data-theme]) { ... } }` block, and a test kept
+    // the copy honest. That whole mechanism existed because an unset preference FOLLOWED the OS, which
+    // is exactly what moved long-time users off the dark UI they already had. Unset now resolves to
+    // lucid-dark, the bare `:root` above already IS lucid-dark, so the correct no-attribute first paint
+    // needs no media query and no second copy of a palette that could drift.
+    expect(CSS).not.toContain("@palette-osfallback");
+    expect(CSS).not.toMatch(/@media \(prefers-color-scheme: light\)\s*\{\s*\n\s*:root:not\(\[data-theme\]\)/);
+    // And the reason it is safe to have none: the base selector still carries the default theme.
+    expect(base.selector).toContain(":root,");
   });
 
   test("declares a color-scheme on every palette block so native controls follow", () => {
@@ -287,8 +305,12 @@ describe("trainer.html palette blocks", () => {
     for (const p of pal) expect(Object.keys(p.tokens).sort(), `trainer theme "${p.id}" drifted`).toEqual(want);
   });
 
-  test("keeps its first-paint guard identical to its lucid-light block", () => {
-    expect(osFallback(TRAINER)).toEqual(byId.get("lucid-light")!.tokens);
+  test("P-THEME.2: has no prefers-color-scheme fallback either, matching styles.css", () => {
+    // The trainer mirrors the PARENT's [data-theme] in an inline head script, and app.ts always stamps a
+    // real id, so this block only ever applied before app.js ran. Unset means Lucid Dark now, and the
+    // trainer's bare `:root` already IS lucid-dark, so there is nothing left for a media query to fix.
+    expect(TRAINER).not.toContain("@palette-osfallback");
+    expect(TRAINER).not.toMatch(/@media \(prefers-color-scheme: light\)/);
   });
 
   test("mirrors the parent document's [data-theme] from <head>, before first paint", () => {

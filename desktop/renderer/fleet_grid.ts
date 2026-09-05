@@ -24,7 +24,7 @@ import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
-import { isPreviewablePath } from "./preview_tabs.ts";
+import { isAutoPreviewPath } from "./preview_tabs.ts";
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
@@ -32,7 +32,7 @@ import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order 
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
 import { laneChip, laneChipBody, mintId, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
-import { clampSize, colsFromDrag, gridCols, heightFromDrag, loadLayout, reconcile, reorder, resizeShape, saveLayout, snapSlot, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
+import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
 import { fmtTokens, fmtUsd, meterBadge, newMeter, onUsage, type MeterState } from "./token_meter.ts";
 import type { ChipKind } from "./answer_chips.ts";
@@ -280,11 +280,11 @@ function wireResize(): void {
 /** How far the pointer must travel before a header press becomes a card DRAG rather than a click. */
 const DRAG_SLOP = 4;
 
-/** How many grid tracks the dock body currently fits. Every column clamp is measured against THIS, so a
- *  card can never persist a span wider than the panel it lives in. */
+/** The widest a card may be right now. Every width clamp is measured against THIS, so a card can never
+ *  persist wider than the panel it lives in. */
 function maxCols(): number {
   const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
-  return gridCols(grid ? Math.round(grid.getBoundingClientRect().width) : 0);
+  return maxCardW(grid ? Math.round(grid.getBoundingClientRect().width) : 0);
 }
 
 /** The size a drag starts from: the persisted entry if the user has sized this card, else its MEASURED
@@ -293,17 +293,24 @@ function startSize(card: HTMLElement): CardSize {
   const saved = layout.size[card.dataset.lane ?? ""];
   const hi = maxCols();
   if (saved) return clampSize(saved, hi);
-  return clampSize({ cols: 1, h: Math.round(card.getBoundingClientRect().height) }, hi);
+  // An unsized card starts from what it MEASURES, so the first drag continues from where the card
+  // actually is instead of jumping to a default.
+  const r = card.getBoundingClientRect();
+  return clampSize({ w: Math.round(r.width) || CARD_DEF_W, h: Math.round(r.height) }, hi);
 }
 
-/** A sized card carries its span and height INLINE; an unsized one carries neither, so it keeps the grid's
- *  own auto-fill track and its content-driven height. */
+/** A sized card carries its width and height INLINE; an unsized one carries neither, so it keeps the
+ *  container's own sizing and its content-driven height.
+ *
+ *  P-FLEET.L12: the width is a flex BASIS, not a grid span. `0 1 Wpx` is deliberate in both numbers:
+ *  grow 0 so a card never stretches to fill a short row (the user sized it, that size is the answer), and
+ *  shrink 1 so a card wider than the panel gives way instead of overflowing it. */
 function applySize(run: LaneRun | undefined): void {
   const card = run?.card; if (!card) return;
   const s = layout.size[run.view.id];
-  if (!s) { card.style.gridColumn = ""; card.style.height = ""; return; }
+  if (!s) { card.style.flex = ""; card.style.height = ""; return; }
   const c = clampSize(s, maxCols());
-  card.style.gridColumn = `span ${c.cols}`;
+  card.style.flex = `0 1 ${c.w}px`;
   card.style.height = `${c.h}px`;
 }
 function applySizes(): void { for (const run of runs.values()) applySize(run); }
@@ -338,8 +345,15 @@ function onDockPointerDown(ev: Event): void {
   const rz = t.closest(".fleet-card-rz") as HTMLElement | null;
   if (rz) { startCardResize(e, rz); return; }
   const head = t.closest(".fleet-card-head") as HTMLElement | null;
-  // Controls act, they do not drag - and the textarea/select inside a card must keep their own gestures.
-  if (head && !t.closest("button") && !t.closest("select") && !t.closest("input")) startCardDrag(e, head);
+  if (!head) return;
+  // P-FLEET.L12: the GRIP always drags, even though it lives among the controls. Reported as "the lane
+  // windows aren't easily draggable": the header is the only drag surface, and it is packed with buttons,
+  // a select and chips, all of which are correctly excluded below - which left almost no draggable pixels
+  // in a real lane header. An explicit grip is a target the user can actually aim at.
+  if (t.closest("[data-fleet-grip]")) { startCardDrag(e, head); return; }
+  // Elsewhere on the header: controls act, they do not drag, and the textarea/select inside a card must
+  // keep their own gestures.
+  if (!t.closest("button") && !t.closest("select") && !t.closest("input") && !t.closest("textarea")) startCardDrag(e, head);
 }
 
 function startCardResize(e: PointerEvent, rz: HTMLElement): void {
@@ -358,15 +372,23 @@ function startCardResize(e: PointerEvent, rz: HTMLElement): void {
     // Cards are TOP-anchored (`align-items:start`), which is what keeps the rest of the grid still while
     // one card grows downward. heightFromDrag owns the sign; flipping it here would fight the pointer.
     if (dir.includes("s")) next.h = heightFromDrag(start.h, pm.clientY - sy);
-    if (dir.includes("e")) next.cols = colsFromDrag(start.cols, pm.clientX - sx, hi);
+    // P-FLEET.L12: 1:1 with the pointer. This used to be colsFromDrag, which quantized the width to a
+    // 300px track with a half-track deadzone, so a 149px drag did nothing and a 150px drag jumped 300px.
+    if (dir.includes("e")) next.w = widthFromDrag(start.w, pm.clientX - sx, hi);
     layout.size[id] = next;
     applySize(runs.get(id));
   };
+  // Listen on the WINDOW, not the 12px handle. Pointer capture already retargets moves to the handle, but
+  // capture is silently lost if the node is replaced mid-gesture, and the poll rebuilds cards every 2.5s:
+  // a resize that outlived a poll would freeze halfway with the button still held. The window keeps the
+  // gesture alive regardless of what happens to the handle under it.
   const up = (): void => {
-    rz.removeEventListener("pointermove", move); rz.removeEventListener("pointerup", up);
+    window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
     persistLayout();
   };
-  rz.addEventListener("pointermove", move); rz.addEventListener("pointerup", up);
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 /** Drag the header to reorder. The rects are collected ONCE, so inserting the placeholder (which reflows
@@ -403,7 +425,8 @@ function startCardDrag(e: PointerEvent, head: HTMLElement): void {
     if (n >= 0) place(n);
   };
   const up = (): void => {
-    head.removeEventListener("pointermove", move); head.removeEventListener("pointerup", up);
+    window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
     card.classList.remove("dragging");
     slotEl.remove();
     if (!moved) return;
@@ -414,7 +437,10 @@ function startCardDrag(e: PointerEvent, head: HTMLElement): void {
     persistLayout();
     applyOrder(grid);
   };
-  head.addEventListener("pointermove", move); head.addEventListener("pointerup", up);
+  // Same reason as the resize gesture: the poll can replace the card (and its header) mid-drag, which
+  // drops pointer capture and would strand a lifted card following nothing.
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 const onWinResize = (): void => {
@@ -578,6 +604,7 @@ const baseName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).
 function buildCard(run: LaneRun): HTMLElement {
   return el(`<div class="fleet-card" data-lane="${esc(run.view.id)}">
     <div class="fleet-card-head">
+      <span class="fleet-grip" data-fleet-grip title="Drag to reorder this lane" aria-hidden="true"></span>
       <span class="fleet-led" aria-hidden="true"></span>
       <span class="fleet-lane-name" data-fleet-name></span>
       <span class="fleet-cwd-chip" data-fleet-cwd></span>
@@ -1013,8 +1040,10 @@ function onLaneEvent(id: string, e: LaneEvent): void {
         open: false,
       });
       paintOutput(run);
-      // P-PREVIEW.10: a previewable write (html/svg) earns the lane its own Preview panel tab.
-      if (e.code?.path && isPreviewablePath(e.code.path)) deps?.previewLaneFile?.(run.view.id, run.view.name || run.view.id, e.code.path);
+      // P-PREVIEW.10: a lane write worth LOOKING at (html/svg/pdf) earns the lane its own Preview panel
+      // tab. P-PREVIEW.18: narrowed from "anything renderable" - a lane writing notes.md or a config.json
+      // was claiming a tab nobody asked for, and with several lanes running that fills the strip.
+      if (e.code?.path && isAutoPreviewPath(e.code.path)) deps?.previewLaneFile?.(run.view.id, run.view.name || run.view.id, e.code.path);
       break;
     case "permission":
       run.view.status = "needs-approval";

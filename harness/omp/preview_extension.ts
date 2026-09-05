@@ -109,11 +109,23 @@ export default function previewExtension(pi: any): void {
       // P-PREVIEW.12: the description NAMES every previewable kind. It used to say ".html/.svg", so a model
       // reading the schema had no way to know it could surface a markdown report, a JSON payload, a CSV
       // table, a chart PNG or a PDF, and simply never tried.
+      //
+      // P-PREVIEW.18: and then it over-corrected. "a markdown report, a data file, a chart PNG all work"
+      // read as an INVITATION, so the panel started popping for routine .md and .json writes and the user
+      // reported it as "the preview panel is being called for everything now, it's really annoying". The
+      // capability is unchanged (every kind still renders on request, which is the point of the tool); the
+      // description now says WHEN to reach for it, because a schema that lists what is possible without
+      // saying what is wanted is how an agent ends up hijacking the screen with a config file. Paired with
+      // the auto-on-write trigger narrowing to html/svg/pdf in desktop/preview_resolve.ts.
       description:
-        "Call this right after you write or edit a local file to show the user the rendered result in LUCID's " +
-        `in-app Preview panel. Previewable kinds: ${PREVIEWABLE_KINDS} - so a markdown report, a data file, a ` +
-        "chart PNG or a generated page all work. It also brings the preview to the front so a following " +
-        "preview_screenshot can capture it. Pass the absolute path; the panel re-validates before rendering. " +
+        "Show the user a local file you just produced, rendered, in LUCID's in-app Preview panel. Reach for " +
+        "this when SEEING the result is the point: a page or app you built (.html/.svg), or a generated " +
+        "report (.pdf). The panel takes over part of the user's screen, so do NOT open it for a file the " +
+        "user did not ask to look at: notes, plans, configs, fixtures, .md/.json/.csv/.log working files, or " +
+        "anything you wrote as a side effect of a task. Those all still RENDER here if the user asks for " +
+        `them (previewable kinds: ${PREVIEWABLE_KINDS}), so open one on request, not by reflex. It also ` +
+        "brings the preview to the front so a following preview_screenshot can capture it. " +
+        "Pass the absolute path; the panel re-validates before rendering. " +
         "The preview frame has NO network access, so a page that loads a script, stylesheet, font or image " +
         "from a CDN renders blank: inline those into the file, or save the asset next to it and reference it " +
         "with a relative path. Prefer this over a browser/bash/eval to show your work, those are security-gated.",

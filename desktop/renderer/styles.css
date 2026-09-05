@@ -99,60 +99,21 @@
   color-scheme:light;
 }
 
-/* @palette-osfallback lucid-light
-   FIRST-PAINT GUARD (P-THEME.1). The renderer CSP is `script-src 'self'`, so index.html cannot
-   carry an inline bootstrap that stamps [data-theme] before the first paint; app.js sets it as
-   its first statement, but the BODY BACKGROUND has already painted from CSS by then. Without
-   this block a light-OS user eats a dark flash on every single launch.
+/* P-THEME.2: there is deliberately NO `prefers-color-scheme` first-paint block here any more.
 
-   `:not([data-theme])` is load-bearing: the moment app.js writes the attribute this block stops
-   matching, so an EXPLICIT choice always wins over the OS hint (including an explicit
-   `lucid-dark`, whose own attribute block is mutually exclusive with this selector, so the two
-   never race). Specificity is (0,2,0) either way; correctness comes from the match conditions,
-   not from source order.
+   P-THEME.1 shipped one, and it was right for the model it shipped with: "never chosen" and "follow the
+   OS" were the SAME stored value, so an unset preference followed the system and the first paint had to
+   match it or a light-OS user ate a dark flash on every launch. It carried a byte-for-byte duplicate of
+   the lucid-light palette, kept honest by a theme.test.ts equality assertion, because CSS cannot share a
+   declaration block across an @media boundary.
 
-   These declarations are a byte-for-byte copy of the `lucid-light` palette above, emitted from
-   the same source. theme.test.ts asserts the two token maps are IDENTICAL, so the duplication
-   cannot drift. CSS has no way to share a declaration block across an @media boundary; a test
-   is the only honest guard. */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) {
-      /* surfaces */
-      --bg-0:#f6f7fb; --bg-1:#ffffff; --bg-2:#f1f2f8; --bg-3:#e8eaf2; --bg-4:#dfe2ec;
-      /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
-      --bg-glow:#f7ecfb; --bg-sunk:#e4e7f0; --bg-code:#f4f5fa; --bg-code-2:#eceef6;
-      --bg-editor:#ffffff; --bg-elev:#ffffff; --bg-kg:#eef0f8; --bg-fade:#f6f7fb; --check-1:#e9ebf3;
-      --check-2:#dfe2ec;
-      /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
-      --tb-1:#ffffff; --tb-2:#f8f9fd; --tb-3:#eef0f7; --sb-1:#f8f9fd; --sb-2:#f3f4fa;
-      --sb-3:#eceef6; --scroll-thumb:#c8cddc; --scroll-thumb-h:#b0b7ca; --scroll-thumb-a:#98a0b6;
-      /* hairlines */
-      --line:#d7dae6; --line-soft:#e7e9f2; --line-strong:#b8bfd2;
-      /* text ramp (txt-code = the <pre> foreground) */
-      --txt:#14161f; --txt-2:#464c60; --txt-3:#697084; --txt-4:#949aab; --txt-code:#1a1d29;
-      /* brand */
-      --accent:#a324b4; --accent-2:#c332d6; --accent-deep:#7a1b8a; --cyan:#0f7d92; --cyan-2:#0d6f85;
-      /* state hues */
-      --green:#1c7f45; --amber:#8a5a04; --red:#c02626; --blue:#2b52c8; --red-mid:#c42a22;
-      --red-deep:#9c1f19;
-      /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
-      --red-txt:#8e1414; --red-txt-2:#a52222; --amber-txt:#6b4302; --amber-txt-2:#7a4e03;
-      --green-txt:#0f5c30; --green-txt-2:#146b39; --blue-txt:#1e3b96; --blue-2:#3a5fd0;
-      --cyan-txt:#0a5b6b;
-      /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
-      --violet:#6d28d9; --violet-2:#5b21b6; --violet-ic:#5b21b6; --violet-txt:#3b1d8f;
-      --hero:#0d7a3f; --hero-txt:#0a5c30;
-      /* inks: color-mix lighten/darken, and text ON a saturated fill */
-      --tint:#ffffff; --shade:#000000; --on-fill:#ffffff; --on-amber:#ffffff;
-      /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
-      --accent-rgb:163 36 180; --accent-2-rgb:195 50 214; --cyan-rgb:15 125 146;
-      --cyan-2-rgb:13 111 133; --green-rgb:28 127 69; --amber-rgb:138 90 4; --red-rgb:192 38 38;
-      --red-deep-rgb:156 31 25; --blue-rgb:43 82 200; --violet-rgb:109 40 217; --hero-rgb:13 122 63;
-      --tint-rgb:255 255 255; --sh-rgb:60 66 92; --scrim-rgb:30 32 48; --scrim-2-rgb:60 40 80;
-      --glass-rgb:255 255 255;
-      color-scheme:light;
-  }
-}
+   That model moved long-time users off the UI they already had: someone whose machine prefers light and
+   who had never opened the theme panel got a light app the day light mode shipped. Unset now means
+   LUCID DARK (theme.ts resolveTheme), and following the OS is an explicit `system` choice. The base
+   `:root` block above IS lucid-dark, so the correct no-attribute first paint is simply the base: no
+   media query, and no duplicated palette that can drift. A user who explicitly picks `system` on a light
+   OS sees one dark frame before app.js stamps the attribute, which is the right trade for never flashing
+   light at the far larger group who never asked for it. */
 
 /* @palette midnight */
 :root[data-theme="midnight"] {
@@ -1896,6 +1857,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .lb-dismissed>summary::before{content:"\25B8";display:inline-block;margin-right:6px;transition:transform var(--t-fast)}
 .lb-dismissed[open]>summary::before{transform:rotate(90deg)}
 .lb-dismissed .liveblk{margin-top:6px}
+/* bulk "Dismiss all" sits ABOVE the queue, so the flex row needs its margin below the buttons */
+.row-actions.lb-bulk{margin:0 0 9px}
 
 /* provider budget */
 .bgt-head{display:flex;align-items:center;gap:10px;margin:0 0 8px}
@@ -4142,27 +4105,40 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-hr-lanes{color:var(--txt-2);border:1px solid var(--line);border-radius:5px;padding:0 4px;background:var(--bg-1);white-space:nowrap}
 .fleet-hr-off{color:var(--txt-4)}
 .fleet-add-btn{flex:none;white-space:nowrap}
-/* P-FLEET.L9: `align-items:start` TOP-anchors every card, so the grip lives on the BOTTOM-RIGHT corner
-   the way a window grip does, and a card growing downward leaves every other card's top edge exactly
-   where it was. (A bottom-anchored variant with a top handle was tried first and rejected in use: it
-   moved the whole row whenever one card grew.) The track floor is 300px (lane_layout.CARD_COL_W) so a
-   card spanning two columns is exactly twice a one-column card, and invariant 11's generous minmax holds. */
-.fleet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;align-items:start;position:relative}
-.fleet-card{--lane:var(--txt-4);--lane-dim:color-mix(in srgb,var(--txt-4) 25%,transparent);position:relative;display:flex;flex-direction:column;min-width:0;
+/* P-FLEET.L12: a WRAPPING FLEX ROW, not a grid. With grid `repeat(auto-fill,minmax(300px,1fr))` plus `span N`
+   cards, a card too wide for the space left in its row jumped to the NEXT row and left a HOLE behind it: that
+   gap is the "challenges with moving around each other" the user reported. A flex row REFLOWS instead, so
+   widening one card just pushes the following card down and no gap is ever left. Cards set their own width in
+   px (fleet_grid.ts owns `flex` inline). `align-items`/`align-content:flex-start` TOP-anchor every card so a
+   card growing downward leaves the others' top edges where they were, the way a window grip expects. */
+.fleet-grid{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;align-content:flex-start;position:relative}
+/* P-FLEET.L12: the card is now a flex ITEM whose width fleet_grid.ts sets inline (`flex:0 1 <w>px`), so this
+   rule sets NO width/flex of its own and nothing here fights that inline value. `max-width:100%` is
+   load-bearing: a card sized wider than the panel shrinks to fit rather than overflowing the fleet column. */
+.fleet-card{--lane:var(--txt-4);--lane-dim:color-mix(in srgb,var(--txt-4) 25%,transparent);position:relative;display:flex;flex-direction:column;min-width:0;max-width:100%;
   background:var(--bg-2);border:1px solid var(--line);border-radius:10px;overflow:hidden;
   transition:border-color .25s,box-shadow .25s,opacity .25s}
-/* P-FLEET.L9: per-card handles on the bottom and right edges plus the bottom-right corner. Thin,
-   invisible until hover, and INSIDE the border radius so they never sit over the dock's own edge
-   handles. The corner is listed last so it wins the overlap. */
-.fleet-card-rz{position:absolute;z-index:4;opacity:0;transition:opacity var(--t)}
+/* P-FLEET.L9, hit boxes widened in P-FLEET.L12: per-card resize handles on the bottom and right edges plus the bottom-right corner. The HIT box
+   is WIDE (12px edges, 20px corner) so it is easy to grab, but the PAINTED mark is a thin inset line via
+   ::after so the card never looks thick-bordered. A low resting opacity keeps an edge DISCOVERABLE for a user
+   who does not know the handles exist; it lifts to full on card hover and gains a brighter accent on the
+   handle's own hover/active. `touch-action:none` stops a pointer drag from scrolling the panel instead of
+   resizing. The corner is listed last so it wins the overlap. */
+.fleet-card-rz{position:absolute;z-index:4;opacity:.35;touch-action:none;transition:opacity var(--t)}
 .fleet-card:hover .fleet-card-rz{opacity:1}
-.fleet-card-rz[data-card-rz="s"]{left:12px;right:12px;bottom:0;height:6px;cursor:ns-resize;
-  background:linear-gradient(0deg,color-mix(in srgb,var(--accent) 42%,transparent),transparent)}
-.fleet-card-rz[data-card-rz="e"]{top:12px;bottom:12px;right:0;width:6px;cursor:ew-resize;
-  background:linear-gradient(270deg,color-mix(in srgb,var(--accent) 42%,transparent),transparent)}
-.fleet-card-rz[data-card-rz="se"]{right:0;bottom:0;width:13px;height:13px;cursor:nwse-resize}
-.fleet-card-rz[data-card-rz="se"]::after{content:"";position:absolute;right:3px;bottom:3px;width:6px;height:6px;
+.fleet-card-rz:hover,.fleet-card-rz:active{opacity:1}
+.fleet-card-rz[data-card-rz="s"]{left:12px;right:12px;bottom:0;height:12px;cursor:ns-resize}
+.fleet-card-rz[data-card-rz="s"]::after{content:"";position:absolute;left:0;right:0;bottom:1px;height:2px;border-radius:2px;
+  background:color-mix(in srgb,var(--accent) 50%,transparent)}
+.fleet-card-rz[data-card-rz="s"]:hover::after,.fleet-card-rz[data-card-rz="s"]:active::after{background:var(--accent)}
+.fleet-card-rz[data-card-rz="e"]{top:12px;bottom:12px;right:0;width:12px;cursor:ew-resize}
+.fleet-card-rz[data-card-rz="e"]::after{content:"";position:absolute;top:0;bottom:0;right:1px;width:2px;border-radius:2px;
+  background:color-mix(in srgb,var(--accent) 50%,transparent)}
+.fleet-card-rz[data-card-rz="e"]:hover::after,.fleet-card-rz[data-card-rz="e"]:active::after{background:var(--accent)}
+.fleet-card-rz[data-card-rz="se"]{right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize}
+.fleet-card-rz[data-card-rz="se"]::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;
   border-right:2px solid var(--accent);border-bottom:2px solid var(--accent);border-bottom-right-radius:2px}
+.fleet-card-rz[data-card-rz="se"]:hover::after,.fleet-card-rz[data-card-rz="se"]:active::after{border-color:var(--accent-2)}
 /* While a card is being dragged to a new slot it lifts off the grid and the placeholder shows where it
    will land. Pointer events off, or the drop target would eat its own pointermove. */
 .fleet-card.dragging{opacity:.72;box-shadow:0 14px 34px -10px rgb(var(--sh-rgb) / .6);cursor:grabbing;z-index:6}
@@ -4180,14 +4156,31 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    park. What it destroys is only the in-memory card: the session history stays on disk. */
 .fleet-dismiss[data-gone="1"]{color:var(--red)}
 .fleet-dismiss[data-gone="1"]:hover{color:var(--red);background:color-mix(in srgb,var(--red) 16%,transparent)}
-.fleet-card-head{display:flex;align-items:center;gap:6px;padding:6px 7px;min-width:0;
+/* P-FLEET.L12: the header WRAPS. On a narrow card the action buttons drop onto a SECOND line instead of being
+   clipped by the card's `overflow:hidden` (the user's explicit ask); `row-gap` spaces the two lines. Wrapping
+   BUTTON elements is fine, the text inside the name and chips still stays on one line (invariant 11). */
+.fleet-card-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;row-gap:5px;padding:6px 7px;min-width:0;
   border-bottom:1px solid var(--line-soft);background:var(--bg-3)}
+/* P-FLEET.L12: the always-on drag grip, first child of the header before the status LED. It is an empty span,
+   so its grabbable texture is painted with CSS: a 2-column dot pattern via a radial-gradient. It reads as
+   quiet TEXTURE not a button (muted until hover), gives the whole header the obvious grab affordance the user
+   asked for, and `touch-action:none` keeps a pointer drag from scrolling the panel. `cursor:grab` becomes
+   `grabbing` while the card is being dragged. */
+.fleet-grip{flex:none;width:8px;height:12px;cursor:grab;touch-action:none;color:var(--txt-4);
+  background-image:radial-gradient(circle,currentColor .9px,transparent 1.4px);background-size:4px 4px}
+.fleet-grip:hover{color:var(--txt-2)}
+.fleet-card.dragging .fleet-grip,.fleet-grip:active{cursor:grabbing}
 .fleet-led{width:8px;height:8px;border-radius:50%;flex:none;background:var(--lane);box-shadow:0 0 6px var(--lane-dim)}
-.fleet-lane-name{flex:1;min-width:0;font-size:11.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-cwd-chip{flex:none;max-width:92px;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);
+/* P-FLEET.L12: header-fit for the wrapping head. The NAME keeps its one-line ellipsis (invariant 11) and gets
+   a `flex:1 1 90px` basis so a narrow card puts the name on line one and drops the buttons to line two rather
+   than collapsing to nothing. The chips and model select stay `white-space:nowrap` and gain `min-width:0` so
+   they may shrink instead of forcing a third line; the model select keeps a `max-width` so a long model id
+   cannot force one either. */
+.fleet-lane-name{flex:1 1 90px;min-width:0;font-size:11.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-cwd-chip{flex:0 1 auto;min-width:0;max-width:92px;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);
   background:var(--bg-1);border:1px solid var(--line);border-radius:5px;padding:1px 5px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-model{flex:none;max-width:110px;height:20px;font:inherit;font-size:10px;color:var(--txt-2);
+.fleet-model{flex:0 1 auto;min-width:0;max-width:110px;height:20px;font:inherit;font-size:10px;color:var(--txt-2);
   background:var(--bg-1);border:1px solid var(--line);border-radius:6px;padding:0 2px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .fleet-model:focus{outline:none;border-color:var(--accent)}
@@ -4286,7 +4279,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* P-FLEET.L7: this lane's MEASURED context fill. Deliberately its own class rather than a health variant:
    health is something the HARNESS did, usage is something the PROVIDER reported, and collapsing the two
    into one chip would teach the user that a number and an action look alike. Neutral until it matters. */
-.fleet-usage{flex:none;font-family:var(--mono);font-size:9.5px;white-space:nowrap;color:var(--txt-3);
+/* min-width:0 lets the ctx chip shrink in the wrapping header instead of forcing the buttons onto a third line. */
+.fleet-usage{flex:none;min-width:0;font-family:var(--mono);font-size:9.5px;white-space:nowrap;color:var(--txt-3);
   border:1px solid var(--line);border-radius:5px;padding:0 4px;background:var(--bg-1)}
 .fleet-usage[data-tone="warn"]{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,var(--line));
   background:color-mix(in srgb,var(--amber) 9%,transparent)}

@@ -86,6 +86,149 @@ export function newEpisode(now: number): HealthEpisode {
   return { probes: 0, recovers: 0, startedAt: now, lastActionAt: 0 };
 }
 
+// ── P-HEALTH.2: RESUME the run the recovery interrupted ────────────────────────────────────────────
+// `recover` above cancels the wedged turn, drops the omp child, and reloads the SAME session id, so the
+// conversation survives. What it never did was resume the WORK: killing the child rejects the in-flight
+// `session/prompt`, the turn falls into its error path, prints "[agent unavailable: ...]" and settles. The
+// session was healthy again and the run was silently gone, so the operator had to notice and re-ask.
+//
+// The run is now re-sent on the recovered session with a short operator note saying where it left off, and
+// the user is told plainly that the stalled run is being restarted and picked up. Two refusals keep this
+// from becoming a machine for repeating work forever:
+//   - A USER Stop is never resumed. Only a harness recovery authorizes it.
+//   - The budget is per RUN and is NOT refilled by activity. HealthEpisode's own budget resets on any
+//     activity (correct for probing a session), but a resumed run that produces a little output and wedges
+//     again would refill it and loop, so the resume counter lives on the turn instead.
+// A session that failed to reload is also never resumed: talking to a phantom session is worse than the
+// stall, and the next prompt starting clean is the honest outcome.
+
+/** How many times ONE run may be auto-resumed after a harness recovery. Per run, never refilled by
+ *  activity. Past this the harness says so and leaves the turn ended, rather than restarting forever. */
+export const RESUME_MAX_PER_RUN = 2;
+
+/** What the recovery knew at the moment it dropped the child, handed to the interrupted run so it can
+ *  explain itself. `pending` is captured at recovery time because the respawn clears the open-call set
+ *  before the interrupted request's error handler ever runs. */
+export interface RecoverMark {
+  reason: string;
+  at: number;
+  silentMs: number;
+  pending: string[];
+}
+
+/** The one-shot handoff between the health watchdog and the run it interrupted.
+ *
+ *  It is a class rather than a bare field because the interesting part is the LIFECYCLE, and a field would
+ *  scatter it across three call sites in the backend: the watchdog SETS it just before the child dies, the
+ *  interrupted request TAKES it exactly once (so a second failure in the same run cannot reuse one
+ *  authorization), and a user Stop CLEARS it (stopping means stop, never "restart automatically"). Keeping
+ *  those three moves here means the rule is unit-tested instead of implied by ordering in a 100-line
+ *  method. */
+export class RecoverMarker {
+  private mark: RecoverMark | null = null;
+
+  /** The watchdog is about to recover: authorize ONE resume of whatever run this interrupts. */
+  set(mark: RecoverMark): void {
+    this.mark = mark;
+  }
+
+  /** Consume the authorization. Returns null when there is none, which is the common case: an ordinary
+   *  transport failure or a user Stop must fall through to the normal error path. */
+  take(): RecoverMark | null {
+    const mark = this.mark;
+    this.mark = null;
+    return mark;
+  }
+
+  /** Drop any authorization: a user Stop, or a fresh run that must not inherit the previous one's. */
+  clear(): void {
+    this.mark = null;
+  }
+}
+
+export interface ResumeInput {
+  /** A harness RECOVERY ended the in-flight request. False for a user Stop or a plain transport failure. */
+  recovered: boolean;
+  /** The session id survived the recovery (`session/load` restored it). */
+  sessionAlive: boolean;
+  /** Auto-resumes already spent on THIS run. */
+  resumesSoFar: number;
+  max?: number;
+}
+
+export interface ResumeVerdict {
+  resume: boolean;
+  /** Why, in one plain sentence, safe to show the user verbatim. Never empty. */
+  reason: string;
+}
+
+/** Decide whether the interrupted run is re-sent. Pure. The `resume: true` reason is the exact line the
+ *  user reads, so it says what is happening and that nothing is being thrown away. */
+export function resumeVerdict(i: ResumeInput): ResumeVerdict {
+  const max = count(i.max ?? RESUME_MAX_PER_RUN);
+  const spent = count(i.resumesSoFar);
+  if (!i.recovered) {
+    return { resume: false, reason: "This run did not end in a harness recovery, so there is nothing to resume." };
+  }
+  if (!i.sessionAlive) {
+    return { resume: false, reason: "The session could not be reloaded after the restart, so this run cannot be resumed and the next message starts a clean session." };
+  }
+  if (spent >= max) {
+    return {
+      resume: false,
+      reason: `This run stalled again after being restarted ${spent} time${spent === 1 ? "" : "s"}, so the harness is leaving it stopped instead of restarting it again. The work so far is saved in this session.`,
+    };
+  }
+  return {
+    resume: true,
+    reason: `The session stalled with a turn still in flight. Restarting the stalled session and picking up where it left off (restart ${spent + 1} of ${max}). Nothing already done is lost.`,
+  };
+}
+
+/** Trim a quoted fragment for the resume note: enough to orient the model, never enough to re-paste a
+ *  whole turn back into the context the reload already restored. */
+function clip(s: string, max: number): string {
+  const t = (s ?? "").replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max)}...` : t;
+}
+
+export interface ResumeNoteInput {
+  /** The operator's original request for this run. */
+  request: string;
+  /** What the model had produced before it went quiet (the tail is what matters). */
+  progress: string;
+  /** Labels of the tool calls that were still open when it wedged. */
+  pending: string[];
+  stalledMs: number;
+  /** 1-based: which restart this is, and the ceiling. */
+  attempt: number;
+  max: number;
+}
+
+/** The note that goes to the AGENT on the resumed run. Operator origin, same convention as
+ *  HEALTH_PROBE_NOTE: harness-authored instruction, not model-authored text, and deliberately SHORT
+ *  because `session/load` already restored the conversation. Its whole job is to stop the model from
+ *  starting over, and to make it verify anything it may have left half-written. Pure. */
+export function buildResumeNote(i: ResumeNoteInput): string {
+  const waited = humanMs(usable(i.stalledMs) ? i.stalledMs : 0);
+  const parts = [
+    `Operator note from the LUCID harness: your previous turn went quiet for ${waited} with a turn still in flight, `
+    + `so this session was restarted and you are resuming mid-run (restart ${count(i.attempt)} of ${count(i.max)}).`,
+  ];
+  const request = clip(i.request, 400);
+  if (request) parts.push(`The request you were working on: "${request}"`);
+  const progress = clip(i.progress, 300);
+  if (progress) parts.push(`The last thing you produced was: "...${progress}"`);
+  const pending = i.pending.filter((p) => typeof p === "string" && p.trim()).map((p) => clip(p, 80));
+  if (pending.length) parts.push(`You were waiting on: ${pending.join(", ")}.`);
+  parts.push(
+    "Continue from where you left off. Do NOT start over and do NOT redo work that is already finished. "
+    + "If you were part-way through writing or editing a file, read it first and verify its actual state "
+    + "before continuing. If the step you were waiting on cannot be completed, say so and move to the next one.",
+  );
+  return parts.join(" ");
+}
+
 /** Real activity ends the episode: the next stall starts from a full budget. */
 export function onActivity(e: HealthEpisode, now: number): HealthEpisode {
   void e; // the old counters are deliberately discarded, not carried forward

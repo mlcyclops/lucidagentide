@@ -36,8 +36,8 @@
 // Run: bun run harness/scripts/demo_ptokens1.ts
 
 import {
-  CARD_MAX_COLS, CARD_MIN_COLS, CARD_MIN_H, colsFromDrag, gridCols, heightFromDrag, loadLayout, reconcile,
-  reorder, resizeShape, saveLayout, snapSlot,
+  CARD_MAX_W, CARD_MIN_H, CARD_MIN_W, heightFromDrag, loadLayout, maxCardW, reconcile,
+  reorder, resizeShape, saveLayout, snapSlot, widthFromDrag,
 } from "../../desktop/renderer/lane_layout.ts";
 import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W } from "../../desktop/renderer/share_dock.ts";
 import {
@@ -200,9 +200,17 @@ console.log("6) health checks are counted, so the user SEES the self-watch worki
 // -- 7. lane window geometry ---------------------------------------------------------------------------
 console.log("7) P-FLEET.L9: the geometry behind top/right resize and drag-to-snap");
 {
-  if (gridCols(0) !== 1 || gridCols(Number.NaN) !== 1) fail("a nonsense width still yields one usable track");
-  if (gridCols(300) !== 1 || gridCols(610) !== 2 || gridCols(920) !== 3) fail("track math must match the CSS grid");
-  ok("gridCols matches the stylesheet's 300px tracks with a 10px gap, and never returns 0");
+  // An UNMEASURABLE body falls back to the hard maximum, NOT the minimum, and that direction is the whole
+  // point: rect.width reads 0 while the panel is hidden or pre-layout, so clamping down would rewrite
+  // every card the user had sized to 260px off one bad measurement. Too permissive is free (CSS shrinks an
+  // over-wide card and the next measurement re-clamps); losing the user's sizes is not recoverable.
+  if (maxCardW(0) !== CARD_MAX_W || maxCardW(Number.NaN) !== CARD_MAX_W || maxCardW(-50) !== CARD_MAX_W) {
+    fail("an unmeasurable panel must not clamp the user's widths down");
+  }
+  if (maxCardW(900) !== 900) fail("a measured panel body IS the width ceiling");
+  if (maxCardW(100) !== CARD_MIN_W) fail("a genuinely tiny panel still floors at one minimum card");
+  if (maxCardW(99_999) !== CARD_MAX_W) fail("an absurd body still clamps at the hard maximum");
+  ok(`maxCardW tracks the panel body, floors at ${CARD_MIN_W}px, caps at ${CARD_MAX_W}px, and treats an unmeasurable body as "do not clamp"`);
 
   // The sign: the grip is on the BOTTOM-RIGHT corner (the conventional window grip), so dragging DOWN is
   // a positive dy and must GROW the card. Cards are top-anchored, which keeps every other card's top edge
@@ -214,12 +222,16 @@ console.log("7) P-FLEET.L9: the geometry behind top/right resize and drag-to-sna
   if (!Number.isFinite(heightFromDrag(300, Number.NaN))) fail("a NaN drag must never produce a NaN height");
   ok(`a 100px downward drag grows 300 -> ${grown} (the grip follows the cursor)`);
 
-  if (colsFromDrag(1, 149, 6) !== 1) fail("under half a track must not jitter the span");
-  if (colsFromDrag(1, 150, 6) !== 2) fail("half a track commits one column");
-  if (colsFromDrag(1, -400, 6) !== CARD_MIN_COLS) fail("span clamps at the floor");
-  if (colsFromDrag(1, 5000, 2) !== 2) fail("the span can never exceed the tracks that actually fit");
-  if (colsFromDrag(1, 5000, 99) !== CARD_MAX_COLS) fail(`the span clamps at ${CARD_MAX_COLS}`);
-  ok("a right-edge drag has a half-track deadzone and clamps to what fits");
+  // P-FLEET.L12: the right edge is CONTINUOUS now. The old span model quantized it to a 300px track with
+  // a half-track deadzone, so a 149px drag moved nothing and a 150px drag jumped a whole 300px column.
+  // Reported as "I would like more adjustable right side handlers, not just snap", so the deadzone that
+  // was previously ASSERTED here is now the bug, and 1:1 tracking is the guarantee.
+  if (widthFromDrag(400, 1, 2000) !== 401) fail("a single pixel of drag must move the edge a single pixel");
+  if (widthFromDrag(400, 149, 2000) !== 549) fail("no deadzone: every px of drag lands");
+  if (widthFromDrag(400, -9000, 2000) !== CARD_MIN_W) fail("width clamps at the floor");
+  if (widthFromDrag(400, 9000, 900) !== 900) fail("a card can never grow wider than the panel body");
+  if (widthFromDrag(400, 9000, 99_999) !== CARD_MAX_W) fail(`width clamps at ${CARD_MAX_W}`);
+  ok("a right-edge drag tracks the pointer 1:1 and clamps to the panel, with no snap step");
 
   const rects = [
     { id: "a", x: 0, y: 0, w: 300, h: 200 }, { id: "b", x: 310, y: 0, w: 300, h: 200 },
@@ -239,7 +251,7 @@ console.log("7) P-FLEET.L9: the geometry behind top/right resize and drag-to-sna
   if (noop.join() !== order.join()) fail("an unknown id changes nothing");
   ok("reorder handles both ends, and an unknown id is a fresh no-op array");
 
-  const rec = reconcile({ order: ["a", "b"], size: { a: { cols: 2, h: 300 }, b: { cols: 1, h: 200 } } }, ["b", "c"]);
+  const rec = reconcile({ order: ["a", "b"], size: { a: { w: 610, h: 300 }, b: { w: 300, h: 200 } } }, ["b", "c"]);
   if (rec.order.join() !== "b,c") fail(`a vanished lane drops and a new one appends, got ${rec.order.join()}`);
   if ("a" in rec.size) fail("a vanished lane must RELEASE its size entry, or the store grows forever");
   ok("reconcile drops a stopped lane (and its size), appends a new one, preserves surviving order");
@@ -248,9 +260,17 @@ console.log("7) P-FLEET.L9: the geometry behind top/right resize and drag-to-sna
     const l = loadLayout(junk as string | null | undefined);
     if (l.order.length || Object.keys(l.size).length) fail(`corrupt payload ${JSON.stringify(junk)} must yield an EMPTY layout`);
   }
-  const round = { order: ["a"], size: { a: { cols: 2, h: 300 } } };
+  const round = { order: ["a"], size: { a: { w: 610, h: 300 } } };
   if (saveLayout(loadLayout(saveLayout(round))) !== saveLayout(round)) fail("a valid layout must round-trip byte-identically");
   ok("7 corrupt payloads all degrade to empty without throwing; a valid layout round-trips exactly");
+
+  // P-FLEET.L12 MIGRATION: a layout saved by the SPAN build must not be thrown away, or every card the
+  // user had already sized silently resets. 2 tracks were 2*300 + 1*10 = 610px on screen.
+  const legacy = loadLayout(JSON.stringify({ order: ["a", "b"], size: { a: { cols: 2, h: 300 }, b: { cols: 1, h: 200 } } }));
+  if (legacy.size.a?.w !== 610) fail(`a 2-track card must migrate to 610px, got ${legacy.size.a?.w}`);
+  if (legacy.size.b?.w !== 300) fail(`a 1-track card must migrate to 300px, got ${legacy.size.b?.w}`);
+  if (legacy.size.a?.h !== 300) fail("migration must preserve the height it already had");
+  ok("a layout persisted in column spans migrates to pixels (2 tracks -> 610px), heights preserved");
 
   const start = { x: 100, y: 100, w: 600, h: 400 };
   const north = resizeShape("n", start, 0, -50, DOCK_MIN_W, DOCK_MIN_H);

@@ -15,7 +15,7 @@
 // data, pdf), because a model that wrote a markdown report or a chart PNG previously had NO way to show it.
 // So step (1) now covers those kinds too, and step (2) keeps only genuinely non-renderable files out.
 
-import { previewablePath, resolvePreview } from "../preview_resolve.ts";
+import { previewAutoSurfaces, previewKindOf, previewablePath, resolvePreview } from "../preview_resolve.ts";
 
 const fail = (msg: string): never => { console.error(`FAIL: ${msg}`); process.exit(1); };
 const ok = (msg: string): void => console.log(`   ${msg} ✓`);
@@ -28,17 +28,28 @@ for (const [tool, ri, want] of [
   ["write", { path: "C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html" }, "C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html"],
   ["edit", { file_path: "/home/n/app.htm" }, "/home/n/app.htm"],
   ["write", { filename: "diagram.svg" }, "diagram.svg"],
-  // P-PREVIEW.12: the kinds that used to be silently refused.
-  ["write", { path: "/home/n/REPORT.md" }, "/home/n/REPORT.md"],
-  ["write", { path: "/home/n/data.json" }, "/home/n/data.json"],
-  ["write", { path: "/home/n/rows.csv" }, "/home/n/rows.csv"],
-  ["write", { path: "/home/n/chart.png" }, "/home/n/chart.png"],
-  ["write", { path: "/home/n/run.log" }, "/home/n/run.log"],
+  // P-PREVIEW.18: a generated PDF is unreadable as bytes, so showing it IS the deliverable.
   ["write", { path: "/home/n/spec.pdf" }, "/home/n/spec.pdf"],
-] as Array<[string, any, string]>) {
+] as Array<[string, Record<string, string>, string]>) {
   const got = previewablePath(tool, ri);
-  if (got !== want) fail(`${tool} ${JSON.stringify(ri)} → ${got}, want ${want}`);
-  ok(`${tool} → surfaces ${got}`);
+  if (got !== want) fail(`${tool} ${JSON.stringify(ri)} \u2192 ${got}, want ${want}`);
+  ok(`${tool} \u2192 surfaces ${got}`);
+}
+
+// (1b) P-PREVIEW.18: RENDERABLE is not the same question as WORTH STEALING THE SCREEN FOR. P-PREVIEW.12
+// widened the kind table so the panel COULD show a markdown report or a chart PNG, and the same table was
+// driving this auto trigger, so every incidental .md / .json / .log write yanked the panel open. An agent
+// writes those constantly (notes, plans, configs, fixtures), and none of them were asked to be looked at.
+console.log("\n1b) a renderable but NON-auto kind stays quiet, and is still previewable ON REQUEST");
+for (const p of ["/home/n/REPORT.md", "/home/n/data.json", "/home/n/rows.csv", "/home/n/chart.png", "/home/n/run.log"]) {
+  if (previewablePath("write", { path: p }) !== null) fail(`a write of ${p} must not open the panel by itself`);
+  if (previewKindOf(p) === null) fail(`${p} must still be RENDERABLE: only the auto trigger narrowed`);
+  if (previewAutoSurfaces(p)) fail(`${p} must not be in the auto set`);
+  ok(`write ${p} \u2192 quiet, but still renders on request (kind: ${previewKindOf(p)})`);
+}
+for (const p of ["/home/n/game.html", "/home/n/art.svg", "/home/n/spec.pdf"]) {
+  if (!previewAutoSurfaces(p)) fail(`${p} must still auto-surface`);
+  ok(`${p} \u2192 auto-surfaces (${previewKindOf(p)})`);
 }
 
 // (2) Non-previewable writes don't fire: source, stylesheets, bundles and binaries stay out of the panel.

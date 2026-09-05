@@ -293,13 +293,64 @@ describe("blockedRefsBanner / injectBlockedRefsBanner (P-PREVIEW.12)", () => {
 });
 
 describe("previewTextDocument (P-PREVIEW.12): a markdown/text/csv preview becomes a real document", () => {
-  test("wraps text in a self-contained escaped <pre> document", () => {
-    const doc = previewTextDocument("markdown", "# Report\n<b>not bold</b> & co", "REPORT.md");
+  test("a NON-markdown text kind stays an escaped monospace source view", () => {
+    // Right call for a .json / .csv / .log: you want the bytes, not a rendering of them.
+    const doc = previewTextDocument("text", '{"a": "<b>1</b> & 2"}', "data.json");
+    expect(doc.startsWith("<!doctype html>")).toBe(true);
+    expect(doc).toContain("<title>data.json</title>");
+    expect(doc).toContain("&lt;b&gt;1&lt;/b&gt; &amp; 2"); // never live markup
+    expect(doc).toContain("white-space:pre-wrap");
+  });
+  test("P-PREVIEW.16: markdown is RENDERED, not shown as its source", () => {
+    const doc = previewTextDocument("markdown", "# Report\n\nsome **bold** text\n\n- one\n- two\n", "REPORT.md");
     expect(doc.startsWith("<!doctype html>")).toBe(true);
     expect(doc).toContain("<title>REPORT.md</title>");
-    expect(doc).toContain("&lt;b&gt;not bold&lt;/b&gt; &amp; co"); // the file's text is never live markup
-    expect(doc).toContain("# Report");
-    expect(doc).toContain("white-space:pre-wrap");
+    expect(doc).toContain("<h1>Report</h1>");
+    expect(doc).toContain("<strong>bold</strong>");
+    expect(doc).toContain("<li>one</li>");
+    // The regression this replaces: the literal syntax must NOT survive as text.
+    expect(doc).not.toContain("# Report");
+    expect(doc).not.toContain("**bold**");
+  });
+  test("markdown renders tables and fenced code (a generated report's staples)", () => {
+    const doc = previewTextDocument("markdown", "| a | b |\n| - | - |\n| 1 | 2 |\n\n```ts\nconst x = 1;\n```\n", "r.md");
+    expect(doc).toContain("<table>");
+    expect(doc).toContain("<th>a</th>");
+    expect(doc).toContain("<td>1</td>");
+    expect(doc).toContain("<pre><code");
+    expect(doc).toContain("const x = 1;");
+  });
+  test("SANITATION: raw HTML in a .md is DISPLAYED, never executed", () => {
+    const doc = previewTextDocument("markdown", "before\n\n<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>\n", "evil.md");
+    // No LIVE element may be emitted. (The escaped text legitimately still contains the characters
+    // "onerror=" inside `&lt;img ...&gt;`, which is the point: it is inert text, so assert on the tags.)
+    expect(doc).not.toContain("<script>");
+    expect(doc).not.toContain("<img");
+    expect(doc).toContain("&lt;script&gt;");
+    expect(doc).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+  test("SANITATION: an unsafe link scheme degrades to plain text; http/relative survive", () => {
+    const bad = previewTextDocument("markdown", "[click](javascript:alert(1))\n", "l.md");
+    expect(bad).not.toContain("javascript:");
+    expect(bad).toContain("click");
+    const good = previewTextDocument("markdown", "[site](https://example.com) and [rel](./other.md)\n", "l.md");
+    expect(good).toContain('href="https://example.com"');
+    expect(good).toContain('href="./other.md"');
+    expect(good).toContain('rel="noreferrer noopener"');
+  });
+  test("SANITATION: an unsafe image src degrades to its alt text; a data: image survives", () => {
+    const bad = previewTextDocument("markdown", "![shot](javascript:alert(1))\n", "i.md");
+    expect(bad).not.toContain("javascript:");
+    expect(bad).toContain("shot");
+    const good = previewTextDocument("markdown", "![chart](data:image/png;base64,iVBORw0KGgo=)\n", "i.md");
+    expect(good).toContain('src="data:image/png;base64,iVBORw0KGgo="');
+  });
+  test("INVARIANT 11: the markdown shell lays prose out as blocks, never as flex items", () => {
+    // A flex container makes every raw text run AND every inline <b>/<code> its own flex item, which
+    // shatters a sentence into narrow stacked columns. Prose here must never be inside one.
+    const doc = previewTextDocument("markdown", "a sentence with **bold** and `code` in it\n", "r.md");
+    expect(doc).not.toContain("display:flex");
+    expect(doc).toContain("max-width:820px"); // a reading measure instead
   });
   test("html and svg are already documents and pass through untouched", () => {
     const page = `<!doctype html><body><h1>app</h1></body>`;
@@ -314,5 +365,10 @@ describe("previewTextDocument (P-PREVIEW.12): a markdown/text/csv preview become
   });
   test("empty text and label never throw", () => {
     expect(previewTextDocument("text", "", "")).toContain("<pre");
+    expect(previewTextDocument("markdown", "", "")).toContain("<!doctype html>");
+  });
+  test("a huge MARKDOWN file is truncated too, and the note is visible in the rendering", () => {
+    const doc = previewTextDocument("markdown", "x".repeat(3 * 1024 * 1024), "big.md");
+    expect(doc).toContain("[truncated at 1024 KB of 3072 KB]");
   });
 });

@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  LANE_TAB_CAP, PREVIEW_KIND_ICON, isPreviewablePath, laneTabId, previewKindLabel, previewPathKind,
+  LANE_TAB_CAP, PREVIEW_KIND_ICON, isAutoPreviewPath, isPreviewablePath, laneTabId, previewKindLabel, previewPathKind,
   removeLaneTab, upsertLaneTab, type PreviewTab,
 } from "./preview_tabs.ts";
 import { PREVIEW_KIND_EXT } from "../preview_resolve.ts";
@@ -109,6 +109,22 @@ describe("isPreviewablePath (P-PREVIEW.12: delegates to the ONE kind table)", ()
                      "old.bmp", "fav.ico", "spec.pdf"]) {
       expect(isPreviewablePath(p)).toBe(true);
     }
+  });
+
+  // P-PREVIEW.18: the lane tab strip asks a NARROWER question than "can the panel render it".
+  test("isAutoPreviewPath: only html/svg/pdf may claim a lane tab by themselves", () => {
+    for (const p of ["index.html", "page.htm", "logo.svg", "spec.pdf", '"C:\\my work\\my page.html"', "  spaced.html  "]) {
+      expect(isAutoPreviewPath(p)).toBe(true);
+    }
+    // A lane writing notes or a config used to earn its own tab, which with several lanes running filled
+    // the strip with files nobody asked to see. Still previewable on request, just not automatically.
+    for (const p of ["REPORT.md", "data.json", "rows.csv", "run.log", "conf.yaml", "chart.png", "photo.jpg"]) {
+      expect(isAutoPreviewPath(p)).toBe(false);
+      expect(isPreviewablePath(p)).toBe(true); // the two questions stay separate
+    }
+    expect(isAutoPreviewPath("app.ts")).toBe(false);
+    expect(isAutoPreviewPath(null)).toBe(false);
+    expect(isAutoPreviewPath("")).toBe(false);
   });
 
   test("previewPathKind reports the KIND, so a tab can label/ice itself instead of assuming a web page", () => {

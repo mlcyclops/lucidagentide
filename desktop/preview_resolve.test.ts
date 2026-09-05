@@ -4,7 +4,7 @@
 // desktop/preview_resolve.test.ts — P-PREVIEW.1 (ADR-0096): the fail-safe preview-target resolver.
 
 import { describe, expect, test } from "bun:test";
-import { PREVIEWABLE_EXT, PREVIEW_ALLOW, PREVIEW_FRAME_CSP, PREVIEW_KIND_EXT, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, normalizePreviewPath, previewKindOf, previewOpenPath, previewablePath, resolvePreview, toFileUrl, type PreviewKind } from "./preview_resolve.ts";
+import { PREVIEWABLE_EXT, PREVIEW_ALLOW, PREVIEW_AUTO_SURFACE, PREVIEW_FRAME_CSP, PREVIEW_KIND_EXT, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, normalizePreviewPath, previewAutoSurfaces, previewKindOf, previewOpenPath, previewablePath, resolvePreview, toFileUrl, type PreviewKind } from "./preview_resolve.ts";
 import { toFsPath } from "./preview_file.ts";
 import { PREVIEWABLE_EXTS } from "../harness/omp/preview_extension.ts"; // P-PREVIEW.12: the omp-side mirror
 
@@ -191,13 +191,40 @@ describe("previewablePath (P-PREVIEW.2, ADR-0096): auto-surface a written app", 
     expect(previewablePath("write", { path: '"C:\\Users\\n\\game.html"' })).toBe("C:\\Users\\n\\game.html");
     expect(previewablePath("edit", { file_path: "'/home/n/app.htm'" })).toBe("/home/n/app.htm");
   });
-  // P-PREVIEW.12: a written .md/.json/.csv/.png now DOES auto-surface (that was the whole bug: the model
-  // could not show a markdown report or a chart PNG). Only a non-previewable extension stays null.
-  test("a write of a previewable NON-markup file → its path (P-PREVIEW.12)", () => {
-    expect(previewablePath("edit", { path: "notes.md" })).toBe("notes.md");
-    expect(previewablePath("write", { path: "/tmp/report.json" })).toBe("/tmp/report.json");
-    expect(previewablePath("write", { path: "/tmp/chart.png" })).toBe("/tmp/chart.png");
-    expect(previewablePath("write", { path: "/tmp/run.log" })).toBe("/tmp/run.log");
+  // P-PREVIEW.18: a .pdf auto-surfaces alongside html/svg, because a generated report is unreadable as
+  // bytes, so showing it IS the deliverable.
+  test("a write of a .pdf auto-surfaces too", () => {
+    expect(previewablePath("write", { path: "/tmp/report.pdf" })).toBe("/tmp/report.pdf");
+  });
+  // P-PREVIEW.18 (THE REGRESSION THIS GUARDS): P-PREVIEW.12 widened the kind table so the panel COULD show
+  // a markdown report or a chart PNG, and that same table was driving the auto-surface trigger, so every
+  // incidental .md / .json / .log write yanked the panel open. Reported as "the preview panel is being
+  // called for everything now including .md .json and it's really annoying". These kinds stay fully
+  // previewable ON REQUEST (preview_open, the Open field, Browse); they just no longer interrupt.
+  test("a write of a renderable but NON-auto kind stays quiet (.md/.json/.csv/.log/.png)", () => {
+    expect(previewablePath("edit", { path: "notes.md" })).toBeNull();
+    expect(previewablePath("write", { path: "/tmp/report.json" })).toBeNull();
+    expect(previewablePath("write", { path: "/tmp/rows.csv" })).toBeNull();
+    expect(previewablePath("write", { path: "/tmp/run.log" })).toBeNull();
+    expect(previewablePath("write", { path: "/tmp/chart.png" })).toBeNull();
+  });
+  test("...and those kinds are still RENDERABLE, so nothing lost the ability to be previewed", () => {
+    // The two questions are deliberately separate: previewKindOf answers "can the panel render it",
+    // PREVIEW_AUTO_SURFACE answers "may it interrupt the user".
+    for (const p of ["notes.md", "report.json", "rows.csv", "run.log", "chart.png"]) {
+      expect(previewKindOf(p)).not.toBeNull();
+      expect(previewAutoSurfaces(p)).toBe(false);
+    }
+    for (const p of ["game.html", "art.svg", "report.pdf"]) {
+      expect(previewAutoSurfaces(p)).toBe(true);
+    }
+  });
+  test("PREVIEW_AUTO_SURFACE covers every kind, so a new kind cannot silently inherit `yes`", () => {
+    // The auto set is an exhaustive record for exactly this reason: adding an extension family to
+    // PREVIEW_KIND_EXT must force a deliberate decision here rather than re-creating the annoyance.
+    const kinds = Object.keys(PREVIEW_KIND_EXT).toSorted();
+    expect(Object.keys(PREVIEW_AUTO_SURFACE).toSorted()).toEqual(kinds);
+    for (const k of kinds) expect(typeof PREVIEW_AUTO_SURFACE[k as PreviewKind]).toBe("boolean");
   });
   test("a write of a NON-previewable file → null (source/binaries never hijack the panel)", () => {
     expect(previewablePath("write", { path: "src/index.ts" })).toBeNull();

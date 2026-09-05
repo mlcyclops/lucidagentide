@@ -517,6 +517,7 @@ export interface AgentsInitResult { ok: boolean; created: string[]; skipped: str
 // needs the shape doesn't drag bridge.ts (a DOM file) into the non-DOM root typecheck. Re-exported here so
 // every existing `import { type ChatEvent } from "./bridge.ts"` keeps working unchanged.
 import type { ChatEvent } from "./chat_events.ts";
+import { streamEndEvents, TERMINAL_EVENT_TYPES } from "./stream_end.ts"; // what to tell the UI when a turn stream ends badly
 export type { ChatEvent };
 /** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial - each type's max auto-run tier (T0-T3). */
 export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3">>;
@@ -653,6 +654,8 @@ export interface LucidBridge {
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
+  /** Bulk-acknowledge every active gate block. Releases NOTHING: each call stays blocked, audit kept. */
+  securityDismissAll(): Promise<{ dismissed: number } | null>;
   /** P-SECACK.1 (ADR-0170): mark DB-backed security rows reviewed (GUI ack ledger; releases nothing). */
   securityAck(input: { ids?: string[]; findings?: boolean }): Promise<{ acked: number; findingsSeen: number | null } | null>;
   /** P-BRIEF.3 (ADR-0072) / P-REPORT.1 (ADR-0116): the Engineering Update from the repo's own logs,
@@ -1271,7 +1274,7 @@ const FALLBACK_CONFIG: ConfigOption[] = [
 
 // Generic NDJSON event stream (used by both /api/chat and the /api/goal loop). `signal` lets Stop abort
 // the CLIENT read so the turn settles even if the server/omp never closes the stream (a wedged turn).
-async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal): Promise<void> {
+async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal, opts?: { tail?: boolean }): Promise<void> {
   let res: Response;
   try {
     res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body), signal });
@@ -1286,8 +1289,30 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
-  // Drop server heartbeats ({type:"ping"}) - they only keep the socket alive through long tool calls.
-  const flush = (line: string) => { const s = line.trim(); if (!s) return; try { const ev = JSON.parse(s); if (ev && ev.type === "ping") return; onEvent(ev); } catch { /* skip */ } };
+  // Did the turn end on its OWN terms? Only a terminal event seen on the wire proves that; anything else
+  // ending this stream is a drop, and the server turn is probably still running (see stream_end.ts).
+  let terminalDone = false;
+  // TWO different faults, so TWO separate guards. A torn line is bad JSON and is skipped. A throw out of
+  // onEvent is a RENDER bug, and the old single `catch {}` swallowed it as if it were bad JSON - so a
+  // renderer exception silently ate an event with nothing logged. Neither fault may kill the read: one
+  // unrenderable event must never cost the user the REST of the turn.
+  const flush = (line: string) => {
+    const s = line.trim();
+    if (!s) return;
+    let parsed: unknown;
+    try { parsed = JSON.parse(s); }
+    catch { return; } // a truncated/partial line, not a turn failure
+    if (!parsed || typeof parsed !== "object" || !("type" in parsed) || typeof parsed.type !== "string") return;
+    if (parsed.type === "ping") return; // server heartbeat: keeps the socket alive through long tool calls
+    // `done`, but ALSO a fleet lane's terminal `error` - a turn that reported its own failure has explained
+    // itself and must not get a "connection dropped" line stacked on top of it.
+    if (TERMINAL_EVENT_TYPES[parsed.type]) terminalDone = true;
+    // Narrowed above to an object with a string `type`. The payload fields are the engine's own ChatEvent
+    // contract (same module, same process family), so this is the ONE documented boundary assertion.
+    const ev = parsed as ChatEvent;
+    try { onEvent(ev); }
+    catch (e) { console.error("[TURN_DIAG] a chat event handler threw; the stream continues", e); }
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -1297,7 +1322,12 @@ async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent)
       while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
     }
     flush(buf);
-  } catch { /* Stop aborted the read, or the stream errored - return so the caller's finally settles. */ }
+  } catch { /* Stop aborted the read, or the socket died mid-turn - classified below, never silent. */ }
+  // The reported bug: this used to end here. A mid-stream death left the composer frozen on the last event
+  // it happened to receive - no error, no settle - while the engine kept working, so the only way to see
+  // what the agent did was to stop the session and reopen it. Now an unaborted end with no terminal `done`
+  // announces itself and settles the turn. A tail stream (fleet lane watch) opts out: it has no `done`.
+  for (const ev of streamEndEvents({ aborted: !!signal?.aborted, terminalDone, tail: opts?.tail }).events) onEvent(ev);
 }
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
@@ -1353,6 +1383,7 @@ export const bridge: LucidBridge = {
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
+  securityDismissAll: () => post("/api/security/dismiss-all", {}),
   securityAck: (input) => post("/api/security/ack", input),
   engineeringBrief: (role, save, repos, window) => (repos && repos.length
     ? post("/api/brief", { role, save, repos, window }) // P-REPORT.9: multi-repo path POSTs the selection
@@ -1498,7 +1529,9 @@ export const bridge: LucidBridge = {
     // attached to, and leaving a lane must never abort a running turn.
     const ac = new AbortController();
     const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
-    const done = streamNdjson("/api/fleet/watch", { laneId }, sink, ac.signal);
+    // `tail`: a lane WATCH is a live tail the server closes on release with no terminal `done` - a clean
+    // close is its normal end, so it must not synthesize the dropped-turn notice into every lane.
+    const done = streamNdjson("/api/fleet/watch", { laneId }, sink, ac.signal, { tail: true });
     return { done, stop: () => ac.abort() };
   },
   fleetTranscript: (laneId) => getData(`/api/fleet/transcript?laneId=${encodeURIComponent(laneId)}`),

@@ -22252,3 +22252,222 @@ rows and not to this field.
 
 **Files:** `desktop/renderer/app.ts` (panel markup, `syncPrevPathField`, the reveal handler),
 `desktop/renderer/styles.css` (`.preview-tabrow`, `.preview-pathbar`, `.prev-pathin`, `.prev-reveal`).
+
+## ADR-0326 -- P-THEME.2: unset means Lucid Dark, because "never chosen" and "follow the OS" were never the same thing (2026-09-05)
+
+**Status:** Accepted -- BUILT. Corrects ADR-0320 (P-THEME.1). User decision, stated directly: "default to
+Lucid Dark in the Theme since existing users are used to this."
+
+**Context.** P-THEME.1 stored the theme preference as one string where `""` carried two different meanings
+at once: "this user has never chosen" AND "this user wants to follow their OS". Those are not the same
+statement, and conflating them had a cost paid entirely by existing users. Someone who had run LUCID for
+months on a machine that prefers light had never opened the theme panel, so their stored preference was
+`""`, so the day light mode shipped their app turned light. They had not asked for a light app. They had
+asked for nothing, and "nothing" was read as consent to a system setting they had never pointed at LUCID.
+
+The first-paint machinery inherited the same conflation and made it structural: because unset followed the
+OS, `styles.css` needed an `@media (prefers-color-scheme: light) { :root:not([data-theme]) { ... } }` block
+carrying a byte-for-byte DUPLICATE of the lucid-light palette (CSS cannot share a declaration block across
+an @media boundary), plus a theme.test.ts equality assertion to keep the copy from drifting. `trainer.html`
+carried its own second copy of the same thing for the same reason.
+
+**Decision.** Split the two meanings.
+
+- **Unset resolves to `DEFAULT_THEME_ID` (lucid-dark), never to the OS hint.** An install nobody configured
+  must not change appearance because of a system preference the user never aimed at this app.
+- **Following the OS is an explicit `system` id** (`SYSTEM_THEME_ID`), and it is what the "Match system"
+  tile now stores and reports as selected. Nothing was removed: a user who wants their app to track the
+  system asks for it, and the `prefers-color-scheme` listener re-resolves for exactly that choice.
+- **A retired or corrupt stored id also lands on the default**, same direction and same reasoning. Dark is
+  additionally the SAFE direction here, because the bare `:root` palette IS lucid-dark, so the stylesheet
+  and the resolved attribute agree even if JS never runs.
+- **Both `prefers-color-scheme` first-paint blocks are DELETED**, in `styles.css` and in `trainer.html`,
+  along with the duplicated light palettes and the parity test that guarded them. With unset meaning dark,
+  the correct no-attribute paint is simply the base block, so the media query had nothing left to fix and
+  the duplication had nothing left to justify. Net effect: 78 lines of duplicated palette gone.
+- **The parity test was INVERTED, not deleted.** It now asserts that no `@palette-osfallback` marker and no
+  such media block exist, in both files. The old assertion protected a copy; the new one protects the
+  absence of the copy, which is the invariant that actually matters now.
+
+**The one visible trade, stated plainly.** A user who explicitly picks `system` on a light-mode OS sees one
+dark frame before `app.js` stamps the attribute. That is the right trade: the alternative is flashing LIGHT
+at the far larger group who never asked for light at all, which is the exact complaint this ADR answers. The
+renderer CSP is `script-src 'self'`, so an inline head bootstrap in `index.html` is not available to remove
+that frame; the trainer frame, which CAN use an inline head script, still does.
+
+**Migration is a no-op by construction.** Nothing is rewritten in storage. An explicit theme pick keeps
+working untouched; `""` simply resolves differently, which is the entire intent. A user who genuinely wants
+OS-following re-selects "Match system" once and it is stored as a real id from then on.
+
+**Files:** `desktop/renderer/theme.ts` (`SYSTEM_THEME_ID`, `resolveTheme`), `desktop/renderer/app.ts` (the
+"Match system" tile, the media listener guard, the picker note), `desktop/renderer/styles.css` and
+`desktop/renderer/trainer.html` (fallback blocks removed), `desktop/settings_store.ts` (comment),
+`desktop/renderer/theme.test.ts` (26).
+
+**Verification.** 26 theme tests including the inverted CSS invariant in both files; full gate 4895 pass /
+375 files with the standing 11 environmental fails. Served bytes checked per ADR-0303: the bundle carries
+the `system` sentinel, and neither styles.css nor trainer.html contains `@palette-osfallback` or a
+`prefers-color-scheme` fallback, while both still declare lucid-dark as the bare `:root`.
+
+## ADR-0325 -- P-FLEET.L12: a card width in PIXELS, a header that wraps, and a grip you can actually grab (2026-09-05)
+
+**Status:** Accepted -- BUILT. Revises the geometry ADR-0312/P-FLEET.L9 shipped. User-reported, three
+symptoms in one message.
+
+**Context.** Three complaints, three different causes, and the first two were the SAME design mistake made
+at two scales: a container that quantizes or clips instead of reflowing.
+
+1. "More adjustable right side handlers, not just snap." Card width was a COLUMN SPAN over 300px tracks
+   (`colsFromDrag`), with `Math.round` as a deliberate half-track deadzone. So a 149px drag moved nothing
+   and a 150px drag jumped a full 300px. The deadzone was correct FOR a span model; the span model was the
+   problem. Height had been plain pixels all along, and nobody ever complained about height.
+2. "The button options in the top get clipped." `.fleet-card-head` was `display:flex` with no `flex-wrap`,
+   inside `.fleet-card{overflow:hidden}`. A narrow card therefore did not wrap its action buttons, it CUT
+   them off, which is visible in the user's screenshot: the eye and lightning icons are sliced.
+3. "The lane windows aren't easily draggable and have some challenges with moving around each other." Two
+   causes. The drag surface was the header MINUS every button, select and input, which in a real lane header
+   leaves almost no pixels to aim at. And `grid-template-columns:repeat(auto-fill,minmax(300px,1fr))` with
+   `span N` cards does not backfill: a card too wide for the rest of its row jumps to the next row and
+   leaves a HOLE, so widening one card visibly broke the packing instead of pushing its neighbour along.
+
+**Decision.**
+
+- **Width is pixels.** `CardSize.cols` becomes `CardSize.w`, `colsFromDrag` becomes `widthFromDrag`, and
+  the right edge tracks the pointer 1:1 with no step and no deadzone. `maxCardW(bodyW)` replaces
+  `gridCols(bodyW)` as the ceiling, because the span model got "never wider than the panel" for free from
+  the track count and pixels have to say it out loud.
+- **The panel is a WRAPPING FLEX ROW, not a grid.** This is what makes cards "auto adjust around each
+  other": widening one pushes the next onto the following line and nothing leaves a gap. Cards carry
+  `flex: 0 1 <w>px` inline, and both numbers are deliberate: grow 0 so a card never stretches to fill a
+  short row (the user sized it, that size is the answer), shrink 1 plus `max-width:100%` so a card wider
+  than the panel gives way instead of overflowing it.
+- **The header wraps.** `flex-wrap:wrap` plus a row gap, with the lane name on a `flex:1 1 90px` basis so a
+  narrow card puts the name on line one and drops the buttons to line two. Invariant 11 is satisfied and
+  not bent: what wraps is a row of BUTTON ELEMENTS, never the text inside a label, and the name and chips
+  keep their one-line ellipsis.
+- **An always-draggable grip.** A `.fleet-grip` span leads every header. The existing rule that buttons,
+  selects and inputs act rather than drag is CORRECT and stays; the grip is simply a target that is always
+  drag, so the gesture has somewhere to live in a header full of controls.
+- **Handles are grabbable.** Hit boxes go 6px to 12px on the edges and 13px to 20px on the corner, while
+  the PAINTED mark stays a thin 2px inset line so the card does not read as thick-bordered. Resting opacity
+  goes 0 to .35: a handle nobody can see is a handle nobody knows exists.
+- **Gestures listen on the WINDOW.** Both drag and resize already called `setPointerCapture`, which is
+  necessary and not sufficient: the fleet poll rebuilds cards every 2.5s, and a node replaced mid-gesture
+  drops its capture, freezing the drag with the button still held. The window keeps the gesture alive
+  regardless of what happens to the element under the cursor.
+
+**The persisted layout is MIGRATED, not discarded.** `loadLayout` converts a legacy `{cols,h}` entry to
+`{w: cols*300 + (cols-1)*10, h}`, gaps included. Dropping the entry would have been three lines shorter and
+would have silently reset every card the user had already sized. An explicit `w` wins over a stale `cols` if
+a payload somehow carries both, and an unreadable span is still DROPPED rather than invented.
+
+**One fallback direction is load-bearing.** `maxCardW` treats an unmeasurable body (0, negative, NaN,
+Infinity) as "do not clamp" and returns the hard maximum, NOT the minimum. `getBoundingClientRect().width`
+reads 0 while the panel is hidden or pre-layout, so clamping down there would rewrite every sized card to
+260px off one bad measurement. Being briefly too permissive costs nothing, because the card shrinks visually
+and the next real measurement re-clamps it; losing the user's sizes is not recoverable. This is the same
+reasoning as the migration above and both are pinned by test.
+
+**Files:** `desktop/renderer/lane_layout.ts` (`CardSize.w`, `widthFromDrag`, `maxCardW`, `clampSize`, the
+migration in `loadLayout`; retired `colsFromDrag` / `gridCols` / `CARD_MIN_COLS` / `CARD_MAX_COLS`),
+`desktop/renderer/fleet_grid.ts` (flex-basis sizing, window-level gestures, the grip and its pointerdown
+branch), `desktop/renderer/styles.css` (flex-wrap panel, wrapping header, widened handles, the grip),
+`desktop/renderer/lane_layout.test.ts` (49), `harness/scripts/demo_ptokens1.ts` (its P-FLEET.L9 geometry
+section now pins the px model + the migration).
+
+**Verification.** 49 layout tests, `make demo-P-TOKENS.1` green over 11 geometry checks including the span
+migration, `demo-P-FLEET.L7` and `demo-P-FLEET.L8/L10` still green, full gate 4894 pass / 375 files with the
+standing 11 environmental fails. Served bytes grepped per ADR-0303: the bundle carries `widthFromDrag`,
+`maxCardW` and `data-fleet-grip` with `colsFromDrag`, `gridCols` and the `gridColumn = span` write all
+ABSENT, and styles.css carries the flex panel, the wrapping header and the grip. VERIFICATION BOUNDARY: the
+FEEL of a drag and a reflow is not assertable headlessly, so the gesture and the wrap are for the user to
+confirm on a window reload.
+
+## ADR-0324 -- P-HEALTH.2: a recovered session RESUMES the run, because healing the session and dropping the work is still a stall (2026-09-05)
+
+**Status:** Accepted -- BUILT. Completes ADR-0311 (P-HEALTH.1) and closes the wedge case left open by
+ADR-0263 (P-STALL.2). User decision, asked and answered explicitly.
+
+**Context.** Three separate mechanisms had each solved part of "the turn is running but I cannot see it",
+and between them they left one hole.
+
+- ADR-0263 (P-STALL.2) deleted the wall-clock turn cutoff, correctly: a ten-minute build is work, and the
+  10-minute silence kill was murdering exactly the turns worth running. It left `slow` notices in place, so
+  a quiet turn is legible, and it left the two real exits: the user (Stop) and transport death.
+- ADR-0311 (P-HEALTH.1) added the self-watch ladder ok -> quiet -> probe -> recover, where `recover`
+  cancels the wedged turn, drops the omp child, and reloads the SAME session id so the conversation lives.
+- This session's earlier fix made a DEAD stream visible instead of silent (the composer used to freeze on
+  its last event while the server turn kept going).
+
+The hole: `recover` heals the SESSION but never resumed the RUN. Dropping the child rejects the in-flight
+`session/prompt`, so the turn fell into its error path, printed `[agent unavailable: ...]`, and settled. The
+session was healthy again and the work was simply gone. The user then had to notice that nothing was
+happening and re-ask, which is the manual habit P-HEALTH.1 was built to remove. Worse, `restart()` nulls
+`this.listener`, so even if something had re-prompted, the resumed run would have streamed into nothing:
+the "listener clobber" hypothesis recorded in PROGRESS.md under the earlier `[TURN_DIAG]` work is real, and
+it is structural in the recovery path rather than a race.
+
+**Decision.** The recovery hands the interrupted run a one-shot authorization, and the run re-sends itself
+on the recovered session with a short operator note. The user is told plainly.
+
+- **The retry lives INSIDE the same `prompt()` call**, not in a detached turn. `onEvent` and the HTTP
+  stream stay attached, so the restart happens in the turn the user is already watching. A detached
+  resume would have needed a re-attach protocol and would have reproduced the original complaint (work
+  happening where the user cannot see it) while nominally fixing it.
+- **The user is told through the existing `health` channel** (`{ action: "recover", reason }`), which the
+  renderer already renders as a harness note with a phase line. The reason is the sentence the user reads:
+  "Restarting the stalled session and picking up where it left off (restart 1 of 2). Nothing already done
+  is lost." No new ChatEvent type, so nothing in the renderer or the fleet mirror had to learn a variant.
+  Silence was the original bug, so a silent fix would have been the same bug.
+- **The agent gets a SHORT operator note**, same origin convention as `HEALTH_PROBE_NOTE`: harness-authored
+  instruction, not model-authored text. It names the original request, the tail of what was produced, and
+  the tool calls that were open, then forbids starting over and requires re-reading any file that may be
+  half-written. It stays short (about 700 chars, hard-clipped near 1.3KB for a 40KB turn) because
+  `session/load` already restored the conversation; re-pasting the turn would just burn context.
+- **The pending tool-call labels are captured at RECOVERY time**, not at failure time, because `restart()`
+  clears `openCalls` before the interrupted request's error handler ever runs.
+- **`this.listener` and `askActive` are re-asserted before the re-send.** Without both, the resumed run
+  streams nowhere and its permission prompts never reach the UI.
+
+**The refusals are the design.** Each one is a way this feature could have become worse than the bug:
+
+- **A user Stop is never resumed.** Stop means stop. `cancel()` clears the authorization for every caller
+  except the recovery itself, which passes `forRecover`.
+- **One mark, one resume.** The authorization is consumable exactly once, so a second failure in the same
+  run cannot reuse it. This is precisely where an infinite restart loop would live.
+- **The budget is per RUN and is NOT refilled by activity.** `HealthEpisode`'s own probe/recover budget
+  resets on any activity, which is right for watching a session, and fatal here: a resumed run that emits
+  a little output and wedges again would refill it forever. So the resume counter lives on the turn, which
+  also means it resets naturally on the next real user message. Wedge -> resume -> wedge -> resume ->
+  wedge STOPS, and says the work so far is saved rather than pretending nothing happened.
+- **A session that failed to reload is never resumed.** `healthRecover` leaves `sessionId` null when
+  `session/load` fails; resuming onto that would talk to a phantom session. The next prompt starting clean
+  is the honest outcome.
+- **Nothing here reintroduces a wall-clock cutoff.** The trigger is still the ADR-0311 ladder, which caps
+  at `quiet` forever while a tool call is open. A long build is still work; this only changes what happens
+  AFTER the harness has already decided to recover.
+
+**Alternative rejected.** Re-prompting from `healthTick` instead of from the interrupted run. It reads
+simpler and is wrong twice: a second `session/prompt` on one session crosses collectors (the ADR-0268
+lesson, already cited by the probe path for the same reason), and the ticker has no `onEvent`, so the
+resumed work would stream into nowhere, which is the exact defect being fixed.
+
+**The marker is a class, not a field.** `RecoverMarker` (set / take / clear) lives in `health_watch.ts`
+with the rest of the policy. As a bare field its whole lifecycle was implied by statement ORDER across
+three call sites in a 100-line method, and untestable because it was private state set from a timer. As a
+class the consume-once and Stop-clears rules are unit-tested. It also removed a real compiler hazard:
+`prompt()` nulls the field at turn start and never assigns it again, so control-flow analysis proved it
+"always null" and typed the whole resume branch as unreachable (`never`). The honest fix was a method call,
+not a type assertion.
+
+**Files:** `desktop/health_watch.ts` (`RESUME_MAX_PER_RUN`, `RecoverMark`, `RecoverMarker`,
+`resumeVerdict`, `buildResumeNote`), `desktop/acp_backend.ts` (`recoverMark`, `recovering`,
+`cancel({ forRecover })`, `healthTick` marking before the drop, the resume loop in `prompt()`),
+`desktop/health_watch.test.ts` (+17), `harness/scripts/demo_phealth2.ts`, `Makefile`.
+
+**Verification.** `make demo-P-HEALTH.2` green over 7 sections (it runs `demo-P-HEALTH.1` first, which
+stays green). 53 health tests. Full gate 4884 pass / 374 files with the standing 11 environmental fails.
+VERIFICATION BOUNDARY: the re-send itself is in `Backend.prompt`, which owns the master omp session and is
+not constructible headlessly, so the demo proves the policy, the marker lifecycle, the wording, and the
+ordering the wiring depends on. The live re-send needs the running app: stall a turn past 7 minutes and
+watch it restart in place.

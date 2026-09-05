@@ -16,7 +16,7 @@
 // so the module is in the browser bundle today and this adds no new bundle dependency.
 // Pure data in, new array out - no DOM, no I/O - so it is unit-testable without a renderer.
 
-import { previewKindOf, type PreviewKind } from "../preview_resolve.ts"; // P-PREVIEW.12: the ONE kind table
+import { previewAutoSurfaces, previewKindOf, type PreviewKind } from "../preview_resolve.ts"; // P-PREVIEW.12: the ONE kind table
 export type { PreviewKind };
 
 export interface PreviewTab { id: string; label: string; path: string; kind: "yours" | "agent" | "lane" }
@@ -69,10 +69,20 @@ export function previewPathKind(p: string | null | undefined): PreviewKind | nul
   return p ? previewKindOf(unquote(String(p))) : null;
 }
 
-/** Does this path belong in the Preview panel? True for every kind in the table (html/svg, images, markdown,
- *  text-ish data, pdf), tolerant of quoted / padded paths. Kept as the boolean the fleet stream sink calls. */
+/** Does this path belong in the Preview panel AT ALL? True for every kind in the table (html/svg, images,
+ *  markdown, text-ish data, pdf), tolerant of quoted / padded paths. This is the "can the panel render it"
+ *  question, so it stays wide: the Open field, Browse, and the agent's `preview_open` all rely on it. */
 export function isPreviewablePath(p: string | null | undefined): boolean {
   return previewPathKind(p) !== null;
+}
+
+/** P-PREVIEW.18: may a lane's write OPEN a preview tab by itself? Narrower than isPreviewablePath on
+ *  purpose. A fleet lane writing notes.md or a config.json used to earn its own tab in the strip, which is
+ *  the same "the panel opens for everything" complaint one level up: with several lanes running, incidental
+ *  writes could fill the tab row with files nobody asked to see. Reads the ONE auto-surface table, so the
+ *  lane strip and the master panel can never disagree about what is worth interrupting for. */
+export function isAutoPreviewPath(p: string | null | undefined): boolean {
+  return p ? previewAutoSurfaces(unquote(String(p))) : false;
 }
 
 /** P-PREVIEW.12: the icons.ts glyph name for each kind, so a tab strip can SHOW what a tab holds instead of

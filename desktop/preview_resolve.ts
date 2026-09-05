@@ -175,23 +175,67 @@ export function previewKindOf(path: string | null | undefined): PreviewKind | nu
   return m ? EXT_KIND.get(m[1]!.toLowerCase()) ?? null : null;
 }
 
+// P-PREVIEW.18: RENDERABLE is not the same question as WORTH STEALING THE SCREEN FOR.
+//
+// P-PREVIEW.12 widened the kind table so the panel could finally show a markdown report, a JSON payload, a
+// CSV or a chart PNG, which fixed a real complaint: the model had no way to show most of what it produces.
+// But the same table also drives the AUTO-SURFACE trigger, so every incidental write started yanking the
+// panel open. An agent writes .md and .json constantly (notes, plans, configs, fixtures, this repo's own
+// PROGRESS.md), and none of those are things the user asked to LOOK at. Reported as: "the preview panel is
+// being called for everything now including .md .json and it's really annoying".
+//
+// So the auto trigger narrows to the kinds whose entire point is to be looked at rendered, while the panel
+// keeps rendering everything it could before ON REQUEST: the agent's `preview_open` tool, the Open field,
+// Browse, and "Send to preview" all still accept every kind in the table. Nothing lost the ability to be
+// previewed; the panel just stopped deciding for the user.
+//
+// Written as an EXHAUSTIVE record rather than a list, so adding a kind to PREVIEW_KIND_EXT forces a
+// deliberate yes/no here instead of silently inheriting "yes" and re-creating this bug.
+export const PREVIEW_AUTO_SURFACE: Readonly<Record<PreviewKind, boolean>> = {
+  html: true,  // a built page is the case the panel exists for
+  svg: true,   // rendered markup, same class as html
+  pdf: true,   // a generated report: unreadable as bytes, so showing it IS the deliverable
+  markdown: false, // notes, plans, PROGRESS entries: written constantly, rarely to be stared at
+  text: false,     // json / csv / log / yaml: data the agent works WITH, not output to admire
+  image: false,    // already rendered inline in chat with its own "Send to preview" button
+};
+
+/** Does a write of this path OPEN the panel by itself? Renderable kinds that are not in the auto set stay
+ *  fully previewable on request; this only answers "may it interrupt the user". */
+export function previewAutoSurfaces(path: string | null | undefined): boolean {
+  const kind = previewKindOf(path);
+  return kind !== null && PREVIEW_AUTO_SURFACE[kind];
+}
+
 /** Tool names that WRITE a file (omp's write/edit family). Read/search/etc. never auto-surface a preview. */
 const WRITE_TOOLS = /\b(write|edit|create|save)\b/i;
 
-/** If `toolName` is a write/edit of a previewable file, return its path; else null. Pure, defensive: pulls the
- *  path from the common rawInput shapes (path/file_path/filename/file), trims, and requires both a write-class
- *  tool AND a previewable extension - so a `read` of an .html, or a write of a .ts, won't fire. P-PREVIEW.12:
- *  the write-class gate is what stops a `read` of some random .png hijacking the panel, so it stays; the kind
- *  table widening means a written .md/.json/.csv/.png report now auto-surfaces the same way an .html does. */
-export function previewablePath(toolName: string | null | undefined, rawInput: any): string | null {
+/** The rawInput keys omp's write/edit family uses for the target path, in precedence order. */
+const PATH_KEYS = ["path", "file_path", "filePath", "filename", "file", "target"] as const;
+
+/** If `toolName` is a write/edit of a file worth SHOWING, return its path; else null. Pure and defensive:
+ *  pulls the path from the common rawInput shapes, trims, and requires a write-class tool AND an
+ *  auto-surfacing kind, so a `read` of an .html, a write of a .ts, and (P-PREVIEW.18) a write of a .md or
+ *  .json all stay quiet. The write-class gate is what stops a `read` of some random .png hijacking the
+ *  panel; the kind gate is what stops the agent's ordinary note-taking from doing the same.
+ *
+ *  `rawInput` crosses the ACP boundary, so it is `unknown` and narrowed here rather than asserted. */
+export function previewablePath(toolName: string | null | undefined, rawInput: unknown): string | null {
   const name = (toolName ?? "").toLowerCase();
   if (!WRITE_TOOLS.test(name)) return null;
-  const ri = rawInput ?? {};
+  if (!rawInput || typeof rawInput !== "object") return null;
+  // Runtime-checked as a non-null object on the line above. omp's rawInput is an arbitrary tool-argument
+  // bag, so there is no shape to validate it against; this asserts only "string-keyed", and every VALUE
+  // stays `unknown` and is typeof-checked before it is used.
+  const fields = rawInput as Record<string, unknown>;
   let path = "";
-  for (const k of ["path", "file_path", "filePath", "filename", "file", "target"]) {
-    if (typeof ri[k] === "string" && normalizePreviewPath(ri[k])) { path = normalizePreviewPath(ri[k]); break; }
+  for (const key of PATH_KEYS) {
+    const value: unknown = fields[key];
+    if (typeof value !== "string") continue;
+    const normalized = normalizePreviewPath(value);
+    if (normalized) { path = normalized; break; }
   }
-  if (!path || !PREVIEWABLE_EXT.test(path)) return null;
+  if (!path || !previewAutoSurfaces(path)) return null;
   return path;
 }
 

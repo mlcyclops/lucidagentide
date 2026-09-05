@@ -20,6 +20,7 @@
 // then blocks it); per-asset and total byte caps prevent a runaway inline. Pure — I/O is injected — so the
 // whole thing is unit-tested without a filesystem.
 
+import { Marked } from "marked"; // P-PREVIEW.16: a previewed .md renders AS markdown, not as its source
 import { previewKindOf, type PreviewKind } from "./preview_resolve.ts"; // P-PREVIEW.12: the ONE kind table
 
 /** Injected file reader (real impl reads the app's directory; tests pass fakes). */
@@ -338,21 +339,117 @@ export function injectBlockedRefsBanner(html: string, refs?: BlockedRef[]): stri
  *  5 MB cap is about refusing a mistake; this is about not handing the frame a multi-megabyte DOM. */
 const MAX_DOC_TEXT = 1024 * 1024;
 
+// ── P-PREVIEW.16: markdown renders AS MARKDOWN ───────────────────────────────────────────────────────
+// A previewed .md used to arrive as escaped monospace source: literal `#`, `**bold**` and ``` fences. The
+// panel advertises markdown as a previewable kind, so a report the model just wrote should read like a
+// report. `marked` is already a direct dependency (the chat thread renders replies with it).
+//
+// SANITATION, and why it is not DOMPurify. The chat renderer (renderer/markdown.ts) pipes marked through
+// DOMPurify, but that runs in the BROWSER where a DOM exists; this function runs in the ENGINE process,
+// where DOMPurify would need jsdom pulled in just to preview a file. So instead of sanitizing raw HTML
+// after the fact, this renderer never PRODUCES any: `html` tokens are escaped back into visible text, so a
+// `<script>` in a .md file is displayed rather than run, and link/image hrefs are restricted to safe
+// schemes so `javascript:` degrades to plain text. That is a stricter policy than the chat thread's (which
+// deliberately renders trusted model HTML/SVG); a file on disk is untrusted input, so it only ever renders
+// as markup that markdown itself asked for. The frame's own defenses (opaque origin, `connect-src 'none'`)
+// still apply underneath, this just means we are not relying on them alone.
+
+/** Link/image targets we will emit. Anything else (javascript:, data: except images, vbscript:, unknown
+ *  schemes) renders as its own text with no anchor. Relative refs are kept: the frame CSP blocks what it
+ *  will not allow, and a relative link inside a previewed report is inert rather than dangerous. */
+const SAFE_HREF = /^(?:https?:\/\/|mailto:|#|\.{0,2}\/)/i;
+
+/** A private Marked instance - NEVER the global `marked`, whose options are process-wide state shared with
+ *  anything else that renders markdown. */
+const previewMarkdown = new Marked({
+  gfm: true,
+  breaks: false,
+  renderer: {
+    // Raw HTML in the FILE becomes visible text. This is the whole sanitation story for block + inline HTML.
+    html({ text }) { return htmlEscape(text ?? ""); },
+    link(token) {
+      const inner = this.parser.parseInline(token.tokens ?? []);
+      const href = (token.href ?? "").trim();
+      if (!SAFE_HREF.test(href)) return inner; // javascript: / data: / unknown scheme -> just the text
+      const title = token.title ? ` title="${htmlEscape(token.title)}"` : "";
+      return `<a href="${htmlEscape(href)}"${title} rel="noreferrer noopener">${inner}</a>`;
+    },
+    image(token) {
+      const href = (token.href ?? "").trim();
+      const alt = htmlEscape(token.text ?? "");
+      // data: images are allowed because the frame CSP already permits `img-src data:` and an inline chart
+      // in a generated report is the common case; anything else unsafe degrades to the alt text.
+      if (!SAFE_HREF.test(href) && !/^data:image\//i.test(href)) return alt;
+      const title = token.title ? ` title="${htmlEscape(token.title)}"` : "";
+      return `<img src="${htmlEscape(href)}" alt="${alt}"${title}>`;
+    },
+  },
+});
+
+/** Markdown source -> a sanitized HTML fragment. Pure; never throws (a malformed document degrades to its
+ *  escaped source rather than taking the preview down with it). */
+export function previewMarkdownHtml(md: string): string {
+  try {
+    const out = previewMarkdown.parse(md ?? "", { async: false });
+    return typeof out === "string" ? out : htmlEscape(md ?? "");
+  } catch {
+    return `<pre>${htmlEscape(md ?? "")}</pre>`;
+  }
+}
+
+/** The document shell shared by both non-markup kinds. INVARIANT 11: prose here is laid out as BLOCKS with
+ *  a reading measure, never as flex items - a flex container would shatter every sentence with an inline
+ *  `<code>` or `<b>` in it into narrow stacked columns. */
+function previewDocument(title: string, style: string, body: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width,initial-scale=1">`
+    + `<title>${htmlEscape(title ?? "")}</title><style>${style}</style></head>`
+    + `<body>${body}</body></html>`;
+}
+
+/** Typography for a rendered markdown preview. Dark to match the panel, one readable column, and code /
+ *  tables that stay legible. No flex anywhere near the prose (invariant 11). */
+const MD_CSS = "html{background:#0b0b10}"
+  + "body{margin:0;background:#0b0b10;color:#d8dbe4;"
+  + "font:15px/1.65 ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}"
+  + ".md{max-width:820px;margin:0 auto;padding:28px 24px 64px}"
+  + ".md>:first-child{margin-top:0}"
+  + ".md h1,.md h2,.md h3,.md h4,.md h5,.md h6{line-height:1.25;margin:1.6em 0 .6em;color:#f0f2f8}"
+  + ".md h1{font-size:1.9em}.md h2{font-size:1.45em}.md h3{font-size:1.2em}.md h4{font-size:1.05em}"
+  + ".md h1,.md h2{padding-bottom:.3em;border-bottom:1px solid #23232e}"
+  + ".md p,.md ul,.md ol,.md blockquote,.md table,.md pre{margin:0 0 1em}"
+  + ".md ul,.md ol{padding-left:1.5em}.md li{margin:.25em 0}"
+  + ".md li>p{margin:.25em 0}"
+  + ".md a{color:#8ab4ff;text-decoration:none}.md a:hover{text-decoration:underline}"
+  + ".md code{background:#16161f;border:1px solid #23232e;border-radius:4px;padding:.12em .35em;"
+  + "font:.87em/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}"
+  + ".md pre{background:#12121a;border:1px solid #23232e;border-radius:8px;padding:14px 16px;overflow:auto}"
+  + ".md pre code{background:none;border:0;padding:0;font-size:.86em;line-height:1.55}"
+  + ".md blockquote{border-left:3px solid #2f2f3d;padding:.2em 0 .2em 1em;color:#a9aebd}"
+  + ".md table{border-collapse:collapse;display:block;overflow:auto;max-width:100%}"
+  + ".md th,.md td{border:1px solid #23232e;padding:.45em .7em;text-align:left}"
+  + ".md th{background:#16161f;color:#f0f2f8;white-space:nowrap}"
+  + ".md hr{border:0;border-top:1px solid #23232e;margin:2em 0}"
+  + ".md img{max-width:100%;height:auto}"
+  + ".md input[type=checkbox]{margin-right:.4em}";
+
+/** Monospace source view, for every text-ish kind that is NOT markdown (json, csv, log, yaml, txt, ...). */
+const PRE_CSS = "body{margin:0;background:#0b0b10;color:#d8dbe4}"
+  + "pre{margin:0;padding:16px 20px;white-space:pre-wrap;overflow-wrap:anywhere;"
+  + "font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}";
+
 /** P-PREVIEW.12: wrap a NON-markup preview (`markdown`, `text`) as a minimal self-contained HTML document so
- *  the serve route can hand it to the frame like any other page: escaped, wrapped, dark, monospace. `html`
- *  and `svg` are already documents and are returned untouched; binary kinds never come through here (they
- *  are served as bytes with their own content type). Pure. */
+ *  the serve route can hand it to the frame like any other page. P-PREVIEW.16: `markdown` is RENDERED
+ *  (headings, lists, tables, code fences); every other text-ish kind stays an escaped monospace source view,
+ *  which is what you want for a .json or a .log. `html` and `svg` are already documents and are returned
+ *  untouched; binary kinds never come through here (they are served as bytes with their own content type).
+ *  Pure. */
 export function previewTextDocument(kind: PreviewKind, text: string, label: string): string {
   if (kind === "html" || kind === "svg") return text ?? "";
   const raw = text ?? "";
   const body = raw.length > MAX_DOC_TEXT
     ? `${raw.slice(0, MAX_DOC_TEXT)}\n\n[truncated at ${Math.round(MAX_DOC_TEXT / 1024)} KB of ${Math.round(raw.length / 1024)} KB]`
     : raw;
-  const page = "margin:0;background:#0b0b10;color:#d8dbe4";
-  const pre = "margin:0;padding:16px 20px;white-space:pre-wrap;overflow-wrap:anywhere;"
-    + "font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">`
-    + `<meta name="viewport" content="width=device-width,initial-scale=1">`
-    + `<title>${htmlEscape(label ?? "")}</title></head>`
-    + `<body style="${page}"><pre style="${pre}">${htmlEscape(body)}</pre></body></html>`;
+  if (kind === "markdown") return previewDocument(label, MD_CSS, `<div class="md">${previewMarkdownHtml(body)}</div>`);
+  return previewDocument(label, PRE_CSS, `<pre>${htmlEscape(body)}</pre>`);
 }

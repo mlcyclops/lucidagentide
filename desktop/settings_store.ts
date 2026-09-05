@@ -563,8 +563,10 @@ export function setChosenModel(model: string): GuiSettings {
   save(s); return s;
 }
 // P-THEME.1: the user's chosen app theme id (see desktop/renderer/theme.ts THEMES). "" / unset means
-// "not chosen", which resolveTheme folds to the OS colour-scheme preference (light OS -> lucid-light,
-// otherwise the dark default). Stored as an opaque STRING, deliberately not a union: the renderer's
+// "not chosen", which resolveTheme folds to the DEFAULT (lucid-dark). P-THEME.2: it used to fold to the
+// OS colour-scheme preference, which silently moved long-time users off the dark UI they already had;
+// following the OS is now the explicit `system` id. Stored as an opaque STRING, deliberately not a union:
+// the renderer's
 // theme registry is the single source of truth for which ids exist, and resolveTheme already treats an
 // unknown id as unset, so shipping or retiring a theme never needs a migration here.
 export function themeId(): string { return load().theme ?? ""; }

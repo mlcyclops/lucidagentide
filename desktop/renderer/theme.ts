@@ -87,20 +87,39 @@ export const THEMES: readonly ThemeDef[] = [
 
 export const DEFAULT_THEME_ID = "lucid-dark";
 
-// The light theme an OS "prefers light" hint lands on when the user has never chosen. Only
-// used for the never-chosen case: see resolveTheme.
+/** P-THEME.2: the explicit "follow my OS" choice.
+ *
+ *  This exists because "never chosen" and "follow the OS" used to be the SAME stored value (""), which
+ *  quietly moved people off the UI they already had: a long-time user whose machine prefers light had never
+ *  touched the theme setting, so shipping light mode flipped their app. Reported as "default to Lucid Dark
+ *  since existing users are used to this".
+ *
+ *  Separating the two makes both honest. Unset now means the DEFAULT (dark), so an untouched install keeps
+ *  looking like the app always looked, and following the OS is something a user opts INTO. */
+export const SYSTEM_THEME_ID = "system";
+
+// The light theme an OS "prefers light" hint lands on, for a user who explicitly chose SYSTEM_THEME_ID.
 const OS_LIGHT_THEME_ID = "lucid-light";
 
 const BY_ID: ReadonlyMap<string, ThemeDef> = new Map(THEMES.map((t) => [t.id, t]));
 
-/** Resolve a persisted id (possibly stale/absent) plus the OS preference into a real theme. */
+/** Resolve a persisted id (possibly stale/absent/the system sentinel) plus the OS preference into a real
+ *  theme. Three cases, and the difference between the last two is the P-THEME.2 fix:
+ *    a known id      -> that theme, whatever the OS says
+ *    SYSTEM_THEME_ID -> the OS hint (an explicit opt-in to following the system)
+ *    unset / unknown -> DEFAULT_THEME_ID, and NOT the OS hint */
 export function resolveTheme(id: string | undefined | null, prefersLight: boolean): ThemeDef {
   // An EXPLICIT choice always wins. Letting the OS preference override a known id is the bug
   // where a user picks Paper, their machine flips to dark at sunset, and the app silently
-  // disagrees with Settings. The OS hint only fills the "never chosen / id we retired" hole.
+  // disagrees with Settings.
   const known = id ? BY_ID.get(id) : undefined;
   if (known) return known;
-  const fallbackId = prefersLight ? OS_LIGHT_THEME_ID : DEFAULT_THEME_ID;
+  // P-THEME.2: the OS hint applies ONLY to the user who asked for it. An unset preference is a user who
+  // has never expressed one, and for them the honest answer is the app's own default: an install nobody
+  // configured must not change appearance because of a system setting they never pointed at LUCID.
+  // A RETIRED id lands here too and also gets the default, which is the safe direction (the base `:root`
+  // palette IS lucid-dark, so the CSS and the attribute agree even if JS never runs).
+  const fallbackId = id === SYSTEM_THEME_ID && prefersLight ? OS_LIGHT_THEME_ID : DEFAULT_THEME_ID;
   // Non-null: both ids are in THEMES and theme.test.ts pins that.
   return BY_ID.get(fallbackId) as ThemeDef;
 }

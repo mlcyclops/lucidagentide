@@ -354,4 +354,39 @@
 //            rewrites to the model's prose, which had also left every preview activity pill dark
 //            (P-PREVIEW.11/.11b, ADR-0308). Plus two stacked chat scroll helpers for long sessions (step a
 //            page, or run to the end) and paste-safe Homebrew docs (stock zsh does not strip # comments).
-export const APP_VERSION = "1.14.2";
+// v2.0.0 = the major, and the reason it is a MAJOR rather than a 1.15: this batch changes defaults users
+//            were relying on and REMOVES models from the catalog, which is what a major version exists to
+//            announce. Eighteen increments (ADR-0309..0326), the largest batch in the project's history.
+//            MODELS: the catalog moves to the current generation and stops going stale - Claude Opus 5 as
+//            the house default (1M ctx), GPT-6 Astra (1M, the first OpenAI generation to match Claude's
+//            window), the Gemini 3 / 3.1 Pro + 3.5 Flash family, Fable/Mythos 5.1, with the picker default
+//            following the USER instead of a hardcoded id, capability tiers derived from one source of
+//            truth (a hand-copied third regex had never learned GPT-6 and mis-ranked a flagship as a
+//            workhorse), and a deprecation floor that DROPS superseded ids (GPT below 5.4) - the breaking
+//            half of the model story (P-MODEL.2, ADR-0317).
+//            LOOK: light mode arrives with SEVEN themes and a picker, after a dark-only lifetime; every
+//            palette is token-complete by test, because a light theme that forgets one token inherits the
+//            dark base and ships unreadable (P-THEME.1, ADR-0320). P-THEME.2 then makes the DEFAULT honest:
+//            "never chosen" used to mean "follow the OS", so shipping light mode moved long-time users off
+//            the dark UI they already had; unset now means Lucid Dark and following the OS is an explicit
+//            choice (ADR-0326).
+//            SESSIONS THAT FINISH: the harness watches its own sessions and recovers a wedged one in place
+//            (ADR-0311), and now RESUMES the run that recovery interrupted, with a short operator note and
+//            a plain notice that it is picking up where it left off - bounded per run, never after a user
+//            Stop (P-HEALTH.2, ADR-0324). A dropped engine stream no longer freezes the composer in
+//            silence while the turn keeps working.
+//            THE FLEET GROWS UP: lane tool-call fidelity and the repaint that was eating transcripts
+//            (ADR-0309), promote a lane into the main composer as an ATTACH rather than a handoff
+//            (ADR-0310/0314), dismiss a lane (ADR-0313), a spend meter that refuses to invent numbers
+//            (ADR-0312/0315), and cards you can actually size and drag: pixel widths tracking the pointer
+//            1:1, headers that wrap instead of clipping, a real grab grip (P-FLEET.L12, ADR-0325).
+//            THE AGENT WRITES TO MEMORY: it can finally write to the knowledge graph, and a locked vault
+//            stops lying about what it holds (P-KG.3, ADR-0319).
+//            PREVIEW BECOMES A SURFACE: twelve renderable kinds, rendered markdown, working PDFs, and an
+//            auto-open trigger narrowed back to html/svg/pdf after it started hijacking the screen for
+//            every .md and .json an agent writes (ADR-0321/0322/0323, P-PREVIEW.15..18).
+//            Plus: tools that name themselves so evaluation can attribute them (P-EVAL.4, ADR-0318), a
+//            login confirmed by the VAULT rather than an exit code (ADR-0316), one-gesture bulk dismissal
+//            of a 100-row security queue, and the test suite no longer appending its fixture blocks into
+//            the operator's real security ledger (P-SEC.4).
+export const APP_VERSION = "2.0.0";

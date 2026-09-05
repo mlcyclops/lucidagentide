@@ -10,68 +10,76 @@
 import { describe, expect, it } from "bun:test";
 import { clampToViewport } from "./share_dock.ts";
 import {
-  gridCols, colsFromDrag, heightFromDrag, clampSize, snapSlot, reorder, reconcile, loadLayout, saveLayout,
+  widthFromDrag, maxCardW, heightFromDrag, clampSize, snapSlot, reorder, reconcile, loadLayout, saveLayout,
   resizeShape,
-  CARD_COL_W, CARD_GAP, CARD_MIN_H, CARD_MAX_H, CARD_MIN_COLS, CARD_MAX_COLS,
+  CARD_COL_W, CARD_GAP, CARD_MIN_H, CARD_MAX_H, CARD_MIN_W, CARD_MAX_W, CARD_DEF_W,
   type CardRect, type LaneLayout,
 } from "./lane_layout.ts";
 
 const MIN_W = 296, MIN_H = 200;
 const START = { x: 100, y: 100, w: 400, h: 300 };
 
-describe("gridCols (P-FLEET.L9)", () => {
-  it("never reports fewer than one track, whatever the width", () => {
-    expect(gridCols(0)).toBe(1);
-    expect(gridCols(-500)).toBe(1);
-    expect(gridCols(Number.NaN)).toBe(1);
-    expect(gridCols(Number.POSITIVE_INFINITY)).toBe(1); // unusable width falls back, never Infinity tracks
-    expect(gridCols(undefined as unknown as number)).toBe(1);
-  });
-
-  it("counts tracks with the gap between them, not after the last one", () => {
-    expect(gridCols(300)).toBe(1);
-    expect(gridCols(609)).toBe(1); // one px short of two tracks
-    expect(gridCols(610)).toBe(2); // 300 + 10 + 300
-    expect(gridCols(920)).toBe(3);
+// P-FLEET.L12 retired `gridCols`: the panel is a wrapping flex row now, so there are no tracks to count.
+// CARD_COL_W and CARD_GAP survive as the DEFAULT card width and the flex gap, and as the arithmetic the
+// legacy span migration below reads, so their values are still pinned here.
+describe("the surviving track constants (P-FLEET.L12)", () => {
+  it("keeps the values the stylesheet and the span migration both depend on", () => {
     expect(CARD_COL_W).toBe(300);
     expect(CARD_GAP).toBe(10);
-  });
-
-  it("honors an explicit track width and gap", () => {
-    expect(gridCols(1000, 200, 0)).toBe(5);
-    expect(gridCols(1000, 0, 0)).toBe(3); // a zero track width is nonsense, fall back to CARD_COL_W
+    expect(CARD_DEF_W).toBe(CARD_COL_W);
   });
 });
 
-describe("colsFromDrag (P-FLEET.L9)", () => {
-  it("has a half-track deadzone so a resting pointer never jitters the span", () => {
-    expect(colsFromDrag(2, 0, 6)).toBe(2);
-    expect(colsFromDrag(2, 149, 6)).toBe(2);
-    expect(colsFromDrag(2, -149, 6)).toBe(2);
-    expect(colsFromDrag(2, 150, 6)).toBe(3);
+describe("widthFromDrag (P-FLEET.L12: continuous, no snap)", () => {
+  it("THE FIX: the edge tracks the pointer 1:1, with no deadzone and no track step", () => {
+    // The old span model quantized this to a 300px track with a half-track deadzone: a 149px drag moved
+    // NOTHING and a 150px drag jumped a full 300px. Reported as "more adjustable right side handlers, not
+    // just snap". Every pixel of drag must now land.
+    expect(widthFromDrag(400, 1, 2000)).toBe(401);
+    expect(widthFromDrag(400, 149, 2000)).toBe(549);
+    expect(widthFromDrag(400, 150, 2000)).toBe(550);
+    expect(widthFromDrag(400, -1, 2000)).toBe(399);
+    expect(widthFromDrag(400, 0, 2000)).toBe(400);
   });
 
-  it("rounds a multi-track drag", () => {
-    expect(colsFromDrag(1, 450, 6)).toBe(3); // +1.5 tracks rounds to +2
+  it("clamps down to CARD_MIN_W", () => {
+    expect(widthFromDrag(400, -400, 2000)).toBe(CARD_MIN_W);
+    expect(widthFromDrag(400, -99999, 2000)).toBe(CARD_MIN_W);
+    expect(widthFromDrag(CARD_MIN_W, -1, 2000)).toBe(CARD_MIN_W);
   });
 
-  it("clamps down to CARD_MIN_COLS", () => {
-    expect(colsFromDrag(1, -400, 6)).toBe(CARD_MIN_COLS);
-    expect(colsFromDrag(2, -400, 6)).toBe(CARD_MIN_COLS);
-    expect(colsFromDrag(3, -99999, 6)).toBe(CARD_MIN_COLS);
-  });
-
-  it("clamps up to the narrower of maxCols and CARD_MAX_COLS", () => {
-    expect(colsFromDrag(1, 5 * CARD_COL_W, 2)).toBe(2);
-    expect(colsFromDrag(6, 5 * CARD_COL_W, 99)).toBe(CARD_MAX_COLS);
-    expect(colsFromDrag(1, 5 * CARD_COL_W, 0)).toBe(CARD_MIN_COLS); // a dock too narrow for a track
+  it("clamps up to the narrower of the panel body and CARD_MAX_W", () => {
+    expect(widthFromDrag(400, 9000, 900)).toBe(900); // never wider than the panel it lives in
+    expect(widthFromDrag(400, 9000, 99999)).toBe(CARD_MAX_W);
+    expect(widthFromDrag(400, 9000, 100)).toBe(CARD_MIN_W); // a panel narrower than one minimum card
   });
 
   it("never returns NaN from an unusable drag or start", () => {
-    expect(colsFromDrag(2, Number.NaN, 6)).toBe(2);
-    expect(colsFromDrag(2, Number.POSITIVE_INFINITY, 6)).toBe(2);
-    expect(colsFromDrag(Number.NaN, 0, 6)).toBe(CARD_MIN_COLS);
-    expect(colsFromDrag(2, 150, Number.NaN)).toBe(3);
+    expect(widthFromDrag(400, Number.NaN, 2000)).toBe(400);
+    expect(widthFromDrag(400, Number.POSITIVE_INFINITY, 2000)).toBe(400);
+    expect(widthFromDrag(Number.NaN, 0, 2000)).toBe(CARD_DEF_W);
+    // An unmeasurable ceiling must not clamp the drag down (see maxCardW below).
+    expect(widthFromDrag(400, 100, Number.NaN)).toBe(500);
+  });
+});
+
+describe("maxCardW (P-FLEET.L12)", () => {
+  it("a measured panel body IS the ceiling, floored at one minimum card", () => {
+    expect(maxCardW(900)).toBe(900);
+    expect(maxCardW(100)).toBe(CARD_MIN_W);
+    expect(maxCardW(99999)).toBe(CARD_MAX_W);
+  });
+
+  it("an UNMEASURABLE body does not clamp: it must never rewrite the user's sizes", () => {
+    // rect.width reads 0 while the panel is hidden or pre-layout. Clamping to the MINIMUM there would
+    // shrink every card the user had sized to 260px off one bad measurement, which is unrecoverable;
+    // being briefly too permissive is free, because CSS shrinks an over-wide card and the next real
+    // measurement re-clamps it. The DIRECTION of this fallback is the assertion.
+    expect(maxCardW(0)).toBe(CARD_MAX_W);
+    expect(maxCardW(-50)).toBe(CARD_MAX_W);
+    expect(maxCardW(Number.NaN)).toBe(CARD_MAX_W);
+    expect(maxCardW(Number.POSITIVE_INFINITY)).toBe(CARD_MAX_W);
+    expect(maxCardW(undefined as unknown as number)).toBe(CARD_MAX_W);
   });
 });
 
@@ -105,19 +113,19 @@ describe("heightFromDrag (P-FLEET.L9)", () => {
   });
 });
 
-describe("clampSize (P-FLEET.L9)", () => {
+describe("clampSize (P-FLEET.L12)", () => {
   it("clamps both axes and returns a NEW object", () => {
-    const s = { cols: 99, h: 99999 };
-    const c = clampSize(s, 6);
-    expect(c).toEqual({ cols: CARD_MAX_COLS, h: CARD_MAX_H });
+    const s = { w: 99999, h: 99999 };
+    const c = clampSize(s, 99999);
+    expect(c).toEqual({ w: CARD_MAX_W, h: CARD_MAX_H });
     expect(c).not.toBe(s);
-    expect(clampSize({ cols: 0, h: 10 }, 6)).toEqual({ cols: CARD_MIN_COLS, h: CARD_MIN_H });
-    expect(clampSize({ cols: 4, h: 300 }, 2)).toEqual({ cols: 2, h: 300 });
+    expect(clampSize({ w: 0, h: 10 }, 2000)).toEqual({ w: CARD_MIN_W, h: CARD_MIN_H });
+    expect(clampSize({ w: 1200, h: 300 }, 900)).toEqual({ w: 900, h: 300 }); // capped by the panel body
   });
 
-  it("substitutes the minimum for an unreadable size instead of propagating NaN", () => {
-    expect(clampSize({ cols: Number.NaN, h: Number.NaN }, 6)).toEqual({ cols: CARD_MIN_COLS, h: CARD_MIN_H });
-    expect(clampSize(undefined as unknown as { cols: number; h: number }, 6)).toEqual({ cols: CARD_MIN_COLS, h: CARD_MIN_H });
+  it("substitutes the default width and minimum height for an unreadable size, never NaN", () => {
+    expect(clampSize({ w: Number.NaN, h: Number.NaN }, 2000)).toEqual({ w: CARD_DEF_W, h: CARD_MIN_H });
+    expect(clampSize(undefined as unknown as { w: number; h: number }, 2000)).toEqual({ w: CARD_DEF_W, h: CARD_MIN_H });
   });
 });
 
@@ -218,14 +226,14 @@ describe("reorder (P-FLEET.L9)", () => {
 
 describe("reconcile (P-FLEET.L9)", () => {
   it("appends unknown lanes in server order", () => {
-    const l: LaneLayout = { order: ["a"], size: { a: { cols: 2, h: 300 } } };
+    const l: LaneLayout = { order: ["a"], size: { a: { w: 610, h: 300 } } };
     const r = reconcile(l, ["a", "b", "c"]);
     expect(r.order).toEqual(["a", "b", "c"]);
-    expect(r.size).toEqual({ a: { cols: 2, h: 300 } });
+    expect(r.size).toEqual({ a: { w: 610, h: 300 } });
   });
 
   it("drops a vanished lane from BOTH order and size", () => {
-    const l: LaneLayout = { order: ["a", "b"], size: { a: { cols: 2, h: 300 }, b: { cols: 1, h: 200 } } };
+    const l: LaneLayout = { order: ["a", "b"], size: { a: { w: 610, h: 300 }, b: { w: 300, h: 200 } } };
     const r = reconcile(l, ["a"]);
     expect(r.order).toEqual(["a"]);
     expect(Object.keys(r.size)).toEqual(["a"]);
@@ -244,7 +252,7 @@ describe("reconcile (P-FLEET.L9)", () => {
   });
 
   it("returns NEW objects even on the no-op path", () => {
-    const l: LaneLayout = { order: ["a"], size: { a: { cols: 2, h: 300 } } };
+    const l: LaneLayout = { order: ["a"], size: { a: { w: 610, h: 300 } } };
     const r = reconcile(l, ["a"]);
     expect(r).toEqual(l);
     expect(r).not.toBe(l);
@@ -274,7 +282,7 @@ describe("loadLayout / saveLayout (P-FLEET.L9)", () => {
   it("round-trips a saved layout byte-identically", () => {
     const l: LaneLayout = {
       order: ["lane-1", "lane-2"],
-      size: { "lane-1": { cols: 2, h: 320 }, "lane-2": { cols: 1, h: 150 } },
+      size: { "lane-1": { w: 610, h: 320 }, "lane-2": { w: 300, h: 150 } },
     };
     const raw = saveLayout(l);
     expect(loadLayout(raw)).toEqual(l);
@@ -282,27 +290,47 @@ describe("loadLayout / saveLayout (P-FLEET.L9)", () => {
   });
 
   it("clamps a persisted size that is out of range", () => {
-    const r = loadLayout('{"order":["a"],"size":{"a":{"cols":99,"h":99999}}}');
-    expect(r.size.a).toEqual({ cols: CARD_MAX_COLS, h: CARD_MAX_H });
+    const r = loadLayout('{"order":["a"],"size":{"a":{"w":99999,"h":99999}}}');
+    expect(r.size.a).toEqual({ w: CARD_MAX_W, h: CARD_MAX_H });
   });
 
   it("drops an unreadable size entry rather than inventing a number, keeping the order", () => {
-    const r = loadLayout('{"order":["a","b"],"size":{"a":{"cols":"x","h":null},"b":{"cols":2,"h":300}}}');
+    const r = loadLayout('{"order":["a","b"],"size":{"a":{"w":"x","h":null},"b":{"w":610,"h":300}}}');
     expect(r.order).toEqual(["a", "b"]);
     expect(r.size.a).toBeUndefined();
-    expect(r.size.b).toEqual({ cols: 2, h: 300 });
+    expect(r.size.b).toEqual({ w: 610, h: 300 });
   });
 
   it("releases a size entry for a lane that is not in the order, so the store cannot grow forever", () => {
-    const r = loadLayout('{"order":["a"],"size":{"a":{"cols":1,"h":200},"ghost":{"cols":2,"h":300}}}');
+    const r = loadLayout('{"order":["a"],"size":{"a":{"w":300,"h":200},"ghost":{"w":610,"h":300}}}');
     expect(Object.keys(r.size)).toEqual(["a"]);
   });
 
   it("saveLayout normalizes duplicates and clamps, so equal layouts serialize equally", () => {
-    expect(saveLayout({ order: ["a", "a"], size: { a: { cols: 2, h: 300 } } }))
-      .toBe(saveLayout({ order: ["a"], size: { a: { cols: 2, h: 300 } } }));
-    expect(saveLayout({ order: ["a"], size: { a: { cols: 99, h: 1 } } }))
-      .toBe(JSON.stringify({ order: ["a"], size: { a: { cols: CARD_MAX_COLS, h: CARD_MIN_H } } }));
+    expect(saveLayout({ order: ["a", "a"], size: { a: { w: 610, h: 300 } } }))
+      .toBe(saveLayout({ order: ["a"], size: { a: { w: 610, h: 300 } } }));
+    expect(saveLayout({ order: ["a"], size: { a: { w: 99999, h: 1 } } }))
+      .toBe(JSON.stringify({ order: ["a"], size: { a: { w: CARD_MAX_W, h: CARD_MIN_H } } }));
+  });
+
+  // P-FLEET.L12 MIGRATION: a layout written by the SPAN build must be converted, not discarded. Dropping
+  // it would silently reset every card the user had already sized, which is the same class of loss as the
+  // unmeasurable-panel clamp above.
+  it("migrates a legacy `cols` span to pixels, gaps included, preserving height", () => {
+    const r = loadLayout('{"order":["a","b","c"],"size":{"a":{"cols":2,"h":320},"b":{"cols":1,"h":150},"c":{"cols":3,"h":400}}}');
+    expect(r.size.a).toEqual({ w: 2 * CARD_COL_W + CARD_GAP, h: 320 });      // 610
+    expect(r.size.b).toEqual({ w: CARD_COL_W, h: 150 });                     // 300, no gap for one track
+    expect(r.size.c).toEqual({ w: 3 * CARD_COL_W + 2 * CARD_GAP, h: 400 });  // 920
+  });
+
+  it("prefers an explicit `w` over a stale `cols` when a payload somehow carries both", () => {
+    const r = loadLayout('{"order":["a"],"size":{"a":{"w":480,"cols":6,"h":300}}}');
+    expect(r.size.a).toEqual({ w: 480, h: 300 });
+  });
+
+  it("a legacy entry with an unreadable span is still DROPPED, not invented", () => {
+    const r = loadLayout('{"order":["a"],"size":{"a":{"cols":"wide","h":300}}}');
+    expect(r.size.a).toBeUndefined();
   });
 });
 

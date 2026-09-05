@@ -16,15 +16,23 @@
 
 import type { DockShape } from "./share_dock.ts";
 
-export interface CardSize { cols: number; h: number }
+/** A card's size in PX, both axes. P-FLEET.L12: `w` replaced a `cols` column span.
+ *
+ *  The span model quantized every width to a 300px track with a half-track deadzone, so the right edge
+ *  moved in 300px jumps and a drag under 150px did nothing at all. Reported as "I would like more
+ *  adjustable right side handlers, not just snap". Width is now a plain pixel value like height already
+ *  was, so the edge tracks the pointer 1:1. */
+export interface CardSize { w: number; h: number }
 export interface LaneLayout { order: string[]; size: Record<string, CardSize> }
 
-export const CARD_COL_W = 300;      // one grid track, px
+export const CARD_COL_W = 300;      // the DEFAULT card width, and the legacy track width migrations read
 export const CARD_GAP = 10;
 export const CARD_MIN_H = 150;
 export const CARD_MAX_H = 1200;
-export const CARD_MIN_COLS = 1;
-export const CARD_MAX_COLS = 6;
+/** Narrower than this and the header controls have nowhere to go even wrapped (invariant 11). */
+export const CARD_MIN_W = 260;
+export const CARD_MAX_W = 2400;
+export const CARD_DEF_W = CARD_COL_W;
 
 /** Coerce anything (a persisted string, a pointer delta off a detached event, undefined) to a usable number.
  *  Non-finite is never propagated: NaN reaching a style property silently blanks the whole rule. */
@@ -34,25 +42,26 @@ function clampInt(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, Math.round(v)));
 }
 
-/** How many tracks fit in a dock body of this width (>= 1 always). */
-export function gridCols(bodyW: number, colW: number = CARD_COL_W, gap: number = CARD_GAP): number {
-  const w = num(colW, CARD_COL_W);
-  const g = Math.max(0, num(gap, CARD_GAP));
-  const track = w > 0 ? w : CARD_COL_W;
-  // n tracks occupy n*track + (n-1)*gap, so add one gap back before dividing.
-  const n = Math.floor((num(bodyW, 0) + g) / (track + g));
-  return Math.max(1, Number.isFinite(n) ? n : 1);
+/** The widest a card may be right now: the panel body it lives in, never less than one minimum card.
+ *  Every width clamp measures against THIS, so a card can never persist wider than the panel that holds
+ *  it (which the span model guaranteed via the track count, and px has to state explicitly).
+ *
+ *  An UNMEASURABLE body (0, negative, NaN, Infinity) falls back to the hard maximum, deliberately NOT to
+ *  the minimum. `getBoundingClientRect().width` is 0 while the panel is hidden or has not laid out yet, so
+ *  clamping down there would rewrite every card the user had sized to 260px on the strength of one bad
+ *  measurement. Being briefly too permissive costs nothing: `.fleet-card` carries `max-width:100%` and a
+ *  shrinkable flex basis, so an over-wide card gives way visually and the next real measurement re-clamps
+ *  it. Losing the user's sizes is not recoverable. */
+export function maxCardW(bodyW: number): number {
+  const body = num(bodyW, 0);
+  if (!(body > 0)) return CARD_MAX_W; // 0 / negative / NaN / -Infinity all mean "not measured"
+  return Math.max(CARD_MIN_W, Math.min(CARD_MAX_W, Math.floor(body)));
 }
 
-/** Right-edge drag -> column span. `dx` is px from the drag origin; a drag that has not crossed half a
- *  track does not change the span (no jitter). Clamped to [CARD_MIN_COLS, min(CARD_MAX_COLS, maxCols)]. */
-export function colsFromDrag(startCols: number, dx: number, maxCols: number, colW: number = CARD_COL_W): number {
-  const w = num(colW, CARD_COL_W);
-  const track = w > 0 ? w : CARD_COL_W;
-  const hi = Math.max(CARD_MIN_COLS, Math.min(CARD_MAX_COLS, Math.floor(num(maxCols, CARD_MAX_COLS))));
-  // Math.round is the half-track deadzone: 149px moves nothing, 150px moves one track.
-  const span = num(startCols, CARD_MIN_COLS) + Math.round(num(dx, 0) / track);
-  return clampInt(span, CARD_MIN_COLS, hi);
+/** Right-edge drag -> width in PX. `dx` is px from the drag origin and moves the edge 1:1: no track, no
+ *  deadzone, no rounding to a span. Clamped to [CARD_MIN_W, min(CARD_MAX_W, maxW)]. */
+export function widthFromDrag(startW: number, dx: number, maxW: number): number {
+  return clampInt(num(startW, CARD_DEF_W) + num(dx, 0), CARD_MIN_W, maxCardW(maxW));
 }
 
 /** BOTTOM-edge drag -> height. Dragging DOWN is a POSITIVE dy and INCREASES height, the conventional
@@ -66,10 +75,9 @@ export function heightFromDrag(startH: number, dy: number): number {
   return clampInt(num(startH, CARD_MIN_H) + num(dy, 0), CARD_MIN_H, CARD_MAX_H);
 }
 
-export function clampSize(s: CardSize, maxCols: number): CardSize {
-  const hi = Math.max(CARD_MIN_COLS, Math.min(CARD_MAX_COLS, Math.floor(num(maxCols, CARD_MAX_COLS))));
+export function clampSize(s: CardSize, maxW: number): CardSize {
   return {
-    cols: clampInt(num(s?.cols, CARD_MIN_COLS), CARD_MIN_COLS, hi),
+    w: clampInt(num(s?.w, CARD_DEF_W), CARD_MIN_W, maxCardW(maxW)),
     h: clampInt(num(s?.h, CARD_MIN_H), CARD_MIN_H, CARD_MAX_H),
   };
 }
@@ -180,7 +188,7 @@ export function reconcile(layout: LaneLayout, laneIds: readonly string[]): LaneL
   const src = layout?.size ?? {};
   for (const id of order) {
     const s = src[id];
-    if (s) size[id] = { cols: s.cols, h: s.h };
+    if (s) size[id] = { w: s.w, h: s.h };
   }
   return { order, size };
 }
@@ -215,11 +223,19 @@ export function loadLayout(raw: string | null | undefined): LaneLayout {
     for (const id of order) {
       const s = bag[id];
       if (!s || typeof s !== "object" || Array.isArray(s)) continue;
-      const cell = s as { cols?: unknown; h?: unknown };
-      // A size we cannot read is DROPPED, not invented: the card falls back to the caller's default rather
-      // than to a fabricated number.
-      if (!Number.isFinite(Number(cell.cols)) || !Number.isFinite(Number(cell.h))) continue;
-      size[id] = clampSize({ cols: Number(cell.cols), h: Number(cell.h) }, CARD_MAX_COLS);
+      const cell = s as { w?: unknown; cols?: unknown; h?: unknown };
+      const h = Number(cell.h);
+      if (!Number.isFinite(h)) continue; // a size we cannot read is DROPPED, never invented
+      // P-FLEET.L12 MIGRATION: a layout persisted before widths were px carries `cols` (a 300px track
+      // span). Converting it beats discarding it, because dropping the entry would silently reset every
+      // card the user had already sized. n tracks occupied n*300 + (n-1)*10, so the gaps come back too.
+      const w = Number.isFinite(Number(cell.w))
+        ? Number(cell.w)
+        : Number.isFinite(Number(cell.cols))
+          ? Number(cell.cols) * CARD_COL_W + Math.max(0, Number(cell.cols) - 1) * CARD_GAP
+          : Number.NaN;
+      if (!Number.isFinite(w)) continue;
+      size[id] = clampSize({ w, h }, CARD_MAX_W);
     }
   }
   return { order, size };
@@ -234,7 +250,7 @@ export function saveLayout(l: LaneLayout): string {
     seen.add(id);
     order.push(id);
     const s = l?.size?.[id];
-    if (s) size[id] = clampSize(s, CARD_MAX_COLS);
+    if (s) size[id] = clampSize(s, CARD_MAX_W);
   }
   // Keys are emitted in `order` sequence, so an unchanged layout always serializes to identical bytes.
   return JSON.stringify({ order, size });

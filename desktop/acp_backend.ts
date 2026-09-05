@@ -48,7 +48,7 @@ import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, r
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
 import { type PendingCall, type PendingView, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
-import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthAction, type HealthEpisode } from "./health_watch.ts"; // P-HEALTH.1
+import { HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
@@ -1236,6 +1236,7 @@ class Backend {
     this.listener = sink;
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
     this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
+    this.recoverMark.clear(); // P-HEALTH.2: a new run never inherits a previous run's recovery marker
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
     this.chatGate.begin(); // P-KG-INGEST.3: a chat turn is live → background extraction should yield to it
@@ -1269,12 +1270,44 @@ class Backend {
       // session/prompt accepts `(text|image)[]` (same shape the preview_screenshot tool returns). Only
       // well-formed blocks (base64 data + image mime) are appended — the renderer already validated them.
       const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
-      const promptContent = [{ type: "text" as const, text: body }, ...imageBlocks];
+      let content: { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] =
+        [{ type: "text" as const, text: body }, ...imageBlocks];
       arm(); // start the slow-notice clock now (covers silence BEFORE the first token)
       tSent = Date.now(); // P-EVAL.2: t_sent \u2014 the prompt is handed to the model
       // P-STALL.2 (ADR-0263): no Promise.race against a clock - the request runs until the work ends,
       // Stop cancels it, or the omp child dies (ACPClient rejects every pending request on exit).
-      const promptRes = await this.acp!.request<{ stopReason?: unknown }>("session/prompt", { sessionId: this.sessionId, prompt: promptContent });
+      // P-HEALTH.2: ...and when the WATCHDOG is what killed it, the run is re-sent here instead of being
+      // dropped. The retry lives inside this one prompt() call on purpose: `onEvent` and the HTTP stream
+      // stay attached, so the user watches the restart happen in the same turn rather than being left with
+      // a dead pane and a session that quietly moved on without them.
+      let promptRes: { stopReason?: unknown } | undefined;
+      let resumes = 0;
+      for (;;) {
+        try {
+          promptRes = await this.acp!.request<{ stopReason?: unknown }>("session/prompt", { sessionId: this.sessionId, prompt: content });
+          break;
+        } catch (err) {
+          const rec = this.recoverMark.take();
+          if (!rec) throw err; // a user Stop, or a genuine transport failure - the existing error path owns it
+          await this.recovering?.catch(() => { /* a failed reload shows up as a null sessionId below */ });
+          const v = resumeVerdict({ recovered: true, sessionAlive: !!this.sessionId, resumesSoFar: resumes });
+          this.turnDiag(`prompt.recovered session=${this.sessionId} resumes=${resumes} resume=${v.resume} silentMs=${rec.silentMs}`);
+          // Either way the user is TOLD, through the same health channel the recovery itself reports on.
+          onEvent({ type: "health", action: "recover", reason: v.reason });
+          if (!v.resume) throw err;
+          resumes++;
+          // `restart()` nulls the listener and clears askActive. Without re-asserting both, the resumed run
+          // would stream into nothing and its permission requests would never reach the UI - which is the
+          // "listener clobber" failure mode this increment exists to close, not to reintroduce.
+          this.listener = sink;
+          this.askActive = true;
+          content = [{ type: "text" as const, text: buildResumeNote({
+            request: text, progress: assistant, pending: rec.pending,
+            stalledMs: rec.silentMs, attempt: resumes, max: RESUME_MAX_PER_RUN,
+          }) }];
+          arm(); // the resumed run gets a fresh silence clock
+        }
+      }
       // P-GOAL-DIAG.1 (ADR-0074): the omp turn's stopReason tells us WHY a maker turn ended (e.g. an
       // empty/early end on a thinking-heavy Claude turn) — invaluable for the model-specific loop bug.
       lastStopReason = promptRes?.stopReason ? String(promptRes.stopReason) : undefined;
@@ -1738,7 +1771,10 @@ class Backend {
   /** P-ACP.4: interrupt the in-flight turn. Sends the ACP `session/cancel` notification — omp aborts
    *  the streaming reply AND in-flight tool calls and returns the pending `session/prompt` with a
    *  cancelled stopReason, so the turn's `done` fires normally and the UI settles. No-op when idle. */
-  cancel(): void {
+  cancel(opts?: { forRecover?: boolean }): void {
+    // P-HEALTH.2: a USER Stop is never auto-resumed - stopping means stop. Only the recovery path keeps the
+    // marker, and it passes `forRecover` because it cancels the wedged turn through this same method.
+    if (!opts?.forRecover) this.recoverMark.clear();
     try { if (this.acp && this.sessionId) this.acp.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* best-effort */ }
   }
 
@@ -1759,6 +1795,15 @@ class Backend {
   private healthBusy = false;
   /** The last self-action, surfaced in status so the user can see the harness handled it. */
   lastHealth: { action: "probe" | "recover"; reason: string; at: number } | null = null;
+  /** P-HEALTH.2: the one-shot handoff from the watchdog to the run it interrupts. Set just before a
+   *  recovery drops the child, so the in-flight prompt can tell a harness recovery apart from a user Stop
+   *  when its request rejects. The lifecycle rules (take once, a Stop clears it) live in health_watch.ts
+   *  where they are tested. */
+  private recoverMark = new RecoverMarker();
+  /** The in-flight recovery. A rejected request awaits this, so the resume happens only after the respawn
+   *  and `session/load` have finished and `sessionId` is either restored or definitively null. */
+  private recovering: Promise<void> | null = null;
+
 
   /** Where the master session stands right now. Read-only: takes no action, mutates nothing. */
   healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null } {
@@ -1795,7 +1840,15 @@ class Backend {
         return { action: "probe", reason: v.reason };
       }
       this.healthEpisode = onRecover(this.healthEpisode, now);
-      await this.healthRecover();
+      // P-HEALTH.2: mark the recovery BEFORE the child dies. Dropping the child rejects the in-flight
+      // `session/prompt`, and the prompt's catch reads this marker to know the run is resumable rather
+      // than failed. The pending labels are captured here for the same reason: `restart()` clears them.
+      this.recoverMark.set({
+        reason: v.reason, at: now, silentMs: v.silentMs,
+        pending: pendingSnapshot(this.openCalls, now).map((p) => p.label),
+      });
+      this.recovering = this.healthRecover();
+      await this.recovering;
       return { action: "recover", reason: v.reason };
     } finally {
       this.healthBusy = false;
@@ -1810,7 +1863,7 @@ class Backend {
    *  than talking to a half-dead child (fail-closed: no session is better than a phantom one). */
   private async healthRecover(): Promise<void> {
     const resumeId = this.sessionId;
-    this.cancel();
+    this.cancel({ forRecover: true }); // keep the resume marker: this is the harness acting, not the user
     this.restart();
     if (!resumeId) return;
     try {
