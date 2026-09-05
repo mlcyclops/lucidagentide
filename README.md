@@ -179,6 +179,16 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.1.0
+
+> **🔓 Connect via OAuth works again, and a lane transcript you can navigate.** If "Connect via OAuth" ever failed for you with an `EPERM` error, this is the release that fixes it.
+
+- **🔐 OAuth sign-in no longer dies on a path it cannot read** - on a packaged Windows install, "Connect via OAuth" could fail with Bun's own `error: EPERM reading ...pi-coding-agent\dist\cli.js` instead of opening a sign-in page. The resolver accepted the bundled omp because the path **existed**, so the broker spawned a file it could not read inside the ACL-protected application directory. This was **not new in 2.0.0**: the offending resolver shipped in every release from v1.11.8 (15 July) onward, so it had been failing for anyone whose install directory denied that read. Existence was never the right question, and runnability is: each candidate is now **probed by running it**, with a fall-through to one that works and a log naming every path tried when none do. Three files had each grown a private copy of that resolver and had already drifted once; they now share one. *(P-AUTH.3)*
+- **🖱 A fleet lane scrollbar you can actually grab** - the global scrollbar thumb carries a 3px transparent border, leaving a 5px pointer target: fine down the edge of a full-height chat, unusable inside a 300px lane card. Lane transcripts now get a 14px track with a 10px thumb and a visible resting colour, so the bar reads as draggable before you hover it. The global bar stays slim everywhere else. *(P-FLEET.L13)*
+- **⬇ Catch-up buttons in every lane** - the same pair the main composer carries: one chevron steps a page and keeps a line of overlap so you resume on a line you have already read, two chevrons run to the newest line instantly. The scroll arithmetic now lives in one shared module that the chat and the lanes both read, so the chat can never get a tuning pass the lanes miss. *(P-FLEET.L13)*
+
+---
+
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.0.0
 
 > **🎉 The major.** Eighteen increments: a current-generation model catalog, light mode and seven themes, sessions that finish what they started, and a fleet that grew from demo to workday.

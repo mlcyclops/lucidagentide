@@ -389,4 +389,22 @@
 //            login confirmed by the VAULT rather than an exit code (ADR-0316), one-gesture bulk dismissal
 //            of a 100-row security queue, and the test suite no longer appending its fixture blocks into
 //            the operator's real security ledger (P-SEC.4).
-export const APP_VERSION = "2.0.0";
+// v2.1.0 = the OAuth fix users actually needed, plus lane scroll affordances.
+//            AUTH: "Connect via OAuth" failed on packaged Windows installs with Bun's own
+//            `EPERM reading ...pi-coding-agent\dist\cli.js`. The resolver accepted LUCID_OMP_BIN because
+//            the path EXISTED, so the broker spawned a file it could not read inside the ACL-protected
+//            app directory. NOT a 2.0.0 regression: the offending resolver landed in c2d8cf9 (2026-07-15)
+//            and shipped in every tag from v1.11.8 onward, so this had been broken for anyone whose
+//            install directory denied the read. Existence was never the question; runnability is, so the
+//            resolver now PROBES each candidate by running `--version` and falls through to one that
+//            works, logging every path it tried when none do. Three files had grown private copies of
+//            that resolver and had already drifted once (c2d8cf9 exists only because the broker picked a
+//            different omp than the model list); they now share desktop/omp_bin.ts, so the class cannot
+//            recur (11 tests).
+//            FLEET: a lane transcript scrollbar you can actually grab (the global thumb is 5px of
+//            pointer target once its 3px transparent border is accounted for, fine on a full-height chat
+//            and unusable in a 300px card), plus the main composer's two catch-up buttons per lane (step
+//            a page keeping a line of overlap, or run to the newest line). The arithmetic moved to
+//            renderer/scroll_jump.ts and BOTH the chat and the lanes read it, so the chat can never get a
+//            tuning pass the lanes miss (11 tests, aimed at the NaN scroll target that fails invisibly).
+export const APP_VERSION = "2.1.0";
