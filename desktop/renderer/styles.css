@@ -3171,17 +3171,51 @@ body.preview-open .thread{font-size:.9em}
 .pscope-note.warn .ic{color:var(--amber)}
 .pscope-note.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line-soft));background:var(--red-dim);color:var(--red-txt)}
 .pscope-note.danger .ic{color:var(--red)}
-/* uniform, auto-spanning compartment count cards */
-.pscope-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:11px}
-.psc{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0;
+/* P-KGUI.3 (ADR-0336): the stat strip, rebuilt for a user with MANY knowledge graphs.
+
+   Was `repeat(3,1fr)`: exactly three fixed tiles, one of which was rendered even when the CUI vault did not
+   exist. Now it is an auto-fill grid of NARROW tiles that wraps naturally and scrolls once it passes two
+   rows, so twenty KGs cost the card a fixed two-row strip instead of ten stacked rows.
+
+   The height cap is DERIVED from --psc-h rather than hand-tuned, so changing the tile padding cannot
+   silently turn the two-row scroller into a two-and-a-bit-row one that clips a tile in half.
+
+   Invariant 11 is satisfied the way the invariant itself prescribes for a narrow column: the label takes
+   the space and ellipsizes, with the full name on `title`. KG names are user-authored and long ones are
+   ordinary ("Predictive Logistics for Contested Environments"), so nowrap plus ellipsis is the contract,
+   NOT a wide track. Nothing here is a flex container holding prose. */
+/* auto-FIT, not auto-fill: with three tiles the empty tracks collapse and the tiles stretch to fill the
+   row (so a user with one KG sees a balanced strip, not three narrow chips against dead space); with
+   fourteen they shrink to the 84px floor and wrap into the scroller. auto-fill would keep the empty tracks
+   and leave the sparse case looking broken. */
+/* --psc-h is the tile's MEASURED height, not a guess: the first cut used 38px, the tiles actually rendered
+   at 56px, and the derived two-row cap therefore sliced the second row in half. Re-measure this in the
+   preview if the tile's typography or padding changes; scroll-snap below makes a stale value self-correct
+   to a row boundary instead of parking mid-tile. */
+.pscope-counts{--psc-h:49px;display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:5px;margin-top:11px;
+  max-height:calc(var(--psc-h) * 2 + 5px);overflow-y:auto;overscroll-behavior:contain;padding-right:2px;
+  scroll-snap-type:y proximity}
+.psc{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;min-width:0;min-height:var(--psc-h);
   background:var(--emboss-bg,linear-gradient(180deg,var(--bg-2),color-mix(in srgb,var(--bg-2) 88%,var(--shade))));
-  border:1px solid var(--line);border-radius:8px;padding:8px 6px;
+  border:1px solid var(--line);border-radius:7px;padding:4px 6px;scroll-snap-align:start;
   box-shadow:var(--emboss)}
-.psc b{font-family:var(--mono);font-size:16px;font-weight:700;line-height:1;color:var(--txt-2)}
+.psc b{font-family:var(--mono);font-size:14px;font-weight:700;line-height:1.25;color:var(--txt-2)}
 .psc b.psc-personal{color:var(--green)}
 .psc b.psc-work{color:var(--amber)}
 .psc b.psc-cui{color:var(--red)}
-.psc span{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4)}
+.psc b.psc-kg{color:var(--accent-2)}
+/* One line, always. A KG name never folds into a sliver; it truncates and the tooltip has the rest. */
+.psc span{max-width:100%;font-size:9px;line-height:1.3;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The qualifier ("active", "locked", "read only"). Same one-line discipline, dimmer than the label. */
+.psc i{max-width:100%;font-style:normal;font-size:8.5px;line-height:1.2;letter-spacing:.04em;color:var(--txt-4);opacity:.72;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.psc[data-stat^="kg:"]{border-color:color-mix(in srgb,var(--accent) 26%,var(--line))}
+/* P-KGUI.3: the hero KG row. Same shape as the LUCID Agent hero in the Profile card, accent-toned rather
+   than hero-toned so the two do not compete for the same "this is the big one" slot on one screen. */
+.psc-kg-hero{margin:10px 0 2px;border-color:color-mix(in srgb,var(--accent) 38%,var(--line))}
+.psc-kg-hero>span{color:var(--txt);min-width:0;overflow:hidden;text-overflow:ellipsis}
+.psc-kg-hero:hover{border-color:var(--accent);box-shadow:0 6px 18px -10px rgb(var(--accent-rgb) / .45)}
 .pscope-lock{margin-top:12px}
 /* isolated CUI store sub-panel (P9.5a) */
 .pscope-cui{margin-top:11px;padding-top:11px;border-top:1px dashed color-mix(in srgb,var(--red) 30%,var(--line-soft))}

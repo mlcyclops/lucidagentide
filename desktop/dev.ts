@@ -3649,6 +3649,19 @@ const server = Bun.serve({
       if (p === "/api/kb/list") {
         return json({ ok: true, data: kgListView() });
       }
+      // P-KGUI.3 (ADR-0336): page count per KG, for the Personalization stat tiles. Each KG is its OWN
+      // DuckDB file, so this costs one open per KG the first time (kbStore caches per kg_id after that).
+      // That is exactly why the renderer fetches it AFTER the panel paints and never blocks on it, and why
+      // a KG that fails to open is reported as absent rather than as zero: a missing number reads as "not
+      // known yet", a fabricated 0 reads as "this graph is empty", and only one of those is honest.
+      if (p === "/api/kb/counts") {
+        const pages: Record<string, number> = {};
+        for (const kg of listKgs()) {
+          try { pages[kg.kg_id] = await (await kbStore(kg.kg_id)).pageCount(); }
+          catch { /* leave it absent: the tile shows a dash, not a wrong zero */ }
+        }
+        return json({ ok: true, data: { pages } });
+      }
       if (p === "/api/kb/create" && req.method === "POST") {
         const b = await readBody<{ name?: unknown }>(req);
         try { createKg({ name: String(b.name ?? "") }); }

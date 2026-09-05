@@ -60,6 +60,9 @@ import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-IN
 import { filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, PersonalGraphData } from "./bridge.ts";
+// P-KGUI.3 (ADR-0336): the Personalization card's stat tiles, rebuilt for a user with MANY knowledge graphs.
+import type { PersonalStatus } from "./bridge.ts";
+import { personalStatTiles, personalStatsHtml } from "./personal_stats.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
@@ -4053,9 +4056,54 @@ const SCOPE_INFO: Record<string, { label: string; tone: "ok" | "warn" | "danger"
 };
 const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
 
-/** Re-render just the Personalization card (instant - the endpoint is local). */
-function hydratePersonal(): Promise<void> {
-  return bridge.personal().then((p) => fillSec("personal", secPersonal(p)));
+// ── P-KGUI.3 (ADR-0336): the Personalization card knows about the user's named KGs ───────────────────
+//
+// The card used to show three fixed compartment tiles and nothing about the KGs the user actually
+// accumulates. These two module vars are what the tile builder reads; both are filled by hydratePersonal.
+let personalKgs: KgListItem[] = [];
+let personalKgPages: Record<string, number> = {};
+let personalCountsBusy = false;
+
+/** The hero KG row, mirroring the LUCID Agent hero button in the Profile card. It opens the EXISTING KG
+ *  picker (select / rename / seed from a folder / import a .lkgpack / the Role KG Packs catalog / new KG),
+ *  which until now was reachable only by opening the KG panel and drilling into its Views dropdown. No new
+ *  capability: the storefront and the importer were already built, they were just three clicks deep. */
+function kgHeroBtnHtml(): string {
+  const active = personalKgs.find((k) => k.active);
+  const name = active?.name.trim() || "My Knowledge";
+  const n = personalKgs.length;
+  return `<button class="role-seg role-seg-hero psc-kg-hero" type="button" id="personalKgPick"`
+    + ` data-tip="Knowledge graphs \u00b7 dropdown|Switch the active KG, rename one, seed a new one from a folder,`
+    + ` import a .lkgpack you own, or browse Role KG Packs. The active KG is what the agent answers from.">`
+    + `${icon("graph", 14)}<span>${esc(name)}</span>`
+    // `n <= 1` rather than `n === 1`: personalKgs is EMPTY on the first paint, before kbList resolves, so a
+    // strict equality check would render "0 graphs" for the fraction of a second before the list lands.
+    + `<em>${n <= 1 ? "select \u00b7 edit \u00b7 upload" : `${n} graphs \u00b7 select \u00b7 edit \u00b7 upload`}</em></button>`;
+}
+
+/** Re-render just the Personalization card (instant - the personal endpoint is local). The KG list rides
+ *  along because the tiles need it; per-KG PAGE COUNTS do not, and are filled in a second pass. */
+async function hydratePersonal(): Promise<void> {
+  const [p, kgv] = await Promise.all([bridge.personal(), bridge.kbList().catch(() => null)]);
+  if (kgv) personalKgs = kgv.kgs.map((k) => ({ kg_id: k.kg_id, name: k.name, active: k.kg_id === kgv.activeId, read_only: k.read_only, source_kind: k.source_kind }));
+  fillSec("personal", secPersonal(p));
+  void fillPersonalKgCounts(p);
+}
+
+/** Second pass: the per-KG page counts. Each KG is its OWN DuckDB file, so this costs one open per KG on
+ *  the first call and must NEVER block the card. The tiles paint with a dash and the numbers land after.
+ *  Single-flight, and it repaints only when a number actually changed, so a burst of hydrations cannot
+ *  fan out into N file opens or flicker the card for nothing. */
+async function fillPersonalKgCounts(p: PersonalStatus | null): Promise<void> {
+  if (personalCountsBusy || personalKgs.length === 0) return;
+  personalCountsBusy = true;
+  try {
+    const pages = await bridge.kbCounts().catch(() => null);
+    if (!pages) return; // a failed count leaves the dashes: better than inventing zeros
+    const changed = personalKgs.some((k) => personalKgPages[k.kg_id] !== pages[k.kg_id]);
+    personalKgPages = pages;
+    if (changed) fillSec("personal", secPersonal(p));
+  } finally { personalCountsBusy = false; }
 }
 
 // ── P-LOCAL.3 (ADR-0135): Settings → Local Providers ─────────────────────────────────────────────
@@ -4154,7 +4202,7 @@ async function saveLocalProviderKey(wrap: HTMLElement): Promise<void> {
 }
 // Settings → Personalization (ADR-0010/0012): opt-in encrypted KG + the
 // Work/Personal/Combined/CUI compartment selector with per-mode risk notices.
-function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
+function secPersonal(p: PersonalStatus | null): string {
   const card = (inner: string) => setCard("personal", "Personalization", "private · encrypted · opt-in", inner, true);
   if (!p) return card(`<div class="set-note">${icon("info", 12)} Personalization is unavailable - update the GUI server.</div>`);
   const toggle = `<label class="set-toggle"><input type="checkbox" id="personalToggle" ${p.enabled ? "checked" : ""}/>
@@ -4179,10 +4227,8 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
       <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. CUI lives in its OWN encrypted store with its own passphrase (ADR-0014) and auto-locks when not selected. The active compartment scopes what is learned and recalled; Combined is a union view (never CUI).">${icon("info", 11)}</span></div>
       <div class="seg pscope-seg">${seg}</div>
       <div class="pscope-note ${info.tone}">${icon(info.tone === "danger" ? "shield" : "info", 13)} <span>${esc(info.note)}</span></div>
-      <div class="pscope-counts">
-        <div class="psc"><b class="psc-personal">${c.personal}</b><span>personal</span></div>
-        <div class="psc"><b class="psc-work">${c.work}</b><span>work</span></div>
-        <div class="psc"><b class="psc-cui">${p.cuiUnlocked ? c.cui : "-"}</b><span>cui${p.cuiUnlocked ? "" : " (locked)"}</span></div></div>
+      ${kgHeroBtnHtml()}
+      ${personalStatsHtml(personalStatTiles({ counts: p.counts, cuiConfigured: p.cuiConfigured, cuiUnlocked: p.cuiUnlocked, kgs: personalKgs.map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, active: k.active })), kgPages: personalKgPages }))}
       ${cur === "cui" ? secCui(p) : ""}
       ${p.legacyCuiInMain > 0 ? `<div class="set-note warn">${icon("info", 12)} <span>${p.legacyCuiInMain} legacy CUI fact(s) sit in the main store from before isolation - not recalled or exported. ${p.cuiUnlocked ? `<button class="btn-mini" id="cuiMigrate" data-tip="Move into the isolated store|Relocates these cui facts (ids + timestamps preserved) into the separate CUI store, then removes them from the main store. Audited.">${icon("shield", 11)} Move into the CUI store</button>` : "Select CUI and unlock its store to move them into isolation."}</span></div>` : ""}
       <label class="set-toggle" style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px"><input type="checkbox" id="personalAiToggle" ${p.aiExtract ? "checked" : ""}/>
@@ -13660,6 +13706,9 @@ function wire(): void {
       showToast({ title: on ? "Richer graph on" : "Richer graph off", desc: on ? "New turns use the model to extract semantic facts + relationships (one extra call per turn)." : "Back to offline pattern extraction (no model cost).", actions: [{ label: "OK" }], timeout: 3200 });
       return;
     }
+    // P-KGUI.3 (ADR-0336): the hero KG row opens the existing picker, anchored on the button itself.
+    const kgHero = t.closest("#personalKgPick");
+    if (kgHero instanceof HTMLElement) { void openKgPicker(kgHero); return; }
     if (t.closest("#personalSetup") || t.closest("#personalUnlock")) {
       const setup = !!t.closest("#personalSetup");
       const pass = ($("#personalPass", $("#setBody")!) as HTMLInputElement)?.value ?? "";

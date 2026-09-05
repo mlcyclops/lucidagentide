@@ -23090,6 +23090,107 @@ capture, that the CSS rule reaching the browser hides `#toasts` under it, and th
 before the pixels are read. The end-to-end claim, a phone guest receiving a clean shot of a working
 preview, is the on-device step.
 
+## ADR-0336 -- P-KGUI.3: the Personalization card, rebuilt for a user who has MANY knowledge graphs (2026-09-05)
+
+**Status:** Accepted -- BUILT. User-directed, and it explicitly OVERRULES my own proposal: I had scoped
+unlimited named KGs as a schema change (a numbered DuckDB migration to open up the fixed compartment enum).
+The user's call was "let's not change the schema, just add another option drop down". They were right. The
+named-KG registry already exists (ADR-0205, P-KGPACK.2), so this was never a data-model problem, it was a
+SURFACING problem. No schema touched, no migration, no contract change.
+
+**Context.** Two screenshots and a precise brief. The Personalization card showed three fixed stat tiles in
+a `repeat(3,1fr)` grid: `264 PERSONAL`, `521 WORK`, `- CUI (LOCKED)`. Three problems in one strip:
+
+1. **The CUI tile was rendered for a vault that does not exist.** The user has never created a CUI store, so
+   the card advertised a locked door with no room behind it. "If there is no CUI vault it shouldn't have a
+   stat showing. If there is one then it can show." A stat about nothing is worse than no stat.
+2. **The tiles were wide, tall, and fixed at three.** "Tighter padding on the stats boxes and smaller
+   horizontal width to fit more and stack at least two rows of scrollable KG stats."
+3. **The KGs themselves had no presence at all.** "I expect people to have many KGs." The thing the user
+   accumulates was the thing the card could not show.
+
+And the storefront problem underneath it: the KG picker (select, rename, seed from a folder, import a
+`.lkgpack`, browse Role KG Packs, new KG) was fully built and reachable only by opening the KG panel and
+drilling into its Views dropdown. Three clicks deep, in a different panel from the one about your knowledge.
+
+**Decision.**
+
+- **A hero KG row in the Personalization card, mirroring the LUCID Agent hero in the Profile card**, because
+  the user pointed at that button and said "similar to the Agent Mode button but a drop down". It opens the
+  EXISTING `openKgPicker`, anchored on itself. **Zero new capability**: every action the user asked for
+  (select, edit, upload a KG or a KG pack) was already implemented, so the correct change was a button, not
+  a feature. Accent-toned rather than hero-toned so it does not compete with the Profile hero on one screen.
+- **The tile strip is a pure, tested builder** (`personalStatTiles` + `personalStatsHtml`) rather than inline
+  template literals, because the three rules it now enforces are decisions worth pinning:
+  - **A tile is evidence, so it exists only when the thing does.** `cuiConfigured === false` omits the CUI
+    tile entirely. A vault that EXISTS but is locked still gets a tile, with a `locked` qualifier, because
+    that is real information about a real store. Absent and locked are different statements.
+  - **An unknown count is a DASH, never a zero.** Per-KG counts arrive after the card paints, and a
+    fabricated `0` reads as "this graph is empty" when it means "not measured yet". A KG that really is
+    empty shows `0`, and the two are distinguishable on screen.
+  - **The active KG leads.** With many KGs the strip scrolls, so the one you are actually using must be
+    visible without scrolling. The rest keep registry order rather than being reshuffled.
+- **`auto-fit`, not `auto-fill`.** With three tiles the empty tracks collapse and the tiles stretch to fill
+  the row, so a user with one KG sees a balanced strip; with seventeen they shrink to an 84px floor and wrap
+  into a two-row scroller. `auto-fill` keeps the empty tracks and leaves the sparse case looking broken.
+- **The two-row cap is DERIVED from the tile height, not hand-tuned.** `max-height:calc(var(--psc-h)*2+5px)`.
+  This is the part I got wrong twice and it is worth recording why: I guessed `--psc-h:38px`, the tiles
+  rendered at 56px, and the cap sliced row two in half. I tightened the padding, guessed 46px, and it still
+  clipped by 4px. Only measuring the rendered tile (49px) produced a clean two-row strip. `scroll-snap-type:
+  y proximity` was added so a future stale value self-corrects to a row boundary rather than parking
+  mid-tile.
+- **Counts are their own call, fetched AFTER the card paints.** Each KG is a separate DuckDB file, so
+  `/api/kb/counts` costs one open per KG on the first call. Putting it on `kbList` would have made opening
+  Settings wait on N file opens. `fillPersonalKgCounts` is single-flight and repaints only when a number
+  actually changed, so a burst of hydrations can neither fan out into N opens nor flicker the card.
+- **A KG that fails to open is reported ABSENT, not zero**, both server-side (the `catch` leaves the key
+  out) and client-side (`kbCounts` drops any non-finite value rather than coercing it). The tile shows a
+  dash. Same rule as above: never fabricate a measurement.
+- **Invariant 11 is satisfied the way the invariant itself prescribes for a narrow column**: the label takes
+  the space and ellipsizes, with the full name on `title`. KG names are user-authored and long ones are
+  ordinary ("Predictive Logistics for Contested Environments"), so nowrap plus ellipsis plus tooltip is the
+  contract here, NOT a wide track. Nothing in the strip is a flex container holding prose.
+- **KG names are `esc`'d everywhere** (invariant 5: user content is data, never markup), in the tile body,
+  in the `title` attribute, and in the hero label.
+
+**Files:** `desktop/renderer/personal_stats.ts` (`StatTile`, `StatKg`, `PersonalStatsInput`,
+`personalStatTiles`, `personalStatsHtml`), `desktop/renderer/personal_stats.test.ts` (17),
+`desktop/renderer/app.ts` (`personalKgs`, `personalKgPages`, `kgHeroBtnHtml`, `hydratePersonal` now
+two-pass, `fillPersonalKgCounts`, the `#personalKgPick` handler, `secPersonal` rewritten to use the
+builder), `desktop/renderer/bridge.ts` (`kbCounts`), `desktop/dev.ts` (`/api/kb/counts`),
+`desktop/renderer/styles.css` (`.pscope-counts`, `.psc`, `.psc-kg-hero`).
+
+**Verification.** 17 pure tests. The first asserts the reported defect directly (no vault means the tile is
+absent, not locked), and a cluster pins dash-versus-zero from both sides: a missing count is a dash, a real
+0 is a 0, and NaN or Infinity degrade to a dash rather than painting "NaN" on screen. Ordering, id
+uniqueness across 15 tiles, the `active` marker outranking `read only`, and an unnamed KG falling back to
+"Untitled KG" are all pinned. Two tests are hostile-input: a KG named `<img src=x onerror=...>` must not
+parse as markup, and one named `" onmouseover=` must not break out of the `title` attribute. One of my own
+assertions was WRONG and I corrected the test rather than the code: I had asserted the string "onerror" was
+absent, but escaping neutralizes brackets and quotes, it does not delete the word, so the payload correctly
+survives as inert text.
+
+Gate 4985 pass / 381 files with the standing 7 environmental fails; renderer suite 1392 pass / 96 files; all
+three typecheck passes clean; license headers clean. Served bytes grepped per ADR-0303 from a fresh engine
+on port 5399 (never the user's 5319), sourcemap stripped first: **18/18**, with the retired inline tiles
+(`<b class="psc-personal">`, `<b class="psc-cui">`, the `cui (locked)` label) and the old `repeat(3,1fr)`
+grid all proven ABSENT. **3/3 live checks** against this machine's real registry: the counts route answers
+`ok`, every count is finite, and it references only registered KGs, so a tile can never point at a ghost.
+
+**Looked at, not just grepped.** Rendered at the REAL 540px panel width (`.settings` is `min(540px,46vw)`)
+against the inlined production stylesheet, in three populations, and measured in the live DOM: no CUI vault
+gives 3 tiles at 56px total height in one row; a locked vault gives 4; fourteen KGs give 17 tiles capped at
+the derived two-row height with a scrollbar and no mid-tile clipping, the active KG leading, and one
+deliberately-missing count showing a dash. The compartment segmented control keeps "Personal Life" on one
+line at that width.
+
+**VERIFICATION BOUNDARY.** The dropdown itself was not exercised by a click in a test: `openKgPicker` is
+pre-existing and this increment only adds a new anchor for it, and the repo has no DOM harness (standing
+since ADR-0309). What is proven is that the button, its id, and the handler branch are in the served bytes,
+and that the picker it opens is the same function the KG panel already uses. Whether 49px is the right tile
+height on a different OS font stack is also a measurement from this machine, which is why the cap is derived
+from one named constant and carries a comment telling the next person to re-measure it.
+
 ## ADR-0334 -- P-FLEET.DGX: the DGX fleet as one configured provider plus one agent registry, never as hostnames in code (2026-09-05)
 
 **Status:** Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be

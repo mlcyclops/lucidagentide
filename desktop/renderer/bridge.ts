@@ -929,6 +929,11 @@ export interface LucidBridge {
   // refreshed list (with an optional `error` on validation failure). The graph view (kbGraph) reads the
   // ACTIVE KG, so activate + re-fetch shows a different graph.
   kbList(): Promise<KgListView | null>;
+  // P-KGUI.3 (ADR-0336): page count per KG, for the Personalization stat tiles. Its own call rather than a
+  // field on kbList, because each KG is a separate DuckDB file: this costs one open per KG the first time,
+  // so the card paints from kbList and fills these in afterwards. An ABSENT key means "not known", which
+  // the tiles render as a dash; a fabricated 0 would read as "this graph is empty".
+  kbCounts(): Promise<Record<string, number> | null>;
   kbCreate(name: string): Promise<KgListView | null>;
   kbRename(kgId: string, name: string): Promise<KgListView | null>;
   kbActivate(kgId: string): Promise<KgListView | null>;
@@ -1558,6 +1563,16 @@ export const bridge: LucidBridge = {
   kbRetrieve: (query, mode) => post("/api/kb/retrieve", { query, mode }),
   kbGraph: () => getData("/api/kb/graph"),
   kbList: () => getData("/api/kb/list"),
+  // P-KGUI.3 (ADR-0336): only finite numbers survive. A malformed entry is DROPPED rather than coerced, so a
+  // bad payload leaves a dash on the tile instead of painting "NaN" or a misleading 0.
+  kbCounts: async () => {
+    const d = await getData("/api/kb/counts");
+    const raw = (d as { pages?: unknown } | null)?.pages;
+    if (!raw || typeof raw !== "object") return null;
+    const out: Record<string, number> = {};
+    for (const [id, n] of Object.entries(raw)) if (typeof n === "number" && Number.isFinite(n)) out[id] = n;
+    return out;
+  },
   kbCreate: (name) => post("/api/kb/create", { name }),
   kbRename: (kgId, name) => post("/api/kb/rename", { kgId, name }),
   kbActivate: (kgId) => post("/api/kb/activate", { kgId }),
