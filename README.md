@@ -80,11 +80,13 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 # <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" /> The newest frontier models are live in LUCID <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" />
 
-### <b>Claude&nbsp;Opus&nbsp;5</b> and <b>Claude&nbsp;Fable&nbsp;5</b>, <b>GPT&nbsp;5.6&nbsp;Sol · Luna · Terra</b>, and the latest <b>Google&nbsp;Gemini</b> models - all in the picker today.
+### <b>Claude&nbsp;Opus&nbsp;5</b>, <b>Claude&nbsp;Fable&nbsp;5.1</b> and <b>Mythos&nbsp;5.1</b>, <b>GPT-6&nbsp;Astra</b>, and <b>Gemini&nbsp;3.1&nbsp;Pro · 3.5&nbsp;Flash</b> - all in the picker today.
 
 <p align="center"><b>Connect the account you already pay for</b> (OAuth subscription or an API key) and pick the model from the list - that's it. Each one carries a <b>cost + intelligence card</b> and a clear <b>U.S.-government data-privacy notice</b>, so you always know what a turn costs and where your chat history stands.</p>
 
-<p align="center"><sub><code>claude-opus-5</code> · <code>claude-fable-5</code> · <code>gpt-5.6-sol</code> · <code>gpt-5.6-luna</code> · <code>gpt-5.6-terra</code> · <code>google-gemini-3.1-pro</code> · plus every other model the runtime exposes, including the AskSage gov gateway and your own local endpoints.</sub></p>
+<p align="center"><sub><code>claude-opus-5</code> · <code>claude-fable-5-1</code> · <code>claude-mythos-5-1</code> · <code>gpt-6-astra</code> · <code>gemini-3.1-pro</code> · <code>gemini-3.5-flash</code> · plus every other model the runtime exposes, including the AskSage gov gateway (<code>gpt-5.6-luna · sol · terra</code>, <code>google-gemini-3.1-pro-com</code>) and your own local endpoints.</sub></p>
+
+<p align="center"><sub><b>Context windows are declared per model</b>, so Opus 5, Fable/Mythos 5.1 and GPT-6 Astra are all billed and metered against their real <b>1M</b> window instead of inheriting a 256K assumption - and vendor-superseded ids are <b>removed</b> from the catalog rather than left to rot in the picker.</sub></p>
 
 </td>
 </tr>
@@ -216,7 +218,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 **Features**
 
-- **🎨 Light mode, and seven themes** - LUCID was dark-only for its entire life. There is now a theme picker with **Lucid Dark**, **Lucid Light**, Midnight, Slate, Ember, Paper and Contrast, applied instantly across the app, the code editor and the trainer. Every palette is **token-complete by test**, parsed off the stylesheet in CI, because a light theme that forgets one token silently inherits the dark base and ships unreadable white-on-white, and no typecheck or smoke test catches that. Contrast ratios are computed rather than eyeballed. *(P-THEME.1, ADR-0320)*
+- **🎨 Light mode, and seven themes** - LUCID was dark-only for its entire life. There is now a theme picker with **Lucid Dark**, **Lucid Light**, Midnight, Slate, Ember, Paper and High Contrast, applied instantly across the app, the code editor and the trainer. Every palette is **token-complete by test**, parsed off the stylesheet in CI, because a light theme that forgets one token silently inherits the dark base and ships unreadable white-on-white, and no typecheck or smoke test catches that. Contrast ratios are computed rather than eyeballed. *(P-THEME.1, ADR-0320)*
 - **📝 The agent can write to the knowledge graph** - memory was read-only to the agent, so anything it learned mid-session died with the session. It can now write, and a **locked vault stops lying**: a locked graph reports itself locked instead of quietly answering as if it were empty, which is the failure that makes a memory system untrustworthy. *(P-KG.3, ADR-0319)*
 - **🩺 A session that heals itself, so nobody restarts the app** - the harness watches its own sessions on a ladder (ok, quiet, probe, recover): it asks a quiet session for status through the operator-note path, and if that fails it cancels and respawns the child **in place**, reloading the same session id so the conversation survives. An **open tool call is never killed on a clock** at any silence duration, because a ten-minute build is work, not a stall. *(P-HEALTH.1, ADR-0311)*
 - **🧯 A stalled session resumes the run, instead of quietly dropping it (the headline)** - the self-watch already recovered a wedged session (cancel, drop the omp child, reload the same session id so the conversation survives), but it never resumed the WORK: dropping the child rejects the in-flight prompt, so the turn printed "[agent unavailable]" and settled. The session was healthy again and the run was gone, with nothing saying which, so you still had to notice and re-ask. The run is now **re-sent on the recovered session** with a short operator note (do not start over, re-read and verify any file you were part-way through writing), and you are told plainly that the stalled session is restarting and picking up where it left off. A user **Stop** is never resumed, one recovery authorizes exactly **one** restart, a session that failed to reload is never resumed rather than talking to a phantom, and the budget is per RUN and not refilled by activity, so a repeatedly wedging turn stops and says the work so far is saved. *(P-HEALTH.2, ADR-0324)*
@@ -912,6 +914,30 @@ cd desktop && bun install && bun run start   # the packaged Electron app
 `omp acp -e harness/omp/security_extension.ts`), so the **security gate stays loaded in-process on the chat
 path** and you get genuine model replies in a plain browser - no Electron needed. See
 [`desktop/README.md`](desktop/README.md) and [ADR-0006](DECISIONS.md).
+
+### Themes
+
+LUCID was dark-only for its entire life. There is now a **theme picker** in **Settings -> Theme**: seven
+full palettes plus an explicit **Match system** tile, applied instantly across the app, the Monaco code
+editor and the trainer stage.
+
+| Theme | Scheme | Character |
+|:--|:--|:--|
+| **Lucid Dark** *(default)* | dark | The original: near-black ground, magenta accent, cyan for data. |
+| **Midnight** | dark | Deep indigo, cooler and quieter than the default. |
+| **Slate** | dark | Neutral grey with the colour turned right down. |
+| **Ember** | dark | Warm amber and red over a roasted dark ground. |
+| **High Contrast** | dark | Pure black with maximum-contrast text for low vision. |
+| **Lucid Light** | light | The same brand hues on a light neutral ground. |
+| **Paper** | light | Warm sepia light, easy on the eyes in a bright room. |
+| **Match system** | follows OS | An opt-in choice with its own stored id, not a silent default. |
+
+Two rules worth knowing. **An unset preference means Lucid Dark**, not "follow the OS": while those two
+shared one value, a long-time user on a light-mode machine was silently moved off the dark UI they had
+always had, so following the OS is now something you pick once *(P-THEME.2, ADR-0326)*. And every palette
+is **token-complete by test** - CI parses the stylesheet and fails the build if a theme omits a token,
+because a light theme that forgets one silently inherits the dark base and ships unreadable white-on-white,
+which no typecheck or smoke test catches *(P-THEME.1, ADR-0320)*.
 
 ### Platform Builds
 
