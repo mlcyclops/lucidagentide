@@ -41,6 +41,8 @@ import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 // survive the browser sign-in detour without turning an unrelated future sign-in into a checkout.
 import { kgPacksBtnHtml, packSignInCopy, shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
 import { enterSubmitTarget } from "./enter_submit.ts"; // P-KGMARKET.5: Enter runs a passphrase field's action
+// P-PREVIEW-PWA.4 (ADR-0335): never publish a FAILED preview to a phone guest as a permanent snapshot.
+import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -7211,24 +7213,48 @@ async function downscaleDataUrl(dataUrl: string, max: number): Promise<string> {
 const PHONE_AUTO_GAP_MS = 3000;
 const PHONE_AUTO_PAINT_MS = 900;
 let phoneAutoLastSend = 0;
+
+// P-PREVIEW-PWA.4 (ADR-0335): capture the frame with LUCID's own transient chrome hidden.
+//
+// `capturePage` photographs on-screen pixels, and `#toasts` is `position:fixed; right:18px; top:52px`,
+// which is directly over the top-right of the right-edge preview panel. So every toast alive at capture
+// time landed in the image: the guest's snapshot in the field report carried an "Opening the preview" pill
+// baked into it forever. Hiding is done with a body class rather than by touching the toast elements, so a
+// toast that arrives mid-capture is covered too, and the class is removed in a `finally` because a stuck
+// `.lucid-capturing` would silently swallow every future toast.
+async function captureWithoutOverlays(rect: { x: number; y: number; width: number; height: number }): Promise<string | null> {
+  if (!bridge.capturePreview) return null;
+  document.body.classList.add("lucid-capturing");
+  try {
+    // One frame, so the hide is actually painted before the pixels are read.
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    return await bridge.capturePreview(rect).catch(() => null);
+  } finally {
+    document.body.classList.remove("lucid-capturing");
+  }
+}
 function schedulePhoneAutoSend(path: string): void {
   window.setTimeout(() => void phoneAutoSend(path), PHONE_AUTO_PAINT_MS); // let the agent frame paint first
 }
 async function phoneAutoSend(path: string): Promise<void> {
-  if (Date.now() - phoneAutoLastSend < PHONE_AUTO_GAP_MS) return;
   if (!bridge.isElectron || !bridge.capturePreview) return;
   const frame = laneFrame("agent");
-  if (!frame || frame.hidden || prevLane !== "agent") return; // agent lane only, and only while it is the visible one
-  const rect = frame.getBoundingClientRect();
-  if (rect.width < 2 || rect.height < 2) return;
+  const rect = frame?.getBoundingClientRect() ?? { width: 0, height: 0, x: 0, y: 0 };
   const share = await currentShareStatus().catch(() => null);
-  if (!share?.active) return;
-  if (Date.now() - phoneAutoLastSend < PHONE_AUTO_GAP_MS) return; // re-check: the status await may have raced a burst
-  phoneAutoLastSend = Date.now(); // claim the slot BEFORE the capture so a burst collapses to one send
-  const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
+  // P-PREVIEW-PWA.4 (ADR-0335): ASK WHETHER THERE IS ANYTHING WORTH SENDING. A failed preview renders the
+  // engine's own "Can't preview this file" page under HTTP 200, so without this probe the capture path
+  // shipped that error page to a guest as a permanent transcript card. Probed only once the cheap local
+  // conditions already hold, so a hidden lane never costs a round trip.
+  const cheap = { shareActive: !!share?.active, laneVisible: !!frame && !frame.hidden && prevLane === "agent", rect, now: Date.now(), lastSentAt: phoneAutoLastSend, gapMs: PHONE_AUTO_GAP_MS };
+  if (snapshotVerdict({ ...cheap, resolves: true }) !== "send") return; // fails for a reason other than resolution
+  const resolves = await bridge.previewProbe(path).catch(() => false);
+  // Re-read the clock: both awaits above can have raced a burst.
+  if (snapshotVerdict({ ...cheap, resolves, now: Date.now(), lastSentAt: phoneAutoLastSend }) !== "send") return;
+  phoneAutoLastSend = Date.now(); // claim the slot only once a send is authorized, so a failure cannot burn it
+  const png = await captureWithoutOverlays({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) });
   if (!png) return;
   const image = await downscaleDataUrl(png, MAX_SNAPSHOT_EDGE);
-  const label = `Preview: ${path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path}`;
+  const label = snapshotLabel(path);
   const evt: ChatEvent = { type: "preview-snapshot", image, label };
   if (p2pHostActive()) { p2pTeeEvent(evt); return; } // direct-P2P: broadcast straight from the renderer host
   await bridge.collabBroadcastPreview(image, label).catch(() => { /* best-effort; the manual button reports errors */ });
@@ -7243,8 +7269,16 @@ async function sendPreviewToPhone(): Promise<void> {
   const frame = laneFrame();
   if (!frame || frame.hidden) { showToast({ title: "Nothing to send", desc: "Open a local file in the preview first.", timeout: 2600 }); return; }
   if (!bridge.isElectron || !bridge.capturePreview) { showToast({ tone: "warn", title: "Desktop app only", desc: "Capturing the preview needs the packaged LUCID app.", timeout: 3200 }); return; }
+  // P-PREVIEW-PWA.4 (ADR-0335): refuse to publish a failed preview, and SAY SO. The manual button has a
+  // user standing in front of it, so unlike the silent auto path this one explains itself rather than
+  // no-opping. Same reason as the auto path: a failure renders under HTTP 200 and photographs like an app.
+  const target = (prevPathByLane[prevLane] ?? "").trim();
+  if (target && !(await bridge.previewProbe(target).catch(() => false))) {
+    showToast({ tone: "warn", title: "Nothing to send yet", desc: "This preview did not load, so there is only an error page to capture. Fix or reopen the file, then send it.", timeout: 4200 });
+    return;
+  }
   const rect = frame.getBoundingClientRect();
-  const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
+  const png = await captureWithoutOverlays({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) });
   if (!png) { showToast({ tone: "warn", title: "Capture failed", desc: "Could not capture the preview.", timeout: 2600 }); return; }
   const image = await downscaleDataUrl(png, MAX_SNAPSHOT_EDGE);
   const evt: ChatEvent = { type: "preview-snapshot", image, label: "Preview snapshot" };

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   NOT_PREVIEWABLE, PREVIEWABLE_EXTENSIONS, isBinaryPreviewKind, previewMaxBytes, previewMimeType,
-  readPreviewFile, toFsPath,
+  probePreviewFile, readPreviewFile, toFsPath,
 } from "./preview_file.ts";
 
 const io = (content: string, bytes = content.length) => ({ read: () => content, size: () => bytes });
@@ -169,5 +169,62 @@ describe("readPreviewFile", () => {
   test("a read/stat failure → typed error, never throws", () => {
     const r = readPreviewFile("/a/missing.html", { read: () => { throw new Error("ENOENT"); }, size: () => { throw new Error("ENOENT"); } });
     expect(r.ok).toBe(false);
+  });
+});
+
+// P-PREVIEW-PWA.4 (ADR-0335): the missing signal. /api/preview/serve answers a FAILED preview with HTTP 200
+// and an HTML body that says so (an iframe pointed at a 404 shows browser error chrome instead), so nothing
+// client-side could tell a rendered app from a rendered failure. That is how the phone auto-send captured an
+// error page and published it to a guest as a permanent transcript card.
+describe("probePreviewFile", () => {
+  test("a resolvable target reports its kind", () => {
+    const r = probePreviewFile("/a/game.html", { size: () => 1234 });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.kind).toBe("html");
+  });
+
+  test("THE BUG: a missing file does NOT resolve", () => {
+    // The exact field-report case: a stale `game.html` the engine could no longer read.
+    const r = probePreviewFile("/a/game.html", { size: () => { throw new Error("ENOENT"); } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("file not found or unreadable");
+  });
+
+  test("it NEVER reads the file, whatever the size", () => {
+    // The whole point of a separate probe: asking "would this render" about a 20 MB PDF must not cost a
+    // 20 MB read. `probePreviewFile` takes no reader at all, so this is structural, and the type enforces it.
+    const r = probePreviewFile("/a/big.pdf", { size: () => 20 * 1024 * 1024 });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.kind).toBe("pdf");
+  });
+
+  test("it agrees with readPreviewFile on every refusal, so the gate cannot drift from the render", () => {
+    const cases: { target: string; size: number }[] = [
+      { target: "", size: 1 },
+      { target: "http://example.com/x.html", size: 1 },
+      { target: "/a/notes.docx", size: 1 },
+      { target: "/a/huge.html", size: 6 * 1024 * 1024 },
+      { target: "/a/huge.pdf", size: 26 * 1024 * 1024 },
+    ];
+    for (const c of cases) {
+      const probed = probePreviewFile(c.target, { size: () => c.size });
+      const read = readPreviewFile(c.target, { read: () => "x", readBytes: () => new Uint8Array(1), size: () => c.size });
+      expect(probed.ok).toBe(false);
+      expect(read.ok).toBe(false);
+      if (!probed.ok && !read.ok) expect(probed.error).toBe(read.error); // same verdict AND same wording
+    }
+  });
+
+  test("a non-previewable extension is refused with the shared message", () => {
+    const r = probePreviewFile("/a/thing.docx", { size: () => 10 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe(NOT_PREVIEWABLE);
+  });
+
+  test("the per-kind cap is honored: 5 MB text, 25 MB binary", () => {
+    expect(probePreviewFile("/a/x.html", { size: () => 5 * 1024 * 1024 }).ok).toBe(true);
+    expect(probePreviewFile("/a/x.html", { size: () => 5 * 1024 * 1024 + 1 }).ok).toBe(false);
+    expect(probePreviewFile("/a/x.pdf", { size: () => 25 * 1024 * 1024 }).ok).toBe(true);
+    expect(probePreviewFile("/a/x.pdf", { size: () => 25 * 1024 * 1024 + 1 }).ok).toBe(false);
   });
 });

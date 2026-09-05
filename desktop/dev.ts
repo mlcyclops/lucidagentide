@@ -100,7 +100,7 @@ import { providerAuth } from "./auth_status.ts";
 import { cloneRepo, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
-import { readPreviewFile, toFsPath } from "./preview_file.ts";
+import { probePreviewFile, readPreviewFile, toFsPath } from "./preview_file.ts";
 import { getState as trainerState, submitAnswer as trainerAnswer, getGames as trainerGames, setRole as trainerSetRole, useDemoPack as trainerUseDemoPack } from "./trainer_session.ts"; // P-TRAINER.7/.8 (ADR-0255) // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { parseImageDataUrl } from "./renderer/image_data_url.ts"; // P-IMG.1 (ADR-0208): strict image gate
@@ -2418,6 +2418,16 @@ const server = Bun.serve({
         return json(r.ok
           ? { ok: true, data: { html: r.html, label: r.label, kind: r.kind, mime: r.mime, ...(r.bytes ? { bytes: Buffer.from(r.bytes).toString("base64") } : {}) } }
           : { ok: false, error: r.error });
+      }
+      // P-PREVIEW-PWA.4 (ADR-0335): does this target resolve, WITHOUT reading it? The /serve route answers a
+      // failed preview with HTTP 200 and an HTML body that says so (an iframe pointed at a 404 shows the
+      // browser's own error chrome instead of our message), so nothing on the client could distinguish a
+      // rendered preview from a rendered failure. That is how the phone auto-send captured an error page and
+      // published it to a guest as a permanent snapshot. One `stat`, no read, no inlining.
+      if (p === "/api/preview/probe") {
+        const target = (url.searchParams.get("path") ?? "").trim();
+        const r = probePreviewFile(target);
+        return json({ ok: true, data: r.ok ? { resolves: true, kind: r.kind } : { resolves: false, error: r.error } });
       }
       // P-PREVIEW.4b (ADR-0096): serve a local previewable file's CONTENT as an HTML document with its OWN
       // per-frame CSP (PREVIEW_FRAME_CSP), loaded by the renderer via `iframe.src`. A `srcdoc` frame inherits

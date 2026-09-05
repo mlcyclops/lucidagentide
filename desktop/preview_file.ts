@@ -123,3 +123,29 @@ export function readPreviewFile(
     return { ok: false, error: "file not found or unreadable" };
   }
 }
+
+/** P-PREVIEW-PWA.4 (ADR-0335): can this target be previewed AT ALL, without reading it?
+ *
+ *  The serve route answers a FAILED preview with HTTP 200 and an HTML body that says so, deliberately: an
+ *  iframe pointed at a 404 shows the browser's own error chrome instead of our message. The cost is that
+ *  nothing on the client can tell a rendered preview from a rendered failure, which is how the phone
+ *  auto-send came to capture an error page and publish it to a guest as a permanent snapshot.
+ *
+ *  This is the missing signal. It runs the same gauntlet as `readPreviewFile` (local target, known kind,
+ *  exists, within its per-kind cap) and stops before the read, so probing a 20 MB PDF costs one `stat`. */
+export function probePreviewFile(
+  target: string,
+  io: { size?: (p: string) => number } = {},
+): { ok: true; kind: PreviewKind } | { ok: false; error: string } {
+  const size = io.size ?? ((p) => statSync(p).size);
+  if (!target || !isLocalFileTarget(target)) return { ok: false, error: "not a local file path" };
+  const kind = previewKindOf(target);
+  if (!kind) return { ok: false, error: NOT_PREVIEWABLE };
+  const cap = previewMaxBytes(kind);
+  try {
+    if (size(toFsPath(target)) > cap) return { ok: false, error: `file too large to preview (over ${Math.round(cap / (1024 * 1024))} MB)` };
+    return { ok: true, kind };
+  } catch {
+    return { ok: false, error: "file not found or unreadable" };
+  }
+}

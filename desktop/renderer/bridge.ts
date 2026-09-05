@@ -1101,6 +1101,10 @@ export interface LucidBridge {
   // P-PREVIEW.4 (ADR-0096): a local file's content for the iframe's srcdoc (file:// can't load from an http
   // origin). Returns the HTML, or null if the path isn't a readable local previewable file.
   previewFile(path: string): Promise<string | null>;
+  // P-PREVIEW-PWA.4 (ADR-0335): true when `path` would actually render. The /serve route answers a failed
+  // preview with HTTP 200 and a human-readable HTML body, so the client cannot tell a rendered app from a
+  // rendered failure; this is that missing signal, and it costs one `stat` (no read, no asset inlining).
+  previewProbe(path: string): Promise<boolean>;
   // P-PREVIEW.4b (ADR-0096): the same-origin URL that SERVES a local file as a document with its own
   // per-frame CSP, for the iframe's `src`. Carries the transport token as a query param (an iframe src GET
   // can't set a header). Used instead of srcdoc so the previewed app's inline scripts actually run.
@@ -1730,6 +1734,14 @@ export const bridge: LucidBridge = {
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
+  // P-PREVIEW-PWA.4 (ADR-0335): does the target resolve, without reading it? One `stat` server-side. Needed
+  // because /api/preview/serve reports a FAILURE with HTTP 200 and an HTML body, so a rendered error page is
+  // indistinguishable from a rendered app on this side of the wire. Fail-closed: any doubt reads as false.
+  previewProbe: async (path) => {
+    const d = await getData(`/api/preview/probe?path=${encodeURIComponent(path)}`);
+    const r = d as { resolves?: unknown } | null;
+    return r?.resolves === true;
+  },
   // P-PREVIEW.4b. The `v` nonce makes every deliberate load a FRESH navigation: assigning an iframe src
   // its current value does not renavigate in Chromium, so without it a re-open (or a re-edit of the same
   // file) kept showing the previously served document forever, no matter what was on disk. The server

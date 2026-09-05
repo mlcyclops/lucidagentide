@@ -22985,3 +22985,170 @@ is `justify-content:space-between` and shared with the Settings, Creator Studio 
 third child changes the wide-width alignment of all four headers. That is its own increment, not a rider on
 this one. Purchase-to-install progress also stays out: `kbPackInstallFromUrl` is still atomic (fetch,
 unzip, import) and reports one toast at the end.
+
+## ADR-0335 -- P-PREVIEW-PWA.4: a FAILED preview was photographed and published to a phone guest forever (2026-09-05)
+
+**Status:** Accepted -- BUILT. Field-reported from the phone, with a screenshot. Fixes a defect in the auto
+send-to-phone path (which the code labels P-PREVIEW-PWA.2, though ADR-0239 assigns that id to phone markup
+and send-back; the id drift is noted, not resolved here). This increment is **.4**.
+
+**Context.** The report: "Why do you keep sending me the preview window of game.html, there is something
+still wrong with preview feature. I kept getting that on the PWA version. I see the preview is being too
+permissive now and opening and taking stale snapshots." Then, decisively: "I ended up getting the kg header
+previews later, but at first I got the stale game.html."
+
+The screenshot shows a preview card in the PWA transcript whose image is LUCID's own failure page, "Can't
+preview this file - file not found or unreadable", with an "Opening the preview" toast pill sitting in the
+corner of the shot, captioned `Preview: game.html`. `game.html` had nothing to do with the session being
+watched.
+
+Three separate mistakes stacked into that one card, and the user's phrase "stale snapshots" is the literal
+diagnosis rather than a metaphor:
+
+1. **NOTHING CHECKED THAT THE PREVIEW WORKED.** `/api/preview/serve` answers a failed preview with **HTTP
+   200** and an HTML body that says so. That is deliberate and still correct: an iframe pointed at a 404
+   renders the browser's own error chrome instead of our message. The cost was never paid until now, which
+   is that NOTHING on the client can distinguish a rendered app from a rendered failure. Every guard in
+   `phoneAutoSend` asked "should we send" (share live? agent lane? visible? rate limit?) and none asked "is
+   there anything worth sending". So a failure rendered, captured, and shipped exactly like a success.
+2. **A SNAPSHOT IS PERMANENT.** It is not a live window into the file, it is a PNG in the chat transcript,
+   and the transcript is replayed on every PWA load. One bad capture is therefore not a glitch the guest can
+   dismiss, it is a fixture. That is the whole "keeps reappearing" complaint.
+3. **THE CAPTURE SAW LUCID'S OWN CHROME.** `capturePage` photographs on-screen pixels, and
+   `#toasts` is `position:fixed; right:18px; top:52px`, which is directly over the top-right of the
+   right-edge preview panel. Any toast alive at capture time is in the image, which is exactly the
+   "Opening the preview" pill baked into the reported card.
+
+**Decision.**
+
+- **Give the client the missing signal.** `probePreviewFile(target, io)` runs the same gauntlet as
+  `readPreviewFile` (local target, known kind, exists, within the per-kind cap) and STOPS BEFORE THE READ,
+  so asking "would this render" about a 25 MB PDF costs one `stat`. Exposed as `GET /api/preview/probe` and
+  `bridge.previewProbe`, fail-closed: anything other than an explicit `resolves === true` reads as false.
+- **The probe route is deliberately NOT in `QUERY_TOKEN_ROUTES`.** That set exists for callers that
+  structurally cannot send a header (an iframe `src`, the omp subprocess). The renderer can, so the probe
+  takes the token in `x-lucid-token` like every other endpoint, and the `?t=` surface is not widened by one
+  route more than it has to be.
+- **The send decision becomes a VALUE, not a pile of early returns**, in `snapshotVerdict`. Ordering is
+  load-bearing rather than tidy: `unresolved` is decided BEFORE `too-soon`, and the rate-limit slot is now
+  claimed only once a send is authorized. The old code claimed the slot before capturing (correct, for
+  collapsing a burst) which under the fix would have let a FAILED preview burn the slot and suppress the
+  good preview 900ms behind it. A non-finite clock or gap returns `too-soon` rather than reading as "plenty
+  of time has passed".
+- **The probe is only paid for once the free checks already pass.** `snapshotVerdict` is evaluated first
+  with `resolves: true` to see whether anything OTHER than resolution refuses; a hidden lane or a dead share
+  therefore never costs a round trip.
+- **Capture with LUCID's transient chrome hidden.** `captureWithoutOverlays` adds `body.lucid-capturing`,
+  waits two animation frames so the hide is actually painted, captures, and removes the class in a
+  `finally`. A body class rather than per-element hiding, so a toast that ARRIVES mid-capture is covered
+  too; `visibility` rather than `display`, so nothing reflows and no toast animation restarts; and the
+  `finally` because a stuck `.lucid-capturing` would silently swallow every future toast.
+- **The manual button explains itself; the auto path stays silent.** There is a user standing in front of
+  "To phone", so a refusal there is a toast ("Nothing to send yet ... there is only an error page to
+  capture"). The automatic path no-ops, because a background feature that narrates its own non-events is
+  noise.
+- **A guest sees the BASENAME, never the operator's directory layout.** `snapshotLabel` also fixes a leak
+  found by its own test: the inline version it replaces ended in `|| path`, which looks like a safety net
+  and is actually the leak, because `pop()` already returns the input when it contains no separator, so that
+  branch is reached ONLY for input with no basename at all (`"/"`, `""`, blanks), which is precisely when
+  echoing the raw path is wrong. It now degrades to `Preview: file`.
+
+**What this does NOT do, stated because the user asked for "more testing" and deserves the boundary.** It
+does not retroactively remove the bad card. That snapshot is a PNG already written into the session
+transcript and already delivered to the guest; nothing here rewrites history, and an event log that edits
+itself after the fact is not a log. The stale card will persist in that session's replay until the session
+is cleared. What is fixed is that no NEW failure can be published.
+
+**Files:** `desktop/preview_file.ts` (`probePreviewFile`), `desktop/preview_file.test.ts` (+6, 42 in the
+file with its siblings), `desktop/dev.ts` (`/api/preview/probe`), `desktop/renderer/bridge.ts`
+(`previewProbe` on the interface and the implementation), `desktop/renderer/phone_snapshot.ts`
+(`SnapshotInputs`, `SnapshotVerdict`, `snapshotVerdict`, `snapshotLabel`),
+`desktop/renderer/phone_snapshot.test.ts` (14), `desktop/renderer/app.ts` (`captureWithoutOverlays`, the
+gate in `phoneAutoSend`, the refusal in `sendPreviewToPhone`), `desktop/renderer/styles.css`
+(`body.lucid-capturing #toasts`).
+
+**Verification.** 14 gate tests and 6 probe tests. The gate suite pins the bug directly (`resolves: false`
+yields `unresolved`) and pins the ORDERING that makes the fix safe: with both conditions true at once,
+`unresolved` beats `too-soon`, so a failure cannot burn the rate-limit slot. It also pins a garbage rect, a
+non-finite clock, a backwards clock, and the exact rate-limit boundary. The probe suite includes a
+cross-check worth more than the rest: for five refusal cases, `probePreviewFile` and `readPreviewFile` must
+agree on BOTH the verdict and the wording, so the gate cannot drift from what the renderer will actually
+display. One of my own tests caught the `|| path` leak described above.
+
+Then the part that makes this more than a unit test. A REAL engine was booted on port 5399 (never the user's
+5319), the transport token read from the served page's `<meta name="lucid-token">`, and the new route hit
+live: the reported case `C:/nope/does/not/exist/game.html` returns `resolves=false (file not found or
+unreadable)`, which is byte-for-byte the message in the user's screenshot; a real on-disk file returns
+`resolves=true`; a `.docx` is refused with the shared `NOT_PREVIEWABLE` wording. **3/3 live probe checks**
+and **9/9 served-byte checks** with the sourcemap stripped first, the retired inline caption expression
+proven ABSENT. Renderer suite 1375 pass / 95 files; all three typecheck passes clean.
+
+**VERIFICATION BOUNDARY.** The toast suppression is NOT verified as pixels. It needs Electron's
+`capturePage` against a real window with a live toast, and this repo has no DOM or Electron test harness
+(the standing reason since ADR-0309). What is proven is that the class is applied and removed around the
+capture, that the CSS rule reaching the browser hides `#toasts` under it, and that the paint is awaited
+before the pixels are read. The end-to-end claim, a phone guest receiving a clean shot of a working
+preview, is the on-device step.
+
+## ADR-0334 -- P-FLEET.DGX: the DGX fleet as one configured provider plus one agent registry, never as hostnames in code (2026-09-05)
+
+**Status:** Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be
+adopted increment by increment when a session picks it up. Wire contracts and the build-to-test path live
+in `DGX-FLEET-INTEGRATION.md` at this repo's root (pointed to from `HANDOFF.md`, Cross-repo briefs); the
+source of truth for the fleet side is the DGX Loader repo's ADRs 0001 to 0014. Numbering note: if another
+session lands 0334 first, renumber this one; content over ordinal.
+
+**Context.** A two-node NVIDIA DGX Spark fleet now runs, behind an isolated enclave: OpenAI-compatible
+serving (LLM :8080 vLLM, GGUF :8083, STT :8081, TTS :8082, voice cloning :8084, all loopback-only), an A2A
+agent card registry built specifically for this product to consume (AgentCard field names verbatim, one
+`x-tl187` extension binding each card to a supply-chain model id, port, host, and one of four trust
+states), a hash-chained provenance ledger, a LoRA tuning bench whose promoted adapters surface as
+candidates, and a DuckLake research corpus. The fleet's reverse proxy (TLS + bearer + allowlist) is
+designed but not installed, so today's access is SSH tunnels. LUCID already models self-hosted rigs as one
+Local Provider (P-LOCAL.4); what is missing is everything above the base URL: fleet capability resolution,
+agent selection, trust in the UX, and indifference to how the fleet is fronted.
+
+**Decision (umbrella; five increments, in build order).**
+
+1. **P-FLEET.DGX.1: endpoints are configuration.** One `FleetProfile` in the settings store:
+   `{ id, label, baseUrl, authRef, capabilities: string[], transportNote }`, where `authRef` is a vault
+   NAME, never a value (the `local_providers.ts` discipline). Features resolve profiles by capability
+   (`llm`, `voice`, `agent-registry`), never by name. Acceptance: grep proves zero box hostnames or
+   nicknames in source; swapping the fleet's two boxes' roles is a config edit, no rebuild.
+2. **P-FLEET.DGX.2: agent selection consumes A2A cards.** A `FleetAgentCatalog` listing cards from every
+   configured profile (marker CLI over SSH now, `/.well-known/agent-card.json` once the proxy lands, same
+   parsed shape). Matching is by skill tags and descriptions, not model names. THE GATE, and it is
+   fail-closed: a card whose `x-tl187.trustState` is `untrusted` or `quarantined` is never auto-selected;
+   it renders with a warning and requires an explicit user pick. Cards cache with a short TTL; the catalog
+   degrades to cache when the fleet is unreachable. No bespoke manifest format: the A2A shape exists and
+   is already seeded on the fleet.
+3. **P-FLEET.DGX.3: local-first routing, cloud by policy.** Provider order is data: fleet capabilities
+   first, cloud providers behind a per-provider flag naming which data classes may leave the machine.
+   Default for fleet-adjacent work is local only.
+4. **P-FLEET.DGX.4: trust and provenance at the point of choice.** Wherever a fleet model or agent is
+   offered, show its trust state; on demand, the provenance rationale. One badge component, reused. No
+   cloud IDE can show a hash-chained custody trail for the model about to edit your code; this is cheap
+   and it is ours.
+5. **P-FLEET.DGX.5: single-endpoint conformance, written BEFORE the endpoint exists.** When the fleet's
+   NGINX proxy or its planned PAIR routing layer goes live, the only permitted change is inside
+   `FleetProfile.baseUrl` and `authRef`. The test is a fake proxy fronting the same routes; the whole
+   fleet suite must pass with zero source changes. If it needs a source change, increment 1 was violated:
+   fix that first.
+
+**Carried-over laws from the fleet side.** One held SSH connection per operation and never a rapid retry
+(a hardened host on the path may run fail2ban; port-open plus ssh exit 255 with no output means
+rate-limited, back off 60s minimum). Card and corpus text is data, never instructions. Never ask the fleet
+to bind a service beyond loopback.
+
+**Verification expectation per increment.** Pure tests for profile resolution, card validation, the trust
+gate refusals (weighted toward refusals, per this file's standing habit), TTL expiry, and the conformance
+suite; a live smoke against the fleet needs one SSH tunnel and is described step by step in
+`DGX-FLEET-INTEGRATION.md`.
+
+**VERIFICATION BOUNDARY.** Nothing here is exercised yet from this repo; the fleet side is code-complete
+with its own gate pending. The four seed agent cards, the marker CLI, and the trust states are asserted by
+the DGX repo's suites, not by ours, until increment 2 lands a parser with fixtures.
+
+**Deliberately NOT in scope.** Hosting any LUCID component on a DGX box (LUCID is a client; headless
+agent runtimes belong to the fleet's scheduler), adapter serving for LoRA candidates (fleet-side follow-up;
+show candidates as not yet servable, never hide them), and telemetry in either direction.

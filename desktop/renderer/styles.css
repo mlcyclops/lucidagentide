@@ -2063,6 +2063,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 
 /* ───────────────────────── toast / popover ───────────────────────── */
 #toasts{position:fixed;right:18px;top:52px;z-index:120;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
+/* P-PREVIEW-PWA.4 (ADR-0335): `capturePage` photographs on-screen PIXELS, and this stack sits directly over
+   the top-right of the right-edge preview panel, so any toast alive at capture time was baked into the
+   snapshot a phone guest keeps forever (the field report's card carried an "Opening the preview" pill).
+   Hidden via a body class rather than per-element, so a toast that arrives mid-capture is covered too.
+   `visibility` not `display`, so nothing reflows and no toast animation is restarted by the round trip. */
+body.lucid-capturing #toasts{visibility:hidden}
 /* --tone: the toast's accent colour; defaults to the positive (green) look - most toasts are
    confirmations. Error/failure callers opt into tone:"danger" (red); warnings into tone:"warn". */
 .toast{--tone:var(--green);--tone-tint:var(--green-dim);--tone-h:var(--green-txt-2);
