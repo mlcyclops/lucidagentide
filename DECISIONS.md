@@ -22869,3 +22869,119 @@ bytes, rewritten 2026-09-05T13:28:25Z) and the clean artifact names were confirm
 inside `latest.yml` was not, because three local download attempts failed. So "an installed 1.14.x now
 offers exactly 2.1.0" remains unverified, and the first exposure window (about 15 minutes serving
 `2.1.1-test.102`) is closed but was real.
+
+## ADR-0333 -- P-KGMARKET.5: the storefront had no button, and the checkout asked the user to remember the checkout (2026-09-05)
+
+**Status:** Accepted -- BUILT. Four user-requested quick wins in one increment, because three of the four
+turn out to be the same funnel and the fourth is what makes the first one fit. Completes the client half of
+P-KGMARKET.1 (ADR-0206). Corrects a claim I made earlier in the session: "Get pack" was NOT opening the
+wrong URL, `getPackFlow` routes a signed-out user to `beginSignIn` correctly. The defects are elsewhere.
+
+**Context.**
+
+1. **DISCOVERY.** The Role KG Packs storefront existed and nothing pointed at it. Reaching it meant knowing
+   to type "Browse Role KG Packs" into the command palette, so the only commercial surface in the product
+   was the one surface with no way in.
+2. **THE ROUND TRIP.** Clicking "Get pack" while signed out opened the browser and then told the user
+   `"Complete sign-in in your browser, then click the pack again to install it."` That is the checkout
+   asking the user to remember the checkout, and it loses whoever closes the modal.
+3. **THE COPY.** The prompt never said WHY an account was needed, so a request to sign in before buying a
+   file read as a data grab rather than as the licence lookup it is. Worse, its title was byte-identical to
+   the LUCID Remote share sign-in toast (`"Finish signing in"`), so a user with both in flight could not
+   tell which browser tab belonged to which.
+4. **PADDING.** Button padding was loose enough that a seventh control did not fit in the KG header.
+
+**Decision.**
+
+- **The storefront gets a button, in the KG header, with a glow.** A user looking at their knowledge graph
+  is exactly the user who wants more of it. `kgPacksBtnHtml()` renders it; the label is the single word
+  "Packs" so invariant 11 holds even when the panel is dragged narrow. The glow is an accent border plus a
+  soft outward shadow and a 6s low-amplitude breath: findable without being an advertisement, and switched
+  off under `prefers-reduced-motion`.
+- **A pending purchase SURVIVES the sign-in detour.** `getPackFlow` records `{packId, packName, startedAt}`
+  when it opens the browser, and the `lucid://auth` handler resumes that exact pack instead of printing a
+  generic "signed in" toast.
+- **The resume is ONE SHOT and TIME-BOXED, which is the real design content here.** `lucid://auth` is
+  SHARED: the same deep link finishes a LUCID Remote sign-in and a Google Drive authorisation. So "resume
+  the purchase on sign-in" must not mean "any future sign-in, forever, opens a payment page for a pack
+  somebody once clicked". `shouldResumeCheckout` expires the intent after `PENDING_CHECKOUT_MAX_AGE_MS`
+  (15 minutes: long enough for a password manager and a second factor, far too short to still be pending
+  when the user next authorises Drive), refuses a backwards clock, refuses non-finite timestamps, and the
+  handler nulls the pending record BEFORE acting so a second callback cannot replay it.
+- **Held in module state, not storage, deliberately.** An intent that does not survive a window reload
+  should not survive one. The expiry is the belt; the volatility is the braces.
+- **The copy names its object at every step.** `packSignInCopy` returns distinct wording for `pending`,
+  `resumed` and `blocked`, each naming the pack, each carrying `LICENCE_RATIONALE` ("Your account holds the
+  pack licence, so it installs on every machine you sign in to") which is the sentence that was missing.
+  The `blocked` case appends the provider's real reason when there is one and INVENTS NOTHING when there is
+  not. The LUCID Remote toast is now "Finish signing in to share", so the two flows are distinguishable.
+- **Enter in a passphrase field runs that field's action.** A password input with a button beside it and no
+  Enter binding reads as broken, and the unlock path is walked every session. Routed through the BUTTON's
+  own `click()` so the setup/unlock logic stays in exactly one place, and gated by an ALLOWLIST
+  (`ENTER_SUBMIT`) rather than "press the button next to you": `#setBody` is one delegated listener over the
+  whole Settings panel, which also holds provider API-key rows, and some rows carry more than one button.
+  Each field lists both its Create and Unlock ids because the markup renders exactly one of them, and
+  `enterSubmitTarget` resolves against what is actually on screen.
+- **`.btn-mini` padding 5px/10px to 4px/8px, gap 6px to 5px.** This is THE button primitive, about 220 call
+  sites, so the change compounds across every toolbar. Tighter is also the SAFE direction for invariant 11:
+  it gives a label more of its row, so nothing that fit before can start wrapping now.
+
+**The KG header now WRAPS, and the numbers say why.** `.kg-tools` was a no-wrap flex row inside
+`.kg{overflow:hidden}`, which is the same shape ADR-0325 found in `.fleet-card-head`. A flex item never
+shrinks below its min-content width, so `.kg-tools` kept its width and hung off the end of the panel with
+the controls at that end unreachable. Measured against the real stylesheet, one row being 30px tall: the
+PRE-increment six-control header **clipped at every panel width from 580px down**. The shipped
+seven-control header stays ONE row down to **680px** and clips only at **220px**. Making `.kg-search` the
+flexible member (`flex:1 1 96px` with `max-width` for the comfortable size, not the reverse, because flex
+wraps at BASE size and only shrinks items after placing them) bought 60px of that: with the old fixed
+150px field the one-row floor was 740px. The trade is height at the extreme, tools box 66px at a 420px
+panel, 127px at 300px, 157px at 220px, and it is the right trade: the alternative is not a shorter header,
+it is a header whose last controls are gone.
+
+**Files:** `desktop/renderer/pack_cta.ts` (`PACKS_TIP`, `kgPacksBtnHtml`, `PendingCheckout`,
+`PENDING_CHECKOUT_MAX_AGE_MS`, `shouldResumeCheckout`, `PackSignInState`, `LICENCE_RATIONALE`,
+`packSignInCopy`), `desktop/renderer/enter_submit.ts` (`ENTER_SUBMIT`, `enterSubmitTarget`),
+`desktop/renderer/pack_cta.test.ts` (16), `desktop/renderer/enter_submit.test.ts` (8),
+`desktop/renderer/app.ts` (the header button + its wiring, the `#setBody` keydown handler,
+`pendingCheckout`, the resume branch in the `lucid://auth` handler, the Remote toast title),
+`desktop/renderer/styles.css` (`.btn-mini` padding, `.kg-tools` wrap, `.kg-search` flex, the
+`.btn-mini.kg-packs` glow and `@keyframes packGlow`).
+
+**Verification.** 24 new pure tests, weighted toward the refusals, because an auto-resume that fires on the
+wrong callback is worse than the bug it fixes: a stale intent does not resume (at the boundary+1ms and at
+24 hours), the boundary is inclusive so a slow but honest sign-in still lands, a backwards clock and
+NaN/Infinity timestamps refuse, an empty pack id has nothing to resume into, and the retired instruction
+"click the pack again" is asserted ABSENT from the copy rather than merely replaced. The allowlist suite
+asserts Enter is INERT for six real non-passphrase ids, for a listed field whose buttons are off screen,
+for an id-less input, for a throwing probe, and for a truthy non-boolean probe result. Full gate 4948 pass
+/ 379 files with the standing 7 environmental fails (5 `fs_browse`, 2 `lucid_acp`, both Windows path-
+separator assumptions, neither ours); all three typecheck passes clean; license headers clean; no em dashes
+in any added line. Served bytes grepped per ADR-0303 from a freshly booted engine on port 5399 (never the
+user's 5319), sourcemap stripped first because it base64-encodes the source and would satisfy every ABSENT
+check vacuously: **22/22**, with `id="kgPacks"`, the glow class, all three copy states, `ENTER_SUBMIT`,
+`pendingCheckout` and `shouldResumeCheckout` PRESENT, and `"click the pack again to install it"`, `"Sign in
+to buy"`, the ambiguous bare `title: "Finish signing in"`, the old `padding:5px 10px` and the old no-wrap
+`.kg-tools` rule all ABSENT.
+
+**Looked at, not just grepped.** The header was rendered at 900 / 620 / 420px against the REAL inlined
+stylesheet (invariant 11: a mockup that diverges from the component CSS is the bug wearing a costume) and
+inspected in the live DOM: one row at the default 900px width, a clean two-row wrap at 420px with the close
+button still on the second row rather than orphaned onto a third, the Packs glow reading as distinct from
+the neutral buttons beside it, and no label wrapping at any width.
+
+**VERIFICATION BOUNDARY, and it is the important one.** The resume was never exercised against a real
+Firebase provider. There is no configured market provider on this machine, so `prov.configured()` is false
+and `getPackFlow` returns at the storefront-hint branch before any of this runs. What is proven is the
+policy, the expiry, the one-shot clearing, the copy, and that the wiring is present in the served bytes.
+What is NOT proven is a live Stripe checkout resuming after a real hosted sign-in. That needs the private
+add-on repo's provider (P-KGMARKET.2), and it is the one claim here resting on inference. The Enter
+binding and the two-click storefront button also have no automated coverage for the GESTURE, the standing
+reason since ADR-0309: this repo has no DOM test harness, so the tables and policies are exhaustively
+tested and the keystroke itself is verified by served-byte presence and structural review.
+
+**Deliberately NOT done.** `set-close` stays inside `.kg-tools`, so at panel widths below about 300px it
+wraps onto a line of its own. Moving it out to be a direct `.set-head` child would pin it, but `.set-head`
+is `justify-content:space-between` and shared with the Settings, Creator Studio and Preview panels, so a
+third child changes the wide-width alignment of all four headers. That is its own increment, not a rider on
+this one. Purchase-to-install progress also stays out: `kbPackInstallFromUrl` is still atomic (fetch,
+unzip, import) and reports one toast at the end.

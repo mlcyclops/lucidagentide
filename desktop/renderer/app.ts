@@ -37,6 +37,10 @@ import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChi
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
+// P-KGMARKET.5 (ADR-0333): the KG-header Packs button, and the pending-checkout policy that lets a purchase
+// survive the browser sign-in detour without turning an unrelated future sign-in into a checkout.
+import { kgPacksBtnHtml, packSignInCopy, shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
+import { enterSubmitTarget } from "./enter_submit.ts"; // P-KGMARKET.5: Enter runs a passphrase field's action
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -475,6 +479,7 @@ function buildShell(): void {
             <button class="btn-mini" id="kgViews" data-tip="Graph views & tools · dropdown|Opens a menu with three options: Relate nodes (author your own relationships), Code graph (this workspace as a file/symbol graph), and Compiled KB (the knowledge base as a page graph). The label shows the graph you're viewing.">${icon("graph", 13)} <span id="kgViewsLbl">Personal</span> <span class="kgv-caret">▾</span></button>
             <button class="btn-mini btn-icon" id="kgCodeUpdate" data-tip="Re-sync the code graph|Re-ingest the workspace to pick up new files + import changes since the last build." hidden>${icon("refresh", 14)}</button>
             <button class="btn-mini" id="kgData" data-tip="Data · dropdown|Opens a menu with: Import chat history (a ChatGPT / Claude / Gemini export - every message scanned before anything is learned), the AI-extraction toggle for imports, Export Obsidian vault (CUI excluded by design), and the CUI archive (records-managed, 32 CFR 2002 · NARA). Everything is audited.">${icon("folder", 13)} Data <span class="kgv-caret">▾</span></button>
+            ${kgPacksBtnHtml()}
             <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
         </div>
@@ -12238,7 +12243,9 @@ function openSharePanel(): void {
       // the token. Poll marketUser so the panel flips to the ready state the moment the callback lands.
       const r = beginSignIn();
       if (r.opened) {
-        showToast({ title: "Finish signing in", desc: "Complete Google sign-in in your browser, then come back to this window.", timeout: 6000 });
+        // P-KGMARKET.5 (ADR-0333): name the OBJECT. This toast and the pack-purchase one were byte-identical
+        // ("Finish signing in"), so a user who had both in flight could not tell which browser tab was which.
+        showToast({ title: "Finish signing in to share", desc: "Complete Google sign-in in your browser, then come back to this window.", timeout: 6000 });
         let tries = 0;
         const iv = window.setInterval(() => {
           if (marketUser().signedIn) { clearInterval(iv); if ($("#shareModal")) { void draw(); showToast({ title: "Signed in", desc: "You can start sharing now.", timeout: 3000 }); } }
@@ -12619,6 +12626,12 @@ function openKgPacks(): void {
 // so the storefront is a hint — open the product page. Once the private Firebase provider is registered, the
 // decision is fail-closed: not signed in → sign-in prompt; owned → pull (which STILL clears the P-KGPACK.4
 // import gate); otherwise → Stripe Checkout. The actual signed-download + install lands in P-KGMARKET.2.
+// P-KGMARKET.5 (ADR-0333): what the user was buying when the browser sign-in took them away. Held in module
+// state rather than storage on purpose: an intent that does not survive a window reload SHOULD not survive
+// one, and `shouldResumeCheckout` expires it anyway because `lucid://auth` is shared with LUCID Remote and
+// Google Drive.
+let pendingCheckout: PendingCheckout | null = null;
+
 async function getPackFlow(pack: KgPack): Promise<void> {
   const prov = getMarketProvider();
   if (!prov.configured()) { window.open(pack.url, "_blank", "noopener"); return; } // public build: storefront is a hint
@@ -12628,11 +12641,17 @@ async function getPackFlow(pack: KgPack): Promise<void> {
   if (action === "signin") {
     // P-KGMARKET.4: kick off the hosted sign-in (or the local dev stub). Stub mode signs in synchronously, so
     // re-run the flow straight into checkout/pull; firebase opens the browser and the lucid://auth deep link
-    // (wired at boot) finishes it, after which the user clicks the row again.
+    // (wired at boot) finishes it.
     const r = beginSignIn();
     if (r.signedIn) { void getPackFlow(pack); return; }
-    if (r.opened) { showToast({ title: "Finish signing in", desc: "Complete sign-in in your browser, then click the pack again to install it.", timeout: 6000 }); return; }
-    showToast({ tone: "warn", title: "Sign in to buy", desc: r.reason ?? "Sign in to purchase and install role packs.", actions: [{ label: "Open product page", run: () => window.open(pack.url, "_blank", "noopener") }, { label: "Close" }], timeout: 0 });
+    if (r.opened) {
+      // P-KGMARKET.5: hold the user's place across the detour. The old copy told them to "click the pack
+      // again", which is the checkout asking the user to remember the checkout.
+      pendingCheckout = { packId: pack.id, packName: pack.name, startedAt: Date.now() };
+      showToast({ ...packSignInCopy("pending", pack.name), timeout: 6000 });
+      return;
+    }
+    showToast({ tone: "warn", ...packSignInCopy("blocked", pack.name, r.reason), actions: [{ label: "Open product page", run: () => window.open(pack.url, "_blank", "noopener") }, { label: "Close" }], timeout: 0 });
     return;
   }
   if (action === "checkout") {
@@ -12777,6 +12796,10 @@ function wire(): void {
   perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(perfWatch.tier() !== "full"); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
+  // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing
+  // "Browse Role KG Packs" into the command palette, so the one commercial surface in the product was the
+  // one surface with no way in.
+  $("#kgPacks")?.addEventListener("click", () => openKgPacks());
   $("#knowledge")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const lens = t.closest("[data-lens]") as HTMLElement | null;
@@ -13202,6 +13225,23 @@ function wire(): void {
     const t = e.target as HTMLElement;
     if (t.id === "chinaAckInput") { const b = $("#chinaAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
     if (t.id === "thirdPartyAckInput") { const b = $("#thirdPartyAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
+  });
+  // P-KGMARKET.5 (ADR-0333): Enter in a passphrase field runs that field's action. A password input with a
+  // button beside it and no Enter binding reads as broken, and the unlock path is walked every session.
+  // Routed through the BUTTON's own click so the setup/unlock logic stays in exactly one place (the
+  // delegated click handler further down), and gated by an allowlist so Enter in a provider API-key row
+  // cannot fire something the user never aimed at.
+  $("#setBody")!.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing) return;
+    const t = e.target as HTMLElement | null;
+    const input = t?.closest("input");
+    if (!input) return;
+    const body = $("#setBody")!;
+    const target = enterSubmitTarget(input.id, (id) => !!$(`#${id}`, body));
+    if (!target) return;
+    e.preventDefault(); // an Enter that submits must not also do whatever the browser would have done
+    const btn = $(`#${target}`, body);
+    btn?.click();
   });
   // P-VOICE.1 (ADR-0115): persist a voice setting when a Voice-card control changes.
   $("#setBody")!.addEventListener("change", async (e) => {
@@ -15048,7 +15088,19 @@ void loadConfig().then(renderStatus);
 initMarket(readMarketBootConfig());
 try {
   (window as unknown as { lucid?: { onAuthCallback?: (cb: (url: string) => void) => void } }).lucid?.onAuthCallback?.((url) => {
-    if (handleAuthCallback(url)) showToast({ title: "Signed in", desc: "You're signed in - click a pack to install it.", timeout: 5000 });
+    if (!handleAuthCallback(url)) return;
+    // P-KGMARKET.5 (ADR-0333): finish the purchase the user started, instead of telling them to find the
+    // row again. ONE SHOT and time-boxed: this deep link also lands for a LUCID Remote sign-in and for a
+    // Google Drive authorisation, so a stale intent must never open a payment page nobody asked for.
+    const pend = pendingCheckout;
+    pendingCheckout = null;
+    const pack = pend && shouldResumeCheckout(pend, Date.now()) ? KG_PACKS.find((p) => p.id === pend.packId) : undefined;
+    if (pend && pack) {
+      showToast({ ...packSignInCopy("resumed", pend.packName), timeout: 4000 });
+      void getPackFlow(pack);
+      return;
+    }
+    showToast({ title: "Signed in", desc: "You're signed in - click a pack to install it.", timeout: 5000 });
   });
 } catch { /* not in Electron */ }
 // CREATOR-0 (ADR-0279): learn this build's identity FIRST, then reveal the Creator surfaces (mode option,

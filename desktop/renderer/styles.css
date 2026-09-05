@@ -1841,8 +1841,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sbx-blk-head{display:flex;align-items:center;gap:8px;font-size:12px;min-width:0}
 .sbx-host{color:var(--txt);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sbx-blk-reason{margin-top:3px;font-size:11px;color:var(--txt-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* P-KGMARKET.5 (ADR-0333): tighter. This is THE button primitive (about 220 call sites), so the 2px taken
+   off each side compounds across every toolbar in the app, which is what makes room for a seventh control
+   in the KG header without shrinking any label. Tighter padding is also the SAFE direction for invariant
+   11: it gives a label more of the row, so nothing that fit before can start wrapping now. */
 .btn-mini{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2);
-  font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+  font-size:11.5px;font-weight:600;padding:4px 8px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;
   transition:background var(--t),color var(--t),border-color var(--t)}
 .btn-mini:hover{background:var(--bg-3);color:var(--txt)}
 .btn-mini.ok:hover{border-color:var(--green);color:var(--green-txt)}
@@ -2786,7 +2790,32 @@ body.preview-open .thread{font-size:.9em}
 .preview-empty-msg b{color:var(--txt);font-weight:600}
 .preview-shot{flex-direction:column;align-items:flex-start;gap:6px}
 .preview-shot-img{max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:4px}
-.kg-tools{display:flex;align-items:center;gap:10px}
+/* P-KGMARKET.5 (ADR-0333): WRAPS. Same mistake ADR-0325 found in .fleet-card-head: a no-wrap flex row of
+   controls inside an `overflow:hidden` panel (.kg is exactly that) does not reflow when the user drags the
+   panel narrow. A flex item never shrinks below its min-content width, so .kg-tools kept its width and
+   simply hung off the end of the panel, with the controls at that end unreachable.
+
+   MEASURED against the real stylesheet, one row = 30px tall: the PRE-increment six-control header clipped
+   at every panel width from 580px down. The shipped seven-control header stays ONE row down to 680px and
+   clips only at 220px. The trade is height at the extreme: the tools box is 66px at a 420px panel, 127px at
+   300px, 157px at 220px. That is the right trade, because the alternative is not a shorter header, it is a
+   header whose last controls are gone. */
+.kg-tools{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;row-gap:6px}
+/* The one COMMERCIAL affordance in this header, so it is findable without being an advertisement: an
+   accent border and a soft outward glow, plus a very slow low-amplitude breath. The global
+   prefers-reduced-motion reset near the top of this file already pins animations to one iteration; the
+   explicit rule below is the file's convention and states the intent at the site. */
+.btn-mini.kg-packs{border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent-2);
+  box-shadow:0 0 0 1px rgb(var(--accent-2-rgb) / .10),0 0 10px -3px rgb(var(--accent-2-rgb) / .32);
+  animation:packGlow 6s var(--ease) infinite}
+.btn-mini.kg-packs:hover{background:color-mix(in srgb,var(--accent) 12%,var(--bg-2));border-color:var(--accent);color:var(--accent-2);
+  box-shadow:0 0 0 1px rgb(var(--accent-2-rgb) / .20),0 0 16px -3px rgb(var(--accent-2-rgb) / .50);animation:none}
+.btn-mini.kg-packs .ic{color:var(--accent-2)}
+@keyframes packGlow{
+  0%,100%{box-shadow:0 0 0 1px rgb(var(--accent-2-rgb) / .10),0 0 10px -3px rgb(var(--accent-2-rgb) / .28)}
+  50%{box-shadow:0 0 0 1px rgb(var(--accent-2-rgb) / .18),0 0 14px -3px rgb(var(--accent-2-rgb) / .46)}
+}
+@media (prefers-reduced-motion:reduce){.btn-mini.kg-packs{animation:none}}
 .seg.kg-lens{display:flex;gap:3px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:3px}
 .kg-lens button{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);font-size:11px;font-weight:600;padding:4px 11px;border-radius:6px;cursor:pointer;transition:background var(--t),color var(--t),box-shadow var(--t)}
 .kg-lens button:hover{color:var(--txt-2)}
@@ -2953,8 +2982,12 @@ body.preview-open .thread{font-size:.9em}
 .kg-node.dim .kg-label{opacity:0}
 .kg-node.match circle{stroke:var(--accent);stroke-width:3;transform:scale(1.12)}
 .kg-node.match .kg-label{fill:var(--txt);opacity:1}
-.kg-search{width:150px;padding:4px 9px;font-size:12px;border-radius:7px;border:1px solid var(--line);background:var(--bg-0);color:var(--txt);outline:none;transition:border-color var(--t) var(--ease)}
-.kg-search:focus{border-color:var(--accent);width:180px}
+/* P-KGMARKET.5 (ADR-0333): the search field is the FLEXIBLE member of the header, so a narrowing panel
+   shrinks the input before it fragments the button row. The basis has to be the small number and max-width
+   the comfortable one, not the reverse: flex wraps at BASE size and only shrinks items AFTER they have been
+   placed on a line, so a 150px basis would keep wrapping the buttons away while the input stayed wide. */
+.kg-search{flex:1 1 96px;min-width:0;max-width:170px;padding:4px 9px;font-size:12px;border-radius:7px;border:1px solid var(--line);background:var(--bg-0);color:var(--txt);outline:none;transition:border-color var(--t) var(--ease),max-width var(--t) var(--ease)}
+.kg-search:focus{border-color:var(--accent);max-width:210px}
 .kg-search::placeholder{color:var(--txt-3)}
 /* P-KG-REL.1: relate mode - crosshair cursor, picked-node ring, and the cursor-following ghost edge */
 .kg-relating .kg-node,.kg-relating .kg-svg{cursor:crosshair}
