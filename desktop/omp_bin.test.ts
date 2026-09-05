@@ -1,11 +1,14 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/omp_bin.test.ts - the v2.0.0 OAuth regression, pinned.
+// desktop/omp_bin.test.ts - the OAuth EPERM defect, pinned (ADR-0330).
 //
 // A packaged Windows install put omp inside C:\Program Files, the resolver accepted it because the path
 // EXISTED, and the OAuth broker's spawn died with Bun's own `EPERM reading ...cli.js`. Existence was never
 // the question; runnability is. These tests are written against that exact failure.
+//
+// Reported on v2.0.0 but NOT a v2.0.0 regression: the offending resolver landed in c2d8cf9 (2026-07-15)
+// and ships in every tag from v1.11.8 onward.
 
 import { describe, expect, test } from "bun:test";
 import { ompCandidates, resolveOmpBin, type OmpCandidateInput } from "./omp_bin.ts";

@@ -22471,3 +22471,401 @@ VERIFICATION BOUNDARY: the re-send itself is in `Backend.prompt`, which owns the
 not constructible headlessly, so the demo proves the policy, the marker lifecycle, the wording, and the
 ordering the wiring depends on. The live re-send needs the running app: stall a turn past 7 minutes and
 watch it restart in place.
+
+## ADR-0327 -- P-PREVIEW.15 + P-TURN-VIS.1: a crop measured in the wrong unit, and a turn that streamed into nothing (2026-09-05)
+
+**Status:** Accepted -- BUILT. Two field-reported defects, root-caused rather than guessed. Shipped in the
+v2.0.0 cut (`1961725`).
+
+**Context.**
+
+1. **Every preview capture cropped the WRONG rect on a zoomed window.** The renderer measures the iframe
+   with `getBoundingClientRect()`, which reports CSS pixels, and handed that rect straight to
+   `webContents.capturePage()`, which takes DIP. The two only coincide at zoom factor 1.0. At the reporter's
+   118% the crop started about 18% LEFT of the panel, so the snip bled into the chat and composer column,
+   and it ran about 18% short, so the right and bottom of the previewed app were sliced off. The capture
+   worked perfectly for anyone who had never touched the zoom, which is why it survived so long.
+2. **A turn could stream into nothing.** If the NDJSON stream ended without a terminal event, the read loop
+   simply fell out of its `while` and returned. The composer stayed locked behind a spinner, no line was
+   printed, nothing was logged, and nothing failed. The user's only signal was that the app had gone quiet,
+   which is indistinguishable from a model thinking hard.
+
+**Decision.**
+
+- **The unit conversion happens at the IPC seam, where the authoritative zoom lives.**
+  `captureCropFromCssRect()` is pure; `main.ts`'s `lucid:capturePreview` handler reads
+  `e.sender.getZoomFactor()` (falling back to 1.0 on error) and passes it in. The renderer is never asked to
+  report its own zoom, because the main process owns that number and asking twice is how they disagree.
+- **Edges are scaled and rounded SEPARATELY, then width is derived as right minus left.** Rounding a width
+  directly loses a sub-pixel at fractional zoom (1.1, 1.18, 1.25), and a crop one pixel short of the panel's
+  right edge is precisely the reported symptom. The test pins the rule explicitly:
+  `left = round(x*z)`, `right = round((x+w)*z)`, `width = right - left`.
+- **Garbage degrades, it never throws.** An unknown, zero, negative, NaN, Infinity, or non-numeric zoom
+  falls back to 1.0, never to a zero-area crop; invalid rect fields yield 0 rather than an exception. A
+  screenshot is a convenience and may not take down the IPC handler that serves three callers.
+- **All three capture paths route through the one handler** (agent screenshot cache, user screenshot export,
+  send-to-phone), so none of them can drift into its own crop math.
+- **A stream ending is CLASSIFIED, not assumed.** `StreamEndKind` is `aborted | complete | dropped`, decided
+  from three flags in `StreamEndState`: `aborted` (the AbortSignal fired), `terminalDone` (a terminal event
+  was actually seen on the wire), and `tail` (this stream is legitimately long-lived).
+- **`aborted` takes precedence over everything.** A user who pressed Stop must never be told the engine may
+  still be running. They know: they did it.
+- **`error` and `lane-error` are TERMINAL alongside `done`.** A fleet lane failure emits `lane-error` and no
+  `done`, so without this the real error path would itself be classified as a silent death and the user
+  would get a spurious "may still be running" notice stacked on top of a genuine failure.
+- **`dropped` emits a user-facing notice PLUS a synthetic terminal `done`**, so the composer unlocks instead
+  of staying hostage to a stream that is never coming back. `STREAM_DROPPED_NOTICE` states both facts the
+  user needs and neither more: the engine may still be running, and reopening the session is how to find
+  out. It does not claim the turn failed, because that is not known.
+- **The fleet watch opts out with `tail: true`, at exactly one call site** (`/api/fleet/watch`). A live tail
+  has no turn boundary, so a clean close is its normal ending, not a fault. Making the detector opt-OUT
+  rather than opt-in means a future stream inherits the loud behaviour by default.
+- **Pre-stream failures got loud in the same pass.** A fetch throw, a 404, and a non-OK status each emit an
+  error line plus `done` rather than resolving quietly, and a render exception inside the loop is now caught
+  as itself instead of being swallowed by the JSON-parse catch. That swallow is how this whole class stayed
+  invisible.
+
+**Files:** `desktop/preview_capture.ts` (`CaptureRect`, `captureCropFromCssRect`),
+`desktop/preview_capture.test.ts` (7), `desktop/main.ts` (the `lucid:capturePreview` handler),
+`desktop/renderer/stream_end.ts` (`StreamEndKind`, `TERMINAL_EVENT_TYPES`, `StreamEndState`,
+`STREAM_DROPPED_NOTICE`, `streamEndEvents`), `desktop/renderer/stream_end.test.ts` (8),
+`desktop/renderer/bridge.ts` (`streamNdjson`).
+
+**Verification.** 7 crop tests and 8 stream-end tests, measured today by running both files. The crop suite
+asserts across six zoom factors (1, 1.1, 1.18, 1.25, 1.5, 2) that the crop never starts left of the element,
+which states the reported symptom as an invariant rather than pinning the one case that was reported. The
+stream-end suite pins the notice WORDING ("still be running", "reopen the session"), the abort precedence,
+that a `tail` stream closing cleanly is not a drop, and that nine mid-turn event types (token, thinking,
+tool, tool-meta, permission, usage, slow, ping, goal-iter) are non-terminal. CORRECTION TO THE RECORD: the
+PROGRESS entry for this increment says "15 stream-end" tests; the file runs 8 cases. DELIVERY: `bridge.ts`
+is renderer-only, so a window reload picks it up, while the capture fix is Electron main and needs a full
+app restart. VERIFICATION BOUNDARY: the 118% crop was reproduced arithmetically, not photographically. The
+fix is proven at the seam; confirming the snip visually needs a zoomed window and a human eye.
+
+## ADR-0328 -- P-PREVIEW.16 + P-PREVIEW.17: a markdown preview that showed SOURCE, a path bar that lied, and a PDF that was a blank frame (2026-09-05)
+
+**Status:** Accepted -- BUILT. Three defects found by test-driving the panel across all five kinds after
+ADR-0321 (P-PREVIEW.12) widened it, user-approved in one pass. Shipped in the v2.0.0 cut (`1961725`).
+
+**Context.**
+
+1. `previewTextDocument` served a `.md` file as ESCAPED MONOSPACE SOURCE, so a report the model had just
+   written came back as literal `#`, `**bold**` and fenced blocks. The panel advertises markdown as a
+   supported kind, which made this worse than an unsupported format: the feature claimed to work.
+2. The path field kept a STALE path when the agent loaded a file into an already-visible panel, because
+   that activation path skipped the field sync. A path bar showing the previous file is worse than no path
+   bar, which is the whole reason ADR-0323 put it on the tab row.
+3. A `.pdf` rendered as a blank white frame even with a correct MIME type. Electron's
+   `webPreferences.plugins` defaults to FALSE, and Chromium's built-in PDF viewer is gated behind it.
+
+**Decision.**
+
+- **Markdown renders through a PRIVATE `Marked` instance, never the global `marked`.** The global's options
+  are process-wide mutable state, so any other caller in the process could change how a preview renders. A
+  private instance makes the render deterministic by construction rather than by convention.
+- **`gfm: true`, `breaks: false`:** headings, lists, GFM tables, fenced code. `breaks: false` because a
+  markdown document written for other renderers must not gain spurious line breaks here.
+- **It NEVER emits raw HTML.** The html renderer escapes rather than passing through, so an embedded
+  `<script>` in a generated report is text on the page.
+- **Link and image targets are restricted to a `SAFE_HREF` allowlist**
+  (`^(?:https?://|mailto:|#|\.{0,2}/)`), and a `javascript:` link degrades to plain TEXT rather than being
+  dropped silently, so the reader can see what the document tried to do. `data:image` is the one deliberate
+  exception, because generated charts arrive that way.
+- **Sanitation is ENGINE-side, not renderer-side.** The bytes that reach the sandboxed frame are already
+  safe, which makes the frame's opaque origin and blocked egress defence in depth rather than the only
+  defence. This is the same direction invariant 5 takes with untrusted content: sanitize before the
+  boundary, not at it.
+- **`MAX_DOC_TEXT` caps a document at 1MB.** A 40MB log dropped into the panel is a hang, not a preview.
+- **`MD_CSS` uses BLOCK layout with NO flex, and two tests assert it.** This is invariant 11 at its highest
+  risk surface: a flex container makes every raw text run AND every inline `<b>`/`<a>/`<code>` its own flex
+  item, so a sentence with bold phrases shatters into narrow stacked columns. Markdown is nothing but prose
+  with inline tags, so if that bug is ever going to come back, it comes back here.
+- **`syncPrevPathField(path)` is called from `loadPreview` on every activation**, and ONLY when
+  `document.activeElement` is not the path field, so a sync can never overwrite what the user is mid-way
+  through typing.
+- **`plugins: true` on the main window's `webPreferences`, with a comment stating what it means TODAY.** It
+  enables Chromium's built-in PDF viewer and nothing else: NPAPI and PPAPI are long gone from modern
+  Chromium, so the historical security objection to this flag no longer describes the flag. The previewed
+  document still sits in the same opaque-origin, egress-blocked sandbox as every other kind, so this widens
+  what can be RENDERED without widening what the document can REACH.
+
+**Files:** `desktop/preview_inline.ts` (`previewMarkdownHtml`, `previewTextDocument`, the private `Marked`
+instance, `htmlEscape`, `SAFE_HREF`, `MAX_DOC_TEXT`, `MD_CSS`), `desktop/preview_inline.test.ts` (66),
+`desktop/renderer/app.ts` (`syncPrevPathField`, its call from `loadPreview`), `desktop/main.ts`
+(`createWindow` webPreferences).
+
+**Verification.** 66 preview_inline tests, measured today, including the sanitation cases that matter (raw
+HTML escaped rather than executed, a `javascript:` link degraded to text, `data:image` allowed, relative
+URLs preserved), the markdown truncation rule, and the two invariant-11 block-layout guards. The OLD
+assertion that markdown came back as escaped source was REWRITTEN rather than left to rot, because it pinned
+exactly the behaviour being fixed. Markdown was additionally proven end to end without waiting on a restart,
+by pushing a real 21.5KB markdown file through the actual `previewTextDocument` and loading the result.
+DELIVERY, and this is the whole story on device: the path bar is renderer-only (window reload), the PDF fix
+is Electron main (full app restart), and markdown is ENGINE-side, so it needs an engine restart.
+VERIFICATION BOUNDARY: the PDF viewer itself was not observed rendering a document, because that needs the
+restarted Electron main process. `plugins: true` being the gate is read off Electron's documented default,
+so the causal claim is grounded but the fix is confirmed by construction, not by looking at a PDF.
+
+## ADR-0329 -- P-PREVIEW.18 + P-SEC.4: the preview stopped hijacking the screen, a 100-row queue got one button, and the suite stopped writing to the operator's real ledger (2026-09-05)
+
+**Status:** Accepted -- BUILT. Two user asks, plus one thing found on the way that mattered more than
+either. Narrows ADR-0321 (P-PREVIEW.12). Shipped in the v2.0.0 cut (`1961725`).
+
+**Context.**
+
+1. **The panel auto-surfaced for every kind it could render.** P-PREVIEW.12 widened the panel to five kinds,
+   and one boolean was answering two different questions: can we render this, and is this worth taking over
+   part of the user's screen for. So a routine `.md`, `.json`, `.csv` or `.log` write during a build
+   interrupted whatever the user was reading.
+2. **The Security panel's Live blocks queue had 100 rows and only per-row buttons**, which makes
+   acknowledging a historical queue technically possible and practically unusable.
+3. **Found on the way:** the delegated Dismiss-all test passed ALONE and failed four times in the full suite,
+   which is the signature of load-order state. It redirected `HOME` and then dynamically imported, so in the
+   full suite it found `security_log` already loaded by an earlier file and holding the REAL home. It
+   dismissed the operator's actual quarantine queue and wrote two fixture rows into their real ledger.
+
+**Decision.**
+
+- **`PREVIEW_AUTO_SURFACE` is a `Record<PreviewKind, boolean>`, exhaustive BY TYPE.** html, svg and pdf
+  auto-surface; markdown, text and image do not. Exhaustiveness is the point: a new preview kind cannot be
+  added without answering the interruption question, so the default can never be inherited by accident.
+- **Nothing was removed, only the interruption.** Every kind stays renderable on request through
+  `preview_open`, the Open field, and Browse.
+- **`isAutoPreviewPath(p)` is the renderer's single read of that policy**, consumed by `fleet_grid.ts` when a
+  lane's tool event carries a written path.
+- **The `preview_open` tool description TEACHES the distinction rather than listing kinds**, because the
+  model is the actor whose behaviour is being changed. A list of extensions would have told it what is
+  possible; it needed to know what is worth interrupting a human for.
+- **`dismissAllBlocks(reviewer)` loads the ledger ONCE but writes one `_dismiss` line and one
+  `block_dismissed` event PER BLOCK.** Looping over `dismissBlock` would re-read and re-replay the entire
+  ledger per block, quadratic on the exact queue size that motivated the feature. But the per-block audit
+  records stay per-block, because per-block provenance is the entire point of the trail: collapsing 100
+  dismissals into one aggregate line would have made the convenient path the one that destroys evidence.
+- **The button is TWO-STEP**: "Dismiss all N" arms it and relabels to "Confirm: dismiss N?". Dismissing 100
+  blocks is not undone by clicking again.
+- **THE SEAM, which is the real content of this ADR: both paths resolve PER CALL, never at module load.**
+  `logPath()` (the JSONL ledger) and `defaultAuditPath()` (the OCSF audit) each honor an explicit override
+  (`LUCID_BLOCKS_PATH` / `LUCID_AUDIT_PATH`), then fall back to a PER-PROCESS temp file under
+  `NODE_ENV=test` (`lucid-blocks-test-<pid>.jsonl` / `lucid-audit-test-<pid>.jsonl`), then to the real
+  `~/.omp/` path. Per-call resolution is what defeats load order: a module already imported by an earlier
+  test file can no longer be holding a real path captured before `HOME` was redirected. A test-only guard
+  that lives at module scope is not a guard, it is a race.
+
+**Damage disclosed rather than quietly repaired.** Two fixture rows (`tool: fetch`, `tool: eval`, reviewer
+`soc-analyst`) were written into the user's real ledger at 03:31:53Z, and their real quarantine queue was
+dismissed. The append-only OCSF audit was deliberately NOT rewritten: an audit you edit after the fact is
+not an audit, and a self-inflicted entry is exactly the kind an operator should be able to see. Nothing was
+RELEASED, which is the one mitigating fact: dismissal moves a block out of the queue, it does not unblock
+the content.
+
+**Files:** `desktop/preview_resolve.ts` (`PREVIEW_AUTO_SURFACE`, `previewAutoSurfaces`),
+`desktop/renderer/preview_tabs.ts` (`isAutoPreviewPath`), `desktop/renderer/fleet_grid.ts` (the lane tool
+event), `harness/omp/preview_extension.ts` (the `preview_open` description),
+`desktop/security_log.ts` (`dismissAllBlocks`, `logPath`), `desktop/audit_export.ts` (`defaultAuditPath`),
+`desktop/dev.ts` (`/api/security/dismiss-all`), `desktop/renderer/app.ts` (the two-step button),
+`desktop/preview_resolve.test.ts` (75), `desktop/security_log.test.ts` (4).
+
+**Verification.** 75 preview_resolve tests and 4 security_log tests, measured today. The auto-surface suite
+guards the direction that was wrong: `.md`, `.json`, `.csv` and `.log` must NOT auto-open while staying
+renderable. The security suite pins that an APPROVED block never becomes dismissable and that dismiss-all
+writes one line and one event per block. The pollution fix is verified by the failure it removes: the
+delegated test now passes both alone and inside the full suite, which was the discriminating symptom.
+VERIFICATION BOUNDARY: "no code path can touch a real file during tests" is a STRUCTURAL claim about the two
+resolvers, not an exhaustive audit of every writer in the tree. Any future module that captures a path at
+import time reintroduces this, and nothing mechanically forbids that yet.
+
+## ADR-0330 -- the OAuth broker spawned an omp it could not READ: existence is not executability (2026-09-05)
+
+**Status:** Accepted -- BUILT. Field defect, reported live on a packaged Windows install. No increment id,
+same as ADR-0316: this is a defect fix off a support report, not a planned increment. Extends the probe
+doctrine of ADR-0261 (write probe) and ADR-0305 (port handshake). Second correction to the resolver first
+patched in `c2d8cf9`.
+
+**Context.** "Connect via OAuth" failed with Bun's own error instead of opening a sign-in page:
+
+```
+error: EPERM reading "C:\Program Files\LucidAgentIDE\resources\repo\node_modules\
+       @oh-my-pi\pi-coding-agent\dist\cli.js" Bun v1.3.14 (Windows x64)
+```
+
+A packaged install ships omp inside the application directory, and on Windows that directory is
+ACL-protected: the same protection ADR-0261's boot gate exists to detect. The resolver accepted
+`LUCID_OMP_BIN` because the path EXISTED, so `dev.ts` handed the broker a file Bun then could not read, and
+the spawn died before any loopback callback server was started. No URL, no error the user could act on.
+
+`existsSync` was never the right question. A file can exist and still be unusable: unreadable under an ACL,
+a stale shim pointing at a package that has been removed, a zero-byte truncation, the wrong architecture.
+Those fail at four different layers and every one of them looks identical to a path check.
+
+**Root cause of the root cause.** THREE files had each grown a private copy of this resolver: `dev.ts` for
+the OAuth broker, `acp_backend.ts` for the chat session, `agent_run.ts`. They had already drifted once, and
+that is not a hypothetical: `c2d8cf9` exists solely because the broker resolved a DIFFERENT omp than the
+model list, and `c2d8cf9`'s fix (prefer `LUCID_OMP_BIN`) is precisely what carried the unreadable path into
+the broker. A defect repaired in one copy became a defect in another.
+
+**Decision.** Probe, do not infer, and keep the decision in exactly one place.
+
+- **`resolveOmpBin(input, canRun)` returns the first candidate that PROVABLY runs.** The only honest test of
+  "can we run this" is to run it. The real callers probe `<candidate> --version`, bounded at 6s and cached
+  per process, so the cost is one short spawn per process rather than per resolution.
+- **The probe is INJECTED, so the policy is pure.** `ompCandidates` and `resolveOmpBin` hold the ORDER and
+  the FALLBACK RULE with no `node:path` and no spawning, which is what makes the decision unit-testable
+  cross-platform instead of only observable on a machine that reproduces the ACL.
+- **Candidate order, most specific first:** `LUCID_OMP_BIN` (trimmed, and skipped entirely when blank),
+  then `~/.bun/bin/omp<exeSuffix>`, then the bare name `omp`. **The bare name is always last** because it is
+  the one candidate that cannot be an unreadable file inside a protected install directory, so the OS PATH
+  gets the final word rather than the first.
+- **A throwing probe is a FAILED probe, never a crash.** A probe that spawns can throw EPERM, ENOENT or
+  EACCES, and the resolver must degrade past it. Success is `canRun(c) === true` strictly: a probe that
+  accidentally returns a string or an object must not authorize a spawn.
+- **It never throws and never returns empty.** When every candidate fails, the caller gets the bare name
+  with `proven: false` and the full ordered `rejected` list, and logs every path it tried. "omp is not
+  installed or not on PATH" is a better message for a user than an exception out of a resolver, and the
+  rejected list makes the NEXT field report diagnosable instead of a bare toast.
+- **All three call sites import the one resolver.** The class of bug where the broker and the model list
+  disagree about which omp is authoritative cannot recur, which matters more than this single EPERM.
+
+**Blast radius, stated because the first characterisation was wrong.** This is NOT a v2.0.0 regression.
+`c2d8cf9` is dated 2026-07-15 and ships in every tag from **v1.11.8** onward, so any user whose install
+directory denied that read had been unable to use OAuth for nearly two months. That is what made this worth
+its own release (v2.1.0) rather than riding the next feature batch.
+
+**Files:** `desktop/omp_bin.ts` (`OmpRunProbe`, `OmpCandidateInput`, `ompCandidates`, `OmpResolution`,
+`resolveOmpBin`), `desktop/omp_bin.test.ts` (11), `desktop/dev.ts`, `desktop/acp_backend.ts`,
+`desktop/agent_run.ts` (three private copies deleted, all three now importing the resolver).
+
+**Verification.** 11 tests written against the report rather than the happy path: the exact Program Files
+path from the field report is rejected and the next candidate wins; a blank or whitespace-only
+`LUCID_OMP_BIN` is not even a candidate; the bare name is last under every input shape; a runnable env
+binary wins outright and the fallbacks are never probed; every candidate failing yields the bare name with
+`proven: false` and all three paths in `rejected`; a throwing probe degrades instead of propagating; a
+truthy non-boolean is not accepted. Gate 4910 pass / 7 fail (the standing Windows path assumptions), all
+three typecheck passes clean, license headers clean. VERIFICATION BOUNDARY: the EPERM itself is not
+reproduced in CI, because it needs a genuinely ACL-protected directory. What is proven is that a candidate
+failing its probe is skipped and the next one taken; that the ACL is WHY the probe fails on the reporter's
+box is read off Bun's error text, not observed here.
+
+## ADR-0331 -- P-FLEET.L13: a 5px scrollbar is not a control, and two copies of the scroll math is how the lanes go stale (2026-09-05)
+
+**Status:** Accepted -- BUILT. User-reported, two asks in one message.
+
+**Context.** "The vertical scrollbar is too thin to grab, and the lane wants the two catch-up buttons the
+main composer has."
+
+The first was a scale mistake, not a styling preference. The global scrollbar rule is an 11px track whose
+thumb carries a 3px transparent border with `background-clip:content-box`, so the actual pointer target is
+**5px**. That is fine down the edge of a full-height chat, where the bar is long and the user is aiming at
+an axis rather than an object. Inside a 300px lane card the bar is short as well as thin, so there is no
+forgiving dimension left and it stops being a control.
+
+The second was a duplication risk. `a375cdc` gave the main composer a page stepper and a run-to-end button,
+but the arithmetic lived inline in `app.ts` keyed to `#chat`. Copying "one viewport minus a line of overlap"
+into the lane renderer is exactly how the two surfaces drift: the chat would eventually get a tuning pass
+the lanes never saw, and nothing would fail.
+
+**Decision.**
+
+- **Widen the lane bar only, and give it a resting colour.** `.fleet-out` gets a 14px track with a 2px
+  border, so a 10px thumb: double the pointer target. It also gets a visible colour before hover, so the
+  bar reads as draggable rather than being discovered. Scoped to `.fleet-out`, so the global bar stays slim
+  everywhere else and no other surface pays for this.
+- **The same catch-up pair the composer carries, per lane.** Single chevron steps ONE page and keeps a line
+  of overlap so the reader resumes on a line they have already read; double chevron runs to the newest line
+  INSTANTLY, not smoothly, because a long transcript is a slow ride to somewhere the reader just asked to
+  be. Both stay hidden until there is content below the fold.
+- **The arithmetic moves to `renderer/scroll_jump.ts` and BOTH callers read it.** The main thread was
+  refactored onto the shared helper rather than left holding its inline copy, which is the half of this that
+  actually prevents the drift. One tuning pass now reaches both surfaces by construction.
+- **Lanes carry their own threshold.** `LANE_JUMP_SHOW_PX` is 48 against the chat's `JUMP_SHOW_PX` of 140,
+  because a 180px transcript would essentially never clear a 140px bar and the pair would have been dead
+  weight in the surface that asked for it.
+- **Both listeners are DELEGATED on the dock**, for the same reason `onDockPointerDown` already was: lane
+  cards are built and destroyed on every poll, so per-card listeners would leak with them. `scroll` does not
+  bubble, so it is captured rather than delegated normally. The click calls `stopPropagation` so it can
+  never reach the header's drag-to-reorder gesture.
+- **Every entry point refuses to produce a NaN target.** This is the failure mode the tests are aimed at,
+  because assigning `NaN` to `scrollTop` silently does nothing: no throw, no console line, and the button
+  simply reads as broken. `belowFold` also clamps at 0, since an over-scrolled or mid-layout element can
+  report a `scrollTop` past the bottom and a negative "below" would read as "plenty left to scroll".
+
+**Files:** `desktop/renderer/scroll_jump.ts` (`JUMP_SHOW_PX`, `LANE_JUMP_SHOW_PX`, `ScrollMetrics`,
+`belowFold`, `shouldShowJump`, `pageStep`, `pageDownTarget`), `desktop/renderer/scroll_jump.test.ts` (11),
+`desktop/renderer/fleet_grid.ts` (`onLaneJumpClick`, `syncLaneJump`, the `data-lane-jump` buttons inside
+`.fleet-out`), `desktop/renderer/app.ts` (its inline arithmetic replaced by the shared import),
+`desktop/renderer/styles.css` (the `.fleet-out` scrollbar rules and the per-lane button rules).
+
+**Verification.** 11 pure tests, weighted toward the refusals: unusable metrics collapse to 0 rather than
+NaN, a garbage threshold falls back instead of showing always or never, an unloaded font (NaN line height)
+still yields a usable step, a page-down clamps to the bottom so a smooth scroll cannot overshoot into the
+rubber-band region, and `pageDownTarget` never returns NaN whatever the scroller reports mid-layout. Gate
+4921 pass / 7 fail (the standing Windows path assumptions), all three typecheck passes clean, license
+headers clean. Served bytes checked per ADR-0303: the rebuilt bundle and `styles.css` carry the change and
+the retired inline arithmetic is ABSENT. VERIFICATION BOUNDARY: the pointer target itself is a CSS number,
+not an assertion. Whether 10px is enough to grab is a feel question, and this repo has no DOM test harness,
+so the widths are reviewed and the math is tested.
+
+**Deliberately NOT in this increment.** The tool-call group collapse and live ticker. Lane chips already
+have per-chip body reveal (`laneChip`/`hasBody`); what is missing is a grouped, collapsible header with a
+ticker, and that lives in the incremental repaint path ADR-0309 exists to protect ("a repaint patches, it
+does not rebuild"). It is its own increment, not a rider on this one.
+
+## ADR-0332 -- P-RELEASE.5: the identity gate rejected every PRERELEASE deb and rpm, so the rolling `latest` could never publish (2026-09-05)
+
+**Status:** Accepted -- BUILT. Fixes a defect in ADR-0307 (P-RELEASE.4) and closes, by accident, the
+download-link failure that ADR-0246's P-RELEASE.2d had flagged as an open interaction.
+
+**Context.** Dispatching the rolling-latest refresh after v2.1.0 failed the Linux job on the identity gate:
+
+```
+FAIL rpm  version mismatch: building 2.1.1-test.101, the rpm says 2.1.1~test.101
+FAIL deb  version mismatch: building 2.1.1-test.101, control says 2.1.1~test.101
+```
+
+The artifacts were RIGHT and the gate was wrong. Neither Debian nor RPM may carry `-` in a version field:
+Debian reads it as the separator before the Debian revision, RPM as the separator before the release. So fpm
+(via electron-builder) rewrites a semver PRERELEASE separator to `~`, which both ecosystems additionally
+sort BEFORE the plain release, matching prerelease semantics exactly. The packagers were being correct.
+
+The gate compared the embedded version string literally, so **every** prerelease deb and rpm failed. And
+the ONLY path that stamps a prerelease is the manual `workflow_dispatch` that refreshes the rolling `latest`
+release, which means that job had never once run to completion. Two visible consequences followed from that
+one never-green job: the rolling downloads went stale, and the marketing site's version-pinned `.deb`/`.rpm`
+links had been 404ing since v1.14.0, because they resolve through `/releases/latest/download/` and no
+successful dispatch had ever refreshed those filenames. A tag build carries a clean version with no `-` in
+it at all, which is precisely how this hid through every single release.
+
+**Decision.** Translate the separator, and nothing else.
+
+- **`debRpmVersion(version)` expresses the semver the way Debian and RPM are ALLOWED to express it**, and
+  the deb and rpm checks compare against that form. It rewrites the prerelease separator only.
+- **The scope is deliberately narrow, because ADR-0307 is a security gate, not a formatting helper.** A
+  genuine version mismatch, a stale payload republished under a new tag, and a mis-stamped build all still
+  fail. Loosening the comparison generally (a substring match, a normalising strip) would have been shorter
+  and would have quietly retired the check the ADR exists for.
+- **The failure message names all three strings** (`building X (deb form Y), control says Z`), so the next
+  person to trip it can act without reading fpm's source. The original message named two and the missing
+  one was the whole answer.
+- **A PUBLISHING dispatch carries the real version, never a test stamp.** Found immediately after the fix
+  let the job complete for the first time: it shipped `lucidagentide-desktop_2.1.1-test.102_amd64.deb`. Two
+  bad things at once, because the rolling `latest` is load-bearing twice over: its `latest*.yml` is what the
+  in-app updater reads, so a test-versioned build goes in front of every existing user via auto-update, and
+  its filenames are what the site's version-pinned links resolve to, so a `-test.<run>` stamp leaves them
+  404ing exactly as before. `build-desktop.yml` now branches on `inputs.publish_latest` and uses the
+  committed version verbatim; the `-test.<run>` stamp is retained for non-publishing dispatch builds, which
+  is the case it was correct for.
+
+**Files:** `desktop/build/release_identity.ts` (`debRpmVersion`, `checkDeb`, `checkRpm`),
+`desktop/build/release_identity.test.ts` (+3, 72 in the file),
+`.github/workflows/build-desktop.yml` (the version-stamp branch).
+
+**Verification.** 3 new tests, and two of them exist to prove the gate was not loosened: a prerelease build
+passes with the `~` form fpm actually writes; a DIFFERENT prerelease correctly `~`-formed still FAILS (the
+stale-payload case ADR-0307 exists for), as does a different base version and a literal `-`; and the message
+names all three strings. 72 tests in the file, gate green. Then the real proof, which is not a test: the
+dispatch was re-run and the rolling `latest` release completed for the first time, its artifacts carrying
+clean `2.1.0` names, and the site's `.deb` and `.rpm` links returned **HTTP 200** where they had returned
+404 since v1.14.0. VERIFICATION BOUNDARY: the updater feed BODY was not read. The asset's freshness (337
+bytes, rewritten 2026-09-05T13:28:25Z) and the clean artifact names were confirmed; the `version:` line
+inside `latest.yml` was not, because three local download attempts failed. So "an installed 1.14.x now
+offers exactly 2.1.0" remains unverified, and the first exposure window (about 15 minutes serving
+`2.1.1-test.102`) is closed but was real.
