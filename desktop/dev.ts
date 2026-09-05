@@ -116,6 +116,7 @@ import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agen
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
+import { resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
@@ -972,15 +973,39 @@ function agedResources(data: CreatorResourcesData, now: number): CreatorResource
   };
 }
 
+// The omp binary, resolved ONCE per engine process and PROVEN to run.
+//
+// v2.0.0 regression this fixes: this resolver accepted `LUCID_OMP_BIN` on existence alone. In a packaged
+// Windows install that path lives under C:\Program Files, whose ACLs made Bun's read of the shim's target
+// fail, so "Connect via OAuth" died with `EPERM reading ...pi-coding-agent\dist\cli.js` instead of
+// returning a sign-in URL. Existence was never the question. resolveOmpBin probes each candidate by
+// actually running it (`--version`) and falls through to one that works.
+//
+// Cached because the probe spawns: the broker, logout, and every later call reuse one answer.
+let ompBinCache: string | null = null;
 function ompBin(): string {
-  // Honor the omp the Electron main process resolved (bundled shim / app-managed install) FIRST — exactly
-  // like acp_backend.ts. Without this, the OAuth broker + logout here resolved a DIFFERENT omp (a stale
-  // ~/.bun global, or none), so "Connect via OAuth" produced no sign-in URL even though the model list —
-  // which runs through acp_backend's LUCID_OMP_BIN-aware resolver — worked fine. They must use the SAME omp.
-  const fromMain = process.env.LUCID_OMP_BIN;
-  if (fromMain && existsSync(fromMain)) return fromMain;
-  for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
-  return "omp";
+  if (ompBinCache) return ompBinCache;
+  const probe = (candidate: string): boolean => {
+    try {
+      // A real capability probe, deliberately cheap and bounded. `--version` touches no auth, no network
+      // and no session state, so it is safe to run at resolve time.
+      const r = Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: 6000 });
+      return r.exitCode === 0;
+    } catch { return false; } // EPERM / ENOENT / EACCES all mean "cannot run this one"
+  };
+  const r = resolveOmpBin(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    probe,
+  );
+  if (!r.proven) {
+    // Name every path we tried. This is the line that turns "OAuth just fails" into a diagnosable report,
+    // which is exactly what the field report for this bug lacked.
+    console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
+  } else if (r.rejected.length) {
+    console.error(`[omp] using ${r.bin} (skipped unrunnable: ${r.rejected.join(", ")})`);
+  }
+  ompBinCache = r.bin;
+  return r.bin;
 }
 
 // P-WINBOOT.2 (ADR-0260): the engine's on-disk base. In the `bun build --compile` engine binary,

@@ -32,6 +32,7 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
+import { resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
@@ -186,13 +187,26 @@ function readDesignInvariants(workspace: string): string {
   } catch { return ""; }
 }
 
+// The omp binary, resolved once and PROVEN runnable. Shares desktop/omp_bin.ts with dev.ts and
+// agent_run.ts: three private copies of this resolver had already drifted once (commit c2d8cf9 exists
+// only because the OAuth broker picked a different omp than this file did), and the v2.0.0 EPERM
+// regression came from accepting a path on existence alone. See omp_bin.ts for the full reasoning.
+let ompBinCache: string | null = null;
 function ompBin(): string {
-  // Prefer the path the Electron main process resolved (bundled or app-managed
-  // install); fall back to the user's bun bin, then PATH.
-  const fromMain = process.env.LUCID_OMP_BIN;
-  if (fromMain && existsSync(fromMain)) return fromMain;
-  for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
-  return "omp";
+  if (ompBinCache) return ompBinCache;
+  const probe = (candidate: string): boolean => {
+    try {
+      const r = Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: 6000 });
+      return r.exitCode === 0;
+    } catch { return false; }
+  };
+  const r = resolveOmpBin(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    probe,
+  );
+  if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
+  ompBinCache = r.bin;
+  return r.bin;
 }
 
 /** P-FLEET.L1: the gated omp argv for a LOCAL LANE. Same fail-closed security gate (-e GATE, invariant 4)

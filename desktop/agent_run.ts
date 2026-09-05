@@ -22,6 +22,7 @@ import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts";
 import { TraceRecorder } from "../harness/agent/trace.ts"; // P-AGENT.13: best-effort run provenance
 import { buildKmsFetchRequest } from "../harness/agent/kms.ts"; // P-AGENT.16: provider-sourced secrets
 import { connectorStatus, runConnector } from "./addon_seam.ts"; // P-AGENT.16: enterprise kms connector
+import { resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + acp_backend.ts
 import { validateSpec, type AgentSpec } from "../harness/agent/spec.ts";
 import type { TrustLabel } from "../harness/contracts.ts";
 
@@ -29,11 +30,25 @@ const REPO = join(import.meta.dir, "..");
 // Absolute so the gate loads from THIS repo even when omp runs in the isolated run dir (mirrors acp_backend).
 const GATE = join(REPO, "harness", "omp", "security_extension.ts");
 
+// One probed omp resolver, shared with dev.ts + acp_backend.ts (desktop/omp_bin.ts). Existence is not
+// runnability: a packaged install's omp sits in an ACL-protected directory, which is how the v2.0.0
+// OAuth broker ended up spawning a path Bun could not read.
+let ompBinCache: string | null = null;
 function ompBin(): string {
-  const fromMain = process.env.LUCID_OMP_BIN;
-  if (fromMain && existsSync(fromMain)) return fromMain;
-  for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
-  return "omp";
+  if (ompBinCache) return ompBinCache;
+  const probe = (candidate: string): boolean => {
+    try {
+      const r = Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: 6000 });
+      return r.exitCode === 0;
+    } catch { return false; }
+  };
+  const r = resolveOmpBin(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    probe,
+  );
+  if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
+  ompBinCache = r.bin;
+  return r.bin;
 }
 
 export interface AgentRunResult {
