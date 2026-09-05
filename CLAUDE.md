@@ -22,6 +22,19 @@
 1. New `make demo-<this-increment>` passes.
 1. Full `make test` green (every prior demo still passes).
 1. If you touched the prompt prefix, re-run the prefix-hash test.
+1. **If you touched anything under `desktop/renderer/`, run
+   `cd desktop && bun run build-renderer`, then GREP THE SERVED BYTES for a
+   marker your change introduced.** `dev.ts bundleApp()` serves the prebuilt
+   `desktop/renderer/app.bundle.js` whenever it exists and NEVER compiles from
+   source (ADR-0260: Bun must not module-load a `.ts` from a protected install
+   dir). So renderer source edits are invisible in the running app until that
+   artifact is rebuilt, and no amount of restarting helps. A source typecheck or
+   a scratch `bun build` proves the code COMPILES; it proves nothing about the
+   bytes the app serves. Verify by fetching `/app.js` and `/styles.css` from a
+   freshly booted engine and grepping for a new identifier, plus one retired
+   identifier that must be ABSENT. This is the ADR-0303 vacuous-green trap in
+   its most expensive form, because everything looks green and the user sees no
+   change at all.
 1. Append exactly 3 lines to PROGRESS.md: shipped / stubbed / next.
 
 Do not start the next increment in the same session. A half-finished second
