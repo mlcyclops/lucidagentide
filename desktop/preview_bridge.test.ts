@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/preview_bridge.test.ts — P-PREVIEW.6b (ADR-0153): the injected inspect bridge.
+// P-PREVIEW.13: plus the EARLY shim that repairs the opaque-origin environment before page code runs.
 
 import { test, expect, describe } from "bun:test";
-import { injectPreviewBridge, PREVIEW_BRIDGE_JS } from "./preview_bridge.ts";
+import { injectPreviewBridge, injectPreviewShim, PREVIEW_BRIDGE_JS, PREVIEW_SHIM_JS } from "./preview_bridge.ts";
 
 describe("injectPreviewBridge", () => {
   test("injects the bridge just before </body>", () => {
@@ -58,5 +59,73 @@ describe("injectPreviewBridge", () => {
     expect(PREVIEW_BRIDGE_JS).toContain("emptyBody: bodyEmpty()");
     expect(PREVIEW_BRIDGE_JS).toContain("healthSent");           // fire-once guard
     expect(PREVIEW_BRIDGE_JS).toContain("errs.slice(-6)");       // bounded error tail, no full dumps
+  });
+});
+
+// P-PREVIEW.13. The bug this guards: the preview frame is sandboxed WITHOUT allow-same-origin, so its
+// origin is opaque and the `localStorage` getter THROWS. A page whose first line reads a saved high score
+// therefore died on line 1, leaving HTML and CSS painted but nothing scripted, which is the "preview panel
+// doesn't work" report. Reproduced and isolated live: the identical game with only that line removed
+// animates correctly in the same sandbox.
+describe("injectPreviewShim (P-PREVIEW.13)", () => {
+  test("injects immediately after <head>, so it is the FIRST script the page runs", () => {
+    const out = injectPreviewShim("<html><head><title>t</title></head><body><script>x()</script></body></html>");
+    expect(out).toContain("<head><script>");
+    // Position is the whole point: it must precede the page's own script, not merely be present.
+    expect(out.indexOf("__lucidShim")).toBeLessThan(out.indexOf("x()"));
+    expect(out.indexOf("__lucidShim")).toBeLessThan(out.indexOf("<title>"));
+  });
+  test("falls back to after <html>, then to prepending, when there is no <head>", () => {
+    expect(injectPreviewShim("<html><body>b</body></html>")).toContain("<html><script>");
+    expect(injectPreviewShim("<h1>bare</h1>").startsWith("<script>")).toBe(true);
+  });
+  test("tolerates attributes on the head/html tags", () => {
+    const out = injectPreviewShim(`<html lang="en"><head data-x="1"><meta charset="utf-8"></head><body></body></html>`);
+    expect(out).toContain(`<head data-x="1"><script>`);
+    expect(out.indexOf("__lucidShim")).toBeLessThan(out.indexOf("<meta"));
+  });
+  test("polyfills BOTH storages, and only when the real one is unreachable", () => {
+    expect(PREVIEW_SHIM_JS).toContain("localStorage");
+    expect(PREVIEW_SHIM_JS).toContain("sessionStorage");
+    // The probe must be guarded, because reading the getter is itself what throws.
+    expect(PREVIEW_SHIM_JS).toMatch(/try\s*\{\s*var s = window\[name\]/);
+    // A reachable Storage is left ALONE (a top-level open has a real one; clobbering it would lose data).
+    expect(PREVIEW_SHIM_JS).toContain("if (ok) return;");
+    // The full surface real code calls, or the polyfill just moves the crash.
+    for (const m of ["getItem", "setItem", "removeItem", "clear", "key", "length"]) {
+      expect(PREVIEW_SHIM_JS).toContain(m);
+    }
+  });
+  test("shares ONE error buffer with the bridge, so an early throw still reaches preview_inspect", () => {
+    // The bridge registers its listener before </body>, far too late to catch a throw from the page's
+    // own first script. Both must therefore read and write the same array.
+    expect(PREVIEW_SHIM_JS).toContain("window.__lucidErrs = window.__lucidErrs || []");
+    expect(PREVIEW_BRIDGE_JS).toContain("window.__lucidErrs = window.__lucidErrs || []");
+  });
+  test("captures errors + unhandled rejections, and surfaces a dead page instead of leaving it blank", () => {
+    expect(PREVIEW_SHIM_JS).toContain("addEventListener('error'");
+    expect(PREVIEW_SHIM_JS).toContain("addEventListener('unhandledrejection'");
+    expect(PREVIEW_SHIM_JS).toContain("lucid-script-error");
+    // Shown once, and dismissible: a stuck banner over someone's app is its own bug.
+    expect(PREVIEW_SHIM_JS).toContain("if (shown) return;");
+    expect(PREVIEW_SHIM_JS).toContain("d.remove()");
+  });
+  test("idempotent: a double injection cannot double-install or double-banner", () => {
+    expect(PREVIEW_SHIM_JS).toContain("if (window.__lucidShim) return;");
+    const twice = injectPreviewShim(injectPreviewShim("<html><head></head><body></body></html>"));
+    expect(twice.split("__lucidShim = 1").length - 1).toBe(2); // both present...
+    expect(PREVIEW_SHIM_JS.indexOf("__lucidShim")).toBeLessThan(PREVIEW_SHIM_JS.indexOf("errs")); // ...guard runs first
+  });
+  test("no arbitrary-code or raw-HTML surface (same bar as the bridge)", () => {
+    expect(/\beval\s*\(/.test(PREVIEW_SHIM_JS)).toBe(false);
+    expect(/new\s+Function/.test(PREVIEW_SHIM_JS)).toBe(false);
+    expect(/innerHTML\s*=|outerHTML\s*=|insertAdjacentHTML|document\.write/.test(PREVIEW_SHIM_JS)).toBe(false);
+    // The banner text is attacker-influenced (it quotes the page's own error), so it MUST be textContent.
+    expect(PREVIEW_SHIM_JS).toContain("p.textContent =");
+    // The only setAttribute is a static style string, never interpolated page data.
+    expect(/setAttribute\('style',[^)]*\$\{/.test(PREVIEW_SHIM_JS)).toBe(false);
+  });
+  test("no egress: the shim never reaches the network (connect-src is 'none' anyway)", () => {
+    expect(/\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource|navigator\.sendBeacon/.test(PREVIEW_SHIM_JS)).toBe(false);
   });
 });

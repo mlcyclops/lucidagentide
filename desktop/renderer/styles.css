@@ -2726,7 +2726,24 @@ body.preview-open .thread{font-size:.9em}
 /* the Close (X) must always be reachable — never let it shrink or get clipped off the toolbar's edge. */
 .preview-panel .set-close{flex:none;order:99}
 /* P-PREVIEW.8: the Yours / Agent tab strip. Only the active lane's iframe is shown; both stay loaded. */
-.preview-tabs{display:flex;gap:2px;padding:0 10px;border-bottom:1px solid var(--line-soft);background:var(--bg-1);flex:none}
+/* P-PREVIEW.14: the strip now shares a row with the path field. The ROW owns the bottom border and the
+   background; the tabs div keeps only its own layout, because renderPrevTabs() rewrites that element's
+   innerHTML and must not be able to disturb the field beside it. */
+.preview-tabrow{display:flex;align-items:stretch;gap:10px;padding:0 10px;flex:none;
+  border-bottom:1px solid var(--line-soft);background:var(--bg-1);min-width:0}
+.preview-tabs{display:flex;gap:2px;flex:0 1 auto;min-width:0}
+/* The field takes the whole right side and is generous on purpose: an absolute Windows path is long, and
+   invariant 11's rule against cramped labels applies to a path just as much as to a list row. It never
+   drops below 260px, and the filename end stays readable because the input scrolls rather than wrapping. */
+.preview-pathbar{display:flex;align-items:center;gap:6px;flex:1 1 420px;min-width:260px;justify-content:flex-end;padding:5px 0}
+.prev-pathin{flex:1 1 auto;min-width:0;height:26px;padding:0 9px;border:1px solid var(--line);border-radius:7px;
+  background:var(--bg-0);color:var(--txt);font-size:11.5px;font-family:var(--mono,ui-monospace,monospace);
+  text-overflow:ellipsis;transition:border-color var(--t) var(--ease),box-shadow var(--t) var(--ease)}
+.prev-pathin::placeholder{color:var(--txt-4);font-family:inherit}
+.prev-pathin:hover{border-color:var(--line-strong)}
+.prev-pathin:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-dim)}
+/* Icon-only, so it must not carry a text label's padding and must never shrink to nothing. */
+.prev-reveal{flex:none;padding:0 7px}
 .prev-tab{position:relative;display:flex;align-items:center;gap:6px;padding:7px 14px;border:0;background:none;color:var(--txt-2);font-size:12px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
 .prev-tab:hover{color:var(--txt)}
 .prev-tab.active{color:var(--txt);border-bottom-color:var(--accent)}

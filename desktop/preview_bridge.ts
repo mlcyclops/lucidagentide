@@ -8,10 +8,116 @@
 // headings, buttons, captured console errors) — there is NO arbitrary eval and NO mutation. Inline JS is
 // allowed by the frame CSP (`script-src 'unsafe-inline'`), and `connect-src 'none'` still blocks all egress.
 
+// ── P-PREVIEW.13: the EARLY shim (runs before any page script) ──────────────────────────────────────
+//
+// THE DEFECT. The preview frame is deliberately sandboxed `allow-scripts allow-forms` with NO
+// `allow-same-origin`, which gives it an OPAQUE origin. In an opaque origin the `localStorage` and
+// `sessionStorage` GETTERS THROW a SecurityError. So a page whose first statement is
+//
+//     const best = Number(localStorage.getItem('best') || 0);
+//
+// dies on line 1. The browser still applies the HTML and CSS, so the user sees a styled but DEAD page:
+// a canvas with its border and background painted and nothing drawn in it. That is the "preview panel
+// doesn't work" report, and it hits most model-built games and apps, because storing a high score, a
+// todo list, or a theme preference is the first thing they reach for. Confirmed by isolating the single
+// line: the identical game with the storage read removed animates correctly in the same sandbox.
+//
+// THE FIX, AND WHY NOT THE OBVIOUS ONE. Adding `allow-same-origin` would make storage work and is the
+// wrong answer: the frame would then share OUR origin, which is the origin holding the per-launch
+// capability token and every /api route. Previewed code is UNTRUSTED (invariant 5) and must never sit
+// inside the trust boundary. So the origin stays opaque and we hand the page an in-memory Storage
+// instead. That is also semantically right: a preview is ephemeral, so preview state SHOULD die with
+// the frame rather than persist into the next thing the user previews.
+//
+// It must be the FIRST script in the document, so it is injected after `<head>` rather than before
+// `</body>` like the inspect bridge below. Installing the error capture here too means an early throw
+// is recorded (the bridge's own listener is registered too late to see one) and, crucially, becomes
+// VISIBLE: a page that dies gets a banner saying so instead of rendering blank in silence.
+
+/** The early shim (inline JS). Self-contained IIFE, idempotent, no egress (connect-src stays 'none'). */
+export const PREVIEW_SHIM_JS = `(function(){
+  if (window.__lucidShim) return; window.__lucidShim = 1;
+  // Shared, bounded error buffer. The inspect bridge ADOPTS this array, so preview_inspect's
+  // { what: 'errors' } reports failures that happened before the bridge existed.
+  var errs = window.__lucidErrs = window.__lucidErrs || [];
+  function push(s){ try{ errs.push(String(s)); if(errs.length>60) errs.shift(); }catch(_){} }
+  window.addEventListener('error', function(e){ push('error: ' + ((e && e.message) || e)); flag(); });
+  window.addEventListener('unhandledrejection', function(e){ push('unhandledrejection: ' + (e && e.reason)); flag(); });
+
+  // In-memory Storage, used ONLY when the real one is unreachable (opaque origin). Implements the
+  // surface real code uses; index access (storage[0]) is not emulated, which no practical page needs.
+  function memStorage(){
+    var m = Object.create(null);
+    var api = {
+      getItem: function(k){ k=String(k); return Object.prototype.hasOwnProperty.call(m,k) ? m[k] : null; },
+      setItem: function(k,v){ m[String(k)] = String(v); },
+      removeItem: function(k){ delete m[String(k)]; },
+      clear: function(){ m = Object.create(null); },
+      key: function(i){ var ks=Object.keys(m); return i>=0 && i<ks.length ? ks[i] : null; }
+    };
+    Object.defineProperty(api, 'length', { get: function(){ return Object.keys(m).length; } });
+    return api;
+  }
+  ['localStorage','sessionStorage'].forEach(function(name){
+    var ok = false;
+    // Touching the getter is what throws, so the probe itself has to be guarded.
+    try { var s = window[name]; if (s) { s.getItem('__lucid_probe'); ok = true; } } catch(_) { ok = false; }
+    if (ok) return; // a real Storage is available (top-level open, or a future allow-same-origin): leave it
+    try {
+      Object.defineProperty(window, name, { value: memStorage(), configurable: true, writable: false });
+      push('note: ' + name + ' is in-memory for this preview (the frame is sandboxed, so nothing persists)');
+    } catch(e) { push('error: could not polyfill ' + name + ': ' + ((e && e.message) || e)); }
+  });
+
+  // A dead page must SAY it is dead. One compact banner, first error only, dismissible, inline-styled
+  // (no stylesheet reaches this frame). Invariant 11: the text is ONE block child, and the close button
+  // is positioned, so nothing shatters a sentence into flex slivers.
+  var shown = false;
+  function flag(){
+    if (shown) return; shown = true;
+    var first = null;
+    for (var i=0;i<errs.length;i++){ if (errs[i].indexOf('error:')===0 || errs[i].indexOf('unhandledrejection:')===0){ first = errs[i]; break; } }
+    if (!first) { shown = false; return; }
+    function paint(){
+      if (!document.body || document.getElementById('lucid-script-error')) return;
+      var d = document.createElement('div');
+      d.id = 'lucid-script-error';
+      d.setAttribute('style','position:fixed;left:0;right:0;top:0;z-index:2147483647;padding:9px 34px 9px 12px;'
+        + 'background:#2b1116;color:#ffd9df;border-bottom:1px solid #7d2233;font:12px/1.5 ui-sans-serif,system-ui,sans-serif;'
+        + 'text-align:left');
+      var p = document.createElement('div');
+      p.textContent = 'This preview stopped early: ' + String(first).slice(0,180)
+        + ' - the page rendered but its script did not finish, so parts of it may be blank.';
+      var x = document.createElement('button');
+      x.textContent = '\\u00d7';
+      x.setAttribute('style','position:absolute;right:6px;top:5px;width:22px;height:22px;cursor:pointer;'
+        + 'background:transparent;border:0;color:#ffd9df;font-size:16px;line-height:1');
+      x.onclick = function(){ d.remove(); };
+      d.appendChild(p); d.appendChild(x);
+      document.body.appendChild(d);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paint); else paint();
+  }
+})();`;
+
+/** Inject the early shim immediately after `<head>` (else after `<html>`, else prepend) so it is the
+ *  FIRST script in the document and can repair the environment before page code runs. Pure. */
+export function injectPreviewShim(html: string): string {
+  const tag = `<script>${PREVIEW_SHIM_JS}</script>`;
+  const head = /<head[^>]*>/i.exec(html);
+  if (head) return html.slice(0, head.index + head[0].length) + tag + html.slice(head.index + head[0].length);
+  const htmlTag = /<html[^>]*>/i.exec(html);
+  if (htmlTag) return html.slice(0, htmlTag.index + htmlTag[0].length) + tag + html.slice(htmlTag.index + htmlTag[0].length);
+  return tag + html;
+}
+
 /** The bridge script body (inline JS). Self-contained IIFE; idempotent; listens only to its own parent. */
 export const PREVIEW_BRIDGE_JS = `(function(){
   if (window.__lucidInspect) return; window.__lucidInspect = 1;
-  var errs = [];
+  // P-PREVIEW.13: ADOPT the early shim's buffer rather than starting a fresh one, so preview_inspect's
+  // { what: 'errors' } also reports failures thrown before this script existed. That is the common case
+  // for a dead page: the throw happens in the page's own first script, long before </body>.
+  var errs = window.__lucidErrs = window.__lucidErrs || [];
   function push(s){ try{ errs.push(String(s)); if(errs.length>60) errs.shift(); }catch(_){} }
   window.addEventListener('error', function(e){ push('error: ' + (e && e.message || e)); });
   window.addEventListener('unhandledrejection', function(e){ push('unhandledrejection: ' + (e && e.reason)); });

@@ -17,9 +17,20 @@ import { isLocalFileTarget } from "./egress_policy.ts";
 //   allow-scripts  → the app needs to run JS (without allow-same-origin this is an OPAQUE origin: the page
 //                    cannot read LUCID's origin, cookies, or localStorage).
 //   allow-forms    → a previewed app may submit a form to itself; harmless in an opaque origin.
-//   EXCLUDED on purpose: allow-same-origin (would let it read LUCID's storage), allow-top-navigation
-//   (would let it navigate LUCID away), allow-popups, allow-modals, allow-pointer-lock, allow-downloads.
-export const PREVIEW_SANDBOX = "allow-scripts allow-forms";
+//   allow-modals   → P-PREVIEW.13: `alert()` / `confirm()` / `prompt()` THROW in a sandbox without this,
+//                    and an uncaught throw aborts the rest of the page's script, so a demo whose first
+//                    action is `alert('welcome')` rendered as a dead page. The grant is frame-confined by
+//                    spec: a modal cannot reach the parent, the network, or another origin. Its only real
+//                    cost is that a page can block its own frame, which the user closes or reloads.
+//   EXCLUDED on purpose: allow-same-origin (would let it read LUCID's storage AND put untrusted previewed
+//   code inside the origin that holds the per-launch capability token), allow-top-navigation (would let it
+//   navigate LUCID away), allow-popups, allow-pointer-lock, allow-downloads.
+//
+//   NOTE on storage: because allow-same-origin stays OFF, `localStorage` / `sessionStorage` remain
+//   unreachable here BY DESIGN. They are not fixed with a sandbox grant; the served document gets an
+//   in-memory Storage from PREVIEW_SHIM_JS instead (desktop/preview_bridge.ts), which keeps the origin
+//   opaque. See that file's header for why the obvious grant is the wrong answer.
+export const PREVIEW_SANDBOX = "allow-scripts allow-forms allow-modals";
 // Permissions-Policy for the frame: deny every powerful feature (camera, mic, geolocation, etc.). Empty = none.
 export const PREVIEW_ALLOW = "";
 
@@ -46,8 +57,17 @@ export const PREVIEW_FRAME_CSP = [
   "form-action 'none'",
   "base-uri 'none'",
 ].join("; ");
-/** Sandbox tokens that must NEVER appear (they'd defeat the opaque-origin isolation). Used by the test. */
-export const PREVIEW_SANDBOX_FORBIDDEN = ["allow-same-origin", "allow-top-navigation", "allow-popups", "allow-modals", "allow-pointer-lock", "allow-downloads"] as const;
+/** Sandbox tokens that must NEVER appear (they'd defeat the opaque-origin isolation). Used by the test.
+ *
+ *  P-PREVIEW.13: `allow-modals` was removed from this list and is now GRANTED. It is the one token here
+ *  that never crossed the isolation boundary: a modal is frame-confined by spec and reaches no other
+ *  origin, no parent, and no network. It sat in this list because the list started as "everything we do
+ *  not need", not "everything that would break isolation". Keeping it here cost real function, because
+ *  `alert()` THROWS without it and an uncaught throw aborts the page's remaining script. Every token
+ *  still listed below is a genuine escape or escalation: same-origin would place untrusted previewed code
+ *  inside the origin holding the capability token; top-navigation could navigate LUCID away; popups,
+ *  pointer-lock and downloads all reach beyond the frame. */
+export const PREVIEW_SANDBOX_FORBIDDEN = ["allow-same-origin", "allow-top-navigation", "allow-popups", "allow-pointer-lock", "allow-downloads"] as const;
 
 // P-PREVIEW.12: the resolver's OWN verdict labels. Renamed off `PreviewKind` (which now names the FILE-kind
 // union below) because one module cannot own two unions called the same thing, and the file kind is the one

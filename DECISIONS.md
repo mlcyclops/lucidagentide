@@ -22161,3 +22161,94 @@ message; and a clean self-contained page produces NEITHER (no false positives).
 **Files:** `desktop/preview_resolve.ts`, `desktop/preview_file.ts`, `desktop/preview_inline.ts`,
 `desktop/renderer/preview_tabs.ts`, `harness/omp/preview_extension.ts` (all +tests), `desktop/dev.ts`
 (`/api/preview/serve`, `/api/preview/open`, `/api/preview/file`), `desktop/renderer/app.ts`.
+
+
+## ADR-0322 -- P-PREVIEW.13: the preview was not blank, it was DEAD - localStorage throws in an opaque origin (2026-09-05)
+
+**Status:** Accepted -- BUILT, reproduced and verified live in Chromium.
+
+**Context.** After P-PREVIEW.12 broadened the previewable kinds, the panel still failed for the case the
+user actually cared about: a game the agent had written rendered as a blank frame. P-PREVIEW.12 was not
+wrong, it was answering a different question. HTML was never a refused kind.
+
+**The diagnosis, in the order it actually went.**
+
+1. Served the reported file class through the real `/api/preview/serve` on both engines. The Music-dir
+   report returned **byte-identical 73639B from the installed app AND the repo build**, bridge injected,
+   zero remote refs, no refusal. So the server was not the problem, and the two builds did not differ here.
+2. Rendered those bytes TOP-LEVEL in Chromium: 275 visible elements, 3598px tall, zero console errors.
+   The document was perfect.
+3. Rendered the same bytes inside an iframe carrying the REAL `PREVIEW_SANDBOX`. The report still rendered.
+   A representative canvas game did NOT: its body background and its cyan canvas border painted, and the
+   canvas stayed empty black. A styled, DEAD page.
+4. Isolated the single line by controlled variants. The game with `localStorage.getItem` removed animates.
+   The game with it present does not. Cause confirmed, not inferred.
+
+**The cause.** The frame is sandboxed `allow-scripts allow-forms` with NO `allow-same-origin`, which is
+deliberate and correct: it gives the frame an OPAQUE origin. In an opaque origin the `localStorage` and
+`sessionStorage` GETTERS THROW a SecurityError. A page whose first statement reads a saved high score dies
+on line 1. The browser has already applied the HTML and CSS by then, so the user sees a styled shell with
+nothing scripted, which reads as "blank" and reads as "the preview is broken". `alert()` throws for the
+same reason and aborts the same way. This is a large class, not an edge case: storing a high score, a todo
+list, or a theme preference is the first thing a generated app reaches for.
+
+**Decision: repair the ENVIRONMENT, do not widen the sandbox.**
+
+- **`PREVIEW_SHIM_JS` + `injectPreviewShim`** (`desktop/preview_bridge.ts`), injected immediately after
+  `<head>` so it is the FIRST script in the document. It hands the page an in-memory `Storage` for both
+  `localStorage` and `sessionStorage`, but ONLY when the real one is unreachable, so a top-level open keeps
+  its real storage. Probing has to be inside a try, because reading the getter is what throws.
+- **`allow-same-origin` was NOT added, and that is the whole point.** It would have made storage work in one
+  character. It would also have put untrusted, agent-authored previewed code inside the origin that holds
+  the per-launch capability token and every `/api` route. Previewed content is untrusted (invariant 5) and
+  must stay outside the trust boundary. In-memory storage is also semantically RIGHT for a preview: the
+  state should die with the frame rather than leak into the next thing previewed.
+- **`allow-modals` WAS added.** It is the one token in `PREVIEW_SANDBOX_FORBIDDEN` that never crossed the
+  isolation boundary: a modal is frame-confined by spec and reaches no other origin, no parent, and no
+  network. It was on that list because the list began as "everything we do not need" rather than
+  "everything that would break isolation", and keeping it there cost real function. The forbidden list was
+  narrowed with that reasoning recorded, and its drift-guard test still passes on the five genuine escape
+  tokens.
+- **A dead page now SAYS it is dead.** The shim installs the error capture before page code runs (the
+  inspect bridge registers before `</body>`, far too late to see the first throw), and paints one
+  dismissible in-frame banner naming the error. Both the shim and the bridge share ONE `window.__lucidErrs`
+  buffer, so `preview_inspect` reports failures that happened before the bridge existed. Same principle as
+  P-PREVIEW.12s blocked-ref banner: never fail silently at a security boundary.
+
+**Verified live.** The original game file, byte-unchanged, now animates inside the real sandbox: canvas
+drawing 126000 lit pixels, `localStorage` usable, no errors, no banner. The Music-dir report is unregressed.
+The frame CSP is untouched.
+
+**Files:** `desktop/preview_bridge.ts` (+test), `desktop/preview_resolve.ts` (`PREVIEW_SANDBOX`,
+`PREVIEW_SANDBOX_FORBIDDEN`), `desktop/dev.ts` (`/api/preview/serve`).
+
+
+## ADR-0323 -- P-PREVIEW.14: the path field moves to the tab row, because 18 characters of a path is not a path (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The preview path field sat in the panel header, wedged between seven toolbar buttons. Measured
+in the running app it showed roughly 18 characters of an absolute Windows path, so the field displayed
+`C:/Users/n/game.h` and the filename you were actually looking at was never visible. Invariant 11 exists
+for exactly this failure (a label crushed into a column too narrow to read it); it had been applied to list
+rows and not to this field.
+
+**Decision.** The field moves down one level onto the Yours / Agent tab row, occupying the whole right side.
+
+- **A new `.preview-tabrow` wrapper holds the tabs AND the path bar as siblings.** The field is NOT placed
+  inside `#prevTabs`, because `renderPrevTabs()` rewrites that element's `innerHTML` wholesale on every
+  lane-tab render, which would silently delete the field the moment a fleet lane opened a preview.
+- **`flex: 1 1 420px; min-width: 260px`**, monospace, single line, `text-overflow: ellipsis`. Measured in
+  the running app: 354px and 41px row height, versus the previous ~18 visible characters.
+- **Hover reveals what is cut off.** `syncPrevPathField` sets `title` to the full path ONLY when the field
+  actually truncates (`scrollWidth > clientWidth`), so a short path gets no redundant tooltip. When the
+  panel is closed the field has no layout, so the title is set unconditionally rather than measured wrongly.
+- **A "show in folder" button** reveals the previewed file SELECTED in the OS file manager. It reuses the
+  existing P-FSREVEAL.1 (ADR-0212) `showInFolder` shell seam the chat feed already uses, so there is one
+  reveal path in the app rather than two. It reads the LANE's loaded path, never the input's text, so a
+  half-typed path cannot send the file manager somewhere the user is not previewing. It is absent, not
+  present-and-dead, when there is no local file, when the target is a remote URL (no containing folder), or
+  in a browser build (no file manager).
+
+**Files:** `desktop/renderer/app.ts` (panel markup, `syncPrevPathField`, the reveal handler),
+`desktop/renderer/styles.css` (`.preview-tabrow`, `.preview-pathbar`, `.prev-pathin`, `.prev-reveal`).

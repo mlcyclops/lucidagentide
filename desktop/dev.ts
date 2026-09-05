@@ -111,7 +111,7 @@ import { previewImageHtml } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-02
 // instead of a silently blank page. previewTextDocument renders the non-markup kinds (markdown, json,
 // csv, txt, log, ...) as a readable document so a model can finally show a report it just wrote.
 import { blockedRefsMessage, findBlockedRefs, injectBlockedRefsBanner, inlinePreviewAssets, previewTextDocument } from "./preview_inline.ts";
-import { injectPreviewBridge } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge
+import { injectPreviewBridge, injectPreviewShim } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge; P-PREVIEW.13: the early sandbox shim
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
@@ -2688,6 +2688,14 @@ const server = Bun.serve({
                 readBytes: (pp) => readFileSync(pp),
               });
             } catch { /* serve raw HTML on any inlining failure */ }
+            // P-PREVIEW.13: the EARLY environment shim. Injected right after <head>, so it is the FIRST
+            // script in the document and runs BEFORE the page's own code. It hands the page an in-memory
+            // localStorage/sessionStorage (the frame's origin is opaque, so the real ones THROW and an
+            // uncaught throw kills the rest of the script - the "styled but dead page" bug), installs the
+            // error capture early enough to actually see that first throw, and shows a banner when one
+            // happens so a blank frame is never silent. Injection ORDER does not matter here, only
+            // document position, which injectPreviewShim owns.
+            body = injectPreviewShim(body);
             // P-PREVIEW.6b (ADR-0153): inject the read-only DOM-inspect bridge (inline JS, CSP-allowed; egress
             // still blocked by connect-src 'none'). Only for HTML: an .svg is self-contained + has no DOM to
             // inspect. It answers postMessage queries from the LUCID renderer; it never mutates or evals.

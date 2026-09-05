@@ -495,8 +495,6 @@ function buildShell(): void {
         <div class="set-head">
           <div class="set-title">${icon("eye", 17)} Preview <span class="set-sub" id="prevKind"></span></div>
           <div class="kg-tools">
-            <input id="prevPath" class="kg-search" type="text" placeholder="Open a local file… (path or file://)" spellcheck="false" autocomplete="off" data-tip="Open a local file|Paste a path to an HTML file the agent built, then Open. Local files only in this build; remote URLs are egress-gated (coming next)." />
-            <button class="btn-mini" id="prevOpen">${icon("download", 13)} Open</button>
             <button class="btn-mini" id="prevBrowse" data-tip="Browse your workspace|Open a file from the current working directory to preview it yourself (native file picker).">${icon("folder", 13)} Browse…</button>
             <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)} Reload</button>
             <button class="btn-mini" id="prevDevice" data-tip="Device viewport|Preview at phone or tablet size (portrait / landscape) - for reviewing a PWA or a mobile / responsive layout.">${devSvg("phone-portrait", 14)}${icon("chevron", 10)}</button>
@@ -507,9 +505,22 @@ function buildShell(): void {
             <button class="set-close" id="prevClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
         </div>
-        <div class="preview-tabs" id="prevTabs">
-          <button type="button" class="prev-tab active" data-lane="yours" data-tip="Your preview|Files you open stay here - the agent can't clobber this tab.">Yours</button>
-          <button type="button" class="prev-tab" data-lane="agent" data-tip="The agent's preview|What the agent is building or reviewing. It updates here without stealing your tab.">Agent <span class="prev-tab-dot" id="prevAgentDot" hidden aria-label="new update"></span></button>
+        <!-- P-PREVIEW.14: the path field lives on the TAB ROW, not the toolbar. Up top it was squeezed
+             between seven buttons and showed roughly 18 characters of an absolute Windows path, so the
+             filename you were actually looking at was never visible. Here it gets the whole right side
+             of its own row, and #prevTabs keeps its own element because renderPrevTabs() replaces that
+             element's innerHTML wholesale - anything placed INSIDE it would be wiped on the next lane
+             tab render. -->
+        <div class="preview-tabrow">
+          <div class="preview-tabs" id="prevTabs">
+            <button type="button" class="prev-tab active" data-lane="yours" data-tip="Your preview|Files you open stay here - the agent can't clobber this tab.">Yours</button>
+            <button type="button" class="prev-tab" data-lane="agent" data-tip="The agent's preview|What the agent is building or reviewing. It updates here without stealing your tab.">Agent <span class="prev-tab-dot" id="prevAgentDot" hidden aria-label="new update"></span></button>
+          </div>
+          <div class="preview-pathbar">
+            <input id="prevPath" class="prev-pathin" type="text" placeholder="Open a local file… (path or file://)" spellcheck="false" autocomplete="off" />
+            <button class="btn-mini" id="prevOpen" data-tip="Open|Load the path in the field into this preview tab.">${icon("download", 13)} Open</button>
+            <button class="btn-mini prev-reveal" id="prevReveal" hidden data-tip="Show in folder|Open the containing folder in your file manager with this file selected.">${icon("folder", 13)}</button>
+          </div>
         </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
@@ -5810,12 +5821,32 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
 }
+// P-PREVIEW.14: keep the tab-row path field honest.
+//   value  - the path itself.
+//   title  - the FULL path, set only when the field actually truncates, so hovering reveals the part you
+//            cannot see. An absolute Windows path overflows even a generous field, which is the whole
+//            reason the field moved off the crowded toolbar. When the panel is closed the field has no
+//            layout (clientWidth 0), so the title is set unconditionally in that case rather than
+//            measured wrongly and left empty.
+//   reveal - the "show in folder" button exists only when there IS a local file AND the native shell can
+//            select it. A remote URL has no containing folder, and a browser build has no file manager,
+//            so in both cases the button is absent rather than present-and-dead.
+function syncPrevPathField(path: string): void {
+  const input = $("#prevPath") as HTMLInputElement | null;
+  if (input) {
+    input.value = path;
+    const laidOut = input.clientWidth > 0;
+    input.title = path && (!laidOut || input.scrollWidth > input.clientWidth) ? path : "";
+  }
+  const rev = $("#prevReveal") as HTMLButtonElement | null;
+  if (rev) rev.hidden = !path || !bridge.canShowInFolder() || /^https?:\/\//i.test(path.trim());
+}
 /** A file YOU chose to preview (Open, Browse, /figma, image-markup) — always lands on the Yours lane. */
 function openPreviewFile(path: string): void {
   if (!path) return;
   if (!previewOpen) openPreview({ reveal: "yours" });
   else switchPrevLane("yours");
-  const p = $("#prevPath") as HTMLInputElement | null; if (p) p.value = path;
+  syncPrevPathField(path);
   loadPreview(path, "yours");
 }
 function closePreview(): void {
@@ -6009,7 +6040,7 @@ function switchPrevLane(l: PrevLane): void {
   $$(".prev-tab").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.lane === l));
   if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing the agent lane clears the "new" badge + refreshes the shot cache for preview_screenshot
   if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; } // viewing a lane tab clears the rail badge
-  const path = $("#prevPath") as HTMLInputElement | null; if (path) path.value = prevPathByLane[l] ?? "";
+  syncPrevPathField(prevPathByLane[l] ?? "");
   const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l] ?? "";
   const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
   const notice = $("#prevNotice") as HTMLElement | null; if (notice) { notice.hidden = true; notice.innerHTML = ""; } // health is per-page, re-derived on load
@@ -12657,6 +12688,17 @@ function wire(): void {
   $("#prevOpen")?.addEventListener("click", () => openPreviewFile((($("#prevPath") as HTMLInputElement | null)?.value ?? "").trim()));
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") openPreviewFile(($("#prevPath") as HTMLInputElement).value.trim()); });
   $("#prevReload")?.addEventListener("click", () => { const f = laneFrame(); if (f && !f.hidden && f.src) f.src = f.src; }); // reload the visible lane
+  // P-PREVIEW.14: reveal the previewed file in the OS file manager, SELECTED rather than just opening
+  // its folder. Reuses the P-FSREVEAL.1 (ADR-0212) shell seam the chat feed already uses, so there is one
+  // reveal path in the app. Reads the LANE's loaded path, not the input's text, so a half-typed path in
+  // the field can never send the file manager somewhere the user is not actually previewing.
+  $("#prevReveal")?.addEventListener("click", () => {
+    const path = (prevPathByLane[prevLane] ?? "").trim();
+    if (!path) return;
+    void bridge.showInFolder(path).then((ok) => {
+      if (!ok) showToast({ tone: "warn", title: "Couldn't open the folder", desc: "Revealing a file needs the desktop app's file manager access.", timeout: 3000 });
+    }).catch(() => { /* best-effort: the preview itself is unaffected */ });
+  });
   // P-PREVIEW.8: the Yours / Agent tab strip.
   $("#prevTabs")?.addEventListener("click", (e) => {
     const closeId = ((e.target as HTMLElement).closest(".prev-tab-x") as HTMLElement | null)?.dataset.close;
