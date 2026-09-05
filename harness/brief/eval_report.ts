@@ -14,15 +14,40 @@
 // PURE by construction: no I/O, no Date.now() (the caller passes `when`). Mirrors the P-CHAT.A/B keystone
 // pattern - the DOM/route wiring is thin and QA-gated; the load-bearing mapping is tested here.
 
-import { computeEvalMetrics, renderEvalMarkdown, type EvalMetrics, type FileChange, type RunRecord } from "./evals.ts";
+import { computeEvalMetrics, renderEvalMarkdown, type EvalMetrics, type FileChange, type RunRecord, type ToolRecord } from "./evals.ts";
 
 /** One tool call the chat turn made, as the renderer observed it. A write/edit carries a file `path` and a
- *  +/- diffstat (the P-CHAT.1 code the chip already sized); a read/search/bash carries neither. */
-export interface ObservedTool { name: string; path?: string; add?: number; del?: number }
+ *  +/- diffstat (the P-CHAT.1 code the chip already sized); a read/search/bash carries neither.
+ *
+ *  P-EVAL.4 (ADR-0187): `kind` / `detail` / `ok` / `durationMs` are the RICHER telemetry a caller may now
+ *  supply, and every one of them is optional on purpose. omp's ACP `tool_call` update transmits only
+ *  toolCallId/title/kind/status/rawInput and NEVER the real toolName, so a client that has nothing but the
+ *  ACP stream can still only fill `kind`; a client joined to the tool-name self-report channel fills `name`
+ *  with the real name. An OLDER client that posts the pre-P-EVAL.4 shape (name/path/add/del only) still
+ *  produces a valid RunRecord and a full report. The type is declared HERE, structurally, rather than
+ *  imported from the renderer's DOM-adjacent bridge.ts, so this pure module never depends on the GUI.
+ *
+ *  `detail` must be a one-line, already-redacted string (a path, a command, a query): evals.ts
+ *  ASCII-sanitizes and truncates it at render time, so a hostile or oversized value cannot break the
+ *  markdown or smuggle a homoglyph past the gate, but it is NOT a redaction pass. `ok` is `false` only for
+ *  a call that genuinely failed; `undefined` means "this transport carried no per-call status", which makes
+ *  evals.ts attribute failures from the `failures` ledger instead. */
+export interface ObservedTool {
+  name: string;
+  path?: string;
+  add?: number;
+  del?: number;
+  kind?: string;
+  detail?: string;
+  ok?: boolean;
+  durationMs?: number;
+}
 
 /** A settled chat turn's observed telemetry - everything the report needs that is actually knowable at the
- *  chat seam. The AC / lint / test signals (and P-EVAL.2's DuckDB capture) are deferred, so the metrics that
- *  depend on them stay `needs_signal` rather than being faked - the ADR-A016 honesty rule. */
+ *  chat seam. The AC / lint / test signals (and P-EVAL.2's DuckDB capture) are deferred, so the MEASURED
+ *  metrics that depend on them stay `null` + `needs_signal` rather than being faked, which is the ADR-A016
+ *  honesty rule and is what gets persisted. P-EVAL.4 then renders a clearly-labelled `derived` proxy in
+ *  their place so the report is readable, without that proxy ever entering the eval_metrics ledger. */
 export interface ObservedTurn {
   runId: string;
   model: string;
@@ -40,11 +65,25 @@ export interface ObservedTurn {
  *  payload must never produce a negative LOC or a NaN metric). */
 const nn = (n: number | undefined): number => (typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
 
+/** Clamp a possibly-missing / non-finite / negative duration to a whole non-negative millisecond count, or
+ *  drop it entirely. `undefined` (not 0) when unknown, so a missing duration never averages in as "instant". */
+const ms = (n: number | undefined): number | undefined =>
+  typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined;
+
+/** Trim a possibly-missing string to `undefined` when it carries nothing. */
+const str = (s: string | undefined): string | undefined => { const v = (s ?? "").trim(); return v.length > 0 ? v : undefined; };
+
 /** Map an observed turn into evals.ts's RunRecord. A tool is a FILE change iff it has a `path` AND a diffstat
  *  (add or del) - reads/searches/bash have no diffstat and are NOT files. Repeated writes to the same path
  *  merge (adds/dels summed); the surplus writes beyond the distinct files are counted as re-edits (a
  *  churn/rework proxy that feeds `wastedTokensEst`). All lines are AI-authored at this seam, so the
- *  provenance aiAdd/aiDel equal add/del. PURE. */
+ *  provenance aiAdd/aiDel equal add/del.
+ *
+ *  P-EVAL.4: every call ALSO becomes a `ToolRecord` so evals.ts can group the turn by real tool name and
+ *  report per-tool failure counts. Absent richer fields are dropped rather than defaulted, which is what
+ *  keeps an older client's payload honest: a missing `ok` means "status unknown", not "succeeded". When no
+ *  `detail` was supplied we fall back to the tool's `path`, since for a read/edit the path IS the detail a
+ *  reader wants. PURE. */
 export function buildRunRecord(t: ObservedTurn): RunRecord {
   const byPath = new Map<string, FileChange>();
   let writeOps = 0;
@@ -67,6 +106,13 @@ export function buildRunRecord(t: ObservedTurn): RunRecord {
     subagents: t.subagents,
     reEdits: Math.max(0, writeOps - files.length),
     files,
+    tools: t.tools.map((x): ToolRecord => ({
+      name: str(x.name),
+      kind: str(x.kind),
+      detail: str(x.detail) ?? str(x.path),
+      ok: typeof x.ok === "boolean" ? x.ok : undefined,
+      durationMs: ms(x.durationMs),
+    })),
   };
 }
 

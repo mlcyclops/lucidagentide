@@ -24,10 +24,33 @@
 // Everything is still defensively wrapped: a registration failure NEVER breaks omp launch — worst case
 // `preview_open` is simply absent and the user keeps auto-on-write preview (P-PREVIEW.2) + the manual panel.
 
-/** Minimal, self-contained checks (no desktop import — this runs in omp's process). The renderer's
+/** Minimal, self-contained checks (no desktop import - this runs in omp's process). The renderer's
  *  resolvePreview/readPreviewFile is the authoritative gate before anything renders; this is belt-and-braces. */
 const LOCAL_PATH = /^(file:\/\/|[A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/;
-const PREVIEWABLE = /\.(html?|svg)$/i;
+
+// P-PREVIEW.12: every extension the Preview panel can render, MIRRORED from the single kind table in
+// desktop/preview_resolve.ts (PREVIEW_KIND_EXT). It is mirrored rather than imported ON PURPOSE: omp loads
+// this file as an `-e` extension inside its OWN subprocess, and importing desktop/preview_resolve.ts would
+// pull in egress_policy -> managed_config/network_whitelist, whose module scope touches disk. A TOP-LEVEL
+// import that throws is OUTSIDE the try/catch below, so it would take all five preview tools down with it and
+// break the "a registration failure never breaks omp launch" guarantee this whole file is built around.
+// preview_extension.test.ts pins this list against PREVIEW_KIND_EXT, so the mirror cannot silently drift.
+export const PREVIEWABLE_EXTS = [
+  "html", "htm",                                                        // pages
+  "svg",                                                                // vector
+  "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico",            // images / charts / screenshots
+  "md", "markdown",                                                     // reports
+  "txt", "json", "csv", "tsv", "log", "yml", "yaml", "xml", "toml", "ini", // data / logs / config
+  "pdf",                                                                // documents
+// `readonly string[]`, deliberately NOT `as const`: nothing needs the literal union, and a literal tuple
+// makes every ordinary string comparison against a member unassignable (a caller doing
+// `expect(ext).toBe(ext.toLowerCase())` fails to typecheck for no useful reason). Membership is enforced
+// by the test that pins this list against PREVIEW_KIND_EXT, not by the type.
+] satisfies readonly string[] as readonly string[];
+/** Built from PREVIEWABLE_EXTS (never hand-written), tolerant of a trailing query/hash and whitespace. */
+const PREVIEWABLE = new RegExp(String.raw`\.(${PREVIEWABLE_EXTS.join("|")})(?:[?#][\s\S]*)?\s*$`, "i");
+/** Named in the tool description + the refusal so a model learns what it CAN show, not just that it failed. */
+const PREVIEWABLE_KINDS = "html, svg, image (png/jpg/gif/webp), markdown, text (txt/json/csv/log/yaml/xml), or pdf";
 
 /** P-PREVIEW.3a-shot (ADR-0096): parse a `data:image/…;base64,…` URL into omp `ImageContent`
  *  (`{ type, data, mimeType }` — the shape the model actually sees), or null if it isn't a valid image
@@ -83,20 +106,28 @@ export default function previewExtension(pi: any): void {
     pi.registerTool({
       name: "preview_open",
       label: "Open in Preview",
+      // P-PREVIEW.12: the description NAMES every previewable kind. It used to say ".html/.svg", so a model
+      // reading the schema had no way to know it could surface a markdown report, a JSON payload, a CSV
+      // table, a chart PNG or a PDF, and simply never tried.
       description:
-        "Call this right after you write or edit a local .html/.svg file to show the user the rendered result " +
-        "in LUCID's in-app Preview panel (it also brings the preview to the front so a following " +
-        "preview_screenshot can capture it). Pass the absolute path; the panel re-validates before rendering. " +
-        "Prefer this over a browser/bash/eval to show your work — those are security-gated.",
+        "Call this right after you write or edit a local file to show the user the rendered result in LUCID's " +
+        `in-app Preview panel. Previewable kinds: ${PREVIEWABLE_KINDS} - so a markdown report, a data file, a ` +
+        "chart PNG or a generated page all work. It also brings the preview to the front so a following " +
+        "preview_screenshot can capture it. Pass the absolute path; the panel re-validates before rendering. " +
+        "The preview frame has NO network access, so a page that loads a script, stylesheet, font or image " +
+        "from a CDN renders blank: inline those into the file, or save the asset next to it and reference it " +
+        "with a relative path. Prefer this over a browser/bash/eval to show your work, those are security-gated.",
       // Read-only from omp's view: it only acknowledges; the desktop opens the (sandboxed) panel. Setting
       // "read" keeps preview_open out of the exec-approval flow so showing a preview is never blocked.
       approval: "read",
-      parameters: schema({ path: "Absolute path to the local .html/.svg file to preview" }),
+      parameters: schema({ path: `Absolute path to the local file to preview (${PREVIEWABLE_KINDS})` }),
       async execute(_toolCallId: string, params: any) {
         // Normalize first: agents sometimes pass the path quoted or padded; a wrapped path still previews.
         const path = normalizeToolPath(params?.path);
+        // Fail-closed, unchanged: a non-local or non-previewable path is an ERROR, never a silent success.
+        // The refusal now names the kinds, so the model can retry with something the panel can actually show.
         if (!path || !LOCAL_PATH.test(path) || !PREVIEWABLE.test(path)) {
-          return { content: [{ type: "text", text: `preview_open: "${path}" is not a local .html/.svg file — nothing to preview.` }], isError: true };
+          return { content: [{ type: "text", text: `preview_open: "${path}" is not a local previewable file. Previewable kinds: ${PREVIEWABLE_KINDS}.` }], isError: true };
         }
         const name = path.split(/[\\/]/).pop() || path;
         // P-PREVIEW.11 (ADR-0308): REPORT OURSELVES to the desktop. The panel used to open purely as a
@@ -107,18 +138,27 @@ export default function previewExtension(pi: any): void {
         // desktop published in our env. Best-effort by design - an older desktop simply has no
         // LUCID_PREVIEW_OPEN_URL, and the title fallback still covers the intent-tracing-off case, so a
         // miss here degrades to the previous behavior instead of failing the call.
+        // P-PREVIEW.12: the response also carries `blocked` - one sentence naming the remote refs the frame's
+        // CSP refused in the document we just opened (desktop side: findBlockedRefs + blockedRefsMessage in
+        // desktop/preview_inline.ts). That is the feedback loop this tool never had: without it a model whose
+        // page pulls Chart.js off a CDN sees a cheerful "Opening ..." while the user stares at a blank frame,
+        // and writes the exact same CDN <script> next turn. Best-effort: an older desktop returns no field.
         const openUrl = process.env.LUCID_PREVIEW_OPEN_URL;
+        let blocked = "";
         if (openUrl) {
           try {
-            await fetch(openUrl, {
+            const r = await fetch(openUrl, {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ path }),
               signal: AbortSignal.timeout(4000),
             });
+            const body: any = await r.json().catch(() => null);
+            const b = body?.data?.blocked ?? body?.blocked;
+            if (typeof b === "string" && b.trim()) blocked = ` ${b.trim().slice(0, 800)}`;
           } catch { /* the panel just does not surface; never fail the tool over it */ }
         }
-        return { content: [{ type: "text", text: `Opening ${name} in the Preview panel for the user.` }] };
+        return { content: [{ type: "text", text: `Opening ${name} in the Preview panel for the user.${blocked}` }] };
       },
     });
 

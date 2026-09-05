@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
+import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { mountMascot, type MascotHandle } from "./mascot.ts"; // P-MASCOT.1: LUCID the ninja (tiny, static import)
 import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
@@ -18,7 +18,7 @@ import { mountBootCinematic } from "./boot_cinematic.ts"; // P-AVATAR.6: the her
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
-import { laneTabId, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
+import { PREVIEW_KIND_ICON, laneTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
 import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -77,13 +77,14 @@ import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOpti
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
 import { initFleetGrid, mountFleetPill, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstByLevel, topModel } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, preferredDefaultModel, providerLabelOf, recommendFallbacks, sortGovFirstByLevel, topModel } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
@@ -103,7 +104,9 @@ import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glo
 import type { ElevenVoiceView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
-import { closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+// P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
+import { DEFAULT_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -133,6 +136,44 @@ import {
 } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline core - every edit is a call into it
 import type { BuildInfoView, CreatorLibraryOp } from "./bridge.ts";
 
+// ── P-THEME.1: the theme, applied BEFORE anything renders ──────────────────────────────────────────
+// The registry (ids, labels, swatches, light/dark grouping) is the pure `theme.ts`; the [data-theme]
+// token blocks are in styles.css. This is only the boot + persistence glue.
+//
+// WHY THE localStorage MIRROR. The chosen theme is persisted SERVER-side (~/.omp/lucid-gui.json, read via
+// /api/settings), which is an async fetch, and the renderer CSP is `script-src 'self'` so index.html
+// cannot carry an inline bootstrap script. Without a synchronous source the body would paint in the old
+// theme and then snap, on every launch. So the choice is mirrored into localStorage (same tier as the
+// picker's favorites/collapse state) and applied as the FIRST thing this module does. The server value
+// remains the source of truth and reconciles the mirror once /api/settings lands.
+// A first-EVER launch has no mirror; styles.css answers prefers-color-scheme on `:root:not([data-theme])`
+// so that paint is already correct with no JS at all.
+const THEME_KEY = "lucid.theme";
+/** The raw PREFERENCE: a theme id, or "" meaning "follow the OS". Distinct from the RESOLVED theme. */
+function themePref(): string {
+  try { return localStorage.getItem(THEME_KEY) ?? ""; } catch { return ""; } // storage off => follow the OS
+}
+function osPrefersLight(): boolean {
+  try { return window.matchMedia("(prefers-color-scheme: light)").matches; } catch { return false; }
+}
+/** Resolve `pref` and paint it: the <html> data-theme attribute drives every `:root[data-theme=...]`
+ *  block in styles.css, and Monaco is re-themed to match (a no-op before the editor loads). */
+function applyTheme(pref: string): void {
+  const t = resolveTheme(pref, osPrefersLight());
+  document.documentElement.dataset.theme = themeAttr(t.id);
+  applyEditorTheme(t.id);
+}
+function bootTheme(): void {
+  applyTheme(themePref());
+  // "Follow the OS" has to keep following it: re-resolve when the system flips, but ONLY while the user
+  // has no explicit choice, so a deliberate pick is never overridden by a system setting change.
+  try {
+    window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+      if (!themePref()) applyTheme("");
+    });
+  } catch { /* older engine without addEventListener on MediaQueryList: the boot paint still stands */ }
+}
+bootTheme();
 // CREATOR-0: `resources` is the Creator build's third inspector tab (CPU + GPU odometers).
 type Tab = "security" | "memory" | "dev" | "resources";
 const state = {
@@ -141,7 +182,10 @@ const state = {
   sidebarCollapsed: false,
   inspectorRail: false,
   immersive: false, // P-AVATAR.1 (ADR-0251): lucid-agent stage - rails hidden, stage layer on
-  model: "claude-opus-4-8",
+  // P-MODEL.2: pre-config placeholder for the badge, replaced the moment loadConfig lands. It must be a
+  // CURRENT flagship, not a stale one: this string is painted before any real model is known, so a stale
+  // value here reads to the user as "the app defaults to an old model" (the reported Opus 4.8 bug).
+  model: "claude-opus-5",
   security: null as SecuritySnapshot | null,
   memory: null as MemorySnapshot | null,
   ledger: null as import("./bridge.ts").UsageLedger | null, // P10.2 cross-model usage ledger
@@ -166,6 +210,9 @@ const state = {
   userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
   activeSkill: null as { command: string; name: string } | null, // P-IDE.2: active bundled skill
   liveUsage: null as { used: number; size: number; cost: number } | null,
+  // P-FLEET.L8: what the composer DRIVES. Promotion attaches the prompt/stream target to a running fleet
+  // lane; it never moves the ACP session, which is exactly why it is legal mid-turn and instant to undo.
+  composerTarget: MASTER_TARGET as ComposerTarget,
   username: "" as string, // the "You" label on your messages (Settings → Profile)
   email: "" as string, // corporate email - attribution identity (ADR-0030); prompted on first open
   attribution: null as import("./bridge.ts").ProfileSettings["attribution"] | null, // identity + source (email|workstation)
@@ -218,9 +265,13 @@ const shortModelId = (v: string) => v.replace(/^anthropic\//, "").replace(/^asks
 // omp's reported usage `size` is unreliable for the AskSage gateway models (it reports
 // 256k for a 1M Gemini), so we prefer this. Keep in sync with tools/memory_data.ts CTX_WINDOW.
 const MODEL_CTX: Record<string, number> = {
+  // P-MODEL.2: Fable/Mythos 5.1 and Opus 5 are all 1M-context; GPT-6 (astra) ships at 1M too, which is
+  // the first OpenAI generation to match Claude's window, so it must not inherit the 256K GPT-5 default.
+  "claude-fable-5-1": 1_000_000, "claude-mythos-5-1": 1_000_000,
   "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
+  "gpt-6-astra": 1_000_000,
   "gpt-5.6-luna": 256_000, "gpt-5.6-sol": 256_000, "gpt-5.6-terra": 256_000,
   "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
   "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
@@ -636,6 +687,10 @@ function renderComposerThumbs(): void {
 }
 /** Validate + stage a pasted/dropped image (data URL) for the next message. */
 function addPastedImage(dataUrl: string, name?: string): void {
+  // P-FLEET.L8: a lane's wire carries no image block, so staging one here would drop it silently at send.
+  // Refuse at the single choke point both paste and drop funnel through, and say why in the module's words.
+  const caps = targetCaps(state.composerTarget);
+  if (!caps.images) { showToast({ tone: "warn", title: "Images can't be sent to a lane", desc: caps.why, actions: [{ label: "OK" }], timeout: 9000 }); return; }
   const r = acceptAttachment(state.attachments, dataUrl, `att_${++attSeq}`, name);
   if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't attach image", desc: r.reason ?? "" }); return; }
   state.attachments.push(r.attachment);
@@ -945,7 +1000,11 @@ const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms /
 // P-CHAT.1 (ADR-0104): the authored code a tool step can expand to preview inline.
 type ToolCode = { path: string; content?: string; oldText?: string; newText?: string; patch?: string };
 // P-CHAT.B (ADR-0189): the opaque payload a tool mark round-trips to fill its chip drilldown (code or detail).
-interface ChipData { code?: ToolCode; detail: string; }
+// P-EVAL.4 (ADR-0318): `id` is omp's toolCallId, kept so the REAL tool name (which arrives separately, via
+// the tool_meta self-report channel, because the ACP update structurally cannot carry it) can be joined
+// onto this call for the chip label and the engineering report. `kind` preserves the coarse ACP class even
+// after the label upgrades, so the report can group by real name and still report the class.
+interface ChipData { code?: ToolCode; detail: string; id?: string; kind?: string; }
 
 /** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
  *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
@@ -1529,6 +1588,14 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   });
 }
 
+/** P-HEALTH.1: the harness acted on this session by itself. Shown in the transcript as the same quiet
+ *  .evt note chip the other system notices use, so a probe or an in-place recovery reads as visible work
+ *  rather than an unexplained gap. */
+function noteHealth(action: "probe" | "recover", reason: string): void {
+  const what = action === "recover" ? "Recovered this session in place" : "Checked on this session";
+  addNoteChip(reason ? `${what}: ${reason}` : what);
+}
+
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
@@ -1536,23 +1603,27 @@ async function send(): Promise<void> {
   const atts = state.attachments.slice();
   const images = promptImageBlocks(atts);
   if (!text && images.length === 0) return;
+  // P-FLEET.L8: a lane runs its OWN omp child, so the master composer's "/" expansion is meaningless to it
+  // - an expanded body would reach a session that never registered the command. targetCaps says so, and
+  // while attached the text goes to the lane exactly as the user typed it.
+  const caps = targetCaps(state.composerTarget);
   // P-CMD.1: a user-authored SKILL-mode "/" command ACTIVATES its body as a persistent instruction (no turn
   // sent) — same behaviour as a bundled skill. Handle it before we open an assistant node.
-  const cmdTok = /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase();
+  const cmdTok = caps.slashCommands ? /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase() : undefined;
   if (cmdTok && !state.streaming) {
     const uc = state.userCommands.find((c) => c.name === cmdTok);
     if (uc && uc.mode === "skill") { ta.value = ""; autosize(ta); setSendEnabled(); void activateUserCommandSkill(uc); return; }
   }
   // P-FIGMA.1 (ADR-0154): typing `/figma` opens the secure import form (URL + token) rather than sending text.
-  if (/^\/figma\b/i.test(text)) { ta.value = ""; autosize(ta); setSendEnabled(); openFigmaForm(); return; }
+  if (caps.slashCommands && /^\/figma\b/i.test(text)) { ta.value = ""; autosize(ta); setSendEnabled(); openFigmaForm(); return; }
   // What actually goes to the model. `/agent` and `/command` kick off builder interviews (the chat agent,
   // steered by the frozen policies, asks what to build then calls the matching tool); a SEND-mode user
   // command expands its body (+ any typed args). The TRANSCRIPT still shows exactly what the user typed.
-  let sendText = resolveSendText(text, cmdTok);
+  let sendText = caps.slashCommands ? resolveSendText(text, cmdTok) : text;
   // P-CMD.2: "/" commands work ANYWHERE in the body — but only when NO start-anchored command consumed
   // the text above (start-anchored keeps the P-CMD.1 args contract, and never re-scanning an expanded body
   // keeps expansion non-recursive). Embedded skill-mode tokens activate their skills and are stripped.
-  if (sendText === text) {
+  if (caps.slashCommands && sendText === text) {
     const inline = expandInlineCommands(text, state.userCommands);
     for (const name of inline.skillNames) {
       const uc = state.userCommands.find((c) => c.name === name);
@@ -1594,6 +1665,12 @@ async function send(): Promise<void> {
   const marks: ToolMark<ChipData>[] = []; // P-CHAT.B (ADR-0189): tool calls anchored by answer-buffer length, interleaved into the answer on settle
   const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
   const failures: { tool: string; reason: string; cmd?: string }[] = []; // P-CHAT.C (ADR-0190): this turn's failed (non-quarantined) tool calls, feed the eval report's fail-rate / wasted-token metrics
+  // P-EVAL.4 (ADR-0318): real tool names + outcomes for THIS turn, keyed by omp's toolCallId. Filled by
+  // the `tool-meta` events the tool_meta omp extension self-reports, which is the only place the real
+  // name exists: omp's ACP tool_call update carries a coarse `kind` ("other" for every custom and MCP
+  // tool) and a title that intent tracing rewrites to model prose (ADR-0308). Per-turn, so it cannot
+  // grow without bound and cannot leak a name from a previous turn onto a reused id.
+  const toolMeta = new Map<string, { name: string; ok?: boolean }>();
   let buf = "";
   let thinkBuf = ""; // P-VOICE.7 (ADR-0269): this turn's reasoning stream - raw material for spoken thinking snapshots
   const t0 = Date.now();
@@ -1658,6 +1735,13 @@ async function send(): Promise<void> {
   };
   // P-CHAT.C (ADR-0190): assemble this turn's OBSERVED telemetry (tokens/cost, tool calls + diffstats,
   // failures) into the shape /api/eval/report consumes; the run-footer CTA POSTs it to build the report.
+  //
+  // P-EVAL.4 (ADR-0318): `name` now carries the REAL tool name whenever the tool_meta extension reported
+  // one, so the report's breakdown reads "read x14, edit x6, bash x3 (1 failed)" instead of the
+  // "other x23" it had degraded to. The coarse ACP class rides along as `kind` so the server can group by
+  // name and still fall back to class, and so a turn with no self-reports is honestly coarse rather than
+  // silently mislabelled. `ok` is only set when a report actually arrived: absent stays "not observed",
+  // never an assumed pass.
   const buildEvalTurn = (): EvalReportTurn => ({
     runId: `run-${t0}`,
     model: state.model || "model",
@@ -1665,16 +1749,34 @@ async function send(): Promise<void> {
     outputTokens: tps.tokenCount,
     totalTokens: tok + tps.tokenCount,
     costUsd: cost,
-    tools: marks.map((m) => ({ name: m.chip.k, path: m.data.code?.path, add: m.chip.diffstat?.add, del: m.chip.diffstat?.del })),
+    tools: marks.map((m) => {
+      const meta = m.data.id ? toolMeta.get(m.data.id) : undefined;
+      const kind = m.data.kind ?? m.chip.k;
+      return {
+        name: meta?.name ?? m.chip.k,
+        kind,
+        path: m.data.code?.path,
+        add: m.chip.diffstat?.add,
+        del: m.chip.diffstat?.del,
+        ...(m.data.detail ? { detail: m.data.detail } : {}),
+        ...(m.chip.failed ? { ok: false } : meta?.ok === undefined ? {} : { ok: meta.ok }),
+      };
+    }),
     failures: failures.slice(),
     subagents: subCards.length,
     when: new Date(t0).toISOString().slice(0, 10),
   });
-  // P-CHAT.C.1: the report evaluates WRITTEN work, so only offer it when the turn actually wrote a file /
-  // code (an edit/write with a diffstat). A read/search/bash-only or pure-text turn has nothing to evaluate.
+  // P-EVAL.4 (ADR-0318): offer the report on ANY tool-using turn.
+  //
+  // It previously required a diffstat-bearing write/edit, on the reasoning that "the report evaluates
+  // WRITTEN work". That silently swallowed the report for a large class of real engineering turns:
+  // an investigation that only read and searched, a debugging turn that only ran commands, a review turn.
+  // Those have plenty to evaluate (tool count, failure rate, wasted tokens, context efficiency, latency)
+  // and were exactly the turns the user found had "no report at all". A pure-text answer with no tool
+  // calls still offers nothing, because there genuinely is nothing measured to report.
   const maybeAppendReport = () => {
     const turn = buildEvalTurn();
-    if (turn.tools.some((t) => t.path && (t.add != null || t.del != null))) appendRunReport(textEl, turn);
+    if (turn.tools.length) appendRunReport(textEl, turn);
   };
   let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
   let noResponse = false; // P-NORESP.1: the model returned nothing \u2192 the notice replaces the empty bubble
@@ -1702,8 +1804,22 @@ async function send(): Promise<void> {
       thoughts.step(e.name, e.detail, e.code);
       // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it
       // can be threaded back into the settled answer as a chip where it fired (zero visual change to the live window).
-      marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail } });
+      // P-EVAL.4 (ADR-0318): `e.name` here is only omp's coarse ACP `kind`. Keep it as `kind` and keep the
+      // toolCallId, so a `tool-meta` report can upgrade the label to the real tool name.
+      marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail, id: e.id, kind: e.name } });
       scrollChat();
+    }
+    // P-EVAL.4 (ADR-0318): the real tool name (and later its pass/fail) arrived for a call already
+    // streamed above. Relabel the mark in place so the settled answer's chip reads "knowledge_search"
+    // rather than "other". Display only: a missing report leaves the coarse label and changes nothing else.
+    else if (e.type === "tool-meta") {
+      const prior = toolMeta.get(e.id);
+      toolMeta.set(e.id, { name: e.name, ...(e.ok === undefined ? (prior?.ok === undefined ? {} : { ok: prior.ok }) : { ok: e.ok }) });
+      for (const m of marks) {
+        if (m.data.id !== e.id) continue;
+        m.chip.k = e.name;
+        if (e.ok === false) m.chip.failed = true;
+      }
     }
     else if (e.type === "subagent") {
       sawTool = true; setPhase(`Delegating to ${e.agent}…`); paintHud();
@@ -1722,13 +1838,16 @@ async function send(): Promise<void> {
       if (e.egress || e.exec) egressDock().appendChild(card.el);
       else { hud.before(card.el); scrollChat(); }
     }
-    else if (e.type === "block") { if (e.quarantined === false) failures.push({ tool: e.tool, reason: e.reason, cmd: e.command }); onBlock(e); } // P-CHAT.C (ADR-0190): a failed (not quarantined) tool call feeds the run's eval metrics
+    // P-CHAT.C (ADR-0190): a failed (not quarantined) tool call feeds the run's eval metrics.
+    else if (e.type === "block") { if (e.quarantined === false) failures.push({ tool: e.tool, reason: e.reason, cmd: e.command }); onBlock(e); }
     else if (e.type === "tool-image") renderToolImages(e.images, e.title); // P-IMG.1 (ADR-0208): a tool produced image(s) → inline + download + push-to-preview
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0153)
     else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants — review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
+    // `used`/`size`/`cost` are the only figures the provider reports over ACP. While attached to a lane
+    // these are that lane's own samples, which is why the ring and the rail both follow the attachment.
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     // P-STALL.1 (ADR-0186): the provider is SILENT (overload/rate-limit) - keep the wait visible. The
     // phase line updates each notice; the next real token/tool event replaces it naturally.
@@ -1739,6 +1858,9 @@ async function send(): Promise<void> {
       liveTurn.pending = e.pending ?? []; liveTurn.pendingAt = Date.now(); // P-INTERJECT.3: the freshest pending-call snapshot, aged locally by the Check-in card
       if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, e.pending); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
+    // P-HEALTH.1: the harness noticed this session go quiet and acted on it. Same treatment as `slow` - the
+    // phase line names the wait, and the transcript gets a quiet note so the self-heal is visible work.
+    else if (e.type === "health") { setPhase(e.action === "recover" ? "Recovering the session" : "Checking on the session"); paintHud(); noteHealth(e.action, e.reason); }
     // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
     // clear notice + a recommended fallback the user can switch to and retry.
     else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason, e.reason); scrollChat(); }
@@ -1756,7 +1878,15 @@ async function send(): Promise<void> {
   // P-PREVIEW-PWA.3 (ADR-0240): a renderer-hosted direct-P2P share sends roster COUNTS so the backend can
   // build the agent-awareness preamble (a relay share is computed backend-side; counts only, never names).
   const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
-  try { await bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare); }
+  // P-FLEET.L8: route by TARGET. Attached, the turn runs inside the lane's own omp child and the lane's
+  // wire carries no image block / P2P attribution, so only the text crosses. A LaneEvent is structurally a
+  // subset of what this closure already handles, so the SAME renderer drives the HUD, the chips and the
+  // token meter either way; named cast per house rule, exactly as bridge.fleetPrompt unifies its own sink.
+  const lane = isLaneTarget(state.composerTarget) ? state.composerTarget : null;
+  try {
+    if (lane) await bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void);
+    else await bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare);
+  }
   finally {
     (node as MsgNode)._md = buf;
     stopThinkingCues(); // P-VOICE.6: the turn is over - no cue may outlive it
@@ -1894,6 +2024,192 @@ function addNoteChip(text: string): void {
   const chip = addEvent(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
   const t = $(".note-chip-txt", chip) as HTMLElement | null;
   if (t) { t.textContent = text; t.title = text; }
+}
+
+// ───────────────────────── P-FLEET.L8: promote a lane into the composer ─────────────────────────
+// Promotion does NOT move the ACP session. The lane's omp child, its folder and its model keep running
+// exactly as they were; the only thing that moves is the renderer's prompt/stream target. That is why this
+// is legal MID-TURN, why detaching is instant, and why composer_target.ts (not this file) owns the badge
+// wording, the capability mask, the transcript seed and the provenance strings: what the user reads and
+// what the lane-session ledger records are the SAME string, so the two cannot drift.
+
+/** The FOLLOW stream of the attached lane. A watch owns no turn, so it outlives individual turns and is
+ *  the one thing demotion has to tear down. */
+let laneWatch: { done: Promise<void>; stop: () => void } | null = null;
+/** The master transcript, parked as DATA while a lane is attached. Snapshotting the rendered markdown
+ *  rather than the DOM is what lets renderThread rebuild it with its copy / save-as-.md payloads intact. */
+let parkedMasterThread: { role: string; text: string }[] | null = null;
+/** The assistant node the WATCH is filling in, when the lane is streaming a turn this composer did not ask
+ *  for. Null whenever we own the turn - `send()` renders that one. */
+let laneWatchNode: { node: HTMLElement; stream: HTMLElement; buf: string } | null = null;
+
+function snapshotThread(): { role: string; text: string }[] {
+  return $$("#thread .msg").map((n) => ({
+    role: n.classList.contains("user") ? "user" : "assistant",
+    text: (n as MsgNode)._md ?? "",
+  }));
+}
+
+/** P-FLEET.L8: attach the composer to a running lane. */
+async function promoteLane(laneId: string): Promise<void> {
+  // Identity is the laneId alone (a lane may be renamed, cd, or swap models without becoming a different
+  // attachment), so sameTarget answers this with the id and nothing else. Re-promoting the lane we are
+  // already on would re-seed the thread out from under whatever the user is reading.
+  const already: ComposerTarget = { kind: "lane", laneId, name: "", cwd: "", model: "" };
+  if (isLaneTarget(state.composerTarget) && sameTarget(state.composerTarget, already)) return;
+  if (isLaneTarget(state.composerTarget)) demoteLane(); // one composer, one lane: leave the old one first
+  const r = await bridge.fleetPromote(laneId).catch(() => null);
+  if (!r?.ok || !r.lane) {
+    // The engine refuses through composer_target.promoteRefusal, so its wording is shown verbatim. An
+    // ABSENT reason is the module's own "did not report a status" case, not a sentence invented here;
+    // promoteRefusal returns null only for a status that ALLOWS promotion, which "" is not.
+    showToast({ tone: "warn", title: "Can't attach to this lane", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
+    return;
+  }
+  const lane: LaneView = r.lane;
+  const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
+  parkedMasterThread = snapshotThread();
+  state.composerTarget = target;
+  // Seed from the lane's own history, so the user lands in the conversation rather than an empty pane.
+  const turns = seedTurns(r.transcript ?? []);
+  renderThread(turns);
+  addNoteChip(promoteNotice(target, turns.length));
+  // TELL THE AGENT. Without this the model has no idea which surface is driving it: the session is the
+  // same session either way, so the content is all present, but "restate what was written in the main
+  // composer" is unanswerable when nothing ever said a main composer exists. Observed in use: the agent
+  // guessed. This rides the operator-interject path, so it is operator-origin and outside untrusted
+  // delimiters, and it is fire-and-forget because a failed note must never block the attach.
+  void bridge.interject(laneId, promoteAgentNote(target)).catch(() => { /* the attach still stands */ });
+  renderComposerTarget();
+  // The FOLLOW: it owns no turn, which is precisely what lets it join one already in flight.
+  laneWatch = bridge.fleetWatch(laneId, onLaneWatchEvent);
+  laneWatch.done.catch(() => { /* the stream ending (or being aborted on demote) is not an error here */ });
+}
+
+/** P-FLEET.L8: release the composer back to the master session. Nothing has to be handed back, so this is
+ *  local and immediate; the engine call is the ledger record, not a precondition. */
+function demoteLane(): void {
+  const was = state.composerTarget;
+  if (!isLaneTarget(was)) return;
+  laneWatch?.stop();
+  laneWatch = null;
+  // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
+  // no further event will ever settle.
+  settleLaneWatchNode();
+  // TELL THE AGENT it is back on its fleet card, BEFORE the release call, so the note lands while the
+  // lane target is still known. This is the other half of the confusion fix: on release the model was
+  // left believing nothing had changed, so it could not answer questions about "the main composer" and
+  // did not know its own next turn would arrive from the card instead.
+  void bridge.interject(was.laneId, demoteAgentNote(was)).catch(() => { /* the release still stands */ });
+  void bridge.fleetDemote().then((r) => {
+    if (r?.ok) return;
+    // The composer has already detached; the fleet card may still paint as attached until it reconciles.
+    showToast({ tone: "warn", title: "The lane still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
+  }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
+  state.composerTarget = MASTER_TARGET;
+  // Restore BEFORE the notice: renderThread clears the thread, so a notice appended first would be wiped.
+  renderThread(parkedMasterThread);
+  parkedMasterThread = null;
+  addNoteChip(demoteNotice(was));
+  renderComposerTarget();
+}
+
+/** P-FLEET.L8: events from the FOLLOW stream. While `send()` owns a turn on this lane the same events also
+ *  arrive on the prompt stream, so the watch renders only what this composer did NOT ask for - which is
+ *  exactly the mid-turn case the follow exists for. */
+function onLaneWatchEvent(e: LaneEvent): void {
+  if (e.type === "watch-seed") {
+    // A promote that landed mid-turn already rendered the transcript the promote call returned; re-seeding
+    // would duplicate it. Only a still-EMPTY thread is seeded from the watch.
+    if ($("#thread .msg")) return;
+    renderThread(seedTurns(e.turns));
+    return;
+  }
+  if (state.streaming) return; // our own turn is rendering these already
+  if (e.type === "token" || e.type === "thinking") {
+    const live = laneWatchNode ?? openLaneWatchNode();
+    live.buf += e.text;
+    live.stream.innerHTML = renderMarkdown(live.buf) + `<span class="cursor"></span>`;
+    (live.node as MsgNode)._md = live.buf;
+    scrollChat();
+    return;
+  }
+  if (e.type === "tool") {
+    addNoteChip(e.detail ? `${e.name}: ${e.detail}` : e.name);
+    return;
+  }
+  if (e.type === "usage") {
+    // The attached lane's OWN measured fill: the status ring speaks for the lane the composer is driving,
+    // never for the master session it is not.
+    state.liveUsage = { used: e.used, size: e.size, cost: e.cost };
+    renderStatus(); renderMetricsRail();
+    return;
+  }
+  if (e.type === "health") { noteHealth(e.action, e.reason); return; }
+  if (e.type === "error") {
+    // The turn died, so the half-written bubble has to stop looking live.
+    settleLaneWatchNode();
+    addNoteChip(`The lane reported an error: ${e.message}`);
+    return;
+  }
+  if (e.type === "done") {
+    settleLaneWatchNode();
+  }
+}
+
+/** Freeze the watched bubble: drop the cursor and section the answer, exactly as a settled master turn. */
+function settleLaneWatchNode(): void {
+  const live = laneWatchNode;
+  laneWatchNode = null;
+  if (live) renderAnswerBody(live.stream, live.buf); // P-CHAT.A sections
+}
+
+function openLaneWatchNode(): { node: HTMLElement; stream: HTMLElement; buf: string } {
+  const node = addMessage("assistant", "");
+  const textEl = $(".text", node) as HTMLElement;
+  textEl.innerHTML = "";
+  const stream = el(`<div class="stream"></div>`);
+  textEl.appendChild(stream);
+  laneWatchNode = { node, stream, buf: "" };
+  return laneWatchNode;
+}
+
+/** P-FLEET.L8: the attachment badge above the composer row. Invariant #11: the label is ONE text child in
+ *  its flex row, so the chip never shatters into slivers; the full folder + model live in the hover title.
+ *  A null badge IS the master target - the main composer shows no badge at all. */
+function renderComposerTarget(): void {
+  const wrap = $(".composer-wrap") as HTMLElement | null;
+  if (!wrap) return;
+  const badge = targetBadge(state.composerTarget);
+  wrap.classList.toggle("on-lane", badge !== null);
+  let bar = $(".composer-target", wrap) as HTMLElement | null;
+  if (!badge) { bar?.remove(); applyTargetCaps(); return; }
+  if (!bar) {
+    bar = el(`<div class="composer-target"><span class="composer-target-label"></span><button class="composer-target-back" type="button"></button></div>`);
+    ($(".composer-row", wrap) ?? wrap.firstElementChild)?.before(bar);
+    ($(".composer-target-back", bar) as HTMLElement).addEventListener("click", () => demoteLane());
+  }
+  bar.title = badge.title;
+  ($(".composer-target-label", bar) as HTMLElement).textContent = badge.label;
+  ($(".composer-target-back", bar) as HTMLElement).textContent = badge.back;
+  applyTargetCaps();
+}
+
+/** P-FLEET.L8: hide what a lane target genuinely CANNOT drive, rather than shipping controls that would
+ *  silently do nothing. targetCaps also carries the one-paragraph why, which is what the refusals quote. */
+function applyTargetCaps(): void {
+  const caps = targetCaps(state.composerTarget);
+  if (!caps.images) {
+    // A staged image could never reach the lane, so it is dropped on attach instead of being sent nowhere.
+    state.attachments = [];
+    const strip = $("#composerThumbs") as HTMLElement | null;
+    if (strip) { strip.innerHTML = ""; strip.hidden = true; }
+    setSendEnabled();
+  }
+  const modes = $("#modeToggle") as HTMLElement | null;
+  if (modes && !caps.modes) modes.hidden = true;
+  else if (modes) renderSessionMode(); // back on master: the toggle's own lockdown rule decides again
+  if (!caps.slashCommands) closeSlashAC();
 }
 
 /** P-INTERJECT.2: the hold-or-push chooser. Sending while a turn streams stages the text here and asks
@@ -3437,6 +3753,49 @@ function secAppearance(): string {
   return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
 }
 
+// ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
+// A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
+// choice (data-theme="") rather than selecting a theme, so "follow the OS" stays a real state and not a
+// guess. Rendered from theme.ts + localStorage, so it paints with no fetch; the click persists through
+// /api/settings and mirrors to localStorage for the next boot's first paint.
+//
+// Invariant 11: `.theme-grid` is `repeat(auto-fill, minmax(220px, 1fr))` and `.theme-nm` is a single
+// ellipsizing line (styles.css). Each `.theme-opt` wraps its label and blurb in their OWN elements, so
+// no raw text is ever a direct flex/grid child next to an inline tag.
+function themeTile(id: string, label: string, blurb: string, swatch: readonly string[], active: boolean): string {
+  // The swatch colours come from the THEMES registry (first-party literals), never from user input, but
+  // they still go through esc() because they land in an inline style attribute.
+  const chips = swatch.map((c) => `<i style="background:${esc(c)}"></i>`).join("");
+  return `<button type="button" class="theme-opt${active ? " on" : ""}" data-theme-pick="${esc(id)}" aria-pressed="${active}">
+      <span class="theme-sw">${chips}</span>
+      <span class="theme-nm">${esc(label)}</span>
+      <span class="theme-bl">${esc(blurb)}</span>
+    </button>`;
+}
+function secTheme(): string {
+  const pref = themePref();
+  const active = resolveTheme(pref, osPrefersLight());
+  // "Match system" is selected only when there is NO explicit preference. Its swatch deliberately shows
+  // one chip from each side so it reads as "either", and it previews what the OS currently resolves to.
+  const sys = themeTile("", "Match system", `Follows your OS. Currently ${active.scheme}.`, ["#0a0b0f", "#c64bd6", "#edeff6"], pref === "");
+  const groups = themeGroups().map(({ scheme, themes }) => `
+    <div class="theme-grp-lbl">${scheme === "light" ? "Light" : "Dark"}</div>
+    <div class="theme-grid">${themes.map((t: ThemeDef) => themeTile(t.id, t.label, t.blurb, t.swatch, pref === t.id)).join("")}</div>`).join("");
+  const inner = `<div class="theme-grid">${sys}</div>${groups}
+    <div class="set-note">${icon("info", 12)} Applies instantly across the app, the code editor, and the trainer. <b>Match system</b> follows your OS light/dark setting; picking a theme explicitly pins it, so a change to your OS setting will no longer move it.</div>`;
+  const count = themeGroups().reduce((n, g) => n + g.themes.length, 0);
+  return setCard("theme", "Theme", `${count} themes · light &amp; dark`, inner, true);
+}
+/** Persist + apply a theme choice. "" clears the choice back to following the OS. Optimistic: the paint
+ *  is instant and the localStorage mirror is written first, so the next boot is correct even if the
+ *  server write fails (a cosmetic setting must never block on the network). */
+async function pickTheme(pref: string): Promise<void> {
+  try { if (pref) localStorage.setItem(THEME_KEY, pref); else localStorage.removeItem(THEME_KEY); } catch { /* storage off: this session still applies */ }
+  applyTheme(pref);
+  if (state.settingsOpen) fillSec("theme", secTheme());
+  await bridge.setTheme(pref).catch(() => null);
+}
+
 // ── P-TRIV.4 (ADR-0191): Settings -> Trivia Wire ─────────────────────────────────────────────────
 // The real on/off toggle (no more hand-editing localStorage), the opt-in re-seed sources, and the
 // "Recycle" button that regenerates the per-role pack on the user's SELECTED model. Rendered from
@@ -3594,6 +3953,7 @@ function settingsShell(): string {
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+    secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
@@ -5797,11 +6157,20 @@ function renderPrevTabs(): void {
   const strip = $("#prevTabs"); if (!strip) return;
   const agentDotHidden = ($("#prevAgentDot") as HTMLElement | null)?.hidden ?? true;
   const act = (id: string) => (prevLane === id ? " active" : "");
-  const lanes = prevLaneTabs.map((t) =>
-    `<button type="button" class="prev-tab prev-tab-lane${act(t.id)}" data-lane="${esc(t.id)}" title="${esc(t.path)}">` +
-    `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
-    `<span class="prev-tab-x" data-close="${esc(t.id)}" title="Close this lane's preview tab">${icon("close", 10)}</span>` +
-    `</button>`).join("");
+  // P-PREVIEW.12: the tab now shows WHAT it is holding. A lane tab used to be html-or-svg by definition;
+  // now it can be a markdown report, a chart PNG, a JSON payload or a PDF, so the icon + tooltip name the
+  // kind. Invariant 11: the icon is `flex: none` and the label is the row's ONE text child, kept on a
+  // single nowrap-ellipsis line.
+  const lanes = prevLaneTabs.map((t) => {
+    const kind = previewPathKind(t.path);
+    const kindIcon = kind ? icon(PREVIEW_KIND_ICON[kind], 10, "prev-tab-kind") : "";
+    const tip = kind ? `${t.path} (${previewKindLabel(kind)})` : t.path;
+    return `<button type="button" class="prev-tab prev-tab-lane${act(t.id)}" data-lane="${esc(t.id)}" title="${esc(tip)}">` +
+      kindIcon +
+      `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
+      `<span class="prev-tab-x" data-close="${esc(t.id)}" title="Close this lane's preview tab">${icon("close", 10)}</span>` +
+      `</button>`;
+  }).join("");
   strip.innerHTML =
     `<button type="button" class="prev-tab${act("yours")}" data-lane="yours" data-tip="Your preview|Files you open stay here - the agent can't clobber this tab.">Yours</button>` +
     `<button type="button" class="prev-tab${act("agent")}" data-lane="agent" data-tip="The agent's preview|What the agent is building or reviewing. It updates here without stealing your tab.">Agent <span class="prev-tab-dot" id="prevAgentDot"${agentDotHidden ? " hidden" : ""} aria-label="new update"></span></button>` +
@@ -7476,6 +7845,7 @@ const RESUME_TAIL = 400;
 async function resumeSession(id: string): Promise<void> {
   closeSettings();
   $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === id));
+
   // P-PERF.1: paint the CACHED transcript instantly (no blank thread), then reconcile with the fresh load.
   const cached = cachedTranscript(id);
   let shownSig = "";
@@ -11007,7 +11377,9 @@ function updateSlashAC(): void {
   // mid-sentence too ("fix this /lic…"), not only when the whole input is one token.
   const caret = ta.selectionStart ?? ta.value.length;
   const tok = slashTokenBeforeCaret(ta.value.slice(0, caret));
-  if (!tok || state.streaming) { closeSlashAC(); return; }
+  // P-FLEET.L8: the master composer expands these, so on a lane target the menu would offer completions
+  // that could never reach the lane's own omp child. targetCaps says so; the menu stays shut.
+  if (!tok || state.streaming || !targetCaps(state.composerTarget).slashCommands) { closeSlashAC(); return; }
   slashItems = filterSlash(tok.slice(1));
   if (!slashItems.length) { closeSlashAC(); return; }
   if (slashSel >= slashItems.length) slashSel = slashItems.length - 1;
@@ -12720,10 +13092,12 @@ function wire(): void {
     fleetQueueRemove: bridge.fleetQueueRemove,
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
+    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving
     fleetAnswer: bridge.fleetAnswer, // scope "session" also allows every same-kind ask for the lane's session
     fleetAuto: bridge.fleetAuto, // full auto-mode: risk-gated ON, per-lane or all-lanes
     fleetCancel: bridge.fleetCancel,
     fleetStop: bridge.fleetStop,
+    fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
@@ -12747,6 +13121,10 @@ function wire(): void {
       return { ok: true };
     },
     vaultAvailable: () => bridge.isElectron && !!bridge.credStore,
+    // P-FLEET.L8: the card's Promote / Back buttons. Attaching is a renderer-side retarget, so the deps are
+    // fire-and-forget; the card's own promoted look comes from LaneView.promoted on the fleet poll.
+    promoteLane: (laneId) => void promoteLane(laneId),
+    demoteLane: () => demoteLane(),
   });
   $("#ctFleet")?.addEventListener("click", () => toggleFleetGrid());
   // P-FLEET.L5: the reviewable timeline dock.
@@ -12795,6 +13173,11 @@ function wire(): void {
     const t = e.target as HTMLElement;
     const head = t.closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; (head.closest(".acc")!.classList.toggle("open")) ? OPEN.add(k) : OPEN.delete(k); return; }
+    // P-THEME.1: a theme tile. `data-theme-pick=""` is the "Match system" tile, which CLEARS the stored
+    // choice, so the empty string is meaningful here and the attribute presence (not truthiness) is the
+    // test. dataset.themePick is "" for that tile, hence `!= null` rather than a plain truthy check.
+    const th = t.closest("[data-theme-pick]") as HTMLElement | null;
+    if (th) { void pickTheme(th.dataset.themePick ?? ""); return; }
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
@@ -13417,6 +13800,9 @@ function wire(): void {
   // P-ACP.4: while a turn runs the Send button is a Stop control (interrupt the turn); else it sends.
   $("#send")!.addEventListener("click", () => { if (state.streaming) void stopTurn(); else void send(); });
 
+  // P-FLEET.L8: paint the (absent) badge once at boot, so the capability mask is applied from the start.
+  renderComposerTarget();
+
   // Jump-to-latest: show the catch-up arrow on user scroll / resize; click pages down one screen.
   $("#chat")?.addEventListener("scroll", scheduleJump, { passive: true });
   window.addEventListener("resize", scheduleJump, { passive: true });
@@ -13556,11 +13942,24 @@ function loadCachedConfig(): void {
 // just-connected provider's models never appeared until a manual refresh.
 let configWarmTries = 0;
 let configWarmTimer: number | null = null; // the single scheduled re-poll (one chain at a time)
-// P-MODELDEF: once per launch, land on the highest-LEVEL model for the ACTIVE provider - unless the user
-// has an explicit sticky choice (chosenModel). Fixes "the default sits on Opus 4.8 / GPT-5.5 instead of
-// the provider's top model (Fable 5 / GPT-5.6)": omp reports its OWN default and we merely mirror it, so
-// we bump it to the best in-family model. Runs only on a real ADOPTED list; never overrides a live turn
-// or the user's saved pick; under AskSage lockdown it stays on a gov model. Fire-and-forget, guarded once.
+// P-MODEL.2: once per launch, land on the model the user should actually be on. The order is a strict
+// preference ladder, and every rung is there because the previous behaviour got it wrong:
+//
+//   1. chosenModel  - an EXPLICIT picker click. A deliberate choice is never re-litigated.
+//   2. lastModel    - the model the COMPOSER last ran on. This rung is the fix for the reported bug.
+//                     The old code consulted only chosenModel, so a user who switched models any way
+//                     other than clicking a picker row had an empty chosenModel and got re-defaulted by
+//                     a heuristic on every single launch. "Use the last model I was using" is what the
+//                     user asked for, and it is also what the backend's resolveStartupModel already
+//                     does, so consulting it here stops the renderer from fighting the backend.
+//   3. curated default - preferredDefaultModel walks DEFAULT_MODEL_PREFERENCE (Opus 5 first). This is
+//                     what a genuinely NEW install lands on. It replaced topModel-within-the-current-
+//                     family, which ranked by raw version digits and therefore produced an arbitrary
+//                     answer across providers (a "6" beating a "5" tells you nothing when the scales
+//                     are unrelated). A new flagship is now a one-line edit to that curated list.
+//
+// Runs only on a real ADOPTED list, never over a live turn, and under AskSage lockdown it stays on a gov
+// model. Fire-and-forget, guarded once per launch.
 let defaultModelApplied = false;
 async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promise<void> {
   if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming) return;
@@ -13568,16 +13967,22 @@ async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promi
   // loadAsksage / auth race loadConfig at boot; both gate what's selectable, so make sure they're known.
   if (state.asksage == null) { const a = await bridge.asksage().catch(() => null); if (a) state.asksage = a; }
   if (!state.auth) { const au = await bridge.auth().catch(() => null); if (au) state.auth = au; }
-  const chosen = (await bridge.chosenModel().catch(() => "")) || "";
+  const [chosen, last] = await Promise.all([
+    bridge.chosenModel().catch(() => ""),
+    bridge.lastModel().catch(() => ""),
+  ]);
   const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value));
   if (!candidates.length) return;
-  const inList = (v: string) => candidates.some((o) => o.value === v);
-  // Respect an explicit prior choice; else the highest-level model in the CURRENT provider's family (version
-  // numbers only compare WITHIN a family - a GPT "5.6" is not a Claude "fable-5"=5.0).
-  const curFam = familyOf(modelOpt.currentValue).id;
-  let desired = chosen && inList(chosen) ? chosen : (topModel(candidates, (v) => familyOf(v).id === curFam)?.value ?? "");
+  const inList = (v: string) => !!v && candidates.some((o) => o.value === v);
+  // A remembered model only wins while it is STILL OFFERED and still selectable: a revoked key or a
+  // retired model must fall through to the curated default rather than pin the picker to a dead id.
+  let desired = inList(chosen) ? chosen
+    : inList(last) ? last
+    : (preferredDefaultModel(candidates)?.value ?? "");
   if (state.asksage?.only && desired && !isGovModel(desired)) {
-    desired = topModel(candidates, (v) => isGovModel(v) && familyOf(v).id === curFam)?.value ?? topModel(candidates, isGovModel)?.value ?? desired;
+    // Lockdown overrides even a remembered pick: a CUI session may not route direct. Prefer the curated
+    // gov default, then any gov model at all, and only then give up (the backend clamp is authoritative).
+    desired = preferredDefaultModel(candidates, isGovModel)?.value ?? topModel(candidates, isGovModel)?.value ?? desired;
   }
   if (desired && desired !== modelOpt.currentValue) await applyConfig("model", desired, { system: true });
 }
@@ -13689,6 +14094,12 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
     const prov = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId);
     if (prov?.oauthActive) {
       resolved = true;
+      // Force the omp respawn before re-reading the model list. The badge reads the credential vault
+      // directly, so it flips green the moment the token lands - but omp still holds the model list it
+      // built at spawn, and a broker that lingers instead of exiting never triggers the server-side
+      // respawn. A plain loadConfig() would then show a stale picker underneath a toast claiming the
+      // models updated. refreshConfig() respawns first; loadConfig() then applies the fresh state.
+      try { await bridge.refreshConfig(); } catch { /* fall through: loadConfig still refreshes what it can */ }
       await loadConfig();
       if (state.settingsOpen) renderSettings();
       showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
@@ -13742,13 +14153,16 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
       updateComposerTools();
     })
     .catch(() => showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 }));
-  // P-IDE.1e (ADR-0109): selecting Fable 5 raises a persistent privacy notice (no absolute privacy from the
-  // U.S. government) instead of the routine "applied" toast.
-  if (configId === "model" && shortModelId(value) === FABLE_ID) {
+  // P-IDE.1e (ADR-0109) / P-MODEL.2: selecting an API-only Claude model (Fable / Mythos) raises a
+  // persistent notice instead of the routine "applied" toast: no absolute privacy from the U.S.
+  // government, AND pay-as-you-go billing outside the plan's included usage.
+  if (configId === "model" && needsClaudeCredential(value)) {
     // Explicit pick raises a persistent modal; a SYSTEM select (e.g. the boot default) shows a brief timed
-    // notice so a serious USG-privacy warning is not a blocking modal on every launch.
-    if (opts.system) showToast({ title: "Fable 5 selected - privacy notice", desc: FABLE_PRIVACY_WARN, tone: "danger", timeout: 8000 });
-    else showToast({ title: "Fable 5 selected - privacy notice", desc: `${FABLE_PRIVACY_WARN} New turns use Fable 5; you can switch models anytime.`, tone: "danger", actions: [{ label: "I understand" }], timeout: 0 });
+    // notice so a serious warning is not a blocking modal on every launch.
+    // Name the model from its own label rather than a hardcoded "Fable 5", so 5.1 and Mythos read right.
+    const warnDesc = `${FABLE_PRIVACY_WARN} It also bills as pay-as-you-go API credits, outside your plan's included usage.`;
+    if (opts.system) showToast({ title: `${label} selected - privacy and billing notice`, desc: warnDesc, tone: "danger", timeout: 8000 });
+    else showToast({ title: `${label} selected - privacy and billing notice`, desc: `${warnDesc} New turns use this model; you can switch anytime.`, tone: "danger", actions: [{ label: "I understand" }], timeout: 0 });
     return;
   }
   if (opts.system) return; // a system switch is automatic - no routine "applied" toast noise on boot
@@ -13762,21 +14176,32 @@ const ITAR_REASON = "Currently unavailable - restricted under U.S. ITAR export c
 const UNAVAILABLE: Record<string, string> = {
   "claude-mythos-5": ITAR_REASON, // Mythos 5 stays ITAR-gated until cleared.
 };
-// P-IDE.1e (ADR-0109): Fable 5 is enabled, but ONLY when a Claude account is connected (it routes through
-// Anthropic), and it carries a U.S.-government privacy notice.
-const FABLE_ID = "claude-fable-5";
-const FABLE_NEEDS_AUTH = "Connect a Claude account to enable Fable 5 - sign in with Claude OAuth or add an ANTHROPIC_API_KEY in Providers.";
+// P-IDE.1e (ADR-0109) / P-MODEL.2: the Fable and Mythos families are enabled, but ONLY when a Claude
+// account is connected (they route through Anthropic), and they carry a U.S.-government privacy notice.
+//
+// P-MODEL.2 widened this from the single hardcoded `claude-fable-5` id to the whole API-ONLY family, via
+// model_families.isApiOnlyModel. The reason is billing, not branding: on Pro and standard Team seats these
+// models draw on pay-as-you-go credits and are NOT included in the plan's usage limits, so they need a
+// real credential and the user needs to be told before the first call, not after the invoice. Keying on
+// one literal id meant Fable 5.1 shipped ungated and unwarned the moment it appeared in a picker.
+const FABLE_NEEDS_AUTH = "Connect a Claude account to enable this model - sign in with Claude OAuth or add an ANTHROPIC_API_KEY in Providers. It bills as pay-as-you-go API credits, not from your plan's included usage.";
 const FABLE_PRIVACY_WARN = "Chat history for this model has NO expectation of absolute privacy from the U.S. government.";
-/** Is a Claude (Anthropic) OAuth session or API key connected? Gates Fable 5. */
+/** Is a Claude (Anthropic) OAuth session or API key connected? Gates the API-only Claude models. */
 function claudeAuthed(): boolean {
   const m = (state.auth?.majors ?? []).find((x) => x.id === "anthropic");
   return !!m && (!!m.oauthActive || !!m.keySet);
 }
-/** Why a model is non-selectable, or undefined if it's available. Fable 5 needs a connected Claude account. */
+/** Does this model need a DIRECT Anthropic credential to be selectable? True for the API-only Fable /
+ *  Mythos families on the direct route. A GOV-routed copy is excluded: it draws on the AskSage gateway's
+ *  own credential and quota, so an Anthropic key is irrelevant to whether it can run. */
+function needsClaudeCredential(value: string): boolean {
+  return isApiOnlyModel(value) && !isGovModel(value);
+}
+/** Why a model is non-selectable, or undefined if it's available. The API-only Claude models (Fable /
+ *  Mythos) need a connected Claude account; ITAR-gated ids are listed in UNAVAILABLE. */
 function unavailableReason(value: string): string | undefined {
-  const short = shortModelId(value);
-  if (short === FABLE_ID) return claudeAuthed() ? undefined : FABLE_NEEDS_AUTH;
-  return UNAVAILABLE[short];
+  if (needsClaudeCredential(value)) return claudeAuthed() ? undefined : FABLE_NEEDS_AUTH;
+  return UNAVAILABLE[shortModelId(value)];
 }
 // Advisory shown on gov-gateway (AskSage) models until they're cleared for production use.
 const GOV_ADVISORY = "Government (AskSage) model - restricted to internal prototype use only until cleared for production by the U.S. government.";
@@ -13816,8 +14241,9 @@ const modelRow = (o: { value: string; name: string }, sel: string) => {
   const iq = `<span class="row-iq" aria-label="Intelligence ${info.iq} of 5">${"★".repeat(info.iq)}<span class="row-iq-dim">${"☆".repeat(5 - info.iq)}</span></span>`;
   const ctxLbl = info.ctx ?? "";
   const ctx = ctxLbl ? `<span class="row-ctx" data-tip="Context window">${esc(ctxLbl)}</span>` : "";
-  // P-IDE.1e (ADR-0109): a small privacy marker on the Fable 5 row (the hover card + selection toast carry the full notice).
-  const warnPill = shortModelId(o.value) === FABLE_ID ? `<span class="row-warn" data-tip="U.S.-gov privacy notice|${esc(FABLE_PRIVACY_WARN)}">${icon("shield", 10)}</span>` : "";
+  // P-IDE.1e (ADR-0109) / P-MODEL.2: a small privacy marker on every API-only Claude row (the hover card
+  // + selection toast carry the full notice). Family-keyed, so Fable 5.1 and Mythos get it too.
+  const warnPill = needsClaudeCredential(o.value) ? `<span class="row-warn" data-tip="U.S.-gov privacy notice|${esc(FABLE_PRIVACY_WARN)}">${icon("shield", 10)}</span>` : "";
   // P-FAV.1: the star toggles membership in the pinned Favorites section; it must never SELECT the
   // row, so the click handlers check [data-fav] before [data-val].
   const fav = favSet.has(o.value);
@@ -13885,6 +14311,12 @@ function familyListHTML(models: { value: string; name: string }[], sel: string, 
 interface ModelInfo { exp: number; iq: number; eff: string; best: string; ctx?: string }
 const MODEL_INFO: Record<string, ModelInfo> = {
   // Anthropic (direct)
+  // P-MODEL.2: Fable/Mythos 5.1 are the current Mythos-level ceiling. `exp: 5` is not a guess: they list
+  // at $10/$50 per Mtok, double Fable 5's tier, and on Pro / standard Team seats they bill as
+  // pay-as-you-go credits OUTSIDE the plan's included limits, so an unaware user pays real money per
+  // call. isApiOnlyModel drives the explicit warning; this card carries the cost framing.
+  "claude-fable-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  "claude-mythos-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
   "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   "claude-mythos-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   "claude-opus-5": { exp: 3, iq: 5, eff: "Frontier-class reasoning at about half the prior Opus price; a low/medium/high effort toggle trades cost for depth.", best: "Hard bugs, architecture, and long-horizon agentic coding.", ctx: "1M" },
@@ -13894,6 +14326,10 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
   "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
   "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude - excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
+  // P-MODEL.2: GPT-6 (codename astra) is OpenAI's current flagship and the first to ship a 1M context.
+  // It rolls out in stages, so it may be absent from a given account's list; when the provider offers it
+  // the picker shows it, and when it does not, nothing here fabricates it.
+  "gpt-6-astra": { exp: 4, iq: 5, eff: "OpenAI's current flagship, with a 1M context window.", best: "Hard reasoning, architecture, and very long-context analysis.", ctx: "1M" },
   // AskSage · OpenAI. GPT-5.6 ships three tier codenames (luna=mid / sol / terra); luna is the default RAG model.
   "gpt-5.6-luna": { exp: 3, iq: 5, eff: "Newest mid-tier GPT-5.6; the default RAG model.", best: "General gov coding, analysis, and RAG grounding.", ctx: "256K" },
   "gpt-5.6-sol": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },
@@ -13973,8 +14409,9 @@ function modelTipHTML(value: string): string {
   const gov = isAsksage(value);
   // ITAR-unavailable reason + gov-prototype-only advisory sit above the (always-present) ratings.
   const banner = reason ? `<div class="mt-banner warn">${esc(reason)}</div>` : "";
-  // P-IDE.1e (ADR-0109): Fable 5, once selectable (Claude connected), carries the U.S.-gov privacy notice.
-  const privacyBanner = shortModelId(value) === FABLE_ID && !reason ? `<div class="mt-banner warn">${icon("shield", 12)} ${esc(FABLE_PRIVACY_WARN)}</div>` : "";
+  // P-IDE.1e (ADR-0109) / P-MODEL.2: an API-only Claude model, once selectable (Claude connected), carries
+  // the U.S.-gov privacy notice.
+  const privacyBanner = needsClaudeCredential(value) && !reason ? `<div class="mt-banner warn">${icon("shield", 12)} ${esc(FABLE_PRIVACY_WARN)}</div>` : "";
   const govNote = gov ? `<div class="mt-banner gov">${esc(GOV_ADVISORY)}</div>` : "";
   const ratings = `<div class="mt-rate">${stars5(info.exp, "exp")}<span class="mt-rlabel">Token Expense</span></div>
     <div class="mt-rate">${stars5(info.iq, "iq")}<span class="mt-rlabel">Intelligence Level</span></div>
@@ -14547,6 +14984,14 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   state.userRole = s?.role ?? null;               // ADR-0088: null until the user picks a role
   state.tourSeen = !!s?.tourSeen;                  // ADR-0089: first-run walkthrough replay guard
   state.govconCui = s?.govconCui ?? null;         // P-GOVCUI.1: null until the first-run gov/CUI step asks
+  // P-THEME.1: the SERVER is the source of truth for the theme; localStorage is only the mirror that
+  // makes the first paint synchronous (see bootTheme). Reconcile whenever they disagree, which is how a
+  // choice made on another machine, or after the mirror was cleared, still lands. Re-paint only on a real
+  // change so a matching value costs nothing.
+  if (s && typeof s.theme === "string" && s.theme !== themePref()) {
+    try { if (s.theme) localStorage.setItem(THEME_KEY, s.theme); else localStorage.removeItem(THEME_KEY); } catch { /* storage off */ }
+    applyTheme(s.theme);
+  }
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
   syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
   // P-AVATAR.6: the lucid-agent role gets a hero opening over the ~6-9s session warm - REAL signals

@@ -85,3 +85,23 @@ describe("resolveStartupModel - no better signal", () => {
     expect(r!.value).toBe("myserver/llama-3.3-70b");
   });
 });
+
+describe("resolveStartupModel - P-MODEL.2 curated default", () => {
+  // A 2026 fresh install: omp's catalog now carries BOTH new flagships.
+  const FRESH = [...OPTIONS, opt("anthropic/claude-opus-5"), opt("openai-codex/gpt-6-astra")];
+
+  it("both 2026 flagships configured -> Opus 5, decided by the curated list and not by the bigger digit", () => {
+    // The old cross-family sort ranked on raw version digits, so gpt-6-astra [6] beat claude-opus-5 [5]
+    // purely because 6 > 5. DEFAULT_MODEL_PREFERENCE makes this a decision: Opus 5 is entry #1.
+    const r = resolveStartupModel({ lastUsed: "", current: "anthropic/claude-opus-4-8", options: FRESH, isConfigured: configuredBy("anthropic/", "openai-codex/") });
+    expect(r).toEqual({ value: "anthropic/claude-opus-5", source: "best-configured" });
+  });
+  it("OpenAI-only fresh install -> gpt-6-astra (the new flagship is tier 2, no longer mis-ranked)", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "", options: FRESH, isConfigured: configuredBy("openai-codex/") });
+    expect(r).toEqual({ value: "openai-codex/gpt-6-astra", source: "best-configured" });
+  });
+  it("an explicit last-used pick still beats the curated default", () => {
+    const r = resolveStartupModel({ lastUsed: "openai-codex/gpt-5.5", current: "", options: FRESH, isConfigured: () => true });
+    expect(r).toEqual({ value: "openai-codex/gpt-5.5", source: "last-used" });
+  });
+});

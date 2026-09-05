@@ -13,6 +13,8 @@
 //   clean       → replies with benign text echoing the prompt (default)
 //   poison      → replies with a hidden zero-width vector (the gate must quarantine + withhold it)
 //   breakout    → replies embedding a literal UNTRUSTED_CONTENT_END (the firewall must neutralize it)
+//   lanefidelity → also emits a CODE-LESS bash tool_call (rawInput.command) + a usage_update, so a lane
+//                  test can assert "the command used" and the measured context figures cross the wire
 //   permission  → sends the client a session/request_permission FIRST (the firewall must deny it), then
 //                 replies with the recorded outcome so a test can assert we denied.
 //   hang        → NEVER answers session/prompt (P-FLEET.1 deadline checks) - unless a session/cancel
@@ -87,6 +89,13 @@ async function handle(line: string): Promise<void> {
     // lane test can assert the authored diff survives the wire. Consumers that only read title/kind are
     // unaffected (the firewall suites).
     write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", title: "search", kind: "edit", status: "completed", rawInput: { path: "src/greeting.ts", edits: [{ old_text: "hello", new_text: "hello\nworld" }] } } } });
+    // P-FLEET.L7: a CODE-LESS call (bash) plus a usage report. Before L7 the lane wire threw both away:
+    // a bash call arrived with only omp's one-line title, so its chevron had nothing to open, and no
+    // usage_update case existed at all, so a promoted lane could not report its own context spend.
+    if (MODE === "lanefidelity") {
+      write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "call-bash-1", title: "bun test", kind: "run", status: "completed", rawInput: { command: "bun test desktop/health_watch.test.ts", timeout: 60 } } } });
+      write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "usage_update", used: 4200, size: 200_000, cost: { amount: 0.0731 } } } });
+    }
     const imgs = countImages(params?.prompt);
     const echoed = imgs ? `${replyText(MODE, promptText, outcome)} [images: ${imgs}]` : replyText(MODE, promptText, outcome);
     write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: echoed } } } });

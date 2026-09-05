@@ -136,6 +136,10 @@ export interface GuiSettings {
   // ADR-0088 (P-ROLE.1): the user's chosen role. Cosmetic preset; unset = "developer". Captured at
   // first-run onboarding (before the email step) and switchable in Settings → Profile.
   userRole?: UserRole;
+  // P-THEME.1: the chosen app theme id (desktop/renderer/theme.ts). Cosmetic, like userRole. Unset means
+  // "never chosen", which follows the OS light/dark preference; a KNOWN id always wins over the OS, since
+  // an explicit choice must not be overridden by a system setting change.
+  theme?: string;
   // ADR-0089 (P-ROLE.1b): the first-run guided walkthrough has been shown (finished OR skipped).
   // Replay-guard so the tour never re-appears uninvited; the About "Take the tour" button ignores it.
   tourSeen?: boolean;
@@ -556,6 +560,17 @@ export function chosenModel(): string { return load().chosenModel ?? ""; }
 export function setChosenModel(model: string): GuiSettings {
   const s = load(); const m = (model ?? "").trim();
   if (m) s.chosenModel = m; else delete s.chosenModel;
+  save(s); return s;
+}
+// P-THEME.1: the user's chosen app theme id (see desktop/renderer/theme.ts THEMES). "" / unset means
+// "not chosen", which resolveTheme folds to the OS colour-scheme preference (light OS -> lucid-light,
+// otherwise the dark default). Stored as an opaque STRING, deliberately not a union: the renderer's
+// theme registry is the single source of truth for which ids exist, and resolveTheme already treats an
+// unknown id as unset, so shipping or retiring a theme never needs a migration here.
+export function themeId(): string { return load().theme ?? ""; }
+export function setThemeId(id: string): GuiSettings {
+  const s = load(); const t = (id ?? "").trim();
+  if (t) s.theme = t; else delete s.theme;
   save(s); return s;
 }
 // ── CREATOR-0 (ADR-0282/0283): Creator endpoint + remote-target declarations ──

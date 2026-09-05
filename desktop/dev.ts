@@ -82,7 +82,7 @@ import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
-import { clearAllOauthCredentials, clearDisabledCredential, disconnectCredential } from "./auth_vault.ts";
+import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
@@ -105,7 +105,12 @@ import { getState as trainerState, submitAnswer as trainerAnswer, getGames as tr
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { parseImageDataUrl } from "./renderer/image_data_url.ts"; // P-IMG.1 (ADR-0208): strict image gate
 import { previewImageHtml } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): image → preview wrapper
-import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
+// P-PREVIEW.4c: fold a multi-file app's relative assets inline.
+// P-PREVIEW.12: findBlockedRefs / blockedRefsMessage / injectBlockedRefsBanner make the frame CSP's
+// refusal of REMOTE refs legible to both the user (an in-frame banner) and the agent (the tool result),
+// instead of a silently blank page. previewTextDocument renders the non-markup kinds (markdown, json,
+// csv, txt, log, ...) as a readable document so a model can finally show a report it just wrote.
+import { blockedRefsMessage, findBlockedRefs, injectBlockedRefsBanner, inlinePreviewAssets, previewTextDocument } from "./preview_inline.ts";
 import { injectPreviewBridge } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
@@ -114,7 +119,7 @@ import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 // CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
 // route reports (both flavors resolve it through the same seam).
 import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreatorEndpoint, removeCreatorTarget, upsertCreatorEndpoint, upsertCreatorTarget, type CreatorRemoteTargetDef } from "./settings_store.ts";
@@ -122,9 +127,11 @@ import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreato
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
 // `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
 // picker); once chosen it's the concrete role. tourSeen guards the first-run walkthrough replay.
+// P-THEME.1: `theme` rides here too - it is the same class of state (cosmetic, policy-free, per-user).
+// "" means never chosen, which the renderer folds to the OS light/dark preference.
 function settingsData() {
   const s = loadSettings();
-  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null };
+  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null, theme: themeId() };
 }
 
 // P-STT.2b: the real WhisperRuntimeDeps for the managed offline-Whisper lifecycle - os specs, the model dir,
@@ -293,7 +300,7 @@ function markWorkspaceSetupAsked(path: string): void {
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { addReportToKg, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
+import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
 import { EXPLAIN_SYSTEM, explainCommand, explainUserPrompt } from "./explain_command.ts";
 import type { PersonalScope } from "../harness/personal/store.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
@@ -998,16 +1005,37 @@ const CREATOR_DIR = process.env.LUCID_CREATOR_DIR || join(process.env.LUCID_DATA
 // no other channel from this child back up to its parent). Still one random value per launch; a
 // standalone `bun run desktop/dev.ts` has no main and mints its own exactly as before.
 const TOKEN = process.env.LUCID_MAIN_TOKEN || randomBytes(32).toString("hex");
+// Routes the OMP CHILD (or the Electron main) calls directly. They cannot set an `x-lucid-token` header,
+// so each inherits a ready URL with `?t=<TOKEN>` and these paths additionally accept the query token.
+// Everything else stays header-only. Hoisted to module scope (was a 17-clause `||` chain rebuilt on every
+// request) so adding a self-report route is a one-line edit and costs no per-request allocation.
+const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
+  "/api/preview/serve", "/api/preview/shot", "/api/preview/open", "/api/preview/inspect", "/api/preview/act",
+  "/api/kb/retrieve",        // ADR-0220: the knowledge_search tool grounds on the local compiled KB
+  "/api/fleet/status",       // P-FLEET.L1: the master's fleet_status tool
+  "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
+  "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
+  "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
+  "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
+  "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
+]);
 // P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
 // sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
 // another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
 // the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
 // P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
 // interject_extension drains only the notes addressed to it (the master child gets target "master").
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => interjectChildEnv(laneId) });
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => interjectChildEnv(laneId), interject: (laneId, text) => { addInterject(laneId, text); } });
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-HEALTH.1: the harness watches its OWN sessions so a stalled long run never needs an app restart. The
+// master session and every lane climb the same ladder (quiet, then the canned status probe, then a
+// cancel-and-resume in place). The ticker is coarse on purpose: the thresholds are minutes, and a tick
+// that finds nothing wrong does no IO at all. Both calls are fail-quiet - a watchdog that can throw into
+// the event loop is a worse bug than the stall it watches for.
+backend.startHealthWatch();
+setInterval(() => { void fleet.healthTick().catch(() => {}); }, 30_000).unref?.();
 // P-PWA-FOCUS.1: the lane-to-guest tap. ONE persistent observer, registered here at module scope right
 // after the lane manager exists (this file is evaluated once per engine process, and this statement sits
 // outside every route handler and every poll tick) - so it is installed exactly once and covers all lanes
@@ -1311,6 +1339,9 @@ const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
 // that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
 // line (the GHE domain, or "" for github.com); it's written to stdin immediately after spawn.
 function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string }> {
+  // Snapshot the vault BEFORE the broker runs, so the exit handler below can tell whether a genuinely
+  // fresh token landed rather than trusting the broker's exit code. Read-only; absent row => not present.
+  const beforeCred = credentialSnapshot(oauthId);
   let proc: ReturnType<typeof Bun.spawn>;
   try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
@@ -1327,16 +1358,29 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
     if (sink && typeof sink !== "number") { try { sink.write(new TextEncoder().encode(promptAnswer.trim() + "\n")); } catch { /* broker may have exited */ } }
   }
   proc.exited.finally(() => { if (oauthBrokers.get(oauthId) === proc) oauthBrokers.delete(oauthId); });
-  // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
-  // built its model list at spawn and won't see it. Respawn so the new provider's models surface
-  // (mirrors what adding an API key does). The front-end re-fetches /api/config after the badge flips.
-  proc.exited.then((code) => {
-    if (code !== 0) return;
+  // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child built
+  // its model list at spawn and won't see it. Respawn so the new provider's models surface (mirrors what
+  // adding an API key does). The front-end re-fetches /api/config after the badge flips.
+  //
+  // We deliberately do NOT gate this on the broker's exit code. The broker runs a local callback server,
+  // and it can exit non-zero (or be torn down noisily, or linger) AFTER it has already written a valid
+  // token. In that case the badge flips green - it reads the vault directly - while omp is never
+  // respawned, which presents to the user as "the browser said I'm signed in, but the picker has no
+  // models" and only clears on a full app restart. The vault is the ground truth, so compare a
+  // before/after snapshot instead: a first row, a replaced row, a rewritten blob or a bumped
+  // `updated_at` all mean a fresh token landed. This also keeps a FAILED login from resurrecting a
+  // credential the user logged out of, which a blind clear-and-restart would.
+  proc.exited.then(() => {
+    if (!landedFreshCredential(beforeCred, credentialSnapshot(oauthId))) {
+      if (loadSettings().developerMode) console.log(`[oauth] ${oauthId} login left no new credential - not respawning omp`);
+      return;
+    }
     // omp's login writes the fresh token but may leave a stale `disabled_cause` from a prior logout,
     // so the just-fetched credential stays ignored. Clear that one flag (token blob untouched) so the
     // login actually "sticks", THEN respawn omp to pick up the now-active provider.
     const r = clearDisabledCredential(oauthId);
     if (r.cleared) console.log(`[oauth] re-enabled ${oauthId} after login (cleared stale disabled flag)`);
+    console.log(`[oauth] ${oauthId} credential landed - respawning omp so its models surface`);
     backend.restart();
   }).catch(() => { /* ignore */ });
   return new Promise((resolve) => {
@@ -1434,7 +1478,7 @@ const server = Bun.serve({
       // browser_* tools (via the token'd LUCID_BROWSER_URL it inherits), same ?t= convention. The two
       // main-process endpoints (/commands, /result) and the status push stay header-only: main MINTED the
       // token (LUCID_MAIN_TOKEN) and sends it as x-lucid-token on every poll.
-      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/open" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve" || p === "/api/fleet/status" || p === "/api/interject/pending" || p === "/api/browser/open" || p === "/api/browser/capture" || p === "/api/browser/scroll" || p === "/api/browser/close" || p === "/api/browser/shot" || p === "/api/browser/click" || p === "/api/browser/type" || p === "/api/browser/drag" || p === "/api/browser/keys";
+      const queryTokenOk = QUERY_TOKEN_ROUTES.has(p);
       const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
       if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
     }
@@ -2339,7 +2383,12 @@ const server = Bun.serve({
       if (p === "/api/preview/file") {
         const target = (url.searchParams.get("path") ?? "").trim();
         const r = readPreviewFile(target);
-        return json(r.ok ? { ok: true, data: { html: r.html, label: r.label } } : { ok: false, error: r.error });
+        // P-PREVIEW.12: `html` + `label` are unchanged for existing callers; `kind` + `mime` are additive
+        // so a caller can tell a markdown report from an app, and `bytes` is base64 so an image can come
+        // through this JSON route as well as the raw /serve one.
+        return json(r.ok
+          ? { ok: true, data: { html: r.html, label: r.label, kind: r.kind, mime: r.mime, ...(r.bytes ? { bytes: Buffer.from(r.bytes).toString("base64") } : {}) } }
+          : { ok: false, error: r.error });
       }
       // P-PREVIEW.4b (ADR-0096): serve a local previewable file's CONTENT as an HTML document with its OWN
       // per-frame CSP (PREVIEW_FRAME_CSP), loaded by the renderer via `iframe.src`. A `srcdoc` frame inherits
@@ -2407,7 +2456,35 @@ const server = Bun.serve({
         const b = await readBody<{ path?: unknown }>(req);
         const target = typeof b.path === "string" ? b.path : "";
         const opened = backend.openPreview(target);
-        return json({ ok: true, data: { opened } });
+        // P-PREVIEW.12: close the feedback loop the agent never had. The frame CSP allows NO remote
+        // origins, so a model's CDN <script src>, remote <img>, webfont or fetch() is refused and the
+        // page renders blank or broken - previously with no signal to the user AND none to the model, so
+        // it could not self-correct and would just try again. Report what was refused, in the tool's own
+        // result, phrased as the fix (inline it, or vendor the asset next to the file and use a relative
+        // path). HTML only: the other kinds have no remote refs to block. Best-effort, and never a gate:
+        // a read failure here must not stop the panel from opening.
+        let blocked = "";
+        try {
+          const r = readPreviewFile(target);
+          if (r.ok && r.kind === "html") blocked = blockedRefsMessage(findBlockedRefs(r.html));
+        } catch { /* the panel still opens; the agent simply gets no blocked-ref advice */ }
+        return json({ ok: true, data: { opened, ...(blocked ? { blocked } : {}) } });
+      }
+      // P-EVAL.4 (ADR-0318): the omp child reports the REAL name of each tool call here. Same token'd
+      // self-report shape as /api/preview/open above, and for the same structural reason: omp's ACP
+      // tool_call update carries only a coarse `kind` ("other" for every custom + MCP tool) plus a title
+      // that intent tracing rewrites to model prose, so the desktop cannot identify a tool from the
+      // stream alone. The hook API inside omp CAN, so it posts `{ id, name, ok? }` and the backend joins
+      // on toolCallId. Pure metadata: it labels chips and the engineering report's tool breakdown, and is
+      // never consulted by a gate, so a dropped report costs a label and nothing more.
+      if (p === "/api/tool/meta" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; name?: unknown; ok?: unknown }>(req);
+        const noted = backend.noteToolMeta({
+          id: typeof b.id === "string" ? b.id : "",
+          name: typeof b.name === "string" ? b.name : "",
+          ...(typeof b.ok === "boolean" ? { ok: b.ok } : {}),
+        });
+        return json({ ok: true, data: { noted } });
       }
       // ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ──────────────────────────
       // The Electron MAIN owns the real BrowserWindow (compositor-level capturePage defeats DOM-locking
@@ -2592,23 +2669,39 @@ const server = Bun.serve({
           "x-content-type-options": "nosniff",
         };
         if (r.ok) {
-          // P-PREVIEW.4c (ADR-0096): fold the app's OWN relative assets (css/js/img/fonts) inline so a
-          // MULTI-FILE app renders under the opaque-origin, egress-blocked frame CSP. HTML only (an .svg is
-          // self-contained); best-effort — a read failure just serves the raw HTML (the CSP blocks the ref).
-          let body = r.html;
-          if (/\.html?$/i.test(toFsPath(target))) {
+          // P-PREVIEW.12: BINARY kinds (image, pdf) are served as their own bytes with their real MIME.
+          // Reading a PNG as UTF-8 corrupts it, so these never touch the HTML pipeline below. The frame
+          // CSP still applies, and it permits no network, so a served image cannot phone home.
+          if (r.bytes) return new Response(r.bytes, { headers: { ...headers, "content-type": r.mime } });
+          // P-PREVIEW.12: text-ish kinds (markdown, txt, json, csv, log, yaml, xml, ...) are wrapped in a
+          // minimal readable document by previewTextDocument. This is the core of the reported bug: a model
+          // that wrote a markdown report or a JSON payload previously got "not an .html/.svg file" and had
+          // no way to show its own work. html/svg pass through it untouched.
+          let body = (r.kind === "html" || r.kind === "svg") ? r.html : previewTextDocument(r.kind, r.html, r.label);
+          if (r.kind === "html") {
+            // P-PREVIEW.4c (ADR-0096): fold the app's OWN relative assets (css/js/img/fonts) inline so a
+            // MULTI-FILE app renders under the opaque-origin, egress-blocked frame CSP. HTML only (an .svg is
+            // self-contained); best-effort, a read failure just serves the raw HTML (the CSP blocks the ref).
             try {
               body = inlinePreviewAssets(body, dirname(toFsPath(target)), {
                 readText: (pp) => readFileSync(pp, "utf8"),
                 readBytes: (pp) => readFileSync(pp),
               });
             } catch { /* serve raw HTML on any inlining failure */ }
+            // P-PREVIEW.6b (ADR-0153): inject the read-only DOM-inspect bridge (inline JS, CSP-allowed; egress
+            // still blocked by connect-src 'none'). Only for HTML: an .svg is self-contained + has no DOM to
+            // inspect. It answers postMessage queries from the LUCID renderer; it never mutates or evals.
+            body = injectPreviewBridge(body);
+            // P-PREVIEW.12: LAST, and only for HTML. The frame CSP allows no remote origins, so a CDN
+            // <script src>, a remote <img>, a webfont or a fetch() dies silently and the user sees a blank
+            // page with no explanation. This banner names what was refused and what to do instead. It runs
+            // after inlining, so anything successfully folded in locally is no longer reported as blocked,
+            // and it is never injected into an .svg (which has no place to put it).
+            body = injectBlockedRefsBanner(body);
           }
-          // P-PREVIEW.6b (ADR-0153): inject the read-only DOM-inspect bridge (inline JS, CSP-allowed; egress
-          // still blocked by connect-src 'none'). Only for HTML — an .svg is self-contained + has no DOM to
-          // inspect. It answers postMessage queries from the LUCID renderer; it never mutates or evals.
-          if (/\.html?$/i.test(toFsPath(target))) body = injectPreviewBridge(body);
-          return new Response(body, { headers });
+          // svg keeps its own image/svg+xml MIME: served as text/html a browser would render the markup
+          // as text rather than as an image.
+          return new Response(body, { headers: r.kind === "svg" ? { ...headers, "content-type": r.mime } : headers });
         }
         const safe = r.error.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
         return new Response(
@@ -3111,12 +3204,18 @@ const server = Bun.serve({
       // settings + provider auth
       if (p === "/api/settings") {
         if (req.method === "POST") {
-          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown }>(req);
+          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown; theme?: unknown }>(req);
           // ADR-0088/0089 + P-GOVCUI.1: role + first-run-tour + gov/CUI answer are cosmetic onboarding state,
           // policy-free — set them up front, independent of the email-attribution policy gate below.
           if (b.role != null && (USER_ROLES as string[]).includes(String(b.role))) setUserRole(String(b.role) as UserRole);
           if (b.tourSeen != null) setTourSeen(!!b.tourSeen);
           if (typeof b.govconCui === "boolean") setGovconCui(b.govconCui);
+          // P-THEME.1: stored as an opaque string and NOT validated against a theme list here. The
+          // renderer's THEMES registry is the single source of truth for which ids exist, and resolveTheme
+          // already treats an unknown id as "not chosen", so validating here would only duplicate that
+          // list server-side and break every time a theme ships. A junk value is inert, not dangerous:
+          // it is only ever written into a [data-theme] attribute, escaped by the DOM API.
+          if (typeof b.theme === "string") setThemeId(b.theme);
           // Enforce enterprise-managed attribution policy server-side (the UI also reflects it).
           if (b.skip && !skipAllowed()) return json({ ok: false, error: "Your organization requires a corporate email.", data: settingsData() });
           if (b.email != null && String(b.email).trim() && !emailDomainAllowed(String(b.email))) {
@@ -3330,6 +3429,14 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await readBody<{ value?: unknown }>(req); setChosenModel(typeof b.value === "string" ? b.value : ""); }
         return json({ ok: true, data: chosenModel() });
       }
+      // P-MODEL.2: the LAST model the composer actually ran on, as persisted by the backend's syncModelEnv.
+      // Read-only: it is written from omp's reported active model, never from the UI. The renderer needs it
+      // because "what was I last using?" and "what did I once click in the picker?" (chosenModel, above)
+      // are different questions, and the renderer's boot-time default used to consult only the latter. A
+      // user who switched models via the composer and never opened the picker therefore had an empty
+      // chosenModel and got re-defaulted to a heuristic pick on every launch, which is the "it keeps
+      // going back to Opus 4.8" the user reported.
+      if (p === "/api/model/last") return json({ ok: true, data: loadSettings().lastModel ?? "" });
       // Manual "Refresh models": respawn omp so it re-reads the credential vault, then return the
       // fresh model list. Used after connecting a provider (OAuth or key) without relaunching.
       if (p === "/api/config/refresh" && req.method === "POST") { backend.restart(); return json({ ok: true, data: await backend.getConfig() }); }
@@ -3456,6 +3563,33 @@ const server = Bun.serve({
         }
         const mode: RetrieveMode = vector ? "hybrid" : (requested === "vector" ? "compiled" : requested);
         return json({ ok: true, data: await retrieveKnowledge({ query: String(b.query ?? ""), mode, compiled: { store }, vector }) });
+      }
+      // ── P-KG.3: the agent's read/write path into the UNLOCKED personal knowledge graph ──────────────
+      // Backs the omp-native `memory_recall` / `memory_retain` tools (harness/omp/knowledge_extension.ts),
+      // which POST here through the token'd LUCID_KG_RECALL_URL / LUCID_KG_RETAIN_URL they inherit.
+      //
+      // Before this, the agent could only SEE the graph as a server-injected <user-profile> preamble and
+      // could not write to it at all, so "remember that I prefer X" was a promise the product could not
+      // keep. All gating (locked / trust / compartment / shape) lives in the pure agent_kg.ts and is
+      // applied by desktop/personal.ts; these routes are transport only and add no policy of their own.
+      //
+      // FAIL-CLOSED on both sides, and the two failure modes are deliberately DISTINGUISHABLE to the
+      // model: a locked vault reports `locked` with a reason, never an empty success on a read (which
+      // would read as "the user has told me nothing") and never a silent success on a write (which would
+      // teach the model it has memory it does not have).
+      if (p === "/api/kg/recall" && req.method === "POST") {
+        const b = await readBody<{ query?: unknown; kinds?: unknown; limit?: unknown }>(req);
+        return json({ ok: true, data: agentRecall({
+          query: String(b.query ?? ""),
+          ...(Array.isArray(b.kinds) ? { kinds: b.kinds.filter((k): k is string => typeof k === "string") } : {}),
+          ...(typeof b.limit === "number" ? { limit: b.limit } : {}),
+        }) });
+      }
+      // The body is passed through UNVALIDATED on purpose: vetAgentWrite is the single validator, and
+      // re-deriving the shape here would create a second, drifting copy of that contract. It receives
+      // `unknown` and returns either a normalized write or a refusal reason.
+      if (p === "/api/kg/retain" && req.method === "POST") {
+        return json({ ok: true, data: agentRetain(await readBody<unknown>(req)) });
       }
       if (p === "/api/kb/graph") {
         const s = await kbStore();
@@ -3825,9 +3959,71 @@ const server = Bun.serve({
         const b = await readBody<{ laneId?: unknown }>(req);
         return json({ ok: true, data: fleet.stop(String(b.laneId ?? "")) });
       }
+      // P-FLEET.L10: DISMISS a lane (stop parks it, this forgets it). Fail-closed on a live turn unless
+      // the caller passes `force`, so one click can never destroy work in flight; the UI makes it a
+      // two-step gesture instead. The lane's on-disk session log and its ledger line both survive, so a
+      // dismissed lane is still reviewable on the timeline.
+      if (p === "/api/fleet/remove" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; force?: unknown }>(req);
+        return json({ ok: true, data: fleet.remove(String(b.laneId ?? ""), b.force === true) });
+      }
       if (p === "/api/fleet/model" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; model?: unknown }>(req);
         return json({ ok: true, data: await fleet.setModel(String(b.laneId ?? ""), String(b.model ?? "")) });
+      }
+      // P-FLEET.L8: the composer ATTACHES to a lane. Promotion does not move the ACP session - the
+      // lane's omp child, cwd, and model are untouched - so it works MID-TURN and demotion is instant.
+      // The response carries the lane's bounded transcript so the composer can render history without a
+      // second round trip, and the manager writes the promote/demote provenance line itself.
+      if (p === "/api/fleet/promote" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        return json({ ok: true, data: fleet.promote(String(b.laneId ?? "")) });
+      }
+      if (p === "/api/fleet/demote" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        const laneId = typeof b.laneId === "string" && b.laneId ? b.laneId : undefined;
+        return json({ ok: true, data: fleet.demote(laneId) });
+      }
+      if (p === "/api/fleet/promoted") return json({ ok: true, data: { lane: fleet.promotedLane() } });
+      // P-FLEET.L8: FOLLOW a lane's live events without owning its turn. This is what lets the composer
+      // join a turn that is ALREADY RUNNING: fleet.observe() is a persistent sink that survives turn
+      // boundaries and respawns, so a promote mid-turn starts streaming from the next chunk instead of
+      // waiting for the turn to end. Distinct from /api/fleet/prompt, which OWNS a turn; a watcher must
+      // never be able to start one.
+      if (p === "/api/fleet/watch" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        const laneId = String(b.laneId ?? "");
+        if (!laneId) return json({ ok: false, error: "laneId is required" });
+        return ndjsonStream("fleet-watch", async (emit) => {
+          const gate = Promise.withResolvers<void>();
+          const dispose = fleet.observe((id, e) => { if (id === laneId) emit(e); });
+          // The stream lives until the CLIENT leaves. Without this it would resolve immediately and the
+          // renderer would reconnect in a tight loop.
+          const stop = () => { dispose(); gate.resolve(); };
+          if (req.signal.aborted) stop();
+          else req.signal.addEventListener("abort", stop, { once: true });
+          const seed = fleet.laneTranscript(laneId);
+          if (seed.length) emit({ type: "watch-seed", turns: seed });
+          await gate.promise;
+        });
+      }
+      if (p === "/api/fleet/transcript") {
+        const laneId = url.searchParams.get("laneId") ?? "";
+        return json({ ok: true, data: { turns: fleet.laneTranscript(laneId) } });
+      }
+      // P-HEALTH.1: what the self-watch currently thinks, and a manual kick. The GET is read-only (it
+      // takes no action), so the renderer can poll it beside the status poll; the POST forces one ladder
+      // step, which is the "I do not want to wait for the next tick" button.
+      //
+      // NAMED `/api/session-health`, NOT `/api/health`: that path is already the ADR-0305 port-guard
+      // nonce endpoint, and it is the ONE route deliberately exempt from the token gate above, because a
+      // foreign process squatting the engine port has to be detectable before anything is authenticated.
+      // Reusing it would have both shadowed this route (the guard is registered first and wins) and hung
+      // session telemetry off an unauthenticated path.
+      if (p === "/api/session-health") return json({ ok: true, data: { master: backend.healthStatus(), lanes: fleet.healthReport() } });
+      if (p === "/api/session-health/tick" && req.method === "POST") {
+        const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
+        return json({ ok: true, data: { master, lanes } });
       }
       // P-INTERJECT.1: mid-turn operator interjections. POST queues a note for "master" or a laneId
       // (store enforces trim/4000-char/8-note discipline; validation here mirrors it for a crisp error).
@@ -4169,6 +4365,16 @@ process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retr
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
 process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${TOKEN}`;
+// P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the
+// real tool name exists ONLY inside omp's hook API - the ACP update carries a coarse `kind` and an
+// intent-shadowed title. Unset means the extension self-skips, and reports fall back to the coarse kind.
+process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${TOKEN}`;
+// P-KG.3: the agent's memory_recall / memory_retain tools reach the UNLOCKED personal knowledge graph
+// through these. Both fail closed when the vault is locked: recall returns no hits and retain refuses,
+// so a locked vault can never be mistaken for an empty one (which would teach the model it has no memory)
+// nor silently swallow a write (which would teach it that it does).
+process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${TOKEN}`;
+process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${TOKEN}`;
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
 // token'd drain endpoint (same pattern as LUCID_FLEET_STATUS_URL - /api requires the per-launch token,

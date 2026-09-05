@@ -12,7 +12,10 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { dirname, join, normalize, sep } from "node:path";
 import { homedir } from "node:os";
 import { pathWithin } from "./path_guard.ts";
-import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScope, type ScopeView } from "../harness/personal/store.ts";
+import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScope, type ScopeView, type UserKind } from "../harness/personal/store.ts";
+// P-KG.3: the PURE decision layer for the agent's KG read/write tools (lock / trust / compartment /
+// shape gates + ranking). Kept out of this file so it is testable without crypto, fs, or HTTP.
+import { LOCKED_READ_REASON, LOCKED_WRITE_REASON, searchGraph, vetAgentWrite, type KgHit, type KgQuery } from "../harness/personal/agent_kg.ts";
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor, modelExtractor, type CompleteFn, type Extractor } from "../harness/personal/distiller.ts";
@@ -438,8 +441,89 @@ export function addReportToKg(scope: PersonalScope, title: string, markdown: str
   try {
     const entityId = target.upsertEntity(`Engineering Report: ${(title || "report").trim()}`.slice(0, 120), "user:decision", "trusted");
     target.addFact({ entityId, statement: clean.slice(0, 20_000), trustLabel: "trusted", scope });
+    // P-KG.3: store mutations are IN-MEMORY until save() (store.ts:139). This call was missing, so a
+    // report pushed to the KG survived only until the next lock or restart, then vanished with no error.
+    // Every other mutating seam here (forgetFact, relateEntities) already saves.
+    target.save();
     return { ok: true };
   } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
+// ── P-KG.3: the AGENT's read/write path into the unlocked personal graph ────────────────────────────
+// Before this, an agent could only SEE the graph as a server-injected <user-profile> preamble
+// (recallPreamble below) and could not write to it at all. These two seams back the omp-native
+// `memory_recall` / `memory_retain` tools, so an agent can look something up on demand instead of
+// hoping it was in the preamble, and can durably record a preference the user just stated.
+//
+// The whole decision layer is the PURE harness/personal/agent_kg.ts (locked / trust / compartment /
+// shape gates, plus ranking), so it is unit-tested without crypto, fs, or HTTP. These functions only
+// bind it to the unlocked store.
+//
+// WHY NO INDEX. The personal graph is encrypted at rest precisely so its contents are unreadable
+// without the passphrase. A vector or FTS index file would be a PLAINTEXT shadow of exactly that
+// content, sitting next to the vault it exists to protect, so we deliberately rank in memory over the
+// already-decrypted graph while it is unlocked. The non-secret workspace KB (harness/kb) keeps its
+// embeddings index; this store must not have one. Graphs here are hundreds of facts, not millions.
+
+/** Resolve the compartment an agent write lands in. "combined" is a VIEW, not a store, so it defaults
+ *  to personal, matching what learnFromTurn already does for distilled facts. `cui` is passed through
+ *  unchanged so vetAgentWrite can REFUSE it: an agent may never classify data as CUI (ADR-0014). */
+function agentWriteScope(view: ScopeView): string {
+  return view === "combined" ? "personal" : view;
+}
+
+export interface AgentRecallResult { ok: boolean; locked?: boolean; hits?: KgHit[]; reason?: string }
+
+/** P-KG.3: rank the unlocked graph against the agent's query. Fail-closed: personalization off or a
+ *  locked store returns `locked: true` with NO hits and an explicit reason, never an empty success,
+ *  because "no facts found" and "I could not look" must not read the same way to a model. */
+export function agentRecall(q: KgQuery): AgentRecallResult {
+  const s = load();
+  const view = (s.personalScope ?? "personal") as ScopeView;
+  const src = s.personalizationEnabled ? storeForScope(view) : null;
+  if (!src) return { ok: true, locked: true, hits: [], reason: LOCKED_READ_REASON };
+  // Same compartment discipline as personalGraph: cui reads only from the isolated cui store, and
+  // legacy cui facts still sitting in the main store never surface.
+  const graph = view === "cui" ? src.graph({ scope: "cui" }) : nonCui(src.graph({ scope: view }));
+  return { ok: true, hits: searchGraph(graph, q, { unlocked: true }) };
+}
+
+export interface AgentRetainResult { ok: boolean; locked?: boolean; id?: string; refused?: string }
+
+/** P-KG.3: vet and persist an agent-proposed fact. Every refusal path returns `ok: false` with a reason
+ *  written for the model, because reporting a phantom success would teach it that it has memory it does
+ *  not have.
+ *
+ *  TRUST: the label is assigned HERE, as `untrusted`, and is never taken from the agent's payload. An
+ *  agent does not get to declare its own input trusted (same discipline as promoteFactGated). `untrusted`
+ *  is the honest label for model-relayed conversation text: recallable, and treated as DATA rather than
+ *  instruction by buildRecallFromGraph. The authoritative content check is upstream and unavoidable: the
+ *  security gate's in-process `tool_call` hook scans every string of this call and blocks it outright
+ *  before the request is ever made, so a Unicode-attack payload never reaches this function. The
+ *  BLOCKED_TRUST gate inside vetAgentWrite is the second layer, for the day provenance is threaded
+ *  through per-fact. */
+export function agentRetain(input: unknown): AgentRetainResult {
+  const s = load();
+  const view = (s.personalScope ?? "personal") as ScopeView;
+  const scope = agentWriteScope(view);
+  const target = s.personalizationEnabled ? storeForScope(view) : null;
+  const verdict = vetAgentWrite(input, { trust: "untrusted", unlocked: !!target, scope });
+  if (!verdict.ok) return { ok: false, ...(target ? {} : { locked: true }), refused: verdict.reason };
+  if (!target) return { ok: false, locked: true, refused: LOCKED_WRITE_REASON }; // unreachable; keeps the narrowing honest
+  const w = verdict.write;
+  try {
+    // `entity` names an EXISTING node to attach to; only honor it when it really exists in this
+    // compartment, else fall back to upserting by (subject, kind) rather than orphaning the fact.
+    const known = w.entity && target.graph({ scope: view }).entities.some((e) => e.id === w.entity);
+    const entityId = known ? w.entity! : target.upsertEntity(w.subject, w.kind as UserKind, "untrusted");
+    const id = target.addFact({
+      entityId, statement: w.text, trustLabel: "untrusted",
+      scope: scope as PersonalScope,
+      ...(w.confidence === undefined ? {} : { confidence: w.confidence }),
+    });
+    target.save();
+    return { ok: true, id };
+  } catch (e) { return { ok: false, refused: `Not stored: ${String((e as Error)?.message ?? e)}` }; }
 }
 
 // ── P9.7: import a third-party chat export (ChatGPT / Claude / Gemini) into the active store ──

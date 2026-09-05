@@ -24,6 +24,21 @@ describe("listPrice tiers", () => {
     expect(listPrice("google/gemini-3-pro").inPerM).toBe(1.25);
     expect(listPrice("openai-codex/gpt-5.5").inPerM).toBe(1.25);
   });
+  // P-MODEL.2: the three rows added for the current catalog. Each is order-sensitive, so these assertions
+  // are really guarding TABLE's ordering: a future insert above them silently re-prices the flagships.
+  test("Opus 5 is priced at its own halved rate, NOT the generic Opus row", () => {
+    expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 });
+    expect(listPrice("anthropic/claude-opus-4-8")).toEqual({ inPerM: 15, outPerM: 75 }); // older Opus unchanged
+  });
+  test("Fable / Mythos are priced at the frontier rate, not the sonnet-ish default", () => {
+    for (const m of ["anthropic/claude-fable-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1"]) {
+      expect(listPrice(m)).toEqual({ inPerM: 10, outPerM: 50 });
+    }
+  });
+  test("a new GPT generation falls into the GPT family estimate, not the unknown default", () => {
+    expect(listPrice("openai-codex/gpt-6-astra").inPerM).toBe(1.25);
+    expect(listPrice("openai-codex/gpt-6-mini").inPerM).toBe(0.25); // small-tier markers still win
+  });
   test("unknown ⇒ a sane default", () => {
     expect(listPrice("acme/whatever-7")).toEqual({ inPerM: 3, outPerM: 15 });
   });

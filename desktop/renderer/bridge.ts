@@ -248,6 +248,12 @@ export interface LaneView {
   sessionAllow: string[];
   /** P-FLEET.L3: staged-prompt previews (clamped text + image count), drained FIFO when idle. */
   queued: { text: string; images: number }[];
+  /** P-FLEET.L8: the MAIN composer is attached to this lane right now (exactly one lane can be). */
+  promoted: boolean;
+  /** P-HEALTH.1: tool calls awaiting a result - the reason a long-silent lane is `quiet` and not probed. */
+  openCalls: number;
+  /** P-HEALTH.1: the harness's last self-action on this lane, so the card can show it was handled. */
+  lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
 }
 // P-FLEET.L5 (ADR-0274): the reviewable timeline - one row per session on this machine, every workspace,
 // lanes labeled through the durable lane-session ledger.
@@ -267,12 +273,20 @@ export interface LaneImage { data: string; mimeType: string }
 export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
   | { type: "token" | "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string; code?: LaneToolCode }
+  /** P-FLEET.L7: `input` is the bounded, code-stripped rawInput - the command a code-less tool ran. */
+  | { type: "tool"; name: string; detail: string; code?: LaneToolCode; input?: string }
   | { type: "permission"; summary: string; kind: string }
   | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
+  /** P-FLEET.L7: this lane's OWN measured context fill, window, and cost. */
+  | { type: "usage"; used: number; size: number; cost: number }
+  /** P-HEALTH.1: the harness probed or recovered this lane by itself. */
+  | { type: "health"; action: "probe" | "recover"; reason: string }
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** P-FLEET.L8: only on /api/fleet/watch - the lane's bounded history, so a composer attaching mid-turn
+   *  renders the conversation instead of an empty pane. Never emitted on a prompt stream. */
+  | { type: "watch-seed"; turns: { role: "user" | "assistant"; text: string }[] };
 export interface FleetStatusView {
   lanes: LaneView[];
   /** P-FLEET.L2: sustained-pressure evidence. No lane cap - the fleet is unlimited; only CPU or memory
@@ -352,7 +366,13 @@ export interface ReportRepoSelection { path: string; fetch?: boolean; prs?: bool
 export interface EvalReportTurn {
   runId: string; model: string;
   ctxTokens: number; outputTokens: number; totalTokens: number; costUsd: number;
-  tools: { name: string; path?: string; add?: number; del?: number }[];
+  // P-EVAL.4 (ADR-0318): per-tool detail the report groups by. `name` is the REAL tool name when the
+  // tool_meta extension reported one (omp's ACP update cannot carry it), otherwise it degrades to the
+  // coarse ACP class. `kind` is ALWAYS that coarse class, so the server can group by name and fall back
+  // to kind without guessing which one it received. `ok` is present only when genuinely observed: absent
+  // means "not known", never "passed", because the report renders measured vs unmeasured from exactly
+  // this distinction.
+  tools: { name: string; path?: string; add?: number; del?: number; kind?: string; detail?: string; ok?: boolean }[];
   failures?: { tool: string; reason: string; cmd?: string }[];
   subagents?: number; when?: string;
 }
@@ -560,6 +580,9 @@ export interface ProfileSettings {
   // P-GOVCUI.1: the first-run Government/CUI answer. `null` = not asked yet (drives the gov onboarding step);
   // true = on the CUI (gov gateway) path; false = standard use. Cosmetic onboarding state, never gates.
   govconCui?: boolean | null;
+  // P-THEME.1: the chosen app theme id, or "" when never chosen (then the OS light/dark preference
+  // decides). An opaque string on purpose: theme.ts's THEMES registry is the only place ids are defined.
+  theme?: string;
 }
 export interface ManagedPolicy {
   managed: boolean; orgName: string;
@@ -819,6 +842,10 @@ export interface LucidBridge {
   // setChosenModel persists it on a genuine user pick, so it survives across launches.
   chosenModel(): Promise<string>;
   setChosenModel(value: string): Promise<string | null>;
+  // P-MODEL.2: the model the composer LAST ran on (backend-written from omp's reported active model).
+  // Distinct from chosenModel: a user who switches models in the composer without ever opening the
+  // picker has no chosenModel, and the boot default must still land on what they were last using.
+  lastModel(): Promise<string>;
   // P-ACP.2 (ADR-0027): ACP session modes (Plan / Agent), switched via session/set_mode.
   modes(): Promise<ModeState | null>;
   setMode(modeId: string): Promise<ModeState | null>;
@@ -857,7 +884,31 @@ export interface LucidBridge {
   fleetAuto(opts: { laneId?: string; on: boolean; acceptRisk?: boolean }): Promise<{ ok: boolean } | null>;
   fleetCancel(laneId: string): Promise<{ ok: boolean } | null>;
   fleetStop(laneId: string): Promise<{ ok: boolean } | null>;
+  /** P-FLEET.L10: DISMISS a lane - stop parks it (reviewable, respawnable), this forgets it so the card
+   *  leaves the grid. Refused while a turn is in flight unless `force`, so one click cannot destroy work.
+   *  The lane's on-disk session log and ledger line survive, so it stays reviewable on the timeline. */
+  fleetRemove(laneId: string, force?: boolean): Promise<{ ok: boolean; reason?: string } | null>;
   fleetSetModel(laneId: string, model: string): Promise<{ ok: boolean; model?: string; reason?: string } | null>;
+  // -- P-FLEET.L8: promote a lane into the MAIN composer, and pull it back --------------------------
+  /** Attach the main composer to this lane. The lane's omp child, session, cwd, and model are untouched,
+   *  so this works MID-TURN. Returns the lane plus its bounded transcript to seed the thread with. */
+  fleetPromote(laneId: string): Promise<{ ok: boolean; lane?: LaneView; transcript?: { role: "user" | "assistant"; text: string }[]; reason?: string } | null>;
+  /** Release the composer back to the master session. Idempotent; laneId omitted demotes whichever lane
+   *  currently holds it. */
+  fleetDemote(laneId?: string): Promise<{ ok: boolean; lane?: LaneView } | null>;
+  fleetPromoted(): Promise<{ lane: LaneView | null } | null>;
+  /** FOLLOW a lane's live events WITHOUT owning a turn. Resolves when the stream ends; call the returned
+   *  aborter to leave. This is what lets a promote join a turn that is already running. */
+  fleetWatch(laneId: string, onEvent: (e: LaneEvent) => void): { done: Promise<void>; stop: () => void };
+  fleetTranscript(laneId: string): Promise<{ turns: { role: "user" | "assistant"; text: string }[] } | null>;
+  // -- P-HEALTH.1: the harness's self-watch ---------------------------------------------------------
+  /** Read-only: where the stall ladder stands for the master session and every lane. Takes no action. */
+  health(): Promise<{
+    master: { action: string; silentMs: number; reason: string; pending: { label: string; elapsedMs: number }[]; last: { action: string; reason: string; at: number } | null };
+    lanes: { laneId: string; action: string; silentMs: number; reason: string; openCalls: { label: string; elapsedMs: number }[] }[];
+  } | null>;
+  /** Force one ladder step now instead of waiting for the next tick. */
+  healthTick(): Promise<{ master: { action: string; reason: string } | null; lanes: { laneId: string; action: string; reason: string }[] } | null>;
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<SkillView[] | null>;
   // P-SKILL.4 (ADR-0097): the directory's per-skill management menu (all confined, all additive).
@@ -924,6 +975,8 @@ export interface LucidBridge {
   setTourSeen(seen: boolean): Promise<ProfileSettings | null>;
   // P-GOVCUI.1: persist the first-run Government/CUI answer (so the gov onboarding step asks exactly once).
   setGovconCui(govconCui: boolean): Promise<ProfileSettings | null>;
+  // P-THEME.1: persist the chosen app theme id ("" clears it back to following the OS preference).
+  setTheme(theme: string): Promise<ProfileSettings | null>;
   // Enterprise-managed policy (read-only; placed by admins via GPO/MDM).
   managed(): Promise<ManagedPolicy | null>;
   // P-IDE.1c: China-origin model data-sovereignty acknowledgement gate.
@@ -1198,9 +1251,17 @@ async function post(path: string, body: unknown): Promise<any> {
 }
 
 // Mock config only as a last resort if the backend can't be reached (no omp).
+//
+// P-MODEL.2: this list is what the picker shows during a cold boot, BEFORE the live config lands, so it
+// is the "default model" the user actually sees and reports. It went stale at Opus 4.8 / Sonnet 4.6 /
+// Haiku 4.5, which is precisely the "why does it keep defaulting to Claude 4.8 Opus" complaint: the real
+// resolver (startup_model.ts) was already picking correctly, but this placeholder was painted first and
+// often outlived the wait. It is deliberately a SHORT, current, ANTHROPIC-only list: the fallback exists
+// for the offline case, and a long speculative catalog here would show models the user may not have.
+// Keep the head in sync with model_families.DEFAULT_MODEL_PREFERENCE when a new flagship ships.
 const FALLBACK_CONFIG: ConfigOption[] = [
-  { id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-opus-4-8", options: [
-    { value: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" }, { value: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, { value: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
+  { id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-opus-5", options: [
+    { value: "anthropic/claude-opus-5", name: "Claude Opus 5" }, { value: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, { value: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
   ] },
   { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }] },
   { id: "thinking", name: "Thinking", category: "thought_level", type: "select", currentValue: "high", options: [
@@ -1390,6 +1451,7 @@ export const bridge: LucidBridge = {
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
   chosenModel: async () => (await getData("/api/model/chosen")) ?? "",
   setChosenModel: (value) => post("/api/model/chosen", { value }),
+  lastModel: async () => (await getData("/api/model/last")) ?? "", // P-MODEL.2
   modes: () => getData("/api/modes"),
   setMode: (modeId) => post("/api/modes", { modeId }),
   setUiMode: (uiMode) => post("/api/uimode", { uiMode }),
@@ -1424,7 +1486,26 @@ export const bridge: LucidBridge = {
   fleetAuto: (opts) => post("/api/fleet/auto", opts),
   fleetCancel: (laneId) => post("/api/fleet/cancel", { laneId }),
   fleetStop: (laneId) => post("/api/fleet/stop", { laneId }),
+  fleetRemove: (laneId, force) => post("/api/fleet/remove", { laneId, ...(force ? { force: true } : {}) }),
   fleetSetModel: (laneId, model) => post("/api/fleet/model", { laneId, model }),
+  // P-FLEET.L8: promote/demote is a pure ATTACH: no process churn, so it is safe mid-turn.
+  fleetPromote: (laneId) => post("/api/fleet/promote", { laneId }),
+  fleetDemote: (laneId) => post("/api/fleet/demote", laneId ? { laneId } : {}),
+  fleetPromoted: () => getData("/api/fleet/promoted"),
+  fleetWatch: (laneId, onEvent) => {
+    // A watcher owns NO turn, so it gets its own AbortController rather than sharing the chat one:
+    // aborting the chat stream must never silently unsubscribe the composer from the lane it is
+    // attached to, and leaving a lane must never abort a running turn.
+    const ac = new AbortController();
+    const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
+    const done = streamNdjson("/api/fleet/watch", { laneId }, sink, ac.signal);
+    return { done, stop: () => ac.abort() };
+  },
+  fleetTranscript: (laneId) => getData(`/api/fleet/transcript?laneId=${encodeURIComponent(laneId)}`),
+  // P-HEALTH.1. NOT `/api/health`: that path is the ADR-0305 port-guard nonce probe, deliberately
+  // unauthenticated and registered first, so it would shadow this and leak session telemetry ungated.
+  health: () => getData("/api/session-health"),
+  healthTick: () => post("/api/session-health/tick", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
   userCommands: async () => (await getData("/api/usercommand")) ?? [], // P-CMD.1
@@ -1539,6 +1620,7 @@ export const bridge: LucidBridge = {
   saveRole: (role) => post("/api/settings", { role }),
   setTourSeen: (seen) => post("/api/settings", { tourSeen: seen }),
   setGovconCui: (govconCui) => post("/api/settings", { govconCui }),
+  setTheme: (theme) => post("/api/settings", { theme }), // P-THEME.1
   managed: () => getData("/api/managed"),
   chinaAck: () => getData("/api/china-ack"),
   setChinaAck: (acknowledge) => post("/api/china-ack", { acknowledge }),

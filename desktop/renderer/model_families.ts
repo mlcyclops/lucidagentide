@@ -82,15 +82,31 @@ export function cmpModelsNewestFirst(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
+/** The model id without its provider prefix, lowercased. Every id heuristic below matches on THIS, so a
+ *  gateway prefix (`asksage-openai/`) can never change a verdict and callers never have to pre-strip. */
+function bareId(value: string): string { return value.replace(/^[^/]*\//, "").toLowerCase(); }
+
 /** Capability tier from the model id (name heuristic): 2 = flagship/frontier, 1 = balanced, 0 = small/
  *  fast. The SINGLE source of truth for "how capable" a model is: the renderer's inferModelInfo maps these
- *  to the hover-card Intelligence (iq) stars, and the picker / default-select / fallback all rank by it —
+ *  to the hover-card Intelligence (iq) stars, and the picker / default-select / fallback all rank by it,
  *  so "highest level" means the same thing everywhere. `\bmini` (word boundary) so "ge·mini" is not
- *  mis-read as a small model; "-mini" in gpt-5-mini etc. still matches. */
+ *  mis-read as a small model; "-mini" in gpt-5-mini etc. still matches.
+ *
+ *  P-MODEL.2: GPT tiering is VERSION-AWARE (`gptVersion() >= 5`) instead of a literal `gpt-5` substring.
+ *  The old regex only knew the ids that existed the day it was written, so `gpt-6-astra` scored 1
+ *  (balanced) and every future `gpt-7` would have repeated that. The small-model test stays FIRST, so
+ *  `gpt-6-mini` / `gpt-6-nano` are still 0.
+ *
+ *  INVARIANT: this is the ONE capability heuristic for the chat picker. startup_model.ts carried a private
+ *  1/2/3 copy that had already drifted (it knew `grok` and `spark`, this did not); both tokens are folded
+ *  in here and that copy is deleted. `trainer_model.ts:trainerTier` is the last remaining variant (its own
+ *  1..3 distillation scale); collapse it into this the next time it is touched. Never add a third. */
 export function capabilityTier(value: string): 0 | 1 | 2 {
-  const s = value.replace(/^[^/]*\//, "").toLowerCase();
-  if (/\bmini|nano|lite|flash|haiku|oss|-8b|-7b/.test(s)) return 0;
-  if (/opus|pro|max|fable|mythos|ultra|gpt-5|gpt-o/.test(s)) return 2;
+  const s = bareId(value);
+  if (/\bmini|nano|lite|flash|haiku|oss|spark|-8b|-7b/.test(s)) return 0; // `spark` folded in from startup_model
+  const gv = gptVersion(s);
+  if (gv !== null && gv >= 5) return 2;                                   // gpt-5/6/7… incl. tier codenames
+  if (/opus|pro|max|fable|mythos|ultra|grok|gpt-o/.test(s)) return 2;     // `grok` folded in from startup_model
   return 1;
 }
 /** Compare two model ids by LEVEL — highest capability first, then newest version, then alpha. Unlike
@@ -104,12 +120,81 @@ export function cmpModelsByLevel(a: string, b: string): number {
 }
 /** The single highest-LEVEL model in a list (capability, then newest), or null when empty. Auxiliary
  *  (tab / auto-review) models are never eligible; pass `accept` to further restrict the pool (e.g. gov-only,
- *  same-family, or "currently selectable"). Used to pick the default / best model for a provider. */
-export function topModel(models: ModelOption[], accept: (value: string) => boolean = () => true): ModelOption | null {
+ *  same-family, or "currently selectable"). Used to pick the default / best model for a provider.
+ *  Generic over the option shape (P-MODEL.2): ranking only ever reads `.value`, so a caller holding a
+ *  richer option type (acp's `{ value; name?; description? }`) ranks in place instead of copying every
+ *  option into a `ModelOption` just to satisfy the signature. */
+export function topModel<T extends { value: string }>(models: readonly T[], accept: (value: string) => boolean = () => true): T | null {
   const pool = models.filter((m) => !isAuxiliaryModel(m.value) && accept(m.value));
   if (!pool.length) return null;
   return pool.slice().sort((a, b) => cmpModelsByLevel(a.value, b.value))[0]!;
 }
+
+// ── P-MODEL.2: the curated fresh-install default ─────────────────────────────
+// WHY a hand-written list instead of "just take the newest/highest": version digits are NOT comparable
+// across families (cmpModelsByLevel says so itself: a GPT "5.6" and a Claude "fable-5" are different
+// scales). The old cross-family sort therefore put `gpt-6-astra` [6] above `claude-opus-5` [5] purely
+// because 6 > 5, which made the first model a new user ever sees an artifact of regex digit racing rather
+// than a decision. Landing a new flagship is now a deliberate one-line edit HERE, reviewed like any other
+// product choice, and can never be an emergent property of a number.
+
+/** P-MODEL.2: the ordered list of ids we deliberately want a FRESH install to open on, best first.
+ *  Matched UNANCHORED against the provider-stripped, lowercased id (`bareId`, hence no `i` flag), so a gov
+ *  copy (`asksage-anthropic/google-claude-fable-5`) hits the same entry as the direct route and the two are
+ *  separated by cmpModelsByLevel. Every entry ends in `(?![\w.-])` = "the id stops here", so
+ *  `claude-opus-5` can never also match `claude-opus-5-mini` at the wrong rank, and each optional
+ *  tier-codename group excludes the small-model tokens so no entry can select a tier-0 model. */
+export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
+  /claude-opus-5(?![\w.-])/,                                            // Opus 5: 1M ctx Anthropic flagship, the house default
+  /gpt-6(?:\.\d+)?(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/,  // GPT-6 + tier codenames (gpt-6-astra)
+  /claude-fable-5[-.]1(?![\w.-])/,                                      // Fable 5.1 (API-credit billed, see isApiOnlyModel)
+  /claude-mythos-5[-.]1(?![\w.-])/,                                     // Mythos 5.1, shipped alongside Fable 5.1
+  /claude-fable-5(?![\w.-])/,
+  /claude-sonnet-5(?![\w.-])/,
+  /gpt-5[-.]6(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/,       // 5.6 + the gov tier codenames (luna/sol/terra)
+  /claude-opus-4[-.]8(?![\w.-])/,
+  /gemini-3[-.]1-pro(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/, // the gov gateway exposes it as …-pro-com
+];
+
+/** The model a fresh session should default to, out of the options omp actually reports. Walks
+ *  DEFAULT_MODEL_PREFERENCE in order and returns the first survivor matching the current entry; when
+ *  several survivors match ONE entry (a direct route and its gov copy) cmpModelsByLevel breaks the tie, so
+ *  the higher tier wins and, on a true tie, `anthropic/…` sorts ahead of `asksage-…`. Survivors exclude
+ *  auxiliary routes, deprecated ids, sovereignty-gated China-origin models and the unusable RAG route;
+ *  `accept` narrows further (e.g. "this provider still holds a credential"). When NOTHING curated is on
+ *  offer the pick degrades to topModel(survivors), so an unknown-but-configured provider still yields a
+ *  sane default rather than null. Null ONLY when nothing survives the filters. */
+export function preferredDefaultModel<T extends { value: string }>(
+  models: readonly T[],
+  accept: (value: string) => boolean = () => true,
+): T | null {
+  const survivors = models.filter((m) =>
+    !isAuxiliaryModel(m.value) && !isDeprecatedModel(m.value) && !isChinaModel(m.value)
+    && !/(^|\/)rag$/i.test(m.value) && accept(m.value));
+  if (!survivors.length) return null;
+  for (const pat of DEFAULT_MODEL_PREFERENCE) {
+    // The capabilityTier guard is belt-and-braces: no curated entry may EVER resolve to a small model, even
+    // if a vendor invents a suffix ("-tiny") that a pattern happens to admit before we notice.
+    let best: T | null = null;
+    for (const m of survivors) {
+      if (!pat.test(bareId(m.value)) || capabilityTier(m.value) === 0) continue;
+      if (!best || cmpModelsByLevel(m.value, best.value) < 0) best = m;
+    }
+    if (best) return best;
+  }
+  return topModel(survivors);
+}
+
+/** P-MODEL.2: a model that bills as pay-as-you-go API credits rather than being included in a
+ *  subscription plan's limits. Anthropic's Fable and Mythos families bill outside Pro and standard
+ *  Team/Enterprise seat limits, so they only work with a connected credential that has credit on it, and
+ *  the UI warns about cost before a session opens on one. A PURE id test with no auth knowledge: pair it
+ *  with `!isGovModel(v)` when the warning is specifically about Anthropic billing, since a gov-routed copy
+ *  is drawn from the AskSage quota instead. */
+export function isApiOnlyModel(value: string): boolean {
+  return /claude-(?:fable|mythos)(?![a-z])/.test(bareId(value));
+}
+
 /** Order a model list so that, WITHIN each family (groupByFamily preserves relative order), gov models
  *  come first and each group is highest-LEVEL first (capability tier, then newest). Renamed from
  *  sortGovFirstNewest: the top row of each provider is now its most CAPABLE model, not merely its highest

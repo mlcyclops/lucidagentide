@@ -23,11 +23,26 @@ const TABLE: [RegExp, Price][] = [
   [/flash/, { inPerM: 0.30, outPerM: 2.50 }],
   [/oss/, { inPerM: 0.10, outPerM: 0.40 }],
   [/spark/, { inPerM: 0.25, outPerM: 2.00 }],
+  // P-MODEL.2: three corrections, all ORDER-SENSITIVE (first match wins, so these must precede the
+  // broader family rows below).
+  // Fable / Mythos list at $10/$50 per Mtok. Without a row they fell through to DEFAULT_PRICE
+  // (sonnet-ish $3/$15), understating the priciest models in the catalog by more than 3x. These are also
+  // the models that bill as pay-as-you-go credits outside a plan's included usage, so a low estimate is
+  // exactly the wrong direction to be wrong in.
+  [/fable|mythos/, { inPerM: 10.0, outPerM: 50.0 }],
+  // Opus 5 halved the Opus price to $5/$25. It must be matched BEFORE the generic /opus/ row, which
+  // still correctly prices 4.6/4.7/4.8 at $15/$75.
+  [/opus-?5(\b|[-.])/, { inPerM: 5.0, outPerM: 25.0 }],
   [/opus/, { inPerM: 15.0, outPerM: 75.0 }],
   [/sonnet/, { inPerM: 3.00, outPerM: 15.0 }],
   [/\bpro\b/, { inPerM: 1.25, outPerM: 10.0 }],
   [/\bo[34]\b|o3|o4/, { inPerM: 2.00, outPerM: 8.00 }],
-  [/gpt-?5|gpt-?4|codex/, { inPerM: 1.25, outPerM: 10.0 }],
+  // Widened from `gpt-?5|gpt-?4` to any numbered GPT generation, so GPT-6 (and 7, and 8) lands on the
+  // GPT family estimate instead of silently falling through to the sonnet-ish default. The figure is the
+  // known GPT-5 tier price used as a placeholder: OpenAI has not published GPT-6 rates, and an
+  // in-family estimate is a better-informed guess than an unrelated default. The user's own metered
+  // usage supersedes this the moment they run the model once (priceFor prefers "actual").
+  [/gpt-?\d|codex/, { inPerM: 1.25, outPerM: 10.0 }],
   [/gemini/, { inPerM: 1.25, outPerM: 10.0 }],
 ];
 const DEFAULT_PRICE: Price = { inPerM: 3.00, outPerM: 15.0 }; // sonnet-ish, when nothing matches

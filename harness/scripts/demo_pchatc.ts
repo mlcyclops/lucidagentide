@@ -11,7 +11,7 @@
 //
 // Run with: bun run harness/scripts/demo_pchatc.ts
 
-import { buildRunRecord, renderTurnEvalReport, type ObservedTurn } from "../brief/eval_report.ts";
+import { buildRunRecord, evalMetricsForTurn, renderTurnEvalReport, type ObservedTurn } from "../brief/eval_report.ts";
 
 function fail(m: string): never { console.error(`FAIL: ${m}`); process.exit(1); }
 function ok(m: string): void { console.log(`  PASS  ${m}`); }
@@ -52,10 +52,18 @@ if (!markdown.includes("Context efficiency | 25x | direct")) fail("context effic
 if (!markdown.includes("```mermaid")) fail("provenance xychart missing");
 ok("renderTurnEvalReport -> titled Model-Evaluation markdown with a provenance chart + direct 25x context efficiency");
 
-// [3] honesty: no AC / tests are knowable at the chat seam, so those metrics are needs_signal, never faked as 0.
-if (!markdown.includes("Spec conformance | needs AC | needs_signal")) fail("spec conformance should be needs_signal");
-if (!markdown.includes("Predicted acceptance | needs AC + tests | needs_signal")) fail("predicted acceptance should be needs_signal");
-ok("no invented signals: spec conformance + predicted acceptance stay needs_signal (ADR-A016 honesty rule)");
+// [3] honesty: no AC / tests are knowable at the chat seam, so those MEASURED metrics stay null +
+// needs_signal and that is what gets persisted. P-EVAL.4 (ADR-0187) changed only the RENDERING: the rows
+// used to read "Spec conformance | needs AC | needs_signal", which made 40% of every report read as broken,
+// and now show a clearly-labelled derived PROXY with the provenance in the Source column. The honesty rule
+// is unmoved, so assert it on both axes: derived in the markdown, still null + needs_signal in EvalMetrics.
+if (!markdown.includes("| Spec conformance | 75% | proxy | derived |")) fail("spec conformance should render as a labelled derived proxy");
+if (!markdown.includes("| Predicted acceptance | 68/100 | proxy | derived |")) fail("predicted acceptance should render as a labelled derived proxy");
+if (!markdown.includes("| Test pass rate | not measured this run | needs_signal | not measured |")) fail("an underivable metric must state that it was not measured");
+const em = evalMetricsForTurn(turn);
+if (em.specConformance.value !== null || em.specConformance.tier !== "needs_signal") fail("the PERSISTED spec conformance must stay null + needs_signal, never a proxy");
+if (em.predictedAcceptance.value !== null) fail("the PERSISTED predicted acceptance must stay null");
+ok("no invented signals: spec + acceptance render as labelled derived proxies while the persisted metrics stay null + needs_signal (ADR-A016 honesty rule)");
 
 // [4] robustness: a lossy / hostile payload never yields a negative LOC or a NaN; an empty turn still renders.
 const dirty = buildRunRecord({ ...turn, ctxTokens: -1, outputTokens: Number.NaN, costUsd: -3, tools: [{ name: "write", path: "x.ts", add: -9, del: 2 }] });

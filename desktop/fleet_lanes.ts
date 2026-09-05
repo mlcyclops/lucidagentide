@@ -28,6 +28,8 @@ import { randomUUID } from "node:crypto";
 import { ACPClient } from "./acp.ts";
 import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSample, type LaneAdmission, type PressureSample } from "./fleet_resources.ts";
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
+import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
+import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -63,6 +65,17 @@ export interface LaneView {
   /** P-FLEET.L3: staged prompts waiting for the lane to go idle. Previews only - clamped text + image
    *  count; the full payloads live in the manager, drained FIFO one turn at a time. */
   queued: { text: string; images: number }[];
+  /** P-FLEET.L8: the MAIN composer is attached to this lane right now. Exactly one lane can hold this,
+   *  so the grid renders one promoted card and the composer shows one badge. The lane keeps running
+   *  regardless: promotion moves the renderer's prompt target, not the ACP session. */
+  promoted: boolean;
+  /** P-HEALTH.1: tool calls awaiting a result. Shown because it is the reason a long-silent lane is
+   *  reported as `quiet` rather than probed or recovered, and a user who cannot see that just sees the
+   *  harness doing nothing. */
+  openCalls: number;
+  /** P-HEALTH.1: the harness's last self-action on this lane, so the card can say "the harness probed
+   *  this and it answered" instead of leaving the user to guess whether anything happened. */
+  lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
 }
 
 /** P-FLEET.L3: a pasted image riding a lane prompt - the P-VISION.1 shape the master chat uses. */
@@ -75,10 +88,21 @@ export interface LaneToolCode { path: string; content?: string; oldText?: string
 
 export type LaneEvent =
   | { type: "token" | "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string; code?: LaneToolCode }
+  /** P-FLEET.L7: `input` is the bounded, code-stripped rawInput JSON, literally "the command used". A
+   *  bash/read/search/fetch call authors no code, so before L7 its chevron had nothing to reveal and the
+   *  card could only show the title. This carries the arguments so a lane chip drills down like a master
+   *  composer chip does. Code fields are stripped because `code` already carries them. */
+  | { type: "tool"; name: string; detail: string; code?: LaneToolCode; input?: string }
   | { type: "permission"; summary: string; kind: string }
   /** P-FLEET.L6: an ask was granted WITHOUT a human - full auto-mode or a standing session allow. */
   | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
+  /** P-FLEET.L7: the provider's context accounting for THIS lane, so a promoted lane can drive the
+   *  composer's token meter with its own figures instead of the master's. `used`/`size` are context
+   *  tokens and window; `cost` is USD. All three are MEASURED: the lane emits nothing until omp reports. */
+  | { type: "usage"; used: number; size: number; cost: number }
+  /** P-HEALTH.1: the harness acted on this lane by itself (probe or in-place recover), so the card and
+   *  the token meter can show the user that the stall was handled without an app restart. */
+  | { type: "health"; action: "probe" | "recover"; reason: string }
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
   | { type: "error"; message: string };
@@ -118,6 +142,10 @@ const QUEUE_MAX = 8;
 /** P-FLEET.L3: cap on authored code carried per tool event. Lane cards are compact; the master's chat
  *  uses 64K, a mini window needs enough for the diff chip and its expansion, not a whole novel. */
 const CODE_CAP = 16 * 1024;
+/** P-FLEET.L7: cap on the arguments carried per tool event. A shell line is tens of bytes; this is
+ *  generous for a long pipeline or a JSON arg blob while keeping the lane stream small. Mirrors
+ *  lane_transcript.LANE_INPUT_CAP so the renderer never receives more than it will display. */
+const INPUT_CAP = 4 * 1024;
 /** Pressure-window cadence. Ten readings per sustain window is plenty of resolution to tell a burst
  *  from a siege, and a two-point os.cpus() read costs nothing measurable. */
 const SAMPLE_MS = 3_000;
@@ -129,8 +157,22 @@ const SAMPLER_IDLE_MS = 20_000;
 
 /** P-FLEET.L5: one durable ledger line - a lane claimed an omp session. Appended at spawn AND at every
  *  recovery, so a lane's whole session lineage survives engine restarts and the timeline can label the
- *  on-disk .jsonl histories that would otherwise read as anonymous chats. */
-export interface LaneSessionRecord { at: number; laneId: string; name: string; cwd: string; sessionId: string; event: "spawn" | "respawn" }
+ *  on-disk .jsonl histories that would otherwise read as anonymous chats.
+ *  P-FLEET.L8 adds "promote"/"demote": the MAIN composer attached to (or released) this lane's session.
+ *  The session itself never moves, so these are the only record that the operator's prompts for a stretch
+ *  of this session's history came from the main chat rather than the lane card. Without them a promoted
+ *  stretch is indistinguishable from lane work, which is exactly the provenance the audit needs.
+ *  P-HEALTH.1 adds "probe"/"recover": the harness acted on the session with no human in the loop, which
+ *  is the strongest reason of all to have a durable line naming what it did and why. */
+export interface LaneSessionRecord {
+  at: number; laneId: string; name: string; cwd: string; sessionId: string;
+  event: "spawn" | "respawn" | "promote" | "demote" | "probe" | "recover";
+  /** The model in force at the moment of the event. A promoted lane keeps ITS model, not the master's,
+   *  so an audit of "which model wrote this" needs the model recorded per event, not per lane. */
+  model?: string;
+  /** Turn count carried across a promote, or the harness's one-sentence reason for a probe/recover. */
+  note?: string;
+}
 
 export interface FleetLaneDeps {
   /** The gated omp argv for a lane (MUST carry the -e security gate; built by acp_backend). */
@@ -148,6 +190,11 @@ export interface FleetLaneDeps {
    *  (+ LUCID_DEV_URL) so the lane's interject_extension drains only ITS notes. Optional: absent means
    *  a bare inherit, exactly the pre-seam behavior. Applied at spawn AND at every in-place recovery. */
   env?: (laneId: string) => Record<string, string>;
+  /** P-HEALTH.1: deliver an OPERATOR note to a lane's in-flight turn (dev.ts supplies addInterject).
+   *  This is how a stall probe reaches a busy session: the lane already has a turn open, and a second
+   *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
+   *  manager built without it simply never probes; it still escalates to recover. */
+  interject?: (laneId: string, text: string) => void;
 }
 
 /** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time.
@@ -181,6 +228,21 @@ interface Lane {
   sessionAllow: Set<string>;
   /** A prompt turn is in flight (one at a time per lane). */
   busy: boolean;
+  // -- P-HEALTH.1 self-watch state -------------------------------------------------------------------
+  /** Tool calls awaiting a result, keyed by toolCallId. A NON-EMPTY map caps the health verdict at
+   *  `quiet`: a long build is legitimate work, and ADR-0263 removed the wall clock precisely because it
+   *  killed those turns. Only a dead child outranks this. */
+  openCalls: Map<string, PendingCall>;
+  /** Per-stall-episode probe/recover budget. Any real activity resets it, so a lane that wedges twice in
+   *  a session gets a fresh budget each time, and a permanently wedged provider still stops being
+   *  retried instead of becoming a respawn loop. */
+  health: HealthEpisode;
+  /** The harness's last self-action on this lane, surfaced in status so the user can see it worked. */
+  lastHealth: { action: "probe" | "recover"; reason: string; at: number } | null;
+  /** P-FLEET.L8: the MAIN composer is attached to this lane, so the card renders as promoted and the
+   *  lane's events also reach the composer. The lane keeps running either way: attachment moves the
+   *  renderer's prompt target, never the ACP session. */
+  promoted: boolean;
   // ── P-FLEET.L4 recovery state ─────────────────────────────────────────────────────────────────────
   /** Bounded conversation memory (user + folded assistant turns) for the respawn replay. */
   transcript: LaneTurnRecord[];
@@ -206,7 +268,7 @@ export class FleetLaneManager {
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
   readonly #observers = new Set<LaneObserver>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string> };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string>; interject?: (laneId: string, text: string) => void };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -218,7 +280,7 @@ export class FleetLaneManager {
   #autoDefault = false;
 
   constructor(deps: FleetLaneDeps) {
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select. */
@@ -252,6 +314,10 @@ export class FleetLaneManager {
       autoApprove: this.#autoDefault,
       sessionAllow: new Set(),
       busy: false,
+      openCalls: new Map(),
+      health: newEpisode(t),
+      lastHealth: null,
+      promoted: false,
       transcript: [],
       liveText: "",
       liveTools: [],
@@ -305,6 +371,11 @@ export class FleetLaneManager {
     lane.lastImages = images;
     lane.liveText = "";
     lane.liveTools = [];
+    // P-HEALTH.1: a new turn starts a fresh stall episode with a full probe/recover budget, and no stale
+    // open calls. A call left open by a killed turn would otherwise cap this turn's verdict at `quiet`
+    // forever, silently disabling the self-watch for the rest of the lane's life.
+    lane.openCalls.clear();
+    lane.health = onActivity(lane.health, this.#deps.now());
     this.#record(lane, { role: "user", text: images.length ? `${text}\n[attached ${images.length} image${images.length === 1 ? "" : "s"}]` : text });
     this.#setStatus(lane, "working");
     try {
@@ -332,6 +403,7 @@ export class FleetLaneManager {
       else { this.#setStatus(lane, "error"); this.#emit(lane, { type: "error", message: why }); }
     } finally {
       lane.busy = false;
+      lane.openCalls.clear();
       lane.sinks.delete(sink);
     }
   }
@@ -463,6 +535,46 @@ export class FleetLaneManager {
     return { ok: true };
   }
 
+  /** P-FLEET.L10: DISMISS a lane - stop its child if alive, then forget it entirely. `stop` only parks a
+   *  lane in the `stopped` state so its transcript stays reviewable and Respawn can revive it in place;
+   *  nothing removed it from the map, so a finished lane sat in the grid until the whole app restarted.
+   *
+   *  FAIL-CLOSED ON A LIVE TURN: a busy lane is REFUSED, not force-killed. One click must never be able
+   *  to destroy work in flight, which is why dismissal is deliberately a two-step gesture in the UI
+   *  (stop, then dismiss). `force` exists for the caller that has already stopped it and just wants the
+   *  row gone; it still cancels cleanly rather than yanking the process.
+   *
+   *  Removal loses only the IN-MEMORY replay transcript. The lane's omp session log stays on disk and its
+   *  spawn line stays in the durable ledger, so the timeline can still label and open it (P-FLEET.L5:
+   *  review is an INDEX over files omp already persists, never a second recording). That is the whole
+   *  reason forgetting a lane is a safe thing to offer.
+   *
+   *  Detaching the composer first is not a nicety: leaving a promoted lane removed would strand the main
+   *  composer pointed at a lane id that no longer resolves, and every later prompt would fail with
+   *  "unknown lane" instead of going somewhere sensible. */
+  remove(laneId: string, force = false): { ok: boolean; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: true }; // already gone: a double click is not an error
+    if (lane.busy && !force) return { ok: false, reason: "lane is mid-turn - stop it first, then dismiss it" };
+    if (lane.promoted) this.#setPromoted(lane, false);
+    lane.pending?.resolve(false); // an open ask dies as a DENY, never dangles
+    if (lane.busy && lane.sessionId) { try { lane.client.notify("session/cancel", { sessionId: lane.sessionId }); } catch { /* dead */ } }
+    try { lane.client.stop(); } catch { /* already dead */ }
+    // Tell every watcher the lane is gone BEFORE the sinks are dropped, so a live dashboard settles its
+    // card instead of waiting forever on a stream that will never produce another event.
+    this.#setStatus(lane, "stopped");
+    this.#emit(lane, { type: "done" });
+    lane.queue.length = 0;
+    lane.transcript.length = 0;
+    lane.openCalls.clear();
+    lane.sinks.clear();
+    // Release this lane from every persistent observer's bookkeeping, or observe()'s disposer would keep
+    // a per-lane wrapper for a lane that no longer exists and leak one entry per dismissal.
+    for (const obs of this.#observers) obs.sinks.delete(lane.id);
+    this.#lanes.delete(lane.id);
+    return { ok: true };
+  }
+
   /** Shutdown path: deny open asks, cancel live turns, stop every child, stop sampling. */
   stopAll(): void {
     for (const lane of this.#lanes.values()) {
@@ -527,6 +639,119 @@ export class FleetLaneManager {
   laneTranscript(laneId: string): LaneTurnRecord[] {
     const lane = this.#lanes.get(laneId);
     return lane ? lane.transcript.map((t) => ({ role: t.role, text: t.text })) : [];
+  }
+
+  // -- P-FLEET.L8: attach the MAIN composer to a lane, and release it ---------------------------------
+
+  /** Attach the main composer to this lane. The lane's omp child, ACP session, cwd, and model are all
+   *  untouched: this only marks WHICH lane the composer is driving, so promotion works mid-turn and
+   *  demotion is instant. Moving the session instead would mean killing and re-handshaking a child that
+   *  is in the middle of a tool call, which is the one thing the user explicitly asked to be able to do
+   *  without losing the work.
+   *
+   *  Exactly one lane holds promotion; promoting a second demotes the first, because the composer has
+   *  one prompt box and two attached lanes would silently send to whichever answered last.
+   *
+   *  Returns the lane view plus the transcript to seed the composer thread with, so the caller does not
+   *  have to make a second round trip to render history. */
+  promote(laneId: string): { ok: boolean; lane?: LaneView; transcript?: LaneTurnRecord[]; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (lane.status === "stopped") return { ok: false, reason: "lane is stopped - respawn it before promoting" };
+    for (const other of this.#lanes.values()) if (other !== lane && other.promoted) this.#setPromoted(other, false);
+    this.#setPromoted(lane, true);
+    return { ok: true, lane: this.#view(lane), transcript: this.laneTranscript(laneId) };
+  }
+
+  /** Release the composer back to the master session. Idempotent: demoting a lane that is not promoted
+   *  is a quiet no-op, because the button can be clicked twice and a stale click is not an error. */
+  demote(laneId?: string): { ok: boolean; lane?: LaneView } {
+    const lane = laneId ? this.#lanes.get(laneId) : [...this.#lanes.values()].find((l) => l.promoted);
+    if (!lane) return { ok: true };
+    if (lane.promoted) this.#setPromoted(lane, false);
+    return { ok: true, lane: this.#view(lane) };
+  }
+
+  /** The lane the composer is attached to, if any. */
+  promotedLane(): LaneView | null {
+    const lane = [...this.#lanes.values()].find((l) => l.promoted);
+    return lane ? this.#view(lane) : null;
+  }
+
+  #setPromoted(lane: Lane, on: boolean): void {
+    lane.promoted = on;
+    // The ledger line is the provenance: without it, a stretch of this session's history driven from the
+    // main composer is indistinguishable from lane work.
+    if (lane.sessionId) {
+      try {
+        this.#deps.recordLaneSession?.({
+          at: this.#deps.now(), laneId: lane.id, name: lane.name, cwd: lane.cwd, sessionId: lane.sessionId,
+          event: on ? "promote" : "demote", model: lane.model, note: `${lane.turns} turn${lane.turns === 1 ? "" : "s"} carried`,
+        });
+      } catch { /* a broken ledger never blocks the UI */ }
+    }
+    this.#emit(lane, { type: "status", status: lane.status });
+  }
+
+  // -- P-HEALTH.1: the harness watches its own lanes ---------------------------------------------------
+
+  /** Run the stall ladder over every lane and act. Called on the caller's cadence (dev.ts drives it from
+   *  the status poll), so this method holds no timer of its own and stays testable with an injected clock.
+   *
+   *  What it will NOT do, restated here because it is the load-bearing refusal: it never cancels or
+   *  respawns a lane that has an open tool call. A ten-minute build is legitimate work, and ADR-0263
+   *  removed the wall-clock cutoff exactly because it killed those turns. healthVerdict enforces that;
+   *  this method just carries out whatever the pure verdict authorizes. */
+  async healthTick(): Promise<{ laneId: string; action: "probe" | "recover"; reason: string }[]> {
+    const now = this.#deps.now();
+    const acted: { laneId: string; action: "probe" | "recover"; reason: string }[] = [];
+    for (const lane of this.#lanes.values()) {
+      if (lane.status === "stopped") continue;
+      const v = healthVerdict({
+        busy: lane.busy, dead: lane.client.isDead, lastActivityAt: lane.lastActivityAt, now,
+        openCalls: lane.openCalls.size, episode: lane.health,
+      });
+      if (v.action !== "probe" && v.action !== "recover") continue;
+      lane.lastHealth = { action: v.action, reason: v.reason, at: now };
+      this.#emit(lane, { type: "health", action: v.action, reason: v.reason });
+      if (lane.sessionId) {
+        try { this.#deps.recordLaneSession?.({ at: now, laneId: lane.id, name: lane.name, cwd: lane.cwd, sessionId: lane.sessionId, event: v.action, model: lane.model, note: v.reason }); }
+        catch { /* a broken ledger never blocks recovery */ }
+      }
+      if (v.action === "probe") {
+        lane.health = onProbe(lane.health, now);
+        // The probe is an OPERATOR note on the existing interject path, not a prompt: the lane already
+        // has a turn in flight, and a second session/prompt on one session would cross collectors.
+        try { this.#deps.interject?.(lane.id, HEALTH_PROBE_NOTE); } catch { /* a failed note is not fatal */ }
+      } else {
+        lane.health = onRecover(lane.health, now);
+        try { await this.cancel(lane.id); } catch { /* the cancel is best-effort; the respawn is the fix */ }
+        try { await this.#recover(lane); } catch { /* #recover reports through lane status */ }
+      }
+      acted.push({ laneId: lane.id, action: v.action, reason: v.reason });
+    }
+    return acted;
+  }
+
+  /** P-HEALTH.1: what the ladder currently thinks of each lane, for the card's health chip. Read-only:
+   *  it takes no action and mutates nothing, so the UI can poll it freely.
+   *
+   *  A STOPPED lane short-circuits to `ok` rather than reporting the raw verdict. healthTick skips
+   *  stopped lanes on purpose (the user stopped it; the harness does not overrule a human), and a row
+   *  that said "recovering" about a lane nothing will touch would be the UI lying about what happens
+   *  next. The report must describe the action that will ACTUALLY be taken, not the ladder in isolation. */
+  healthReport(): { laneId: string; action: string; silentMs: number; reason: string; openCalls: PendingView[] }[] {
+    const now = this.#deps.now();
+    return [...this.#lanes.values()].map((lane) => {
+      if (lane.status === "stopped") {
+        return { laneId: lane.id, action: "ok", silentMs: 0, reason: "You stopped this lane, so the harness leaves it alone. Respawn it to continue.", openCalls: [] };
+      }
+      const v = healthVerdict({
+        busy: lane.busy, dead: lane.client.isDead, lastActivityAt: lane.lastActivityAt, now,
+        openCalls: lane.openCalls.size, episode: lane.health,
+      });
+      return { laneId: lane.id, action: v.action, silentMs: v.silentMs, reason: v.reason, openCalls: pendingSnapshot(lane.openCalls, now) };
+    });
   }
 
   // ── internals ─────────────────────────────────────────────────────────────────────────────────────
@@ -666,6 +891,10 @@ export class FleetLaneManager {
       if (method !== "session/update") return;
       const u = params?.update ?? params;
       lane.lastActivityAt = this.#deps.now();
+      // P-HEALTH.1: real traffic ends the stall episode and restores the probe/recover budget. Doing this
+      // on EVERY update (not just tokens) is deliberate: a turn that only makes tool calls for ten
+      // minutes is alive, and the harness must not treat it as silent.
+      lane.health = onActivity(lane.health, lane.lastActivityAt);
       switch (u?.sessionUpdate) {
         case "agent_message_chunk":
           if (u.content?.type === "text") {
@@ -680,14 +909,29 @@ export class FleetLaneManager {
         case "tool_call":
         case "tool_call_update": {
           const title = String(u.title ?? "");
-          if (u.sessionUpdate === "tool_call" && title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
+          if (u.sessionUpdate === "tool_call") {
+            if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
+            trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
+          } else {
+            settleToolCall(lane.openCalls, u); // a terminal status closes it and frees the health ladder
+          }
           // P-FLEET.L3 (mirrors P-CHAT.1): the authored code rides the CALL's rawInput - a write's
           // `content`, an edit's `edits[{old_text,new_text}]` joined into one before/after pair, or omp's
           // hashline patch in a single `input` string. Relative paths resolve against the LANE's cwd.
           const code = u.sessionUpdate === "tool_call" ? this.#toolCode(lane, u) : undefined;
-          this.#emit(lane, { type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: title, ...(code ? { code } : {}) });
+          // P-FLEET.L7: and the ARGUMENTS ride it too. Emitted only on the CALL (an update repeats the
+          // title with no rawInput), and only when there is no authored code, since `code` is the richer
+          // view of the same bytes and showing both would just duplicate a diff under its own patch.
+          const input = u.sessionUpdate === "tool_call" && !code ? this.#toolInput(u) : undefined;
+          this.#emit(lane, { type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: title, ...(code ? { code } : {}), ...(input ? { input } : {}) });
           break;
         }
+        // P-FLEET.L7: omp reports CONTEXT fill, the window, and cost. It does NOT report per-turn output
+        // tokens on this path, so the lane forwards exactly the three measured figures and invents
+        // nothing; the renderer labels its own output estimate as an estimate.
+        case "usage_update":
+          this.#emit(lane, { type: "usage", used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) });
+          break;
       }
     };
     lane.client.onRequest = async (method, params) => {
@@ -749,6 +993,43 @@ export class FleetLaneManager {
     return undefined;
   }
 
+  /** P-FLEET.L7: "the command used" for a call that authored no code. A bash call's whole value is its
+   *  `command`, a read's is its `path`, a search's is its `pattern` plus `paths`: before L7 the card threw
+   *  all of it away and showed only omp's one-line title, so the lane chevron had nothing to open while
+   *  the master composer showed the real arguments.
+   *
+   *  The single-string fast paths come first so the common case reads as itself (a shell line, not a JSON
+   *  object wrapping a shell line). Everything else serializes, with the code-bearing keys STRIPPED: they
+   *  are already carried by #toolCode, and a 16KB file body pasted under a chevron labelled "command" is
+   *  noise. Serialization is defensive - a rawInput holding a cycle or a BigInt must never take down the
+   *  notify handler, which is the lane's only channel. */
+  #toolInput(u: { rawInput?: unknown; input?: unknown }): string | undefined {
+    const riRaw = u.rawInput ?? u.input;
+    if (typeof riRaw === "string") return riRaw.trim().slice(0, INPUT_CAP) || undefined;
+    if (!riRaw || typeof riRaw !== "object") return undefined;
+    const ri = riRaw as Record<string, unknown>;
+    for (const k of ["command", "cmd", "query", "pattern", "url", "expression"]) {
+      const v = ri[k];
+      if (typeof v === "string" && v.trim()) {
+        // A search carries its scope in a sibling key; the pattern alone is not the command.
+        const scope = Array.isArray(ri.paths) ? ri.paths.filter((p) => typeof p === "string").join(", ") : typeof ri.path === "string" ? ri.path : "";
+        return `${v.trim()}${scope ? `\n  in: ${scope}` : ""}`.slice(0, INPUT_CAP);
+      }
+    }
+    const stripped: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(ri)) {
+      if (k === "content" || k === "edits" || k === "old_text" || k === "new_text" || k === "oldText" || k === "newText") continue;
+      if (v === undefined || v === null || v === "") continue;
+      stripped[k] = v;
+    }
+    if (!Object.keys(stripped).length) return undefined;
+    try {
+      return JSON.stringify(stripped, (_k, v) => (typeof v === "bigint" ? String(v) : v), 2).slice(0, INPUT_CAP);
+    } catch {
+      return undefined; // an unserializable rawInput is simply not shown; it never breaks the stream
+    }
+  }
+
   #askUser(lane: Lane, summary: string, kind: string): Promise<boolean> {
     lane.pending?.resolve(false); // never two open asks - the older one dies as a deny
     const gate = Promise.withResolvers<boolean>();
@@ -800,6 +1081,9 @@ export class FleetLaneManager {
       queued: lane.queue.map((q) => ({ text: q.text.length > 140 ? `${q.text.slice(0, 140)}\u2026` : q.text, images: q.images.length })),
       autoApprove: lane.autoApprove,
       sessionAllow: [...lane.sessionAllow],
+      promoted: lane.promoted,
+      openCalls: lane.openCalls.size,
+      ...(lane.lastHealth ? { lastHealth: { ...lane.lastHealth } } : {}),
       ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary, kind: lane.pending.kind } } : {}),
     };
   }

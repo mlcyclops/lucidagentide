@@ -51,9 +51,16 @@ export function readLaneLedger(path: string = LANE_LEDGER_PATH()): LaneSessionRe
         "name" in o && typeof o.name === "string" &&
         "cwd" in o && typeof o.cwd === "string" &&
         "at" in o && typeof o.at === "number" &&
-        "event" in o && (o.event === "spawn" || o.event === "respawn")
+        // P-FLEET.L8 / P-HEALTH.1 widened this closed set. It stays a WHITELIST rather than a
+        // string check so a junk or future event name is dropped instead of silently labeling a
+        // session, and so the timeline's "is this a lane session" answer cannot drift.
+        "event" in o && (o.event === "spawn" || o.event === "respawn" || o.event === "promote" || o.event === "demote" || o.event === "probe" || o.event === "recover")
       ) {
-        out.push({ at: o.at, laneId: o.laneId, name: o.name, cwd: o.cwd, sessionId: o.sessionId, event: o.event });
+        out.push({
+          at: o.at, laneId: o.laneId, name: o.name, cwd: o.cwd, sessionId: o.sessionId, event: o.event,
+          ...("model" in o && typeof o.model === "string" ? { model: o.model } : {}),
+          ...("note" in o && typeof o.note === "string" ? { note: o.note } : {}),
+        });
       }
     } catch { /* torn line - skip, never throw */ }
   }

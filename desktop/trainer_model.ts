@@ -19,7 +19,7 @@
 // The distiller side holds the other half of the guarantee: lenient-but-validated parsing plus one
 // corrective retry, so a weaker model's prose-wrapped JSON still lands (harness/trainer/distiller.ts).
 
-import { cmpModelsNewestFirst, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel } from "./renderer/model_families.ts";
+import { capabilityTier, cmpModelsNewestFirst, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel } from "./renderer/model_families.ts";
 import type { ModelOption } from "./checker_model.ts";
 
 /** Non-chat routes the trainer can never run on (no structured chat completion). */
@@ -27,13 +27,15 @@ export function isNonChatRoute(value: string): boolean {
   return /(^|\/)rag$/i.test(value) || /embed|whisper|-tts|audio|image|vision-only/i.test(value);
 }
 
-/** Capability tier for distillation: 3 flagship, 2 workhorse (default), 1 fast/small. Mirrors the
- *  ADR-0250 ranking (`\bmini` so "gemini" never reads as a mini). */
+/** Capability tier for distillation: 3 flagship, 2 workhorse (default), 1 fast/small.
+ *
+ *  P-MODEL.2: this used to be a hand-copied third variant of the same regex heuristic, and it drifted:
+ *  it never learned GPT-6, so a user whose only configured provider offered gpt-6-astra had their
+ *  flagship ranked as a workhorse. It now DELEGATES to model_families.capabilityTier, the single source
+ *  of truth, and only re-bases 0..2 onto this module's 1..3 scale (kept because `tier` is part of the
+ *  returned TrainerModelPick and the UI displays it). */
 export function trainerTier(value: string): number {
-  const s = value.toLowerCase();
-  if (/\bmini|nano|lite|flash|haiku|oss|spark|-8b|-7b/.test(s)) return 1;
-  if (/opus|fable|mythos|ultra|-max\b|\bpro\b|-pro\b|gpt-5|gpt-o|grok/.test(s)) return 3;
-  return 2;
+  return capabilityTier(value) + 1;
 }
 
 /** A model the trainer can run on at all (any tier). */

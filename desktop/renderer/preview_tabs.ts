@@ -9,7 +9,15 @@
 //     victim), so a chatty fleet cannot grow the strip without bound;
 //   - the previewable-path test the fleet stream sink uses to decide a lane write belongs here at all,
 //     tolerant of the quoted / padded paths tool details tend to carry.
+// P-PREVIEW.12: that test used to be a THIRD copy of `/\.(html?|svg)$/i` (the others were in
+// preview_resolve.ts and preview_file.ts), which is how "the model cannot show me what it built" happened in
+// three places at once. It now delegates to previewKindOf, the one kind table in preview_resolve.ts. That
+// import is safe from the renderer program: renderer/app.ts already imports ../preview_resolve.ts (line 20),
+// so the module is in the browser bundle today and this adds no new bundle dependency.
 // Pure data in, new array out - no DOM, no I/O - so it is unit-testable without a renderer.
+
+import { previewKindOf, type PreviewKind } from "../preview_resolve.ts"; // P-PREVIEW.12: the ONE kind table
+export type { PreviewKind };
 
 export interface PreviewTab { id: string; label: string; path: string; kind: "yours" | "agent" | "lane" }
 
@@ -44,15 +52,51 @@ export function removeLaneTab(tabs: PreviewTab[], laneId: string): PreviewTab[] 
   return tabs.filter((t) => t.id !== id);
 }
 
-/** Does this path belong in the Preview panel? Case-insensitive .html / .htm / .svg, tolerant of the
- *  padding and quote pairs ("p", 'p', `p`) that tool-detail strings tend to wrap paths in. Paths with
- *  interior spaces are fine - only the OUTER padding and matched quote pairs are stripped. */
-export function isPreviewablePath(p: string | null | undefined): boolean {
-  if (!p) return false;
-  let s = String(p).trim();
+/** Strip the OUTER padding and matched quote pairs ("p", 'p', `p`) that tool-detail strings tend to wrap
+ *  paths in. Interior spaces are preserved: only the outside is trimmed. */
+function unquote(p: string): string {
+  let s = p.trim();
   while (
     s.length >= 2 &&
     ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")) || (s.startsWith("`") && s.endsWith("`")))
   ) s = s.slice(1, -1).trim();
-  return /\.(html?|svg)$/i.test(s);
+  return s;
+}
+
+/** P-PREVIEW.12: which PreviewKind a tab's path renders as, or null when the panel cannot show it. Delegates
+ *  to the ONE kind table (preview_resolve.ts) after unwrapping a quoted/padded path. */
+export function previewPathKind(p: string | null | undefined): PreviewKind | null {
+  return p ? previewKindOf(unquote(String(p))) : null;
+}
+
+/** Does this path belong in the Preview panel? True for every kind in the table (html/svg, images, markdown,
+ *  text-ish data, pdf), tolerant of quoted / padded paths. Kept as the boolean the fleet stream sink calls. */
+export function isPreviewablePath(p: string | null | undefined): boolean {
+  return previewPathKind(p) !== null;
+}
+
+/** P-PREVIEW.12: the icons.ts glyph name for each kind, so a tab strip can SHOW what a tab holds instead of
+ *  assuming every tab is a web page. An unknown name degrades to `info` inside icon(), so this can never
+ *  break a render. Consumed by app.ts (which owns the strip markup). */
+export const PREVIEW_KIND_ICON: Readonly<Record<PreviewKind, string>> = {
+  html: "layout",
+  svg: "pen",
+  image: "eye",
+  markdown: "report",
+  text: "textT",
+  pdf: "print",
+};
+
+/** A short human noun for a kind, for a tab tooltip / chip. INVARIANT 11: one word, so a tab label stays on
+ *  ONE line and ellipsizes rather than folding. */
+export function previewKindLabel(kind: PreviewKind | null): string {
+  switch (kind) {
+    case "html": return "page";
+    case "svg": return "vector";
+    case "image": return "image";
+    case "markdown": return "markdown";
+    case "text": return "text";
+    case "pdf": return "PDF";
+    default: return "file";
+  }
 }

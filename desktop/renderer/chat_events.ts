@@ -28,7 +28,12 @@ export interface FleetLaneStatus {
 export type ChatEvent =
   | { type: "token"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
+  // P-EVAL.4 (ADR-0318): `id` is omp's toolCallId; `name` is only omp's COARSE ACP kind ("other" for
+  // every custom and MCP tool), because the ACP tool_call update structurally carries no tool name.
+  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
+  // P-EVAL.4 (ADR-0318): the real tool name (and later its pass/fail) for a call already streamed as
+  // `tool`, self-reported from inside omp where the hook API does have it. Display + report metadata.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean }
   | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string } // P-IMG.1 (ADR-0208): a tool result produced image(s) → render inline + download + push-to-preview
   | { type: "preview-snapshot"; image: string; label?: string } // P-PREVIEW-PWA.1 (ADR-0237): a scaled-down capture of the host's Preview panel, broadcast to phone guests only (never fed to the local desktop transcript)
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task ids from the delegation rawInput (absent when all auto-generated)
@@ -64,4 +69,8 @@ export type ChatEvent =
   // `block` variant: `block` means the SECURITY GATE refused something, and a phone showing a lane crash in
   // the gate's clothing would teach the user to misread the one signal that must never be ambiguous. A lane
   // error is an ordinary failure, so it gets its own name and its own (red, but distinct) chip.
-  | { type: "lane-error"; message: string };
+  | { type: "lane-error"; message: string }
+  // P-HEALTH.1: the harness acted on this session BY ITSELF - it probed a silent turn with the canned
+  // status ask, or cancelled and resumed a wedged one in place. Surfaced so a self-heal is visible work
+  // rather than an unexplained gap, and so the token meter can count what the harness spent.
+  | { type: "health"; action: "probe" | "recover"; reason: string };

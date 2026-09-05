@@ -48,6 +48,8 @@ import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, r
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
 import { type PendingCall, type PendingView, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
+import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthAction, type HealthEpisode } from "./health_watch.ts"; // P-HEALTH.1
+import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
@@ -154,6 +156,12 @@ const INTERJECT_EXT = join(REPO, "harness", "omp", "interject_extension.ts");
 // lanes driving one shared window would fight over it (same rationale that keeps preview off lanes).
 // The extension self-skips when LUCID_BROWSER_URL is absent (no Electron main = no window executor).
 const BROWSER_EXT = join(REPO, "harness", "omp", "browser_extension.ts");
+// P-EVAL.4 (ADR-0318): reports the REAL tool name (+ pass/fail) of every tool call over a token'd
+// loopback URL, because omp's ACP tool_call update carries only a coarse `kind` and an intent-shadowed
+// title (ADR-0308) - so the chat's chips and the engineering report's per-tool breakdown had degraded to
+// "other". Observability only: it never blocks, so it is deliberately fail-SOFT (unlike the gate) and
+// self-skips when LUCID_TOOL_META_URL is absent.
+const TOOL_META_EXT = join(REPO, "harness", "omp", "tool_meta_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
@@ -265,7 +273,14 @@ export type ChatEvent =
   // P-CHAT.1 (ADR-0104): `code` carries the tool's authored content so the chat can show an inline,
   // expandable code/diff preview — a write's `content`, or an edit's `oldText`/`newText` (rendered as a
   // diff). Bounded server-side. Absent for tools with no authored code (read/search/bash command shown as detail).
-  | { type: "tool"; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } }
+  // P-EVAL.4 (ADR-0318): `id` is omp's toolCallId. It is the join key for the REAL tool name, which the
+  // ACP update itself cannot carry (`name` here is only the coarse ACP `kind`: "other" for every custom
+  // and MCP tool). The renderer keeps it on the chip so a later `tool-meta` event can relabel it, and
+  // sends it with the engineering report so the server can resolve real names.
+  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } }
+  // P-EVAL.4 (ADR-0318): the tool_meta extension reported the real name (and later the pass/fail) for a
+  // call already streamed as `tool`. Display + report metadata only, never a gate.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean }
   // P-IMG.1 (ADR-0208): a tool result carried image content (generated image, chart, rendered figure). The
   // images are validated + capped in extractToolImages before this event is emitted; the UI renders them
   // inline in the reply with a download + "send to preview" (for markup) affordance.
@@ -296,6 +311,10 @@ export type ChatEvent =
   // P-NORESP.1: the model produced NOTHING (no token/thinking/tool) without erroring — a silent failure,
   // typically an overloaded/oversubscribed gov model. The UI surfaces it + recommends a fallback model.
   | { type: "no-response"; model: string; stopReason?: string; reason?: string }
+  // P-HEALTH.1: the harness acted on this session BY ITSELF - it probed a silent turn with the canned
+  // status ask, or cancelled and resumed a wedged one in place. Kept in parity with the renderer's
+  // chat_events.ts union (the two are mirrored at this one boundary, like every other variant here).
+  | { type: "health"; action: "probe" | "recover"; reason: string }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
 // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in). Preview +
@@ -423,6 +442,27 @@ class Backend {
     this.emit({ type: "preview-activity", label: PREVIEW_ACTIVITY[kind] });
   }
 
+  /** P-EVAL.4 (ADR-0318): relay a self-reported tool name (and, on the result report, its pass/fail) into
+   *  the ACTIVE turn's event stream. Called by dev.ts /api/tool/meta, which the tool_meta omp extension
+   *  POSTs to.
+   *
+   *  WHY a relay and not a cache: omp's ACP tool_call update carries only a coarse `kind` ("other" for
+   *  every custom and MCP tool) plus a title that intent tracing rewrites to model prose (ADR-0308), so
+   *  the desktop cannot name a tool from the stream. The hook API inside omp can, so it tells us. Each
+   *  call reports twice (start carries the name, result adds the outcome) and the RENDERER merges them
+   *  per turn, keyed by toolCallId: that is the correct scope, because a per-turn map cannot leak a name
+   *  from an earlier turn onto a reused id and cannot grow without bound. Holding a second copy here
+   *  would buy nothing and would need its own eviction policy.
+   *
+   *  Returns false on an unusable report so the route can say so; the caller never acts on it, since a
+   *  dropped label costs a coarser report and nothing else. */
+  noteToolMeta(report: { id: string; name: string; ok?: boolean }): boolean {
+    const id = (report.id ?? "").trim(), name = (report.name ?? "").trim();
+    if (!id || !name) return false;
+    this.emit({ type: "tool-meta", id, name, ...(report.ok === undefined ? {} : { ok: report.ok }) });
+    return true;
+  }
+
   // P-ASKSAGE.1 (ADR-0059): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's
   // `[ASKSAGE_DIAG]` stderr lines. Surfaced (developer-mode only) in the Logs panel so the non-streamed
   // AskSage tool loop — and the "empty-response → gives up early" anomaly — is observable from a UI test.
@@ -540,13 +580,16 @@ class Backend {
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
+        // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
+        // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
+        const toolMetaArgs = existsSync(TOOL_META_EXT) ? ["-e", TOOL_META_EXT] : [];
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
         // requires isolation, in which case exec fail-closes (this.sandboxExecBlock) rather than runs
         // unisolated: the spawn still happens (chat/read tools stay useful) but every exec permission
         // is denied at the session/request_permission seam below.
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...interjectArgs, ...browserArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...interjectChildEnv("master") });
@@ -608,7 +651,10 @@ class Backend {
                 else if (typeof ri.oldText === "string" || typeof ri.newText === "string") code = { path: codePath, oldText: clip(ri.oldText) ?? "", newText: clip(ri.newText) ?? "" };
                 // omp's default `hashline` edit sends a patch in a single `input` string (kept for completeness).
                 else if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) code = { path: codePath, patch: clip(ri.input) };
-                this.emit({ type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}) });
+                // P-EVAL.4 (ADR-0318): carry omp's toolCallId so the real tool name (self-reported by the
+                // tool_meta extension, which is the only place it exists) can be joined onto this call.
+                const callId = typeof u.toolCallId === "string" ? u.toolCallId : "";
+                this.emit({ type: "tool", ...(callId ? { id: callId } : {}), name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}) });
                 // P-LOC.4 (ADR-0211): mirror this authored write/edit into the GUI-owned AI-LOC ledger the
                 // dashboard reads. The gate ALSO records it into agent_obs.duckdb (the BI system-of-record),
                 // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
@@ -1154,9 +1200,15 @@ class Backend {
     const arm = () => {
       clearTimeout(slow);
       silentSince = Date.now();
+      // P-HEALTH.1: the same real-activity signal the slow clock uses also feeds the self-watch, and
+      // resets the stall episode's probe/recover budget. Sharing one definition of "activity" is what
+      // keeps the visible notice and the automatic action from ever disagreeing about whether the
+      // session is alive.
+      this.healthActivityAt = silentSince;
+      this.healthEpisode = onActivity(this.healthEpisode, silentSince);
       if (this.pendingPerms > 0) return;
       const notify = () => {
-        try { onEvent({ type: "slow", waitedMs: Date.now() - silentSince, pending: pendingSnapshot(this.openCalls, Date.now()) }); } catch { /* stream gone \u2014 the turn continues server-side */ }
+        try { onEvent({ type: "slow", waitedMs: Date.now() - silentSince, pending: pendingSnapshot(this.openCalls, Date.now()) }); } catch { /* stream gone, the turn continues server-side */ }
         slow = setTimeout(notify, Backend.SLOW_NOTICE_MS);
       };
       slow = setTimeout(notify, Backend.SLOW_NOTICE_MS);
@@ -1688,6 +1740,99 @@ class Backend {
    *  cancelled stopReason, so the turn's `done` fires normally and the UI settles. No-op when idle. */
   cancel(): void {
     try { if (this.acp && this.sessionId) this.acp.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* best-effort */ }
+  }
+
+  // -- P-HEALTH.1: the harness watches its OWN master session ----------------------------------------
+  //
+  // The user's manual habit was: when a long run stalls, type "Status?"; if that does not wake it,
+  // restart the whole LUCID app. The restart is the expensive part, and it is never actually necessary:
+  // the wedged thing is the omp child, and the session log on disk lets a fresh child resume the same
+  // conversation. So this ladder automates the habit and recovers IN PLACE.
+  //
+  // The refusal that makes it safe: an OPEN TOOL CALL caps the verdict at `quiet`, so a turn that is
+  // genuinely running a long build is never probed (a note interleaved into a running call is noise) and
+  // never cancelled (ADR-0263 removed the wall-clock kill precisely because it destroyed that work).
+  // Only a DEAD child overrides, and that is evidence rather than a guess about how long work may take.
+  private healthEpisode: HealthEpisode = newEpisode(Date.now());
+  private healthActivityAt = Date.now();
+  private healthTimer: Timer | null = null;
+  private healthBusy = false;
+  /** The last self-action, surfaced in status so the user can see the harness handled it. */
+  lastHealth: { action: "probe" | "recover"; reason: string; at: number } | null = null;
+
+  /** Where the master session stands right now. Read-only: takes no action, mutates nothing. */
+  healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null } {
+    const now = Date.now();
+    const v = healthVerdict({
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
+      lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
+    });
+    return { action: v.action, silentMs: v.silentMs, reason: v.reason, pending: pendingSnapshot(this.openCalls, now), last: this.lastHealth };
+  }
+
+  /** Run the ladder once and act on it. Returns what it did, or null when nothing was warranted.
+   *  Serialized by `healthBusy`: a recover awaits a respawn plus a session/load, which takes longer than
+   *  the poll interval, and two overlapping recoveries would race two children onto one session id. */
+  async healthTick(): Promise<{ action: "probe" | "recover"; reason: string } | null> {
+    if (this.healthBusy) return null;
+    const now = Date.now();
+    const v = healthVerdict({
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
+      lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
+    });
+    if (v.action !== "probe" && v.action !== "recover") return null;
+    this.healthBusy = true;
+    try {
+      this.lastHealth = { action: v.action, reason: v.reason, at: now };
+      // Tell the live turn's stream first, so the pane shows the harness working instead of going quiet
+      // for another two minutes while a respawn happens behind it.
+      try { this.listener?.({ type: "health", action: v.action, reason: v.reason }); } catch { /* stream gone */ }
+      if (v.action === "probe") {
+        this.healthEpisode = onProbe(this.healthEpisode, now);
+        // An OPERATOR note on the interject path, not a prompt: the turn is still open, and a second
+        // session/prompt on one session would cross collectors (the ADR-0268 lesson).
+        try { addInterject("master", HEALTH_PROBE_NOTE); } catch { /* a failed note is not fatal */ }
+        return { action: "probe", reason: v.reason };
+      }
+      this.healthEpisode = onRecover(this.healthEpisode, now);
+      await this.healthRecover();
+      return { action: "recover", reason: v.reason };
+    } finally {
+      this.healthBusy = false;
+      this.healthActivityAt = Date.now(); // the action itself buys a fresh window before the next verdict
+    }
+  }
+
+  /** Recover the master session in place: cancel, drop the wedged child, then RESUME the same session id
+   *  so the conversation survives. This is the whole point of the increment - restart() alone would mint
+   *  a fresh session on the next prompt and silently throw the thread away, which is worse than the stall
+   *  it was fixing. A resume that fails leaves sessionId null, so the next prompt starts clean rather
+   *  than talking to a half-dead child (fail-closed: no session is better than a phantom one). */
+  private async healthRecover(): Promise<void> {
+    const resumeId = this.sessionId;
+    this.cancel();
+    this.restart();
+    if (!resumeId) return;
+    try {
+      await this.start();
+      await this.acp!.request("session/load", { sessionId: resumeId, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
+      this.sessionId = resumeId;
+    } catch {
+      this.sessionId = null;
+    }
+  }
+
+  /** Start/stop the self-watch ticker. dev.ts owns the lifecycle so tests can drive healthTick directly.
+   *  Unref'd: a watchdog must never be the reason the process refuses to exit. */
+  startHealthWatch(intervalMs = 30_000): void {
+    if (this.healthTimer) return;
+    this.healthTimer = setInterval(() => { void this.healthTick().catch(() => {}); }, intervalMs);
+    (this.healthTimer as { unref?: () => void }).unref?.();
+  }
+
+  stopHealthWatch(): void {
+    if (this.healthTimer) clearInterval(this.healthTimer);
+    this.healthTimer = null;
   }
 
   // Serializes utility completions so they never clobber a concurrent chat turn's listener.

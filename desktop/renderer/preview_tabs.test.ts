@@ -4,7 +4,11 @@
 // P-PREVIEW.10: unit tests for the pure lane-tab registry (upsert / cap-evict / remove / previewable test).
 
 import { describe, expect, test } from "bun:test";
-import { LANE_TAB_CAP, isPreviewablePath, laneTabId, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
+import {
+  LANE_TAB_CAP, PREVIEW_KIND_ICON, isPreviewablePath, laneTabId, previewKindLabel, previewPathKind,
+  removeLaneTab, upsertLaneTab, type PreviewTab,
+} from "./preview_tabs.ts";
+import { PREVIEW_KIND_EXT } from "../preview_resolve.ts";
 
 const lane = (n: number): PreviewTab[] => {
   let tabs: PreviewTab[] = [];
@@ -68,7 +72,7 @@ describe("removeLaneTab", () => {
   });
 });
 
-describe("isPreviewablePath", () => {
+describe("isPreviewablePath (P-PREVIEW.12: delegates to the ONE kind table)", () => {
   test("accepts .html / .htm / .svg case-insensitively", () => {
     expect(isPreviewablePath("index.html")).toBe(true);
     expect(isPreviewablePath("page.htm")).toBe(true);
@@ -94,5 +98,46 @@ describe("isPreviewablePath", () => {
     expect(isPreviewablePath("  spaced name.html  ")).toBe(true);
     expect(isPreviewablePath(' "wrapped.htm" ')).toBe(true);
     expect(isPreviewablePath('"app.js"')).toBe(false); // quotes stripped, still not previewable
+  });
+
+  // P-PREVIEW.12: a lane that writes a report, a payload, a table or a chart now earns a tab too. Before
+  // this, only html/svg did, which is why most of what a model produces could never reach the panel.
+  test("accepts every other kind in the table (report / data / chart / doc)", () => {
+    for (const p of ["REPORT.md", "notes.markdown", "data.json", "rows.csv", "rows.tsv", "run.log",
+                     "conf.yaml", "conf.yml", "feed.xml", "app.toml", "app.ini", "readme.txt",
+                     "chart.png", "photo.jpg", "photo.jpeg", "anim.gif", "pic.webp", "pic.avif",
+                     "old.bmp", "fav.ico", "spec.pdf"]) {
+      expect(isPreviewablePath(p)).toBe(true);
+    }
+  });
+
+  test("previewPathKind reports the KIND, so a tab can label/ice itself instead of assuming a web page", () => {
+    expect(previewPathKind("index.html")).toBe("html");
+    expect(previewPathKind("logo.svg")).toBe("svg");
+    expect(previewPathKind("chart.png")).toBe("image");
+    expect(previewPathKind("REPORT.md")).toBe("markdown");
+    expect(previewPathKind("rows.csv")).toBe("text");
+    expect(previewPathKind("spec.pdf")).toBe("pdf");
+    expect(previewPathKind("app.ts")).toBeNull();
+    expect(previewPathKind(null)).toBeNull();
+    expect(previewPathKind("")).toBeNull();
+  });
+
+  test("previewPathKind unwraps a quoted / padded path before classifying", () => {
+    expect(previewPathKind('"C:\\my work\\chart.png"')).toBe("image");
+    expect(previewPathKind("  'notes.md'  ")).toBe("markdown");
+    expect(previewPathKind("`out/report.pdf`")).toBe("pdf");
+  });
+
+  // Guards the tab strip against a kind added to the table with no icon or noun to render it with.
+  test("every kind in the table has an icon name and a one-word label", () => {
+    for (const kind of Object.keys(PREVIEW_KIND_EXT) as Array<keyof typeof PREVIEW_KIND_ICON>) {
+      expect(typeof PREVIEW_KIND_ICON[kind]).toBe("string");
+      expect(PREVIEW_KIND_ICON[kind].length).toBeGreaterThan(0);
+      const label = previewKindLabel(kind);
+      expect(label).not.toContain(" "); // INVARIANT 11: a tab label stays on ONE line
+      expect(label.length).toBeGreaterThan(0);
+    }
+    expect(previewKindLabel(null)).toBe("file");
   });
 });

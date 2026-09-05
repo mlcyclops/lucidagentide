@@ -7,7 +7,7 @@
 // BOTH schema modes - a healthy typebox shim, or plain JSON-Schema literals when the shim is absent/broken.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import previewExtension, { normalizeToolPath, previewShotImage } from "./preview_extension.ts";
+import previewExtension, { PREVIEWABLE_EXTS, normalizeToolPath, previewShotImage } from "./preview_extension.ts";
 
 // Minimal TypeBox shim mirroring what omp injects as `pi.typebox`: Type.Object/String/Optional produce a
 // standard JSON-schema object, with Optional-wrapped props left OUT of `required` (like real TypeBox, which
@@ -68,7 +68,7 @@ describe("preview_extension (mock pi)", () => {
     const open = byName(tools, "preview_open");
     expect(open.parameters).toEqual({
       type: "object",
-      properties: { path: { type: "string", description: expect.stringContaining(".html/.svg") } },
+      properties: { path: { type: "string", description: expect.stringContaining("markdown") } },
       required: ["path"],
     });
     const inspect = byName(tools, "preview_inspect");
@@ -86,6 +86,23 @@ describe("preview_extension (mock pi)", () => {
     expect(r.content[0].text).toContain("game.html");
   });
 
+  // P-PREVIEW.12: THE bug this increment fixes. Every one of these used to come back isError with
+  // "is not a local .html/.svg file", so a model that wrote a report, a payload, a table, a chart or a PDF
+  // had no way at all to show it to the user.
+  test("execute accepts every previewable kind, not just .html/.svg (P-PREVIEW.12)", async () => {
+    const { pi, tools } = capture();
+    previewExtension(pi);
+    const open = byName(tools, "preview_open");
+    for (const p of ["/tmp/REPORT.md", "/tmp/notes.markdown", "/tmp/data.json", "/tmp/rows.csv",
+                     "/tmp/rows.tsv", "/tmp/run.log", "/tmp/conf.yaml", "/tmp/feed.xml", "/tmp/app.toml",
+                     "/tmp/app.ini", "/tmp/readme.txt", "/tmp/chart.png", "/tmp/photo.jpeg",
+                     "/tmp/anim.gif", "/tmp/pic.webp", "/tmp/pic.avif", "/tmp/old.bmp", "/tmp/fav.ico",
+                     "/tmp/spec.pdf", "C:/work/diagram.svg", "C:/work/page.htm"]) {
+      const r = await open.execute("id", { path: p });
+      expect(r.isError).toBeFalsy();
+    }
+  });
+
   test("execute accepts a QUOTED or padded path (agents sometimes wrap paths in quotes)", async () => {
     const { pi, tools } = capture();
     previewExtension(pi);
@@ -97,12 +114,25 @@ describe("preview_extension (mock pi)", () => {
     expect(sq.isError).toBeFalsy();
   });
 
-  test("execute rejects a non-local or non-previewable path (isError)", async () => {
+  test("execute rejects a non-local or non-previewable path (isError), and NAMES the kinds", async () => {
     const { pi, tools } = capture();
     previewExtension(pi);
-    expect((await tools[0].execute("id", { path: "src/index.ts" })).isError).toBe(true);   // not previewable
+    // Fail-closed is unchanged: a bad path is an ERROR, never a cheerful acknowledgement.
+    const bad = await tools[0].execute("id", { path: "src/index.ts" });
+    expect(bad.isError).toBe(true);
+    expect(bad.content[0].text).toContain("markdown"); // the refusal teaches what IS previewable
+    expect(bad.content[0].text).not.toContain("\u2014");
+    expect((await tools[0].execute("id", { path: "/tmp/app.ts" })).isError).toBe(true);     // not previewable
+    expect((await tools[0].execute("id", { path: "/tmp/bundle.js" })).isError).toBe(true);  // not previewable
+    expect((await tools[0].execute("id", { path: "/tmp/setup.exe" })).isError).toBe(true);  // not previewable
     expect((await tools[0].execute("id", { path: "game.html" })).isError).toBe(true);       // not absolute/local
     expect((await tools[0].execute("id", { path: "" })).isError).toBe(true);                // empty
+  });
+
+  test("every preview tool stays read-tier (opening a preview never trips the exec gate)", () => {
+    const { pi, tools } = capture();
+    previewExtension(pi);
+    for (const t of tools) expect(t.approval).toBe("read");
   });
 
   // The load-bearing safety property: registration can NEVER break omp launch.
@@ -244,5 +274,101 @@ describe("preview_open execute (P-PREVIEW.11): the tool reports itself to the de
     const r = await openTool().execute("id", { path: "https://example.com/app.html" });
     expect(r.isError).toBe(true);
     expect(fetched).toBe(false); // never ask the desktop to open something the gate already refused
+  });
+});
+
+// P-PREVIEW.12: the previewable-extension set has ONE authoritative definition, the kind table in
+// desktop/preview_resolve.ts. This file deliberately does NOT import it (see the comment on
+// PREVIEWABLE_EXTS: a top-level import of desktop code sits outside the try/catch that guarantees a
+// registration failure never breaks omp launch, and it would newly drag desktop modules into the harness
+// typecheck program). The mirror is pinned against the real table by desktop/preview_resolve.test.ts;
+// what THIS file owns is that the tool's gate is actually built from the mirror.
+describe("PREVIEWABLE_EXTS (P-PREVIEW.12): the omp-side mirror of the desktop kind table", () => {
+  test("no duplicates, all lowercase, no leading dots", () => {
+    expect(new Set(PREVIEWABLE_EXTS).size).toBe(PREVIEWABLE_EXTS.length);
+    for (const ext of PREVIEWABLE_EXTS) expect(ext).toBe(ext.toLowerCase().replace(/^\./, ""));
+  });
+  test("covers every kind the panel renders (pages, vector, images, reports, data, docs)", () => {
+    for (const ext of ["html", "htm", "svg", "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico",
+                       "md", "markdown", "txt", "json", "csv", "tsv", "log", "yml", "yaml", "xml",
+                       "toml", "ini", "pdf"]) {
+      expect(PREVIEWABLE_EXTS).toContain(ext);
+    }
+  });
+  test("the tool's gate is built FROM the list: every entry opens, everything else is refused", async () => {
+    const { pi, tools } = capture();
+    previewExtension(pi);
+    const open = byName(tools, "preview_open");
+    for (const ext of PREVIEWABLE_EXTS) {
+      expect((await open.execute("id", { path: `/tmp/x.${ext}` })).isError).toBeFalsy();
+    }
+    for (const ext of ["ts", "js", "css", "exe", "zip", "mp4", "woff2"]) {
+      expect((await open.execute("id", { path: `/tmp/x.${ext}` })).isError).toBe(true);
+    }
+  });
+});
+
+// P-PREVIEW.12: the feedback loop the tool never had. The preview frame allows no network, so a page that
+// pulls Chart.js off a CDN renders blank; the desktop reports what it refused as `blocked` on the
+// /api/preview/open response, and the tool MUST hand that to the model or it will write the same CDN
+// <script> next turn while the user stares at an empty panel.
+describe("preview_open execute (P-PREVIEW.12): surfaces the desktop's blocked-refs note", () => {
+  const realFetch = globalThis.fetch;
+  const realUrl = process.env.LUCID_PREVIEW_OPEN_URL;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realUrl === undefined) delete process.env.LUCID_PREVIEW_OPEN_URL;
+    else process.env.LUCID_PREVIEW_OPEN_URL = realUrl;
+  });
+  const openTool = () => { const { pi, tools } = capture(); previewExtension(pi); return byName(tools, "preview_open"); };
+  const NOTE = "The preview frame has no network access, so it blocked 1 remote script (first: https://cdn/x.js): inline that script or CSS directly into the file, or save the asset next to the file and reference it with a relative path.";
+  const respond = (payload: unknown) => {
+    globalThis.fetch = (async () => new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } })) as any;
+  };
+
+  test("a `blocked` note on the response is appended to the tool result the model reads", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    respond({ ok: true, data: { opened: true, blocked: NOTE } });
+    const r = await openTool().execute("id", { path: "/tmp/deck.html" });
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0].text).toContain("deck.html");
+    expect(r.content[0].text).toContain("no network access");
+    expect(r.content[0].text).toContain("https://cdn/x.js");
+    expect(r.content[0].text).toMatch(/relative path/);
+  });
+
+  test("a top-level `blocked` (no data wrapper) is accepted too", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    respond({ blocked: NOTE });
+    const r = await openTool().execute("id", { path: "/tmp/deck.html" });
+    expect(r.content[0].text).toContain("no network access");
+  });
+
+  test("no blocked refs means the ack is exactly as before (no noise on the happy path)", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    respond({ ok: true, data: { opened: true } });
+    const r = await openTool().execute("id", { path: "/tmp/deck.html" });
+    expect(r.content[0].text).toBe("Opening deck.html in the Preview panel for the user.");
+  });
+
+  test("an empty / non-string / absurd `blocked` is ignored or bounded (never trusted verbatim)", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    respond({ ok: true, data: { blocked: "   " } });
+    expect((await openTool().execute("id", { path: "/tmp/a.html" })).content[0].text)
+      .toBe("Opening a.html in the Preview panel for the user.");
+    respond({ ok: true, data: { blocked: { not: "a string" } } });
+    expect((await openTool().execute("id", { path: "/tmp/a.html" })).content[0].text)
+      .toBe("Opening a.html in the Preview panel for the user.");
+    respond({ ok: true, data: { blocked: "z".repeat(5000) } });
+    const long = await openTool().execute("id", { path: "/tmp/a.html" });
+    expect(long.content[0].text.length).toBeLessThan(900); // bounded: a rogue response can't flood the turn
+  });
+
+  test("a non-JSON response never fails the tool (the ack still lands)", async () => {
+    process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";
+    globalThis.fetch = (async () => new Response("<html>nope</html>", { headers: { "content-type": "text/html" } })) as any;
+    const r = await openTool().execute("id", { path: "/tmp/deck.html" });
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0].text).toContain("deck.html");
   });
 });

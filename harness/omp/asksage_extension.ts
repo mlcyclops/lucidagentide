@@ -44,6 +44,10 @@ interface ModelSpec {
 // the o-series are `gpt-o3` / `gpt-o4-mini`, not `o3`). Cost is cosmetic here
 // (AskSage bills via a monthly token quota, surfaced separately in the desktop).
 const OPENAI_MODELS: ModelSpec[] = [
+  // P-MODEL.2: GPT-6 (announced 2026-09-03, 1M ctx) leads the list as the newest OpenAI flagship. Added
+  // from the vendor announcement, NOT yet confirmed against a live CIV `/openai/v1/models` + `/query` the
+  // way the ids below were: if the gateway rejects it, drop the entry (ADR-0215's live fetch is the fix).
+  { id: "gpt-6-astra", name: "GPT-6 Astra · AskSage Gov", reasoning: true, contextWindow: 1_000_000, maxTokens: 32_000 },
   // GPT-5.6 family (added 2026-07). The gateway exposes THREE tier codenames, confirmed live against
   // `/openai/v1/models` + a real `/query` (each replied 200): `gpt-5.6-luna` (mid tier — the RAG default),
   // `gpt-5.6-sol`, `gpt-5.6-terra`. There is no bare `gpt-5.6` id. Recheck the set each release (ADR-0215
@@ -71,6 +75,11 @@ const OPENAI_MODELS: ModelSpec[] = [
 // 4.5 Haiku, and Fable 5 gov ids were confirmed live against /get-models + a real /query
 // (each returned 200 with a reply). Newest first (the picker sorts, but this keeps it readable).
 const ANTHROPIC_MODELS: ModelSpec[] = [
+  // P-MODEL.2: Fable 5.1 + Mythos 5.1 (Anthropic, ~2026-09-01), newest first. These are the vendor ids;
+  // the gateway may yet expose them under the `google-claude-` prefix it uses for Fable 5, so recheck
+  // against a live /get-models before treating a 400 here as anything but a naming mismatch.
+  { id: "claude-fable-5-1", name: "Claude Fable 5.1 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
+  { id: "claude-mythos-5-1", name: "Claude Mythos 5.1 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
   { id: "google-claude-sonnet-5", name: "Claude Sonnet 5 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
   { id: "google-claude-fable-5", name: "Claude Fable 5 · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 },
   { id: "google-claude-48-opus", name: "Claude 4.8 Opus · AskSage Gov", reasoning: false, contextWindow: 200_000, maxTokens: 32_000 },

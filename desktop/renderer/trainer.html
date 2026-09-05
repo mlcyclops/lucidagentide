@@ -10,35 +10,217 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Lucid Trainer</title>
 <style>
-:root{
-  --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b;
-  --line:#252a3a; --line-soft:#1a1e2a; --line-strong:#323a4f;
+/* THEMING (P-THEME.1). This file is a SAME-ORIGIN IFRAME with its own document, and it does
+   NOT load styles.css - it must not. Its class names (.brand .panel .chip .stage .spacer)
+   collide with the app's, so linking the 5k-line app sheet would restyle the whole trainer.
+   So the token contract is DUPLICATED here, deliberately, and kept to the 36 colours this
+   surface actually uses. Same rules as styles.css: the bare `:root` IS `lucid-dark` (so a
+   failure still paints today's trainer), one `[data-theme]` block per app theme id, alpha
+   variants come from the `--*-rgb` triplets, and derived recipes live once at the bottom.
+   The <head> script mirrors the PARENT document's [data-theme] before first paint, so a theme
+   switch in Settings reaches this frame with no plumbing from app.ts. Ids must stay in step
+   with desktop/renderer/theme.ts. */
+
+/* @palette lucid-dark */
+:root, :root[data-theme="lucid-dark"]{
+  /* surfaces + hairlines */
+  --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --line:#252a3a;
+  --line-soft:#1a1e2a; --line-strong:#323a4f;
+  /* text ramp */
   --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90; --txt-4:#525a70;
-  --accent:#c64bd6; --accent-2:#e07bf0; --accent-dim:rgba(198,75,214,.14);
-  --cyan:#46c8dc; --cyan-dim:rgba(70,200,220,.14);
-  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
-  --green-dim:rgba(70,210,126,.14); --red-dim:rgba(239,95,95,.14);
+  /* brand + state hues */
+  --accent:#c64bd6; --accent-2:#e07bf0; --accent-deep:#7d39c4; --cyan:#46c8dc;
+  --cyan-2:#7ee7ff; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#150018; --btn-text-cyan:#00181c; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:198 75 214; --cyan-rgb:70 200 220; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:6 7 11; --bg-0-rgb:10 11 15; --bg-1-rgb:15 17 23;
+  --bg-2-rgb:21 24 35;
+  color-scheme:dark;
+}
+
+/* @palette lucid-light */
+:root[data-theme="lucid-light"]{
+  /* surfaces + hairlines */
+  --bg-0:#f6f7fb; --bg-1:#ffffff; --bg-2:#f1f2f8; --bg-3:#e8eaf2; --line:#d7dae6;
+  --line-soft:#e7e9f2; --line-strong:#b8bfd2;
+  /* text ramp */
+  --txt:#14161f; --txt-2:#464c60; --txt-3:#697084; --txt-4:#949aab;
+  /* brand + state hues */
+  --accent:#a324b4; --accent-2:#c332d6; --accent-deep:#7a1b8a; --cyan:#0f7d92;
+  --cyan-2:#0d6f85; --green:#1c7f45; --amber:#8a5a04; --red:#c02626; --blue:#2b52c8;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#ffffff; --btn-text-cyan:#ffffff; --state-correct-text:#ffffff;
+  --state-wrong-text:#ffffff;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:163 36 180; --cyan-rgb:15 125 146; --green-rgb:28 127 69; --amber-rgb:138 90 4;
+  --red-rgb:192 38 38; --blue-rgb:43 82 200; --tint-rgb:255 255 255; --sh-rgb:60 66 92;
+  --scrim-rgb:30 32 48; --bg-0-rgb:246 247 251; --bg-1-rgb:255 255 255;
+  --bg-2-rgb:241 242 248;
+  color-scheme:light;
+}
+
+/* @palette midnight */
+:root[data-theme="midnight"]{
+  /* surfaces + hairlines */
+  --bg-0:#070a18; --bg-1:#0b0f22; --bg-2:#111731; --bg-3:#182042; --line:#222d5c;
+  --line-soft:#161d3c; --line-strong:#33417a;
+  /* text ramp */
+  --txt:#e9ecff; --txt-2:#a8b0d8; --txt-3:#6f78a6; --txt-4:#4e5680;
+  /* brand + state hues */
+  --accent:#a86cf0; --accent-2:#c194ff; --accent-deep:#6d3ec4; --cyan:#5bd6f0;
+  --cyan-2:#8ae8ff; --green:#46d29a; --amber:#e8bc50; --red:#f06a80; --blue:#6b8afd;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#0a0718; --btn-text-cyan:#04121a; --state-correct-text:#001a10;
+  --state-wrong-text:#1a0008;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:168 108 240; --cyan-rgb:91 214 240; --green-rgb:70 210 154;
+  --amber-rgb:232 188 80; --red-rgb:240 106 128; --blue-rgb:107 138 253;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:6 8 22; --bg-0-rgb:7 10 24;
+  --bg-1-rgb:11 15 34; --bg-2-rgb:17 23 49;
+  color-scheme:dark;
+}
+
+/* @palette slate */
+:root[data-theme="slate"]{
+  /* surfaces + hairlines */
+  --bg-0:#101114; --bg-1:#16181c; --bg-2:#1d2025; --bg-3:#252930; --line:#2b2f37;
+  --line-soft:#1e2126; --line-strong:#3c424c;
+  /* text ramp */
+  --txt:#e8eaee; --txt-2:#a8adb8; --txt-3:#7b8290; --txt-4:#575c66;
+  /* brand + state hues */
+  --accent:#a878b8; --accent-2:#c199cf; --accent-deep:#7d5589; --cyan:#78b8c4;
+  --cyan-2:#a0d8e2; --green:#74b892; --amber:#c8a86a; --red:#d68a8a; --blue:#8098c4;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#16181c; --btn-text-cyan:#101216; --state-correct-text:#0c1a12;
+  --state-wrong-text:#1a0e0e;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:168 120 184; --cyan-rgb:120 184 196; --green-rgb:116 184 146;
+  --amber-rgb:200 168 106; --red-rgb:214 138 138; --blue-rgb:128 152 196;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:8 9 11; --bg-0-rgb:16 17 20;
+  --bg-1-rgb:22 24 28; --bg-2-rgb:29 32 37;
+  color-scheme:dark;
+}
+
+/* @palette ember */
+:root[data-theme="ember"]{
+  /* surfaces + hairlines */
+  --bg-0:#120c0a; --bg-1:#19100c; --bg-2:#221610; --bg-3:#2c1d15; --line:#3a2419;
+  --line-soft:#241710; --line-strong:#503425;
+  /* text ramp */
+  --txt:#f8ece4; --txt-2:#d0b8a6; --txt-3:#9c8272; --txt-4:#75604f;
+  /* brand + state hues */
+  --accent:#f2653a; --accent-2:#ff9166; --accent-deep:#b8401f; --cyan:#5fbfb4;
+  --cyan-2:#8ad8ce; --green:#7ac46a; --amber:#f0b53c; --red:#ef5f5f; --blue:#7f9fe0;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#1a0a04; --btn-text-cyan:#041412; --state-correct-text:#04140a;
+  --state-wrong-text:#180400;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:242 101 58; --cyan-rgb:95 191 180; --green-rgb:122 196 106;
+  --amber-rgb:240 181 60; --red-rgb:239 95 95; --blue-rgb:127 159 224; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:12 6 4; --bg-0-rgb:18 12 10; --bg-1-rgb:25 16 12;
+  --bg-2-rgb:34 22 16;
+  color-scheme:dark;
+}
+
+/* @palette paper */
+:root[data-theme="paper"]{
+  /* surfaces + hairlines */
+  --bg-0:#f6f0e4; --bg-1:#fffaf0; --bg-2:#f1e9d9; --bg-3:#e8dfcb; --line:#d9cdb0;
+  --line-soft:#e9e0cc; --line-strong:#bdac8a;
+  /* text ramp */
+  --txt:#2b2418; --txt-2:#584a35; --txt-3:#7a6a52; --txt-4:#9c8c72;
+  /* brand + state hues */
+  --accent:#9c2b6d; --accent-2:#b8367f; --accent-deep:#75204f; --cyan:#0d6f6a;
+  --cyan-2:#0b6058; --green:#2b6b2b; --amber:#8a5a04; --red:#b52d20; --blue:#2f4f9e;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#fffaf0; --btn-text-cyan:#fffaf0; --state-correct-text:#fffaf0;
+  --state-wrong-text:#fffaf0;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:156 43 109; --cyan-rgb:13 111 106; --green-rgb:43 107 43; --amber-rgb:138 90 4;
+  --red-rgb:181 45 32; --blue-rgb:47 79 158; --tint-rgb:255 255 255; --sh-rgb:90 74 50;
+  --scrim-rgb:48 38 24; --bg-0-rgb:246 240 228; --bg-1-rgb:255 250 240;
+  --bg-2-rgb:241 233 217;
+  color-scheme:light;
+}
+
+/* @palette contrast */
+:root[data-theme="contrast"]{
+  /* surfaces + hairlines */
+  --bg-0:#000000; --bg-1:#000000; --bg-2:#0b0d12; --bg-3:#16191f; --line:#5a6070;
+  --line-soft:#3a3f4a; --line-strong:#8a90a0;
+  /* text ramp */
+  --txt:#ffffff; --txt-2:#e4e8f2; --txt-3:#b8c0d0; --txt-4:#949cae;
+  /* brand + state hues */
+  --accent:#ff6ee8; --accent-2:#ff9cf0; --accent-deep:#d63cc0; --cyan:#5ff0ff;
+  --cyan-2:#9cf8ff; --green:#3dff8f; --amber:#ffd23d; --red:#ff8080; --blue:#8ab4ff;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#000000; --btn-text-cyan:#000000; --state-correct-text:#000000;
+  --state-wrong-text:#000000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:255 110 232; --cyan-rgb:95 240 255; --green-rgb:61 255 143;
+  --amber-rgb:255 210 61; --red-rgb:255 128 128; --blue-rgb:138 180 255;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:0 0 0; --bg-0-rgb:0 0 0;
+  --bg-1-rgb:0 0 0; --bg-2-rgb:11 13 18;
+  color-scheme:dark;
+}
+
+/* @palette-osfallback lucid-light - first-paint guard, see styles.css for the full
+   reasoning. Identical to the lucid-light block above; theme.test.ts pins that. */
+@media (prefers-color-scheme: light){
+  :root:not([data-theme]){
+    /* surfaces + hairlines */
+    --bg-0:#f6f7fb; --bg-1:#ffffff; --bg-2:#f1f2f8; --bg-3:#e8eaf2; --line:#d7dae6;
+    --line-soft:#e7e9f2; --line-strong:#b8bfd2;
+    /* text ramp */
+    --txt:#14161f; --txt-2:#464c60; --txt-3:#697084; --txt-4:#949aab;
+    /* brand + state hues */
+    --accent:#a324b4; --accent-2:#c332d6; --accent-deep:#7a1b8a; --cyan:#0f7d92;
+    --cyan-2:#0d6f85; --green:#1c7f45; --amber:#8a5a04; --red:#c02626; --blue:#2b52c8;
+    /* ink ON a saturated gradient fill (see the note above) */
+    --btn-text-dark:#ffffff; --btn-text-cyan:#ffffff; --state-correct-text:#ffffff;
+    --state-wrong-text:#ffffff;
+    /* channel triplets: the only way to build an alpha variant of a themed colour */
+    --accent-rgb:163 36 180; --cyan-rgb:15 125 146; --green-rgb:28 127 69;
+    --amber-rgb:138 90 4; --red-rgb:192 38 38; --blue-rgb:43 82 200; --tint-rgb:255 255 255;
+    --sh-rgb:60 66 92; --scrim-rgb:30 32 48; --bg-0-rgb:246 247 251; --bg-1-rgb:255 255 255;
+    --bg-2-rgb:241 242 248;
+    color-scheme:light;
+  }
+}
+
+/* @derived - built FROM the palette; one definition for every theme. */
+:root{
+  --accent-dim:rgb(var(--accent-rgb) / .14); --cyan-dim:rgb(var(--cyan-rgb) / .14);
+  --green-dim:rgb(var(--green-rgb) / .14); --red-dim:rgb(var(--red-rgb) / .14);
+  --shadow:0 18px 50px -18px rgb(var(--sh-rgb) / .7),0 2px 10px rgb(var(--sh-rgb) / .4);
+  --emboss:inset 0 1px 0 rgb(var(--tint-rgb) / .05);
+}
+
+/* @shape - theme-invariant geometry, motion, type. */
+:root{
   --r-lg:12px; --r-md:9px; --r-sm:6px;
   --t:180ms; --spring:cubic-bezier(.34,1.56,.64,1); --ease:cubic-bezier(.2,.8,.2,1); --ease-out:cubic-bezier(.16,1,.3,1);
-  --btn-text-dark:#150018; --btn-text-cyan:#00181c;
-  --state-correct-text:#00180c; --state-wrong-text:#180000;
   --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
-  --shadow:0 18px 50px -18px rgba(0,0,0,.7),0 2px 10px rgba(0,0,0,.4);
-  --emboss:inset 0 1px 0 rgba(255,255,255,.05);
 }
+
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
   margin:0;font-family:var(--font);color:var(--txt);overflow:hidden;
   background:
-    radial-gradient(90% 60% at 12% -8%,rgba(198,75,214,.16),transparent 60%),
-    radial-gradient(70% 55% at 108% 8%,rgba(70,200,220,.12),transparent 55%),
-    radial-gradient(120% 100% at 50% 120%,rgba(94,141,242,.08),transparent 60%),
+    radial-gradient(90% 60% at 12% -8%,rgb(var(--accent-rgb) / .16),transparent 60%),
+    radial-gradient(70% 55% at 108% 8%,rgb(var(--cyan-rgb) / .12),transparent 55%),
+    radial-gradient(120% 100% at 50% 120%,rgb(var(--blue-rgb) / .08),transparent 60%),
     var(--bg-0);
 }
 body::before{ /* faint grid */
   content:"";position:fixed;inset:0;pointer-events:none;opacity:.35;
-  background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-image:linear-gradient(rgb(var(--tint-rgb) / .025) 1px,transparent 1px),linear-gradient(90deg,rgb(var(--tint-rgb) / .025) 1px,transparent 1px);
+  /* P-THEME.1 theme-exempt: #000 below is MASK ALPHA (opaque=keep), not a rendered colour. */
   background-size:44px 44px;mask-image:radial-gradient(120% 100% at 50% 0%,#000,transparent 75%);
 }
 .wrap{position:relative;height:100vh;display:flex;flex-direction:column;padding:22px 26px 20px;gap:18px;max-width:1180px;margin:0 auto}
@@ -46,7 +228,7 @@ body::before{ /* faint grid */
 /* ---- top bar ---- */
 .topbar{display:flex;align-items:center;gap:14px}
 .brand{display:flex;align-items:center;gap:11px;min-width:0}
-.brand .logo{width:38px;height:38px;flex:none;filter:drop-shadow(0 3px 10px rgba(198,75,214,.5))}
+.brand .logo{width:38px;height:38px;flex:none;filter:drop-shadow(0 3px 10px rgb(var(--accent-rgb) / .5))}
 .brand h1{font-size:17px;font-weight:700;letter-spacing:.2px;margin:0;white-space:nowrap}
 .brand h1 .sub{display:block;font-size:11px;font-weight:500;color:var(--txt-3);letter-spacing:.14em;text-transform:uppercase;margin-top:1px}
 .spacer{flex:1}
@@ -59,20 +241,20 @@ body::before{ /* faint grid */
 
 /* ---- main grid ---- */
 .main{flex:1;min-height:0;display:grid;grid-template-columns:1fr 300px;gap:18px}
-.panel{background:linear-gradient(180deg,rgba(21,24,35,.92),rgba(15,17,23,.92));border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow),var(--emboss);backdrop-filter:blur(8px);position:relative;overflow:hidden}
-.panel::after{content:"";position:absolute;inset:0;border-radius:var(--r-lg);pointer-events:none;background:radial-gradient(80% 40% at 50% -10%,rgba(198,75,214,.08),transparent 60%)}
+.panel{background:linear-gradient(180deg,rgb(var(--bg-2-rgb) / .92),rgb(var(--bg-1-rgb) / .92));border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow),var(--emboss);backdrop-filter:blur(8px);position:relative;overflow:hidden}
+.panel::after{content:"";position:absolute;inset:0;border-radius:var(--r-lg);pointer-events:none;background:radial-gradient(80% 40% at 50% -10%,rgb(var(--accent-rgb) / .08),transparent 60%)}
 
 /* ---- stage ---- */
 .stage{display:flex;flex-direction:column;padding:22px 24px;min-height:0}
 .stage-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
 .chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.04em;padding:4px 11px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
-.chip.scenario{color:var(--cyan);background:var(--cyan-dim);border-color:rgba(70,200,220,.3)}
-.chip.direct{color:var(--accent-2);background:var(--accent-dim);border-color:rgba(198,75,214,.3)}
-.chip.edge{color:var(--amber);background:rgba(232,178,60,.14);border-color:rgba(232,178,60,.3)}
+.chip.scenario{color:var(--cyan);background:var(--cyan-dim);border-color:rgb(var(--cyan-rgb) / .3)}
+.chip.direct{color:var(--accent-2);background:var(--accent-dim);border-color:rgb(var(--accent-rgb) / .3)}
+.chip.edge{color:var(--amber);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .3)}
 .chip svg{width:13px;height:13px;flex:none}
 .dom-chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
 .dom-chip .dot{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 8px currentColor}
-.scenario-card{position:relative;background:linear-gradient(160deg,rgba(198,75,214,.10),rgba(70,200,220,.05));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:20px 22px 20px 56px;margin-bottom:4px;box-shadow:var(--emboss);animation:cardIn .5s var(--ease-out) both}
+.scenario-card{position:relative;background:linear-gradient(160deg,rgb(var(--accent-rgb) / .10),rgb(var(--cyan-rgb) / .05));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:20px 22px 20px 56px;margin-bottom:4px;box-shadow:var(--emboss);animation:cardIn .5s var(--ease-out) both}
 .scenario-card .qmark{position:absolute;left:18px;top:18px;width:26px;height:26px;color:var(--accent-2);opacity:.9}
 .scenario-card p{margin:0;font-size:17px;line-height:1.55;color:var(--txt)}
 .stage-note{font-size:12px;color:var(--txt-3);margin:14px 2px 8px;display:flex;align-items:center;gap:7px}
@@ -86,11 +268,11 @@ body::before{ /* faint grid */
 .btn{display:inline-flex;align-items:center;gap:8px;font-family:var(--font);font-size:13.5px;font-weight:600;border:0;border-radius:var(--r-md);padding:11px 18px;cursor:pointer;white-space:nowrap;transition:transform var(--t) var(--spring),box-shadow var(--t),filter var(--t),background var(--t)}
 .btn svg{width:16px;height:16px;flex:none}
 .btn:active{transform:translateY(1px) scale(.98)}
-.btn-primary{color:var(--btn-text-dark);background:linear-gradient(135deg,var(--accent-2),var(--accent));box-shadow:0 8px 22px -8px rgba(198,75,214,.8),var(--emboss)}
-.btn-primary:hover{transform:translateY(-2px);box-shadow:0 14px 30px -8px rgba(198,75,214,.9)}
+.btn-primary{color:var(--btn-text-dark);background:linear-gradient(135deg,var(--accent-2),var(--accent));box-shadow:0 8px 22px -8px rgb(var(--accent-rgb) / .8),var(--emboss)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 14px 30px -8px rgb(var(--accent-rgb) / .9)}
 .btn-ghost{color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line)}
 .btn-ghost:hover{color:var(--txt);border-color:var(--accent);background:var(--bg-3)}
-.btn-cyan{color:var(--btn-text-cyan);background:linear-gradient(135deg,#7ce0ef,var(--cyan));box-shadow:0 8px 22px -8px rgba(70,200,220,.7),var(--emboss)}
+.btn-cyan{color:var(--btn-text-cyan);background:linear-gradient(135deg,var(--cyan-2),var(--cyan));box-shadow:0 8px 22px -8px rgb(var(--cyan-rgb) / .7),var(--emboss)}
 .btn-cyan:hover{transform:translateY(-2px)}
 .btn:disabled{opacity:.5;cursor:not-allowed;transform:none;filter:grayscale(.3)}
 
@@ -115,15 +297,15 @@ body::before{ /* faint grid */
 .gap-next .v{font-size:12.5px;color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 
 /* ---- drills launcher (floating, right edge) ---- */
-.drill-tab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:30;display:flex;flex-direction:column;align-items:center;gap:8px;background:linear-gradient(135deg,var(--accent),#8f2fa0);color:#fff;border:0;border-radius:14px 0 0 14px;padding:16px 12px;cursor:pointer;box-shadow:-8px 0 26px -10px rgba(198,75,214,.8);writing-mode:vertical-rl;text-orientation:mixed;font-family:var(--font);font-weight:700;font-size:13px;letter-spacing:.08em;transition:padding var(--t) var(--spring),box-shadow var(--t)}
-.drill-tab:hover{padding-right:18px;box-shadow:-12px 0 34px -10px rgba(198,75,214,1)}
+.drill-tab{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:30;display:flex;flex-direction:column;align-items:center;gap:8px;background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:var(--btn-text-dark);border:0;border-radius:14px 0 0 14px;padding:16px 12px;cursor:pointer;box-shadow:-8px 0 26px -10px rgb(var(--accent-rgb) / .8);writing-mode:vertical-rl;text-orientation:mixed;font-family:var(--font);font-weight:700;font-size:13px;letter-spacing:.08em;transition:padding var(--t) var(--spring),box-shadow var(--t)}
+.drill-tab:hover{padding-right:18px;box-shadow:-12px 0 34px -10px rgb(var(--accent-rgb) / 1)}
 .drill-tab svg{width:20px;height:20px;transform:rotate(90deg)}
 .drill-tab .pip{writing-mode:horizontal-tb;background:var(--cyan);color:var(--btn-text-cyan);font-size:10px;border-radius:999px;padding:1px 6px;font-weight:800}
 
 /* ---- flyout ---- */
-.scrim{position:fixed;inset:0;background:rgba(5,6,10,.55);backdrop-filter:blur(2px);z-index:40;opacity:0;pointer-events:none;transition:opacity var(--t)}
+.scrim{position:fixed;inset:0;background:rgb(var(--scrim-rgb) / .55);backdrop-filter:blur(2px);z-index:40;opacity:0;pointer-events:none;transition:opacity var(--t)}
 .scrim.on{opacity:1;pointer-events:auto}
-.flyout{position:fixed;top:0;right:0;height:100vh;width:min(460px,92vw);z-index:50;background:linear-gradient(180deg,rgba(21,24,35,.98),rgba(11,12,17,.99));border-left:1px solid var(--line-strong);box-shadow:-24px 0 60px -20px rgba(0,0,0,.8);transform:translateX(102%);transition:transform .42s var(--spring);display:flex;flex-direction:column;padding:20px 20px 22px}
+.flyout{position:fixed;top:0;right:0;height:100vh;width:min(460px,92vw);z-index:50;background:linear-gradient(180deg,rgb(var(--bg-2-rgb) / .98),rgb(var(--bg-0-rgb) / .99));border-left:1px solid var(--line-strong);box-shadow:-24px 0 60px -20px rgb(var(--sh-rgb) / .8);transform:translateX(102%);transition:transform .42s var(--spring);display:flex;flex-direction:column;padding:20px 20px 22px}
 .flyout.on{transform:translateX(0)}
 .flyout-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
 .flyout-head .t{font-size:16px;font-weight:700}
@@ -135,7 +317,7 @@ body::before{ /* faint grid */
 .flyout-body::-webkit-scrollbar{width:8px}.flyout-body::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:8px}
 
 /* approval gate */
-.approve{background:linear-gradient(160deg,rgba(198,75,214,.12),rgba(70,200,220,.06));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:18px;text-align:center;animation:cardIn .4s var(--ease-out) both}
+.approve{background:linear-gradient(160deg,rgb(var(--accent-rgb) / .12),rgb(var(--cyan-rgb) / .06));border:1px solid var(--line-strong);border-radius:var(--r-md);padding:18px;text-align:center;animation:cardIn .4s var(--ease-out) both}
 .approve .mascot{width:76px;height:76px;margin:2px auto 10px;display:block;animation:bob 3s ease-in-out infinite}
 .approve h3{margin:0 0 6px;font-size:16px}
 .approve p{margin:0 0 16px;font-size:13px;color:var(--txt-2);line-height:1.55}
@@ -193,9 +375,9 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
 .role-chip{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:7px;background:linear-gradient(180deg,var(--bg-2),var(--bg-1));border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--txt-2);font:600 12.5px var(--font);cursor:pointer;white-space:nowrap;transition:border-color var(--t),color var(--t)}
 .role-chip:hover{border-color:var(--accent);color:var(--txt)}
 .role-chip #roleName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}
-.role-scrim{position:fixed;inset:0;z-index:80;background:rgba(5,6,10,.62);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:cardIn .2s var(--ease-out) both}
+.role-scrim{position:fixed;inset:0;z-index:80;background:rgb(var(--scrim-rgb) / .62);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:cardIn .2s var(--ease-out) both}
 .role-scrim[hidden]{display:none}
-.role-modal{width:min(560px,94vw);max-height:90vh;overflow-y:auto;background:linear-gradient(180deg,rgba(21,24,35,.99),rgba(11,12,17,.99));border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:var(--shadow);padding:22px}
+.role-modal{width:min(560px,94vw);max-height:90vh;overflow-y:auto;background:linear-gradient(180deg,rgb(var(--bg-2-rgb) / .99),rgb(var(--bg-0-rgb) / .99));border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:var(--shadow);padding:22px}
 .role-modal-h{display:flex;align-items:center;gap:12px;margin-bottom:6px}
 .role-modal-h .rico{width:36px;height:36px;flex:none;color:var(--accent-2)}
 .role-modal-h b{font-size:17px;display:block}
@@ -206,11 +388,35 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
 .role-in:focus,.role-ta:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
 .role-ta{resize:vertical;min-height:76px;line-height:1.5}
 .role-file{display:flex;align-items:center;gap:9px;margin-top:9px;font-size:12px;color:var(--txt-3)}
-.role-err{margin-top:12px;color:var(--red);font-size:12.5px;background:var(--red-dim);border:1px solid rgba(239,95,95,.3);border-radius:8px;padding:9px 12px}
+.role-err{margin-top:12px;color:var(--red);font-size:12.5px;background:var(--red-dim);border:1px solid rgb(var(--red-rgb) / .3);border-radius:8px;padding:9px 12px}
 .role-err[hidden]{display:none}
 .role-actions{display:flex;gap:10px;margin-top:18px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
 </style>
+<script>
+// P-THEME.1: this frame has its OWN document, so the app's [data-theme] on <html> does not
+// cascade in. Mirror it from the PARENT, here in <head>, so it lands BEFORE first paint (an
+// inline head script beats the first paint; a script at the end of <body> does not, and the
+// user would watch the trainer flash dark). Then keep following the parent for as long as the
+// frame lives, so a switch in Settings reaches this surface with no plumbing from app.ts.
+// Opened standalone (file://, no parent) every branch no-ops and the base :root plus the
+// prefers-color-scheme guard decide, which is exactly the right fallback.
+(function(){
+  var root = document.documentElement, host = null;
+  try { host = window.parent !== window ? window.parent.document.documentElement : null; } catch (e) { host = null; }
+  function pull(){
+    try {
+      var t = host && host.getAttribute("data-theme");
+      if (t) root.setAttribute("data-theme", t); else root.removeAttribute("data-theme");
+    } catch (e) { /* parent torn down mid-switch: keep the current theme, never throw */ }
+  }
+  if (!host) return;
+  pull();
+  try {
+    new MutationObserver(pull).observe(host, { attributes: true, attributeFilter: ["data-theme"] });
+  } catch (e) { /* no observer: the theme is simply fixed at mount, which still looks right */ }
+})();
+</script>
 </head>
 <body>
 <canvas id="fx"></canvas>
@@ -224,7 +430,7 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
     <div class="spacer"></div>
     <div class="streak" id="streakPod" title="Answer streak"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg><span id="streakN">0</span></div>
     <div class="xp-pod">
-      <svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="#252a3a" stroke-width="4"/><circle id="xpRing" cx="18" cy="18" r="15" fill="none" stroke="#e07bf0" stroke-width="4" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
+      <svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" style="stroke:var(--line)" stroke-width="4"/><circle id="xpRing" cx="18" cy="18" r="15" fill="none" stroke="#e07bf0" stroke-width="4" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg>
       <div><b id="xpN">0</b> <span>XP</span></div>
     </div>
   </div>
@@ -256,7 +462,7 @@ canvas#fx{position:fixed;inset:0;pointer-events:none;z-index:60}
       <div class="cov-wrap">
         <div class="cov-ring">
           <svg viewBox="0 0 120 120"><defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e07bf0"/><stop offset="1" stop-color="#46c8dc"/></linearGradient><filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-            <circle cx="60" cy="60" r="50" fill="none" stroke="#1b1f2b" stroke-width="11"/>
+            <circle cx="60" cy="60" r="50" fill="none" style="stroke:var(--bg-3)" stroke-width="11"/>
             <circle id="covArc" cx="60" cy="60" r="50" fill="none" stroke="url(#cg)" stroke-width="11" stroke-linecap="round" stroke-dasharray="314.16" stroke-dashoffset="314.16" transform="rotate(-90 60 60)" filter="url(#glow)" style="transition:stroke-dashoffset 1s var(--ease-out)"/>
           </svg>
           <div class="pct"><b id="covPct">0%</b><span>extracted</span></div>
@@ -371,6 +577,10 @@ let xp=0, streak=0, qi=0, drillsUnlocked=false;
 // When embedded in LUCID (same-origin iframe) these hydrate the stage/HUD/games from trainer.duckdb.
 // Standalone (file://, no server), every call throws and we fall back to the seeded content below.
 const LTOKEN=document.querySelector('meta[name="lucid-token"]')?.content||"";
+// P-THEME.1 theme-exempt: CATEGORICAL data-viz colours. Each one paints its own ring arc /
+// gradient chip, so it is read against itself, not against an app surface; re-tinting per
+// theme would destroy the one thing a categorical scale must keep, which is being telling
+// apart from its neighbours. The chip INK is themed (--btn-text-*), the hues are not.
 const PALETTE=["#e07bf0","#46c8dc","#5e8df2","#46d27e","#e8b23c","#c64bd6","#7ce0ef","#ef5f5f"];
 const QKIND={scenario:"scenario",direct:"direct",edge_probe:"edge",followup:"direct"};
 let LIVE=false, NEEDS_ROLE=false, apiCoverage=null, liveQ=null, gamesLoaded=false, GAMES_DATA=null, ROLE="";

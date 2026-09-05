@@ -49,10 +49,13 @@ export const PREVIEW_FRAME_CSP = [
 /** Sandbox tokens that must NEVER appear (they'd defeat the opaque-origin isolation). Used by the test. */
 export const PREVIEW_SANDBOX_FORBIDDEN = ["allow-same-origin", "allow-top-navigation", "allow-popups", "allow-modals", "allow-pointer-lock", "allow-downloads"] as const;
 
-export type PreviewKind = "local" | "remote" | "blocked";
+// P-PREVIEW.12: the resolver's OWN verdict labels. Renamed off `PreviewKind` (which now names the FILE-kind
+// union below) because one module cannot own two unions called the same thing, and the file kind is the one
+// every other preview module needs to import.
+export type PreviewTargetKind = "local" | "remote" | "blocked";
 
 export interface PreviewTarget {
-  kind: PreviewKind;
+  kind: PreviewTargetKind;
   /** The value to put in the iframe `src` for a local target; "" for remote/blocked (not auto-loaded). */
   src: string;
   /** A short human label for the panel header / chip. */
@@ -113,14 +116,53 @@ export function previewOpenPath(toolName: string | null | undefined, rawInput: a
   return p || null;
 }
 
-/** File extensions we can render directly in the sandboxed preview iframe (a self-contained page). */
-const PREVIEWABLE_EXT = /\.(html?|svg)$/i;
+// P-PREVIEW.12: what the panel can render, BY EXTENSION, as ONE table. This used to be a bare
+// `/\.(html?|svg)$/i` copied into preview_file.ts and renderer/preview_tabs.ts, and it was the single
+// biggest reason "the model can't show me what it built": a markdown report, a JSON payload, a CSV, a chart
+// PNG or a plain log was refused with "not a local .html/.svg file", so the agent had no way to surface most
+// of what it produces. Widened to every kind the sandboxed frame can honestly render, and the regex below is
+// DERIVED from this table so adding an extension in one place can never leave the other behind.
+export type PreviewKind = "html" | "svg" | "image" | "markdown" | "text" | "pdf";
+
+/** The ONE previewable-extension set (lowercase, no leading dot). Exported so a self-contained mirror of it
+ *  (harness/omp/preview_extension.ts, which runs in omp's subprocess and must not import desktop code) can
+ *  be pinned against it by a drift test instead of quietly diverging. */
+export const PREVIEW_KIND_EXT: Readonly<Record<PreviewKind, readonly string[]>> = {
+  html: ["html", "htm"],
+  svg: ["svg"],
+  image: ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"],
+  markdown: ["md", "markdown"],
+  text: ["txt", "json", "csv", "tsv", "log", "yml", "yaml", "xml", "toml", "ini"],
+  pdf: ["pdf"],
+};
+
+/** Flattened extension -> kind lookup, built once from PREVIEW_KIND_EXT. */
+const EXT_KIND: ReadonlyMap<string, PreviewKind> = new Map(
+  (Object.entries(PREVIEW_KIND_EXT) as Array<[PreviewKind, readonly string[]]>)
+    .flatMap(([kind, exts]) => exts.map((ext) => [ext, kind] as [string, PreviewKind])),
+);
+
+/** File extensions we can render in the sandboxed preview iframe. BUILT from PREVIEW_KIND_EXT (never hand
+ *  written) so the table and the regex cannot drift. A trailing query/hash (`chart.png?v=2`, `page.html#top`)
+ *  and trailing whitespace still classify; `index.html.bak` and a bare `html` do not (the dot is required and
+ *  the extension must be last). Case-insensitive. */
+export const PREVIEWABLE_EXT: RegExp = new RegExp(String.raw`\.(${[...EXT_KIND.keys()].join("|")})(?:[?#][\s\S]*)?\s*$`, "i");
+
+/** P-PREVIEW.12: which PreviewKind this path renders as, or null when the panel cannot show it. Pure; the
+ *  single classifier behind preview_file.ts's reader, the renderer's tab strip, and previewablePath below. */
+export function previewKindOf(path: string | null | undefined): PreviewKind | null {
+  const m = PREVIEWABLE_EXT.exec((path ?? "").trim());
+  return m ? EXT_KIND.get(m[1]!.toLowerCase()) ?? null : null;
+}
+
 /** Tool names that WRITE a file (omp's write/edit family). Read/search/etc. never auto-surface a preview. */
 const WRITE_TOOLS = /\b(write|edit|create|save)\b/i;
 
-/** If `toolName` is a write/edit of a browser-previewable file, return its path; else null. Pure, defensive:
- *  pulls the path from the common rawInput shapes (path/file_path/filename/file), trims, and requires both a
- *  write-class tool AND a previewable extension — so a `read` of an .html, or a write of a .ts, won't fire. */
+/** If `toolName` is a write/edit of a previewable file, return its path; else null. Pure, defensive: pulls the
+ *  path from the common rawInput shapes (path/file_path/filename/file), trims, and requires both a write-class
+ *  tool AND a previewable extension - so a `read` of an .html, or a write of a .ts, won't fire. P-PREVIEW.12:
+ *  the write-class gate is what stops a `read` of some random .png hijacking the panel, so it stays; the kind
+ *  table widening means a written .md/.json/.csv/.png report now auto-surfaces the same way an .html does. */
 export function previewablePath(toolName: string | null | undefined, rawInput: any): string | null {
   const name = (toolName ?? "").toLowerCase();
   if (!WRITE_TOOLS.test(name)) return null;

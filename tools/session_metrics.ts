@@ -19,6 +19,8 @@ import { Database as Sqlite } from "bun:sqlite";
 // desktop/renderer/app.ts MODEL_CTX. omp's reported window is unreliable for the
 // AskSage gateway models, so this map is the source of truth for the denominator.
 export const CTX_WINDOW: Record<string, number> = {
+  // P-MODEL.2: keep in sync with desktop/renderer/app.ts MODEL_CTX (that comment points here too).
+  "claude-fable-5-1": 1_000_000, "claude-mythos-5-1": 1_000_000, "gpt-6-astra": 1_000_000,
   "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,

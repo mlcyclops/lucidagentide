@@ -4,8 +4,9 @@
 // desktop/preview_resolve.test.ts — P-PREVIEW.1 (ADR-0096): the fail-safe preview-target resolver.
 
 import { describe, expect, test } from "bun:test";
-import { PREVIEW_ALLOW, PREVIEW_FRAME_CSP, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, normalizePreviewPath, previewOpenPath, previewablePath, resolvePreview, toFileUrl } from "./preview_resolve.ts";
+import { PREVIEWABLE_EXT, PREVIEW_ALLOW, PREVIEW_FRAME_CSP, PREVIEW_KIND_EXT, PREVIEW_SANDBOX, PREVIEW_SANDBOX_FORBIDDEN, canPreviewRemote, normalizePreviewPath, previewKindOf, previewOpenPath, previewablePath, resolvePreview, toFileUrl, type PreviewKind } from "./preview_resolve.ts";
 import { toFsPath } from "./preview_file.ts";
+import { PREVIEWABLE_EXTS } from "../harness/omp/preview_extension.ts"; // P-PREVIEW.12: the omp-side mirror
 
 describe("previewOpenPath (P-PREVIEW.3a, ADR-0096): the agent's preview_open tool call", () => {
   test("a preview_open call → its path", () => {
@@ -111,6 +112,75 @@ describe("served-preview per-frame CSP (P-PREVIEW.4b, ADR-0096)", () => {
   });
 });
 
+// P-PREVIEW.12: the kind table is the fix for "the model can't show me what it built". These tests pin BOTH
+// halves of the contract: every kind classifies, and PREVIEWABLE_EXT is DERIVED from the table (so a future
+// extension added to one is added to both, which is exactly what drifted three ways before this increment).
+describe("previewKindOf (P-PREVIEW.12): the one previewable-kind table", () => {
+  test("classifies every extension in the table to its own kind", () => {
+    for (const [kind, exts] of Object.entries(PREVIEW_KIND_EXT) as Array<[PreviewKind, readonly string[]]>) {
+      for (const ext of exts) expect(previewKindOf(`/tmp/report.${ext}`)).toBe(kind);
+    }
+  });
+  test("covers the kinds the agent actually produces (page, vector, chart, report, data, doc)", () => {
+    expect(previewKindOf("index.html")).toBe("html");
+    expect(previewKindOf("page.htm")).toBe("html");
+    expect(previewKindOf("diagram.svg")).toBe("svg");
+    expect(previewKindOf("chart.png")).toBe("image");
+    expect(previewKindOf("photo.jpeg")).toBe("image");
+    expect(previewKindOf("REPORT.md")).toBe("markdown");
+    expect(previewKindOf("data.json")).toBe("text");
+    expect(previewKindOf("rows.csv")).toBe("text");
+    expect(previewKindOf("run.log")).toBe("text");
+    expect(previewKindOf("spec.pdf")).toBe("pdf");
+  });
+  test("is case-insensitive", () => {
+    expect(previewKindOf("C:\\work\\INDEX.HTML")).toBe("html");
+    expect(previewKindOf("art.SVG")).toBe("svg");
+    expect(previewKindOf("shot.PNG")).toBe("image");
+    expect(previewKindOf("notes.MarkDown")).toBe("markdown");
+  });
+  test("tolerates a query string, a hash, and trailing whitespace", () => {
+    expect(previewKindOf("chart.png?v=2")).toBe("image");
+    expect(previewKindOf("page.html#top")).toBe("html");
+    expect(previewKindOf("app.html?cache=1#frag")).toBe("html");
+    expect(previewKindOf("  notes.md  ")).toBe("markdown");
+    expect(previewKindOf("data.json?t=9 ")).toBe("text");
+  });
+  test("returns null for anything the panel cannot honestly render", () => {
+    for (const p of ["app.ts", "tool.exe", "styles.css", "bundle.js", "README", "index.html.bak", "html", "", "   "]) {
+      expect(previewKindOf(p)).toBeNull();
+    }
+    expect(previewKindOf(null)).toBeNull();
+    expect(previewKindOf(undefined)).toBeNull();
+  });
+  test("PREVIEWABLE_EXT is DERIVED from the kind table: the two agree on every entry", () => {
+    const all = Object.values(PREVIEW_KIND_EXT).flat();
+    expect(all.length).toBeGreaterThan(20);
+    for (const ext of all) {
+      expect(PREVIEWABLE_EXT.test(`/tmp/x.${ext}`)).toBe(true);   // in the table  -> matches the regex
+      expect(previewKindOf(`/tmp/x.${ext}`)).not.toBeNull();      // ... and classifies
+    }
+    for (const ext of ["ts", "tsx", "css", "js", "exe", "zip", "mp4"]) {
+      expect(PREVIEWABLE_EXT.test(`/tmp/x.${ext}`)).toBe(false);  // not in the table -> refused by both
+      expect(previewKindOf(`/tmp/x.${ext}`)).toBeNull();
+    }
+  });
+  test("the table has no duplicate extension (one extension, one kind)", () => {
+    const all = Object.values(PREVIEW_KIND_EXT).flat();
+    expect(new Set(all).size).toBe(all.length);
+  });
+  // P-PREVIEW.12: harness/omp/preview_extension.ts runs as an omp `-e` inside omp's OWN subprocess, so it
+  // cannot import this module (a top-level import there would sit outside the try/catch that guarantees a
+  // registration failure never breaks omp launch, and it would pull desktop modules into the harness
+  // typecheck program). It therefore MIRRORS this list. This is the alarm if the two ever diverge: the
+  // agent-facing `preview_open` gate must accept exactly what the panel can actually render.
+  test("the omp preview_open mirror (harness/omp/preview_extension.ts) holds exactly these extensions", () => {
+    const mirrored = [...PREVIEWABLE_EXTS].sort();
+    const authoritative = Object.values(PREVIEW_KIND_EXT).flat().sort();
+    expect(mirrored).toEqual(authoritative);
+  });
+});
+
 describe("previewablePath (P-PREVIEW.2, ADR-0096): auto-surface a written app", () => {
   test("a write of an .html file → its path", () => {
     expect(previewablePath("write", { path: "C:\\Users\\n\\game.html" })).toBe("C:\\Users\\n\\game.html");
@@ -121,13 +191,28 @@ describe("previewablePath (P-PREVIEW.2, ADR-0096): auto-surface a written app", 
     expect(previewablePath("write", { path: '"C:\\Users\\n\\game.html"' })).toBe("C:\\Users\\n\\game.html");
     expect(previewablePath("edit", { file_path: "'/home/n/app.htm'" })).toBe("/home/n/app.htm");
   });
-  test("a write of a NON-previewable file → null (only browser docs auto-surface)", () => {
-    expect(previewablePath("write", { path: "src/index.ts" })).toBeNull();
-    expect(previewablePath("edit", { path: "notes.md" })).toBeNull();
+  // P-PREVIEW.12: a written .md/.json/.csv/.png now DOES auto-surface (that was the whole bug: the model
+  // could not show a markdown report or a chart PNG). Only a non-previewable extension stays null.
+  test("a write of a previewable NON-markup file → its path (P-PREVIEW.12)", () => {
+    expect(previewablePath("edit", { path: "notes.md" })).toBe("notes.md");
+    expect(previewablePath("write", { path: "/tmp/report.json" })).toBe("/tmp/report.json");
+    expect(previewablePath("write", { path: "/tmp/chart.png" })).toBe("/tmp/chart.png");
+    expect(previewablePath("write", { path: "/tmp/run.log" })).toBe("/tmp/run.log");
   });
-  test("a non-write tool (read/search/bash) → null, even on an .html", () => {
+  test("a write of a NON-previewable file → null (source/binaries never hijack the panel)", () => {
+    expect(previewablePath("write", { path: "src/index.ts" })).toBeNull();
+    expect(previewablePath("write", { path: "styles.css" })).toBeNull();
+    expect(previewablePath("write", { path: "setup.exe" })).toBeNull();
+    expect(previewablePath("write", { path: "Makefile" })).toBeNull();
+  });
+  // The write-class gate is the thing that stops a `read` of some random .png taking over the panel now
+  // that images are previewable, so it is pinned against the newly-admitted kinds too.
+  test("a non-write tool never surfaces a preview, not even for a newly previewable kind", () => {
     expect(previewablePath("read", { path: "game.html" })).toBeNull();
     expect(previewablePath("bash", { command: "cat game.html" })).toBeNull();
+    expect(previewablePath("read", { path: "/tmp/chart.png" })).toBeNull();
+    expect(previewablePath("search", { path: "/tmp/notes.md" })).toBeNull();
+    expect(previewablePath("grep", { path: "/tmp/run.log" })).toBeNull();
   });
   test("missing/empty path → null", () => {
     expect(previewablePath("write", {})).toBeNull();

@@ -94,3 +94,43 @@ export function clearAllOauthCredentials(dbPath?: string): DisconnectResult {
     return { removed: 0, reason: String((e as Error)?.message ?? e) };
   }
 }
+
+/** A cheap, READ-ONLY snapshot of a provider's OAuth credential row - just enough to tell whether a
+ *  later write actually landed a *fresh* token. `dataHash` is a non-cryptographic hash of the token blob
+ *  (change detection only; it is never logged and never used as a secret). Scoped to
+ *  `credential_type='oauth'` so a coexisting API-key row can't be mistaken for a login. Absent row, or
+ *  any failure, reports `{ present: false }` - consistent with the best-effort contract above. */
+export interface CredentialSnapshot { present: boolean; id?: number; updatedAt?: number; dataHash?: string; disabled?: boolean }
+
+export function credentialSnapshot(provider: string, dbPath?: string): CredentialSnapshot {
+  const p = vaultPath(dbPath);
+  if (!provider) return { present: false };
+  if (!existsSync(p)) return { present: false };
+  try {
+    const db = new Database(p, { readonly: true });
+    try {
+      const row = db.query("select id, data, disabled_cause, updated_at from auth_credentials where provider = ? and credential_type = 'oauth'")
+        .get(provider) as { id: number; data: string | null; disabled_cause: string | null; updated_at: number } | null;
+      if (!row) return { present: false };
+      return {
+        present: true,
+        id: Number(row.id),
+        updatedAt: Number(row.updated_at ?? 0),
+        dataHash: String(Bun.hash(row.data ?? "")),
+        disabled: !!row.disabled_cause,
+      };
+    } finally { db.close(); }
+  } catch { return { present: false }; }
+}
+
+/** True when `after` shows a genuinely NEW token versus `before`: a first row, a replaced row, a rewritten
+ *  blob, or a bumped `updated_at`. This is how a caller decides omp must be respawned after a login attempt
+ *  WITHOUT trusting the broker's exit code, and without resurrecting a credential the user logged out of
+ *  (a failed login leaves the snapshot identical, so it returns false). */
+export function landedFreshCredential(before: CredentialSnapshot, after: CredentialSnapshot): boolean {
+  if (!after.present) return false;
+  if (!before.present) return true;
+  if (after.id !== before.id) return true;
+  if (after.dataHash !== before.dataHash) return true;
+  return (after.updatedAt ?? 0) > (before.updatedAt ?? 0);
+}

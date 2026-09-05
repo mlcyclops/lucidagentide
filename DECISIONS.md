@@ -21247,3 +21247,917 @@ forensics entry, ADR-0279/0304 (one branch, two products - the hazard class), AD
 green), ADR-0225/0261 (the existing pre-upload gates this sits beside), ADR-0246 (signing, still
 open), `desktop/build/release_identity.ts`, `desktop/build/release-identity-gate.ts`,
 `.github/workflows/build-desktop.yml`, `.github/workflows/build-creator.yml`.
+
+## ADR-0309 -- P-FLEET.L7: lane tool-call fidelity, and the repaint that was eating the transcript (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### Two user-visible bugs with one cause
+
+Reported together: "I want expandable tool calls with chevron down arrows showing the command used,
+similar to the main composer" and "I want to copy/paste content from their windows." They looked like
+two feature requests. The second was a bug, and both trace to the same lines.
+
+`fleet_grid.paintOutput` ran `out.innerHTML = outputHtml(run)` on EVERY token event. Rebuilding the
+whole output subtree per token has two consequences nobody wrote down: it destroys any text selection
+the user is holding (so copy from a working lane is impossible, not merely awkward), and it resets
+every `<details>` element to closed (so an expanded tool call slams shut on the next token). A lane
+that is streaming is exactly when a user wants to read and copy it, so the repaint was worst precisely
+when it mattered.
+
+The chevron half was a real gap. `#toolCode` extracted authored code from `rawInput` for write/edit,
+and `toolLine` rendered a `<details>` only when `code` existed. A bash/read/search/fetch call authors
+no code, so it carried nothing but omp's one-line title: there was literally nothing to put under a
+chevron. The command the agent ran was discarded at the wire.
+
+### Decision
+
+Carry the arguments, and patch the DOM instead of rebuilding it.
+
+The engine gains `input` on the `tool` LaneEvent: the bounded (4KB), code-stripped rawInput, with
+single-string fast paths (`command`, `cmd`, `query`, `pattern`, `url`, `expression`) so a shell line
+reads as itself rather than as JSON wrapping a shell line, plus a sibling `paths`/`path` scope line
+because a search pattern without its scope is not the command. It is emitted ONLY when the call
+authored no code: `code` is the richer view of the same bytes, and showing both would render a diff
+twice, once under a label saying "command". Serialization is defensive (cycles and BigInt cannot take
+down the notify handler, which is a lane's only channel).
+
+`desktop/renderer/lane_transcript.ts` is the new pure keystone. It mints stable monotone ids so a DOM
+node keyed on one is stable for the card's life, and it DELEGATES chip classification to
+`answer_chips.toolChip`, the same function the master composer uses. That delegation is a correctness
+claim, not tidiness: a lane chip and a composer chip describe the same tool call, and calling one
+function is the only way they cannot drift. `laneChipBody` resolves code, then command, then detail,
+and `hasBody` is derived from the SAME internal decision, so the biconditional (`hasBody` is false
+exactly when there is no body) holds by construction rather than by two functions agreeing. The DOM
+then omits the chevron rather than rendering a dead one.
+
+`paintOutput` no longer touches `innerHTML`. Settled turns append once into `div[data-lane-turn=<id>]`
+and are structurally unreachable from the paint path afterwards; only `div[data-lane-live]` repaints,
+and even there prose is written as `textContent` on pre-built nodes. `.fleet-out` re-grants
+`user-select: text`, because the card header is a drag surface and a dragging ancestor suppresses
+selection inside it.
+
+Truncation is VISIBLE. A clipped command or a capped diff says so in its own last row. A card that
+quietly shortens a command is misreporting what ran, which is worse than refusing to show it.
+
+The lane also forwards `usage_update` (context fill, window, cost) untouched. It reports no output-token
+figure because omp sends none on this path.
+
+### Verification
+
+`bun test desktop/renderer/lane_transcript.test.ts` 36 pass / 0 fail. `make demo-P-FLEET.L7` exits 0:
+drives a REAL FleetLaneManager against a fake-ACP child in a new `lanefidelity` mode and proves the
+bash command crosses the wire verbatim while the edit carries `code` and no duplicate `input`; the
+hasBody biconditional over five shapes including whitespace-only input; delegation asserted by
+comparing `laneChip` against `toolChip` directly; 1000 distinct ids; a 10KB command clipped at 4096
+with the truncation declared; a 5000-row diff capped at exactly 400 with the last row saying so; and a
+3-turn copy round-trip that is plain text, in order, and em-dash free. NOT exercised by an automated
+test: the DOM patching itself, because this repo has no DOM test harness installed (renderer tests
+cover the DOM-free modules only). It is verified by isolated typecheck, by structural review (the
+settled-turn cursor is a node COUNT, so an existing turn node cannot be re-read), and by the live
+engine boot below. That is the honest boundary.
+
+### Links
+
+ADR-0274 (P-FLEET.L3, the authored-code wire this extends), ADR-0104 (P-CHAT.1, the rawInput
+extraction contract), ADR-0189 (P-CHAT.B, the composer chip anatomy being mirrored),
+`desktop/renderer/lane_transcript.ts`, `desktop/fleet_lanes.ts`, `desktop/renderer/fleet_grid.ts`.
+
+## ADR-0310 -- P-FLEET.L8: promoting a lane is an ATTACH, not a session handoff (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### The requirement that rules out the obvious design
+
+"I want to click a button on the LUCID Fleet instance and move it to the main composer session with
+its model and working folder, possibly in flight, with the record keeping provenance and composer chat
+showing with history. I want to be able to switch on the fly."
+
+"Possibly in flight" is the whole design constraint. The obvious reading of "move it to the main
+composer" is a handoff: close the lane's ACP session, open it on the master connection, replay the
+transcript. That cannot satisfy the requirement. A lane mid-turn is holding an open `session/prompt`
+and possibly an open tool call; killing the child to re-handshake it elsewhere destroys exactly the
+work the user wanted to keep, and re-driving a session log through a second connection risks
+corrupting it. It would also make demote as expensive as promote, when the user asked for both to feel
+effortless.
+
+### Decision
+
+The composer ATTACHES to the running lane. Nothing about the lane changes: same omp child, same ACP
+session id, same cwd, same model. What moves is which surface the renderer sends prompts to and renders
+events from. `state.composerTarget` is either `{kind:"master"}` or `{kind:"lane", laneId, name, cwd,
+model}`, and `send()` routes to `bridge.fleetPrompt` or `bridge.sendPrompt` through the SAME event
+rendering closure.
+
+Because a promote can land mid-turn, the composer needs to join a turn already in progress. That is
+what `/api/fleet/watch` is for: an NDJSON stream built on the existing `FleetLaneManager.observe()`
+sink, which already survives turn boundaries and respawns. A watcher owns NO turn and cannot start one
+(that is `prompt`'s job), and it gets its own AbortController so leaving a lane never aborts a running
+turn and aborting a turn never silently unsubscribes the composer.
+
+Provenance is the reason this needs a durable record at all. The lane's session log is unchanged by
+promotion, so without a ledger line, a stretch of that session driven from the main chat is
+indistinguishable from lane work. `LaneSessionRecord.event` widens to include `promote`/`demote`, each
+carrying the model IN FORCE at that moment (a promoted lane keeps its own model, not the master's, so
+"which model wrote this" needs recording per event) and the turn count carried. The ledger reader stays
+a WHITELIST so a junk or future event name is dropped rather than silently labeling a session.
+
+Exactly one lane may hold the composer; promoting a second releases the first, because there is one
+prompt box and two attached lanes would send to whichever answered last. `promoteRefusal` is
+fail-closed on an unknown status but explicitly ALLOWS `working`: an in-flight promote is the feature,
+not an error case. `targetCaps` reports what a lane target genuinely cannot drive (images, session
+modes, the goal loop, slash expansion) so the UI hides those controls instead of shipping dead ones.
+
+### Verification
+
+`bun test desktop/renderer/composer_target.test.ts` 38 pass / 0 fail. `make demo-P-FLEET.L8` exits 0
+against a REAL FleetLaneManager: the session id, cwd, and model are byte-identical across a promote;
+promoting a second lane leaves exactly one promoted; demote is idempotent; the ledger carries 2 promote
+and 2 demote lines each naming lane, folder, model, and turns; `working`/`awaiting-input`/`done` all
+promote while `stopped`/`error` refuse naming respawn and `""`/`"banana"` refuse fail-closed; and
+`seedTurns` folds `[ran: x]` bookkeeping to one note with the prose byte-preserved.
+
+LIVE, against a real booted engine on port 5399 with a real spawned lane: promote returned
+`promoted: true` carrying sessionId `01a06a84-8c57-7000-bd89-bfbf51635735`, IDENTICAL to the id the
+spawn reported, which is the central design guarantee observed rather than argued. `/api/fleet/promoted`
+reported the lane, demote returned it to null, and the JSONL ledger showed the promote and demote lines.
+NOT exercised: a promote landing mid-turn against a real provider, which needs a long live turn to
+interleave with; the mid-turn path is covered by the demo's `working`-status assertion and by the watch
+stream's seed-only-if-empty guard.
+
+### Links
+
+ADR-0274 (P-FLEET.L1-L5, the lane engine and its ledger), ADR-0268 (one turn per session: why a watcher
+may not prompt), `desktop/renderer/composer_target.ts`, `desktop/fleet_lanes.ts` (`promote`/`demote`),
+`desktop/dev.ts` (`/api/fleet/promote|demote|promoted|watch|transcript`), `desktop/renderer/app.ts`.
+
+## ADR-0311 -- P-HEALTH.1: the harness recovers its own sessions, so nobody restarts the app (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### The manual habit being automated
+
+"I notice there are some issues with longer running session runs with LUCID where it stalls out and
+needs restarted. I need the models to be responsive and possibly have some automatic harness checks
+like I do after a manual stop where I ask 'Status?' and don't need to restart the entire LUCID app."
+
+That describes a two-step manual protocol: poke the session with "Status?", and if that fails, restart
+everything. The restart is the expensive part and it was never actually necessary. The wedged thing is
+one omp child; the session log on disk lets a fresh child resume the same conversation.
+
+### The constraint that shapes the whole design
+
+ADR-0263 (P-STALL.2) DELETED the 10-minute silence cutoff because it was killing legitimately long
+work: an agent fanning out to subagents can sit quiet far longer than any fixed clock while the work is
+genuinely running, and the kill threw it all away. Any automatic recovery is a wall clock wearing a new
+hat, so this increment had to be built so it cannot regress that.
+
+The resolution is that an OPEN TOOL CALL caps the verdict at `quiet`, unconditionally and at any
+duration. A ten-minute build is real work: probing it would interleave a note into a running call, and
+recovering it would cancel exactly the turn worth running. The only thing that outranks an open call is
+a DEAD child, because that is evidence rather than a guess about how long work is allowed to take. An
+unreadable open-call count (NaN) counts as one open call, so unknown work in flight is never killed.
+
+### Decision
+
+A pure ladder in `desktop/health_watch.ts`: `ok -> quiet -> probe -> recover`. `quiet` shows the stall
+and does nothing. `probe` delivers the canned status ask as an OPERATOR note on the existing interject
+path, not a second prompt (the turn is still open, and two prompts on one session cross collectors).
+`recover` cancels and respawns in place. For the master session that means cancel, drop the wedged
+child, then `session/load` the SAME session id, because `restart()` alone would mint a fresh session on
+the next prompt and silently throw the thread away, which is worse than the stall it was fixing.
+
+Attempts are BOUNDED per stall episode and any real activity resets the budget. Past `maxProbes` it
+never probes again (no nag loop); past `maxRecovers` it never recovers again and SAYS the harness has
+stopped trying, so a permanently wedged provider cannot become a respawn loop. An unusable clock
+(NaN/Infinity/negative) yields `ok` even with a dead child: fail-closed here means an unreadable
+timestamp does not get to authorize a destructive action, since `dead` arrives from the same poll as
+the clock. A lane the USER stopped is never auto-revived, and `healthReport` short-circuits such a lane
+to `ok` rather than reporting a raw verdict about an action nothing will take.
+
+`HEALTH_PROBE_NOTE` explicitly says to continue afterwards, so a probe can never be misread as a stop
+order and end the work it was checking on.
+
+The route is `/api/session-health`, NOT `/api/health`. That path is already the ADR-0305 port-guard
+nonce probe and is the one route deliberately exempt from the token gate, because a foreign process
+squatting the engine port must be detectable before anything is authenticated. This was caught by
+booting the engine and finding the new route shadowed: reusing the path would have both hidden the
+route and hung session telemetry off an unauthenticated endpoint.
+
+### Verification
+
+`bun test desktop/health_watch.test.ts` 37 pass / 0 fail. `make demo-P-HEALTH.1` exits 0 and carries
+the ADR-0263 guarantee as its own named case: busy, silent, `openCalls: 1` stays `quiet` at 3 minutes,
+7 minutes, 30 minutes, and 10 HOURS, with the reason naming the open call. Also proven: inclusive
+thresholds, idle-is-always-ok, a dead child outranking an open call whether busy or idle, budget
+exhaustion saying so, the action gap holding a second tick 1s after a recovery, an unreadable clock
+yielding `ok`, and LIVE that a real lane keeps its id, turn count, and transcript while a user-stopped
+lane is left alone.
+
+LIVE against a booted engine: `/api/health` still returns the port-guard nonce unauthenticated,
+`/api/session-health` returns a real verdict with a plain-sentence reason, the same path without a token
+returns `forbidden`, and `/api/session-health/tick` returns `master: null` on an idle session (the
+correct no-action outcome). NOT exercised end to end: a real provider wedging mid-turn and being
+recovered by the ticker, which needs a genuinely stuck upstream to reproduce. The recovery path itself
+is covered by the lane-level demo and the pure ladder's `recover` verdict.
+
+### Links
+
+ADR-0263 (P-STALL.2, the cutoff this must not reintroduce), ADR-0186 (P-STALL.1, the visible-silence
+notice this shares its activity signal with), ADR-0305 (the `/api/health` port guard this route had to
+avoid), P-INTERJECT.1 (the operator-note path a probe rides), `desktop/health_watch.ts`,
+`desktop/acp_backend.ts`, `desktop/fleet_lanes.ts`.
+
+## ADR-0312 -- P-TOKENS.1 / P-FLEET.L9: a spend meter that refuses to invent numbers, and lane windows (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### What the provider actually reports
+
+"I want more fidelity into token usage per model to show as a small up arrow button above the send
+button, that allows the user to see token spend per tool calls, health checks, input tokens, output
+tokens, and other metrics on the fly."
+
+Over ACP, omp reports exactly three things: context fill (`used`), the context window (`size`), and
+`cost` in USD. It does NOT report per-turn output tokens on this path, and it does not report a cache
+breakdown. So a literal reading of the request cannot be satisfied honestly, and the tempting failure
+mode is to render `0` or `$0.00` for the parts that never arrived. That is the worst possible outcome
+for a spend readout: the user would budget against a fabricated figure.
+
+### Decision
+
+`desktop/renderer/token_meter.ts` makes provenance a field. Every `MeterRow` carries
+`measured: boolean`, and an unreported metric renders the words "not reported", never a plausible zero.
+Output tokens are labeled ESTIMATED (the renderer's own TokenSpeedEngine count) with a hint containing
+the word "estimate", and per-tool `ctxDelta` is ATTRIBUTION (context growth bracketed by two usage
+samples) that stays `null` and says so rather than showing 0 when no two samples bracket the call.
+
+The one distinction worth stating: a REPORTED cost of 0 renders `$0.00` and stays measured, because a
+reported zero is a fact while an unreported zero is an invention. Both are pinned by tests.
+
+The DOM layer renders rows verbatim and does no arithmetic and no formatting, so the honesty rules
+cannot be relitigated in a template. The button's `%` glyph is the only figure the DOM composes, and
+`pct === null` renders BLANK rather than 0%.
+
+### Lane windows (P-FLEET.L9)
+
+"I want to be able to resize using custom handlers the LUCID Fleet instances on the top and right, move
+them around by dragging them to snap positions."
+
+Resizing "on the top" was a missing handle, not a broken drag: `#fleetDock` had only `e`/`s`/`se`, and
+being bottom-right anchored it physically could not grow upward. It now has all eight, and
+`lane_layout.resizeShape` keeps the OPPOSITE edge pinned, so `y + h` is invariant under a north drag
+even once height pins at the minimum.
+
+Per-card resize needed a layout decision first. Cards are now bottom-anchored (`align-items: end`),
+which is what makes a top-edge drag coherent: the card grows UPWARD and the lane's own composer stays
+under the cursor doing the dragging, the chat-window mental model. That makes the sign inversion
+load-bearing: dragging UP is a negative `dy` and must INCREASE height, and it is pinned by an exact
+equality test because an inverted sign here makes the whole feature feel broken. The right edge maps to
+a grid column span with a half-track deadzone so it cannot jitter. Header drag picks a slot by
+nearest-center, bucketing rows by BOTTOM edge rather than top, because bottom-anchored cards in one row
+share a bottom and have different tops.
+
+A corrupt persisted layout yields an EMPTY layout rather than throwing, copying `share_dock.loadDockState`'s
+doctrine: a broken store must never brick the panel.
+
+### Verification
+
+`bun test desktop/renderer/token_meter.test.ts desktop/renderer/lane_layout.test.ts` 83 pass / 0 fail.
+`make demo-P-TOKENS.1` exits 0 with the anti-fabrication assertion stated negatively: a cold meter's
+rows contain no `$0.00` and no `0 tokens` and every provider row is unmeasured. Also proven: the
+measured-zero distinction, output rows always unmeasured with an "estimate" hint, `ctxDelta` attributed
+at +400 when bracketed and declining to guess when not, 70 calls keeping the newest 60, five reducers
+mutating nothing, health checks getting their own row, tone escalating at 75% and 90%; plus the
+geometry: the upward-drag sign inversion, the fixed bottom edge under a north drag (including once
+height pins), seven corrupt layouts degrading to empty, and `resizeShape` composing with
+`share_dock.clampToViewport`.
+
+NOT exercised by an automated test: the pointer gestures themselves and the popover DOM, for the same
+reason as ADR-0309 (no DOM test harness in this repo). Both files typecheck clean in isolation and the
+renderer bundles (134 modules), and all geometry and all numbers come from the two pure modules above,
+which are exhaustively tested. The gestures remain the honest gap.
+
+### Links
+
+ADR-0234 (P-SHARE.1/.2, the `share_dock` chassis whose viewport clamp this composes with), ADR-0263
+(why the meter counts health checks at all), invariant #11 (the one-text-child flex rule the popover
+rows follow), `desktop/renderer/token_meter.ts`, `desktop/renderer/lane_layout.ts`,
+`desktop/renderer/styles.css`.
+
+## ADR-0313 -- P-FLEET.L10: a lane you can dismiss, and the prebuilt-bundle trap that hid a whole increment (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### Part 1: the invisible increment
+
+ADR-0309..0312 shipped green: every test passed, every demo passed, `tsc` was clean, and the user saw
+NO CHANGE AT ALL in the running app. The cause is `dev.ts bundleApp()`: when
+`desktop/renderer/app.bundle.js` exists it is served verbatim and the engine NEVER compiles renderer
+source (ADR-0260, so Bun cannot module-load a `.ts` from a protected install dir). The artifact on the
+user's disk was five days stale, so renderer edits were real, committed, and unreachable. Restarting
+did not help and could not have.
+
+The verification that felt sufficient was `bun build renderer/app.ts --outfile /tmp/scratch.js`
+succeeding. That proves the code COMPILES. It says nothing about the bytes the app serves, which is a
+different claim entirely, and it is ADR-0303's vacuous green in its most expensive form: nothing fails,
+so nothing prompts a second look.
+
+Two fixes. First, the AGENTS.md END ritual now requires, for any `desktop/renderer/` change, running
+`cd desktop && bun run build-renderer` and then GREPPING THE SERVED RESPONSE from a freshly booted
+engine for a new identifier plus one retired identifier that must be ABSENT. Fetching `/app.js` is the
+only check that exercises the path the user actually gets. Second, this ADR records the trap, because
+the next person to edit the renderer will otherwise rediscover it the same way.
+
+### Part 2: dismissing a lane
+
+"I want to be able to remove a lane by hitting the x button again. I get that I can stop it, but now
+it's in the way until I restart LUCID again."
+
+Correct diagnosis of a real gap. `stop()` parked a lane in the `stopped` state and NOTHING ever removed
+it from `#lanes`. That was deliberate as far as it went (a stopped lane keeps a readable transcript and
+Respawn revives it in place), but there was no exit at all, so a finished lane held a grid column for
+the life of the process.
+
+`remove(laneId, force?)` is the exit, and the close button becomes a TWO-STEP gesture: a running lane
+stops, and a second click on an already-stopped lane dismisses it. Two steps rather than one because a
+single click must never be able to destroy work in flight, and because the stopped state is genuinely
+where you read what the lane did. A mid-turn dismissal is REFUSED with the fix named, not force-killed.
+The glyph turns red once armed, since one icon silently doing two different things is how a user loses
+something they meant to park.
+
+Releasing promotion first is not a nicety. The engine demotes server-side, but the composer's target
+lives in the renderer and would not hear about it, leaving the badge pointed at a lane id that no longer
+resolves and every later prompt failing with "unknown lane". The dismissal therefore tells the composer
+directly rather than relying on two layers to agree by luck.
+
+Dismissal is safe to offer precisely because it destroys so little: only the in-memory replay
+transcript. The lane's omp session log stays on disk and its spawn line stays in the durable ledger, so
+the timeline still labels and opens it (P-FLEET.L5: review is an INDEX over files omp already persists,
+never a second recording). No new ledger event was added for removal: the frozen event set is already
+wide enough to attribute the session, and widening a contract for "the user closed a card" would buy
+nothing.
+
+### Verification
+
+`make demo-P-FLEET.L10` (an alias onto the L8 demo, section 8) exits 0 proving: a busy lane refuses with
+`"lane is mid-turn - stop it first, then dismiss it"` and stays exactly where it was; dismissing a
+PROMOTED lane releases the composer so nothing strands; the lane leaves `status()` and holds no
+transcript; a second dismissal is a quiet no-op; and the spawn ledger line OUTLIVES the lane.
+
+Then the new ritual, run on itself. Bundle rebuilt (8.80 MB), engine booted fresh on port 5399, and the
+SERVED bytes grepped: `/app.js` carries `fleet-dismiss`, `fleetRemove`, `dismissLane`, `data-lane-note`
+and `fleet/remove`; `/styles.css` carries both `.fleet-dismiss[data-gone="1"]` rules. Retired
+identifiers `fleet-tool-detail`, `fleet-diff-pre` and `outputHtml` are ABSENT from the served bundle.
+LIVE end to end: a real lane promoted, stopped, and dismissed returned the lane id gone from
+`/api/fleet/status` (0 occurrences) and `/api/fleet/promoted` back to `{lane: null}`.
+
+NOT exercised: the two-click gesture itself, for the standing reason that this repo has no DOM test
+harness. The state machine behind it is fully covered above; the clicks are not.
+
+### Links
+
+ADR-0260 (P-WINBOOT.2, why the prebuilt bundle exists and must not be removed), ADR-0303 (the vacuous
+green), ADR-0274 (P-FLEET.L4, the stopped-is-recoverable state this adds an exit to), ADR-0310
+(P-FLEET.L8, the promotion this must release), AGENTS.md END ritual step 4, `desktop/fleet_lanes.ts`
+(`remove`), `desktop/dev.ts` (`/api/fleet/remove`), `desktop/renderer/fleet_grid.ts` (`dismissLane`).
+
+## ADR-0314 -- P-FLEET.L11: the agent was never told it had been moved, and the card never got the turns (2026-09-04)
+
+**Status:** Accepted -- BUILT. Corrects ADR-0310 and ADR-0312.
+
+### Three defects, reported from one session
+
+**1. The resize grip was on the wrong edges.** ADR-0312 put the per-card handles on the top and right and
+bottom-anchored the cards, reasoning that a top-edge drag grows the transcript upward with the lane's own
+composer staying under the cursor. Rejected in use, and the user is right: the bottom-right corner is
+where a window grip belongs, and bottom-anchoring moved every card in a row whenever one card grew. Now
+`align-items: start`, handles on `s`/`e`/`se`, and `heightFromDrag` takes the conventional sign (drag DOWN
+is positive dy and grows). `snapSlot` had to flip with it: it bucketed rows by BOTTOM edge because
+bottom-anchored cards in a row share a bottom. Top-anchored cards share a TOP, so keying on the bottom
+would have scattered one visual row across several buckets and snapped drags to a row the user was not
+pointing at. The test that pinned the old keying was rewritten with a case that actually distinguishes the
+two (a tall card beside a short one, pointer low but over the short card's column).
+
+**2. The back button described the wrong object.** It said "Back to main chat", which reads as navigating
+away. The action releases the LANE, so it now says "Return to Fleet Agent". Pinned by exact-string test,
+because this is the user's own wording and it should not drift.
+
+**3. THE REAL DEFECT: nothing ever told the agent it had been moved, and the card never received the
+turns.** Observed live: a lane was driven from the main composer for several turns, released, then asked
+to "restate what was written in the main composer" and the model had no idea what that referred to and
+guessed.
+
+That splits into two independent bugs, both mine:
+
+- **The agent was never informed.** `promoteNotice`/`demoteNotice` were written as provenance and land in
+  the human transcript and the ledger. Neither ever reached the model. The session is the SAME session
+  throughout, so every byte of content was present, but nothing had ever stated WHICH SURFACE was driving
+  it, so "the main composer" was an unresolvable reference. Fixed with `promoteAgentNote`/`demoteAgentNote`
+  delivered on the operator-interject path (operator-origin, outside untrusted delimiters, the same
+  channel P-HEALTH.1's probe uses). They name the surface in the user's vocabulary, because the user will
+  use those words in the very next turn, and they explicitly say to continue so an attach or release can
+  never read as a stop order.
+
+- **The card never saw the composer's turns.** `fleet_grid` only ever received events from streams IT
+  owns (`fleetPrompt`/`fleetDrain`/`fleetRetry`); it never subscribed to `observe()`. So while the
+  composer drove a promoted lane, the card got nothing, and releasing the lane dropped the user back to a
+  transcript that stopped at the moment of promotion, with no record of the work or the tool calls in
+  between. The engine's `lane.transcript` was correct the whole time (`prompt()` records into it
+  regardless of who asked), but the card renders from its own richer transcript, which had a hole.
+  Fixed: `syncFollow` holds a `fleetWatch` open for exactly as long as `LaneView.promoted` is true and the
+  card is not itself streaming, feeding events through the SAME `onLaneEvent` the card's own prompts use.
+  So a composer-driven turn lands in the card identically to a card-driven one, tool chips and all. Gated
+  on `!streaming` because when the card owns the turn the events already arrive on the prompt stream and a
+  second subscription would render everything twice. The follow is stopped on dock close, on dismissal,
+  and when a lane vanishes, or it would hold one NDJSON connection per promoted lane for the process life.
+
+### Verification
+
+89 pure tests green across the two touched keystones (the rewritten row-keying case and four new
+agent-note cases: the phrase the user will say is present, the release states the history is still the
+model's own, both are operator-framed with "no reply needed" and "continue", and an unreported field says
+so rather than rendering blank). All four demos green; `tsc` 0 errors.
+
+Then the ADR-0313 ritual, which is what makes this checkable at all. Bundle rebuilt (8.82 MB) and the
+SERVED bytes inspected: `/app.js` carries "Return to Fleet Agent", `promoteAgentNote`, `demoteAgentNote`,
+`syncFollow`, "OPERATOR NOTE" and handles `s`/`e`/`se`, with "Back to main chat" and handles `n`/`ne`
+ABSENT; `/styles.css` carries `align-items:start` and the `s`/`e`/`se` rules with `ne` ABSENT. LIVE: an
+operator note POSTed for a lane target returned `pending: 1`, drained verbatim on the next read, and the
+second read returned empty, proving exactly-once delivery on the channel the promote note rides.
+
+NOT exercised: a real model reading the note and answering a "what happened in the main composer" question
+correctly. That needs a live provider turn and is the honest boundary; what is proven is that the note is
+generated, is worded to resolve the reference, and reaches the session exactly once.
+
+### Links
+
+ADR-0310 (P-FLEET.L8, the promotion this corrects), ADR-0312 (P-FLEET.L9, the drag direction this
+reverses), ADR-0313 (the served-bytes ritual used to verify this), P-INTERJECT.1 (the operator-note
+channel), ADR-0263 (the "never read as a stop order" rule these notes inherit),
+`desktop/renderer/composer_target.ts`, `desktop/renderer/lane_layout.ts`, `desktop/renderer/fleet_grid.ts`
+(`syncFollow`), `desktop/renderer/app.ts`.
+
+## ADR-0315 -- P-TOKENS.1 withdrawn from the composer: the spend button is removed, the accounting stays (2026-09-04)
+
+**Status:** Accepted -- BUILT. Withdraws the composer surface of ADR-0312.
+
+### Decision
+
+"The token spend button is unneeded at this time remove it." Removed, as a clean cutover rather than a
+hide: the markup, the popover, the click wiring, the dismissal listeners, the coalesced repaint, and
+every reducer call that existed only to feed it are all deleted, not disabled behind a flag. A hidden
+button is a maintenance cost with no user, and a feature flag for something nobody asked to keep is
+worse than the button was.
+
+### What was kept, and why that is not a shim
+
+`desktop/renderer/token_meter.ts` and its 36 tests STAY, because the fleet card is a genuine second
+consumer that predates this removal: every lane card folds its OWN usage samples through `onUsage` and
+reads `meterBadge` for the chip value and for the warn/danger thresholds, so the card chip and any future
+spend surface escalate at the same fill. Deleting the module would have meant re-deriving that inside
+`fleet_grid.ts`, which is exactly the duplication the module exists to prevent.
+
+`meterRows`/`toolRows`/`modelRows` are kept too, even though nothing renders them today. They ARE the
+honesty contract (measured versus estimated, "not reported" versus a fabricated `$0.00`), they are
+exhaustively tested, and the next surface that shows spend must inherit that contract rather than invent
+a friendlier-looking one. Keeping a tested pure function with no current caller is cheap; re-litigating
+anti-fabrication in a new template is not.
+
+### What went with it, and what deliberately did not
+
+Removed as newly-dead: `meterModelSpend`, `appendMeterRows`, `renderTokenPop`, `sectionHead`,
+`paintTokenMeter`/`paintTokenMeterNow`, `closeTokenPop`/`toggleTokenPop`, `resetTokenMeter`, the module
+`meter` state, and the whole `laneWatchTool`/`settleLaneWatchTool` open-call tracking (which existed only
+to attribute per-call spend to the popover). A `--noUnusedLocals` pass confirms no orphan is left behind:
+the 5 remaining unused locals in app.ts are all pre-existing and unrelated.
+
+DELIBERATELY KEPT: the `health` ChatEvent still renders its transcript note. That was never part of the
+button. `noteHealth` lost its `onHealth` count and kept its `.evt` note chip, because an automatic probe
+or in-place recovery still has to be visible work rather than an unexplained gap. Also kept: the status
+ring and metrics rail continue to follow `state.liveUsage`, which is pre-existing behavior the button
+merely sat beside, and which correctly follows the attachment when the composer is driving a lane.
+
+### Verification
+
+`tsc --noEmit` 0 errors; all four demos green (the token demo still passes because the module is
+untouched, and its header and the Makefile target now name the fleet card as the consumer rather than a
+popover that no longer exists). ADR-0313 ritual: bundle rebuilt (8.78 MB, DOWN from 8.82) and the SERVED
+bytes checked for ABSENCE, which is the assertion that matters for a removal. Gone from `/app.js`:
+`tokenMeterBtn`, `tokenMeterPop`, `token-meter-btn`, `token-meter-pct`, `toggleTokenPop`,
+`paintTokenMeter`, `resetTokenMeter`, `meterModelSpend`, `appendMeterRows`. Gone from `/styles.css`:
+`token-meter-btn`, `token-pop`, `token-row`. Still present, proving the cut was surgical: `fleet-usage`
+and `meterBadge` in the bundle, and 3 `fleet-usage` rules in the stylesheet.
+
+### Links
+
+ADR-0312 (P-TOKENS.1, the surface this withdraws), ADR-0313 (the served-bytes ritual, used here to prove
+an ABSENCE rather than a presence), `desktop/renderer/token_meter.ts` (kept, tested, one live consumer),
+`desktop/renderer/fleet_grid.ts` (that consumer), `desktop/renderer/app.ts`, `desktop/renderer/styles.css`.
+
+## ADR-0316 -- a login is confirmed by the vault, not by an exit code: the OAuth badge went green while the model picker stayed empty (2026-09-04)
+
+**Status:** Accepted -- BUILT. Fixes a defect in the `auth-broker login` flow, reported from Linux Mint.
+
+### The report
+
+"ChatGPT models aren't showing up after I did an OAuth in the browser and it shows that it's
+authenticated." Both halves of that sentence were true at the same time, which is what made it
+confusing: the provider badge said OAuth active, and the model picker had nothing in it.
+
+### Why both could be true at once
+
+The badge and the model list read two different sources, and nothing reconciled them.
+
+`providerAuth()` (`desktop/auth_status.ts`) reads omp's vault SQLite directly - `~/.omp/agent/agent.db`,
+table `auth_credentials` - and sets `oauthActive` the moment a row exists with `credential_type='oauth'`
+and `disabled_cause IS NULL`. It never asks omp what models it has. The model list is built by omp's
+`ModelRegistry` at omp SPAWN time, so a credential that appears after that spawn is invisible until the
+omp child is respawned. The only bridge between the two was one line in `startOauthBroker`:
+
+    proc.exited.then((code) => { if (code !== 0) return; ...; backend.restart(); })
+
+### The defect
+
+The broker is not a short-lived command. It opens the provider in a browser and runs a LOCAL loopback
+callback server (OpenAI's Codex broker binds a fixed :1455) to catch the redirect. That process can exit
+non-zero, be torn down noisily, or linger long after it has already written a perfectly good token. In
+every one of those cases the token is in the vault, the badge flips green because the badge reads the
+vault, and omp is NEVER respawned. The user sees a successful sign-in over an empty picker, and only a
+full app restart clears it. `/api/auth/oauth` did not restart either; only `/api/auth/key` did.
+
+The renderer made it worse instead of catching it. `pollOauthThenRefresh` carried the comment "the server
+already respawned omp when the broker exited" and then showed a "Connected - models updated" toast over a
+stale list. The one surface positioned to notice the gap instead asserted the thing that was false.
+
+### Decision
+
+The vault is the ground truth for whether a login happened, so ask the vault, not the process.
+
+`credentialSnapshot(provider)` is taken BEFORE the broker spawns and again when it exits: a read-only
+fingerprint of `id`, `updated_at`, and a `Bun.hash` of the token blob, scoped to `credential_type='oauth'`
+so a coexisting API-key row cannot be mistaken for a login. `landedFreshCredential(before, after)` reports
+a genuine write on a first row, a replaced row, a rewritten blob, or a bumped `updated_at`. The broker's
+exit code is no longer consulted at all.
+
+This also closes a hazard the old code had in the opposite direction. It cleared `disabled_cause` and
+respawned on ANY clean exit, including one where nothing was written, which would re-arm a credential the
+user had deliberately logged out of, behind their back. A failed login now leaves the snapshot identical,
+so that repair is never attempted.
+
+Second, independent net: `pollOauthThenRefresh` now calls `bridge.refreshConfig()` (the pre-existing
+`/api/config/refresh`, which respawns omp and returns the fresh list) before `loadConfig()`. That endpoint
+already existed for exactly this purpose and had simply never been wired into the OAuth path. It makes the
+success path self-healing even for a broker that never exits at all, and it means the toast can no longer
+claim an update it did not cause.
+
+### What this does NOT fix, and how to tell the difference
+
+Two adjacent modes present identically to a user and are NOT this bug.
+
+STALE DISABLED FLAG. omp's `login` writes a fresh token but does not clear a `disabled_cause` left by a
+prior `logout`, and omp only honors a credential when that column is null (`desktop/auth_vault.ts`). This
+mode SURVIVES an app restart. Because `providerAuth()` also filters on that column, LUCID's own badge is
+GREY here, so it matches "the browser said I was authenticated" rather than "LUCID says I am". Repair:
+`bun run tools/omp_auth_reenable.ts openai-codex`, then restart.
+
+WRONG EXPECTATION. `openai-codex` OAuth grants the ChatGPT / Codex SUBSCRIPTION models and nothing else.
+The shipped Settings hint already says so, and `harness/voice/catalog.ts` carries the same caveat for the
+speech API. An account with no entitlement yields an empty list with nothing broken.
+
+`bun run tools/omp_auth_status.ts` separates all three, because it prints the disabled cause that the
+badge hides by filtering on it.
+
+Ruled out for this report: the port-keyed `safeStorage` divergence is win32-only (`desktop/main.ts` notes
+that macOS Keychain and Linux libsecret already key by app name), and the OAuth token lives in omp's
+`agent.db` rather than the libsecret-backed `lucid-cred-vault`, so a missing Mint keyring cannot produce a
+GREEN OAuth badge.
+
+### Verification
+
+`desktop/auth_vault.test.ts`, 15 new tests, written for the refusals rather than the happy path: a
+re-login that rewrites the blob inside the same one-second `updated_at` tick is still detected (the clock
+cannot be trusted at that resolution); a replaced row carrying an identical token at an identical clock is
+detected by `id`; a failed login that changed nothing is NOT fresh, and neither is a failed login against
+a logged-out row (the anti-resurrection guarantee, which is what protects a user's explicit logout); an
+API-key row is not an OAuth login; an absent or corrupt vault reports "nothing there" instead of throwing;
+and the snapshot never contains the token blob.
+
+67 pass / 0 fail across auth_vault, budget_gate, provider_hub, voice/catalog and adr_numbering.
+`tsc --noEmit` clean on all three touched files; the 2 remaining `fleet_grid.ts` errors are pre-existing
+in-flight work, confirmed by stashing (3 errors before this change, 2 after).
+
+Caught and repaired during this work: the 15 new cases were first written with a whole-file `write`,
+which CLOBBERED the 9 committed tests already in `desktop/auth_vault.test.ts` (the
+`clearDisabledCredential` / `disconnectCredential` / `clearAllOauthCredentials` suites from commit
+979f522). Noticed only because `git status` reported the file as MODIFIED rather than untracked. Restored
+from HEAD and the new cases appended instead, with prefixed helpers (`snapVault` / `snapRun` /
+`snapLogin`) so nothing collides with the original fixtures; the file now runs 24 tests, 9 original and
+15 new. The lesson is narrow and worth pinning: a new test file for an EXISTING module is very often not
+a new file, so `write` on a `*.test.ts` path needs a tracked-state check first.
+
+ADR-0313 ritual, because `desktop/renderer/app.ts` was touched: bundle rebuilt and the SERVED bytes
+inspected, confirming `refreshConfig(); } catch {} await loadConfig()` sits immediately before the
+"Connected - models updated" toast in `/app.js`. A source typecheck would have proved nothing about the
+bytes the app actually serves.
+
+### Links
+
+`desktop/auth_vault.ts` (`credentialSnapshot`, `landedFreshCredential`), `desktop/auth_vault.test.ts`,
+`desktop/dev.ts` (`startOauthBroker`), `desktop/renderer/app.ts` (`pollOauthThenRefresh`),
+`desktop/auth_status.ts` (`providerAuth`, the badge), `tools/omp_auth_status.ts` and
+`tools/omp_auth_reenable.ts` (diagnosis and repair), `desktop/netdiag.ts` (the loopback-callback failure,
+a different mode), ADR-0210 (the Copilot broker stdin prompt in the same function), ADR-0313 (the
+served-bytes ritual).
+
+
+## ADR-0317 -- P-MODEL.2: the picker default follows the user, and the catalog stops going stale (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user reported that the model picker "keeps defaulting to Claude 4.8 Opus" even though newer
+models exist, that GPT-6 was missing entirely, and that Fable 5.1 was absent. Three separate defects wore
+one costume:
+
+1. **A stale placeholder painted first.** `bridge.ts` `FALLBACK_CONFIG` hardcoded Opus 4.8 / Sonnet 4.6 /
+   Haiku 4.5, and `app.ts` `state.model` hardcoded `claude-opus-4-8`. Both are pre-config placeholders shown
+   while the ACP session warms. The real resolver (ADR-0250 `resolveStartupModel`) was already choosing
+   correctly, but the user sees the placeholder, and on a cold boot it often outlives the wait.
+2. **The renderer fought the backend.** `maybeApplyDefaultModel` consulted only `chosenModel`, which is set
+   ONLY on an explicit picker click. A user who switched models any other way had an empty `chosenModel`
+   and got re-defaulted by a heuristic on every launch. The backend was honoring `lastModel`; the renderer
+   then overrode it.
+3. **Ranking was an artifact, not a decision.** The "best configured" branch sorted ACROSS families by raw
+   version digits, so `gpt-6-astra` [6] beat `claude-opus-5` [5] because 6 > 5. `model_families.ts` itself
+   documents that cross-family version compare is meaningless. Worse, `capabilityTier` matched flagships
+   with a token list containing the literal `gpt-5`, so `gpt-6-astra` matched NOTHING and a brand-new
+   OpenAI flagship was ranked as a mid-tier workhorse.
+
+**Decision.**
+
+- **A curated `DEFAULT_MODEL_PREFERENCE`** (ordered, best-first) plus `preferredDefaultModel()` in
+  `model_families.ts`. A new flagship is now a one-line edit to an explicit list rather than an emergent
+  property of a regex race. It drops auxiliary / deprecated / China-origin / RAG routes, applies the
+  caller predicate, and falls back to `topModel` so an unknown-but-configured provider still resolves.
+- **`capabilityTier` is version-aware for GPT** (`gptVersion >= 5` is flagship), so every future generation
+  is ranked correctly without an edit.
+- **The preference ladder is explicit**: `chosenModel` (an explicit click is never re-litigated), then
+  `lastModel` (what the composer actually last ran on, the fix the user asked for), then the curated
+  default. A remembered model wins only while still offered and still selectable.
+- **One capability heuristic, not three.** `startup_model.ts` had a private `capability()` and
+  `trainer_model.ts` a `trainerTier()`, both hand-copied from `capabilityTier` and both drifted (neither
+  knew GPT-6). Both now delegate; `trainerTier` only re-bases 0..2 onto its displayed 1..3 scale.
+- **API-only models are a FAMILY, not an id.** `isApiOnlyModel` covers Fable and Mythos. The credential
+  gate and the privacy/billing notice were keyed on the literal `claude-fable-5`, so Fable 5.1 would have
+  shipped ungated and unwarned. Gov-routed copies are excluded: they draw on the AskSage credential, so an
+  Anthropic key is irrelevant to whether they can run.
+- **Catalog:** `gpt-6-astra` (1M ctx), `claude-fable-5-1`, `claude-mythos-5-1` added to the gov catalog,
+  `MODEL_CTX`, `MODEL_INFO`, and `tools/session_metrics.ts CTX_WINDOW`.
+- **Pricing corrected** in `model_pricing.ts`, which is load-bearing for the report cost metric: Opus 5 is
+  $5/$25 (was inheriting the generic Opus $15/$75, a 3x overstatement); Fable/Mythos are $10/$50 (were
+  falling through to the sonnet-ish default, a >3x UNDERstatement on the priciest models in the catalog);
+  the GPT family row widened from `gpt-?5|gpt-?4` to `gpt-?\d` so a new generation lands on an in-family
+  estimate instead of an unrelated default. The rows are ORDER-SENSITIVE and now carry tests that guard
+  the ordering, because a future insert above them silently re-prices the flagships.
+
+**Consequences.** A fresh install opens on Opus 5. A returning user opens on whatever they last used, no
+matter how they selected it. Fable 5.1 is gated behind a connected Claude account and states the
+pay-as-you-go billing consequence before the first call, not after the invoice.
+
+**Not verified.** The AskSage gov ids for Fable 5.1 / Mythos 5.1 come from the vendor announcement and are
+NOT live-confirmed against a CIV `/get-models`; the gateway may expose them under its `google-claude-`
+prefix. Noted in place in `asksage_extension.ts`.
+
+**Files:** `desktop/renderer/model_families.ts`, `desktop/startup_model.ts`, `desktop/trainer_model.ts`,
+`desktop/model_pricing.ts`, `harness/omp/asksage_extension.ts`, `desktop/renderer/app.ts`,
+`desktop/renderer/bridge.ts`, `desktop/dev.ts` (`/api/model/last`), `tools/session_metrics.ts`.
+
+
+## ADR-0318 -- P-EVAL.4: ACP cannot name a tool, so the tool names itself (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user reported the engineering reports "seem to be missing a lot of details they used to
+have". Two causes, one structural and one a policy that was too narrow.
+
+**The structural one.** omp builds its ACP tool_call update in `buildToolCallStartUpdate`
+(`node_modules/@oh-my-pi/pi-coding-agent/src/modes/acp/acp-event-mapper.ts:410-417`) and it carries exactly
+five fields: `toolCallId`, `title`, `kind`, `status`, `rawInput`. **The tool NAME is never transmitted.**
+So:
+
+- `kind` is a coarse enum (`mapToolKind`: read | edit | execute | search | fetch | think | other), which
+  means EVERY custom tool and EVERY MCP tool arrives as `"other"`.
+- `title` used to read `` `${toolName}: ${subject}` ``, which is what the desktop scraped instead. With
+  intent tracing on, `buildToolTitle` returns the MODEL'S PROSE, so the name vanished from there too. That
+  is the same shadowing that broke `preview_open` and the preview activity pills (ADR-0308).
+
+Net product effect: the report per-tool breakdown degraded to `other x23`, and the chat chips lost their
+labels. This was never a report bug; the report was faithfully rendering the only thing it was given.
+
+**Decision: an explicit self-report channel, exactly as ADR-0308 established for `preview_open`.** The hook
+API inside omp DOES have the name: `pi.on("tool_call")` fires in-process with `{ toolName, toolCallId,
+input }`, and `pi.on("tool_result")` adds `isError`. A new `harness/omp/tool_meta_extension.ts` posts
+`{ id, name, ok? }` to a token'd loopback URL (`LUCID_TOOL_META_URL`), and both sides join on `toolCallId`,
+which each already has.
+
+Design points that matter:
+
+- **A separate extension, not a line in the gate.** `security_extension.ts` already has a `tool_call` hook
+  and can BLOCK. This one is observability: it never inspects content, never returns a verdict, never
+  awaits. Keeping it separate keeps reporting work off the security decision path, and means a failure here
+  can only cost a label, never a security decision.
+- **Deliberately fail-SOFT, which is the opposite of the gate.** Telemetry is not a security control. If the
+  URL is unset, the POST fails, or the hook API is missing, the correct outcome is a coarser report, not a
+  blocked tool call.
+- **A relay, not a cache.** `noteToolMeta` validates and emits; the RENDERER merges the start and result
+  reports per turn. That is the correct scope: a per-turn map cannot leak a name from an earlier turn onto
+  a reused id and cannot grow unbounded. A second copy in the backend would have needed its own eviction
+  policy and bought nothing.
+- **`ok` absent means UNKNOWN, never "passed".** A non-boolean `isError` leaves `ok` unset, because the
+  report renders measured-vs-unmeasured from exactly that distinction.
+
+**The policy one.** `maybeAppendReport` only offered the CTA when some tool had `path && (add|del)`, on the
+reasoning that "the report evaluates WRITTEN work". That silently swallowed the report for a large class of
+real engineering turns: an investigation that only read and searched, a debugging turn that only ran
+commands, a review turn. Those have plenty to evaluate (tool count, failure rate, wasted tokens, context
+efficiency, latency). It now offers on ANY tool-using turn; a pure-text answer still offers nothing,
+because there genuinely is nothing measured.
+
+**The dead-metric half (report side).** Four of ten metrics were permanently `needs_signal` because nothing
+ever populated `RunRecord.tests` / `.ac` / `.cleanLoc` / `.dod`. A report where 400f the table says "no
+signal" reads as broken. These are now DERIVED from telemetry that is always present, on a **second,
+render-only axis** (`EvalMetrics.derived` + `EvalMetrics.sources`), and every row is labeled
+`measured | derived | not measured`. The measured metrics compute byte-identically to P-EVAL.1 and that is
+what persists, because `Metric.tier` is written verbatim into `eval_metrics.tiers` (migration 0011) and
+cross-run averaged: letting a report-time proxy into a persisted value would make the rollup average one
+real AC check against one tool-failure guess. **The DuckDB ledger keeps storing null-not-fake** (invariant
+10). A derived proxy can never render as a measured spec check.
+
+**Consequences.** The breakdown reads `read x14, edit x6, bash x3 (1 failed)`. A turn with no self-reports
+degrades honestly to an `unattributed` bucket that reconciles against the tool count, rather than a
+mislabeled `other x23`. New report sections: Tool activity, Files touched, Not measured this run.
+
+**Files:** `harness/omp/tool_meta_extension.ts` (+test), `harness/brief/evals.ts`,
+`harness/brief/eval_report.ts`, `desktop/acp_backend.ts`, `desktop/dev.ts` (`/api/tool/meta`),
+`desktop/renderer/app.ts`, `desktop/renderer/bridge.ts`, `desktop/renderer/chat_events.ts`.
+
+
+## ADR-0319 -- P-KG.3: the agent can finally write to the knowledge graph, and a locked vault stops lying (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user asked for the knowledge graph to be "easier for agents to write and read from when
+unlocked, using native tools to omp and this harness, and indexed if necessary". Agents had exactly ONE
+knowledge tool, read-only (`knowledge_search`, ADR-0220), and **no write path at all**. The personal
+encrypted graph reached the model only as a server-injected `<user-profile>` preamble, so "remember that I
+prefer X" was a promise the product could not keep.
+
+**Decision.** Two new omp-native tools through the SAME `pi.registerTool()` surface (that IS the native
+surface; omp ships no retain/recall of its own):
+
+- **`memory_recall`** (approval `read`) -> `POST /api/kg/recall`. Every hit is wrapped in
+  `UNTRUSTED_CONTENT_START/END`. The user's own stored facts are still DATA, never instructions: a stored
+  fact that reads like a command does not become one by being in the graph.
+- **`memory_retain`** (approval `write`) -> `POST /api/kg/retain`. `write` was chosen against omp's own
+  definition (`extensions/types.ts:445`: mutates state without executing code). Declaring it is
+  load-bearing, because an OMITTED approval defaults to `exec`.
+
+The whole decision layer is the PURE `harness/personal/agent_kg.ts` (lock / trust / compartment / shape
+gates plus ranking), so it is unit-tested with no crypto, fs, or HTTP.
+
+**The invariants that shaped it.**
+
+- **Fail-closed in BOTH directions, and the two failure modes are DISTINGUISHABLE.** A locked vault reports
+  `locked` with a reason. It must never be an empty success on a read, which reads to a model as "the user
+  has told me nothing", and never a silent success on a write, which teaches the model it has memory it
+  does not have. Both are worse than an error.
+- **Trust is assigned by the SERVER, never taken from the payload.** An agent does not get to declare its
+  own input trusted (the same discipline as `promoteFactGated`). Agent writes land as `untrusted`:
+  recallable, and treated as data by `buildRecallFromGraph`. `BLOCKED_TRUST` is IMPORTED from
+  `promotion_gate.ts` rather than re-listed, because two copies of that set is how a `suspicious` fact
+  eventually slips through one path and not the other. This is correctness keystone #2 and
+  `promotion_gate.ts` / its test are untouched.
+- **A quarantined fact never leaks back on READ either.** `searchGraph` filters on the same set.
+- **An agent may NEVER write into CUI**, even with the CUI store unlocked and CUI active. CUI is
+  heightened-handling data in its own isolated store with its own DEK (ADR-0014); classifying something as
+  CUI is a call only the user may make. The compartment comes from the session, so a payload-injected
+  `scope` is ignored outright.
+- **NO plaintext index on disk, deliberately.** The personal graph is encrypted at rest precisely so its
+  contents are unreadable without the passphrase. A vector or FTS index file would be a plaintext shadow of
+  exactly that content sitting next to the vault it exists to protect. So ranking happens in memory over
+  the already-decrypted graph while unlocked; these graphs are hundreds of facts, not millions. The
+  separate, NON-secret workspace KB (`harness/kb`) keeps its embeddings index. This is the answer to
+  "indexed if necessary": here it is necessary that it is NOT.
+
+**Bug found and fixed next door.** `addReportToKg` (ADR-0117) called `upsertEntity` + `addFact` and never
+called `save()`. Store mutations are in-memory until `save()` (`store.ts:139`), so every report ever pushed
+to the KG survived only until the next lock or restart, then vanished with no error. Every other mutating
+seam (`forgetFact`, `relateEntities`) already saved.
+
+**Files:** `harness/personal/agent_kg.ts` (+test), `harness/omp/knowledge_extension.ts` (+test),
+`desktop/personal.ts` (`agentRecall` / `agentRetain`), `desktop/personal_agent_kg.test.ts`,
+`desktop/dev.ts` (both routes + the two token'd env URLs), `harness/memory/promotion_gate.ts` (export only).
+
+
+## ADR-0320 -- P-THEME.1: light mode and colour themes, and the token that would have broken them (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user asked for "a light mode and different colour themes available in the settings like
+Discord or Grokbot have". There was no theme mechanism at all: no `prefers-color-scheme`, no `data-theme`,
+no toggle, no persisted field. `styles.css` had exactly one `:root` block (25 colour tokens, dark-only) and
+the 4600-line file carried roughly 80 to 120 further hardcoded colours that bypassed those tokens
+entirely, so flipping the tokens alone would have produced a half-themed app.
+
+**Decision.** Seven themes: `lucid-dark` (the current look, byte-identical), `midnight`, `slate`, `ember`,
+`contrast` (AAA), `lucid-light`, `paper`. `theme.ts` is the single registry; `styles.css` holds one
+`:root[data-theme="<id>"]` palette block per theme; `[data-theme]` lives on the DOCUMENT ELEMENT.
+
+- **Every theme block declares EVERY token.** A test parses `styles.css` from disk and asserts it, because
+  a theme that inherits one colour from the dark base by accident is exactly how a light theme ends up with
+  unreadable dark-on-light text. The 25 colour tokens grew to 78 as the escapees were tokenized (body
+  gradient, scrollbars, titlebar, emboss, badges, and the `lucidGlow`/`piGlow` keyframes that held rgba
+  COPIES of the accent). Keyframes cannot read a per-theme `var()` the way those rgba literals were
+  written, so each theme now publishes `--*-rgb` channel triplets and the derived tints, shadows, emboss
+  and focus ring are computed ONCE from them rather than duplicated per theme.
+- **`lucid-dark` IS the bare `:root`**, via the grouped selector `:root, :root[data-theme="lucid-dark"]`:
+  one block, both roles, zero duplication, and it still gives an explicit dark pick a real attribute block.
+- **The flash-of-wrong-theme problem, and why it needed a CSS answer.** The choice is persisted
+  SERVER-side (`~/.omp/lucid-gui.json` via `/api/settings`), which is an async fetch, and the renderer CSP
+  is `script-src 'self'` so `index.html` cannot carry an inline bootstrap script. Without a synchronous
+  source the body paints in the old theme and then snaps, on every launch. Two mitigations, both needed:
+  the choice is mirrored into `localStorage` and applied as the FIRST statement of `app.ts`, and
+  `styles.css` answers `@media (prefers-color-scheme: light)` on `:root:not([data-theme])` so a
+  first-EVER launch on a light OS is already correct with no JS at all. The `:not([data-theme])` is
+  load-bearing: once the attribute is set, an explicit choice must win over the OS.
+- **"Match system" is a real state, not a guess.** A synthetic tile CLEARS the stored choice, and a
+  `matchMedia` listener re-resolves on an OS flip ONLY while no explicit choice exists.
+- **Invariant 11 is load-bearing in the picker.** `.theme-grid` is `repeat(auto-fill, minmax(220px, 1fr))`,
+  `.theme-nm` owns ONE ellipsizing line, and `.theme-opt` is a GRID with areas `"sw nm" / "bl bl"`, NOT a
+  flex row holding raw text beside inline tags, which is what shatters a blurb into stacked slivers.
+- **Coverage beyond the main window.** Monaco gains a registered `lucid-light` and `applyEditorTheme()`
+  re-themes the live instance (a no-op before Monaco loads, and the recorded value is picked up on first
+  open). `trainer.html` is a same-origin iframe with its own document and its own token block, so it
+  self-syncs by reading `window.parent.document.documentElement.dataset.theme` plus a MutationObserver.
+
+**Consequences.** Theme is stored as an OPAQUE STRING server-side and is deliberately NOT validated against
+a theme list there: the renderer registry is the source of truth for which ids exist, `resolveTheme` already
+treats an unknown id as unset, and validating server-side would duplicate the list and break on every new
+theme. A junk value is inert, not dangerous: it only ever reaches a `[data-theme]` attribute via the DOM API.
+
+**Files:** `desktop/renderer/theme.ts` (+test), `desktop/renderer/styles.css`,
+`desktop/renderer/ide_panel.ts`, `desktop/renderer/trainer.html`, `desktop/renderer/app.ts`,
+`desktop/renderer/index.html`, `desktop/settings_store.ts`, `desktop/dev.ts`, `desktop/renderer/bridge.ts`.
+
+
+## ADR-0321 -- P-PREVIEW.12: the preview refused most of what a model produces, and blocked the rest in silence (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user reported that "the preview feature seems to make a lot of models not be able to show
+what they want in the preview panel". Two independent causes, and the second is the more interesting one.
+
+**Cause 1: the gate was `/\.(html?|svg)$/i`.** Every `.md`, `.png`, `.json`, `.csv`, `.txt`, `.log`, `.pdf`
+was refused, with the agent-facing message `"<path> is not a local .html/.svg file - nothing to preview."`
+A model that wrote a markdown report or a chart PNG could not show it. Worse, that regex was DUPLICATED in
+three places (`preview_resolve.ts`, `preview_file.ts`, and `isPreviewablePath` in `preview_tabs.ts`), plus a
+fourth copy inside `preview_inline.ts`'s iframe-recursion check.
+
+**Cause 2: the frame CSP has no remote origins, and said nothing about it.** `PREVIEW_FRAME_CSP` is
+`default-src 'none'` with `connect-src 'none'`, `img-src data: blob:`, `font-src data:`. A model page that
+pulls Chart.js, three.js or Tailwind from a CDN, or a remote `<img>`, or a webfont, or calls `fetch()`, is
+refused and renders blank or broken. `inlinePreviewAssets` folds in only RELATIVE LOCAL refs and leaves
+remote refs untouched, so they died at the CSP with **no signal to the user and none to the agent** -- so
+the model could not self-correct and would simply try the same thing again.
+
+**Decision.**
+
+- **ONE kind table.** `PREVIEW_KIND_EXT` + `previewKindOf()` in `preview_resolve.ts`; `PREVIEWABLE_EXT` is
+  DERIVED from it so the two can never drift, and the other three copies now import it. Kinds:
+  `html | svg | image | markdown | text | pdf`. Verified after the change that no second
+  previewable-extension regex survives anywhere in the repo.
+- **Binary kinds are read as BYTES.** A `readFileSync(path, "utf8")` corrupts a PNG. `image`/`pdf` carry
+  `bytes` + a real `mime` and bypass the HTML pipeline entirely; `svg` keeps `image/svg+xml`, because served
+  as `text/html` a browser renders the markup as text instead of as an image. Per-kind size caps: 5 MB for
+  text-ish (a 25 MB markdown file is a mistake), 25 MB for image/pdf (that is normal).
+- **The CSP was NOT weakened. Not one byte.** `PREVIEW_FRAME_CSP` and `PREVIEW_SANDBOX` are byte-identical
+  and their drift-guard tests pass untouched. **The fix is legibility, not permission.** `findBlockedRefs()`
+  reports the remote refs a document contains (script / style / image / font / frame / fetch, treating
+  protocol-relative `//host` as remote, deduped, capped at 20), and that feeds TWO channels:
+  - the USER gets a dismissible in-frame banner, injected LAST so anything successfully inlined locally is
+    no longer reported as blocked, and never into an `.svg`;
+  - the AGENT gets `blockedRefsMessage()` on the `preview_open` result, phrased as the FIX ("inline that
+    script or CSS directly into the file, or save the asset next to the file and reference it with a
+    relative path"), which is the feedback loop that did not exist.
+- **Auto-surface follows the kinds.** `previewablePath()` keeps its write-class requirement (that is what
+  stops a `read` of a random png hijacking the panel) but now admits the new kinds, so a written `.md` /
+  `.png` / `.csv` lights up the panel. Lane tabs show a per-kind icon and label.
+
+**Verified end to end** against a live engine through the real `/api/preview/serve`: `.md`, `.json`, `.csv`,
+`.log` render as readable documents; `.png` returns `image/png` with the PNG signature intact; `.svg`
+returns `image/svg+xml`; a CDN-referencing page produces both the in-frame banner and the agent-facing
+message; and a clean self-contained page produces NEITHER (no false positives).
+
+**Files:** `desktop/preview_resolve.ts`, `desktop/preview_file.ts`, `desktop/preview_inline.ts`,
+`desktop/renderer/preview_tabs.ts`, `harness/omp/preview_extension.ts` (all +tests), `desktop/dev.ts`
+(`/api/preview/serve`, `/api/preview/open`, `/api/preview/file`), `desktop/renderer/app.ts`.

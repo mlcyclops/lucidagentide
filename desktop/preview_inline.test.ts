@@ -5,7 +5,10 @@
 // it renders under the opaque-origin, egress-blocked preview CSP without widening the frame's origin.
 
 import { describe, expect, test } from "bun:test";
-import { inlinePreviewAssets, resolveLocalRef } from "./preview_inline.ts";
+import {
+  blockedRefsBanner, blockedRefsMessage, findBlockedRefs, injectBlockedRefsBanner, inlinePreviewAssets,
+  previewTextDocument, resolveLocalRef, type BlockedRef,
+} from "./preview_inline.ts";
 
 const B = "/app"; // base dir
 // A fake filesystem keyed by resolved path; readBytes returns the same content as bytes.
@@ -104,5 +107,212 @@ describe("inlinePreviewAssets (P-PREVIEW.4c)", () => {
   test("a remote / non-html iframe src is left alone", () => {
     const html = `<iframe src="https://x.com/a"></iframe><iframe src="data.json"></iframe>`;
     expect(inlinePreviewAssets(html, B, fs({ "/app/data.json": "{}" }))).toBe(html);
+  });
+});
+
+// P-PREVIEW.12: the frame CSP is not changing (no remote origins, `connect-src 'none'` stays). What changes
+// is that it stops failing SILENTLY: these are the facts the agent and the user now get instead of a blank
+// frame. A miss here means a model keeps writing CDN <script> tags forever, so the detection is over-tested.
+describe("findBlockedRefs (P-PREVIEW.12): what the frame CSP will refuse", () => {
+  const urls = (refs: BlockedRef[], kind: BlockedRef["kind"]) => refs.filter((r) => r.kind === kind).map((r) => r.url);
+
+  test("finds a remote <script src> (the Chart.js / three.js / Tailwind CDN case)", () => {
+    const refs = findBlockedRefs(`<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>`);
+    expect(refs).toEqual([{ kind: "script", url: "https://cdn.jsdelivr.net/npm/chart.js" }]);
+  });
+  test("finds a remote stylesheet, and a remote modulepreload/preload by its `as`", () => {
+    const refs = findBlockedRefs(
+      `<link rel="stylesheet" href="https://cdn/x.css">`
+      + `<link rel="preload" as="font" href="https://fonts.gstatic.com/a.woff2">`
+      + `<link rel="modulepreload" href="https://cdn/m.js">`
+      + `<link rel="preload" as="image" href="https://cdn/hero.png">`,
+    );
+    expect(urls(refs, "style")).toEqual(["https://cdn/x.css"]);
+    expect(urls(refs, "font")).toEqual(["https://fonts.gstatic.com/a.woff2"]);
+    expect(urls(refs, "script")).toEqual(["https://cdn/m.js"]);
+    expect(urls(refs, "image")).toEqual(["https://cdn/hero.png"]);
+  });
+  test("finds remote media on img / source / video / audio", () => {
+    const refs = findBlockedRefs(
+      `<img src="https://i.imgur.com/a.png"><source src="https://x/b.webm">`
+      + `<video src="https://x/c.mp4"></video><audio src="https://x/d.mp3"></audio>`,
+    );
+    expect(urls(refs, "image")).toEqual(["https://i.imgur.com/a.png", "https://x/b.webm", "https://x/c.mp4", "https://x/d.mp3"]);
+  });
+  test("finds a remote @font-face url as a FONT, and any other remote css url as an image", () => {
+    const refs = findBlockedRefs(
+      `<style>@font-face{font-family:x;src:url("https://fonts.gstatic.com/x.woff2")}`
+      + `body{background:url('https://cdn/bg.jpg')}</style>`,
+    );
+    expect(urls(refs, "font")).toEqual(["https://fonts.gstatic.com/x.woff2"]);
+    expect(urls(refs, "image")).toEqual(["https://cdn/bg.jpg"]);
+  });
+  test("finds a remote <iframe src>", () => {
+    expect(findBlockedRefs(`<iframe src="https://example.com/embed"></iframe>`))
+      .toEqual([{ kind: "frame", url: "https://example.com/embed" }]);
+  });
+  test("finds absolute-URL fetch() and XMLHttpRequest.open() in INLINE script text", () => {
+    const refs = findBlockedRefs(
+      `<script>fetch("https://api.example.com/v1/data").then(r=>r.json());`
+      + `const x=new XMLHttpRequest();x.open("GET","https://api.example.com/v2/rows");</script>`,
+    );
+    expect(urls(refs, "fetch")).toEqual(["https://api.example.com/v1/data", "https://api.example.com/v2/rows"]);
+  });
+  test("a PROTOCOL-RELATIVE //host ref is remote too (it inherits the frame's scheme)", () => {
+    const refs = findBlockedRefs(`<script src="//cdn.tailwindcss.com"></script><img src="//x/y.png">`);
+    expect(urls(refs, "script")).toEqual(["//cdn.tailwindcss.com"]);
+    expect(urls(refs, "image")).toEqual(["//x/y.png"]);
+  });
+  test("ignores relative, root-absolute, data:, blob: and anchor refs (nothing to report)", () => {
+    const html = `<script src="game.js"></script><script src="/root.js"></script>`
+      + `<link rel="stylesheet" href="style.css"><img src="sprite.png"><img src="data:image/png;base64,AA">`
+      + `<img src="blob:abc"><iframe src="child.html"></iframe><a href="#top">x</a>`
+      + `<style>body{background:url(bg.png)}</style><script>fetch("/api/local")</script>`;
+    expect(findBlockedRefs(html)).toEqual([]);
+  });
+  test("a self-contained page reports nothing (the common, working case stays quiet)", () => {
+    expect(findBlockedRefs(`<!doctype html><style>body{margin:0}</style><script>go()</script>`)).toEqual([]);
+  });
+  test("dedupes by kind+url but keeps the same url under a different kind", () => {
+    const refs = findBlockedRefs(
+      `<script src="https://cdn/x.js"></script><script src="https://cdn/x.js"></script>`
+      + `<iframe src="https://cdn/x.js"></iframe>`,
+    );
+    expect(refs).toEqual([
+      { kind: "script", url: "https://cdn/x.js" },
+      { kind: "frame", url: "https://cdn/x.js" },
+    ]);
+  });
+  test("caps the list at 20 entries so a pathological file cannot blow up the payload", () => {
+    const many = Array.from({ length: 200 }, (_, i) => `<img src="https://cdn/${i}.png">`).join("");
+    expect(findBlockedRefs(many)).toHaveLength(20);
+  });
+  test("reports in a deterministic kind order, and does not throw on junk input", () => {
+    const refs = findBlockedRefs(
+      `<img src="https://x/a.png"><iframe src="https://x/f"></iframe>`
+      + `<script src="https://x/s.js"></script><link rel="stylesheet" href="https://x/c.css">`,
+    );
+    expect(refs.map((r) => r.kind)).toEqual(["script", "style", "image", "frame"]);
+    expect(findBlockedRefs("")).toEqual([]);
+    expect(findBlockedRefs("<script src=")).toEqual([]);
+  });
+  // The inliner folds local refs in FIRST, so detection must run on the inlined output: anything that
+  // survived inlining is, by construction, exactly what the CSP is about to refuse.
+  test("runs cleanly on inlined output: locals are gone, the remote ones remain", () => {
+    const html = `<link rel="stylesheet" href="style.css"><script src="https://cdn/x.js"></script>`;
+    const inlined = inlinePreviewAssets(html, B, fs({ "/app/style.css": "body{color:red}" }));
+    expect(findBlockedRefs(inlined)).toEqual([{ kind: "script", url: "https://cdn/x.js" }]);
+  });
+});
+
+describe("blockedRefsMessage (P-PREVIEW.12): the agent's feedback loop", () => {
+  test("an empty list is the empty string (nothing to say)", () => {
+    expect(blockedRefsMessage([])).toBe("");
+  });
+  test("one sentence that names the counts, the first url, and the ACTIONABLE fix", () => {
+    const msg = blockedRefsMessage([
+      { kind: "script", url: "https://cdn/chart.js" },
+      { kind: "script", url: "https://cdn/d3.js" },
+      { kind: "image", url: "https://x/a.png" },
+    ]);
+    expect(msg).toContain("2 remote scripts");
+    expect(msg).toContain("1 remote image");
+    expect(msg).toContain("https://cdn/chart.js");
+    expect(msg).toContain("no network access");
+    expect(msg).toMatch(/inline/i);        // fix #1: inline the script/CSS
+    expect(msg).toMatch(/relative path/i); // fix #2: vendor the asset beside the file
+    expect(msg.trimEnd().split(". ")).toHaveLength(1); // one sentence
+    expect(msg).not.toContain("\u2014");   // project rule: never an em dash
+  });
+  test("singular vs plural nouns per kind", () => {
+    expect(blockedRefsMessage([{ kind: "style", url: "//cdn/a.css" }])).toContain("1 remote stylesheet");
+    expect(blockedRefsMessage([{ kind: "font", url: "//f/a.woff2" }])).toContain("1 remote font");
+    expect(blockedRefsMessage([{ kind: "frame", url: "https://x/e" }])).toContain("1 remote iframe");
+    expect(blockedRefsMessage([{ kind: "fetch", url: "https://api/x" }])).toContain("1 network call");
+    expect(blockedRefsMessage([
+      { kind: "fetch", url: "https://api/x" }, { kind: "fetch", url: "https://api/y" },
+    ])).toContain("2 network calls");
+  });
+});
+
+describe("blockedRefsBanner / injectBlockedRefsBanner (P-PREVIEW.12)", () => {
+  const refs: BlockedRef[] = [{ kind: "script", url: "https://cdn/x.js" }];
+
+  test("no refs means no banner and an UNCHANGED document", () => {
+    expect(blockedRefsBanner([])).toBe("");
+    const html = `<!doctype html><html><body><h1>fine</h1></body></html>`;
+    expect(injectBlockedRefsBanner(html)).toBe(html);
+  });
+  test("the banner carries the message, is dismissible, and is styled inline (no stylesheet reaches the frame)", () => {
+    const b = blockedRefsBanner(refs);
+    expect(b).toContain("no network access");
+    expect(b).toContain("onclick=\"this.parentNode.remove()\""); // dismissible under script-src 'unsafe-inline'
+    expect(b).toMatch(/<div[^>]+style="/);                       // every rule is inline
+    expect(b).not.toContain("<link");
+    expect(b).not.toContain("class=");
+  });
+  // INVARIANT 11: prose inside a flex box shatters into stacked slivers. The banner is a BLOCK paragraph
+  // with an absolutely-positioned icon, and the message lives in exactly ONE element.
+  test("INVARIANT 11: no flex anywhere, icon absolutely positioned, message in ONE element", () => {
+    const b = blockedRefsBanner(refs);
+    expect(b).not.toContain("display:flex");
+    expect(b).not.toContain("display: flex");
+    expect(b).toMatch(/<span[^>]+style="position:absolute/); // the icon is out of the text flow
+    expect(b.match(/<p\b/g) ?? []).toHaveLength(1);          // the prose is one block paragraph
+    const p = /<p style="margin:0">([\s\S]*?)<\/p>/.exec(b);
+    expect(p).not.toBeNull();
+    expect(p![1]).toBe(blockedRefsMessage(refs)); // the whole sentence, one text node, nothing interleaved
+  });
+  test("a url from the document is HTML-escaped (it is untrusted, agent-authored text)", () => {
+    const b = blockedRefsBanner([{ kind: "script", url: `https://x/"><script>steal()</script>` }]);
+    expect(b).not.toContain("<script>steal()");
+    expect(b).toContain("&lt;script&gt;");
+    expect(b).toContain("&quot;");
+  });
+  test("injects at the top of <body> when there is one", () => {
+    const out = injectBlockedRefsBanner(`<!doctype html><html><body><h1>hi</h1></body></html>`, refs);
+    expect(out.indexOf("lucid-blocked-refs")).toBeGreaterThan(out.indexOf("<body>"));
+    expect(out.indexOf("lucid-blocked-refs")).toBeLessThan(out.indexOf("<h1>"));
+  });
+  test("falls back to </head>, then <html>, then after the doctype: never BEFORE the doctype (quirks mode)", () => {
+    const headOnly = injectBlockedRefsBanner(`<!doctype html><html><head><title>t</title></head>`, refs);
+    expect(headOnly.indexOf("lucid-blocked-refs")).toBeGreaterThan(headOnly.indexOf("</head>"));
+    const htmlOnly = injectBlockedRefsBanner(`<html><h1>x</h1></html>`, refs);
+    expect(htmlOnly.indexOf("lucid-blocked-refs")).toBeLessThan(htmlOnly.indexOf("<h1>"));
+    const doctypeOnly = injectBlockedRefsBanner(`<!doctype html><h1>x</h1>`, refs);
+    expect(doctypeOnly.startsWith("<!doctype html>")).toBe(true);
+    const fragment = injectBlockedRefsBanner(`<h1>x</h1>`, refs);
+    expect(fragment.startsWith(`<div id="lucid-blocked-refs"`)).toBe(true);
+  });
+  test("computes the refs itself when they are not passed (safe to call unconditionally)", () => {
+    const out = injectBlockedRefsBanner(`<body><script src="https://cdn/x.js"></script></body>`);
+    expect(out).toContain("lucid-blocked-refs");
+    expect(out).toContain("https://cdn/x.js");
+    expect(out).toContain(`<script src="https://cdn/x.js">`); // the document itself is not rewritten
+  });
+});
+
+describe("previewTextDocument (P-PREVIEW.12): a markdown/text/csv preview becomes a real document", () => {
+  test("wraps text in a self-contained escaped <pre> document", () => {
+    const doc = previewTextDocument("markdown", "# Report\n<b>not bold</b> & co", "REPORT.md");
+    expect(doc.startsWith("<!doctype html>")).toBe(true);
+    expect(doc).toContain("<title>REPORT.md</title>");
+    expect(doc).toContain("&lt;b&gt;not bold&lt;/b&gt; &amp; co"); // the file's text is never live markup
+    expect(doc).toContain("# Report");
+    expect(doc).toContain("white-space:pre-wrap");
+  });
+  test("html and svg are already documents and pass through untouched", () => {
+    const page = `<!doctype html><body><h1>app</h1></body>`;
+    expect(previewTextDocument("html", page, "a.html")).toBe(page);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>`;
+    expect(previewTextDocument("svg", svg, "a.svg")).toBe(svg);
+  });
+  test("a huge text file is truncated with a visible note (the frame never gets a multi-MB DOM)", () => {
+    const doc = previewTextDocument("text", "x".repeat(3 * 1024 * 1024), "run.log");
+    expect(doc).toContain("[truncated at 1024 KB of 3072 KB]");
+    expect(doc.length).toBeLessThan(1024 * 1024 + 4096);
+  });
+  test("empty text and label never throw", () => {
+    expect(previewTextDocument("text", "", "")).toContain("<pre");
   });
 });
