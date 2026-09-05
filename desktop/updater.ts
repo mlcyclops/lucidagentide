@@ -29,7 +29,7 @@ export function initAutoUpdate(getWindow: () => BrowserWindow | null): void {
   // a policy-managed / air-gapped fleet never makes an outbound update call or hangs waiting on one.
   const policy = updatePolicy();
   if (policy.channel === "managed") {
-    console.log("[updater] channel=managed — in-app update check disabled (IT owns the version)");
+    console.log("[updater] channel=managed: in-app update check disabled (IT owns the version)");
     return;
   }
 
@@ -60,7 +60,7 @@ export function initAutoUpdate(getWindow: () => BrowserWindow | null): void {
   if (policy.channel === "feed" && policy.feedUrl) {
     try {
       autoUpdater.setFeedURL({ provider: "generic", url: policy.feedUrl });
-      console.log(`[updater] channel=feed — internal mirror ${policy.feedUrl}`);
+      console.log(`[updater] channel=feed: internal mirror ${policy.feedUrl}`);
     } catch (e) {
       console.warn("[updater] feed URL rejected, falling back to default provider:", (e as Error)?.message ?? e);
     }
