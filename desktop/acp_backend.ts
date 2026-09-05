@@ -15,6 +15,7 @@ import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
+import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
@@ -895,7 +896,9 @@ class Backend {
         // plan-mode approval) as an `elicitation/create` we can answer (see answerElicitation). Without it
         // omp's tool wrapper silently denies every gated tool call ("Tool call denied by user").
         try {
-          await acp.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, elicitation: { form: {} } } }, { timeoutMs: HANDSHAKE_MS });
+          // P-FLEET.L14 (ADR-0337): shared with fleet_lanes, because these two drifting is what broke
+          // every bash/eval call in a fleet lane. See acp_client_caps.ts for the two-gate explanation.
+          await acp.request("initialize", { protocolVersion: 1, clientCapabilities: ACP_INTERACTIVE_CLIENT_CAPS }, { timeoutMs: HANDSHAKE_MS });
         } catch (e) {
           try { acp.stop(); } catch { /* ignore */ }
           throw e;

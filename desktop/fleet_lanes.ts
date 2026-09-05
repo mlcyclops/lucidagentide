@@ -26,6 +26,9 @@ import { basename, join } from "node:path";
 import { statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { ACPClient } from "./acp.ts";
+// P-FLEET.L14 (ADR-0337): one definition of the interactive client's capabilities, shared with acp_backend.
+// Advertising `elicitation.form` is what lets omp reach this client for its OWN inner approval gate.
+import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts";
 import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSample, type LaneAdmission, type PressureSample } from "./fleet_resources.ts";
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
@@ -810,7 +813,26 @@ export class FleetLaneManager {
     lane.client.start();
     const init = await lane.client.request<{ agentCapabilities?: { loadSession?: boolean } }>("initialize", {
       protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+      // P-FLEET.L14 (ADR-0337): `elicitation: { form: {} }` is LOAD-BEARING, not decoration.
+      //
+      // There are TWO approval gates in front of a tool call, and answering one is not enough:
+      //   1. ACP `session/request_permission` - ours. The lane answers it below, and P-FLEET.L6
+      //      auto-approve / session grants resolve it without a human.
+      //   2. omp's own `ExtensionToolWrapper` - an INNER gate. `acp_config.yml` sets
+      //      `tools.approval.bash: prompt` (P-EXEC.1, ADR-0066) and omp honors per-tool overrides in
+      //      EVERY approval mode, including its default `yolo`. So bash ALWAYS reaches gate 2.
+      //
+      // In ACP mode gate 2 has no TUI to prompt in, so omp asks the client through a FORM elicitation,
+      // and it only does that when the client ADVERTISED `elicitation.form` here. Without this line omp
+      // concludes there is no interactive UI and hard-fails the call with `Tool "bash" requires approval
+      // but no interactive UI available`, which is exactly what a lane reported: every bash and eval
+      // denied, while auto-approve looked broken because it was correctly answering gate 1 the whole time.
+      //
+      // The `elicitation/create` handler below was already written and was DEAD CODE: omp never sends the
+      // request to a client that did not advertise the capability. Advertise and answer, or neither.
+      //
+      // Shared with acp_backend rather than restated, so the two interactive clients cannot drift again.
+      clientCapabilities: ACP_INTERACTIVE_CLIENT_CAPS,
     }, { timeoutMs: HANDSHAKE_MS });
     lane.canLoadSession = init?.agentCapabilities?.loadSession === true;
     if (resume && lane.canLoadSession && lane.sessionId) {

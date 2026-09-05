@@ -23191,6 +23191,105 @@ and that the picker it opens is the same function the KG panel already uses. Whe
 height on a different OS font stack is also a measurement from this machine, which is why the cap is derived
 from one named constant and carries a comment telling the next person to re-measure it.
 
+## ADR-0337 -- P-FLEET.L14: a fleet lane could not run bash, because it answered a gate omp never asked it (2026-09-05)
+
+**Status:** Accepted -- BUILT. Field-reported from a running `dgx` lane, with the harness's own error text
+quoted back. One missing line, and a structural change so it cannot recur.
+
+**Context.** The report: "on the fleet lane dgx running now it reports that it can't run bash/exec and the
+auto approve isn't working that I have set. Why is it failing?" The lane's transcript carried omp's message
+verbatim:
+
+```
+Tool "bash" requires approval but no interactive UI available.
+  1. Set tools.approvalMode: yolo in /settings
+  2. Add tools.approval.bash: allow to config
+  3. Use an interactive UI that actually shows the approval prompt
+```
+
+Four bash attempts in a row denied, an `auto-approved` chip visible in the same transcript, and the lane's
+own agent reasoning itself into the wrong conclusion ("it seems execution is blocked session-wide by the
+client's approval configuration") and then telling the user to change a setting that would not have helped.
+
+**There are TWO approval gates in front of a tool call, and the lane was answering only the first.**
+
+1. **GATE 1, ours: ACP `session/request_permission`.** Both the main chat (`acp_backend.ts`) and every fleet
+   lane (`fleet_lanes.ts`) answer this. P-FLEET.L6 auto-approve and standing session grants resolve it with
+   no human. This is the gate the user had configured, and it was working perfectly: that is exactly what
+   the `auto-approved` chip in their transcript was.
+2. **GATE 2, omp's: `ExtensionToolWrapper`.** `harness/omp/acp_config.yml` sets `tools.approval.bash: prompt`
+   (P-EXEC.1, ADR-0066) and omp honors per-tool overrides in EVERY approval mode, including its default
+   `yolo`. So bash and eval ALWAYS reach gate 2, by our own deliberate configuration. Under ACP there is no
+   TUI to prompt in, so omp asks the CLIENT through a form elicitation (`elicitation/create`) -- but only
+   when the client ADVERTISED `elicitation.form` at `initialize`. Otherwise it concludes no interactive UI
+   exists and hard-fails the call.
+
+`acp_backend.ts` advertised the capability. `fleet_lanes.ts` sent
+`{ fs: { readTextFile: false, writeTextFile: false } }` and nothing else. And the cruel detail: the lane had
+ALREADY been written an `elicitation/create` handler, complete with a comment explaining the inner gate. That
+handler was **dead code from the day it was written**, because omp never sends the request to a client that
+did not advertise the capability. Someone copied the answer and missed the advertisement, and nothing failed
+loudly enough to notice, because gate 1 kept working and the lane only broke on tools that reach gate 2.
+
+This also explains why the user's diagnosis and their agent's diagnosis both went wrong. Every visible
+signal said approvals were fine. `bash` is the ONLY thing that looked broken, so it read as "bash is
+blocked" rather than "the second approval channel was never opened".
+
+**Decision.**
+
+- **Advertise `elicitation: { form: {} }` from the lane.** That is the one-line fix and the whole behavioral
+  change: omp can now reach the lane's already-written handler, which picks the affirmative option, and
+  bash runs.
+- **Make the drift structurally impossible, not merely currently-absent.** The bug was a mismatch BETWEEN
+  two files that each looked correct in isolation, so the fix is one shared definition,
+  `ACP_INTERACTIVE_CLIENT_CAPS` in `desktop/acp_client_caps.ts`, imported by both interactive clients. A
+  future third client gets it right by construction.
+- **Advertise and answer, or neither.** The module states the coupling explicitly, because both halves of
+  the mistake are live hazards: answering without advertising is this bug, and advertising without
+  answering hangs every gated call until it times out.
+- **`fs.readTextFile` / `writeTextFile` stay FALSE, and the constant says why.** omp runs against the
+  workspace and reads files itself; proxying file I/O back through the client would put an unscanned route
+  around the in-process security gate that invariant 4 exists to protect. Centralizing the capabilities
+  makes that a decision with a reason attached rather than a default nobody revisits.
+- **The UTILITY extraction client keeps its bare capabilities** (`acp_backend.ts`, the chat-history import
+  path). It sets `onRequest = async () => ({})` and runs no tools, so it must NOT gain an approval channel.
+  Deliberately left alone.
+
+**Files:** `desktop/acp_client_caps.ts` (`ACP_INTERACTIVE_CLIENT_CAPS`, `advertisesElicitationForm`),
+`desktop/acp_client_caps.test.ts` (9), `desktop/fleet_lanes.ts` (the `#handshake` capabilities),
+`desktop/acp_backend.ts` (now imports the shared constant instead of restating it).
+
+**Verification.** 9 tests. The unit half pins the predicate against the exact capability object lanes used
+to send (reported unreachable) and against half-declared shapes (`{ elicitation: {} }`,
+`{ elicitation: null }`, `{ elicitation: "form" }`) which must not count as reachable. The important half is
+SOURCE-LEVEL and reads the real files, because a unit test on either client alone would have passed while
+lanes stayed broken: any client that answers `elicitation/create` must import the shared constant and pass
+it to `initialize`. A companion test pins that both clients really do answer `elicitation/create`, so the
+guard cannot pass by finding nothing to check (ADR-0303: a guard that silently matches nothing is worse
+than no guard).
+
+And the guard was proved NON-VACUOUS rather than assumed to be: the pre-fix `clientCapabilities` literal was
+reconstructed and the parity assertions re-run against it, confirming they FAIL on the source as it stood
+when the lane was broken, that the pre-fix source did still answer `elicitation/create` (so the guard
+applied to it), and that the predicate separates the old capability object from the new one. 5/5.
+
+Gate 4994 pass / 382 files with the standing 7 environmental fails; `fleet_lanes` suite 33 pass; all three
+typecheck passes clean; license headers clean.
+
+**VERIFICATION BOUNDARY, and it is the honest one.** A real lane running a real `bash` through both gates
+was NOT observed from here. That needs the packaged app, a live DGX lane, and a restarted engine. What is
+proven is the causal chain end to end in code: `acp_config.yml` forces bash to gate 2, omp's wrapper
+requires an advertised `elicitation.form` to reach a client at gate 2, the lane did not advertise it, the
+main chat did and works, and the lane's handler was unreachable. The fix makes the lane's advertisement
+identical to the client that demonstrably works. Confirming it live is the on-device step, and the lane
+needs an ENGINE restart to pick it up.
+
+**NOT the cause, recorded because both the user and the lane's own agent concluded it was.** Their
+approval setting was not misconfigured, `tools.approvalMode` did not need changing, and
+`tools.approval.bash: allow` was not the right remedy: that would have disabled the P-EXEC.1 command
+classifier (which auto-approves read-only commands and gates risky ones) for every lane, trading a broken
+lane for a blind one.
+
 ## ADR-0334 -- P-FLEET.DGX: the DGX fleet as one configured provider plus one agent registry, never as hostnames in code (2026-09-05)
 
 **Status:** Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be
