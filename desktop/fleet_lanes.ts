@@ -29,6 +29,9 @@ import { ACPClient } from "./acp.ts";
 // P-FLEET.L14 (ADR-0337): one definition of the interactive client's capabilities, shared with acp_backend.
 // Advertising `elicitation.form` is what lets omp reach this client for its OWN inner approval gate.
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts";
+// P-FLEET.L15 (ADR-0338): the SHARED answerer for omp's form elicitation. The lane used to hand-roll this
+// and got both the options path and the response shape wrong, denying every gated tool call.
+import { elicitationAnswer } from "./exec_policy.ts";
 import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSample, type LaneAdmission, type PressureSample } from "./fleet_resources.ts";
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
@@ -977,13 +980,17 @@ export class FleetLaneManager {
         if (!allow) return { outcome: { outcome: "cancelled" } };
         return pick();
       }
-      // omp's redundant INNER elicitation gate (see acp_backend): it only fires AFTER the permission
-      // ask above was allowed, so pick the affirmative option; a custom question gets no synthesized answer.
-      if (method === "elicitation/create") {
-        const options: { value?: string; label?: string }[] = params?.options ?? params?.schema?.options ?? [];
-        const yes = options.find((o) => /^(yes|approve|allow|proceed|ok)/i.test(String(o.label ?? o.value ?? "")));
-        return yes ? { value: yes.value ?? yes.label } : {};
-      }
+      // omp's redundant INNER elicitation gate: it only fires AFTER the permission ask above was allowed,
+      // so accept the affirmative option; a custom question gets no synthesized answer.
+      //
+      // P-FLEET.L15 (ADR-0338): this now calls the SHARED answerer. The hand-rolled version it replaces
+      // read the options from `params.options ?? params.schema.options` and answered with a bare
+      // `{ value }`. Both were wrong: omp puts the choices in the form schema at
+      // `requestedSchema.properties.value.enum`, and wants `{ action: "accept", content: { value } }`. So it
+      // found no options, returned `{}`, and omp read that as "denied by user" -- for EVERY bash and eval
+      // call, with no prompt shown to anyone. ADR-0337 made omp start asking the lane; this makes the
+      // lane's answer mean something.
+      if (method === "elicitation/create") return elicitationAnswer(params);
       return {};
     };
     lane.client.onExit = () => {

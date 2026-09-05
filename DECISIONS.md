@@ -23290,6 +23290,174 @@ approval setting was not misconfigured, `tools.approvalMode` did not need changi
 classifier (which auto-approves read-only commands and gates risky ones) for every lane, trading a broken
 lane for a blind one.
 
+## ADR-0338 -- P-FLEET.L15: ADR-0337 made omp ASK the lane; the lane's answer was malformed, so it still denied everything (2026-09-05)
+
+**Status:** Accepted -- BUILT. **Corrects my own ADR-0337, which was necessary but NOT sufficient.** Same
+field report, second round: "still having issues", with the lane now reporting "Direct execution is being
+denied at the tool-permission layer (bash x3, eval x1) even after your go-ahead".
+
+**Context.** ADR-0337 added `elicitation: { form: {} }` so omp would deliver its inner approval gate to the
+lane as an `elicitation/create` request. That was correct and it was half the bug. The other half was
+waiting behind it: the lane's `elicitation/create` handler, the one ADR-0337 called "already written" and
+"dead code", was ALSO WRONG. Waking it up did not make it work.
+
+It got both halves of the contract wrong:
+
+```ts
+// what the lane shipped
+const options = params?.options ?? params?.schema?.options ?? [];
+const yes = options.find((o) => /^(yes|approve|...)/i.test(String(o.label ?? o.value ?? "")));
+return yes ? { value: yes.value ?? yes.label } : {};
+```
+
+1. **Wrong options path.** omp sends a JSON-Schema form, so the choices are at
+   `requestedSchema.properties.value.enum` as an array of **strings**. `params.options` is the shape of the
+   OUTER `session/request_permission` request, a different message with a different schema.
+   `params.schema.options` does not exist anywhere. The lane read objects (`o.label ?? o.value`) out of what
+   is actually a string array, so even fed the right path it would have found nothing.
+2. **Wrong response shape.** omp wants `{ action: "accept", content: { value } }`. The lane returned a bare
+   `{ value }` on the (unreachable) success path and `{}` otherwise.
+
+So it returned `{}` every time, and omp reads anything that is not an explicit accept as **"denied by
+user"** -- with no prompt shown to anyone. That is precisely the failure mode `acp_backend`'s own comment
+had warned about since ADR-0110, three lines above the code that gets it right.
+
+**This is the same root cause as ADR-0337, one level deeper: the concept was copied, the implementation was
+not shared.** `acp_backend` already had a correct, unit-tested reader. The lane had a plausible-looking
+re-derivation of it. Two files, two guesses, one of them wrong, and nothing compared them.
+
+**Decision.**
+
+- **The reader and the answer builder move to `exec_policy.ts`, beside the `elicitationApproval` predicate
+  they belong to**: `elicitationOptions(params)` and `elicitationAnswer(params)`. Both interactive clients
+  now call the SAME function. There is exactly one place in the codebase that knows omp's form-elicitation
+  wire shape.
+- **`acp_backend` was collapsed onto it too**, rather than left as the "good" copy. Keeping a correct
+  duplicate is how the next divergence starts. What stays backend-specific is the one genuinely
+  backend-specific thing: the developer-mode gate diagnostic.
+- **Fail-closed stays fail-closed.** A form with no affirmative option gets `{ action: "decline" }`, not a
+  synthesized accept: a custom question is not an approval and we do not answer on the user's behalf. Every
+  missing link in the schema path returns `[]` rather than throwing, and an empty option set declines.
+- **`params: any` became `params: unknown`** on the seam that reads it. This is untrusted wire input from a
+  subprocess; `any` is exactly the wrong type for the one place the shape must be checked, and the whole
+  defect was a shape mistake. `elicitationOptions` narrows with `in` and `typeof` at every step.
+- **The parity guard from ADR-0337 was extended to cover the ANSWER, not just the capability.** Advertising
+  correctly while hand-rolling the answer is this bug, and it is worse than the original: omp asks, the
+  client replies with nonsense, and the call dies silently. The guard now also forbids the two option paths
+  the lane guessed, anywhere outside `exec_policy`.
+
+**Files:** `desktop/exec_policy.ts` (`ElicitationAnswer`, `elicitationOptions`, `elicitationAnswer`),
+`desktop/exec_policy.test.ts` (+16), `desktop/fleet_lanes.ts` (handler collapsed to one call),
+`desktop/acp_backend.ts` (`answerElicitation` collapsed onto the shared pair, `any` to `unknown`),
+`desktop/acp_client_caps.test.ts` (+2 parity assertions, 11 total).
+
+**Verification.** 16 new tests pinning the wire shape by ASSERTION rather than by whoever reads omp's source
+next: the real enum path resolves, both shapes the lane guessed resolve to nothing, non-strings are dropped
+rather than coerced, every missing link in the path refuses instead of throwing, an approval accepts with
+the value nested under `content`, a no-affirmative form declines, and the accepted value is always one of
+the offered options rather than a fabricated string. Gate 5005 pass / 382 files with the standing 7
+environmental fails; all three typecheck passes clean; license headers clean.
+
+**And the smoking gun, measured rather than argued.** The pre-fix handler was transcribed verbatim and fed
+the REAL wire shape that `acp_backend` demonstrably works against:
+
+```
+old answer: {}
+new answer: {"action":"accept","content":{"value":"Approve"}}
+```
+
+The same proof confirms the options WERE readable from that input (so the failure was the read, not omp),
+that the pre-fix source fails both new parity assertions, and, after I corrected a flaw in my own proof
+harness (the first version left the import in place and made the guard look weaker than it is), 7/7.
+
+**VERIFICATION BOUNDARY, unchanged and still the honest one.** A real lane running a real `bash` through
+both gates has still not been observed from here; it needs the packaged app and a live DGX lane. Two
+engine-side defects are now fixed and the lane's behavior at both gates is byte-identical to the client that
+works in production. **The lane needs an ENGINE RESTART to pick either fix up**, and a lane already running
+is still on the old code: its `initialize` handshake happened once, at spawn.
+
+**Process note worth keeping.** ADR-0337 called that handler "dead code" and moved on. It was dead, and it
+was also broken, and I recorded the first fact while not checking the second. The lesson is not "look
+harder": it is that when a code path has provably never executed, its correctness is UNKNOWN rather than
+presumed, and turning it on is a change that needs its own verification.
+
+## ADR-0339 -- P-PREVIEW.19: the Preview panel followed the user into the next conversation (2026-09-05)
+
+**Status:** Accepted -- BUILT. Field-reported with a screenshot. Third preview-surfacing defect in this
+arc, and it uses the probe seam ADR-0335 built.
+
+**Context.** "During a new prompt session you open the preview panel to that file every time without
+reason. Why?" The screenshot shows a fresh session with the Preview panel open on the Agent tab, path field
+reading `/tmp/x.pdf`, body reading "Can't preview this file - file not found or unreadable". A POSIX path,
+on a Windows machine, for a file the user never opened, in a conversation that had nothing to do with it.
+
+Three defects compounded, and each alone would have been survivable:
+
+1. **AN UNRESOLVABLE TARGET WAS STILL REMEMBERED.** `onPreviewAvailable` did
+   `if (!path) return; state.lastPreviewablePath = path;`. It never asked whether the file previews, so a
+   failed open was memorialised exactly like a successful one. That is how a path that had never once
+   rendered became the panel's sticky re-open target.
+2. **IT SURVIVED THE SESSION BOUNDARY.** `state.lastPreviewablePath` is renderer module state and a new chat
+   session does NOT reload the window, so `newSession()` left it sitting there along with
+   `prevPathByLane.agent` and a live document in the hidden agent iframe.
+3. **AND IT RE-OPENED THE PANEL.** Two separate readers surface the panel from that one field:
+   `openPreview()` re-loads it into the agent lane, and the preview-activity pill does
+   `if (panel.hidden && state.lastPreviewablePath) openPreview()`. So the stale value did not merely
+   persist, it took over part of the screen on every new session.
+
+**Decision.**
+
+- **Only remember a target that PROVABLY previews.** `onPreviewAvailable` now gates
+  `state.lastPreviewablePath` on `bridge.previewProbe(path)`. This is the third consumer of the ADR-0335
+  probe and the reason that seam was worth building: `/api/preview/serve` reports a failure with HTTP 200
+  and an HTML body, so a rendered error page is indistinguishable from a rendered document on the client,
+  and every feature that treats "we loaded something" as "it worked" inherits the same bug.
+- **The LOAD still happens regardless of the probe.** A genuine failure must be visible NOW, in the panel,
+  with the engine's own message. What the probe governs is only whether the target is worth RE-OPENING a
+  panel for later. Conflating those two would have made a broken preview silently invisible, which is a
+  worse bug than the one being fixed.
+- **A new session drops the AGENT lane, and leaves YOURS alone.** That asymmetry is the substance:
+  the agent lane is conversation-scoped, while a PDF the user opened by hand in the Yours tab is not ours
+  to close. `previewAfterNewSession` holds the decision and returns `changed` so the caller skips the DOM
+  teardown in the common case where nothing was carried.
+- **The frame is UNLOADED, not just hidden.** `resetAgentPreviewLane` clears `srcdoc`/`src`, because leaving
+  a live document in a hidden iframe keeps its timers, audio and network running for a conversation that is
+  over. The "new" badge is cleared too: there is nothing new to look at.
+- **This is ADR-0329's principle applied to TIME.** That increment ruled that being able to render a file
+  kind is not the same as being worth interrupting a human for. The same holds across sessions: a preview
+  earns the screen because it is live and relevant, not because it once existed.
+
+**Files:** `desktop/renderer/preview_session.ts` (`PreviewLanes`, `previewAfterNewSession`),
+`desktop/renderer/preview_session.test.ts` (7), `desktop/renderer/app.ts` (`onPreviewAvailable` probe gate,
+`resetAgentPreviewLane`, the `newSession` call).
+
+**Verification.** 7 pure tests. They pin the reported case directly (a `/tmp/x.pdf` agent target and
+remembered path both cleared), the asymmetry (a hand-opened `yours` path survives), that
+`lastPreviewable` set ALONE still counts as a change (missing that case would have left the bug half-fixed,
+since that field alone is enough for the activity pill to surface the panel), that the input is not
+mutated, and that clearing twice is stable so a double `newSession` cannot resurrect anything. Gate 5012
+pass / 383 files with the standing 7 environmental fails; all three typecheck passes clean.
+
+Served bytes checked per ADR-0303 from a fresh engine on port 5399, sourcemap stripped first: **10/10**,
+with the unconditional-remember expression proven ABSENT from the bundle.
+
+**A vacuous check caught in my own verifier, worth recording.** The first version of that script checked the
+P-FLEET.L15 engine symbols (`elicitationAnswer`, `elicitationOptions`) against the served RENDERER bundle.
+The two "present" checks failed honestly, which is what exposed it, but the paired "absent" check
+(`params?.schema?.options` must be gone) had PASSED, and it passed for the wrong reason: that string was
+never in the renderer bundle to begin with. Two halves of one increment live in different artifacts, and
+checking both against one of them is exactly the ADR-0303 trap. Split: renderer claims are checked against
+the served bundle, engine claims against the source the engine actually loads.
+
+**VERIFICATION BOUNDARY.** The end-to-end behavior (start a new session, panel stays shut) was not observed
+from here: it needs the packaged app, and there is no DOM harness in this repo. What is proven is the
+decision, the probe gate, and that both are present in the served bytes with the old expression gone.
+Renderer-only, so a WINDOW RELOAD picks it up.
+
+**One thing this does NOT do.** It does not clear a preview the user opened themselves, ever, including a
+broken one. If `/tmp/x.pdf` is sitting in the YOURS tab it stays there until they close it. That is
+deliberate: their tab, their business.
+
 ## ADR-0334 -- P-FLEET.DGX: the DGX fleet as one configured provider plus one agent registry, never as hostnames in code (2026-09-05)
 
 **Status:** Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be

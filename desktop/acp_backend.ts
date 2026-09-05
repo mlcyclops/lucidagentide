@@ -69,7 +69,7 @@ import type { AgentSpec } from "../harness/agent/spec.ts";
 import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-CMD.1: chat -> user slash command
 import type { UserCommand } from "../harness/commands/spec.ts";
 import { gateDenyReason } from "./gate_audit.ts";
-import { type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationApproval, execStore, execVerdict, recordExec } from "./exec_policy.ts";
+import { type ElicitationAnswer, type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool_failure.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
@@ -503,12 +503,16 @@ class Backend {
    *  allowed the call. A non-approval elicitation (a custom question with no affirmative option) gets no
    *  synthesized answer — declined, matching the pre-capability behavior where such prompts returned no
    *  value. Surfaced in the gate diagnostics (developer mode) for the Logs panel. */
-  private answerElicitation(params: any): { action: string; content?: { value: string } } {
-    const enumVals: unknown = params?.requestedSchema?.properties?.value?.enum;
-    const opts: string[] = Array.isArray(enumVals) ? enumVals.filter((v): v is string => typeof v === "string") : [];
-    const approve = elicitationApproval(opts);
-    this.recordGateDiag({ kind: "elicitation", options: opts.slice(0, 8), decision: approve ? `accept:${approve}` : "decline" });
-    return approve ? { action: "accept", content: { value: approve } } : { action: "decline" };
+  // P-FLEET.L15 (ADR-0338): the option-reading and answer-building moved to `exec_policy` so fleet lanes
+  // share this EXACT logic instead of hand-rolling it. The lane's own version guessed both the options path
+  // and the response shape wrong and therefore denied every gated tool call. What stays here is the only
+  // part that is genuinely backend-specific: the developer-mode gate diagnostic.
+  private answerElicitation(params: unknown): ElicitationAnswer {
+    const opts = elicitationOptions(params);
+    const answer = elicitationAnswer(params);
+    const chosen = answer.action === "accept" ? answer.content?.value : null;
+    this.recordGateDiag({ kind: "elicitation", options: opts.slice(0, 8), decision: chosen ? `accept:${chosen}` : "decline" });
+    return answer;
   }
 
   // Turn-lifecycle diagnostics (developer mode). Prints to the dev-server console so a hung long

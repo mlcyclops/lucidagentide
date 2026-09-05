@@ -294,6 +294,44 @@ export function elicitationApproval(options: readonly unknown[]): string | null 
   return opts.find((v) => /\b(approve|allow|yes|proceed|accept)\b/i.test(v)) ?? null;
 }
 
+/** P-FLEET.L15 (ADR-0338): the ACP response to omp's form elicitation.
+ *  `decline` is the fail-closed default: omp reads anything that is not an explicit accept as a denial. */
+export interface ElicitationAnswer { action: "accept" | "decline"; content?: { value: string } }
+
+/** The option strings omp offered, read from the ONE place it actually puts them.
+ *
+ *  This function exists because a second implementation guessed wrong and denied every tool call in a fleet
+ *  lane for as long as it shipped. omp sends a JSON-Schema form, so the choices live at
+ *  `requestedSchema.properties.value.enum` as an array of STRINGS. They are NOT at `params.options` (that is
+ *  the shape of the OUTER `session/request_permission` request, which is a different message with a
+ *  different schema) and not at `params.schema.options` (that shape does not exist anywhere). Reading either
+ *  of those yields `[]`, which silently becomes a decline. */
+export function elicitationOptions(params: unknown): string[] {
+  if (!params || typeof params !== "object" || !("requestedSchema" in params)) return [];
+  const schema = params.requestedSchema;
+  if (!schema || typeof schema !== "object" || !("properties" in schema)) return [];
+  const props = schema.properties;
+  if (!props || typeof props !== "object" || !("value" in props)) return [];
+  const value = props.value;
+  if (!value || typeof value !== "object" || !("enum" in value)) return [];
+  const list = value.enum;
+  return Array.isArray(list) ? list.filter((v): v is string => typeof v === "string") : [];
+}
+
+/** Answer omp's form elicitation by accepting the affirmative option.
+ *
+ *  This is a REDUNDANT inner gate: it only fires after our authoritative `session/request_permission` gate
+ *  already allowed the call, so accepting here re-states a decision a human or an explicit auto-approve
+ *  policy already made. A form with no affirmative option is a custom question rather than an approval, and
+ *  gets `decline` instead of a synthesized answer, which matches the pre-capability behavior.
+ *
+ *  The RESPONSE SHAPE is load-bearing too: omp wants `{ action: "accept", content: { value } }`. Returning
+ *  a bare `{ value }`, or `{}`, is read as "denied by user" with no prompt shown anywhere. */
+export function elicitationAnswer(params: unknown): ElicitationAnswer {
+  const approve = elicitationApproval(elicitationOptions(params));
+  return approve ? { action: "accept", content: { value: approve } } : { action: "decline" };
+}
+
 /** Pure update: fold a user's choice into the store. Returns a NEW store (never mutates). allow-once /
  *  allow-turn / deny persist nothing (turn scope is in-memory on the backend). */
 export function applyExecChoice(store: ExecStore, cls: ExecClass, choice: ExecChoice): ExecStore {

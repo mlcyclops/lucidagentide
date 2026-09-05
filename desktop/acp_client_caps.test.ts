@@ -69,6 +69,18 @@ describe("every ACP client that ANSWERS an elicitation also ADVERTISES it", () =
     expect(src).toContain(`from "./acp_client_caps.ts"`);
     // And it must actually PASS it to initialize, not just import it.
     expect(src).toMatch(/clientCapabilities:\s*ACP_INTERACTIVE_CLIENT_CAPS/);
+    // P-FLEET.L15 (ADR-0338): and it must answer with the SHARED answerer. Advertising the capability
+    // correctly while hand-rolling the answer is the second half of the same bug, and it is worse: omp
+    // asks, the client answers something malformed, and the call is denied with no prompt anywhere.
+    expect(src).toContain("elicitationAnswer");
+  });
+
+  test.each(CLIENTS)("%s does not hand-roll the options path", (file) => {
+    const src = readFileSync(join(import.meta.dir, file), "utf8");
+    // The two shapes the lane guessed. Neither exists on an elicitation/create request, and reading either
+    // silently yields no options, which becomes a decline. Only `exec_policy` may know the real path.
+    expect(src).not.toMatch(/params\?\.options\s*\?\?\s*params\?\.schema\?\.options/);
+    expect(src).not.toContain("schema?.options");
   });
 
   test("both clients really do answer elicitation/create, so the check above is not vacuous", () => {

@@ -43,6 +43,8 @@ import { kgPacksBtnHtml, packSignInCopy, shouldResumeCheckout, type PendingCheck
 import { enterSubmitTarget } from "./enter_submit.ts"; // P-KGMARKET.5: Enter runs a passphrase field's action
 // P-PREVIEW-PWA.4 (ADR-0335): never publish a FAILED preview to a phone guest as a permanent snapshot.
 import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
+// P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
+import { previewAfterNewSession } from "./preview_session.ts";
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -5954,7 +5956,15 @@ function closeTrainer(): void {
  *  user could click it). If the panel is already open, swap to the new file; otherwise open it on this file. */
 function onPreviewAvailable(path: string): void {
   if (!path) return;
-  state.lastPreviewablePath = path;
+  // P-PREVIEW.19 (ADR-0339): only remember a target that PROVABLY previews. `/api/preview/serve` reports a
+  // failure with HTTP 200 and an HTML body, so a rendered error page is indistinguishable from a rendered
+  // document on this side; the probe (ADR-0335) is the only honest answer. Without this a path that never
+  // once rendered still became the panel's sticky re-open target, which is how a new session kept opening
+  // on `/tmp/x.pdf`. The load below still happens either way, so a genuine failure is visible NOW; what the
+  // probe governs is whether it is worth re-opening a panel for LATER.
+  void bridge.previewProbe(path).then((resolves) => {
+    if (resolves) state.lastPreviewablePath = path;
+  }).catch(() => { /* fail-closed: an unprobeable path is not remembered */ });
   schedulePhoneAutoSend(path); // P-PREVIEW-PWA.2: auto-mirror the agent's refreshed preview to phone guests
   // A write JUST happened, so the agent lane's loaded document is stale by definition. Clear the lane's
   // path before openPreview so its unchanged-path guard cannot skip the reload (that guard exists to keep
@@ -14083,8 +14093,33 @@ function wire(): void {
 // ───────────────────────── palette actions ─────────────────────────
 function newSession(): void {
   seedThread(); state.liveUsage = null;
+  resetAgentPreviewLane(); // P-PREVIEW.19 (ADR-0339): the agent's preview belongs to the conversation that ended
   void bridge.newSession().then(() => loadSessionMode()); // ADR-0219: fresh session defaults to CUI under lockdown
   renderStatus(); $("#input")?.focus();
+}
+
+/** P-PREVIEW.19 (ADR-0339): drop the AGENT preview lane at a session boundary, and leave YOURS alone.
+ *
+ *  A new chat session does not reload the window, so without this every piece of preview state survives
+ *  into the next conversation: `lastPreviewablePath` keeps re-opening the panel, and the agent frame keeps
+ *  showing a document from a conversation the user has moved on from. The user's own tab is not
+ *  conversation-scoped and is not ours to close. */
+function resetAgentPreviewLane(): void {
+  const { lanes, changed } = previewAfterNewSession({
+    yours: prevPathByLane.yours ?? "",
+    agent: prevPathByLane.agent ?? "",
+    lastPreviewable: state.lastPreviewablePath,
+  });
+  if (!changed) return; // nothing was carried, so no teardown and no repaint
+  state.lastPreviewablePath = lanes.lastPreviewable;
+  prevPathByLane.agent = lanes.agent;
+  prevKindByLane.agent = "";
+  // Unload the frame too: leaving a live document in a hidden iframe keeps its timers, audio and network
+  // running for a conversation that is over.
+  const af = laneFrame("agent");
+  if (af) { af.removeAttribute("srcdoc"); af.removeAttribute("src"); af.hidden = true; }
+  const dot = $("#prevAgentDot"); if (dot) dot.hidden = true; // no "new" badge for something we just dropped
+  if (previewOpen && prevLane === "agent") switchPrevLane(prevPathByLane.yours ? "yours" : "agent");
 }
 /** Drop an omp slash command into the composer (omp runs it on send via ACP). */
 function runCommand(c: OmpCommand): void {

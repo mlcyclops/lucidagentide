@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, elicitationApproval, execVerdict,
+  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, elicitationAnswer, elicitationApproval, elicitationOptions, execVerdict,
   loopVerdict, type ExecStore, type RiskTier,
 } from "./exec_policy.ts";
 
@@ -342,5 +342,79 @@ describe("elicitationApproval (omp form-elicitation approve/deny)", () => {
   test("fail-safe on junk input (non-strings, non-array)", () => {
     expect(elicitationApproval([1, null, {}, "Deny"] as unknown[])).toBeNull();
     expect(elicitationApproval([1, "Approve"] as unknown[])).toBe("Approve");
+  });
+});
+
+// P-FLEET.L15 (ADR-0338): the WIRE SHAPE, pinned. A fleet lane hand-rolled this and guessed both halves
+// wrong, which denied every bash and eval call for as long as it shipped, with no prompt shown to anyone.
+// These tests exist so the shape is documented by assertion rather than by whoever reads omp's source next.
+describe("elicitationOptions (where omp actually puts the choices)", () => {
+  const real = (...vals: string[]) => ({ requestedSchema: { properties: { value: { enum: vals } } } });
+
+  test("reads the JSON-Schema enum, which is the ONE place omp puts them", () => {
+    expect(elicitationOptions(real("Approve", "Deny"))).toEqual(["Approve", "Deny"]);
+  });
+
+  test("THE BUG: the two shapes the lane guessed yield NOTHING", () => {
+    // `params.options` is the shape of the OUTER session/request_permission request, a different message
+    // with a different schema. `params.schema.options` does not exist anywhere. Reading either gave [],
+    // which silently became a decline.
+    expect(elicitationOptions({ options: ["Approve", "Deny"] })).toEqual([]);
+    expect(elicitationOptions({ schema: { options: ["Approve", "Deny"] } })).toEqual([]);
+    expect(elicitationOptions({ options: [{ value: "approve", label: "Approve" }] })).toEqual([]);
+  });
+
+  test("non-string entries are dropped, not coerced", () => {
+    expect(elicitationOptions(real())).toEqual([]);
+    expect(elicitationOptions({ requestedSchema: { properties: { value: { enum: [1, "Approve", null] } } } })).toEqual(["Approve"]);
+  });
+
+  test("every missing link in the path refuses instead of throwing", () => {
+    for (const bad of [
+      null, undefined, 0, "", [], true,
+      {}, { requestedSchema: null }, { requestedSchema: {} },
+      { requestedSchema: { properties: null } }, { requestedSchema: { properties: {} } },
+      { requestedSchema: { properties: { value: null } } },
+      { requestedSchema: { properties: { value: {} } } },
+      { requestedSchema: { properties: { value: { enum: "Approve" } } } },
+    ]) {
+      expect(elicitationOptions(bad)).toEqual([]);
+    }
+  });
+});
+
+describe("elicitationAnswer (the response shape omp requires)", () => {
+  const real = (...vals: string[]) => ({ requestedSchema: { properties: { value: { enum: vals } } } });
+
+  test("an approval form is ACCEPTED with the chosen value nested under content", () => {
+    // A bare `{ value }` or a `{}` is read by omp as "denied by user" with no prompt anywhere. The nesting
+    // is the difference between a lane that runs commands and a lane that cannot.
+    expect(elicitationAnswer(real("Approve", "Deny"))).toEqual({ action: "accept", content: { value: "Approve" } });
+  });
+
+  test("a form with no affirmative option DECLINES rather than synthesizing an answer", () => {
+    // A custom question is not an approval, so we do not invent a choice for the user.
+    expect(elicitationAnswer(real("Red", "Green"))).toEqual({ action: "decline" });
+    expect(elicitationAnswer(real("Deny"))).toEqual({ action: "decline" });
+  });
+
+  test("THE BUG, end to end: the shape the lane used to receive now still declines cleanly", () => {
+    // Proves the failure was in the READ, not in omp: fed the lane's guessed shape, the shared answerer
+    // declines explicitly (a valid ACP response) rather than returning `{}` (which omp treats as denial
+    // but which is also not a well-formed answer).
+    expect(elicitationAnswer({ options: ["Approve", "Deny"] })).toEqual({ action: "decline" });
+  });
+
+  test("garbage declines, never throws and never accepts", () => {
+    for (const bad of [null, undefined, 0, "", [], true, {}]) {
+      expect(elicitationAnswer(bad)).toEqual({ action: "decline" });
+    }
+  });
+
+  test("the accepted value is one of the offered options, never a fabricated string", () => {
+    const offered = ["Approve and run", "Deny"];
+    const a = elicitationAnswer(real(...offered));
+    expect(a.action).toBe("accept");
+    expect(offered).toContain(a.content?.value);
   });
 });
