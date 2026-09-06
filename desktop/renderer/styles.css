@@ -2807,6 +2807,8 @@ body.preview-open .thread{font-size:.9em}
    300px, 157px at 220px. That is the right trade, because the alternative is not a shorter header, it is a
    header whose last controls are gone. */
 .kg-tools{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;row-gap:6px}
+/* P-KGPACK.8: preview totals stay one readable line, with full detail on hover. */
+#kgScopeLbl{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* The one COMMERCIAL affordance in this header, so it is findable without being an advertisement: an
    accent border and a soft outward glow, plus a very slow low-amplitude breath. The global
    prefers-reduced-motion reset near the top of this file already pins animations to one iteration; the

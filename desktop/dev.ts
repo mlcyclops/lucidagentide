@@ -268,7 +268,7 @@ async function syncVectorIndex(kgId: string, kgName: string, embedder: Embedder)
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
-import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg, knowledgeVectorStore, vectorDatasetFor } from "./kb_store.ts"
+import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, setActiveKg, knowledgeVectorStore, vectorDatasetFor } from "./kb_store.ts"
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
@@ -3639,8 +3639,29 @@ const server = Bun.serve({
         return json({ ok: true, data: agentRetain(await readBody<unknown>(req)) });
       }
       if (p === "/api/kb/graph") {
-        const s = await kbStore();
-        return json({ ok: true, data: { pages: await s.listPages(), links: await s.listLinks() } });
+        try {
+          // Capture identity before awaiting: changing the active KG cannot relabel this snapshot.
+          const kgId = url.searchParams.get("kgId") ?? activeKgId();
+          if (!kgId || !kgEntry(kgId)) return json({ ok: false, error: "Unknown knowledge graph.", data: null });
+          const snapshot = await (await kbStore(kgId)).graphSnapshot();
+          return json({ ok: true, data: { kgId, ...snapshot } });
+        } catch (e) {
+          return json({ ok: false, error: clientError(e, "could not load the knowledge graph"), data: null });
+        }
+      }
+      if (p === "/api/kb/page") {
+        try {
+          // Detail reads must name the KG that supplied the selected node, never the current active KG.
+          const kgId = url.searchParams.get("kgId");
+          const pageId = url.searchParams.get("pageId");
+          if (!kgId || !pageId) return json({ ok: false, error: "kgId and pageId are required.", data: null });
+          if (!kgEntry(kgId)) return json({ ok: false, error: "Unknown knowledge graph.", data: null });
+          const page = await (await kbStore(kgId)).getPage(pageId);
+          if (!page) return json({ ok: false, error: "Knowledge page not found.", data: null });
+          return json({ ok: true, data: page });
+        } catch (e) {
+          return json({ ok: false, error: clientError(e, "could not load the knowledge page"), data: null });
+        }
       }
       // P-KGPACK.2 (ADR-0205): the named-KG picker. list/create/rename/activate over the KG registry
       // (file-per-KG, ADR-0205). Mutations return the refreshed list; a validation error rides on `error`

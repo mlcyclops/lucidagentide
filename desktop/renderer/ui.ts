@@ -203,7 +203,7 @@ export interface ToastOpts { title: string; desc: string; meta?: string; actions
 // tone:"danger" (shield + red), warnings into tone:"warn".
 const TONE_ICON: Record<ToastTone, string> = { ok: "check", info: "info", warn: "bolt", danger: "shield" };
 
-export function showToast(o: ToastOpts): void {
+export function showToast(o: ToastOpts): () => void {
   const host = $("#toasts")!;
   const toneClass = o.tone ? ` ${o.tone}` : "";
   const ico = o.tone ? (TONE_ICON[o.tone] ?? "shield") : "check";
@@ -228,4 +228,5 @@ export function showToast(o: ToastOpts): void {
   host.appendChild(node);
   requestAnimationFrame(() => node.classList.add("show"));
   if (o.timeout) setTimeout(dismiss, o.timeout);
+  return dismiss;
 }

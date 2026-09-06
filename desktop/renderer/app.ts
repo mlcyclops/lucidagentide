@@ -61,7 +61,7 @@ import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/
 import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable)
 import { filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
-import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, PersonalGraphData } from "./bridge.ts";
+import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
 // P-KGUI.3 (ADR-0336): the Personalization card's stat tiles, rebuilt for a user with MANY knowledge graphs.
 import type { PersonalStatus } from "./bridge.ts";
 import { personalStatTiles, personalStatsHtml } from "./personal_stats.ts";
@@ -4065,6 +4065,7 @@ const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
 let personalKgs: KgListItem[] = [];
 let personalKgPages: Record<string, number> = {};
 let personalCountsBusy = false;
+let personalHydrationGeneration = 0;
 
 /** The hero KG row, mirroring the LUCID Agent hero button in the Profile card. It opens the EXISTING KG
  *  picker (select / rename / seed from a folder / import a .lkgpack / the Role KG Packs catalog / new KG),
@@ -4086,26 +4087,31 @@ function kgHeroBtnHtml(): string {
 /** Re-render just the Personalization card (instant - the personal endpoint is local). The KG list rides
  *  along because the tiles need it; per-KG PAGE COUNTS do not, and are filled in a second pass. */
 async function hydratePersonal(): Promise<void> {
+  const generation = ++personalHydrationGeneration;
   const [p, kgv] = await Promise.all([bridge.personal(), bridge.kbList().catch(() => null)]);
+  if (generation !== personalHydrationGeneration) return;
   if (kgv) personalKgs = kgv.kgs.map((k) => ({ kg_id: k.kg_id, name: k.name, active: k.kg_id === kgv.activeId, read_only: k.read_only, source_kind: k.source_kind }));
   fillSec("personal", secPersonal(p));
-  void fillPersonalKgCounts(p);
+  void fillPersonalKgCounts(p, generation);
 }
 
 /** Second pass: the per-KG page counts. Each KG is its OWN DuckDB file, so this costs one open per KG on
  *  the first call and must NEVER block the card. The tiles paint with a dash and the numbers land after.
  *  Single-flight, and it repaints only when a number actually changed, so a burst of hydrations cannot
  *  fan out into N file opens or flicker the card for nothing. */
-async function fillPersonalKgCounts(p: PersonalStatus | null): Promise<void> {
+async function fillPersonalKgCounts(p: PersonalStatus | null, generation: number): Promise<void> {
   if (personalCountsBusy || personalKgs.length === 0) return;
   personalCountsBusy = true;
   try {
     const pages = await bridge.kbCounts().catch(() => null);
-    if (!pages) return; // a failed count leaves the dashes: better than inventing zeros
+    if (!pages || generation !== personalHydrationGeneration) return; // discard counts from before an import or switch
     const changed = personalKgs.some((k) => personalKgPages[k.kg_id] !== pages[k.kg_id]);
     personalKgPages = pages;
     if (changed) fillSec("personal", secPersonal(p));
-  } finally { personalCountsBusy = false; }
+  } finally {
+    personalCountsBusy = false;
+    if (generation !== personalHydrationGeneration && state.settingsOpen) void hydratePersonal();
+  }
 }
 
 // ── P-LOCAL.3 (ADR-0135): Settings → Local Providers ─────────────────────────────────────────────
@@ -5504,6 +5510,8 @@ async function maybeOnboardPersonal(): Promise<void> {
 
 // ───────────────────────── Knowledge graph (P9.3) ─────────────────────────
 let kgHandle: GraphHandle | null = null;
+let kgRenderGeneration = 0; // closing or switching invalidates every in-flight graph read
+let kbSideGeneration = 0;
 const perfWatch = watchPerfTier(); // P-PERF.2 (ADR-0129): battery/spec-aware render tier
 let kgForceRender = false; // P-PERF.2: one-shot "Render anyway" override of the minimal-tier pause (per run)
 // P-PERF.3 (ADR-0130): layout continuity across mounts - re-opening the KG (rail switch, live-refresh
@@ -5642,13 +5650,17 @@ async function openKgPicker(anchor: HTMLElement): Promise<void> {
 }
 /** Activate a KG + draw its page graph. Re-picking the KG already on the canvas returns to the Personal graph. */
 async function pickKg(kgId: string): Promise<void> {
-  if (kbGraphMode && kgId === activeKbId) { updateKbButton(false); await renderKnowledge(); return; }
+  if (kgOpen && kbGraphMode && kgId === activeKbId) { updateKbButton(false); await renderKnowledge(); return; }
   const v = await bridge.kbActivate(kgId).catch(() => null);
-  if (v) {
-    activeKbId = v.activeId;
-    activeKbName = v.kgs.find((k) => k.kg_id === v.activeId)?.name ?? "";
+  if (!v || v.error || v.activeId !== kgId) {
+    showToast({ tone: "danger", title: "KG not activated", desc: v?.error ?? "Couldn't select that graph. Your previous KG is unchanged.", timeout: 5000 });
+    return;
   }
-  await renderKbGraph(); // reads the ACTIVE KG's pages+links (invariant: /api/kb/graph uses the active store)
+  activeKbId = v.activeId;
+  activeKbName = v.kgs.find((k) => k.kg_id === v.activeId)?.name ?? "";
+  updateKbButton(true);
+  void hydratePersonal();
+  if (kgOpen) await renderKbGraph();
 }
 /** Rename a KG via the shared text-prompt modal, then push the refreshed list back into the open picker. */
 async function renameKgFlow(kgId: string, view: import("./bridge.ts").KgListView, apply: (v: import("./bridge.ts").KgListView | null) => void): Promise<void> {
@@ -5737,15 +5749,46 @@ async function importPackFlow(): Promise<void> {
     ],
   }).catch(() => null);
   if (!picked) return;
-  showToast({ title: "Verifying + scanning the pack…", desc: "Integrity + origin are checked and every page is re-scanned before anything installs.", timeout: 2200 });
-  const r = await bridge.kbPackImport({ path: picked }).catch(() => null);
-  if (!r || !r.ok) {
-    showToast({ tone: "danger", title: "Pack rejected", desc: `${r?.error ?? "Couldn't import that pack."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 7000 });
+  await installPackFlow(() => bridge.kbPackImport({ path: picked }));
+}
+
+/** One completion path for local files and entitled downloads. Never mount a hidden graph. */
+let packInstallBusy = false;
+async function installPackFlow(install: () => Promise<KbPackImportView | null>): Promise<void> {
+  if (packInstallBusy) {
+    showToast({ tone: "info", title: "A pack is already importing", desc: "Let verification finish before importing another pack.", timeout: 4000 });
     return;
   }
-  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? "Imported pack"; }
-  await renderKbGraph();
-  showToast({ title: `"${r.kgName ?? "Pack"}" installed`, desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only · shown as untrusted data`, timeout: 6000 });
+  packInstallBusy = true;
+  const dismissProgress = showToast({ tone: "info", title: "Importing your KG Pack…", desc: "Checking integrity and origin, then scanning every page. You can keep working; no restart is needed.", timeout: 0 });
+  try {
+    const r = await install().catch(() => null);
+    if (!r?.ok || !r.kgId) {
+      showToast({ tone: "danger", title: "Pack not installed", desc: `${r?.error ?? "Couldn't confirm the import. Check your KG list before retrying."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 0 });
+      return;
+    }
+    const v = await bridge.kbActivate(r.kgId).catch(() => null);
+    const activated = !!v && !v.error && v.activeId === r.kgId;
+    if (activated) {
+      activeKbId = v.activeId;
+      activeKbName = v.kgs.find((k) => k.kg_id === v.activeId)?.name ?? r.kgName ?? "Imported pack";
+      updateKbButton(true);
+    }
+    // Seed the confirmed count immediately; a stale pre-import count request cannot overwrite it.
+    if (typeof r.pages === "number") personalKgPages[r.kgId] = r.pages;
+    void hydratePersonal();
+    if (activated && kgOpen) await renderKbGraph();
+    showToast({
+      tone: activated ? "ok" : "warn",
+      title: `"${r.kgName ?? "Pack"}" installed`,
+      desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only · untrusted data. ${activated ? "Ready to use now. The graph is a lightweight preview; all pages remain available to the agent." : "Could not activate it. Select it from the KG picker; do not re-import."}`,
+      actions: activated ? [{ label: "View graph preview", run: () => openKnowledge() }, { label: "Done" }] : [{ label: "OK" }],
+      timeout: 0,
+    });
+  } finally {
+    dismissProgress();
+    packInstallBusy = false;
+  }
 }
 
 // P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI toggle / Export vault / CUI archive,
@@ -5829,12 +5872,13 @@ function kgSignature(d: PersonalGraphData | null): string {
  *  simulation (positions preserved). No-op if the panel is closed or nothing changed. */
 async function refreshKnowledgeLive(): Promise<void> {
   if (!kgOpen || !kgHandle || kgCodeMode || kbGraphMode) return; // code-graph / compiled-KB mode isn't the live personal graph
+  const generation = kgRenderGeneration;
   const data = await bridge.personalGraph().catch(() => null);
-  if (!data || data.nodes.length === 0) return;
+  if (!kgOpen || generation !== kgRenderGeneration || !kgHandle || kgCodeMode || kbGraphMode || !data || data.nodes.length === 0) return;
   const sig = kgSignature(data);
   if (sig === kgSig) return; // nothing new learned
   kgSig = sig; kgData = data;
-  kgHandle.update(data);
+  kgHandle.update(capGraph(data, graphOpts(perfWatch.tier()).nodeCap).data);
 }
 
 /** After a chat turn, learning happens in the background (learnFromTurn, async + best-effort),
@@ -5854,12 +5898,16 @@ function openKnowledge(): void {
   $("#knowledge")!.hidden = false;
   $("#inspector")!.hidden = true;
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "knowledge"));
-  updateCodeGraphButtons(false); // always open on the personal graph; the Code-graph button re-enters code mode
-  void renderKnowledge();
+  updateCodeGraphButtons(false);
+  void (kbGraphMode ? renderKbGraph() : renderKnowledge());
 }
 function closeKnowledge(): void {
   if (!kgOpen) return;
   kgOpen = false;
+  kgRenderGeneration++;
+  kbSideGeneration++;
+  kbGraphData = null;
+  kgData = null;
   if (kgRelateMode) setRelateMode(false); // leave relate mode clean for next open
   kgHandle?.destroy(); kgHandle = null;
   showKgCenter(false);
@@ -7544,6 +7592,10 @@ async function openResourcePanelLive(): Promise<void> {
   openResourcePanel(status);
 }
 async function renderKnowledge(): Promise<void> {
+  if (!kgOpen) return;
+  const generation = ++kgRenderGeneration;
+  kbSideGeneration++;
+  kbGraphData = null;
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
   if (!canvas || !side) return;
   kbGraphMode = false; updateKbButton(false); // P-KB.2b: personal graph is neither code nor compiled-KB
@@ -7555,7 +7607,9 @@ async function renderKnowledge(): Promise<void> {
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // the facts panel only appears on selection
   let status: Awaited<ReturnType<typeof bridge.personal>>;
   try { status = await bridge.personal(); }
-  catch { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>Couldn't load your graph. Try reopening this panel.</div></div>`; return; }
+  catch { if (kgOpen && generation === kgRenderGeneration) canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>Couldn't load your graph. Try reopening this panel.</div></div>`; return; }
+  if (!kgOpen || generation !== kgRenderGeneration) return;
+  if (scopeLbl) scopeLbl.removeAttribute("title");
   if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
   const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; showKgCenter(false); syncKgSideOpen(); };
   if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
@@ -7567,11 +7621,15 @@ async function renderKnowledge(): Promise<void> {
   // P-SYSRES.1 (ADR-0182): hard-pause the CPU-heavy graph build while the machine is starved. Checked
   // BEFORE the decrypt so pausing skips that cost too. Fail-open: no profile evidence never blocks.
   const sysKg = await bridge.systemStatus().catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (sysKg?.verdict.level === "blocked") return renderSysBlocked(canvas as HTMLElement, sysKg, "knowledge graph", () => void renderKnowledge());
   // P-PERF.2: pause BEFORE the decrypt - skipping the render should skip its cost too.
   if (perfWatch.tier() === "minimal" && !kgForceRender) return renderKgPaused(canvas as HTMLElement);
-  try { kgData = await bridge.personalGraph(); }
-  catch { return gate("Couldn't decrypt your graph. Try reopening this panel."); }
+  let data: PersonalGraphData | null;
+  try { data = await bridge.personalGraph(); }
+  catch { if (kgOpen && generation === kgRenderGeneration) gate("Couldn't decrypt your graph. Try reopening this panel."); return; }
+  if (!kgOpen || generation !== kgRenderGeneration) return;
+  kgData = data;
   if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // appears only when a node is clicked
   // P-PERF.2: tier-scaled fidelity - calm + shorter settle + a top-hubs cap off AC power. kgData stays
@@ -7621,10 +7679,16 @@ function updateKbButton(active: boolean): void {
   updateKgViewsLabel(); // P-KGUI.1: the consolidated views button shows the active graph
 }
 /** Render a selected compiled page in the kg side panel - its body is UNTRUSTED DATA (escaped + framed). */
-function renderKbSide(id: string | null): void {
+async function renderKbSide(id: string | null): Promise<void> {
   const side = $("#kgSide") as HTMLElement | null; if (!side) return;
-  const page = id ? kbGraphData?.pages.find((p) => p.page_id === id) : null;
-  if (!page) { side.hidden = true; side.innerHTML = ""; syncKgSideOpen(); return; }
+  const generation = ++kbSideGeneration;
+  const graph = kbGraphData;
+  if (!id || !graph?.pages.some((p) => p.page_id === id)) { side.hidden = true; side.innerHTML = ""; syncKgSideOpen(); return; }
+  side.innerHTML = `<div class="kg-empty">Loading page…</div>`;
+  side.hidden = false; syncKgSideOpen();
+  const page = await bridge.kbPage(graph.kgId, id).catch(() => null);
+  if (!kgOpen || !kbGraphMode || generation !== kbSideGeneration || graph !== kbGraphData) return;
+  if (!page) { side.innerHTML = `<div class="kg-empty">Couldn't load this page. Select it again to retry.</div>`; return; }
   side.innerHTML = `<div class="kb-side">
     <div class="kb-side-hd"><b>${esc(page.title)}</b> <span class="skdir-trust ${esc(page.trust_label)}">${esc(page.trust_label)}</span></div>
     <div class="kb-side-kind">${esc(page.kind)} \u00b7 <code>${esc(page.slug)}</code></div>
@@ -7634,21 +7698,41 @@ function renderKbSide(id: string | null): void {
 }
 /** Fetch + draw the compiled KB page graph in the shared canvas (mirrors renderCodeGraph). */
 async function renderKbGraph(): Promise<void> {
+  if (!kgOpen) return;
+  const generation = ++kgRenderGeneration;
+  kbSideGeneration++;
+  kbGraphData = null;
+  kgData = null;
   const canvas = $("#kgCanvas"), side = $("#kgSide") as HTMLElement | null, scopeLbl = $("#kgScopeLbl");
   if (!canvas) return;
   kgHandle?.destroy(); kgHandle = null;
-  kbGraphMode = true; updateKbButton(true); updateCodeGraphButtons(false); // mutually exclusive with code + personal
-  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>Loading the compiled KB\u2026</div></div>`;
+  updateKbButton(true); updateCodeGraphButtons(false);
+  showKgCenter(false);
+  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>Loading graph preview…</div></div>`;
   if (side) { side.hidden = true; side.innerHTML = ""; }
-  const g = await bridge.kbGraph().catch(() => null);
+  syncKgSideOpen();
+  const sys = await bridge.systemStatus().catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
+  if (sys?.verdict.level === "blocked") return renderSysBlocked(canvas as HTMLElement, sys, "graph preview", () => void renderKbGraph());
+  const g = await bridge.kbGraph(activeKbId ?? undefined).catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   kbGraphData = g;
-  if (scopeLbl) scopeLbl.textContent = g ? `\u00b7 compiled KB \u00b7 ${g.pages.length} pages \u00b7 ${g.links.length} links` : "";
-  if (!g || !g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>The compiled KB is empty. Ingest a document to build summary, concept &amp; entity pages.</div></div>`; showKgCenter(false); syncKgSideOpen(); return; }
-  kgHandle = mountGraph(canvas as HTMLElement, kbToGraphData(g), (id) => renderKbSide(id), {}, {
-    positions: kgLayoutCache.get("kb"),
-    onPositions: (pos) => kgLayoutCache.set("kb", pos),
+  if (scopeLbl) {
+    scopeLbl.textContent = g ? `· ${g.totalPages} pages · ${g.totalLinks} links · preview ${g.pages.length} nodes / ${g.links.length} links` : "";
+    scopeLbl.setAttribute("title", "Lightweight preview: at most 100 nodes and 200 links. All pages remain available to the agent; Find a node searches this preview.");
+  }
+  if (!g) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>Couldn't load the graph preview. Your imported pack is still installed. Reopen this view to retry.</div></div>`; return; }
+  if (!g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>This knowledge graph is empty. Import a document to add pages.</div></div>`; return; }
+  kgData = kbToGraphData(g);
+  const cacheKey = `kb:${g.kgId}`;
+  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => void renderKbSide(id), {}, {
+    staticLayout: true,
+    positions: kgLayoutCache.get(cacheKey),
+    onPositions: (pos) => kgLayoutCache.set(cacheKey, pos),
   });
   kgHandle.setLens(kgLens);
+  const query = ($("#kgSearch") as HTMLInputElement | null)?.value.trim();
+  if (query) kgHandle.setSearch(matchNodes(kgData.nodes, query));
   showKgCenter(true); syncKgSideOpen();
 }
 // P-KGPACK.2 (ADR-0205): the compiled-KB view is entered through the KG picker (openKgPicker → pickKg),
@@ -7667,6 +7751,10 @@ function updateCodeGraphButtons(active: boolean, meta?: import("./bridge.ts").Co
 /** Render the workspace code graph at `level`. `ingest` forces a fresh (re)build; otherwise load the stored
  *  graph (building on first use). Bypasses the personalization gate - the code graph isn't private user data. */
 async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeGraphLevel): Promise<void> {
+  if (!kgOpen) return;
+  const generation = ++kgRenderGeneration;
+  kbSideGeneration++;
+  kbGraphData = null;
   codeGraphLevel = level;
   const canvas = $("#kgCanvas"), side = $("#kgSide") as HTMLElement | null;
   if (!canvas) return;
@@ -7678,13 +7766,16 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   // P-SYSRES.1 (ADR-0182): the AST ingest is the app's biggest CPU spike - hard-pause it while the
   // machine is starved (notice + what-to-close panel + re-check). Fail-open on missing evidence.
   const sysCg = await bridge.systemStatus().catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (sysCg?.verdict.level === "blocked") {
     renderSysBlocked(canvas as HTMLElement, sysCg, "code graph", () => void renderCodeGraph(ingest, level));
     updateCodeGraphButtons(true, null);
     return;
   }
   let data = ingest ? await bridge.codeGraphIngest(level).catch(() => null) : await bridge.codeGraph(level).catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (data && !data.ingested && !ingest) data = await bridge.codeGraphIngest(level).catch(() => null); // never built → build now
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (!data || !data.nodes.length) {
     canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>No ${level === "symbol" ? "symbols" : "source files"} found to graph in this workspace. Open a code repo as your workspace, then try again.</div></div>`;
     updateCodeGraphButtons(true, null); showKgCenter(false); return;
@@ -12764,12 +12855,7 @@ async function getPackFlow(pack: KgPack): Promise<void> {
   // action === "pull": entitled → fetch the signed download URL, then download + gated-install (P-KGMARKET.4).
   const dl = await prov.downloadUrl(pack.id).catch(() => null);
   if (!dl) { showToast({ tone: "danger", title: "Couldn't start the download", desc: "The pack is owned, but no download link came back. Try again.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
-  showToast({ title: `Installing "${pack.name}"…`, desc: "Downloading the signed pack - it's verified for origin and re-scanned before anything installs.", timeout: 2200 });
-  const r = await bridge.kbPackInstallFromUrl(dl).catch(() => null);
-  if (!r || !r.ok) { showToast({ tone: "danger", title: "Install failed", desc: `${r?.error ?? "Couldn't install that pack."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 7000 }); return; }
-  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? pack.name; }
-  await renderKbGraph();
-  showToast({ title: `"${r.kgName ?? pack.name}" installed`, desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only`, timeout: 6000 });
+  await installPackFlow(() => bridge.kbPackInstallFromUrl(dl));
 }
 
 function wire(): void {
@@ -12895,7 +12981,7 @@ function wire(): void {
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.
-  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(perfWatch.tier() !== "full"); });
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
   // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing

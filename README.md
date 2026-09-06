@@ -181,6 +181,12 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## Unreleased: seamless KG pack imports
+
+Import a `.lkgpack.zip` from Settings > Personalization or the KG panel's Packs menu. Verification stays visible until completion. On success, the pack becomes active and its page count refreshes without restarting LUCID. Settings stays open; **View graph preview** opens the visualization when you want it.
+
+The preview shows at most **100 nodes and 200 links**, with full graph totals in the header. It uses static placement, not a force simulation or animated particles. Click a node to load its page; Find a node searches the displayed preview. All pages remain available to knowledge retrieval, including pages outside the preview. Imports still verify integrity and origin, scan every page fail-closed, and install read-only as untrusted data. Existing installations need the updated build; importing after that does not require a restart. *(P-KGPACK.8, [ADR-0341](DECISIONS.md))*
+
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.2.0
 
 > **🐛 Four reported defects, fixed.** A fleet lane that could not run a command at all, a phone that was shown a broken preview, a Preview panel that followed you into your next conversation, and a storefront with no door.

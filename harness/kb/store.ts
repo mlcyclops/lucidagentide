@@ -48,6 +48,15 @@ export interface KbPage {
   updated_at: string;
 }
 
+export type KbPageMetadata = Omit<KbPage, "body_md">;
+
+export interface KbGraphSnapshot {
+  pages: KbPageMetadata[];
+  links: KbLink[];
+  totalPages: number;
+  totalLinks: number;
+}
+
 export interface KbLink {
   link_id: string;
   from_page_id: string;
@@ -128,6 +137,69 @@ export class KbGraphStore {
       "INSERT INTO kb_changelog VALUES ($1,$2,$3,$4,$5)",
       [Snowflake.next(), c.documentId ?? null, c.action, c.detail, new Date().toISOString()],
     );
+  }
+
+  async getPage(id: string): Promise<KbPage | undefined> {
+    return (await this.db.get("SELECT * FROM kb_pages WHERE page_id = $1", [id])) as KbPage | undefined;
+  }
+
+  /** One statement gives drawing a consistent, bounded snapshot even while ingestion writes pages.
+   *  Rank by incident-link degree, breaking ties by id. Bodies never enter the snapshot query. */
+  async graphSnapshot(): Promise<KbGraphSnapshot> {
+    const rows = await this.db.all(`
+      WITH degrees AS (
+        SELECT page_id, count(*) AS degree
+        FROM (
+          SELECT from_page_id AS page_id FROM kb_links
+          UNION ALL
+          SELECT to_page_id AS page_id FROM kb_links
+        ) endpoints
+        GROUP BY page_id
+      ), snapshot_pages AS MATERIALIZED (
+        SELECT p.page_id, p.kind, p.slug, p.title, p.trust_label, p.classification,
+               p.created_at, p.updated_at, coalesce(d.degree, 0) AS degree
+        FROM kb_pages p LEFT JOIN degrees d ON d.page_id = p.page_id
+        ORDER BY degree DESC, p.page_id
+        LIMIT 100
+      ), snapshot_links AS (
+        SELECT l.link_id, l.from_page_id, l.to_page_id, l.relation, l.created_at
+        FROM kb_links l
+        JOIN snapshot_pages f ON f.page_id = l.from_page_id
+        JOIN snapshot_pages t ON t.page_id = l.to_page_id
+        ORDER BY l.from_page_id, l.to_page_id, l.relation, l.link_id
+        LIMIT 200
+      )
+      SELECT 0 AS row_kind, * FROM snapshot_pages
+      UNION ALL BY NAME
+      SELECT 1 AS row_kind, * FROM snapshot_links
+      UNION ALL BY NAME
+      SELECT 2 AS row_kind, (SELECT count(*) FROM kb_pages) AS total_pages,
+             (SELECT count(*) FROM kb_links) AS total_links
+      ORDER BY row_kind, degree DESC, page_id, from_page_id, to_page_id, relation, link_id
+    `);
+    const snapshot: KbGraphSnapshot = { pages: [], links: [], totalPages: 0, totalLinks: 0 };
+    for (const row of rows) {
+      if (row.row_kind === 0) {
+        snapshot.pages.push({
+          page_id: row.page_id as string, kind: row.kind as PageKind,
+          slug: row.slug as string, title: row.title as string,
+          trust_label: row.trust_label as string, classification: row.classification as Classification,
+          // TIMESTAMP columns come back as DuckDBTimestampValue (bigint micros inside) - JSON.stringify
+          // throws on those. The snapshot is a wire contract, so it carries real strings.
+          created_at: String(row.created_at), updated_at: String(row.updated_at),
+        });
+      } else if (row.row_kind === 1) {
+        snapshot.links.push({
+          link_id: row.link_id as string, from_page_id: row.from_page_id as string,
+          to_page_id: row.to_page_id as string, relation: row.relation as string,
+          created_at: String(row.created_at),
+        });
+      } else {
+        snapshot.totalPages = Number(row.total_pages);
+        snapshot.totalLinks = Number(row.total_links);
+      }
+    }
+    return snapshot;
   }
 
   async listPages(kind?: PageKind): Promise<KbPage[]> {

@@ -23604,3 +23604,21 @@ title ABSENT.
 would write a real pack into their real registry (ADR-0329's lesson about tests touching live data). Every
 stage either side of that write is proven: extraction, signature, store open, page listing, and the gate's
 own tested refusals.
+
+## ADR-0341 -- P-KGPACK.8: live pack completion and bounded static graph previews (2026-09-06)
+
+**Status:** Accepted.
+
+**Problem.** Compiled-pack graphs bypassed the personal/code graph performance limits: the endpoint materialized every page body and link, and the renderer mounted an unrestricted force graph with perpetual particles. Import from Settings also mounted that graph behind a closed panel and left the Personalization list/counts stale. Activation failures were swallowed. A delayed graph read could mount after the user closed or switched the panel.
+
+**Decision.** Local-file and entitled-download imports share `installPackFlow`: persistent verification feedback, single-flight installation, checked activation, immediate count hydration, explicit success/failure, and an optional View graph preview action. Settings stays open and hidden panels never mount. A hydration generation rejects pre-import count results and queues a fresh count pass. Graph generations invalidate reads on close/switch; selected-page reads also carry graph identity.
+
+`KbGraphStore.graphSnapshot()` performs a single bounded-result SQL query: metadata for the deterministic top 100 degree-ranked pages, at most 200 internal links, and true page/link totals. Bodies are fetched only for a selected page through an explicit, registry-validated KG ID. Full store APIs and agent retrieval are unchanged; no schema migration or trust change. The limits apply on every machine, not a guessed RAM threshold.
+
+Pack previews use `GraphPerfOpts.staticLayout`: deterministic sunflower placement, zero force steps, zero particle elements, and a parked idle loop. Pan, zoom, node dragging, selection, and per-KG position caching still work. A real 100-node star exposed numerical divergence in the old force layout during QA, so merely lowering its settle budget was rejected. Resource blocking is checked before loading the preview. The graph summary explicitly distinguishes full totals from preview nodes/links; search covers the preview only.
+
+**Evidence.** A temporary, isolated engine imported a real unsigned 2,227-page ZIP through the live renderer's `installPackFlow` and the real HTTP/scanner path. Settings stayed open, displayed 2,227 pages, and had zero hidden graph nodes. The native file chooser was bypassed by invoking the actual completion function through Chromium's debugger; no scanner, database, or HTTP result was mocked. The preview had 100 visible nodes, 198 links from 2,375 total links, no particles, and zero graph DOM mutations over 1.2 seconds idle. Clicking a node loaded its untrusted page body. Close removed all nodes; reopen restored 100; closing during a network-delayed load left zero late nodes. Renderer screenshots confirmed visible, finite placement. These checks used disposable data, not the operator's KG registry.
+
+**Found by the demo.** The first snapshot cut returned TIMESTAMP columns as raw `DuckDBTimestampValue` rows (bigint micros inside), so the result only serialized behind dev.ts's bigint-flattening `json()` replacer; a plain `JSON.stringify` threw. The demo's determinism check stringifies without that replacer and crashed, which is the point of running the real path. The snapshot mapper now emits real strings for `created_at`/`updated_at`, and the store test asserts serializability. `listPages`/`getPage` keep their pre-existing raw values (their consumers ride the replacer; changing them is not this increment's scope).
+
+**Limits.** This is a visualization/import UX change, not a claim of reduced whole-process RAM on every device. Installation still scans every page. The updated build must be deployed before an already-running old installation gains these changes; no per-import restart is needed afterward. Regression coverage lives in `harness/kb/store.test.ts` and `desktop/scripts/demo_p_kgpack_8.ts`.

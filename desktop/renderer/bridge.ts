@@ -404,9 +404,10 @@ export interface KbBlockedView { stage: "source" | "page"; slug?: string; reason
 export interface KbIngestResultView { documentId: string; status: "compiled" | "quarantined"; pagesCompiled: number; pagesQuarantined: number; links: number; pageIds: string[]; blocked: KbBlockedView[] }
 export interface KbRetrievedItemView { store: "vector" | "compiled"; citation: string; title: string; text: string; score: number; trustLabel: string }
 export interface KbRetrieveResultView { mode: "vector" | "compiled" | "hybrid"; items: KbRetrievedItemView[]; wrapped: string }
-export interface KbPageView { page_id: string; kind: string; slug: string; title: string; body_md: string; trust_label: string }
+export interface KbPageView { page_id: string; kind: string; slug: string; title: string; body_md: string; trust_label: string; classification: string; created_at: string; updated_at: string }
+export type KbPageMetadataView = Omit<KbPageView, "body_md">;
 export interface KbLinkView { link_id: string; from_page_id: string; to_page_id: string; relation: string }
-export interface KbGraphView { pages: KbPageView[]; links: KbLinkView[] }
+export interface KbGraphView { kgId: string; pages: KbPageMetadataView[]; links: KbLinkView[]; totalPages: number; totalLinks: number }
 // P-KGPACK.2 (ADR-0205): the named-KG picker. `activeId` is the KG a no-arg store lookup resolves to; a
 // mutation returns the refreshed list plus an optional `error` (validation failures don't null the list).
 export interface KgListItemView { kg_id: string; name: string; read_only: boolean; source_kind: string }
@@ -924,10 +925,11 @@ export interface LucidBridge {
   // P-KB.2b (ADR-0099/0100): compiled-KB ingest / retrieve / page-graph.
   kbIngest(doc: { sourcePath: string; title: string; text: string }): Promise<KbIngestResultView | null>;
   kbRetrieve(query: string, mode: "vector" | "compiled" | "hybrid"): Promise<KbRetrieveResultView | null>;
-  kbGraph(): Promise<KbGraphView | null>;
+  kbGraph(kgId?: string): Promise<KbGraphView | null>;
+  kbPage(kgId: string, pageId: string): Promise<KbPageView | null>;
   // P-KGPACK.2 (ADR-0205): the named-KG picker. list = all KGs + active; create/rename/activate return the
-  // refreshed list (with an optional `error` on validation failure). The graph view (kbGraph) reads the
-  // ACTIVE KG, so activate + re-fetch shows a different graph.
+  // refreshed list (with an optional `error` on validation failure). A no-arg kbGraph reads the active
+  // KG; explicit graph/detail reads stay bound to their requested KG even if the picker changes.
   kbList(): Promise<KgListView | null>;
   // P-KGUI.3 (ADR-0336): page count per KG, for the Personalization stat tiles. Its own call rather than a
   // field on kbList, because each KG is a separate DuckDB file: this costs one open per KG the first time,
@@ -1561,7 +1563,8 @@ export const bridge: LucidBridge = {
   skillStudioDraft: (candidate) => post("/api/skill-studio/draft", { candidate }),
   kbIngest: (doc) => post("/api/kb/ingest", doc),
   kbRetrieve: (query, mode) => post("/api/kb/retrieve", { query, mode }),
-  kbGraph: () => getData("/api/kb/graph"),
+  kbGraph: (kgId) => getData(kgId === undefined ? "/api/kb/graph" : `/api/kb/graph?kgId=${encodeURIComponent(kgId)}`),
+  kbPage: (kgId, pageId) => getData(`/api/kb/page?kgId=${encodeURIComponent(kgId)}&pageId=${encodeURIComponent(pageId)}`),
   kbList: () => getData("/api/kb/list"),
   // P-KGUI.3 (ADR-0336): only finite numbers survive. A malformed entry is DROPPED rather than coerced, so a
   // bad payload leaves a dash on the tile instead of painting "NaN" or a misleading 0.

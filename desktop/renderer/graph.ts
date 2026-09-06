@@ -42,6 +42,7 @@ export interface GraphHandle {
 // mount is a STATIC paint, no settle explosion); `onPositions` harvests the layout back on destroy.
 export interface GraphPerfOpts {
   forceCalm?: boolean;
+  staticLayout?: boolean; // bounded pack previews: deterministic placement, no force simulation or particles
   settleFrames?: number;
   positions?: ReadonlyMap<string, { x: number; y: number }>;
   onPositions?: (pos: Map<string, { x: number; y: number }>) => void;
@@ -57,7 +58,8 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   host.innerHTML = "";
   // calm: no particle flow, instant fit, loop parks when idle. From the OS reduced-motion preference OR
   // forced by the power tier (P-PERF.2) - mutable so plugging in / unplugging adapts a LIVE graph.
-  let calm = !!perf.forceCalm || reducedMotion();
+  const staticLayout = !!perf.staticLayout;
+  let calm = staticLayout || !!perf.forceCalm || reducedMotion();
   // Mutable so the layout re-fits when the canvas resizes (side panel toggles, KG resizer, window).
   let W = host.clientWidth || 600, H = host.clientHeight || 420;
   let cx = W / 2, cy = H / 2;
@@ -79,6 +81,10 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   const nodes: SimNode[] = data.nodes.map((n, i) => {
     const p = perf.positions?.get(n.id);
     if (p) { seededCount++; return { ...n, x: p.x, y: p.y, vx: 0, vy: 0, r: 7 + Math.min(15, n.count * 2.5) }; }
+    if (staticLayout) {
+      const angle = i * Math.PI * (3 - Math.sqrt(5)), radius = 52 * Math.sqrt(i);
+      return { ...n, x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius, vx: 0, vy: 0, r: 7 + Math.min(15, n.count * 2.5) };
+    }
     const a = (i / Math.max(1, data.nodes.length)) * Math.PI * 2;
     return { ...n, x: cx + Math.cos(a) * 130 + (i % 7) * 4, y: cy + Math.sin(a) * 130 + (i % 5) * 4, vx: 0, vy: 0, r: 7 + Math.min(15, n.count * 2.5) };
   });
@@ -90,7 +96,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     const ix = new Map(nodes.map((n, i) => [n.id, i]));
     return edges.map((e) => [ix.get(e.from)!, ix.get(e.to)!] as const);
   };
-  let springs = buildSprings();
+  let springs = staticLayout ? [] : buildSprings();
 
   const colorOf = (n: SimNode): string => (lens === "trust" ? TRUST_COLOR[n.trust] : KIND_COLOR[kindLabel(n.kind)]) ?? "#888";
 
@@ -123,7 +129,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   };
 
   // ── edges as curved paths + a few flow particles each (cap for perf on bigger graphs) ──
-  const PPE = edges.length > 36 ? 1 : edges.length > 14 ? 2 : 3; // particles per edge
+  const PPE = staticLayout ? 0 : edges.length > 36 ? 1 : edges.length > 14 ? 2 : 3; // particles per edge
   interface EdgeGeom { ax: number; ay: number; ccx: number; ccy: number; bx: number; by: number; col: string }
   interface EdgeEl { e: (typeof edges)[number]; path: SVGPathElement; parts: SVGCircleElement[]; geom?: EdgeGeom }
   const edgeEls: EdgeEl[] = edges.map((e) => {
@@ -208,7 +214,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   const SETTLE = Math.max(60, Math.min(1200, Math.round(perf.settleFrames ?? 480)));
   // P-PERF.3: a seeded mount skips some or ALL of the settle (static paint / short nestle).
   const startPlan = settleStart(seededCount, nodes.length, SETTLE);
-  let frames = startPlan.frames, raf = 0, idleParity = 0;
+  let frames = staticLayout ? SETTLE : startPlan.frames, raf = 0, idleParity = 0;
   // P-KGVIZ.1 (ADR-0183): FORM IN PLACE. With hundreds of nodes the old on-screen settle meant seconds
   // of shaking while the camera chased checkpoints - disorienting and un-grabbable. Any settle a mount
   // still needs now runs here, OFF-SCREEN and time-boxed, before the first paint; the sim is then
@@ -224,7 +230,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   const kick = () => { if (!stopped && raf === 0) raf = requestAnimationFrame(tick); };
   const tick = () => {
     if (stopped) return;
-    const simActive = frames < SETTLE || !!drag;
+    const simActive = !staticLayout && (frames < SETTLE || !!drag);
     if (simActive) {
       // P-KGVIZ.1: the physics lives in kg_ops.stepForces - ONE source for this live tick and the
       // off-screen pre-settle, so "form in place" lands on the same layout the old visible settle did.
@@ -255,7 +261,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     raf = requestAnimationFrame(tick);
   };
   raf = requestAnimationFrame(tick);
-  const reheat = () => { if (!stopped && frames > SETTLE - 160) { frames = SETTLE - 160; kick(); } };
+  const reheat = () => { if (!staticLayout && !stopped && frames > SETTLE - 160) { frames = SETTLE - 160; kick(); } };
 
   let pan: { x: number; y: number } | null = null, moved = false;
   const toGraph = (ev: MouseEvent): [number, number] => { const r = svg.getBoundingClientRect(); return [(ev.clientX - r.left - tx) / scale, (ev.clientY - r.top - ty) / scale]; };
@@ -313,7 +319,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   // P-KGVIZ.1: every mount is static now (pre-settled or fully seeded) - snap the one-time fit so the
   // view OPENS at the settled center (no camera glide), then paint once. A short opacity fade reveals
   // the formed graph; motion-free, and skipped entirely under calm/reduced-motion.
-  if ((formed || startPlan.needsFit) && !userMoved) computeFit(undefined, true);
+  if ((staticLayout || formed || startPlan.needsFit) && !userMoved) computeFit(undefined, true);
   paint();
   if (formed && !calm) svg.classList.add("kg-form");
 
@@ -358,10 +364,10 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       for (let i = 0; i < PPE; i++) { const c = make("circle"); c.setAttribute("class", "kg-part"); c.setAttribute("r", "1.7"); partG.append(c); parts.push(c); }
       edgeEls.push({ e, path, parts });
     }
-    springs = buildSprings(); // indices shifted (splice/push) - rebuild for the pure physics step
+    if (!staticLayout) springs = buildSprings(); // only force layouts need spring indices
     // P-KGVIZ.1: live merges settle OFF-SCREEN too (the old reheat meant every incoming fact shook the
     // whole graph for 160 visible frames). Newcomers nestle among inertia-pinned neighbors silently.
-    if (!drag) { presettle(nodes, springs, cx, cy, { settle: SETTLE, frames: Math.max(0, SETTLE - 160), deadlineMs: 200 }); frames = SETTLE; }
+    if (!staticLayout && !drag) { presettle(nodes, springs, cx, cy, { settle: SETTLE, frames: Math.max(0, SETTLE - 160), deadlineMs: 200 }); frames = SETTLE; }
     else reheat(); // mid-drag: keep the live sim (the hold must stay under the cursor)
     paint();
   };
@@ -387,6 +393,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       paint(); // apply / clear the dim+match classes
     },
     setCalm(on) { // P-PERF.2: unplugging calms a live graph in place; plugging in resumes the flow
+      on = staticLayout || on;
       if (calm === on) return;
       calm = on;
       partG.style.display = on ? "none" : "";
