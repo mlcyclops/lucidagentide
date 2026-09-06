@@ -18,8 +18,8 @@
 // P-SKILLREG.1 / ADR-0068/0069). Keys/signers come from env (managed config), fail-soft to unsigned.
 
 import { createPrivateKey, createPublicKey, sign as edSign, type KeyObject } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, statSync, writeFileSync, copyFileSync, rmSync, type Stats } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { DEFAULT_POLICY, type GateDecision, scanAndDecide } from "../harness/security/gate.ts";
 import { ScannerClient } from "../harness/security/scanner_client.ts";
@@ -195,13 +195,20 @@ export async function installPackFromUrl(url: string, opts: {
     bytes = Buffer.from(await res.arrayBuffer());
   } catch (e) { return { ok: false, stage: "manifest", error: `download failed: ${(e as Error).message}` }; }
 
-  // Unzip manifest + db (basename-matched, robust to any folder prefix) into a temp .lkgpack dir.
+  return importPackBytes(bytes, opts);
+}
+
+/** The ONE place a `.lkgpack.zip` becomes an importable pack directory: extract manifest + db (matched by
+ *  BASENAME, so any folder prefix inside the zip is fine) into a temp `.lkgpack`, run the P-KGPACK.4 gate,
+ *  then delete the temp copy. Shared by the entitled download and by a hand-picked local zip so those two
+ *  routes can never drift apart on what counts as a valid pack. */
+export async function importPackBytes(bytes: Buffer, opts: Parameters<typeof importKgPack>[1] = {}): Promise<PackImportResult> {
   let extracted: { name: string; data: Buffer }[];
   try { extracted = readZipEntriesMatching(bytes, (base) => base === LKGPACK_MANIFEST || base === LKGPACK_DB_FILE); }
   catch (e) { return { ok: false, stage: "manifest", error: `not a valid .lkgpack.zip: ${(e as Error).message}` }; }
   const man = extracted.find((e) => e.name === LKGPACK_MANIFEST);
   const dbf = extracted.find((e) => e.name === LKGPACK_DB_FILE);
-  if (!man || !dbf) return { ok: false, stage: "manifest", error: "the download is missing manifest.json or kb_graph.duckdb" };
+  if (!man || !dbf) return { ok: false, stage: "manifest", error: `that zip is missing ${LKGPACK_MANIFEST} or ${LKGPACK_DB_FILE}` };
 
   const tmp = mkdtempSync(join(tmpdir(), "lkgpack-"));
   const packDir = join(tmp, "pack.lkgpack");
@@ -215,4 +222,45 @@ export async function installPackFromUrl(url: string, opts: {
   } finally {
     try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
   }
+}
+
+/** What the user actually picked. The storefront delivers a `.lkgpack.zip`, but the import picker was a
+ *  FOLDER dialog, so the zip was invisible and the only way through was to guess that unzipping was
+ *  required, with nothing in the UI saying so. Both are accepted now, plus the `manifest.json` INSIDE an
+ *  unzipped pack: on Windows a single dialog cannot offer files and folders at once, so the file dialog
+ *  filters on `zip` + `json` and a picked manifest resolves to its parent. */
+export type PackInput =
+  | { kind: "dir"; packDir: string }
+  | { kind: "zip"; file: string }
+  | { kind: "reject"; reason: string };
+
+/** PURE-ish (one stat + one 4-byte read): classify a picked path. Never opens a store. */
+export function classifyPackInput(p: string): PackInput {
+  let st: Stats;
+  try { st = statSync(p); }
+  catch { return { kind: "reject", reason: "that path no longer exists - pick the .lkgpack.zip you downloaded" }; }
+  if (st.isDirectory()) return { kind: "dir", packDir: p };
+  if (basename(p) === LKGPACK_MANIFEST) return { kind: "dir", packDir: dirname(p) };
+  // Trust the MAGIC, not the extension: a renamed download is still a pack, and a .zip that is not one
+  // gets a clear message instead of a confusing failure three stages later.
+  let head = Buffer.alloc(0);
+  try {
+    const fd = openSync(p, "r");
+    try { const buf = Buffer.alloc(4); head = buf.subarray(0, readSync(fd, buf, 0, 4, 0)); } finally { closeSync(fd); }
+  } catch { return { kind: "reject", reason: "that file could not be read" }; }
+  if (head.length === 4 && head[0] === 0x50 && head[1] === 0x4b) return { kind: "zip", file: p };
+  return { kind: "reject", reason: "that is not a KG pack - pick the .lkgpack.zip you downloaded, or the manifest.json inside an unzipped pack" };
+}
+
+/** Import whatever the user picked: an unzipped `.lkgpack` folder, its `manifest.json`, or the downloaded
+ *  `.lkgpack.zip`. The zip path reuses installPackFromUrl's extraction, so there is ONE unzip in the code
+ *  base and the gate (integrity, origin, fail-closed re-scan) is identical for every route. */
+export async function importPackFromPath(p: string, opts: Parameters<typeof importKgPack>[1] = {}): Promise<PackImportResult> {
+  const input = classifyPackInput(p);
+  if (input.kind === "reject") return { ok: false, stage: "manifest", error: input.reason };
+  if (input.kind === "dir") return importKgPack(input.packDir, opts);
+  let bytes: Buffer;
+  try { bytes = readFileSync(input.file); }
+  catch (e) { return { ok: false, stage: "manifest", error: `could not read that file: ${(e as Error).message}` }; }
+  return importPackBytes(bytes, opts);
 }

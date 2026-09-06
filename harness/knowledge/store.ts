@@ -15,8 +15,9 @@
 import { join } from "node:path";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { Db } from "../memory/db.ts";
+import { resolveMigrationsDir } from "../migrations_dir.ts";
 
-export const KNOWLEDGE_MIGRATIONS_DIR = join(import.meta.dir, "migrations");
+export const KNOWLEDGE_MIGRATIONS_DIR = resolveMigrationsDir("harness/knowledge", import.meta.dir);
 
 export type Classification = "U" | "CUI";
 export type KbSource = "local" | "asksage";

@@ -17,8 +17,9 @@ import { createHash } from "node:crypto";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import type { TrustLabel } from "../contracts.ts";
 import { Db } from "../memory/db.ts";
+import { resolveMigrationsDir } from "../migrations_dir.ts";
 
-export const KB_MIGRATIONS_DIR = join(import.meta.dir, "migrations");
+export const KB_MIGRATIONS_DIR = resolveMigrationsDir("harness/kb", import.meta.dir);
 
 export type Classification = "U" | "CUI";
 export type DocumentStatus = "compiled" | "quarantined" | "stale";

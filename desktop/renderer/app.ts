@@ -5721,12 +5721,24 @@ async function exportPackFlow(kgId: string, view: import("./bridge.ts").KgListVi
   showExportToast(`"${kgName}" exported`, `${r.pages ?? 0} pages · ${r.signed ? "signed" : "unsigned"} · a .lkgpack you can share or sell`, r.path);
 }
 /** P-KGPACK.4: import a .lkgpack. Integrity + origin are verified and every page is re-scanned fail-closed
- *  before anything registers; a clean pack installs as a read-only, untrusted KG and is shown. */
+ *  before anything registers; a clean pack installs as a read-only, untrusted KG and is shown.
+ *
+ *  P-KGPACK.7 (ADR-0340): this used to open a FOLDER dialog, so the `.lkgpack.zip` a buyer downloads was
+ *  not selectable at all and the only way through was to guess that unzipping was required. A single
+ *  Windows dialog cannot offer files and folders together, so this asks for the FILE the user actually
+ *  has, and accepts the `manifest.json` inside an already-unzipped pack as the way to point at a folder. */
 async function importPackFlow(): Promise<void> {
-  const folder = await pickFolderDialog({ title: "Choose a .lkgpack KG Pack folder", confirm: "Import this pack" });
-  if (!folder) return;
+  const picked = await bridge.pickFile?.({
+    title: "Choose your KG Pack (.lkgpack.zip)",
+    filters: [
+      { name: "KG Pack", extensions: ["zip"] },
+      { name: "Unzipped pack (pick its manifest.json)", extensions: ["json"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  }).catch(() => null);
+  if (!picked) return;
   showToast({ title: "Verifying + scanning the pack…", desc: "Integrity + origin are checked and every page is re-scanned before anything installs.", timeout: 2200 });
-  const r = await bridge.kbPackImport({ path: folder }).catch(() => null);
+  const r = await bridge.kbPackImport({ path: picked }).catch(() => null);
   if (!r || !r.ok) {
     showToast({ tone: "danger", title: "Pack rejected", desc: `${r?.error ?? "Couldn't import that pack."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 7000 });
     return;

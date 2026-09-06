@@ -817,6 +817,10 @@ demo-P-KGMARKET.4b: ## P-KGMARKET.4 part 2 (ADR-0206): the marketplace SIGN-IN f
 demo-P-KGPACK.6: ## P-KGPACK.6 (ADR-0205): the background KG-seed job - lift the 50-doc cap so a full dataset (here 120 conversations, past the old cap) compiles as a tracked background job with live counts + cancel; all 120 compile, 0 skipped
 	$(BUN) run desktop/scripts/demo_p_kgpack_6.ts
 
+.PHONY: demo-P-KGPACK.7
+demo-P-KGPACK.7: ## P-KGPACK.7 (ADR-0340): a BOUGHT pack imports in the SHIPPED app - every DuckDB store computed its migrations dir as join(import.meta.dir,"migrations"), a real path from source and a VIRTUAL bunfs path inside the compiled engine, so opening a pack db threw ENOENT on 'B:\~BUN\root\migrations' and the import was refused at the scan stage; the resolver now PROBES (own dir, then LUCID_RESOURCES, then execPath) and this demo COMPILES a probe with the same --compile flag the engine uses to prove a real store opens where the bug lived; plus the picker accepts the downloaded .lkgpack.zip (it was folder-only, so the delivered artifact was unselectable) or the manifest.json inside an unzipped pack
+	$(BUN) run desktop/scripts/demo_p_kgpack_7.ts
+
 .PHONY: demo-P-KGPACK.5
 demo-P-KGPACK.5: ## P-KGPACK.5 (ADR-0205): the Role KG Packs storefront - a curated, filter-as-you-type catalog of role-specific KG Packs (public SKU surface; rows link to the product page, packs live in the private add-on repo) with a gated "Import a pack you own" action routing through the P-KGPACK.4 verify + re-scan
 	$(BUN) run desktop/scripts/demo_p_kgpack_5.ts

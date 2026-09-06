@@ -23520,3 +23520,87 @@ the DGX repo's suites, not by ours, until increment 2 lands a parser with fixtur
 **Deliberately NOT in scope.** Hosting any LUCID component on a DGX box (LUCID is a client; headless
 agent runtimes belong to the fleet's scheduler), adapter serving for LoRA candidates (fleet-side follow-up;
 show candidates as not yet servable, never hide them), and telemetry in either direction.
+
+-----
+
+## ADR-0340 -- P-KGPACK.7: a bought pack could not import in the shipped app (2026-09-05)
+
+**Status:** Accepted. Field report, on the first real purchase-to-import attempt.
+
+### What happened
+
+"Import a Pack You Own" refused a purchased Senior Proposal Manager pack:
+
+```
+pack db is not a valid KG store: ENOENT: no such file or directory, scandir 'B:\~BUN\root\migrations' (scan)
+```
+
+Nothing was wrong with the pack. Verified against the real artifact: its manifest signature checks out
+against `techlead187-kgpack-2026`, and its db holds **2,221 pages**. The shipped app simply could not open
+a KG store at all.
+
+`B:\~BUN\root` is the virtual bunfs root of a `bun build --compile` binary. Packaged builds spawn the
+COMPILED engine (`bin/lucid-engine`, ADR-0260) precisely so Bun never module-loads a `.ts` out of a
+protected install directory. Inside that binary `import.meta.dir` is virtual, and the bundle embeds
+**modules**, not a directory of `.sql` files. Every DuckDB store computed its migration set as
+`join(import.meta.dir, "migrations")`, so in the shipped app all three resolved to the same non-existent
+virtual path and `Db.open` threw before a single statement ran.
+
+This is the ADR-0260 lesson recurring one layer down. That ADR fixed the ENGINE's own base directory by
+deriving it from `execPath` (`engineDesktopDir`), and the note it left, that a compiled binary has no
+on-disk module tree, was never applied to the DATA layer sitting behind it.
+
+### Why it looked fine for so long
+
+The KG panel renders, so a store clearly opens somewhere. From source it always did: `import.meta.dir` is a
+real path in a dev run, in `bun test`, and in the `bun run dev.ts` fallback, which is every environment
+where anyone had ever exercised an import. The one environment where it fails is the one users have. A
+source-only test would have passed against the broken code, so this increment's demo COMPILES a probe with
+the same `--compile` flag and requires it to open a real store; an absent `MIGRATIONS=` line FAILS rather
+than matching nothing, because the first cut of that assertion passed vacuously when the probe crashed
+before printing (ADR-0303, again).
+
+### The fix
+
+`harness/migrations_dir.ts` -- `resolveMigrationsDir(repoRelDir, importMetaDir)`. It PROBES, in order: the
+module's own `migrations/`; `$LUCID_RESOURCES/repo/<rel>/migrations` (main.ts threads `LUCID_RESOURCES`
+when packaged); `<execPath>/../../<rel>/migrations` (the compiled engine ships at `<repo>/bin/lucid-engine`
+beside the packaged repo, which DOES carry the `.sql` files). No substring guessing about virtual paths,
+the same discipline as `engineDesktopDir`. The store's repo-relative path must be passed explicitly because
+the compiled bundle collapses every module to one virtual root, so a module cannot infer its own subtree.
+All three stores (`harness/kb`, `harness/knowledge`, `harness/memory`) now route through it, so the KG,
+vector and memory databases are fixed together rather than one bug at a time.
+
+### The second half of the report
+
+The picker was a FOLDER dialog titled "Choose a .lkgpack KG Pack folder", but the storefront delivers a
+`.lkgpack.zip`. The downloaded file was therefore not selectable, and the only way forward was to guess
+that unzipping was required, which the user did, with nothing in the UI saying so. `classifyPackInput`
+now accepts an unzipped `.lkgpack` folder, the `manifest.json` inside one, or the zip itself, identified by
+its `PK` MAGIC rather than its extension so a renamed download still works. A single Windows dialog cannot
+offer files and folders at once, which is why picking `manifest.json` is the way to point at a folder.
+`importPackBytes` is now the ONE place a zip becomes a pack directory, shared by the entitled download and
+a hand-picked local file, so those two routes cannot drift on what counts as a valid pack. Every route
+still runs the identical P-KGPACK.4 gate: integrity, Ed25519 origin, fail-closed re-scan, read-only install.
+
+### Collateral found and fixed
+
+`demo-P-KGPACK.5` had been RED since `63d039c` ("SPM flagship replaces capture"), which retired the
+`capture-proposal-manager` SKU the demo asserted on, and it broke a second time when ADR-0333 changed the
+row markup from `data-kgpack-repo` to `data-kgpack-get`. Demos are not in `bun test`, so two increments
+walked past a failing one. (I also briefly overwrote that demo by claiming the already-taken `P-KGPACK.5`
+id for this work, which is exactly the collision `adr_numbering.test.ts` cannot catch: it checks ADR
+uniqueness only, never increment ids.) This increment is `.7`; `.1` through `.6` are taken.
+
+### Verified
+
+`make demo-P-KGPACK.7` green, including the compiled-binary probe. The real purchased pack extracts,
+verifies signed, and opens 2,221 pages through the fixed path. Gate at the standing 7 (harness 1609 pass /
+2 fail, desktop 3317 pass / 5 fail, all Windows-only environmental), `tsc --noEmit` clean in both projects,
+renderer rebuilt and the served bundle grepped: the new picker copy present, the retired folder-dialog
+title ABSENT.
+
+**Not verified.** The end-to-end in-app import into the operator's live KG store, because running it here
+would write a real pack into their real registry (ADR-0329's lesson about tests touching live data). Every
+stage either side of that write is proven: extraction, signature, store open, page listing, and the gate's
+own tested refusals.

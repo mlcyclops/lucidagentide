@@ -22,13 +22,19 @@ console.log(`   ${KG_PACKS.length} role packs: ${KG_PACKS.map((p) => p.name).joi
 console.log("== [2/3] filter-as-you-type narrows the shelf ==");
 assert(filterKgPacks(KG_PACKS, "").length === KG_PACKS.length, "empty query → everything");
 assert(filterKgPacks(KG_PACKS, "RMF").some((p) => p.id === "cmmc-rmf-security-lead"), "‘RMF’ → the security lead pack");
-assert(filterKgPacks(KG_PACKS, "capture").some((p) => p.id === "capture-proposal-manager"), "‘capture’ → the proposal pack");
+// 63d039c ("SPM flagship replaces capture") retired the `capture-proposal-manager` SKU and moved that word
+// to the BD pack, but this assertion kept the old id, so the demo has been RED since that commit - demos
+// are not in `bun test`, so nothing caught it. Assert against the pack the catalog actually ships.
+assert(filterKgPacks(KG_PACKS, "capture").some((p) => p.id === "dow-dod-business-development"), "‘capture’ → the BD capture pack");
 assert(filterKgPacks(KG_PACKS, "zzz").length === 0, "no match → empty");
-console.log("   ‘RMF’ → CMMC & RMF Security Lead · ‘capture’ → Capture & Proposal Manager");
+console.log("   ‘RMF’ → CMMC & RMF Security Lead · ‘capture’ → Business Development Capture Manager");
 
 console.log("== [3/3] rows link out; the modal offers the gated import ==");
 const rows = kgPackRowsHtml(KG_PACKS, "");
-assert(rows.includes(`data-kgpack-repo="${KG_PACKS_URL}"`) && rows.includes("Get pack"), "rows carry a Get-pack link");
+// P-KGMARKET.5 (ADR-0333) turned "Get pack" from a link at KG_PACKS_URL into an in-app purchase flow, so
+// the row now carries data-kgpack-get="<id>" instead of data-kgpack-repo="<url>". Same staleness as above:
+// the increment that changed the markup did not update this demo.
+assert(rows.includes(`data-kgpack-get="${KG_PACKS[0]!.id}"`) && rows.includes("Get pack"), "rows carry a Get-pack action");
 assert(kgPackRowsHtml(KG_PACKS, "zzz").includes("No KG pack matches"), "empty state is a message");
 const modal = kgPacksHtml(KG_PACKS, "");
 assert(modal.includes('id="kgpackSearch"') && modal.includes("data-kgpack-import") && modal.includes("Import a pack you own"), "modal has search + the gated import action");
