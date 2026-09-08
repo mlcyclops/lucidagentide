@@ -23,7 +23,7 @@
 //     another in the lane's dropdown (session/set_config_option, the same mechanism the master uses).
 
 import { basename, join } from "node:path";
-import { statSync } from "node:fs";
+import { stat } from "node:fs/promises"; // P-FLEET.L16: async stat runs OFF the event loop (statSync wedged it)
 import { randomUUID } from "node:crypto";
 import { ACPClient } from "./acp.ts";
 // P-FLEET.L14 (ADR-0337): one definition of the interactive client's capabilities, shared with acp_backend.
@@ -139,6 +139,10 @@ export interface FleetStatusData {
 const APPROVAL_TIMEOUT_MS = 600_000;
 /** ACP handshake bounds (P-KG-INGEST.5, ADR-0264: every request carries a clock). */
 const HANDSHAKE_MS = 30_000;
+/** P-FLEET.L16: how long the spawn-time directory check may wait for the filesystem to answer. Ten
+ *  seconds is generous for a healthy disk and short enough that a OneDrive hydration stall reads as
+ *  the refusal it is instead of a frozen button. */
+const STAT_DIR_MS = 10_000;
 /** The transcript kept for recovery replay, per lane: enough memory to resume mid-task, bounded so a
  *  chatty lane cannot grow without limit. Oldest turns fall off first; the byte cap trims per turn. */
 const TRANSCRIPT_MAX_TURNS = 40;
@@ -187,6 +191,11 @@ export interface FleetLaneDeps {
   masterModel: () => string;
   /** Machine sample for admission + the dashboard headroom bar. */
   sample?: () => Promise<SystemSnapshot>;
+  /** P-FLEET.L16: is `path` a directory? Async + BOUNDED by the caller. Injectable so tests can model
+   *  a filesystem that never answers (the OneDrive dehydrated-placeholder hang). */
+  statDir?: (path: string) => Promise<boolean>;
+  /** P-FLEET.L16: the directory-check bound (test seam; production default STAT_DIR_MS). */
+  statDirMs?: number;
   now?: () => number;
   /** P-FLEET.L5: durable lane-session ledger sink (dev.ts appends JSONL). Optional and fail-quiet -
    *  a broken ledger must never block a lane. */
@@ -274,7 +283,7 @@ export class FleetLaneManager {
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
   readonly #observers = new Set<LaneObserver>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string>; interject?: (laneId: string, text: string) => void };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string>; interject?: (laneId: string, text: string) => void };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -286,16 +295,30 @@ export class FleetLaneManager {
   #autoDefault = false;
 
   constructor(deps: FleetLaneDeps) {
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select. */
   async spawn(opts: { cwd: string; model?: string; name?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
+    if (!cwd) return { ok: false, reason: `not a directory: ""` };
+    // P-FLEET.L16 (the frozen "Spawning\u2026" button): this used to be a bare statSync. On a cloud-backed
+    // folder (OneDrive files-on-demand) a dehydrated placeholder can BLOCK that call for however long
+    // hydration takes - and because it blocked Bun's ONE event loop, it wedged every route in the app,
+    // including this very request, so the renderer's button spun with zero feedback and no timeout could
+    // save it (the timeout code was behind the same wedged loop). Async stat runs off-loop; the race
+    // turns "filesystem never answers" into a NAMED refusal the card can show. Fail-closed for spawn:
+    // an unanswerable folder is a refusal, never a wedge.
+    const statClock = Promise.withResolvers<"timeout">();
+    const statTimer = setTimeout(() => statClock.resolve("timeout"), this.#deps.statDirMs ?? STAT_DIR_MS);
     try {
-      if (!cwd || !statSync(cwd).isDirectory()) return { ok: false, reason: `not a directory: "${cwd}"` };
+      const isDir = await Promise.race([this.#deps.statDir(cwd), statClock.promise]);
+      if (isDir === "timeout") return { ok: false, reason: `the folder is not answering ("${cwd}") - a cloud placeholder still hydrating (OneDrive), a disconnected drive, or a stalled sync client. Open it in Explorer once (or mark it "Always keep on this device"), then spawn again.` };
+      if (!isDir) return { ok: false, reason: `not a directory: "${cwd}"` };
     } catch {
       return { ok: false, reason: `not a directory: "${cwd}"` };
+    } finally {
+      clearTimeout(statTimer);
     }
     const admission = await this.#admission();
     if (!admission.ok) return { ok: false, reason: admission.reason };

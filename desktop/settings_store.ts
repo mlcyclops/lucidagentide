@@ -153,8 +153,20 @@ export interface GuiSettings {
   sttProvider?: "elevenlabs" | "whisper";
   // sttUrl: the offline OpenAI-compatible Whisper server (whisper.cpp / faster-whisper). Default :9000.
   sttUrl?: string;
-  // ttsProvider: default engine for the brief podcast + read-aloud — "elevenlabs" | "openai-tts" | "local-tts".
-  ttsProvider?: "elevenlabs" | "openai-tts" | "local-tts";
+  // ttsProvider: default engine for the brief podcast + read-aloud.
+  ttsProvider?: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
+  // dotsTtsUrl: the self-hosted dots.tts service (P-VOICE.6) - normally an SSH -L forward of the DGX's
+  // loopback :8084, or an nginx /voice/ proxy URL. Only used when ttsProvider is "dots-tts".
+  dotsTtsUrl?: string;
+  // ttsDigest: speak a short model-written digest instead of the verbatim reply (P-VOICE.6) - built for
+  // slow self-hosted engines (dots.tts synthesizes 5-10s per clip).
+  ttsDigest?: boolean;
+  // P-VOICE.7: imported voice-endpoint configs (the portable lucid-voice-endpoint contract) + which one
+  // is active. Environment data, never code: no box name is ever hardcoded anywhere in LUCID.
+  voiceEndpoints?: VoiceEndpointConfig[];
+  activeVoiceEndpointId?: string;
+  // dotsTtsModel: the checkpoint the active endpoint serves (set by activation; overridable).
+  dotsTtsModel?: string;
   // ttsVoice: LEGACY single voice id (an ElevenLabs id — the only engine whose picker worked pre-P-VOICE.2).
   // Superseded by ttsVoices, which remembers a voice PER ENGINE so switching engines never sends a foreign
   // voice id (an ElevenLabs id would 400 against Kokoro). Read as the ElevenLabs fallback, then retired.
@@ -293,15 +305,26 @@ export function setCollabP2P(patch: { preferDirect?: boolean; iceUrls?: string[]
 function wsToHttp(u: string): string { return u.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:"); }
 function originLabel(u: string): string { try { return new URL(u).host; } catch { return u; } }
 
+import type { VoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7 portable endpoints
+
 // P-VOICE.1 (ADR-0115): voice (TTS/STT) config. Effective values with defaults, for the server + UI.
 export interface VoiceSettings {
   sttProvider: "elevenlabs" | "whisper";
   sttUrl: string;
-  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
+  /** P-VOICE.6: base URL of the self-hosted dots.tts service (SSH forward / proxy of the DGX's :8084). */
+  dotsTtsUrl: string;
   ttsVoice: string;
   ttsVoiceFavorites: string[];
   ttsAutoSpeak: boolean;
   ttsConversation: boolean;
+  /** P-VOICE.6: speak a short digest aloud instead of the verbatim reply (slow-engine mode). */
+  ttsDigest: boolean;
+  /** P-VOICE.7: imported portable endpoint configs (labels + urls; environment data, never code). */
+  voiceEndpoints: VoiceEndpointConfig[];
+  activeVoiceEndpointId: string;
+  /** P-VOICE.7: model checkpoint for the dots engine (activation sets it; env overrides win). */
+  dotsTtsModel: string;
 }
 export function voiceSettings(): VoiceSettings {
   const s = load();
@@ -319,7 +342,50 @@ export function voiceSettings(): VoiceSettings {
     // Conversation mode is meaningless without the speaking half, so it reads false whenever auto-speak is
     // off - the stored preference survives, but nothing opens the mic behind the user's back.
     ttsConversation: s.ttsConversation === true && s.ttsAutoSpeak === true,
+    dotsTtsUrl: s.dotsTtsUrl || process.env.LUCID_DOTS_TTS_URL || "http://127.0.0.1:8084",
+    // Digest reads false without auto-speak for the same reason conversation does: it only shapes speech.
+    ttsDigest: s.ttsDigest === true && s.ttsAutoSpeak === true,
+    voiceEndpoints: Array.isArray(s.voiceEndpoints) ? s.voiceEndpoints : [],
+    activeVoiceEndpointId: s.activeVoiceEndpointId ?? "",
+    dotsTtsModel: process.env.LUCID_DOTS_TTS_MODEL || s.dotsTtsModel || "rednote-hilab/dots.tts-soar",
   };
+}
+
+/** P-VOICE.7: upsert an imported endpoint (validated upstream by parseVoiceEndpointConfig). Dedupe by
+ *  id; a re-import of the same id replaces the stored copy (the loader re-exports after edits). The
+ *  list is capped defensively - an import can never grow the settings file without bound. */
+export function importVoiceEndpoint(cfg: VoiceEndpointConfig): VoiceSettings {
+  const s = load();
+  const rest = (s.voiceEndpoints ?? []).filter((e) => e.id !== cfg.id);
+  s.voiceEndpoints = [cfg, ...rest].slice(0, 20);
+  save(s);
+  return voiceSettings();
+}
+
+/** P-VOICE.7: make an imported endpoint THE speaking engine in one click: url + model + provider all
+ *  switch together, so "Send to LUCID" then "Activate" is the whole transfer. Unknown id: no-op. */
+export function activateVoiceEndpoint(id: string): VoiceSettings {
+  const s = load();
+  const cfg = (s.voiceEndpoints ?? []).find((e) => e.id === id);
+  if (cfg) {
+    s.activeVoiceEndpointId = cfg.id;
+    s.dotsTtsUrl = cfg.url;
+    s.dotsTtsModel = cfg.model || undefined;
+    s.ttsProvider = "dots-tts";
+    save(s);
+  }
+  return voiceSettings();
+}
+
+/** P-VOICE.7: forget an imported endpoint. Removing the ACTIVE one keeps the effective url (the user
+ *  may have tuned it) but clears the active marker so the UI stops claiming the pairing. */
+export function removeVoiceEndpoint(id: string): VoiceSettings {
+  const s = load();
+  s.voiceEndpoints = (s.voiceEndpoints ?? []).filter((e) => e.id !== id);
+  if (!s.voiceEndpoints.length) s.voiceEndpoints = undefined;
+  if (s.activeVoiceEndpointId === id) s.activeVoiceEndpointId = undefined;
+  save(s);
+  return voiceSettings();
 }
 /** Merge a partial voice-settings patch. Favorites are replaced wholesale (the UI sends the full list).
  *  `ttsVoice` targets whichever engine is selected AFTER this patch applies, so the UI can switch engine and
@@ -342,6 +408,8 @@ export function setVoiceSettings(patch: Partial<VoiceSettings>): VoiceSettings {
   // `data-voice-set` control can drive this the same way it drives the engine pickers.
   if (patch.ttsAutoSpeak !== undefined) s.ttsAutoSpeak = patch.ttsAutoSpeak === true;
   if (patch.ttsConversation !== undefined) s.ttsConversation = patch.ttsConversation === true;
+  if (patch.dotsTtsUrl !== undefined) s.dotsTtsUrl = patch.dotsTtsUrl.trim() || undefined; // P-VOICE.6
+  if (patch.ttsDigest !== undefined) s.ttsDigest = patch.ttsDigest === true; // P-VOICE.6
   save(s); return voiceSettings();
 }
 

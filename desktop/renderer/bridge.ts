@@ -306,7 +306,11 @@ export interface FleetStatusView {
 export interface VoiceSettingsView {
   sttProvider: "elevenlabs" | "whisper";
   sttUrl: string;
-  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  /** P-VOICE.6: base URL of the self-hosted dots.tts service (SSH forward / proxy of the DGX's :8084). */
+  dotsTtsUrl?: string;
+  /** P-VOICE.6: speak a short model-written digest instead of the verbatim reply (slow-engine mode). */
+  ttsDigest?: boolean;
+  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
   /** The voice chosen for `ttsProvider` — the store remembers one per engine (P-VOICE.2, ADR-0247). */
   ttsVoice: string;
   ttsVoiceFavorites: string[];
@@ -327,8 +331,22 @@ export interface VoiceListView {
   conversation: boolean;
   note?: string;
 }
+/** P-VOICE.7: one imported portable endpoint (the lucid-voice-endpoint contract, post-validation). */
+export interface VoiceEndpointView {
+  id: string; label: string; url: string; model?: string;
+  transport?: { kind: string; command?: string; note?: string };
+  exportedAt?: number; source?: string;
+}
+export interface VoiceEndpointListView {
+  endpoints: VoiceEndpointView[];
+  active: string;
+  handoffDir: string;
+  imported: number;
+  rejects: { file: string; reason: string }[];
+}
+
 export interface TtsEngineView {
-  id: "elevenlabs" | "openai-tts" | "local-tts";
+  id: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
   label: string;
   blurb: string;
   cloud: boolean;
@@ -441,6 +459,9 @@ export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
   fields?: ProviderFieldAuth[];
+  /** Why the LAST OAuth attempt died after the browser said "success" (server-side broker exited
+   *  without persisting a credential). Present only while the provider is NOT connected. */
+  oauthError?: { message: string; at: number };
 }
 export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
 export interface HeadroomStatus {
@@ -518,7 +539,7 @@ export interface AgentsInitResult { ok: boolean; created: string[]; skipped: str
 // needs the shape doesn't drag bridge.ts (a DOM file) into the non-DOM root typecheck. Re-exported here so
 // every existing `import { type ChatEvent } from "./bridge.ts"` keeps working unchanged.
 import type { ChatEvent } from "./chat_events.ts";
-import { streamEndEvents, TERMINAL_EVENT_TYPES } from "./stream_end.ts"; // what to tell the UI when a turn stream ends badly
+import { streamNdjson as streamNdjsonCore } from "./ndjson_stream.ts"; // reader + drop classification + P-REATTACH.1 recovery
 export type { ChatEvent };
 /** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial - each type's max auto-run tier (T0-T3). */
 export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3">>;
@@ -749,6 +770,14 @@ export interface LucidBridge {
   /** Voices for `provider`, or for the engine currently selected in settings when omitted. */
   voices(provider?: string): Promise<VoiceListView | null>;
   transcribe(audioB64: string, mime: string, language?: string): Promise<{ text: string; note: string } | null>;
+  /** P-VOICE.6: compress a settled reply into a short spoken digest (empty digest = speak verbatim). */
+  voiceDigest(text: string): Promise<{ digest: string } | null>;
+  /** P-VOICE.7: list imported endpoints (auto-scans the handoff mailbox first). */
+  voiceEndpoints(): Promise<VoiceEndpointListView | null>;
+  /** P-VOICE.7: manual-upload fallback - the raw text of an exported .json. */
+  voiceEndpointImport(json: string): Promise<{ endpoints: VoiceEndpointView[]; active: string; imported?: string } | null>;
+  voiceEndpointActivate(id: string): Promise<{ endpoints: VoiceEndpointView[]; active: string; url?: string } | null>;
+  voiceEndpointRemove(id: string): Promise<{ endpoints: VoiceEndpointView[]; active: string } | null>;
   // P-STT.2b: managed on-device Whisper - hardware-gated install / start / stop / status (no-code).
   whisperStatus(): Promise<WhisperStatusView | null>;
   whisperInstall(tier?: string): Promise<WhisperActionView | null>;
@@ -1004,6 +1033,9 @@ export interface LucidBridge {
   embeddingsTest(input: { baseUrl: string; model: string; authKind: string; headerName?: string; secret?: string }): Promise<{ ok: boolean; dim?: number; error?: string } | null>;
   embeddingsReindex(): Promise<{ ok: boolean; kgs?: number; pages?: number; stored?: number; error?: string } | null>;
   auth(): Promise<AuthStatus | null>;
+  /** P-GUIDE.1/.2: guide id (provider id or "choosing") -> absolute path of the bundled advisor guide
+   *  (served into the Preview panel by path). Missing files are omitted server-side. */
+  guides(): Promise<Record<string, string> | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
@@ -1283,62 +1315,11 @@ const FALLBACK_CONFIG: ConfigOption[] = [
   ] },
 ];
 
-// Generic NDJSON event stream (used by both /api/chat and the /api/goal loop). `signal` lets Stop abort
-// the CLIENT read so the turn settles even if the server/omp never closes the stream (a wedged turn).
-async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal, opts?: { tail?: boolean }): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body), signal });
-  } catch {
-    if (signal?.aborted) return; // Stop pressed - the caller's finally settles the UI; no error line
-    onEvent({ type: "token", text: "[backend unreachable - is the GUI server running?]" });
-    onEvent({ type: "done" });
-    return;
-  }
-  if (res.status === 404) { onEvent({ type: "token", text: "[backend is out of date - close the GUI server window and relaunch (launcher → G)]" }); onEvent({ type: "done" }); return; }
-  if (!res.ok || !res.body) { onEvent({ type: "token", text: `[backend error ${res.status}]` }); onEvent({ type: "done" }); return; }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  // Did the turn end on its OWN terms? Only a terminal event seen on the wire proves that; anything else
-  // ending this stream is a drop, and the server turn is probably still running (see stream_end.ts).
-  let terminalDone = false;
-  // TWO different faults, so TWO separate guards. A torn line is bad JSON and is skipped. A throw out of
-  // onEvent is a RENDER bug, and the old single `catch {}` swallowed it as if it were bad JSON - so a
-  // renderer exception silently ate an event with nothing logged. Neither fault may kill the read: one
-  // unrenderable event must never cost the user the REST of the turn.
-  const flush = (line: string) => {
-    const s = line.trim();
-    if (!s) return;
-    let parsed: unknown;
-    try { parsed = JSON.parse(s); }
-    catch { return; } // a truncated/partial line, not a turn failure
-    if (!parsed || typeof parsed !== "object" || !("type" in parsed) || typeof parsed.type !== "string") return;
-    if (parsed.type === "ping") return; // server heartbeat: keeps the socket alive through long tool calls
-    // `done`, but ALSO a fleet lane's terminal `error` - a turn that reported its own failure has explained
-    // itself and must not get a "connection dropped" line stacked on top of it.
-    if (TERMINAL_EVENT_TYPES[parsed.type]) terminalDone = true;
-    // Narrowed above to an object with a string `type`. The payload fields are the engine's own ChatEvent
-    // contract (same module, same process family), so this is the ONE documented boundary assertion.
-    const ev = parsed as ChatEvent;
-    try { onEvent(ev); }
-    catch (e) { console.error("[TURN_DIAG] a chat event handler threw; the stream continues", e); }
-  };
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
-    }
-    flush(buf);
-  } catch { /* Stop aborted the read, or the socket died mid-turn - classified below, never silent. */ }
-  // The reported bug: this used to end here. A mid-stream death left the composer frozen on the last event
-  // it happened to receive - no error, no settle - while the engine kept working, so the only way to see
-  // what the agent did was to stop the session and reopen it. Now an unaborted end with no terminal `done`
-  // announces itself and settles the turn. A tail stream (fleet lane watch) opts out: it has no `done`.
-  for (const ev of streamEndEvents({ aborted: !!signal?.aborted, terminalDone, tail: opts?.tail }).events) onEvent(ev);
+// Generic NDJSON event stream (used by /api/chat, /api/goal, and the fleet lanes). The reader,
+// end-classification, and P-REATTACH.1 recovery loop live in ndjson_stream.ts (extracted so a real
+// Bun.serve exercises them in tests); this wrapper only injects the auth headers every request needs.
+function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal, opts?: { tail?: boolean; reattach?: string }): Promise<void> {
+  return streamNdjsonCore(path, body, onEvent, signal, { ...opts, headers: () => authHeaders({}) });
 }
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
@@ -1348,7 +1329,9 @@ const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { da
   chatAbort = new AbortController();
   // P-COLLAB.15: `from` attributes a guest-driven turn in the live collab broadcast (omitted for host turns).
   // P-PREVIEW-PWA.3: `share` carries direct-P2P roster COUNTS for the agent-awareness preamble.
-  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
+  // P-REATTACH.1: a mid-turn socket drop re-adopts the running turn via /api/chat/attach instead of
+  // freezing the composer while the engine keeps working ("chat stream write failed" in the GUI log).
+  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}) }, onEvent, chatAbort.signal, { reattach: "/api/chat/attach" }).finally(() => { chatAbort = null; });
 };
 
 // P-COLLAB.10: JOIN a shared session. /api/collab/join returns EITHER a JSON error envelope (malformed link /
@@ -1451,6 +1434,12 @@ export const bridge: LucidBridge = {
   setVoiceSettings: (patch) => post("/api/voice-settings", patch),
   voices: (provider) => getData(provider ? `/api/voices?provider=${encodeURIComponent(provider)}` : "/api/voices"),
   transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
+  voiceDigest: (text) => post("/api/voice/digest", { text }), // P-VOICE.6: slow-engine spoken digest
+  // P-VOICE.7: portable voice endpoints (DGX Loader handoff + manual upload fallback)
+  voiceEndpoints: () => getData("/api/voice/endpoints"),
+  voiceEndpointImport: (json) => post("/api/voice/endpoints/import", { json }),
+  voiceEndpointActivate: (id) => post("/api/voice/endpoints/activate", { id }),
+  voiceEndpointRemove: (id) => post("/api/voice/endpoints/remove", { id }),
   whisperStatus: () => getData("/api/whisper/status"),
   whisperInstall: (tier) => post("/api/whisper/install", { tier }),
   whisperStart: (tier) => post("/api/whisper/start", { tier }),
@@ -1688,6 +1677,8 @@ export const bridge: LucidBridge = {
   embeddingsTest: (input) => post("/api/embeddings/test", input),
   embeddingsReindex: () => post("/api/embeddings/reindex", {}),
   auth: () => getData("/api/auth"),
+  guides: () => getData("/api/guides"), // P-GUIDE.1: absolute paths of bundled advisor guides
+
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId, promptAnswer?: string) => post("/api/auth/oauth", { oauthId, promptAnswer }),
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),

@@ -52,6 +52,26 @@ test("a BURST never refuses a lane, even pegged - only a HELD line does; a bad c
   expect(bad.reason).toContain("not a directory");
 }, TIMEOUT);
 
+// P-FLEET.L16 (the frozen "Spawning\u2026" button): a filesystem that never answers the directory check
+// (a OneDrive dehydrated placeholder, a dead network drive) must become a NAMED refusal on the stat
+// clock - never a wedge. The old statSync blocked the whole event loop, so no timeout could even run.
+test("a directory check that never answers refuses on the stat clock instead of hanging", async () => {
+  const never = Promise.withResolvers<boolean>(); // intentionally never resolved: the hydration stall
+  live = new FleetLaneManager({
+    argv: () => ({ cmd: "bun", args: [FAKE] }),
+    masterModel: () => "master-model-a",
+    sample: async () => healthy,
+    statDir: () => never.promise,
+    statDirMs: 120,
+  });
+  const t0 = Date.now();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  expect(r.ok).toBe(false);
+  expect(r.reason).toContain("not answering");
+  expect(r.reason).toContain("OneDrive");
+  expect(Date.now() - t0).toBeLessThan(5_000); // bounded by the clock, nowhere near a human-visible hang
+}, TIMEOUT);
+
 test("thirty unbroken seconds over the line DOES refuse, carrying the percent and the duration", async () => {
   // A fake clock drives the pressure window: each status() poll takes another pegged reading 5s later, so
   // by the seventh the machine has provably held the line for 30s. Same shape as the real loop (the

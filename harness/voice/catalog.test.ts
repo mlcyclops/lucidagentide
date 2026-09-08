@@ -6,18 +6,47 @@
 
 import { expect, test } from "bun:test";
 import {
-  KOKORO_VOICES, OPENAI_VOICES, TTS_PROVIDERS, defaultVoiceFor, normalizeTtsProvider, resolveVoice,
+  KOKORO_VOICES, OPENAI_VOICES, TTS_PROVIDERS, defaultVoiceFor, mapDotsVoices, normalizeTtsProvider, resolveVoice,
   ttsEngineStatus, voicesForProvider,
 } from "./catalog.ts";
 
 const env = (o: Partial<Parameters<typeof ttsEngineStatus>[1]> = {}) =>
   ({ keySet: false, oauthActive: false, localUp: false, localUrl: "http://localhost:8880", ...o });
 
-test("every engine has a provider row, and only self-hosted Kokoro needs no key", () => {
-  expect(TTS_PROVIDERS.map((p) => p.id)).toEqual(["elevenlabs", "openai-tts", "local-tts"]);
-  expect(TTS_PROVIDERS.filter((p) => p.keyEnv === null).map((p) => p.id)).toEqual(["local-tts"]);
+test("every engine has a provider row; the self-hosted engines need no key", () => {
+  expect(TTS_PROVIDERS.map((p) => p.id)).toEqual(["elevenlabs", "openai-tts", "local-tts", "dots-tts"]);
+  expect(TTS_PROVIDERS.filter((p) => p.keyEnv === null).map((p) => p.id)).toEqual(["local-tts", "dots-tts"]);
   expect(TTS_PROVIDERS.filter((p) => p.cloud).map((p) => p.id)).toEqual(["elevenlabs", "openai-tts"]);
-  expect(TTS_PROVIDERS.filter((p) => p.liveList).map((p) => p.id)).toEqual(["elevenlabs"]); // only ElevenLabs has a list endpoint
+  // Live lists: ElevenLabs (per-account) and dots.tts (the user's per-box cloned voices).
+  expect(TTS_PROVIDERS.filter((p) => p.liveList).map((p) => p.id)).toEqual(["elevenlabs", "dots-tts"]);
+});
+
+// P-VOICE.6: dots.tts joins as a live-list self-hosted engine.
+test("dots-tts normalizes, passes the stored voice through, and reports the tunnel when down", () => {
+  expect(normalizeTtsProvider("dots-tts")).toBe("dots-tts");
+  expect(voicesForProvider("dots-tts")).toEqual([]); // live list, like ElevenLabs
+  expect(defaultVoiceFor("dots-tts")).toBe("");
+  expect(resolveVoice("dots-tts", "cersei-lannister-game-of-thrones")).toBe("cersei-lannister-game-of-thrones");
+  expect(ttsEngineStatus("dots-tts", env({ localUp: true, localUrl: "http://127.0.0.1:8084" })).ready).toBe(true);
+  const down = ttsEngineStatus("dots-tts", env({ localUp: false, localUrl: "http://127.0.0.1:8084" }));
+  expect(down.ready).toBe(false);
+  expect(down.reason).toContain("ssh -L 8084");
+});
+
+test("mapDotsVoices parses the /v1/voices payload and drops malformed entries", () => {
+  const voices = mapDotsVoices({ ok: true, voices: [
+    { name: "abrielle-narration", warmed: true },
+    { name: "christian-bale", warmed: false },
+    { name: "", warmed: true },      // empty name: dropped
+    { warmed: true },                 // no name: dropped
+    "not-an-object",                  // dropped
+  ] });
+  expect(voices.map((v) => v.voiceId)).toEqual(["abrielle-narration", "christian-bale"]);
+  expect(voices[0]?.category).toBe("warmed");
+  expect(voices[1]?.category).toBe("cold");
+  expect(mapDotsVoices(null)).toEqual([]);
+  expect(mapDotsVoices({ ok: false })).toEqual([]);
+  expect(mapDotsVoices({ voices: "nope" })).toEqual([]);
 });
 
 test("catalog ids are unique and non-empty", () => {

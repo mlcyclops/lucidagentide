@@ -192,15 +192,18 @@ export async function startWhisper(deps: WhisperRuntimeDeps, opts: { tier?: Whis
   return { ok: false, reason: "the whisper server did not become healthy in time" };
 }
 
-/** P-STT.6: should the INSTALLED app autostart the managed server on launch? Pure, so the gate is
+/** P-STT.6 + P-STT.7: should the app autostart the managed server on launch? Pure, so the gate is
  *  unit-tested; dev.ts feeds it the live status + voice settings. Autostart only when:
- *  - the app is packaged (the bundled binary is guaranteed; dev runs stay opt-in),
+ *  - a binary RESOLVED (status.binAvailable): the packaged bundle, the runtime-staged dev binary,
+ *    LUCID_WHISPER_BIN, or one on PATH. This replaced the old packaged-only gate - a dev run that has
+ *    staged the pinned binary (clicked Install & start once) autostarts exactly like the installed app,
+ *    while a fresh dev checkout with no binary still does nothing surprising,
  *  - Whisper is the chosen STT engine (never race an ElevenLabs user),
  *  - the sttUrl is empty or loopback - a REMOTE url means the user runs their own server elsewhere,
  *    and startWhisper would clobber that wiring via setSttUrl,
- *  - the machine is capable, a binary resolved, and nothing is running or mid-install. */
-export function shouldAutostartWhisper(status: WhisperStatusView, voice: { sttProvider: string; sttUrl: string }, packaged: boolean): boolean {
-  if (!packaged || voice.sttProvider !== "whisper") return false;
+ *  - the machine is capable, and nothing is running or mid-install. */
+export function shouldAutostartWhisper(status: WhisperStatusView, voice: { sttProvider: string; sttUrl: string }): boolean {
+  if (voice.sttProvider !== "whisper") return false;
   if (!status.capable || !status.binAvailable || status.running || status.install.active) return false;
   if (voice.sttUrl) {
     try {

@@ -17,6 +17,7 @@ import { approvalPrompt, matchApprovalUtterance, pickOption, type ApprovalOption
 import { mountBootCinematic } from "./boot_cinematic.ts"; // P-AVATAR.6: the hero opening over the config warm
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
+import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
 import { PREVIEW_KIND_ICON, laneTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
@@ -115,6 +116,7 @@ import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glo
 import type { ElevenVoiceView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
+import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
 import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
 // P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
 import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
@@ -2565,7 +2567,7 @@ function setInspectorRail(rail: boolean): void {
 // OAuth here signs in a SUBSCRIPTION/CLI tier; the full commercial catalog comes from an API key.
 // Spell that out where it bites (OpenAI/Gemini), and steer Perplexity to its working key path.
 const PROV_HINTS: Record<string, string> = {
-  elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. Get a key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys ↗</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
+  elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. New to ElevenLabs? <a href="https://try.elevenlabs.io/nru4d3mgw8b5" target="_blank" rel="noopener">Create an account \u2197</a>, then get your key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">API keys \u2197</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
   openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
   google: "OAuth uses the Gemini CLI / Code Assist tier. <b>Workspace / Enterprise Google accounts</b> also need a <b>GCP project ID</b> below (personal accounts leave it blank) - without it the sign-in aborts. For the full commercial Gemini catalog, add a GEMINI_API_KEY. For the enterprise-governed backend (Gemini for Google Cloud), use the <b>Gemini Enterprise</b> card below.",
   anthropic: "OAuth signs in your Claude subscription. For pay-as-you-go API access, add an ANTHROPIC_API_KEY below.",
@@ -2593,6 +2595,17 @@ function provCard(p: ProviderAuth): string {
         ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
         : `<button class="btn-mini ok" data-oauth="${esc(p.oauthId)}">${icon("expand", 12)} Connect via OAuth</button>`}</div>`
     : "";
+  // Why the LAST sign-in attempt died (server kept the broker's error; cleared on retry/success).
+  // `.set-note` is the block-paragraph pattern (icon absolutely positioned, text flows) - never flex prose.
+  const oauthErr = !p.oauthActive && p.oauthError && Date.now() - p.oauthError.at < 15 * 60_000
+    ? `<div class="set-note danger">${icon("shield", 12)} <b>Sign-in failed:</b> ${esc(p.oauthError.message)}</div>`
+    : "";
+  // P-GUIDE.1/.2: every provider with an entry in the shared manifest links its plan advisor guide;
+  // it opens in the Preview panel via its engine-resolved path. Vendors change tiers out from under
+  // users (Google killed consumer OAuth in June 2026), so the guides are load-bearing onboarding.
+  const guideRow = GUIDE_FILES[p.id]
+    ? `<div class="prov-row"><button class="btn-link" data-guide="${esc(p.id)}">${icon("info", 12)} Which plan do I need? Open the guide</button></div>`
+    : "";
   // OAuth-only providers (e.g. GitHub Copilot) carry no primary key env — omit the key row entirely.
   const keyRow = p.env
     ? `<div class="prov-row">
@@ -2619,7 +2632,17 @@ function provCard(p: ProviderAuth): string {
   }).join("");
   return `<div class="prov">
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
-    <div class="prov-body">${oauthRow}${keyRow}${fieldsRows}${hint}</div></div>`;
+    <div class="prov-body">${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
+}
+
+/** P-GUIDE.1/.2: open a bundled advisor guide in the Preview panel (Yours lane). The engine resolves
+ *  the absolute path (dev checkout vs installed resources differ); the preview serve route does the
+ *  rest. Shared by the Settings cards and the Provider Hub, which reuse the same provCard markup. */
+async function openGuide(id: string): Promise<void> {
+  const g = await bridge.guides().catch(() => null);
+  const path = g?.[id];
+  if (path) { openPreviewFile(path); return; }
+  showToast({ tone: "danger", title: "Guide unavailable", desc: "The bundled guide could not be resolved. Reinstall or rebuild the app.", actions: [{ label: "OK" }], timeout: 6000 });
 }
 // AskSage monthly tokens - fully dynamic from the Civ API (no manual limit). `used` is this
 // account's usage; `remaining` is what's left accounting for BOTH your and your org's caps; the
@@ -3396,7 +3419,12 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
         <option value="elevenlabs"${sel(ttsp === "elevenlabs")}>ElevenLabs - cloud, custom voices</option>
         <option value="openai-tts"${sel(ttsp === "openai-tts")}>ChatGPT / OpenAI - cloud</option>
         <option value="local-tts"${sel(ttsp === "local-tts")}>Kokoro - offline, air-gap</option>
+        <option value="dots-tts"${sel(ttsp === "dots-tts")}>dots.tts - self-hosted DGX, your cloned voices</option>
       </select></div>
+    <div class="voice-row" id="voiceDotsUrlRow"${ttsp === "dots-tts" ? "" : " hidden"}>
+      <label class="voice-lbl" for="voiceDotsUrl">dots.tts URL</label>
+      <input id="voiceDotsUrl" class="prov-key" data-voice-set="dotsTtsUrl" spellcheck="false" placeholder="http://127.0.0.1:8084 (the tunnel or proxy mouth of your box's dots.tts service)" value="${esc(vset?.dotsTtsUrl ?? "")}" /></div>
+    <div id="voiceEndpointsBox"${ttsp === "dots-tts" ? "" : " hidden"}></div>
     <div class="voice-row voice-pick"><label class="voice-lbl" for="voiceSelect">Voice</label>
       <select id="voiceSelect" class="prov-key" data-voice-set="ttsVoice"><option value="">loading voices…</option></select>
       <button class="btn-mini" id="voiceFav" data-tip="Favorite|Star the selected voice - favorites are listed first">${icon("spark", 12)}</button></div>
@@ -3406,6 +3434,9 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
     <div class="voice-row"><label class="voice-lbl" for="voiceConversation">Conversation</label>
       <label class="voice-check"><input type="checkbox" id="voiceConversation" data-voice-set="ttsConversation"${vset?.ttsConversation ? " checked" : ""}${vset?.ttsAutoSpeak ? "" : " disabled"} />
         <span>Hands-free turn-taking: the mic opens when the reply finishes speaking, and a few seconds of silence sends your turn. Needs auto-speak.</span></label></div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceDigest">Spoken digest</label>
+      <label class="voice-check"><input type="checkbox" id="voiceDigest" data-voice-set="ttsDigest"${vset?.ttsDigest ? " checked" : ""}${vset?.ttsAutoSpeak ? "" : " disabled"} />
+        <span>Speak the first sentence, then a short digest of the reply instead of every word - made for slow self-hosted engines like dots.tts (5-10s a clip over the VPN). The full text stays in the chat. Needs auto-speak.</span></label></div>
     <div class="set-note" id="voiceNote"></div>`;
   return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
 }
@@ -3452,6 +3483,29 @@ async function hydrateWhisper(): Promise<void> {
   const card = $("#whisperCard"); if (!card) return;
   const s = await bridge.whisperStatus().catch(() => null);
   card.innerHTML = s ? whisperCardHtml(s) : "";
+}
+
+// P-VOICE.7: the imported-endpoints strip inside the dots.tts section. The GET auto-scans the handoff
+// mailbox (the DGX Loader's "Send to LUCID" drops files there), so freshly sent configs appear on every
+// Settings open with no extra click; the Import button is the portable fallback (a file exported on
+// another machine). Every list row is a real imported config - no box name lives in code.
+async function hydrateVoiceEndpoints(): Promise<void> {
+  const box = $("#voiceEndpointsBox"); if (!box) return;
+  const d = await bridge.voiceEndpoints().catch(() => null);
+  if (!d) { box.innerHTML = ""; return; }
+  const opts = d.endpoints.map((e) => `<option value="${esc(e.id)}"${e.id === d.active ? " selected" : ""}>${esc(e.label)} (${esc(e.url)})</option>`).join("");
+  const rejectNote = d.rejects.length
+    ? `<div class="set-note danger">${icon("shield", 12)} <b>Skipped:</b> ${esc(d.rejects.map((r) => `${r.file}: ${r.reason}`).join(" \u00b7 "))}</div>`
+    : "";
+  box.innerHTML = `
+    <div class="voice-row"><label class="voice-lbl" for="voiceEndpointSel">Endpoints</label>
+      <select id="voiceEndpointSel" class="prov-key">
+        <option value=""${d.active ? "" : " selected"}>${d.endpoints.length ? "choose an imported endpoint\u2026" : "none imported yet"}</option>${opts}
+      </select>
+      <button class="btn-mini" id="voiceEndpointImportBtn" data-tip="Import|Upload a .json exported from the DGX Loader (Export config)">${icon("expand", 12)} Import\u2026</button>
+      <input type="file" id="voiceEndpointFile" accept=".json,application/json" hidden /></div>
+    <div class="set-note">${icon("info", 12)} One-click transfer: in the DGX Loader's Voice tab hit <b>Send to LUCID</b> - the config lands in the handoff folder and appears here on the next Settings open. Or export the file there and Import it here. Configs never carry secrets.</div>
+    ${rejectNote}`;
 }
 /** Populate the Voice card's picker with the SELECTED engine's voices (P-VOICE.2, ADR-0247): ElevenLabs is
  *  fetched live from the account, OpenAI and Kokoro come from the static catalog. Best-effort: an engine that
@@ -4015,7 +4069,7 @@ function hydrateSettings(): void {
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
-    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); });
+    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -9755,9 +9809,37 @@ function speechFeed(buf: string, flush: boolean): void {
   if (!state.voice?.ttsAutoSpeak) return;
   if (!flush && buf.length - speechFedAt < 48) return; // don't rescan the buffer on every single token
   speechFedAt = buf.length;
+  // P-VOICE.6 digest mode: for slow engines the audio narrates a DIGEST, not the transcript. The FIRST
+  // settled sentence still goes out immediately (the comprehension anchor - the listener hears something
+  // within one synthesis round-trip); the verbatim middle is withheld; on settle the model-written digest
+  // of the whole reply speaks instead. The composer keeps every word either way.
+  if (state.voice.ttsDigest) {
+    if (flush) { void speakDigestTail(buf); return; }
+    if (speechCursor > 0) return; // anchor already out - the rest waits for the digest
+    const r = takeSpeechChunks(buf, 0, { minChars: 24 });
+    if (r.chunks.length) { speechCursor = r.cursor; speechSay(r.chunks[0]!); }
+    return;
+  }
   const r = takeSpeechChunks(buf, speechCursor, flush ? { flush: true } : { minChars: speechCursor ? 180 : 24 });
   speechCursor = r.cursor;
   for (const c of r.chunks) speechSay(c);
+}
+
+/** P-VOICE.6: speak the settled turn's remainder in digest mode. Short replies skip the completion
+ *  round-trip (they ARE their own digest); a failed/empty digest falls back to the verbatim tail so
+ *  digest mode can degrade the audio's brevity but never its existence. */
+async function speakDigestTail(buf: string): Promise<void> {
+  const spokenTail = () => {
+    const r = takeSpeechChunks(buf, speechCursor, { flush: true });
+    speechCursor = r.cursor;
+    for (const c of r.chunks) speechSay(c);
+  };
+  if (buf.slice(speechCursor).trim().length === 0) return; // anchor covered everything
+  if (buf.trim().length < DIGEST_MIN_CHARS) { spokenTail(); return; }
+  const d = await bridge.voiceDigest(buf).catch(() => null);
+  const digest = d?.digest?.trim() ?? "";
+  if (digest) { speechCursor = buf.length; speechSay(digest); return; }
+  spokenTail();
 }
 
 // ── P-VOICE.4 (ADR-0248): the floating "LUCID Agent [Voice]" panel ─────────────────────────
@@ -13450,6 +13532,37 @@ function wire(): void {
       if (row?.dataset.lpId) { await bridge.localProviderEnable(row.dataset.lpId, (t0 as HTMLInputElement).checked).catch(() => {}); }
       return;
     }
+    // P-VOICE.7: activate an imported endpoint - one click makes it THE speaking engine (url + model +
+    // provider switch together server-side), and the URL field repaints to show the effective value.
+    if (t0.id === "voiceEndpointSel") {
+      const sel = t0 as HTMLSelectElement; // well-known node: this branch is keyed on its id
+      if (!sel.value) return;
+      const r = await bridge.voiceEndpointActivate(sel.value).catch(() => null);
+      if (!r) { showToast({ tone: "warn", title: "Couldn't activate", desc: "The engine didn't answer - is it running?", timeout: 4000 }); return; }
+      const next = await bridge.voiceSettings().catch(() => null);
+      if (next) state.voice = next;
+      const urlInput = $("#voiceDotsUrl") as HTMLInputElement | null;
+      if (urlInput && r.url) urlInput.value = r.url;
+      updateVoiceChip();
+      void loadVoices();
+      showToast({ title: "Endpoint activated", desc: `dots.tts now speaks through ${r.url ?? "the imported endpoint"}. Pick a voice below.`, timeout: 3600 });
+      return;
+    }
+    if (t0.id === "voiceEndpointFile") {
+      const fileInput = t0 as HTMLInputElement; // well-known node: keyed on its id
+      const f = fileInput.files?.[0];
+      if (!f) return;
+      const text = await f.text();
+      fileInput.value = ""; // allow re-picking the same file after a fix
+      const r = await bridge.voiceEndpointImport(text).catch(() => null);
+      if (r?.imported) {
+        showToast({ title: "Endpoint imported", desc: "Pick it in the Endpoints list to activate it.", timeout: 3600 });
+        void hydrateVoiceEndpoints();
+      } else {
+        showToast({ tone: "danger", title: "Import rejected", desc: "Not a valid lucid-voice-endpoint file (wrong shape, or it carries a credential-like field - secrets never travel in endpoint exports).", actions: [{ label: "OK" }], timeout: 0 });
+      }
+      return;
+    }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
     if (!vs) return;
     const key = vs.dataset.voiceSet!;
@@ -13458,8 +13571,15 @@ function wire(): void {
     const next = await bridge.setVoiceSettings({ [key]: value } as never).catch(() => null);
     if (next) { state.voice = next; updateVoiceChip(); }
     if (key === "ttsAutoSpeak" && value !== true) speech.stop();
-    if (key === "sttProvider") { const row = $("#voiceSttUrlRow"); if (row) (row as HTMLElement).hidden = vs.value !== "whisper"; }
-    if (key === "ttsProvider") void loadVoices(); // each engine has its own voices (and its own remembered pick)
+    if (key === "sttProvider") { const row = $("#voiceSttUrlRow") as HTMLElement | null; if (row) row.hidden = vs.value !== "whisper"; }
+    if (key === "ttsProvider") {
+      // DOM casts: $() returns Element; `hidden` lives on HTMLElement (well-known nodes, named consts).
+      const dotsRow = $("#voiceDotsUrlRow") as HTMLElement | null; // P-VOICE.6: URL row only for the DGX engine
+      if (dotsRow) dotsRow.hidden = vs.value !== "dots-tts";
+      const epBox = $("#voiceEndpointsBox") as HTMLElement | null; // P-VOICE.7: same visibility rule
+      if (epBox) { epBox.hidden = vs.value !== "dots-tts"; if (vs.value === "dots-tts") void hydrateVoiceEndpoints(); }
+      void loadVoices(); // each engine has its own voices (and its own remembered pick)
+    }
   });
   $("#setBody")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
@@ -13472,6 +13592,7 @@ function wire(): void {
     if (th) { void pickTheme(th.dataset.themePick ?? ""); return; }
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
+    if (t.closest("#voiceEndpointImportBtn")) { ($("#voiceEndpointFile") as HTMLInputElement | null)?.click(); return; } // P-VOICE.7
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
     // P-TRIV.4 (ADR-0191): Trivia Wire toggle + opt-in re-seed sources + the Recycle action
     if (t.closest("#trivToggle")) {
@@ -13911,6 +14032,8 @@ function wire(): void {
     }
     const clear = t.closest("[data-clearkey]") as HTMLElement | null;
     if (clear) { await bridge.saveKey(clear.dataset.clearkey!, ""); void renderSettings(); return; }
+    const guide = t.closest("[data-guide]") as HTMLElement | null;
+    if (guide) { await openGuide(guide.dataset.guide!); return; }
     const oauth = t.closest("[data-oauth]") as HTMLElement | null;
     if (oauth) { await startProviderOauth(oauth.dataset.oauth!, oauth.closest(".set-card"), () => void renderSettings()); return; }
     const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
@@ -14435,11 +14558,27 @@ function authUrlActions(url: string): { label: string; kind?: "ok" | "danger"; r
  *  respawned omp when the broker exited, so a plain loadConfig() surfaces the new models. */
 async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const startedAt = Date.now();
   let resolved = false;
   const check = async (): Promise<boolean> => {
     if (resolved) return true;
     const a = await bridge.auth();
     const prov = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId);
+    // The broker exited WITHOUT a credential: stop spinning and say why. The browser's "Authentication
+    // Successful" page renders before the token exchange + provider onboarding run, so this toast is
+    // the user's ONLY evidence of what actually failed (e.g. Google's "requires GOOGLE_CLOUD_PROJECT"
+    // abort for Workspace accounts). Only a failure from THIS attempt counts - a minute of slack covers
+    // the server/renderer clock being the same machine but the record predating our first poll.
+    if (!prov?.oauthActive && prov?.oauthError && prov.oauthError.at >= startedAt - 60_000) {
+      resolved = true;
+      const gcpHint = /GOOGLE_CLOUD_PROJECT/i.test(prov.oauthError.message)
+        ? " Fill the \u201cGCP project ID\u201d field on this provider's card (a project with the Gemini for Google Cloud API enabled), save it, then retry."
+        : "";
+      if (a) state.auth = a; // let renderSettings paint the card's failure note without a second fetch
+      if (state.settingsOpen) renderSettings();
+      showToast({ tone: "danger", title: `${prov.name}: sign-in failed`, desc: prov.oauthError.message + gcpHint, actions: [{ label: "OK" }], timeout: 0 });
+      return true;
+    }
     if (prov?.oauthActive) {
       resolved = true;
       // Force the omp respawn before re-reading the model list. The badge reads the credential vault
@@ -14997,7 +15136,12 @@ function openProviderHub(onClose?: () => void): void {
     </div></div>`);
   document.body.appendChild(ov);
   const body = $("#provHubBody", ov)!;
-  const redraw = () => { body.innerHTML = buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
+  // P-GUIDE.2: onboarding header - new users land here with nothing configured, so the hub leads with
+  // the guided-setup entry (the choosing guide, incl. the free-tier start ladder and the Creator-edition
+  // pointer) and names the /providers command. `.set-note` = block prose, single text child per line.
+  const onboardHtml = `<div class="provhub-sec"><div class="set-note">${icon("spark", 12)} <b>New here?</b> Open the <b>guided setup</b> for a walkthrough: what each provider costs, which free tiers exist, and which plan fits your work. Or type <code>/providers</code> plus what you are trying to do, and the agent walks you through it live.</div>
+    <div class="prov-row"><button class="btn-mini ok" data-guide="choosing">${icon("expand", 12)} Guided setup: choose a provider</button></div></div>`;
+  const redraw = () => { body.innerHTML = onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
   const close = () => { ov.remove(); hubClose = null; document.removeEventListener("keydown", onKey); onClose?.(); };
   hubClose = close;
@@ -15043,6 +15187,8 @@ function openProviderHub(onClose?: () => void): void {
       await refreshAuth(); await loadConfig(); redraw();
       return;
     }
+    const guide = t.closest("[data-guide]") as HTMLElement | null;
+    if (guide) { hubClose?.(); await openGuide(guide.dataset.guide!); return; } // close the hub modal first: the preview takes the screen
     const oauth = t.closest("[data-oauth]") as HTMLElement | null;
     if (oauth) { await startProviderOauth(oauth.dataset.oauth!, oauth.closest(".provhub-config"), () => { void refreshAuth().then(redraw); }); return; }
     const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;

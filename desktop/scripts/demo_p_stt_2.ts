@@ -68,10 +68,10 @@ check("integrity floor rejects a truncated file", looksLikeWhisperModel(new Uint
 // (5) P-STT.6: the installed-app autostart gate (pure). The packaged build autostarts the managed server so
 // dictation works out of the box; a dev run, a non-whisper engine, a REMOTE sttUrl, or a running server never do.
 const okView: WhisperStatusView = { capable: true, recommended: "small", defaultTier: "tiny", summary: "", binAvailable: true, binHint: "", running: false, port: 9111, activeTier: null, serveUrl: null, tiers: [], install: { active: false, tier: null, fraction: 0, phase: "idle" } };
-check("packaged + whisper STT + loopback url -> autostart", shouldAutostartWhisper(okView, { sttProvider: "whisper", sttUrl: "http://localhost:9000" }, true) === true);
-check("a dev run never autostarts", shouldAutostartWhisper(okView, { sttProvider: "whisper", sttUrl: "" }, false) === false);
-check("a user's REMOTE sttUrl is never clobbered", shouldAutostartWhisper(okView, { sttProvider: "whisper", sttUrl: "http://stt.corp.example:9000" }, true) === false);
-check("an already-running server is left alone", shouldAutostartWhisper({ ...okView, running: true }, { sttProvider: "whisper", sttUrl: "" }, true) === false);
+check("whisper STT + loopback url + resolved binary -> autostart", shouldAutostartWhisper(okView, { sttProvider: "whisper", sttUrl: "http://localhost:9000" }) === true);
+check("no resolved binary (fresh dev checkout) never autostarts", shouldAutostartWhisper({ ...okView, binAvailable: false }, { sttProvider: "whisper", sttUrl: "" }) === false);
+check("a user's REMOTE sttUrl is never clobbered", shouldAutostartWhisper(okView, { sttProvider: "whisper", sttUrl: "http://stt.corp.example:9000" }) === false);
+check("an already-running server is left alone", shouldAutostartWhisper({ ...okView, running: true }, { sttProvider: "whisper", sttUrl: "" }) === false);
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

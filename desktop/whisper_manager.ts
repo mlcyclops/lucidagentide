@@ -18,12 +18,14 @@ export interface BinResolveIO {
   exists: (path: string) => boolean;
   which: (name: string) => string | null;
   resourcesPath?: string; // packaged-app resources dir (process.resourcesPath), if any
+  /** P-STT.7: the runtime-staged dir (~/.omp/whisper/bin) whisper_binary_stage.ts fills on dev runs. */
+  stagedDir?: string;
   platform: string; // process.platform
 }
 
-export interface ResolvedBin { path: string; source: "env" | "bundled" | "path" }
+export interface ResolvedBin { path: string; source: "env" | "bundled" | "staged" | "path" }
 
-/** Find the whisper.cpp server binary (env -> bundled -> PATH), or null. Pure (I/O injected). */
+/** Find the whisper.cpp server binary (env -> bundled -> staged -> PATH), or null. Pure (I/O injected). */
 export function resolveWhisperBin(io: BinResolveIO): ResolvedBin | null {
   const exe = io.platform === "win32" ? "whisper-server.exe" : "whisper-server";
   const envBin = io.env.LUCID_WHISPER_BIN;
@@ -31,6 +33,12 @@ export function resolveWhisperBin(io: BinResolveIO): ResolvedBin | null {
   if (io.resourcesPath) {
     const bundled = `${io.resourcesPath}/whisper/${exe}`;
     if (io.exists(bundled)) return { path: bundled, source: "bundled" };
+  }
+  // P-STT.7: the dev-run staging dir sits between the bundle (installer-verified) and PATH (whatever
+  // the user has lying around) - it holds the SAME pinned, hash-verified release the bundle ships.
+  if (io.stagedDir) {
+    const staged = `${io.stagedDir}/${exe}`;
+    if (io.exists(staged)) return { path: staged, source: "staged" };
   }
   const onPath = io.which(exe) ?? io.which("whisper-server") ?? io.which("whisper-cli");
   return onPath ? { path: onPath, source: "path" } : null;

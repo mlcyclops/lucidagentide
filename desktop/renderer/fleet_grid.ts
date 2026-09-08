@@ -1472,6 +1472,13 @@ async function submitSpawn(): Promise<void> {
       .catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     if (!s.ok) warn = `Token not saved (${s.error ?? "vault unavailable"}) - used for this clone only.`;
   }
+  // P-FLEET.L16: a spawn that outlives this clock is almost always the engine wedged behind a blocking
+  // filesystem call (a OneDrive folder hydrating) or a cold provider backend. Say so, live, instead of
+  // spinning mutely - the number-one report was "it just sits there" with the cause invisible.
+  const slow = setTimeout(() => {
+    if (go) go.innerHTML = `${icon("bolt", 12)} Still spawning\u2026`;
+    if (err) { err.hidden = false; err.textContent = "Taking longer than usual. If this folder lives under OneDrive, open it in Explorer once (cloud placeholders can stall the engine while they hydrate); the engine window may name the holdup."; }
+  }, 20_000);
   const r = await deps.fleetSpawn({
     cwd,
     model: model || undefined,
@@ -1479,6 +1486,8 @@ async function submitSpawn(): Promise<void> {
     ...(remote ? { repoUrl: repoRaw } : {}),
     ...(remote && pat ? { pat } : {}),
   }).catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
+  clearTimeout(slow);
+  if (err && err.hidden === false && r?.ok) err.hidden = true; // the slow-note must not outlive a success
   if (patInput) patInput.value = ""; // never leave the plaintext sitting in the DOM
   if (r?.ok) { form.remove(); paintEmpty(); await refresh(); return; }
   if (go) { go.disabled = false; go.innerHTML = goHtml; }

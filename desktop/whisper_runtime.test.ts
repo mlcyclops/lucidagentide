@@ -272,23 +272,23 @@ describe("shouldAutostartWhisper (installed-app autostart gate)", () => {
   it("status exposes the tiny default tier for the picker", () => {
     expect(view().defaultTier).toBe("tiny");
   });
-  it("autostarts in the packaged app: whisper STT, no custom url, capable, binary present", () => {
-    expect(shouldAutostartWhisper(view(), voice, true)).toBe(true);
+  it("autostarts when a binary resolves: whisper STT, no custom url, capable", () => {
+    expect(shouldAutostartWhisper(view(), voice)).toBe(true);
   });
-  it("never autostarts a dev run (packaged=false)", () => {
-    expect(shouldAutostartWhisper(view(), voice, false)).toBe(false);
-  });
+  // P-STT.7: the packaged-only restriction is GONE - a dev run that staged the pinned binary (or set
+  // LUCID_WHISPER_BIN / has whisper.cpp on PATH) autostarts identically to the installed app. The
+  // fresh-checkout safety the old flag provided is carried by binAvailable=false instead.
   it("never races a non-whisper STT engine", () => {
-    expect(shouldAutostartWhisper(view(), { sttProvider: "elevenlabs", sttUrl: "" }, true)).toBe(false);
+    expect(shouldAutostartWhisper(view(), { sttProvider: "elevenlabs", sttUrl: "" })).toBe(false);
   });
   it("loopback sttUrls stay managed; a REMOTE url is the user's own server (no clobber)", () => {
-    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://127.0.0.1:9111" }, true)).toBe(true);
-    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://localhost:9000" }, true)).toBe(true);
-    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://stt.example.com:9000" }, true)).toBe(false);
+    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://127.0.0.1:9111" })).toBe(true);
+    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://localhost:9000" })).toBe(true);
+    expect(shouldAutostartWhisper(view(), { sttProvider: "whisper", sttUrl: "http://stt.example.com:9000" })).toBe(false);
   });
-  it("requires a resolved binary and capable hardware", () => {
-    expect(shouldAutostartWhisper(view({ resolveBin: () => null }), voice, true)).toBe(false);
-    expect(shouldAutostartWhisper(view({ specs: () => ({ ...MAC8, totalRamGB: 1 }) }), voice, true)).toBe(false);
+  it("requires a resolved binary and capable hardware (a fresh dev checkout stays quiet)", () => {
+    expect(shouldAutostartWhisper(view({ resolveBin: () => null }), voice)).toBe(false);
+    expect(shouldAutostartWhisper(view({ specs: () => ({ ...MAC8, totalRamGB: 1 }) }), voice)).toBe(false);
   });
   it("skips when the managed server already runs", async () => {
     let up = false;
@@ -296,6 +296,6 @@ describe("shouldAutostartWhisper (installed-app autostart gate)", () => {
     const r = await startWhisper(d, { port: 9126 });
     expect(r.ok).toBe(true);
     expect(r.tier).toBe("tiny"); // the no-pick default
-    expect(shouldAutostartWhisper(whisperStatus(d), voice, true)).toBe(false);
+    expect(shouldAutostartWhisper(whisperStatus(d), voice)).toBe(false);
   });
 });

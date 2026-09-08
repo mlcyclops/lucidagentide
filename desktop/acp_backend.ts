@@ -1160,6 +1160,20 @@ class Backend {
     return this.listener !== null ? { busy: true, startedAt: this.turnStartedAtMs } : { busy: false, startedAt: null };
   }
 
+  /** P-REATTACH.1: the running turn's downstream swap + completion gate (null between turns). */
+  private turnAttach: { swap: (fn: (e: ChatEvent) => void) => void; ended: Promise<void> } | null = null;
+
+  /** P-REATTACH.1: point the RUNNING master turn's event flow at a NEW stream (the old one died, or a
+   *  mid-turn message arrived and its stream is taking over the watch). Events missed while detached
+   *  are reconciled by the turn's final `done`, which carries the full assistant text. Returns
+   *  attached:false when no prompt turn is live - the caller settles its stream immediately. */
+  attachTurn(onEvent: (e: ChatEvent) => void): { attached: boolean; ended?: Promise<void> } {
+    const t = this.turnAttach;
+    if (!t) return { attached: false };
+    t.swap(onEvent);
+    return { attached: true, ended: t.ended };
+  }
+
   /** P-COLLAB.3: the model id omp currently reports active (for the shared-session welcome header). */
   activeModelName(): string { return this.activeModel(); }
 
@@ -1208,7 +1222,16 @@ class Backend {
    *  assistant reply so the personalization distiller can learn from the turn (P9.2).
    *  P-STALL.2 (ADR-0263): the turn waits as long as the work takes - no time cutoff. Stop ends it, and
    *  a dead omp child rejects the in-flight request (ACPClient drains pending on exit). */
-  async prompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void> {
+  async prompt(text: string, onEventRaw: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void> {
+    // P-REATTACH.1 (the frozen-composer bug): EVERY event this turn emits (the notification sink, slow
+    // notices, error lines, the final reconciling `done`) flows through ONE swappable downstream. When
+    // the browser stream dies mid-turn ("chat stream write failed - server turn continues"), a fresh
+    // stream calls attachTurn() and adopts THIS running turn; the swap redirects delivery only - the
+    // turn's accounting (assistant capture, latency taps, health arming) never changes hands.
+    let downstream = onEventRaw;
+    const onEvent = (e: ChatEvent) => downstream(e);
+    const turnEnd = Promise.withResolvers<void>();
+    this.turnAttach = { swap: (fn) => { downstream = fn; }, ended: turnEnd.promise };
     let assistant = "";
     let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
     let slow: Timer | undefined;
@@ -1368,6 +1391,10 @@ class Backend {
     // Carry the FULL accumulated reply on `done` so the UI can reconcile a lossy live stream (if some
     // token chunks didn't reach the browser, the turn still renders the complete final answer on settle).
     onEvent({ type: "done", text: assistant });
+    // P-REATTACH.1: the turn is over. Resolve AFTER the reconciling `done` above so an attached stream
+    // flushes it before its route closes; a late attacher from here on settles immediately instead.
+    this.turnAttach = null;
+    turnEnd.resolve();
     void learnFromTurn(text, assistant, (sys, usr) => this.complete(sys, usr)); // best-effort; the model extractor (opt-in) uses complete()
     // ADR-0009 Phase B (issue #12): capture the turn for traceability. Sanitized + sha only,
     // GUI-side (can't co-write DuckDB); fully guarded so it never affects the chat.

@@ -1,0 +1,263 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC
+     SPDX-License-Identifier: BUSL-1.1 -->
+<!-- desktop/renderer/guides/openweight_plans.html - the in-app advisor for the gated OTHERS section:
+     open-weight and regional providers (DeepSeek, Qwen, Kimi, GLM, MiniMax, Groq, OpenRouter). Opened from
+     the gated provider cards in Settings into the Preview panel (Yours lane). Fully self-contained: the
+     preview frame is sandboxed with NO network and NO app stylesheet, so every byte lives inline.
+     House rules apply: lucid-dark palette, block-paragraph prose (never prose inside flex), one-line
+     ellipsizing labels, and no em dashes anywhere. Prices verified September 2026; the sources section
+     at the bottom names where each number came from. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Open-weight and regional providers: a LUCID field guide</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-elev:#12151f;
+    --line:#252a3a; --line-soft:#1a1e2a;
+    --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90;
+    --accent:#c64bd6; --accent-2:#e07bf0; --cyan:#46c8dc; --green:#46d27e; --amber:#e8b23c;
+    --red:#ef5f5f; --violet:#8b5cf6;
+    --green-txt:#8ee8ad; --amber-txt:#f3cf7a; --red-txt:#ffb0b0; --cyan-txt:#8fe0ee; --violet-txt:#e9ddff;
+    --r-lg:12px; --r-md:9px; --r-sm:6px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg-0);color:var(--txt);
+    font:14px/1.55 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 22px 64px}
+  header{padding:26px 0 18px;border-bottom:1px solid var(--line)}
+  .brand{font-size:11px;letter-spacing:.22em;color:var(--accent-2);text-transform:uppercase;font-weight:700}
+  h1{margin:8px 0 6px;font-size:26px;line-height:1.25;letter-spacing:-.01em}
+  .sub{color:var(--txt-2);margin:0;max-width:64ch}
+  .stamp{margin-top:10px;color:var(--txt-3);font-size:12px}
+  h2{font-size:18px;margin:40px 0 4px;letter-spacing:-.01em}
+  h2 .no{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  h3{font-size:14.5px;margin:20px 0 6px;color:var(--accent-2)}
+  p{margin:8px 0;color:var(--txt-2);max-width:72ch}
+  p b,li b{color:var(--txt)}
+  a{color:var(--cyan);text-decoration:none;word-break:break-all}
+  ul{margin:6px 0 10px;padding-left:20px;color:var(--txt-2)}
+  li{margin:4px 0}
+  code{background:var(--bg-2);border:1px solid var(--line-soft);border-radius:4px;
+    padding:1px 5px;font:12px ui-monospace,Consolas,monospace;color:var(--cyan-txt);white-space:nowrap}
+  /* callouts: block paragraphs with a colored spine, NEVER flex around prose */
+  .note{border-left:3px solid var(--cyan);background:var(--bg-1);border-radius:0 var(--r-md) var(--r-md) 0;
+    padding:10px 14px;margin:14px 0}
+  .note.good{border-left-color:var(--green)}
+  .note.warn{border-left-color:var(--amber)}
+  .note.bad{border-left-color:var(--red)}
+  .note p{margin:4px 0}
+  .note .t{font-weight:700;color:var(--txt);font-size:13px;letter-spacing:.02em}
+  .note.good .t{color:var(--green-txt)} .note.warn .t{color:var(--amber-txt)} .note.bad .t{color:var(--red-txt)}
+  /* tables: generous columns, first column never wraps mid-word */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th{color:var(--txt-3);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em;text-align:left}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px;font-weight:600;color:var(--txt)}
+  td{color:var(--txt-2)}
+  .price{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 18px;margin:14px 0}
+  /* status chips: single-purpose atoms, each chip is one element so flex is safe here */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+  .chip{white-space:nowrap;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2)}
+  .chip.ok{color:var(--green-txt);border-color:rgb(70 210 126 / .35);background:rgb(70 210 126 / .08)}
+  .chip.dead{color:var(--red-txt);border-color:rgb(239 95 95 / .35);background:rgb(239 95 95 / .08);text-decoration:line-through}
+  .chip.warn{color:var(--amber-txt);border-color:rgb(232 178 60 / .35);background:rgb(232 178 60 / .08)}
+  .chip.info{color:var(--cyan-txt);border-color:rgb(70 200 220 / .35);background:rgb(70 200 220 / .08)}
+  /* timeline: spine + block entries */
+  .tl{border-left:2px solid var(--line);margin:16px 0 6px 6px;padding-left:18px}
+  .tl-item{position:relative;margin:0 0 16px}
+  .tl-item::before{content:"";position:absolute;left:-24px;top:5px;width:9px;height:9px;border-radius:50%;
+    background:var(--bg-3);border:2px solid var(--accent)}
+  .tl-item.break::before{border-color:var(--red)}
+  .tl-date{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--txt-3);text-transform:uppercase}
+  .tl-item p{margin:2px 0 0}
+  /* verdict ribbon */
+  .verdict{background:linear-gradient(135deg,rgb(139 92 246 / .12),rgb(198 75 214 / .10));
+    border:1px solid rgb(139 92 246 / .4);border-radius:var(--r-lg);padding:16px 18px;margin:18px 0}
+  .verdict .t{color:var(--violet-txt);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+  .verdict p{color:var(--txt)}
+  .toc{margin:16px 0 0;padding:0;list-style:none;column-count:2;column-gap:24px}
+  .toc li{margin:3px 0;break-inside:avoid}
+  .toc a{color:var(--txt-2)}
+  .toc a:hover{color:var(--accent-2)}
+  .toc .no{color:var(--accent);margin-right:6px;font-variant-numeric:tabular-nums}
+  .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--txt-3);font-size:12px}
+  @media (max-width:640px){ .toc{column-count:1} td:first-child{max-width:160px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">LUCID Agent IDE · Advisor Guide</div>
+  <h1>Open-weight and regional providers, eyes open</h1>
+  <p class="sub">The gated OTHERS section: DeepSeek, Qwen, Kimi, GLM, MiniMax, Groq, and OpenRouter. Why
+    LUCID makes you type ACKNOWLEDGE before showing these cards, what each provider costs, and where the
+    astonishing price-performance actually is.</p>
+  <p class="stamp">Prices verified September 2026. These vendors reprice aggressively and run off-peak
+    discounts; re-check the sources at the bottom before budgeting.</p>
+  <ul class="toc">
+    <li><span class="no">1</span><a href="#gate">Read this first: the sovereignty gate</a></li>
+    <li><span class="no">2</span><a href="#now">Do this in LUCID right now</a></li>
+    <li><span class="no">3</span><a href="#providers">The providers, priced</a></li>
+    <li><span class="no">4</span><a href="#bench">Benchmarks and cost per point</a></li>
+    <li><span class="no">5</span><a href="#pick">Which one, for what</a></li>
+    <li><span class="no">6</span><a href="#sources">Sources</a></li>
+  </ul>
+</header>
+
+<h2 id="gate"><span class="no">1</span>Read this first: the sovereignty gate</h2>
+<div class="note bad">
+  <p class="t">Why these cards are hidden behind a typed ACKNOWLEDGE</p>
+  <p>Every provider in this section either routes your prompts to <b>servers outside the United States</b>
+     or aggregates <b>many origins with no U.S. data-sovereignty guarantee</b>. Your code, your prompts, and
+     your context windows leave U.S. jurisdiction, and no contract in this section promises otherwise.
+     LUCID will not surface these cards until you type the word ACKNOWLEDGE, because this is a decision you
+     should make once, deliberately, and not by accident while clicking through Settings.</p>
+  <p><b>Defense and regulated users:</b> treat this entire section as off-limits for sensitive work. Your
+     compliance path in LUCID is the <b>AskSage gov gateway card</b> (org-issued key), which exists exactly
+     so you never need anything on this page.</p>
+</div>
+<p>What the gate is not: a quality judgment. Several models below sit within a point of the frontier on
+   coding benchmarks at a tenth of the price. The gate is purely about where your data goes. If your work
+   is open source, personal, or otherwise fine to leave U.S. jurisdiction, read on; the economics are the
+   best in the industry.</p>
+<div class="chips">
+  <span class="chip warn">Gated: typed ACKNOWLEDGE</span>
+  <span class="chip warn">Non-U.S. routing or mixed origins</span>
+  <span class="chip info">Groq: U.S. hardware company</span>
+  <span class="chip info">OpenRouter: U.S. company, many origins</span>
+  <span class="chip ok">Regulated path: AskSage card</span>
+</div>
+
+<h2 id="now"><span class="no">2</span>Do this in LUCID right now</h2>
+<div class="verdict">
+  <div class="t">The short version</div>
+  <p>Type <b>ACKNOWLEDGE</b> in the gated OTHERS section of Settings to reveal the cards. Then it is
+     ordinary key-pasting: each card takes its provider key (the pattern is <code>DEEPSEEK_API_KEY</code>
+     and so on). Two exceptions have real sign-in flows: <b>Qwen</b> offers OAuth through the qwen-portal,
+     and <b>OpenRouter</b> supports OAuth directly in LUCID.</p>
+</div>
+<h3>The reveal</h3>
+<p>Open <b>Settings &gt; Providers</b> and scroll to the gated <b>OTHERS</b> section. Type
+   <b>ACKNOWLEDGE</b> into the confirmation field. The seven provider cards appear and stay revealed for
+   this install.</p>
+<h3>Keys and the two OAuth exceptions</h3>
+<ul>
+  <li><b>API keys:</b> DeepSeek, Kimi (Moonshot), GLM (Z.AI), MiniMax, and Groq each take a key from the
+      vendor console, pasted into the matching field on their card
+      (<code>DEEPSEEK_API_KEY</code> and equivalents per provider).</li>
+  <li><b>Qwen:</b> has a real OAuth flow. Click Connect on the Qwen card and sign in through the
+      <b>qwen-portal</b>; no key needed for the subscription path.</li>
+  <li><b>OpenRouter:</b> supports OAuth in LUCID, or paste a key. One OpenRouter key unlocks many models
+      across vendors, including free variants, which makes it the quickest single setup in this section.</li>
+</ul>
+
+<h2 id="providers"><span class="no">3</span>The providers, priced</h2>
+<p>All prices are per 1M tokens, input/output, September 2026:</p>
+<table>
+  <tr><th>Provider</th><th>Flagship pricing</th><th>Standing (Sep 2026)</th><th>Notes</th></tr>
+  <tr><td>DeepSeek</td>
+      <td class="price">V4 Flash $0.22 to 0.44 / $0.66 to 1.32; V4 Pro $0.66 to 1.32 / $1.98 to 3.96</td>
+      <td>V4 Pro Max sits in the 80% SWE-V cluster</td>
+      <td>Cache hits as low as $0.007 to 0.014 per 1M, plus off-peak discounts. The value benchmark
+          everyone else is priced against.</td></tr>
+  <tr><td>Qwen (Alibaba)</td>
+      <td class="price">Qwen3.7 Flash $0.03 / $0.13</td>
+      <td>Qwen3.7 Max near the 80% SWE-V band</td>
+      <td>Flash is the cheapest capable model anywhere, full stop. OAuth via qwen-portal.</td></tr>
+  <tr><td>Kimi (Moonshot)</td>
+      <td class="price">K2.6 / K3 about $3 / $15</td>
+      <td>K2.6 in the 80% SWE-V cluster</td>
+      <td>Priced like a Western frontier model; you pay for the standing.</td></tr>
+  <tr><td>GLM (Z.AI)</td>
+      <td class="price">GLM-5.3 $1.40 / $4.40</td>
+      <td>GLM-5.2: best open-weight SWE-bench Pro at 62.1% (vendor aggregate)</td>
+      <td>The open-weight leader on the harder standardized benchmark.</td></tr>
+  <tr><td>MiniMax</td>
+      <td class="price">M3 $0.30 / $1.20</td>
+      <td>M3 in the 80% SWE-V cluster</td>
+      <td>M2.7 scored 56.22% SWE-bench Pro at about a fifth of GLM's cost; see the cost-per-point
+          section below.</td></tr>
+  <tr><td>Groq</td>
+      <td class="price">From $0.05 input up to $1 / $3 (Kimi K2)</td>
+      <td>Serves open-weight models, not its own</td>
+      <td>A U.S. hardware speed play: LPU inference, 50% batch discount, prompt caching. In this section
+          for what it serves, not where it lives.</td></tr>
+  <tr><td>OpenRouter</td>
+      <td class="price">Pass-through per model + free variants</td>
+      <td>Aggregator, not a lab</td>
+      <td>One key, many models, many origins. U.S. company, but routing follows the model you pick, so
+          the sovereignty note still applies.</td></tr>
+</table>
+
+<h2 id="bench"><span class="no">4</span>Benchmarks and cost per point</h2>
+<p>The headline fact of September 2026: <b>five models cluster at 80.2 to 80.6% on SWE-bench Verified</b>:
+   DeepSeek V4 Pro Max, Gemini 3.1 Pro, MiniMax M3, Qwen3.7 Max, and Kimi K2.6. Three of the five are
+   open-weight models from this page, sitting statistically level with a Western frontier flagship.</p>
+<div class="note warn">
+  <p class="t">Benchmark honesty</p>
+  <p>SWE-bench Verified numbers are largely <b>self-reported by vendors</b>. Standardized harnesses score
+     everyone lower: on SWE-bench Pro, the best open-weight result is GLM-5.2 at 62.1% (a vendor aggregate
+     figure), and MiniMax M2.7 posts 56.22%. The ordering reshuffles between the two boards, so never
+     compare a self-reported Verified score against someone else's standardized Pro score.</p>
+</div>
+<h3>Cost per benchmark point</h3>
+<p>The most useful lens for this section is not "who is best" but "what does a point cost". Worked example
+   from the standardized board: <b>MiniMax M2.7</b> scores 56.22% SWE-bench Pro at <b>about a fifth of
+   GLM's cost</b>, while GLM-5.2 leads open weights at 62.1%. That is roughly nine tenths of the leader's
+   score for roughly one fifth of the spend (approximate: prices move and the scored versions trail the
+   priced ones). If your agent runs are high-volume and tolerant of a retry, the cheaper model wins on
+   economics long before the leader wins on quality.</p>
+<div class="note good">
+  <p class="t">Where the bargains concentrate</p>
+  <p>Qwen3.7 Flash at $0.03/$0.13 makes experimentation effectively free. MiniMax M3 at $0.30/$1.20 buys
+     an 80%-cluster SWE-V model for pocket change. DeepSeek's cache-hit pricing ($0.007 to 0.014) rewards
+     agent loops that reuse context. These three are the reason this section exists.</p>
+</div>
+
+<h2 id="pick"><span class="no">5</span>Which one, for what</h2>
+<table>
+  <tr><th>You want</th><th>Pick</th><th>Why</th></tr>
+  <tr><td>Cheapest possible start</td><td>Qwen3.7 Flash</td>
+      <td class="price">$0.03/$0.13 per 1M is unbeatable for drafts, classification, and bulk steps.</td></tr>
+  <tr><td>Frontier-adjacent coding, cheap</td><td>MiniMax M3 or DeepSeek V4 Pro</td>
+      <td>Both flirt with the 80% SWE-V cluster at a fraction of Western frontier prices.</td></tr>
+  <tr><td>Best standardized coding score</td><td>GLM-5.3</td>
+      <td>The GLM line holds the open-weight SWE-bench Pro lead; $1.40/$4.40 is still cheap for that.</td></tr>
+  <tr><td>Raw speed</td><td>Groq</td>
+      <td>LPU hardware serves open-weight models at very high token rates; batch discount for offline jobs.</td></tr>
+  <tr><td>One key, maximum breadth</td><td>OpenRouter</td>
+      <td>Aggregates the whole landscape including free variants; OAuth makes it the fastest setup here.</td></tr>
+  <tr><td>Anything sensitive or regulated</td><td>None of these</td>
+      <td>Use the AskSage gov gateway card or a sovereign path such as Azure OpenAI under your own tenant.</td></tr>
+</table>
+
+<h2 id="sources"><span class="no">6</span>Sources</h2>
+<ul>
+  <li>DeepSeek pricing and cache economics:
+      <a href="https://felloai.com/deepseek-pricing">felloai.com/deepseek-pricing</a></li>
+  <li>Open-weight coding model landscape 2026:
+      <a href="https://morphllm.com/best-open-source-coding-model-2026">morphllm.com/best-open-source-coding-model-2026</a></li>
+  <li>Standardized SWE-bench Pro results:
+      <a href="https://morphllm.com/swe-bench-pro">morphllm.com/swe-bench-pro</a></li>
+  <li>Groq pricing and LPU inference:
+      <a href="https://www.cloudzero.com/blog/groq-pricing">cloudzero.com/blog/groq-pricing</a></li>
+  <li>OpenRouter model catalog and pricing:
+      <a href="https://openrouter.ai">openrouter.ai</a></li>
+</ul>
+
+<div class="foot">
+  Generated for LUCID Agent IDE · TechLead 187 LLC · Prices are point-in-time (September 2026) and change
+  without notice. Links do not open inside this sandboxed preview; copy them into your browser.
+</div>
+
+</div>
+</body>
+</html>

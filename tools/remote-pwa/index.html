@@ -708,6 +708,24 @@
   <script src="./config.js"></script>
   <script type="module" src="./firebase_auth.js"></script>
   <script type="module" src="./app.js"></script>
-  <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js", { scope: "/remote" }).catch(() => {});</script>
+  <script>
+    // P-REMOTE.13: the stale-view fix's second half. A standalone PWA can live for DAYS without a real
+    // navigation, so (1) updateViaCache "none" keeps the worker script itself out of the HTTP cache,
+    // (2) reg.update() runs on every return to the foreground (the only reliable "check now" moment on
+    // a phone), and (3) when a NEW worker takes control (its skipWaiting + clients.claim), the page
+    // reloads ONCE so the running JS actually matches the freshly activated shell - previously the old
+    // bundle kept driving the screen until the user happened to fully relaunch.
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js", { scope: "/remote", updateViaCache: "none" }).then((reg) => {
+        document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
+      }).catch(() => {});
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (reloaded) return; // one reload per takeover - never a loop
+        reloaded = true;
+        location.reload();
+      });
+    }
+  </script>
 </body>
 </html>

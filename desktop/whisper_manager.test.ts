@@ -21,6 +21,17 @@ describe("resolveWhisperBin", () => {
     const r = resolveWhisperBin(binIO({ resourcesPath: "/app/res", exists: (p) => p === "/app/res/whisper/whisper-server" }));
     expect(r).toEqual({ path: "/app/res/whisper/whisper-server", source: "bundled" });
   });
+  // P-STT.7: the runtime-staged dir (dev runs) sits between the bundle and PATH.
+  it("resolves the staged binary when no bundle exists", () => {
+    const r = resolveWhisperBin(binIO({ stagedDir: "/home/u/.omp/whisper/bin", exists: (p) => p === "/home/u/.omp/whisper/bin/whisper-server" }));
+    expect(r).toEqual({ path: "/home/u/.omp/whisper/bin/whisper-server", source: "staged" });
+  });
+  it("the bundle still wins over the staged dir; staged wins over PATH", () => {
+    const both = resolveWhisperBin(binIO({ resourcesPath: "/app/res", stagedDir: "/staged", exists: () => true }));
+    expect(both?.source).toBe("bundled");
+    const stagedVsPath = resolveWhisperBin(binIO({ stagedDir: "/staged", exists: (p) => p === "/staged/whisper-server", which: () => "/usr/bin/whisper-server" }));
+    expect(stagedVsPath?.source).toBe("staged");
+  });
   it("uses a binary on PATH for a dev who already has whisper.cpp", () => {
     const r = resolveWhisperBin(binIO({ which: (n) => (n === "whisper-server" ? "/usr/local/bin/whisper-server" : null) }));
     expect(r).toEqual({ path: "/usr/local/bin/whisper-server", source: "path" });

@@ -12,7 +12,7 @@
 //   bun run desktop:web        # http://localhost:5319
 
 import { join, dirname, basename } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { renderTurnEvalReport, evalMetricsForTurn, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
@@ -74,15 +74,21 @@ import { probeEnabledServers } from "./mcp_probe.ts"; // P-AGENT.12: MCP tool di
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
 import { ElevenLabsTtsBackend, ElevenLabsSttBackend, elevenLabsSpeak, listElevenVoices } from "../harness/voice/elevenlabs.ts";
-import { TTS_PROVIDERS, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247)
+import { TTS_PROVIDERS, mapDotsVoices, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247) + P-VOICE.6 dots
+import { digestSpokenReply } from "../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
+import { parseVoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7: portable endpoint contract
+import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint } from "./settings_store.ts";
 import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
 import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin } from "./whisper_manager.ts";
+import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
+import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
+import { GUIDE_FILES } from "./guides_manifest.ts";
 import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
@@ -96,7 +102,7 @@ import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, fa
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
-import { providerAuth } from "./auth_status.ts";
+import { providerAuth, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { cloneRepo, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
@@ -159,6 +165,41 @@ async function transcribeClip(audio: Uint8Array, mimeType?: string, language?: s
 }
 
 function whisperModelDir(): string { return join(homedir(), ".omp", "whisper"); }
+
+// P-VOICE.7: the same-machine handoff mailbox. The DGX Loader's "Send to LUCID" writes
+// <home>/.omp/voice_endpoints/<id>.json (ADR-0017 in that repo); LUCID auto-scans on every endpoints
+// read, so the transfer is: click there, pick it here. Per-file fail-soft: one malformed file is
+// reported by name and skipped, never fatal, and NOTHING is imported without passing the fail-closed
+// contract gate (parseVoiceEndpointConfig - version/kind/slug/no-secrets).
+const voiceEndpointHandoffDir = (): string => join(homedir(), ".omp", "voice_endpoints");
+function scanVoiceEndpointHandoff(): { imported: number; rejects: { file: string; reason: string }[] } {
+  const rejects: { file: string; reason: string }[] = [];
+  let imported = 0;
+  let files: string[];
+  try { files = readdirSync(voiceEndpointHandoffDir()).filter((f) => f.endsWith(".json")); } catch { return { imported, rejects }; } // no mailbox yet
+  const have = voiceSettings().voiceEndpoints;
+  for (const f of files) {
+    let parsedJson: unknown;
+    try { parsedJson = JSON.parse(readFileSync(join(voiceEndpointHandoffDir(), f), "utf8")); }
+    catch { rejects.push({ file: f, reason: "unreadable or not JSON" }); continue; }
+    const r = parseVoiceEndpointConfig(parsedJson);
+    if (!r.ok) { rejects.push({ file: f, reason: r.reason }); continue; }
+    const existing = have.find((e) => e.id === r.config.id);
+    if (existing && (existing.exportedAt ?? 0) >= (r.config.exportedAt ?? 0)) continue; // already current
+    importVoiceEndpoint(r.config);
+    imported += 1;
+  }
+  return { imported, rejects };
+}
+/** P-STT.7: make a whisper-server resolvable, staging the pinned build when nothing resolves yet.
+ *  Returns null when a binary is available (already or after staging), else the user-facing reason. */
+async function ensureWhisperBinary(): Promise<string | null> {
+  if (whisperDeps().resolveBin()) return null;
+  const r = await stageWhisperBinary(join(whisperModelDir(), "bin"));
+  if (!r.ok) return r.reason;
+  console.log(`[whisper] staged the pinned whisper-server at ${r.path}`);
+  return null;
+}
 function whisperDeps(): WhisperRuntimeDeps {
   const dir = whisperModelDir();
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
@@ -166,7 +207,7 @@ function whisperDeps(): WhisperRuntimeDeps {
     specs: () => ({ arch: process.arch, platform: process.platform, totalRamGB: totalmem() / 1e9, cpuCores: cpus().length, accel: process.platform === "darwin" ? "metal" : "cpu" }),
     modelDir: dir,
     listModels: () => { try { return readdirSync(dir); } catch { return []; } },
-    resolveBin: () => resolveWhisperBin({ env: process.env, exists: existsSync, which: (n) => Bun.which(n), resourcesPath: process.env.LUCID_RESOURCES, platform: process.platform }),
+    resolveBin: () => resolveWhisperBin({ env: process.env, exists: existsSync, which: (n) => Bun.which(n), resourcesPath: process.env.LUCID_RESOURCES, stagedDir: join(dir, "bin"), platform: process.platform }),
     download: (model, dest, onProgress) => downloadWhisperModel(model, dest, {
       fetch: globalThis.fetch,
       writeStream: async (path, body, onBytes) => { const w = Bun.file(path).writer(); const rd = body.getReader(); let tot = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; if (value) { w.write(value); tot += value.length; onBytes(value.length); } } await w.end(); return tot; },
@@ -387,22 +428,21 @@ process.on("exit", () => { void stopWhisper(); });
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => { void stopWhisper(); process.exit(0); });
 }
-// P-STT.6: in the INSTALLED app (main.ts threads LUCID_RESOURCES only when app.isPackaged, and that build
-// bundles whisper-server), autostart the managed offline Whisper so dictation works out of the box - no
-// trip to Settings. The gate (shouldAutostartWhisper, unit-tested) skips dev runs, non-whisper STT, a
-// user-pointed REMOTE sttUrl, incapable hardware, and an already-running/adopted server. First launch
-// downloads the default tiny model (~78MB); fire-and-forget so the HTTP server never waits on it.
-if (process.env.LUCID_RESOURCES) {
-  void (async () => {
-    try {
-      const d = whisperDeps();
-      const v = voiceSettings();
-      if (!shouldAutostartWhisper(whisperRuntimeStatus(d), v, true)) return;
-      const r = await startWhisper(d, {});
-      console.log(r.ok ? `[whisper] autostarted${r.tier ? ` (${r.tier})` : " (adopted a running server)"}` : `[whisper] autostart did not run: ${r.reason}`);
-    } catch (e) { console.warn("[whisper] autostart failed:", e); }
-  })();
-}
+// P-STT.6 + P-STT.7: autostart the managed offline Whisper so dictation works out of the box - in the
+// INSTALLED app (bundled binary) AND in a dev run that has a resolvable binary (the runtime-staged
+// pinned build, LUCID_WHISPER_BIN, or PATH). The gate (shouldAutostartWhisper, unit-tested) skips
+// non-whisper STT, a user-pointed REMOTE sttUrl, incapable hardware, an already-running/adopted server,
+// and any machine with NO binary (a fresh dev checkout stays quiet until Install & start stages one).
+// First launch downloads the default tiny model (~78MB); fire-and-forget so the HTTP server never waits.
+void (async () => {
+  try {
+    const d = whisperDeps();
+    const v = voiceSettings();
+    if (!shouldAutostartWhisper(whisperRuntimeStatus(d), v)) return;
+    const r = await startWhisper(d, {});
+    console.log(r.ok ? `[whisper] autostarted${r.tier ? ` (${r.tier})` : " (adopted a running server)"}` : `[whisper] autostart did not run: ${r.reason}`);
+  } catch (e) { console.warn("[whisper] autostart failed:", e); }
+})();
 
 /** The relay a new share will use: THIS device's embedded relay when running (no third party), else the
  *  configured external relay (self-hosted default / public opt-in), else null (start fails closed). */
@@ -1218,19 +1258,33 @@ const LOCAL_TTS_URL = (): string => process.env.LUCID_TTS_URL || "http://localho
 // Is a self-hosted Kokoro actually listening? ANY HTTP answer counts - even a 404 proves something is bound.
 // Cached for a few seconds because the picker probes on every open, and a refused connection costs a syscall
 // round-trip we do not want in the menu's critical path.
-let localTtsProbe = { at: 0, up: false };
-async function localTtsUp(): Promise<boolean> {
+let localTtsProbe = { at: 0, up: false, url: "" };
+async function localTtsUp(url: string = LOCAL_TTS_URL()): Promise<boolean> {
   const now = Date.now();
-  if (now - localTtsProbe.at < 5000) return localTtsProbe.up;
+  if (localTtsProbe.url === url && now - localTtsProbe.at < 5000) return localTtsProbe.up;
   let up = false;
-  try { await fetch(LOCAL_TTS_URL(), { signal: AbortSignal.timeout(700) }); up = true; }
+  try { await fetch(url, { signal: AbortSignal.timeout(700) }); up = true; }
   catch { up = false; } // connection refused / DNS / timeout - nothing is serving there
-  localTtsProbe = { at: now, up };
+  localTtsProbe = { at: now, up, url };
+  return up;
+}
+// P-VOICE.6: the dots.tts probe is separate state (different URL, same any-HTTP-answer-counts rule) so
+// flipping the picker between Kokoro and dots never serves one engine the other's cached verdict.
+let dotsTtsProbe = { at: 0, up: false, url: "" };
+async function dotsTtsUp(url: string): Promise<boolean> {
+  const now = Date.now();
+  if (dotsTtsProbe.url === url && now - dotsTtsProbe.at < 5000) return dotsTtsProbe.up;
+  let up = false;
+  try { await fetch(`${url.replace(/\/+$/, "")}/health`, { signal: AbortSignal.timeout(1500) }); up = true; }
+  catch { up = false; } // tunnel down / VPN off / service stopped
+  dotsTtsProbe = { at: now, up, url };
   return up;
 }
 /** Every TTS engine with its LIVE readiness + the specific reason it can't speak. */
 async function ttsEngines(): Promise<(TtsProviderInfo & { ready: boolean; reason: string })[]> {
+  const v = voiceSettings();
   const localUp = await localTtsUp();
+  const dotsUp = await dotsTtsUp(v.dotsTtsUrl); // P-VOICE.6: 5s-cached like the Kokoro probe
   const auth = providerAuth(); // one SQLite read, not one per engine
   const rows = [...auth.majors, ...auth.others];
   const localUrl = LOCAL_TTS_URL();
@@ -1241,8 +1295,8 @@ async function ttsEngines(): Promise<(TtsProviderInfo & { ready: boolean; reason
       // The OpenAI engine's OAuth row is the CHAT sign-in ("openai"); ttsEngineStatus uses it to explain why
       // being signed in still isn't enough for the platform speech API.
       oauthActive: !!rows.find((r) => r.id === (e.id === "openai-tts" ? "openai" : e.id))?.oauthActive,
-      localUp,
-      localUrl,
+      localUp: e.id === "dots-tts" ? dotsUp : localUp,
+      localUrl: e.id === "dots-tts" ? v.dotsTtsUrl : localUrl,
     }),
   }));
 }
@@ -1351,6 +1405,19 @@ function gitChangeInputs(repo: string): { numstat: string; nameStatus: string; r
   return { numstat: gitOut(repo, ["diff", "--numstat", ...args]), nameStatus: gitOut(repo, ["diff", "--name-status", ...args]), range: range ? `the last ${Math.min(10, cnt - 1)} commits` : "the working tree" };
 }
 
+/** providerAuth() + the last per-provider OAuth failure (oauth_failure.ts) merged onto inactive rows,
+ *  so the Settings poller can STOP spinning and tell the user why the sign-in died. An active login
+ *  never carries an error (success clears the slot; a stale record must not shadow a good credential). */
+function authWithOauthErrors(): ProviderAuthSnapshot {
+  const a = providerAuth();
+  for (const row of [...a.gateway, ...a.majors, ...a.others]) {
+    if (!row.oauthId || row.oauthActive) continue;
+    const f = getOauthFailure(row.oauthId);
+    if (f) row.oauthError = f;
+  }
+  return a;
+}
+
 // OAuth via omp's `auth-broker login` — it opens the provider, runs a LOCAL callback server
 // (e.g. :1455) for the redirect, exchanges the code, stores the token, then exits. It MUST stay
 // alive AND have BOTH pipes drained until the callback lands — otherwise a full stdout/stderr pipe
@@ -1367,6 +1434,7 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
   // Snapshot the vault BEFORE the broker runs, so the exit handler below can tell whether a genuinely
   // fresh token landed rather than trusting the broker's exit code. Read-only; absent row => not present.
   const beforeCred = credentialSnapshot(oauthId);
+  clearOauthFailure(oauthId); // a fresh attempt owns the failure slot - stale reasons never linger
   let proc: ReturnType<typeof Bun.spawn>;
   try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
@@ -1395,11 +1463,20 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
   // before/after snapshot instead: a first row, a replaced row, a rewritten blob or a bumped
   // `updated_at` all mean a fresh token landed. This also keeps a FAILED login from resurrecting a
   // credential the user logged out of, which a blind clear-and-restart would.
+  // Drained broker output, hoisted above the exit handler so it can extract a failure reason. The
+  // browser shows "Authentication Successful" the instant the callback lands, but the token exchange
+  // and provider onboarding (Gemini's loadCodeAssist/onboardUser project discovery, notably) run AFTER
+  // that page renders - when one of those throws, the broker's stderr is the ONLY record of why. We
+  // persist that reason (oauth_failure.ts) so /api/auth can show it instead of a forever-"not set" badge.
+  const dec = new TextDecoder();
+  let out = "", err = "";
   proc.exited.then(() => {
     if (!landedFreshCredential(beforeCred, credentialSnapshot(oauthId))) {
-      if (loadSettings().developerMode) console.log(`[oauth] ${oauthId} login left no new credential - not respawning omp`);
+      const f = recordOauthFailure(oauthId, extractOauthFailure(out, err));
+      console.error(`[oauth] ${oauthId} login left no new credential - not respawning omp: ${f.message}`);
       return;
     }
+    clearOauthFailure(oauthId);
     // omp's login writes the fresh token but may leave a stale `disabled_cause` from a prior logout,
     // so the just-fetched credential stays ignored. Clear that one flag (token blob untouched) so the
     // login actually "sticks", THEN respawn omp to pick up the now-active provider.
@@ -1408,9 +1485,9 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
     console.log(`[oauth] ${oauthId} credential landed - respawning omp so its models surface`);
     backend.restart();
   }).catch(() => { /* ignore */ });
-  return new Promise((resolve) => {
-    const dec = new TextDecoder();
-    let out = "", err = "", done = false, ended = 0;
+  const { promise, resolve } = Promise.withResolvers<{ started: boolean; url: string; output: string }>();
+  {
+    let done = false, ended = 0;
     const finish = (url: string) => {
       if (done) return; done = true;
       if (!url && loadSettings().developerMode) {
@@ -1435,7 +1512,8 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
       if (++ended === 2) finish("");
     })();
     setTimeout(() => finish(""), 60_000); // 60s — OTP/MFA flows need time (phone unlock, SMS delay)
-  });
+  }
+  return promise;
 }
 /** Send a device-authorization code to a running broker's stdin (xAI "Grok Build", GitHub device flow, etc.).
  *  The broker prints "Paste the authorization code (or full redirect URL)::" and reads a line from stdin. */
@@ -2272,13 +2350,21 @@ const server = Bun.serve({
       // Fail-safe: a missing key is an actionable note; a synth failure returns the note (never a 500).
       if (p === "/api/brief/audio" && req.method === "POST") {
         const b = await readBody<{ provider?: unknown; voiceId?: unknown }>(req);
-        const provider = b.provider === "local-tts" ? "local-tts" : b.provider === "elevenlabs" ? "elevenlabs" : "openai-tts";
+        const provider = b.provider === "local-tts" ? "local-tts" : b.provider === "elevenlabs" ? "elevenlabs" : b.provider === "dots-tts" ? "dots-tts" : "openai-tts";
         const pickedVoice = typeof b.voiceId === "string" && b.voiceId ? b.voiceId : "";
         const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const script = buildPodcastScript(buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") }));
         let backend: PodcastBackend;
-        if (provider === "local-tts") {
+        if (provider === "dots-tts") {
+          // P-VOICE.6: the podcast through the user's own cloned voices. Host = the picked/stored voice;
+          // Engineer = the next favorite when one exists (mirrors the ElevenLabs pairing below).
+          const v = voiceSettings();
+          const host = pickedVoice || v.ttsVoice || v.ttsVoiceFavorites[0] || "";
+          if (!host) return json({ ok: true, data: { note: "Pick one of your DGX voices first (Settings \u2192 Voice).", audioB64: null, mime: "audio/wav", turns: 0 } });
+          const engineer = v.ttsVoiceFavorites.find((id) => id !== host) || host;
+          backend = new OpenAiCompatibleTtsBackend({ baseUrl: v.dotsTtsUrl, model: v.dotsTtsModel, voices: { Host: host, Engineer: engineer, default: host } });
+        } else if (provider === "local-tts") {
           backend = new OpenAiCompatibleTtsBackend({ baseUrl: process.env.LUCID_TTS_URL || "http://localhost:8880", model: process.env.LUCID_TTS_MODEL || "kokoro", voices: { Host: "af_heart", Engineer: "am_onyx", default: "af_heart" } });
         } else if (provider === "elevenlabs") {
           const key = process.env.ELEVENLABS_API_KEY;
@@ -2311,11 +2397,65 @@ const server = Bun.serve({
         const selected = resolveVoice(provider, provider === v.ttsProvider ? v.ttsVoice : "");
         const engines = await ttsEngines();
         const base = { provider, engines, favorites: v.ttsVoiceFavorites, selected, autoSpeak: v.ttsAutoSpeak, conversation: v.ttsConversation };
+        // P-VOICE.6: dots.tts voices are per-BOX (the user's cloned voices) and fetched live, like
+        // ElevenLabs' per-account list. A dead tunnel returns [] plus the same reason the picker shows.
+        if (provider === "dots-tts") {
+          try {
+            const res = await fetch(`${v.dotsTtsUrl.replace(/\/+$/, "")}/v1/voices`, { signal: AbortSignal.timeout(4000) });
+            return json({ ok: true, data: { ...base, voices: mapDotsVoices(await res.json()) } });
+          } catch (e) {
+            return json({ ok: true, data: { ...base, voices: [], note: clientError(e, `No dots.tts service answered at ${v.dotsTtsUrl} - bring the SSH forward / VPN up, or fix the URL.`) } });
+          }
+        }
         if (provider !== "elevenlabs") return json({ ok: true, data: { ...base, voices: voicesForProvider(provider) } });
         const key = process.env.ELEVENLABS_API_KEY;
         if (!key) return json({ ok: true, data: { ...base, voices: [], note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
         try { return json({ ok: true, data: { ...base, voices: await listElevenVoices({ apiKey: key }) } }); }
         catch (e) { return json({ ok: true, data: { ...base, voices: [], note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
+      }
+      // P-VOICE.7: portable voice endpoints. GET scans the handoff mailbox then lists; import is the
+      // manual-upload fallback (the renderer posts the file's text); activate makes an endpoint THE
+      // speaking engine in one click; remove forgets it.
+      if (p === "/api/voice/endpoints") {
+        const scan = scanVoiceEndpointHandoff();
+        const v = voiceSettings();
+        return json({ ok: true, data: { endpoints: v.voiceEndpoints, active: v.activeVoiceEndpointId, handoffDir: voiceEndpointHandoffDir(), ...scan } });
+      }
+      if (p === "/api/voice/endpoints/import" && req.method === "POST") {
+        const b = await readBody<{ json?: unknown }>(req);
+        let parsedJson: unknown;
+        try { parsedJson = JSON.parse(String(b.json ?? "")); }
+        catch { return json({ ok: false, error: "That file is not JSON." }); }
+        const r = parseVoiceEndpointConfig(parsedJson);
+        if (!r.ok) return json({ ok: false, error: r.reason });
+        const v = importVoiceEndpoint(r.config);
+        return json({ ok: true, data: { endpoints: v.voiceEndpoints, active: v.activeVoiceEndpointId, imported: r.config.id } });
+      }
+      if (p === "/api/voice/endpoints/activate" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const v = activateVoiceEndpoint(typeof b.id === "string" ? b.id : "");
+        return json({ ok: true, data: { endpoints: v.voiceEndpoints, active: v.activeVoiceEndpointId, url: v.dotsTtsUrl } });
+      }
+      if (p === "/api/voice/endpoints/remove" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const v = removeVoiceEndpoint(typeof b.id === "string" ? b.id : "");
+        return json({ ok: true, data: { endpoints: v.voiceEndpoints, active: v.activeVoiceEndpointId } });
+      }
+      // P-VOICE.6: compress a settled reply into a short SPOKEN digest (slow-engine mode). The verbatim
+      // text stays in the composer; only the audio narration shrinks. Uses the session's own completion
+      // seam (backend.complete), fail-soft: any failure returns the empty digest and the caller falls
+      // back to speaking the tail verbatim rather than losing speech entirely.
+      if (p === "/api/voice/digest" && req.method === "POST") {
+        const b = await readBody<{ text?: unknown }>(req);
+        const text = String(b.text ?? "").slice(0, 16_000);
+        if (!text.trim()) return json({ ok: true, data: { digest: "" } });
+        try {
+          const d = digestSpokenReply(text);
+          const out = await backend.complete(d.system, d.user);
+          return json({ ok: true, data: { digest: (out ?? "").trim().slice(0, 1200) } });
+        } catch (e) {
+          return json({ ok: true, data: { digest: "", note: clientError(e, "digest unavailable") } });
+        }
       }
       // P-VOICE.1: transcribe recorded mic audio \u2192 text. Provider from settings: elevenlabs (cloud Scribe)
       // or whisper (offline OpenAI-compatible server). The transcript is ordinary user input (scanned on send).
@@ -2329,11 +2469,17 @@ const server = Bun.serve({
       if (p === "/api/whisper/status") return json({ ok: true, data: whisperRuntimeStatus(whisperDeps()) });
       if (p === "/api/whisper/install" && req.method === "POST") {
         const wb = await readBody<{ tier?: unknown }>(req);
+        // P-STT.7: a dev run with no binary stages the pinned whisper-server FIRST, so Install & start
+        // means what it says on every path (previously it downloaded a model no server could load).
+        const staged = await ensureWhisperBinary();
+        if (staged) return json({ ok: false, data: { ok: false, reason: staged }, error: staged });
         const rr = await installWhisper(whisperDeps(), typeof wb.tier === "string" ? (wb.tier as WhisperTier) : undefined, () => {});
         return json({ ok: rr.ok, data: rr, error: rr.reason });
       }
       if (p === "/api/whisper/start" && req.method === "POST") {
         const wb = await readBody<{ tier?: unknown }>(req);
+        const staged = await ensureWhisperBinary(); // P-STT.7: same stage-on-demand as install
+        if (staged) return json({ ok: false, data: { ok: false, reason: staged }, error: staged });
         const rr = await startWhisper(whisperDeps(), { tier: typeof wb.tier === "string" ? (wb.tier as WhisperTier) : undefined });
         return json({ ok: rr.ok, data: rr, error: rr.reason });
       }
@@ -2362,6 +2508,16 @@ const server = Bun.serve({
             const voiceId = (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice || v.ttsVoiceFavorites[0];
             const out = await elevenLabsSpeak(text, { apiKey: key, voiceId, format: "mp3" });
             return json({ ok: true, data: { audioB64: Buffer.from(out.audio).toString("base64"), mime: out.mime, note: "" } });
+          }
+          // P-VOICE.6: dots.tts speaks the SAME OpenAI /v1/audio/speech shape the Kokoro path uses, so the
+          // one compatible backend covers all three self-hosted/platform engines; only base URL + model differ.
+          if (provider === "dots-tts") {
+            const voice = resolveVoice(provider, (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice);
+            if (!voice) return json({ ok: true, data: { audioB64: null, mime: "audio/wav", note: "Pick one of your DGX voices first (Settings \u2192 Voice)." } });
+            const backend = new OpenAiCompatibleTtsBackend({ baseUrl: v.dotsTtsUrl, model: v.dotsTtsModel, voices: { default: voice } });
+            const r = await backend.synthesize({ title: "read", turns: [{ speaker: "default", text }] });
+            const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
+            return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });
           }
           const kokoro = provider === "local-tts";
           const key = kokoro ? undefined : process.env.OPENAI_API_KEY; // presence guaranteed by the readiness check above
@@ -3358,7 +3514,21 @@ const server = Bun.serve({
         }
         return json({ ok: true, data: { ok: true, kgs, pages, stored } });
       }
-      if (p === "/api/auth") return json({ ok: true, data: providerAuth() });
+      // P-GUIDE.1/.2: bundled advisor guides (renderer/guides/*.html, packaged with the app). The Preview
+      // panel renders LOCAL files by ABSOLUTE path (/api/preview/serve), and only the engine knows where
+      // the packaged renderer tree lives (dev checkout vs installed resources), so this route is the path
+      // oracle the Settings links resolve through. Read-only, no params, no user input touches the path.
+      // Keys come from the shared GUIDE_FILES manifest; a missing file (partial build) is simply omitted,
+      // so the renderer's fail-soft toast handles it instead of the preview 404ing.
+      if (p === "/api/guides") {
+        const out: Record<string, string> = {};
+        for (const [id, file] of Object.entries(GUIDE_FILES)) {
+          const abs = join(ROOT, "guides", file);
+          if (existsSync(abs)) out[id] = abs;
+        }
+        return json({ ok: true, data: out });
+      }
+      if (p === "/api/auth") return json({ ok: true, data: authWithOauthErrors() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
         setKey(String(env), String(key ?? ""));
@@ -4128,6 +4298,17 @@ const server = Bun.serve({
       }
       // P-INTERJECT.1: the unified Processes list (master turn, live lanes, import job, wave-2 browsers).
       if (p === "/api/processes") return json({ ok: true, data: { processes: await buildProcessViews() } });
+      // P-REATTACH.1: re-adopt the RUNNING master turn onto a fresh stream after a socket drop. No body,
+      // no prompt: this only redirects where the live turn's events go. When nothing is running, settle
+      // immediately (the turn the client lost has already persisted; reopening the session shows it).
+      if (p === "/api/chat/attach" && req.method === "POST") {
+        return ndjsonStream("chat-attach", async (emit) => {
+          const a = backend.attachTurn(emit);
+          if (!a.attached) { emit({ type: "token", text: "[the turn already finished while disconnected - reopen this session to see its full reply]" }); emit({ type: "done" }); return; }
+          emit({ type: "token", text: "\n[re-attached to the running turn]\n" });
+          await a.ended;
+        });
+      }
       if (p === "/api/chat" && req.method === "POST") {
         const { text, images, from, share } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown }>(req);
         // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
@@ -4153,12 +4334,35 @@ const server = Bun.serve({
         const counts = collabManager.active ? accessCounts(collabManager.status().participants) : bodyShare;
         const awareness = buildShareAwareness(counts);
         const modelPrompt = awareness ? `${awareness}\n\n${prompt}` : prompt;
-        return ndjsonStream("chat", (emit) => backend.prompt(modelPrompt, (e) => {
-          // acp_backend's ChatEvent and bridge's are structurally identical (kept in parity); bridge over the
-          // separate declarations at this one boundary.
-          if (collabManager.active) { try { collabManager.tapEvent(e as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ } }
+        // P-REATTACH.1 + P-INTERJECT.1: a prompt that arrives while the master turn is RUNNING is an
+        // INTERJECTION, not a superseding turn. The old path called backend.prompt() unconditionally,
+        // which silently stole the running turn's listener and raced a second session/prompt onto the
+        // same session - omp cancelled the in-flight turn (stopReason=cancelled), the new stream never
+        // saw the events, and the composer froze on a blinking cursor while work continued invisibly.
+        // Now: attach THIS stream as the running turn's live output, then queue the text on the
+        // interject store (delivered into the turn at its next tool boundary). Attach BEFORE queueing:
+        // if the turn ended in the race, fall through to a normal prompt and no orphan note is left.
+        const runPrompt = (emit: (e: unknown) => void) => backend.prompt(modelPrompt, (e) => {
+          if (collabManager.active) {
+            // acp_backend's ChatEvent and collab's are structurally identical (kept in parity); inference
+            // cannot unify the separate declarations, so bridge once under a named binding.
+            const tapped = e as unknown as Parameters<typeof collabManager.tapEvent>[0];
+            try { collabManager.tapEvent(tapped); } catch { /* non-fatal */ }
+          }
           emit(e);
-        }, imgs));
+        }, imgs);
+        if (backend.midTurn().busy) {
+          const noteText = prompt.trim();
+          return ndjsonStream("chat-interject", async (emit) => {
+            const a = backend.attachTurn(emit);
+            // The turn ended in the check-to-attach race: no note was queued, so run a normal turn.
+            if (!a.attached) { await runPrompt(emit); return; }
+            if (noteText) addInterject("master", noteText);
+            emit({ type: "token", text: "[the agent is mid-turn - your message was handed to it as a note and will be folded in at the next step. Watching the running turn\u2026]\n" });
+            await a.ended;
+          });
+        }
+        return ndjsonStream("chat", (emit) => runPrompt(emit));
       }
       // P-COLLAB.3 (ADR-0192): live session sharing. `status` is the Share panel's poll; `start` mints a
       // room + view/full links + stands up the host (fail-closed if no relay is authorized); `stop` ends it.

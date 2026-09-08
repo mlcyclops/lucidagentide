@@ -8,8 +8,17 @@
 // or a cached session would be wrong AND a data-at-rest surface). Same-origin shell requests are NETWORK-FIRST
 // so a deployed fix reaches an installed phone immediately; the cache is offline fallback only.
 
-const CACHE = "lucid-remote-v6";
+const CACHE = "lucid-remote-v7";
 const SHELL = ["./", "./index.html", "./app.js", "./firebase_auth.js", "./config.js", "./manifest.webmanifest", "./icon.svg?v=3"];
+
+// P-REMOTE.13 (the "sometimes I get the OLD app" bug): "network-first" was really HTTP-CACHE-first.
+// The shell files ship under STABLE names (app.js, index.html) and the hosting CDN serves them with a
+// nonzero max-age, so a plain fetch() here could be answered by the browser's HTTP cache with a WEEKS-old
+// app.js - no network involved - and the ok-response branch below then wrote that stale copy back into
+// the SW cache, extending the rot. `cache: "no-cache"` forces a conditional revalidation (ETag) all the
+// way to the CDN, so a deployed fix reaches the phone on the next launch; the SW cache stays what it was
+// meant to be: OFFLINE fallback only.
+const freshen = (request) => new Request(request, { cache: "no-cache" });
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -26,7 +35,7 @@ self.addEventListener("fetch", (e) => {
   // Same-origin contains only the static shell. Session/auth/checkout traffic is cross-origin and never cached.
   if (e.request.method !== "GET" || url.origin !== self.location.origin) return;
   e.respondWith(
-    fetch(e.request).then((response) => {
+    fetch(freshen(e.request)).then((response) => {
       if (response.ok) {
         const copy = response.clone();
         e.waitUntil(caches.open(CACHE).then((cache) => cache.put(e.request, copy)));

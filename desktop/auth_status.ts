@@ -28,7 +28,13 @@ export interface ProviderAuth {
   oauthActive: boolean; oauthIdentity?: string;
   keySet: boolean; keyLast4?: string;
   fields?: ProviderFieldAuth[];
+  /** Why the LAST OAuth attempt died after the browser said "success" (broker exited without a
+   *  credential). Set by dev.ts from the drained broker output; absent once a login lands. */
+  oauthError?: { message: string; at: number };
 }
+
+/** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). */
+export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
 
 // The AskSage gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY. Surfaced ABOVE the
 // Providers section in its own card (it routes through an accredited gov proxy, not a direct provider).
@@ -115,7 +121,7 @@ function vaultRows(): any[] {
   } catch { return []; }
 }
 
-export function providerAuth(): { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] } {
+export function providerAuth(): ProviderAuthSnapshot {
   const rows = vaultRows();
   const keys = load().keys ?? {};
   const valueFor = (env: string): string | undefined => (env ? (keys[env] ?? process.env[env]) : undefined) || undefined;

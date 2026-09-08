@@ -14,7 +14,7 @@
 // (ElevenLabs is per-ACCOUNT: premade + cloned voices), and the renderer renders whatever comes back.
 
 /** The TTS engines LUCID can speak with. Mirrors `VoiceSettings["ttsProvider"]` in desktop/settings_store.ts. */
-export type TtsProviderId = "elevenlabs" | "openai-tts" | "local-tts";
+export type TtsProviderId = "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
 
 /** One selectable voice. Same shape the ElevenLabs list parses into, so the picker renders both identically. */
 export interface CatalogVoice {
@@ -59,10 +59,23 @@ export const TTS_PROVIDERS: readonly TtsProviderInfo[] = [
   {
     id: "local-tts",
     label: "Kokoro",
-    blurb: "Offline on this machine · air-gap safe, no key",
+    blurb: "Offline on this machine \u00b7 air-gap safe, no key",
     cloud: false,
     keyEnv: null,
     liveList: false,
+  },
+  {
+    // P-VOICE.6: rednote-hilab dots.tts served from the user's own box (a DGX over WireGuard/SSH forward).
+    // Self-hosted like Kokoro (no key, audio stays on the user's hardware), but the voice list is LIVE:
+    // the service registers user-cloned voices (GET /v1/voices) and speaks the OpenAI /v1/audio/speech
+    // shape, so LUCID's OpenAI-compatible backend drives it unchanged. Synthesis is SLOW (about 5-10s a
+    // clip on a GB10) - the spoken-digest path exists for exactly this engine.
+    id: "dots-tts",
+    label: "dots.tts (DGX)",
+    blurb: "Self-hosted over VPN \u00b7 your cloned voices, audio never leaves your boxes",
+    cloud: false,
+    keyEnv: null,
+    liveList: true,
   },
 ] as const;
 
@@ -134,6 +147,11 @@ export function ttsEngineStatus(id: string, i: TtsReadinessInput): { ready: bool
       ? { ready: true, reason: "" }
       : { ready: false, reason: `No Kokoro server answered at ${i.localUrl}. Start one there, or pick a cloud engine.` };
   }
+  if (p === "dots-tts") {
+    return i.localUp
+      ? { ready: true, reason: "" }
+      : { ready: false, reason: `No dots.tts service answered at ${i.localUrl}. Bring the tunnel up (ssh -L 8084:127.0.0.1:8084 to the DGX, or your nginx /voice/ proxy), or fix the URL in Settings \u2192 Voice.` };
+  }
   if (i.keySet) return { ready: true, reason: "" };
   if (p === "elevenlabs") return { ready: false, reason: "Add your ElevenLabs API key in Settings \u2192 Voice." };
   return {
@@ -146,7 +164,7 @@ export function ttsEngineStatus(id: string, i: TtsReadinessInput): { ready: bool
 
 /** Fold any incoming string to a valid engine id. Unknown/empty → "elevenlabs" (the shipped default). */
 export function normalizeTtsProvider(id: string | undefined | null): TtsProviderId {
-  return id === "openai-tts" || id === "local-tts" || id === "elevenlabs" ? id : "elevenlabs";
+  return id === "openai-tts" || id === "local-tts" || id === "elevenlabs" || id === "dots-tts" ? id : "elevenlabs";
 }
 
 /** The STATIC voices for an engine. ElevenLabs returns [] — its list is per-account and fetched live. */
@@ -169,7 +187,25 @@ export function defaultVoiceFor(id: string): string {
 export function resolveVoice(id: string, selected: string | undefined | null): string {
   const p = normalizeTtsProvider(id);
   const want = (selected ?? "").trim();
-  if (p === "elevenlabs") return want;
+  // Live-list engines (per-account ElevenLabs, per-box dots.tts): the catalog cannot validate the id,
+  // so the stored choice passes through untouched (the service 404s an unknown voice with a clear error).
+  if (p === "elevenlabs" || p === "dots-tts") return want;
   if (!want) return defaultVoiceFor(p);
   return voicesForProvider(p).some((v) => v.voiceId === want) ? want : defaultVoiceFor(p);
+}
+
+/** P-VOICE.6: parse the dots.tts `GET /v1/voices` payload (`{ ok, voices: [{ name, warmed }] }`) into
+ *  catalog voices. External network JSON, so every field is guard-narrowed; malformed entries are
+ *  dropped, never thrown - an empty list plus the readiness probe tells the UI what is wrong. The
+ *  voice NAME is the id (that is what /v1/audio/speech takes as `voice`); `warmed` becomes the
+ *  category chip so a cold voice's extra conditioning latency is visible before picking it. */
+export function mapDotsVoices(payload: unknown): CatalogVoice[] {
+  if (!payload || typeof payload !== "object" || !("voices" in payload) || !Array.isArray(payload.voices)) return [];
+  const out: CatalogVoice[] = [];
+  for (const v of payload.voices) {
+    if (!v || typeof v !== "object" || !("name" in v) || typeof v.name !== "string" || !v.name.trim()) continue;
+    const warmed = "warmed" in v && v.warmed === true;
+    out.push({ voiceId: v.name, name: v.name, category: warmed ? "warmed" : "cold", description: warmed ? "Conditioning cached on the DGX - speaks at full speed" : "First request will be slower while conditioning derives" });
+  }
+  return out;
 }
