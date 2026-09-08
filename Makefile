@@ -727,6 +727,14 @@ demo-P-SECACK.1: ## P-SECACK.1 (ADR-0170): reviewed security rows leave the acti
 demo-P-RESUME.1: ## P-RESUME.1 (ADR-0171): a resumed session keeps its thinking + tool-call + tool-failure history - per-session lucid-steps sidecar (omp's transcript untouched), turn anchors only move forward, quarantines not duplicated, hostile text escaped, corrupt sidecar degrades safely
 	$(BUN) run desktop/scripts/demo_p_resume_1.ts
 
+.PHONY: demo-P-CTX.1
+demo-P-CTX.1: ## P-CTX.1 (ADR-0350): the prompt-audit - a REAL per-block token breakdown of the assembled request, offline (echo model, in-memory sessions, MCP off), with omp's OWN counters as the parity anchor; sections sum exactly (residuals are differences), extension tools attributed by set difference, absences declared never fabricated
+	$(BUN) run harness/scripts/demo_pctx1.ts
+
+.PHONY: prompt-audit
+prompt-audit: ## Measure the assembled request's non-message baseline on THIS repo (same script as demo-P-CTX.1; flags: --json --window N --target N --detail N --no-extensions --live-discovery)
+	$(BUN) run harness/scripts/demo_pctx1.ts --detail 12
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data
