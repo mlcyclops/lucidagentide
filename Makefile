@@ -735,6 +735,10 @@ demo-P-CTX.1: ## P-CTX.1 (ADR-0350): the prompt-audit - a REAL per-block token b
 prompt-audit: ## Measure the assembled request's non-message baseline on THIS repo (same script as demo-P-CTX.1; flags: --json --window N --target N --detail N --no-extensions --live-discovery)
 	$(BUN) run harness/scripts/demo_pctx1.ts --detail 12
 
+.PHONY: demo-P-TEST.W1
+demo-P-TEST.W1: ## P-TEST.W1 (ADR-0351): the gate is honestly green on Windows - the 8 environmental fails fixed at their true source: auth_status isolated from the machine's persisted settings (LUCID_GUI_SETTINGS_FILE seam), fs_browse real-FS tests inject the HOST platform (posix semantics stay via fully-synthetic deps), lucid_acp asset assertions separator-agnostic
+	$(BUN) test $(TEST_IGNORES) desktop/auth_status.test.ts desktop/fs_browse.test.ts harness/launcher/lucid_acp.test.ts
+
 .PHONY: dashboards
 dashboards: ## Materialize dashboard CSVs from a DuckDB into observable/docs/data (DB=path)
 	$(BUN) run harness/scripts/materialize_dashboards.ts $(DB) observable/docs/data

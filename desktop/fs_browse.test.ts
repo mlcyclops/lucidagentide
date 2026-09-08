@@ -19,8 +19,11 @@ writeFileSync(join(HOME, "afile.txt"), "x");
 afterAll(() => rmSync(TMP, { recursive: true, force: true }));
 
 describe("listDir — full-tree (unmanaged)", () => {
+  // These blocks browse the REAL temp tree, so the path module must match the HOST: injecting a
+  // fixed "linux" made path.posix resolve Windows temp paths (C:\...) as RELATIVE, prefixing the
+  // cwd. Posix-specific semantics (below) stay testable by injecting platform AND synthetic deps.
   test("null path lands on home and lists only sub-DIRECTORIES (no files, no dotfiles)", () => {
-    const d = listDir(null, { home: HOME, platform: "linux" });
+    const d = listDir(null, { home: HOME, platform: process.platform });
     expect(d.path).toBe(resolve(HOME));
     expect(d.dirs.map((x) => x.name)).toEqual(["proj"]); // afile.txt + nothing hidden
     expect(d.dirs[0].isGit).toBe(true); // proj has a .git
@@ -28,36 +31,43 @@ describe("listDir — full-tree (unmanaged)", () => {
   });
 
   test("can browse ABOVE home, up toward the filesystem root", () => {
-    const atRoot = listDir(ROOT, { home: HOME, platform: "linux" });
+    const atRoot = listDir(ROOT, { home: HOME, platform: process.platform });
     // sibling + home are dirs; .hidden is suppressed
     expect(atRoot.dirs.map((x) => x.name).sort()).toEqual(["home", "sibling"]);
     expect(atRoot.parent).toBe(resolve(TMP)); // keeps going up — not clamped to home
   });
 
   test("parent of the filesystem root is null (top of the tree)", () => {
-    const d = listDir("/", { home: HOME, platform: "linux" });
+    // Posix-root semantics on any host: fully injected deps so the host filesystem never leaks in.
+    const d = listDir("/", {
+      home: "/home/u",
+      platform: "linux",
+      exists: () => true,
+      isDir: () => true,
+      readdir: () => [],
+    });
     expect(d.parent).toBeNull();
   });
 
   test("a non-existent / unreadable target falls back to home, never throws", () => {
-    const d = listDir(join(ROOT, "nope-does-not-exist"), { home: HOME, platform: "linux" });
+    const d = listDir(join(ROOT, "nope-does-not-exist"), { home: HOME, platform: process.platform });
     expect(d.path).toBe(resolve(HOME));
   });
 });
 
 describe("listDir — managed workspaceRoots (only tightens)", () => {
   test("a target outside the allowed roots snaps back into the root", () => {
-    const d = listDir("/etc", { home: HOME, platform: "linux", allowedRoots: [HOME] });
+    const d = listDir("/etc", { home: HOME, platform: process.platform, allowedRoots: [HOME] });
     expect(d.path).toBe(resolve(HOME));
   });
 
   test("never offers a parent above an allowed root", () => {
-    const d = listDir(HOME, { home: HOME, platform: "linux", allowedRoots: [HOME] });
+    const d = listDir(HOME, { home: HOME, platform: process.platform, allowedRoots: [HOME] });
     expect(d.parent).toBeNull(); // HOME is the managed ceiling
   });
 
   test("navigation within an allowed root still works", () => {
-    const d = listDir(join(HOME, "proj"), { home: HOME, platform: "linux", allowedRoots: [HOME] });
+    const d = listDir(join(HOME, "proj"), { home: HOME, platform: process.platform, allowedRoots: [HOME] });
     expect(d.path).toBe(resolve(HOME, "proj"));
     expect(d.parent).toBe(resolve(HOME)); // up to the root, but no further
   });

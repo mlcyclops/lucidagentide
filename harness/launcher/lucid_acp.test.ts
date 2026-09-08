@@ -310,7 +310,9 @@ test("buildTuiArgs without lucidTheme carries no theme extension (cosmetic = opt
 });
 
 test("assets exposes the theme extension beside the gates", () => {
-  expect(assets("/repo").lucidTheme).toBe("/repo/harness/omp/lucid_theme_extension.ts");
+  // join() emits host separators; the asset path feeds a spawn argv where either form works,
+  // so the assertion is separator-agnostic instead of failing on every Windows checkout.
+  expect(assets("/repo").lucidTheme.replace(/\\/g, "/")).toBe("/repo/harness/omp/lucid_theme_extension.ts");
 });
 
 test("runTui loads the skin -e in the spawned argv (repo asset exists), gate still first", async () => {
@@ -397,8 +399,9 @@ test("buildTuiArgs WITHOUT lucidWelcome/quietConfig has no --config entry", () =
 });
 
 test("assets exposes the welcome extension and quiet config", () => {
-  expect(assets("/repo").lucidWelcome).toBe("/repo/harness/omp/lucid_welcome_extension.ts");
-  expect(assets("/repo").lucidTuiConfig).toBe("/repo/harness/omp/lucid_tui.config.yml");
+  const posixy = (p: string): string => p.replace(/\\/g, "/");
+  expect(posixy(assets("/repo").lucidWelcome)).toBe("/repo/harness/omp/lucid_welcome_extension.ts");
+  expect(posixy(assets("/repo").lucidTuiConfig)).toBe("/repo/harness/omp/lucid_tui.config.yml");
 });
 
 test("runTui welcome ON: spawned argv includes welcome -e after theme and --config for quiet overlay", async () => {
