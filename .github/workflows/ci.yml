@@ -72,9 +72,39 @@ jobs:
       - name: Packaged-boot guard (release boots under the packaging filter)
         run: bun test desktop/packaged_boot.test.ts
 
+  # ADR-0352 (P-TEST.W2): the developer machine is Windows, CI was Linux-only, and the gap grew
+  # 8 standing environmental test failures that no PR ever saw (ADR-0351 fixed them). This leg
+  # replicates the LOCAL gate (`make test`'s bun half: the full suite under TEST_IGNORES) on
+  # windows-latest, so path-separator / path-module / machine-state rot fails the PR that
+  # introduces it instead of a developer's baseline ritual days later.
+  gate-windows:
+    name: Full test gate (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install (root)
+        run: bun install
+
+      - name: Install (desktop)
+        working-directory: desktop
+        run: bun install
+
+      # The same exclusion-only scope as the local gate (ADR-0303: scope by exclusion, never by
+      # positional pattern) - vendored trees and the packaged release copy stay out.
+      - name: Full test suite (Windows)
+        run: bun test --path-ignore-patterns="desktop/release/**" --path-ignore-patterns="vendor/**" --path-ignore-patterns="lucidaddon_audit/**"
+
   scanner:
-    name: Unicode scanner tests (Python)
-    runs-on: ubuntu-latest
+    name: Unicode scanner tests (Python, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
