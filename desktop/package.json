@@ -189,14 +189,14 @@
   "dependencies": {
     "@types/katex": "^0.16.8",
     "electron-updater": "^6.3.9",
-    "katex": "^0.17.0",
-    "monaco-editor": "^0.55.1"
+    "katex": "^0.18.7",
+    "monaco-editor": "^0.56.0"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "electron": "^44.0.0",
     "electron-builder": "^25.1.8",
     "png-to-ico": "^3.0.1",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
