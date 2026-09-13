@@ -83,6 +83,17 @@ describe("KbGraphStore", () => {
     expect(await store.getPage("missing-page")).toBeUndefined();
   });
 
+  // BUDGET, not a mask: this case performs ~419 REAL DuckDB round trips (105 pages + 104 star edges +
+  // 210 clique edges), each an autocommit INSERT prepared and executed through the node binding. That is
+  // about 5s of wall clock, so the default 5000ms budget is too tight and the case flaked at 5470ms in a
+  // full-suite run (391 files contending for disk) while passing in 7.3s for the whole file in isolation.
+  // A gate that is red half the time is the ADR-0351 disease, so the budget is stated explicitly here.
+  //
+  // The fixture sizes are LOAD-BEARING and must not be shrunk to buy speed: 105 pages is what exceeds the
+  // 100-page cap, and the 21-node clique's 210 edges are what exceed the 200-edge cap, so both dimensions
+  // are genuinely exercised. Shrinking either one deletes the coverage instead of the cost. The real cost
+  // fix would be a bulk-insert seam on KbGraphStore (its `db` is private by design), which is a production
+  // API change and does not belong in a test-hygiene fix.
   test("dense snapshots cap both dimensions deterministically while retaining the complete queryable graph", async () => {
     const ids: string[] = [];
     for (let i = 0; i < 105; i++) {
@@ -128,7 +139,7 @@ describe("KbGraphStore", () => {
     expect(fullPages.every((p) => p.body_md === `Full body ${ids.indexOf(p.page_id)}`)).toBe(true);
     expect(await store.listPages("concept")).toEqual(fullPages);
     expect(allLinks).toHaveLength(snapshot.totalLinks);
-  });
+  }, 20_000);
 
   test("the changelog is append-only + queryable per document", async () => {
     const docId = await store.addDocument({ sourcePath: "s.md", title: "S", sha256: "d", classification: "U", trustLabel: "trusted", status: "compiled" });
