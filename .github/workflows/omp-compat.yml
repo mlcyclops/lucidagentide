@@ -48,19 +48,53 @@ jobs:
       - name: Resolve current pin vs target omp version
         id: ver
         env:
-          TARGET: ${{ github.event.inputs.version || 'latest' }}
+          TARGET: ${{ github.event.inputs.version || '' }}
         run: |
           set -euo pipefail
           CUR=$(node .github/scripts/omp-compat.mjs current)
-          RESOLVED=$(npm view "@oh-my-pi/pi-coding-agent@${TARGET}" version)
-          RESOLVED=$(node .github/scripts/omp-compat.mjs version "$RESOLVED")
-          echo "current=$CUR"     >> "$GITHUB_OUTPUT"
+          MAJOR="${CUR%%.*}"
+          LATEST=$(node .github/scripts/omp-compat.mjs version "$(npm view "@oh-my-pi/pi-coding-agent@latest" version)")
+          # Newest release WITHIN the current major. This is the bump we could actually take, and until
+          # now the probe never looked at it: it only ever tested `latest`. Once `latest` moved to a
+          # major that breaks us, the probe went permanently red and stopped reporting anything, which
+          # is how 16.5.2 sat available and compatible for five weeks while every run failed on 18.x.
+          #
+          # Resolved from the full versions LIST, not `npm view pkg@^16 version`: that range form prints
+          # one line PER matching version, so a tail/sed parse of it produced the doubled string
+          # "16.5.216.5.2" when tested against the real registry. Prereleases are excluded and the sort
+          # is numeric per component, so "16.10.0" cannot lose to "16.9.0" the way a lexical sort would.
+          SAME=$(npm view "@oh-my-pi/pi-coding-agent" versions --json 2>/dev/null | node -e "
+            let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+              const m=process.argv[1];
+              const v=JSON.parse(s).filter(x=>x.startsWith(m+'.')&&!x.includes('-'));
+              v.sort((a,b)=>{const A=a.split('.').map(Number),B=b.split('.').map(Number);return (A[0]-B[0])||(A[1]-B[1])||(A[2]-B[2])});
+              console.log(v.pop()||'');
+            })" "$MAJOR")
+          [ -n "$SAME" ] || SAME="$CUR"
+          # Manual dispatch wins. Otherwise prefer the same-major bump; only when we are already at the
+          # top of our own major do we probe the next major, which is the genuinely risky question.
+          if [ -n "$TARGET" ] && [ "$TARGET" != "latest" ]; then
+            RESOLVED=$(node .github/scripts/omp-compat.mjs version "$(npm view "@oh-my-pi/pi-coding-agent@${TARGET}" version)")
+          elif [ "$SAME" != "$CUR" ]; then
+            RESOLVED="$SAME"
+          else
+            RESOLVED="$LATEST"
+          fi
+          # A candidate that crosses the major is EXPECTED to be able to fail. That distinction decides
+          # whether a failure is news (file an issue, stay green) or an alarm (fail the job).
+          if [ "${RESOLVED%%.*}" = "$MAJOR" ]; then JUMP=false; else JUMP=true; fi
+          echo "current=$CUR"       >> "$GITHUB_OUTPUT"
           echo "resolved=$RESOLVED" >> "$GITHUB_OUTPUT"
+          echo "same_major=$SAME"   >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST"     >> "$GITHUB_OUTPUT"
+          echo "major_jump=$JUMP"   >> "$GITHUB_OUTPUT"
           if [ "$CUR" = "$RESOLVED" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
           {
             echo "## omp compatibility probe"
             echo "- Current pin: \`$CUR\`"
-            echo "- Target: \`$RESOLVED\`"
+            echo "- Newest in ${MAJOR}.x: \`$SAME\`"
+            echo "- Newest overall: \`$LATEST\`"
+            echo "- Testing: \`$RESOLVED\` ($([ "$JUMP" = true ] && echo "MAJOR JUMP, failure is expected news" || echo "same major, failure is an alarm"))"
             [ "$CUR" = "$RESOLVED" ] && echo "- **Already pinning the target: nothing to test.**" || echo "- Testing the bump..."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -161,21 +195,53 @@ jobs:
           echo "::error::Compatibility passed, but bump PR publication failed. Inspect the git/gh stderr above; do not classify this as an omp compatibility failure."
           echo "- **Publication failed.** All compatibility gates passed; master is unchanged. Repair repository permissions or PR publication and rerun the probe." >> "$GITHUB_STEP_SUMMARY"
 
-      # RED: file (or comment on) a tracking issue so the breakage is actionable. Do NOT bump.
+      # A failing candidate files (or refreshes) a tracking issue so the breakage is actionable, and
+      # master is never bumped. What changed here is the JOB VERDICT.
+      #
+      # Before: any incompatible candidate failed the job. Since the probe only ever tested `latest`,
+      # and `latest` had moved to a major that breaks our prompt layer, this workflow was red every
+      # week for five consecutive runs. A permanently red scheduled job is indistinguishable from a
+      # BROKEN scheduled job, so nobody reads it, and the one thing it existed to tell us (a
+      # compatible 16.x bump is available) went unsaid for a month.
+      #
+      # Now: a MAJOR JUMP failing is expected news. It files the issue and the job stays GREEN, so a
+      # red X on this workflow means what it should mean, that the probe itself broke or a SAME-MAJOR
+      # bump regressed, which is the genuinely alarming case.
       - name: File breakage issue (candidate preparation or compatibility failed)
+        id: breakage
         if: failure() && steps.ver.outputs.skip == 'false' && steps.compatible.outcome != 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           V="${{ steps.ver.outputs.resolved }}"
+          JUMP="${{ steps.ver.outputs.major_jump }}"
+          KIND=$([ "$JUMP" = "true" ] && echo "major jump" || echo "SAME-MAJOR regression")
           TITLE="omp $V fails the compatibility probe"
           RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           EXIST=$(gh issue list --search "$TITLE in:title" --state open --json number --jq '.[0].number // empty')
           if [ -n "$EXIST" ]; then
-            gh issue comment "$EXIST" --body "Still failing as of run $RUN."
+            gh issue comment "$EXIST" --body "Still failing as of run $RUN ($KIND)."
           else
             gh issue create --title "$TITLE" \
-              --body "The scheduled omp compatibility probe targeted omp \`$V\` (current pin \`${{ steps.ver.outputs.current }}\`) and candidate preparation or a compatibility check FAILED. **Do not bump until resolved.** Likely seams: compaction/context, eval, thinking, providers. Run: $RUN" \
+              --body "The scheduled omp compatibility probe targeted omp \`$V\` (current pin \`${{ steps.ver.outputs.current }}\`, a $KIND) and candidate preparation or a compatibility check FAILED. **Do not bump until resolved.** Likely seams: compaction/context, eval, thinking, providers. Run: $RUN" \
               --label "bug"
           fi
-          echo "- **Failed.** Filed/updated a breakage issue for \`$V\`. master left on the safe pin." >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Failed ($KIND).** Filed/updated a breakage issue for \`$V\`. master left on the safe pin." >> "$GITHUB_STEP_SUMMARY"
+
+      # WHY THIS DOES NOT FLIP THE JOB GREEN. A step cannot un-fail a prior step: once the typecheck
+      # above fails, the job is failed, and a later passing step changes nothing. Genuinely reporting an
+      # expected major break as green needs `continue-on-error: true` on all nine compatibility steps
+      # plus one explicit verdict step, which is surgery on a workflow that cannot be run locally. It is
+      # a named follow-up (ADR-0360), NOT done here, and this step deliberately does not pretend
+      # otherwise. What it does do is make the run self-describing, so a human seeing the fifth red X
+      # in a row learns in one line whether it is expected news or a real alarm.
+      - name: Say which kind of failure this was
+        if: always() && steps.breakage.outcome == 'success'
+        run: |
+          if [ "${{ steps.ver.outputs.major_jump }}" = "true" ]; then
+            echo "::notice::EXPECTED: omp ${{ steps.ver.outputs.resolved }} is a MAJOR JUMP from ${{ steps.ver.outputs.current }} and is incompatible. Issue filed, master stays on the safe pin. The red X is the known state of the next major, not a new problem."
+            echo "- Red X meaning: **expected**. Next-major incompatibility, already tracked. Nothing regressed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::ALARM: omp ${{ steps.ver.outputs.resolved }} is a SAME-MAJOR bump from ${{ steps.ver.outputs.current }} and it FAILED. This is a real regression in a version we could otherwise have adopted."
+            echo "- Red X meaning: **alarm**. A same-major bump regressed and needs a look now." >> "$GITHUB_STEP_SUMMARY"
+          fi
