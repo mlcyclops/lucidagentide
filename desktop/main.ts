@@ -17,7 +17,8 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
-import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
+import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtime.ts";
+import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
 import { createSplash, setSplashStatus } from "./splash.ts";
 import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
 import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDirWritable, type WriteProbe } from "./engine_boot.ts";
@@ -844,6 +845,21 @@ app.whenReady().then(async () => {
     runtimeEnv = await ensureRuntimes((s) => setSplashStatus(splash, s));
   } catch (e) {
     console.warn("[main] runtime bootstrap failed (continuing):", (e as Error).message);
+  }
+  // P-OMP-BOOT.1 (ADR-0357): say it ONCE, HERE, where a human is looking. If provisioning could not
+  // produce a runnable omp then no model can run at all, and the reported v2.2.0 outage proved what
+  // happens when we stay quiet: dead turns on about half of all launches, 192 identical stack traces
+  // buried in engine.log, and nothing on screen. This fires only when NOTHING is runnable; a merely
+  // SLOW probe is indeterminate, not missing, so findOmp still returns a bin and this stays silent
+  // (ADR-0358, which is also where the earlier "ten days" phrasing here was corrected).
+  // The launch continues on purpose: the workspace, editor, settings and Providers UI are all still
+  // useful, and the remedy is often entered there. It continues with the user INFORMED.
+  // `ompResolution()` is memoized from the bootstrap probe, so this costs nothing extra and still names
+  // every path that was tried, which is exactly what the earlier field report lacked.
+  if (!runtimeEnv.LUCID_OMP_BIN) {
+    const report = ompUnavailableReport(ompResolution());
+    console.error(`[main] ${report.title}\n${report.detail}`);
+    dialog.showErrorBox(report.title, report.detail);
   }
 
   // os_crypt convergence, backfill direction: on a machine that only ever ran port-suffixed instances

@@ -326,7 +326,11 @@ export class FleetLaneManager {
     let id = `lane-${randomUUID().slice(0, 8)}`;
     while (this.#lanes.has(id)) id = `lane-${randomUUID().slice(0, 8)}`;
     const t = this.#deps.now();
-    const plan = this.#deps.argv();
+    // P-GATE-PATH.1 (ADR-0356): the argv thunk REFUSES when the security gate is not on disk (there is
+    // no ungated lane). Catch it here so the card shows the reason, like every other refusal above,
+    // instead of rejecting spawn() as an unhandled error.
+    let plan: { cmd: string; args: string[] };
+    try { plan = this.#deps.argv(); } catch (e) { return { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
     const lane: Lane = {
       id,
       name: (opts.name ?? "").trim() || basename(cwd),
@@ -887,7 +891,10 @@ export class FleetLaneManager {
   async #recover(lane: Lane): Promise<{ ok: boolean; reason?: string }> {
     lane.pending?.resolve(false);
     try { lane.client.stop(); } catch { /* already dead */ }
-    const plan = this.#deps.argv();
+    // P-GATE-PATH.1 (ADR-0356): a revive is a fresh spawn, so it re-asks for the gated argv and refuses
+    // the same way. A lane must never come back to life ungated.
+    let plan: { cmd: string; args: string[] };
+    try { plan = this.#deps.argv(); } catch (e) { return { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
     lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, this.#deps.env?.(lane.id) ?? {});
     this.#wire(lane);
     this.#setStatus(lane, "starting");

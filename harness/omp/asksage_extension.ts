@@ -140,7 +140,8 @@ export default function asksageExtension(pi: any): void {
     // non-negotiable for the agent, so omit the effort knob here (the models still reason at their
     // default effort). Moving this route to /v1/responses (which supports both) is the eventual upgrade.
     // maxTokensField is pinned defensively - the gateway rejects the legacy `max_tokens` on 5.x too
-    // (omp 16.1.20 already picks max_completion_tokens; the pin survives an omp default change).
+    // (omp already picks max_completion_tokens; the pin survives an omp default change, which is the
+    // whole point of pinning it rather than naming whichever omp version happened to be current).
     pi.registerProvider("asksage-openai", {
       baseUrl: `${base}/openai/v1`,
       api: "openai-completions",

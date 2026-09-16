@@ -52,6 +52,24 @@ test("a BURST never refuses a lane, even pegged - only a HELD line does; a bad c
   expect(bad.reason).toContain("not a directory");
 }, TIMEOUT);
 
+// P-GATE-PATH.1 (ADR-0356): the argv thunk (acp_backend.fleetLaneArgv) REFUSES when the security gate is
+// not on disk, because there is no such thing as an ungated lane. That refusal has to arrive as a named
+// reason on the card like every other one, not as a rejected promise from spawn(), and above all it must
+// not leave a half-built lane in the map for the grid to render as if it were alive.
+test("a gate-less argv refuses the lane by NAME and creates nothing", async () => {
+  const refusal = "refusing to start the agent: the security gate extension is not on disk";
+  live = new FleetLaneManager({
+    argv: () => { throw new Error(refusal); },
+    masterModel: () => "master-model-a",
+    sample: async () => healthy,
+  });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  expect(r.ok).toBe(false);
+  expect(r.reason).toBe(refusal);
+  expect(r.lane).toBeUndefined();
+  expect((await live.status()).lanes).toEqual([]); // no orphan lane in the map
+}, TIMEOUT);
+
 // P-FLEET.L16 (the frozen "Spawning\u2026" button): a filesystem that never answers the directory check
 // (a OneDrive dehydrated placeholder, a dead network drive) must become a NAMED refusal on the stat
 // clock - never a wedge. The old statSync blocked the whole event loop, so no timeout could even run.

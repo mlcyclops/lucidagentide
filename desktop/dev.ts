@@ -13,6 +13,7 @@
 
 import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { ndjsonStream } from "./chat_stream.ts";
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { renderTurnEvalReport, evalMetricsForTurn, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
@@ -117,14 +118,14 @@ import { previewImageHtml } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-02
 // instead of a silently blank page. previewTextDocument renders the non-markup kinds (markdown, json,
 // csv, txt, log, ...) as a readable document so a model can finally show a report it just wrote.
 import { blockedRefsMessage, findBlockedRefs, injectBlockedRefsBanner, inlinePreviewAssets, previewTextDocument } from "./preview_inline.ts";
-import { injectPreviewBridge, injectPreviewShim } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge; P-PREVIEW.13: the early sandbox shim
+import { injectPreviewBridge, injectPreviewShim, injectPreviewZoom } from "./preview_bridge.ts"; // Preview sandbox bridges
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
-import { resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
+import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
-import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
+import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 // CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
@@ -349,7 +350,7 @@ import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
 import type { CompleteFn } from "../harness/personal/distiller.ts";
 import { homedir } from "node:os";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { listDir } from "./fs_browse.ts";
 import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
@@ -1022,24 +1023,37 @@ function agedResources(data: CreatorResourcesData, now: number): CreatorResource
 // actually running it (`--version`) and falls through to one that works.
 //
 // Cached because the probe spawns: the broker, logout, and every later call reuse one answer.
+// P-OMP-BOOT.1 (ADR-0357): set once by ompBin() when NOTHING runs. Read by the request catch so the
+// hundredth identical failure costs one line, not one stack trace.
+let ompUnrunnable: string | null = null;
+let ompFailures = 0; // requests already refused for that one reason, so the log stops repeating itself
 let ompBinCache: string | null = null;
 function ompBin(): string {
   if (ompBinCache) return ompBinCache;
-  const probe = (candidate: string): boolean => {
+  const probe = (candidate: string): boolean | "timeout" => {
     try {
-      // A real capability probe, deliberately cheap and bounded. `--version` touches no auth, no network
-      // and no session state, so it is safe to run at resolve time.
-      const r = Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: 6000 });
-      return r.exitCode === 0;
+      // A real capability probe. `--version` touches no auth, no network and no session state, so it is
+      // safe to run at resolve time. P-OMP-BOOT.2 (ADR-0358): the budget is now OMP_PROBE_TIMEOUT_MS and
+      // a timeout is reported as its own verdict, because 6 s condemned a perfectly good bundled omp on
+      // a cold, antivirus-scanned launch (10 of 21 boots in the reported reproduction).
+      return bunProbeVerdict(Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: OMP_PROBE_TIMEOUT_MS }));
     } catch { return false; } // EPERM / ENOENT / EACCES all mean "cannot run this one"
   };
   const r = resolveOmpBin(
     { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
     probe,
   );
-  if (!r.proven) {
+  if (r.indeterminate) {
+    // NOT fatal, and deliberately does NOT set ompUnrunnable: a slow probe is no evidence that the
+    // binary is missing, and the old code's fall-through to a bare `omp` is what turned a slow laptop
+    // into ten days of dead turns. Use the candidate and say why once.
+    console.error(`[omp] probe timed out; using ${r.bin} anyway (slow cold start, not a missing binary): ${r.timedOut.join(", ")}`);
+  } else if (!r.proven) {
     // Name every path we tried. This is the line that turns "OAuth just fails" into a diagnosable report,
     // which is exactly what the field report for this bug lacked.
+    // P-OMP-BOOT.1 (ADR-0357): and record it, so the per-request catch can report THIS instead of
+    // reprinting a ten-line spawn stack on every /api/commands and /api/modes poll forever.
+    ompUnrunnable = ompUnavailableReport(r).detail;
     console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
   } else if (r.rejected.length) {
     console.error(`[omp] using ${r.bin} (skipped unrunnable: ${r.rejected.join(", ")})`);
@@ -1527,29 +1541,6 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
 
-// Stream NDJSON ChatEvents to the browser with a HEARTBEAT. A long maker tool call (e.g. a broad
-// codebase search during a /goal loop) can run for >60s emitting nothing; without a keepalive the
-// socket goes idle, Bun's `idleTimeout` closes it, and every later event — tool chips AND the final
-// answer — is lost while the turn keeps working server-side (it writes the file, the UI stays frozen
-// on the last event it saw). A `{type:"ping"}` every 15s keeps the connection alive; the client
-// (bridge.ts) drops pings. On a real browser disconnect we log once (developer mode) and keep going.
-function ndjsonStream(label: string, run: (emit: (e: unknown) => void) => Promise<void>): Response {
-  const enc = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      let writeFailed = false;
-      let lastSend = Date.now();
-      const emit = (e: unknown) => {
-        try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); lastSend = Date.now(); }
-        catch { if (!writeFailed && loadSettings().developerMode) { writeFailed = true; console.error(`[TURN_DIAG] ${label} stream write failed (browser disconnected) — server turn continues`); } }
-      };
-      const hb = setInterval(() => { if (Date.now() - lastSend >= 15_000) emit({ type: "ping" }); }, 15_000);
-      try { await run(emit); }
-      finally { clearInterval(hb); try { controller.close(); } catch { /* already closed */ } }
-    },
-  });
-  return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
-}
 
 const server = Bun.serve({
   port: PORT,
@@ -2100,6 +2091,38 @@ const server = Bun.serve({
           return json({ ok: true, data: { reachable: true, status: r.status, authed: r.status === 401 || r.status === 403 } });
         } catch (e) {
           return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable — check the URL and that the endpoint is up") } });
+        }
+      }
+      // P-LOCAL.6: ASK THE SERVER. `GET <baseUrl>/models` is the same list omp's own discovery reads, so a
+      // model's real id and real context window come from the endpoint instead of the catalog's editorial
+      // guess. A SAVED provider (`id`) authenticates with the secret MAIN injected into this child's env at
+      // spawn (P-LOCAL.2); a key is NEVER accepted in this request body, because ADR-0135 keeps provider
+      // secrets off the engine's HTTP surface entirely. An unsaved credentialed endpoint therefore reports
+      // authRequired, and the user saves the provider first - one extra click instead of a new secret path.
+      if (p === "/api/local-providers/discover" && req.method === "POST") {
+        const b = await readBody<{ baseUrl?: unknown; id?: unknown }>(req);
+        const saved = typeof b.id === "string" && b.id ? listLocalProviders().find((d) => d.id === b.id) : undefined;
+        const target = providerModelsUrl(saved?.baseUrl ?? (typeof b.baseUrl === "string" ? b.baseUrl : ""));
+        if (!target) return json({ ok: true, data: { reachable: false, error: "invalid base URL" } });
+        const headers = saved ? discoveryHeaders(saved, (process.env[providerEnvVar(saved)] ?? "").trim() || undefined) : {};
+        try {
+          const r = await fetch(target, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(6000) });
+          const base = { reachable: true, status: r.status, models: [] as unknown[], dropped: 0 };
+          if (r.status === 401 || r.status === 403) return json({ ok: true, data: { ...base, authRequired: true } });
+          if (!r.ok) return json({ ok: true, data: { ...base, error: `the endpoint answered HTTP ${r.status}` } });
+          // The body is untrusted and remote: cap it before parsing so a broken or hostile endpoint
+          // cannot make the engine buffer an unbounded response.
+          const declared = Number(r.headers.get("content-length") ?? 0);
+          if (declared > MAX_DISCOVERY_BYTES) return json({ ok: true, data: { ...base, error: "the model list is implausibly large" } });
+          const raw = await r.text();
+          if (raw.length > MAX_DISCOVERY_BYTES) return json({ ok: true, data: { ...base, error: "the model list is implausibly large" } });
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); }
+          catch { return json({ ok: true, data: { ...base, error: "the endpoint did not answer with an OpenAI model list" } }); }
+          const d = parseDiscoveredModels(parsed);
+          return json({ ok: true, data: { reachable: true, status: r.status, authRequired: false, models: d.models, dropped: d.dropped } });
+        } catch (e) {
+          return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable - check the URL and that the endpoint is up") } });
         }
       }
       // P-AGENT.6: enterprise export — compile the spec + write a portable, tamper-evident bundle (with a
@@ -2864,10 +2887,15 @@ const server = Bun.serve({
           "x-content-type-options": "nosniff",
         };
         if (r.ok) {
-          // P-PREVIEW.12: BINARY kinds (image, pdf) are served as their own bytes with their real MIME.
-          // Reading a PNG as UTF-8 corrupts it, so these never touch the HTML pipeline below. The frame
-          // CSP still applies, and it permits no network, so a served image cannot phone home.
-          if (r.bytes) return new Response(r.bytes, { headers: { ...headers, "content-type": r.mime } });
+          // Images need a document host for sandbox wheel routing; PDFs retain their native viewer.
+          if (r.bytes) {
+            if (r.kind === "image") {
+              const data = Buffer.from(r.bytes).toString("base64");
+              const image = `<!doctype html><html><head><meta charset="utf-8"><title>Preview image</title><style>html,body{margin:0;min-height:100%;background:#fff}img{display:block;max-width:100%;height:auto}</style></head><body><img alt="Preview image" src="data:${r.mime};base64,${data}"></body></html>`;
+              return new Response(injectPreviewZoom(image), { headers });
+            }
+            return new Response(r.bytes, { headers: { ...headers, "content-type": r.mime } });
+          }
           // P-PREVIEW.12: text-ish kinds (markdown, txt, json, csv, log, yaml, xml, ...) are wrapped in a
           // minimal readable document by previewTextDocument. This is the core of the reported bug: a model
           // that wrote a markdown report or a JSON payload previously got "not an .html/.svg file" and had
@@ -2902,6 +2930,7 @@ const server = Bun.serve({
             // and it is never injected into an .svg (which has no place to put it).
             body = injectBlockedRefsBanner(body);
           }
+          body = injectPreviewZoom(body, r.kind === "svg");
           // svg keeps its own image/svg+xml MIME: served as text/html a browser would render the markup
           // as text rather than as an image.
           return new Response(body, { headers: r.kind === "svg" ? { ...headers, "content-type": r.mime } : headers });
@@ -4081,7 +4110,13 @@ const server = Bun.serve({
         return json({ ok: true, data: { resolved: backend.resolvePermission(String(b.id ?? ""), b.optionId != null ? String(b.optionId) : null) } });
       }
       // P-ACP.4: Stop — interrupt the in-flight turn (reply + tool calls) via ACP session/cancel.
-      if (p === "/api/chat/cancel" && req.method === "POST") { backend.cancel(); return json({ ok: true, data: { cancelled: true } }); }
+      if (p === "/api/chat/cancel" && req.method === "POST") {
+        const body = req.body ? await readBody<{ turnId?: unknown; requestId?: unknown }>(req) : {};
+        if ((body.turnId !== undefined && typeof body.turnId !== "string") || (body.requestId !== undefined && typeof body.requestId !== "string")) return Response.json({ ok: false, error: "turnId and requestId must be strings" }, { status: 400 });
+        if ((body.turnId !== undefined || body.requestId !== undefined) && !backend.turnStatus(body.turnId, body.requestId)) return Response.json({ ok: false, error: "The requested chat turn is no longer available. A different turn will not be cancelled." }, { status: 409 });
+        backend.cancel();
+        return json({ ok: true, data: { cancelled: true } });
+      }
       if (p === "/api/goal/cancel" && req.method === "POST") { backend.cancelGoal(); return json({ ok: true, data: { cancelled: true } }); } // P-GOAL.2: stop the loop
       // P-IDE.2 (ADR-0029): set/clear the active BUNDLED skill. Its prompt is TRUSTED (app corpus), so
       // it's wrapped in `<active-skill>` and delivered as a user-turn preamble (persona/recall path) —
@@ -4298,19 +4333,24 @@ const server = Bun.serve({
       }
       // P-INTERJECT.1: the unified Processes list (master turn, live lanes, import job, wave-2 browsers).
       if (p === "/api/processes") return json({ ok: true, data: { processes: await buildProcessViews() } });
-      // P-REATTACH.1: re-adopt the RUNNING master turn onto a fresh stream after a socket drop. No body,
-      // no prompt: this only redirects where the live turn's events go. When nothing is running, settle
-      // immediately (the turn the client lost has already persisted; reopening the session shows it).
+      if (p === "/api/chat/status" && req.method === "GET") return json({ data: backend.turnStatus() });
+      // Recovery subscribes to exactly one execution; it never sends another model prompt.
       if (p === "/api/chat/attach" && req.method === "POST") {
-        return ndjsonStream("chat-attach", async (emit) => {
-          const a = backend.attachTurn(emit);
-          if (!a.attached) { emit({ type: "token", text: "[the turn already finished while disconnected - reopen this session to see its full reply]" }); emit({ type: "done" }); return; }
-          emit({ type: "token", text: "\n[re-attached to the running turn]\n" });
-          await a.ended;
-        });
+        const body = await readBody<{ turnId?: unknown; requestId?: unknown }>(req);
+        if ((body.turnId !== undefined && typeof body.turnId !== "string") || (body.requestId !== undefined && typeof body.requestId !== "string")) {
+          return Response.json({ ok: false, error: "turnId and requestId must be strings" }, { status: 400 });
+        }
+        const status = backend.turnStatus(body.turnId, body.requestId);
+        if (!status) return Response.json({ ok: false, error: "The requested chat turn is no longer available. A different turn will not be attached." }, { status: 409 });
+        // No await between identity validation and synchronous observer attachment.
+        return ndjsonStream("chat-attach", async (emit, connectionAbort) => {
+          const attachment = backend.attachTurn(emit, status.turnId, connectionAbort);
+          try { await attachment.ended; } finally { attachment.detach(); }
+        }, req.signal);
       }
       if (p === "/api/chat" && req.method === "POST") {
-        const { text, images, from, share } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown }>(req);
+        const { text, images, from, share, requestId } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown; requestId?: unknown }>(req);
+        if (requestId !== undefined && typeof requestId !== "string") return Response.json({ ok: false, error: "requestId must be a string" }, { status: 400 });
         // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
         const imgs = Array.isArray(images)
           ? images.filter((im): im is { data: string; mimeType: string } => !!im && typeof (im as { data?: unknown }).data === "string" && typeof (im as { mimeType?: unknown }).mimeType === "string").slice(0, 6)
@@ -4342,27 +4382,25 @@ const server = Bun.serve({
         // Now: attach THIS stream as the running turn's live output, then queue the text on the
         // interject store (delivered into the turn at its next tool boundary). Attach BEFORE queueing:
         // if the turn ended in the race, fall through to a normal prompt and no orphan note is left.
-        const runPrompt = (emit: (e: unknown) => void) => backend.prompt(modelPrompt, (e) => {
-          if (collabManager.active) {
-            // acp_backend's ChatEvent and collab's are structurally identical (kept in parity); inference
-            // cannot unify the separate declarations, so bridge once under a named binding.
-            const tapped = e as unknown as Parameters<typeof collabManager.tapEvent>[0];
-            try { collabManager.tapEvent(tapped); } catch { /* non-fatal */ }
-          }
-          emit(e);
-        }, imgs);
-        if (backend.midTurn().busy) {
+        const runPrompt = async (emit: (e: unknown) => void, connectionAbort: AbortSignal) => {
+          const execution = backend.prompt(modelPrompt, emit, imgs, { signal: connectionAbort, prompt, requestId });
+          // Sharing observes execution independently of the originating browser connection.
+          const shared = collabManager.active ? backend.attachTurn((event) => {
+            try { collabManager.tapEvent(event as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ }
+          }) : undefined;
+          try { await execution; } finally { shared?.detach(); }
+        };
+        const activeTurn = backend.turnStatus();
+        if (activeTurn?.running) {
           const noteText = prompt.trim();
-          return ndjsonStream("chat-interject", async (emit) => {
-            const a = backend.attachTurn(emit);
-            // The turn ended in the check-to-attach race: no note was queued, so run a normal turn.
-            if (!a.attached) { await runPrompt(emit); return; }
+          return ndjsonStream("chat-interject", async (emit, connectionAbort) => {
+            const attachment = backend.attachTurn(emit, activeTurn.turnId, connectionAbort);
+            if (!attachment.attached || !attachment.running) { attachment.detach(); await runPrompt(emit, connectionAbort); return; }
             if (noteText) addInterject("master", noteText);
-            emit({ type: "token", text: "[the agent is mid-turn - your message was handed to it as a note and will be folded in at the next step. Watching the running turn\u2026]\n" });
-            await a.ended;
-          });
+            try { await attachment.ended; } finally { attachment.detach(); }
+          }, req.signal);
         }
-        return ndjsonStream("chat", (emit) => runPrompt(emit));
+        return ndjsonStream("chat", runPrompt, req.signal);
       }
       // P-COLLAB.3 (ADR-0192): live session sharing. `status` is the Share panel's poll; `start` mints a
       // room + view/full links + stands up the host (fail-closed if no relay is authorized); `stop` ends it.
@@ -4626,6 +4664,17 @@ const server = Bun.serve({
     } catch (err) {
       // js/stack-trace-exposure: log the detail server-side, return a generic message to the client
       // so an internal error/stack never reaches the renderer (or a forged caller).
+      // P-OMP-BOOT.1 (ADR-0357): a repeated "omp cannot start" is ONE known condition, not N internal
+      // errors. The v2.2.0 report shipped an engine.log that was mostly the same ten-line stack, once per
+      // UI poll, which buried the single fact that mattered. Log the named cause once, then only count,
+      // and tell the CLIENT the real reason so the UI can say it too (it is a boot/config fault, not a
+      // leak: it names paths the user already owns, and never a credential).
+      if (ompUnrunnable && isOmpSpawnFailure(err)) {
+        ompFailures++;
+        if (ompFailures === 1) console.error(`[dev] ${p}: the omp agent cannot be started\n${ompUnrunnable}`);
+        else if (ompFailures % 100 === 0) console.error(`[dev] the omp agent still cannot be started (${ompFailures} requests affected)`);
+        return json({ ok: false, error: "the omp agent cannot be started", detail: ompUnrunnable });
+      }
       console.error(`[dev] ${p}:`, err);
       return json({ ok: false, error: "internal error" });
     }

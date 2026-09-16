@@ -123,3 +123,10 @@ lucidaddon_audit/
 .omp/images/
 # P-MAINT.1: maintainer-agent SBOM baselines (per-workspace runtime state, never source)
 .omp/maintainer/
+# Support bundles collected by tools/collect-support-logs.ps1. These are a USER'S machine state: their
+# email, their workspace paths, their install layout, and length/last4 fingerprints of their provider
+# keys. This repo is PUBLIC, so a bundle must never be committed. The collector writes to the Desktop by
+# default; one landed here once and a `git add -A` would have shipped it. Pattern, not a single filename,
+# so the next one is safe too.
+lucid-support-*.zip
+tools/lucid-support-*.zip

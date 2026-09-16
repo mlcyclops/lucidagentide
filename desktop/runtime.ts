@@ -19,10 +19,11 @@
 // blocks tool calls - it never silently treats "no scanner" as "safe".
 
 import { app } from "electron";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { delimiter as PATH_SEP, dirname, join } from "node:path";
+import { delimiter as PATH_SEP, dirname, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
+import { nodeProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin, type OmpResolution } from "./omp_bin.ts"; // P-OMP-BOOT.1/.2: ONE probed omp resolver
 
 const EXE = process.platform === "win32" ? ".exe" : "";
 
@@ -84,8 +85,15 @@ function systemBins(tool: string): string[] {
   const dirs = process.platform === "win32" ? [] : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
   return dirs.map((d) => join(d, `${tool}${EXE}`));
 }
+/** The bundled or user bun, or null when there is none. NULL, not the bare name: a bare `"bun"` was
+ *  returned here before P-OMP-BOOT.1 (ADR-0357), and `dirname("bun")` is `"."`, which `existsSync`
+ *  happily confirms - so the PATH augmentation below prepended the CURRENT DIRECTORY and provided no bun
+ *  at all. That is both a silent provisioning failure and a PATH-hijack surface. */
+export function resolveBun(): string | null {
+  return bundled("bun") ?? firstExisting([join(homedir(), ".bun", "bin", `bun${EXE}`), ...systemBins("bun")]);
+}
 export function findBun(): string {
-  return bundled("bun") ?? firstExisting([join(homedir(), ".bun", "bin", `bun${EXE}`), ...systemBins("bun")]) ?? "bun";
+  return resolveBun() ?? "bun"; // callers that only need something to spawn keep the bare-name behavior
 }
 export function findUv(): string | null {
   return (
@@ -97,10 +105,60 @@ export function findUv(): string | null {
     ])
   );
 }
+
+/** Can this omp candidate actually RUN? `--version` touches no auth, network or session state.
+ *  `bunDir` is prepended to PATH for the probe because the packaged omp is a BUN SHIM
+ *  (`node_modules/.bin/omp.bunx` names `bun` plus a relative cli.js), so probing it without bun
+ *  reachable would reject the very binary the children will successfully use.
+ *
+ *  P-OMP-BOOT.2 (ADR-0358): returns `"timeout"` distinctly, and the budget is OMP_PROBE_TIMEOUT_MS. A
+ *  cold-start probe that runs out of time says nothing about whether the binary works. */
+function ompRuns(candidate: string, bunDir: string | null): boolean | "timeout" {
+  try {
+    const env = bunDir ? { ...process.env, PATH: [bunDir, process.env.PATH ?? ""].join(PATH_SEP) } : process.env;
+    return nodeProbeVerdict(spawnSync(candidate, ["--version"], { stdio: "ignore", timeout: OMP_PROBE_TIMEOUT_MS, windowsHide: true, env }));
+  } catch { return false; } // EPERM / ENOENT / EACCES all mean "cannot run this one"
+}
+
+/** The omp to hand the children, or null when there is genuinely nothing to hand them.
+ *
+ *  P-OMP-BOOT.1 (ADR-0357): this used to be `firstExisting([...])`, which accepted the packaged shim on
+ *  existence alone and so could hand out a path nobody had ever run.
+ *
+ *  P-OMP-BOOT.2 (ADR-0358) corrects the attribution recorded in ADR-0357: existence-based resolution was
+ *  a real defect but it was NOT the cause of the reported outage. That was the 6 s probe budget. The
+ *  reporting user's engine log shows 10 of 21 v2.2.0 boots declaring omp unrunnable from an install
+ *  where it demonstrably ran on the other 11, which no missing file can explain. So an INDETERMINATE
+ *  resolution counts as usable here: returning null would send `ensureRuntimes` off to reinstall omp
+ *  over a perfectly good one every time the machine happened to be busy. */
 export function findOmp(): string | null {
-  // bundledOmp() first: a packaged install ships omp under resources/repo/node_modules, so it
-  // resolves with no network (managedOmp is the legacy `bun add -g` location, kept as a fallback).
-  return firstExisting([bundledOmp(), managedOmp(), join(homedir(), ".bun", "bin", `omp${EXE}`), ...systemBins("omp")]);
+  const r = ompResolution();
+  return r.proven || r.indeterminate ? r.bin : null;
+}
+
+/** The full resolution, for the boot diagnostic: `findOmp()` alone cannot say what it TRIED.
+ *
+ *  Memoized for the process lifetime. `needsBootstrap()` and `ensureRuntimes()` both ask, and with a
+ *  30 s budget per candidate an unmemoized answer would pay the cold-start cost twice before the window
+ *  even opens. Electron main is long-lived and the answer cannot meaningfully change during startup;
+ *  `forget` exists so provisioning can re-ask exactly once after installing something. */
+let ompResolutionCache: OmpResolution | null = null;
+export function ompResolution(forget = false): OmpResolution {
+  if (forget) ompResolutionCache = null;
+  if (ompResolutionCache) return ompResolutionCache;
+  const bunPath = resolveBun();
+  ompResolutionCache = resolveOmpBin(
+    {
+      // bundled first: a packaged install ships omp under resources/repo/node_modules, so it resolves
+      // with no network (managedOmp is the `bun add -g` location ensureRuntimes provisions into).
+      installed: [bundledOmp(), managedOmp(), ...systemBins("omp")],
+      home: homedir(),
+      exeSuffix: EXE,
+      join,
+    },
+    (c) => ompRuns(c, bunPath ? dirname(bunPath) : null),
+  );
+  return ompResolutionCache;
 }
 function findScannerPython(): string | null {
   return bundledPython() ?? firstExisting([venvPython(), projectVenvPython()]);
@@ -140,7 +198,12 @@ export async function ensureRuntimes(onStatus: (s: string) => void = () => {}): 
       mkdirSync(ompGlobalDir(), { recursive: true });
       onStatus("Installing the omp agent…");
       await run(bun, ["add", "-g", "@oh-my-pi/pi-coding-agent"], { BUN_INSTALL: ompGlobalDir() });
-      omp = existsSync(managedOmp()) ? managedOmp() : null;
+      // P-OMP-BOOT.1 (ADR-0357): PROVE the freshly installed one too. `existsSync(managedOmp())` was
+      // the same mistake one line further down the chain: `bun add -g` can lay down a shim and still
+      // leave nothing runnable, and reporting that as success is what put an unrunnable path in
+      // LUCID_OMP_BIN in the first place.
+      ompResolution(true); // drop the pre-install memo, otherwise findOmp reports the stale answer
+      omp = findOmp();
     } catch (e) {
       console.warn("[runtime] omp install failed:", (e as Error).message);
     }
@@ -168,8 +231,15 @@ export async function ensureRuntimes(onStatus: (s: string) => void = () => {}): 
   }
   if (py) env.SCANNER_PYTHON = py;
 
-  // 3) PATH so omp's own child calls (and a bun shim) resolve.
-  const extra = [dirname(bun), join(ompGlobalDir(), "bin")].filter((d) => existsSync(d));
+  // 3) PATH so omp's own child calls (and the bundled bun SHIM) resolve.
+  //    P-OMP-BOOT.1 (ADR-0357): only ABSOLUTE resolved dirs. This read `dirname(bun)` where `bun` could
+  //    be the bare name `"bun"`, making `dirname` return `"."`, which `existsSync` confirms - so on every
+  //    machine without bun this prepended the CURRENT WORKING DIRECTORY to the PATH of the agent and all
+  //    its children. It provided no bun (the shim still failed) and it meant a `bun.exe` dropped in the
+  //    open workspace would be preferred over a real one.
+  const bunPath = resolveBun();
+  const extra = [bunPath ? dirname(bunPath) : null, join(ompGlobalDir(), "bin")]
+    .filter((d): d is string => !!d && isAbsolute(d) && existsSync(d));
   env.PATH = [...extra, process.env.PATH ?? ""].join(PATH_SEP);
 
   return env;

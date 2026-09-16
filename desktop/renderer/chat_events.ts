@@ -12,6 +12,8 @@
 import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Agent Builder spec type
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (DOM-free)
+import type { TurnSnapshot } from "../turn_recovery.ts";
+export type { TurnStatus, TurnSnapshot } from "../turn_recovery.ts";
 
 /** P-PWA-FLEET.1: one fleet lane's status as mirrored to phone guests. `cwd` carries only the folder
  *  BASENAME (the frames.ts "no file paths" invariant - a full path never crosses the wire). */
@@ -26,6 +28,8 @@ export interface FleetLaneStatus {
 }
 
 export type ChatEvent =
+  | { type: "turn-snapshot"; snapshot: TurnSnapshot }
+  | { type: "connection"; state: "reconnecting" | "failed"; message: string }
   | { type: "token"; text: string }
   | { type: "thinking"; text: string }
   // P-EVAL.4 (ADR-0318): `id` is omp's toolCallId; `name` is only omp's COARSE ACP kind ("other" for

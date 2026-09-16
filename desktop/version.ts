@@ -434,4 +434,21 @@
 //            RELEASE: the rolling `latest` channel can publish at all. The identity gate compared deb and
 //            rpm versions literally, so every prerelease failed it (`~` is the only legal separator in
 //            those formats), and a publishing dispatch stamped itself as a test build (ADR-0332).
-export const APP_VERSION = "2.2.0";
+// v2.2.1 = the release that makes models work again on a slow machine, and restores the security gate.
+//            OMP: on a cold first launch, models could simply never run. The capability probe that
+//            decides which omp to spawn had a 6 SECOND budget, and the bundled omp is a shim over a
+//            98 MB bun that loads a large cli.js, so on a laptop with a real-time virus scanner reading
+//            both files for the first time it can take longer than that. The resolver counted the
+//            timeout as a REJECTION and fell through to a bare `omp`, which a packaged install does not
+//            have, and cached that verdict for the whole session. A reported log shows 10 of 21 boots
+//            from ONE install deciding omp was unrunnable while the other 11 ran it fine. A timeout is
+//            now its own verdict: the slow candidate is used anyway, the budget is 30 s, and a genuinely
+//            missing omp gets one loud dialog naming every path tried instead of a stack trace per UI
+//            poll (ADR-0357, ADR-0358).
+//            SECURITY: the packaged engine loaded NO security gate. It built omp's `-e` extension paths
+//            from `import.meta.dir`, which inside a compiled binary is Bun's virtual root, so it handed
+//            omp `B:\~BUN\harness\omp\security_extension.ts`: a path in no filesystem. omp logged
+//            "Cannot find module" to its own log and ran ungated while every surface reported healthy.
+//            One probed resolver now answers for every cross-process path, and a gate that cannot be
+//            found REFUSES the spawn rather than proceeding without it (ADR-0356).
+export const APP_VERSION = "2.2.1";

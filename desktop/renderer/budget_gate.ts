@@ -43,3 +43,32 @@ export function providerHasApiKey(auth: AuthGroupsLike | null, model: string): b
   const prov = providerForModel(auth, model);
   return prov ? prov.keySet : true;
 }
+
+/** Cached subscription reports have no observation timestamp or account identity. Match provider
+ *  labels conservatively; never substitute an API-key probe for a subscription allowance. */
+export function providerBudgetRows<T extends { label: string }>(rows: readonly T[], providerId: string): T[] {
+  const aliases: Record<string, readonly string[]> = {
+    anthropic: ["claude", "anthropic"], openai: ["openai", "codex", "gpt"],
+    google: ["google", "gemini"], xai: ["xai", "grok"], "github-copilot": ["github copilot", "copilot"],
+  };
+  return rows.filter((row) => {
+    const label = row.label.toLowerCase();
+    return (aliases[providerId] ?? [providerId]).some((alias) =>
+      label === alias || (label.startsWith(alias) && /[\s:/-]/.test(label[alias.length] ?? "")));
+  });
+}
+
+/** A passed reset is not proof of a replenished allowance. Keep unknown values unknown. */
+export function budgetWindowState(row: { used: number; resetsAt: number | null }, now = Date.now()): {
+  remainingPercent: number | null; resetsAt: number | null; expired: boolean;
+} {
+  const resetsAt = row.resetsAt != null && Number.isFinite(row.resetsAt) && row.resetsAt > 0
+    && row.resetsAt <= 8.64e15 ? row.resetsAt : null;
+  const expired = resetsAt != null && resetsAt <= now;
+  return {
+    remainingPercent: !expired && Number.isFinite(row.used) && row.used >= 0 && row.used <= 1
+      ? Math.round((1 - row.used) * 100) : null,
+    resetsAt,
+    expired,
+  };
+}

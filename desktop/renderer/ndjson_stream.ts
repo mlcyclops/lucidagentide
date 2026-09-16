@@ -16,7 +16,7 @@
 // renderer world in; this module depends only on the event contract and the end classifier).
 
 import type { ChatEvent } from "./chat_events.ts";
-import { streamEndEvents, TERMINAL_EVENT_TYPES } from "./stream_end.ts";
+import { STREAM_DROPPED_NOTICE, streamEndEvents, TERMINAL_EVENT_TYPES } from "./stream_end.ts";
 
 export interface StreamNdjsonOpts {
   /** Live tail stream (fleet lane watch): a clean close with no terminal `done` is normal, never a drop. */
@@ -24,10 +24,18 @@ export interface StreamNdjsonOpts {
   /** POST path to re-attach to the running turn after a mid-stream drop (e.g. "/api/chat/attach").
    *  Absent -> the drop notice + synthesized done settle the turn (the pre-existing behavior). */
   reattach?: string;
+  /** Body for each re-attach (e.g. the acknowledged turn ID); never resends the original prompt. */
+  reattachBody?: () => unknown;
   /** Per-request headers (auth token etc.); a thunk so a refreshed token is picked up on re-attach. */
   headers?: () => Record<string, string>;
   /** Milliseconds between re-attach attempts (test seam; default 1000). */
   reattachDelayMs?: number;
+  /** Per-connection headers/idle deadline, enabled only with reattach (default 45000, above 15s pings).
+   *  Valid events reset it, so a healthy long-running tool has no total turn deadline. */
+  connectionTimeoutMs?: number;
+  /** Route transport notices outside assistant text. Failures reject without a synthetic done;
+   *  callers can keep the pending turn recoverable instead of treating transport loss as completion. */
+  onRecovery?: (state: "reconnecting" | "failed", message: string) => void;
 }
 
 /** How one connection ended. `settled` = a pre-stream failure already emitted its own explanation +
@@ -37,77 +45,133 @@ type ReadEnd = "aborted" | "complete" | "dropped" | "settled";
 /** Generic NDJSON event stream (used by /api/chat, /api/goal, fleet lanes). `signal` lets Stop abort
  *  the CLIENT read so the turn settles even if the server/omp never closes the stream (a wedged turn). */
 export async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal, opts?: StreamNdjsonOpts): Promise<void> {
-  const readOnce = async (p: string, b: unknown): Promise<ReadEnd> => {
-    let res: Response;
-    try {
-      res = await fetch(p, { method: "POST", headers: { "content-type": "application/json", ...(opts?.headers?.() ?? {}) }, body: JSON.stringify(b), signal });
-    } catch {
-      if (signal?.aborted) return "aborted"; // Stop pressed - the caller's finally settles the UI; no error line
-      onEvent({ type: "token", text: "[backend unreachable - is the GUI server running?]" });
-      onEvent({ type: "done" });
-      return "settled";
+  const emit = (ev: ChatEvent) => {
+    if (signal?.aborted) return;
+    try { onEvent(ev); }
+    catch (e) { console.error("[TURN_DIAG] a chat event handler threw; the stream continues", e); }
+  };
+  const recovery = (state: "reconnecting" | "failed", message: string) => {
+    if (signal?.aborted) return;
+    try { opts?.onRecovery?.(state, message); }
+    catch (e) { console.error("[TURN_DIAG] a recovery handler threw; the stream continues", e); }
+  };
+  const fail = (message: string): ReadEnd => {
+    if (signal?.aborted) return "aborted";
+    if (opts?.onRecovery) {
+      recovery("failed", message);
+      if (signal?.aborted) return "aborted";
+      throw new Error(message);
     }
-    if (res.status === 404) { onEvent({ type: "token", text: "[backend is out of date - close the GUI server window and relaunch (launcher \u2192 G)]" }); onEvent({ type: "done" }); return "settled"; }
-    if (!res.ok || !res.body) { onEvent({ type: "token", text: `[backend error ${res.status}]` }); onEvent({ type: "done" }); return "settled"; }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    // Did the turn end on its OWN terms? Only a terminal event seen on the wire proves that; anything else
-    // ending this stream is a drop, and the server turn is probably still running (see stream_end.ts).
-    let terminalDone = false;
-    // TWO different faults, so TWO separate guards. A torn line is bad JSON and is skipped. A throw out of
-    // onEvent is a RENDER bug, and the old single `catch {}` swallowed it as if it were bad JSON - so a
-    // renderer exception silently ate an event with nothing logged. Neither fault may kill the read: one
-    // unrenderable event must never cost the user the REST of the turn.
-    const flush = (line: string) => {
-      const s = line.trim();
-      if (!s) return;
-      let parsed: unknown;
-      try { parsed = JSON.parse(s); }
-      catch { return; } // a truncated/partial line, not a turn failure
-      if (!parsed || typeof parsed !== "object" || !("type" in parsed) || typeof parsed.type !== "string") return;
-      if (parsed.type === "ping") return; // server heartbeat: keeps the socket alive through long tool calls
-      // `done`, but ALSO a fleet lane's terminal `error` - a turn that reported its own failure has explained
-      // itself and must not get a "connection dropped" line stacked on top of it.
-      if (TERMINAL_EVENT_TYPES[parsed.type]) terminalDone = true;
-      // Narrowed above to an object with a string `type`. The payload fields are the engine's own ChatEvent
-      // contract (same module, same process family), so this is the ONE documented boundary assertion.
-      const ev = parsed as ChatEvent;
-      try { onEvent(ev); }
-      catch (e) { console.error("[TURN_DIAG] a chat event handler threw; the stream continues", e); }
+    emit({ type: "token", text: message });
+    emit({ type: "done" });
+    return "settled";
+  };
+  const readOnce = async (p: string, b: unknown): Promise<ReadEnd> => {
+    if (signal?.aborted) return "aborted";
+    // Own the transport signal: an idle socket must not abort the caller's turn/Stop controller.
+    const connection = new AbortController();
+    const abort = () => connection.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let res: Response | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const touch = () => {
+      if (!opts?.reattach) return;
+      clearTimeout(deadline);
+      deadline = setTimeout(abort, opts.connectionTimeoutMs ?? 45000);
     };
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+      touch(); // Includes a server that accepts the POST but never sends response headers.
+      try {
+        res = await fetch(p, { method: "POST", headers: { "content-type": "application/json", ...(opts?.headers?.() ?? {}) }, body: JSON.stringify(b), signal: connection.signal });
+      } catch {
+        if (signal?.aborted) return "aborted";
+        // Even the initial POST may have started work before its acknowledgement was lost.
+        // Only adopt that work through attach, never repeat the original prompt POST.
+        if (opts?.reattach) return "dropped";
+        return fail("[backend unreachable - is the GUI server running?]");
       }
-      flush(buf);
-    } catch { /* Stop aborted the read, or the socket died mid-turn - classified below, never silent. */ }
-    if (signal?.aborted) return "aborted";
-    if (terminalDone || opts?.tail) return "complete"; // a tail's clean close is its normal end
-    return "dropped";
+      if (signal?.aborted) return "aborted";
+      if (connection.signal.aborted) return "dropped";
+      if (opts?.reattach && (res.status === 408 || res.status === 429 || res.status >= 500)) return "dropped";
+      if (res.status === 404) return fail("[backend is out of date - close the GUI server window and relaunch (launcher \u2192 G)]");
+      if (!res.ok || !res.body) return fail(`[backend error ${res.status}]`);
+      reader = res.body.getReader();
+      touch();
+      const dec = new TextDecoder();
+      let buf = "";
+      let terminalDone = false;
+      const flush = (line: string) => {
+        const s = line.trim();
+        if (!s) return;
+        let parsed: unknown;
+        try { parsed = JSON.parse(s); }
+        catch { return; } // A torn line is not a valid heartbeat or event.
+        if (!parsed || typeof parsed !== "object" || !("type" in parsed) || typeof parsed.type !== "string") return;
+        touch();
+        if (parsed.type === "ping") return;
+        if (TERMINAL_EVENT_TYPES[parsed.type] === true) terminalDone = true;
+        // The engine owns payload fields; object + string type is the NDJSON envelope boundary.
+        emit(parsed as ChatEvent);
+      };
+      try {
+        while (!terminalDone && !connection.signal.aborted) {
+          const { done, value } = await reader.read();
+          if (connection.signal.aborted) break;
+          if (done) { flush(buf + dec.decode()); break; }
+          buf += dec.decode(value, { stream: true });
+          let nl: number;
+          while (!terminalDone && !connection.signal.aborted && (nl = buf.indexOf("\n")) >= 0) {
+            flush(buf.slice(0, nl));
+            buf = buf.slice(nl + 1);
+          }
+        }
+      } catch { /* Stop, an idle deadline, or a broken socket: classified below. */ }
+      if (signal?.aborted) return "aborted";
+      if (terminalDone || opts?.tail) return "complete";
+      return "dropped";
+    } finally {
+      clearTimeout(deadline);
+      signal?.removeEventListener("abort", abort);
+      connection.abort();
+      // Terminal events end the client read even when the server leaves its socket open.
+      // Cancel error responses too; an unread retry body must not retain the old connection.
+      try {
+        if (reader) await reader.cancel();
+        else if (res?.body) await res.body.cancel();
+      } catch { /* Aborting the owned fetch may already have errored its body. */ }
+      finally { reader?.releaseLock(); }
+    }
   };
 
+  const waitForRetry = async () => {
+    if (signal?.aborted) return;
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, opts?.reattachDelayMs ?? 1000);
+      signal?.addEventListener("abort", finish, { once: true });
+    });
+  };
   let end = await readOnce(path, body);
-  // P-REATTACH.1: a dropped chat stream re-adopts the running turn instead of freezing or lying "done".
-  // Each hop waits briefly (a dying engine should fail the NEXT fetch fast, which lands in `settled`);
-  // the hop cap only bounds a pathologically flapping socket - a healthy attach ends in `complete`.
   let hops = 0;
+  // Bound reconnect attempts, not tool runtime. A healthy connection can run indefinitely.
   while (end === "dropped" && opts?.reattach && !signal?.aborted && hops < 60) {
     hops += 1;
-    if (hops === 1) onEvent({ type: "token", text: "\n[connection to the engine dropped - re-attaching to the running turn\u2026]\n" });
-    const { promise, resolve } = Promise.withResolvers<void>();
-    setTimeout(resolve, opts.reattachDelayMs ?? 1000);
-    await promise;
-    end = await readOnce(opts.reattach, {});
+    if (hops === 1) {
+      const message = "[connection to the engine dropped - re-attaching to the running turn\u2026]";
+      if (opts.onRecovery) recovery("reconnecting", message);
+      else emit({ type: "token", text: `\n${message}\n` });
+    }
+    await waitForRetry();
+    if (signal?.aborted) return;
+    end = await readOnce(opts.reattach, opts.reattachBody?.() ?? {});
   }
-  // The reported bug: this used to end silently. A mid-stream death with no re-attach path announces
-  // itself and settles the turn honestly (drop notice + synthesized done). Aborted/complete/settled
-  // ends emit nothing extra.
   if (end === "dropped") {
-    for (const ev of streamEndEvents({ aborted: !!signal?.aborted, terminalDone: false, tail: opts?.tail }).events) onEvent(ev);
+    if (opts?.onRecovery && !signal?.aborted && !opts.tail) fail(STREAM_DROPPED_NOTICE);
+    for (const ev of streamEndEvents({ aborted: !!signal?.aborted, terminalDone: false, tail: opts?.tail }).events) emit(ev);
   }
 }

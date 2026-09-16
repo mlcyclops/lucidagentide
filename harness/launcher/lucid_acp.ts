@@ -20,8 +20,7 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
 import { ScannerClient, ScanUnavailableError } from "../security/scanner_client.ts";
@@ -37,19 +36,21 @@ import { ensureEgressProxy } from "../runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR
 import { egressAuditSink } from "../../desktop/egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { caps } from "../runs/profiles.ts";
 import { managedConfig, managedRequireIsolation } from "../../desktop/managed_config.ts";
+import { resolvedRepo } from "../../desktop/repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): the ONE probed repo root
 
 type Env = Record<string, string | undefined>;
 const EXE = process.platform === "win32" ? ".exe" : "";
-const HERE = dirname(fileURLToPath(import.meta.url));
 
 /** Repo root. In a dev checkout / packaged resources/repo this file lives at <repo>/harness/launcher/.
  *  In a `bun build --compile` standalone `lucid` binary (P-EXT.4), import.meta is VIRTUALIZED, so the
- *  source-relative path is wrong — there we derive the repo from the real on-disk binary, which ships
- *  at <repo>/bin/lucid[.exe] (so repo = dirname(execPath)/..). */
+ *  source-relative path is wrong: there the repo is derived from the real on-disk binary, which ships
+ *  at <repo>/bin/lucid[.exe] (so repo = dirname(execPath)/..).
+ *
+ *  P-GATE-PATH.1 (ADR-0356): that probe now lives in ONE place (desktop/repo_root.ts) because the
+ *  desktop engine lacked it and shipped `B:\~BUN\harness\omp\security_extension.ts` to omp on every
+ *  packaged install. Two copies of this rule meant one of them could be, and was, missing. */
 export function repoRoot(): string {
-  const fromSource = join(HERE, "..", "..");
-  if (existsSync(join(fromSource, "harness", "omp", "security_extension.ts"))) return fromSource;
-  return join(dirname(process.execPath), "..");
+  return resolvedRepo().root;
 }
 
 /** The desktop app's userData dir (Electron app.getPath('userData') == productName under the OS app-data
@@ -368,7 +369,7 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
     const a = assets();
     resolveScannerEnv(process.env, a.repo);
     const pf = await preflight({ gate: a.gate });
-    process.stdout.write(pf.ok ? "[lucid check] OK — gate + scanner ready\n" : `[lucid check] FAIL-CLOSED — ${pf.reason}\n`);
+    process.stdout.write(pf.ok ? "[lucid check] OK: gate + scanner ready\n" : `[lucid check] FAIL-CLOSED: ${pf.reason}\n`);
     return pf.ok ? 0 : 1;
   }
   if (sub === "agent-firewall") {

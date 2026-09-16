@@ -561,3 +561,58 @@ No code changed."
   by explicit config.
 - No code, build config, or workflow file was modified. The only file added is
   this document.
+
+-----
+
+## Refresh 2026-09-16 (P-ARM64.A revisit, after the omp 16.1.20 -> 16.5.2 bump)
+
+Re-verified against the tree, not re-derived from the earlier pass. The headline
+holds: **still 0 blockers.** Three rows changed and one row was wrong.
+
+**Row 7 corrected.** `pi-natives` is pinned at `16.5.2`, not `16.1.20`
+(`package.json:70-73`, all four `@oh-my-pi` pins move together because
+`packagePin()` in `.github/scripts/omp-compat.mjs` throws otherwise). Verdict is
+unchanged and now confirmed against the registry rather than inferred from a
+lockfile entry: `npm view @oh-my-pi/pi-natives-linux-arm64@16.5.2` answers
+`16.5.2`, so the addon publishes for linux-arm64 at the version we actually ship.
+
+**Row 6 confirmed.** `@duckdb/node-bindings-linux-arm64` publishes (`1.5.5-r.5`).
+Runtime load on arm is still unverified, same caveat as before.
+
+**Rows 1, 3, 4 are the real remaining work, and they are narrower than
+"needs-build" suggests.** `desktop/build/fetch-runtimes.ts` has NO linux-arm64
+entry for bun, uv, or CPython. It has darwin-arm64 for all three
+(`fetch-runtimes.ts:74, 90, 159`), so the mechanism is arch-aware already and the
+only missing input is three pinned SHA-256 hashes. That matters because
+`desktop/build/airgap-smoke.ts:120-126` fails the build when the arch-matched
+bundled bun (or its plain alias) is absent, so an arm leg added before the hashes
+would fail CI rather than ship something broken. That is the correct order.
+
+**Row 11 is a trap, not a chore.** `desktop/package.json:155` is
+`"artifactName": "LucidAgent-x86_64.${ext}"`, a hardcoded literal, while the deb
+and rpm blocks already use `${arch}` (lines 158, 172). Changing it to `${arch}`
+is one character of work and it RENAMES THE SHIPPING x64 ASSET, because
+electron-builder substitutes `x64` there, not `x86_64`: every existing link to
+`LucidAgent-x86_64.AppImage` breaks. Deliberately NOT changed in the v2.2.1 patch
+release. It belongs to the increment that actually adds the arm leg, where the
+rename is justified because two arches must be distinguishable anyway.
+
+### Ordered plan to ship linux-arm64
+
+1. Pin the three linux-arm64 runtimes in `fetch-runtimes.ts` (bun `1.3.14`
+   `linux-aarch64`, uv `0.11.23` `aarch64-unknown-linux-gnu`, CPython
+   `3.12.13+20260623` `aarch64-unknown-linux-gnu`), each with a downloaded and
+   vendor-cross-checked SHA-256. Fail-closed by construction: a wrong hash aborts.
+2. Change `linux.artifactName` to `LucidAgent-${arch}.${ext}` and accept the x64
+   rename in the SAME release, with the release notes naming both new filenames.
+3. Add the `ubuntu-24.04-arm` leg to the `build-desktop.yml` matrix
+   (`build-desktop.yml:49-51`). GitHub now offers arm64 Linux runners, so no
+   cross-build and no QEMU is required.
+4. Let `airgap-smoke.ts` do its job unchanged: it already resolves
+   `python-${PLAT}-${ARCH}`, `bun-${PLAT}-${ARCH}`, and
+   `pi_natives.${PLAT}-${ARCH}*.node`, so it validates the arm output with no edit.
+
+Cost is dominated by step 1 (three downloads plus hash verification) and step 3
+(one CI leg, roughly doubling Linux build minutes). Risk is concentrated in the
+unverified DuckDB arm load path from row 6, which step 4 surfaces on the first
+arm CI run rather than at a user.

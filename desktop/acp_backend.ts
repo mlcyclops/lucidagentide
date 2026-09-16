@@ -15,6 +15,7 @@ import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
+import { LiveTurn, type TurnAttachment, type TurnSnapshot, type TurnStatus } from "./turn_recovery.ts";
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
@@ -33,7 +34,8 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
+import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
+import { gatePath, gateRefusal, repoAsset } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
 import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
@@ -124,49 +126,55 @@ function egressTarget(tc: any): string | null {
   return m ? m[1]! : (String(tc?.title ?? "").trim() || null);
 }
 
-const REPO = join(import.meta.dir, "..");
-// Absolute so the gate loads from THIS repo even when omp runs in another workspace.
-const GATE = join(REPO, "harness", "omp", "security_extension.ts");
+// P-GATE-PATH.1 (ADR-0356): every path below is resolved by repo_root.ts, NEVER from import.meta.dir.
+// These strings are handed to a SEPARATE omp process as `-e` arguments, and in a `bun build --compile`
+// engine `join(import.meta.dir, "..")` is Bun's VIRTUAL embedded root (observed live: `B:\~BUN`), so
+// every one of them named a file that exists in no filesystem and omp ran with no gate at all.
+//
+// The gate is `string | null` on purpose: null means this process cannot gate an omp child, and every
+// spawn site below REFUSES rather than dropping the `-e` (invariant 3, fail-closed). Absolutely every
+// other extension here stays optional and fail-soft, because none of them carries a security decision.
+const GATE = gatePath();
 // P-MCP-GATE.1 (ADR-0148): scans/withholds MCP tool RESULTS in-process (closes the ADR-0020 gap). Loaded
 // alongside the gate; source-scoped to MCP results (leaves local tools untouched).
-const MCP_RESULT_GATE = join(REPO, "harness", "omp", "mcp_result_gate.ts");
+const MCP_RESULT_GATE = repoAsset("harness", "omp", "mcp_result_gate.ts");
 // AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
 // repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
-const ASKSAGE = join(REPO, "harness", "omp", "asksage_extension.ts");
+const ASKSAGE = repoAsset("harness", "omp", "asksage_extension.ts");
 // P-PREVIEW.3a (ADR-0096) — DRAFT: registers the agent-callable `preview_open` tool. Defensively wrapped so
 // a registration failure never breaks omp launch (see preview_extension.ts). Only added when the file exists.
-const PREVIEW_EXT = join(REPO, "harness", "omp", "preview_extension.ts");
-const AGENT_BUILDER_EXT = join(REPO, "harness", "omp", "agent_builder_extension.ts"); // P-AGENT.8.2: chat -> canvas handoff tool
-const SLASH_CMD_EXT = join(REPO, "harness", "omp", "slash_command_extension.ts"); // P-CMD.1: slash_command_create tool
+const PREVIEW_EXT = repoAsset("harness", "omp", "preview_extension.ts");
+const AGENT_BUILDER_EXT = repoAsset("harness", "omp", "agent_builder_extension.ts"); // P-AGENT.8.2: chat -> canvas handoff tool
+const SLASH_CMD_EXT = repoAsset("harness", "omp", "slash_command_extension.ts"); // P-CMD.1: slash_command_create tool
 // P-FLEET.L1: registers the read-tier `fleet_status` tool so the master agent's model can see the local
 // lane fleet (metadata only). Only added when the file exists - a missing extension never blocks omp launch.
-const FLEET_EXT = join(REPO, "harness", "omp", "fleet_extension.ts");
+const FLEET_EXT = repoAsset("harness", "omp", "fleet_extension.ts");
 // P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
 // (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
-const CODEGRAPH_EXT = join(REPO, "harness", "omp", "codegraph_extension.ts");
+const CODEGRAPH_EXT = repoAsset("harness", "omp", "codegraph_extension.ts");
 // ADR-0220: registers the read-only `knowledge_search` tool so ANY model can ground on the user's ingested
 // knowledge base (Obsidian/folders/chat history → compiled KB). Always added when present (self-describing when
 // empty); the non-AskSage RAG path, independent of the gov gateway.
-const KNOWLEDGE_EXT = join(REPO, "harness", "omp", "knowledge_extension.ts");
+const KNOWLEDGE_EXT = repoAsset("harness", "omp", "knowledge_extension.ts");
 // P-INTERJECT.1: delivers mid-turn operator interjections into tool results (loopback drain of the
 // dev server's interject store). Loaded on the master AND lane argv, AFTER the security/MCP gates so
 // its tool_result hook sees already-wrapped content and appends OUTSIDE the untrusted envelope.
 // Only added when the file exists - a missing extension never blocks omp launch.
-const INTERJECT_EXT = join(REPO, "harness", "omp", "interject_extension.ts");
+const INTERJECT_EXT = repoAsset("harness", "omp", "interject_extension.ts");
 // P-BROWSER.1 (wave 2): the agent-controlled visible browser window's tools (browser_open /
 // browser_screenshot / browser_scroll / browser_close). MASTER ONLY - the window is a singleton and
 // lanes driving one shared window would fight over it (same rationale that keeps preview off lanes).
 // The extension self-skips when LUCID_BROWSER_URL is absent (no Electron main = no window executor).
-const BROWSER_EXT = join(REPO, "harness", "omp", "browser_extension.ts");
+const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
 // P-EVAL.4 (ADR-0318): reports the REAL tool name (+ pass/fail) of every tool call over a token'd
 // loopback URL, because omp's ACP tool_call update carries only a coarse `kind` and an intent-shadowed
 // title (ADR-0308) - so the chat's chips and the engineering report's per-tool breakdown had degraded to
 // "other". Observability only: it never blocks, so it is deliberately fail-SOFT (unlike the gate) and
 // self-skips when LUCID_TOOL_META_URL is absent.
-const TOOL_META_EXT = join(REPO, "harness", "omp", "tool_meta_extension.ts");
+const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
-const ACP_CONFIG = join(REPO, "harness", "omp", "acp_config.yml");
+const ACP_CONFIG = repoAsset("harness", "omp", "acp_config.yml");
 
 // P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md (if any) and wrap it as standing design-invariant
 // guidance for the user-turn preamble. Re-read every turn (cheap, small file) so edits take effect live.
@@ -195,17 +203,18 @@ function readDesignInvariants(workspace: string): string {
 let ompBinCache: string | null = null;
 function ompBin(): string {
   if (ompBinCache) return ompBinCache;
-  const probe = (candidate: string): boolean => {
+  // P-OMP-BOOT.2 (ADR-0358): a timeout is "slow machine", not "missing binary". See omp_bin.ts.
+  const probe = (candidate: string): boolean | "timeout" => {
     try {
-      const r = Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: 6000 });
-      return r.exitCode === 0;
+      return bunProbeVerdict(Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: OMP_PROBE_TIMEOUT_MS }));
     } catch { return false; }
   };
   const r = resolveOmpBin(
     { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
     probe,
   );
-  if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
+  if (r.indeterminate) console.error(`[omp] probe timed out; using ${r.bin} anyway (slow cold start, not a missing binary): ${r.timedOut.join(", ")}`);
+  else if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
   ompBinCache = r.bin;
   return r.bin;
 }
@@ -216,6 +225,9 @@ function ompBin(): string {
  *  would recurse). ONE source of truth for the gate path lives in this file, so a lane can never spawn
  *  ungated by path drift. */
 export function fleetLaneArgv(): { cmd: string; args: string[] } {
+  // P-GATE-PATH.1 (ADR-0356): no gate on disk means no gated lane. REFUSE, never spawn ungated:
+  // FleetLaneManager.spawn turns this into a named refusal on the lane card.
+  if (!GATE) throw new Error(gateRefusal());
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
   const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
@@ -283,6 +295,7 @@ function whenIdleOrAborted(gate: ChatGate, signal?: AbortSignal): Promise<void> 
 }
 
 export type ChatEvent =
+  | { type: "turn-snapshot"; snapshot: TurnSnapshot }
   | { type: "token"; text: string }
   | { type: "thinking"; text: string }
   // P-CHAT.1 (ADR-0104): `code` carries the tool's authored content so the chat can show an inline,
@@ -608,6 +621,11 @@ class Backend {
         // requires isolation, in which case exec fail-closes (this.sandboxExecBlock) rather than runs
         // unisolated: the spawn still happens (chat/read tools stay useful) but every exec permission
         // is denied at the session/request_permission seam below.
+        // P-GATE-PATH.1 (ADR-0356): the gate is the one extension whose absence must STOP the spawn.
+        // Before this, a virtualized path was passed anyway, omp logged "Cannot find module" to its own
+        // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
+        // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
+        if (!GATE) throw new Error(gateRefusal());
         const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
@@ -1056,7 +1074,7 @@ class Backend {
       options: opts.map((o) => ({ optionId: String(o.optionId ?? o.id ?? ""), name: String(o.name ?? o.optionId ?? "option"), kind: o.kind })),
     });
     return new Promise((resolve) => {
-      const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
+      const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.recoveryTurn?.resolvePermission(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
       const t = setTimeout(() => settle({ outcome: { outcome: "cancelled" } }), Backend.PERM_MS); // fail-closed
       this.permPending.set(id, (optionId) => settle(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } }));
     });
@@ -1077,7 +1095,7 @@ class Backend {
     const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     return new Promise((resolve) => {
-      const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
+      const settle = (outcome: any) => { clearTimeout(t); this.permPending.delete(id); this.recoveryTurn?.resolvePermission(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(outcome); };
       // P-ENT.4 (ADR-0069): audit the fail-closed TIMEOUT block too (was silent).
       const t = setTimeout(() => {
         emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "medium", tool: localFile ? "egress-local-file" : "egress", reason: `${gateDenyReason(null, true)} · ${target}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
@@ -1114,7 +1132,7 @@ class Backend {
     const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : { outcome: { outcome: "cancelled" } };
     return new Promise((resolve) => {
-      const settle = (o: any) => { clearTimeout(t); this.permPending.delete(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
+      const settle = (o: any) => { clearTimeout(t); this.permPending.delete(id); this.recoveryTurn?.resolvePermission(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
       // P-ENT.4 (ADR-0069): a fail-closed TIMEOUT is a real block — audit it too (it used to settle silently,
       // so a denial could happen with no SecurityEvent — the "why did I get a deny with no record?" gap).
       const t = setTimeout(() => {
@@ -1160,18 +1178,28 @@ class Backend {
     return this.listener !== null ? { busy: true, startedAt: this.turnStartedAtMs } : { busy: false, startedAt: null };
   }
 
-  /** P-REATTACH.1: the running turn's downstream swap + completion gate (null between turns). */
-  private turnAttach: { swap: (fn: (e: ChatEvent) => void) => void; ended: Promise<void> } | null = null;
+  private recoveryTurn: LiveTurn<ChatEvent> | null = null;
 
-  /** P-REATTACH.1: point the RUNNING master turn's event flow at a NEW stream (the old one died, or a
-   *  mid-turn message arrived and its stream is taking over the watch). Events missed while detached
-   *  are reconciled by the turn's final `done`, which carries the full assistant text. Returns
-   *  attached:false when no prompt turn is live - the caller settles its stream immediately. */
-  attachTurn(onEvent: (e: ChatEvent) => void): { attached: boolean; ended?: Promise<void> } {
-    const t = this.turnAttach;
-    if (!t) return { attached: false };
-    t.swap(onEvent);
-    return { attached: true, ended: t.ended };
+  turnStatus(turnId?: string, requestId?: string): TurnStatus | null {
+    const turn = this.recoveryTurn;
+    return turn?.matches(turnId, requestId) ? turn.status() : null;
+  }
+
+  /** Attach an observer only to the requested turn, including its recently completed snapshot. */
+  attachTurn(onEvent: (e: ChatEvent) => void, turnId?: string, signal?: AbortSignal, requestId?: string): TurnAttachment {
+    const turn = this.recoveryTurn;
+    if (!turn || !turn.matches(turnId, requestId)) return { attached: false, running: false, detach: () => {} };
+    return turn.attach(onEvent, signal);
+  }
+
+  private clearTurnRecovery(): void {
+    const turn = this.recoveryTurn;
+    this.recoveryTurn = null;
+    this.askActive = false;
+    this.openCalls.clear();
+    this.chatGate.end();
+    try { for (const fn of this.permPending.values()) fn(null); }
+    finally { turn?.finish(); }
   }
 
   /** P-COLLAB.3: the model id omp currently reports active (for the shared-session welcome header). */
@@ -1179,12 +1207,14 @@ class Backend {
 
   /** Resume a past session so the next prompt continues it. */
   async loadSession(id: string): Promise<void> {
+    this.clearTurnRecovery();
     await this.start();
     await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
     this.sessionId = id;
   }
 
   async newSession(): Promise<void> {
+    this.clearTurnRecovery();
     await this.start();
     if (this.sessionId) await this.acp!.request("session/close", { sessionId: this.sessionId }).catch(() => {});
     this.sessionId = null;
@@ -1194,7 +1224,8 @@ class Backend {
 
   /** Tear down the omp process so the next call respawns it (e.g. after an API
    *  key changes - the new env is picked up on the fresh spawn). */
-  restart(): void {
+  restart(options?: { preserveTurn?: boolean }): void {
+    if (!options?.preserveTurn) this.clearTurnRecovery();
     try { this.acp?.stop(); } catch { /* ignore */ }
     try { this.utilAcp?.stop(); } catch { /* ignore */ } // P-KG-INGEST.4: respawn the util omp too (fresh env/keys)
     this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
@@ -1222,19 +1253,16 @@ class Backend {
    *  assistant reply so the personalization distiller can learn from the turn (P9.2).
    *  P-STALL.2 (ADR-0263): the turn waits as long as the work takes - no time cutoff. Stop ends it, and
    *  a dead omp child rejects the in-flight request (ACPClient drains pending on exit). */
-  async prompt(text: string, onEventRaw: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[]): Promise<void> {
-    // P-REATTACH.1 (the frozen-composer bug): EVERY event this turn emits (the notification sink, slow
-    // notices, error lines, the final reconciling `done`) flows through ONE swappable downstream. When
-    // the browser stream dies mid-turn ("chat stream write failed - server turn continues"), a fresh
-    // stream calls attachTurn() and adopts THIS running turn; the swap redirects delivery only - the
-    // turn's accounting (assistant capture, latency taps, health arming) never changes hands.
-    let downstream = onEventRaw;
-    const onEvent = (e: ChatEvent) => downstream(e);
-    const turnEnd = Promise.withResolvers<void>();
-    this.turnAttach = { swap: (fn) => { downstream = fn; }, ended: turnEnd.promise };
-    let assistant = "";
+  async prompt(text: string, onEventRaw: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], options?: { signal?: AbortSignal; prompt?: string; requestId?: string }): Promise<void> {
+    if (this.recoveryTurn?.running || this.listener) throw new Error("A chat turn is already running");
+    const turn = new LiveTurn<ChatEvent>(options?.prompt ?? text, this.sessionId, () => pendingSnapshot(this.openCalls, Date.now()), options?.requestId);
+    this.recoveryTurn = turn;
+    this.openCalls.clear();
+    turn.attach(onEventRaw, options?.signal);
+    const onEvent = (e: ChatEvent) => turn.emit(e);
     let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
     let slow: Timer | undefined;
+    try {
     let silentSince = Date.now();
     // While a permission is awaiting the user (Ask mode), pause the slow-notice clock \u2014 a human
     // deciding is not a silent provider (askUser has its own fail-closed timeout).
@@ -1267,14 +1295,14 @@ class Backend {
     let sawOutput = false; // P-NORESP.1: did the turn emit ANY content (token / thinking / tool)?
     let lastStopReason: string | undefined; // omp's stopReason — extra signal for a silent empty turn
     let failMsg: string | undefined; // P-NORESP.1: the error message when a turn threw with no output
-    // Only learnable assistant text accrues to `assistant` (→ recordTurns + learnFromTurn). Thinking
+    // Only learnable assistant text accrues to the owner's answer (recordTurns + learnFromTurn). Thinking
     // and other display-only events are excluded by construction (R-04 / ADR-0054).
     const sink = (e: ChatEvent) => {
       arm();
       if (e.type === "token" || e.type === "thinking" || e.type === "tool" || e.type === "tool-image" || e.type === "subagent") sawOutput = true;
       if (tFirstToken === null && (e.type === "token" || e.type === "thinking")) tFirstToken = Date.now();
       else if (e.type === "usage") { usage.tokensIn = e.used; usage.costUsd = e.cost; }
-      if (isLearnableAssistantText(e)) assistant += e.text;
+      if (isLearnableAssistantText(e)) turn.text += e.text;
       try { onEvent(e); } catch { enqueueErr++; }
     };
     this.listener = sink;
@@ -1287,10 +1315,13 @@ class Backend {
     this.turnDiag(`prompt.start session=${this.sessionId}`);
     try {
       await this.ensureSession();
+      if (this.recoveryTurn !== turn) return;
+      turn.sessionId = this.sessionId;
       // ADR-0217: FAIL-CLOSED AskSage lockdown. Force the model to the gov gateway before sending; if the lock
       // is on but no gov model exists, REFUSE the turn rather than route to a direct provider. This is the
       // authoritative enforcement (the renderer's toggle-time switch does not survive an omp respawn / relaunch).
       const lock = await this.enforceAsksageLock();
+      if (this.recoveryTurn !== turn) return;
       if (!lock.ok) { lockBlocked = true; throw new Error(lock.error ?? "AskSage lockdown could not be satisfied."); }
       beginStepTurn(this.sessionId); // P-RESUME.1: anchor this turn's recorded steps to the new user message
       // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
@@ -1329,11 +1360,13 @@ class Backend {
       for (;;) {
         try {
           promptRes = await this.acp!.request<{ stopReason?: unknown }>("session/prompt", { sessionId: this.sessionId, prompt: content });
+          if (this.recoveryTurn !== turn) return;
           break;
         } catch (err) {
           const rec = this.recoverMark.take();
           if (!rec) throw err; // a user Stop, or a genuine transport failure - the existing error path owns it
           await this.recovering?.catch(() => { /* a failed reload shows up as a null sessionId below */ });
+          if (this.recoveryTurn !== turn) return;
           const v = resumeVerdict({ recovered: true, sessionAlive: !!this.sessionId, resumesSoFar: resumes });
           this.turnDiag(`prompt.recovered session=${this.sessionId} resumes=${resumes} resume=${v.resume} silentMs=${rec.silentMs}`);
           // Either way the user is TOLD, through the same health channel the recovery itself reports on.
@@ -1346,7 +1379,7 @@ class Backend {
           this.listener = sink;
           this.askActive = true;
           content = [{ type: "text" as const, text: buildResumeNote({
-            request: text, progress: assistant, pending: rec.pending,
+            request: text, progress: turn.text, pending: rec.pending,
             stalledMs: rec.silentMs, attempt: resumes, max: RESUME_MAX_PER_RUN,
           }) }];
           arm(); // the resumed run gets a fresh silence clock
@@ -1355,11 +1388,11 @@ class Backend {
       // P-GOAL-DIAG.1 (ADR-0074): the omp turn's stopReason tells us WHY a maker turn ended (e.g. an
       // empty/early end on a thinking-heavy Claude turn) — invaluable for the model-specific loop bug.
       lastStopReason = promptRes?.stopReason ? String(promptRes.stopReason) : undefined;
-      this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${assistant.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
+      this.turnDiag(`prompt.resolved session=${this.sessionId} chars=${turn.text.length} stopReason=${promptRes?.stopReason ?? "?"} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink}`);
     } catch (e) {
       errored = true; // P-EVAL.2: a disconnect/refusal makes this turn's latency sample ok=false
       failMsg = e instanceof Error ? e.message : String(e);
-      this.turnDiag(`prompt.${lockBlocked ? "lockdown-blocked" : "error"} session=${this.sessionId} chars=${assistant.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${failMsg.slice(0, 80)}`);
+      this.turnDiag(`prompt.${lockBlocked ? "lockdown-blocked" : "error"} session=${this.sessionId} chars=${turn.text.length} enqueueErr=${enqueueErr} listenerIntact=${this.listener === sink} msg=${failMsg.slice(0, 80)}`);
       // ADR-0217: a lockdown block is a deliberate refusal — surface it plainly (no fallback). A failure
       // AFTER some output streamed also prints inline. But a failure with NO output at all (e.g. an
       // overloaded gov model returning HTTP 429/5xx) is handled below by the no-response notice, which
@@ -1369,6 +1402,7 @@ class Backend {
       else if (sawOutput) onEvent({ type: "token", text: `\n[agent unavailable: ${failMsg}]` });
     } finally {
       clearTimeout(slow);
+      if (this.recoveryTurn === turn) {
       this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
       this.askActive = false;
       this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
@@ -1376,9 +1410,10 @@ class Backend {
       for (const [id, fn] of this.permPending) { this.permPending.delete(id); fn(null); }
       this.pendingPerms = 0;
       endStepTurn(this.sessionId); // P-RESUME.1: persist the buffered thinking for this turn
+      }
+      if (this.listener === sink) { this.listener = null; this.turnStartedAtMs = null; }
     }
-    this.listener = null;
-    this.turnStartedAtMs = null;
+    if (this.recoveryTurn !== turn) return;
     // P-NORESP.1: the turn produced NO content at all (no token/thinking/tool) — either a silent empty
     // response (200 with nothing) OR a failure that threw before any output (e.g. an overloaded gov model
     // returning HTTP 429/5xx, or Claude Fable 5 erroring). Both leave the user with nothing, so surface a
@@ -1390,15 +1425,11 @@ class Backend {
     }
     // Carry the FULL accumulated reply on `done` so the UI can reconcile a lossy live stream (if some
     // token chunks didn't reach the browser, the turn still renders the complete final answer on settle).
-    onEvent({ type: "done", text: assistant });
-    // P-REATTACH.1: the turn is over. Resolve AFTER the reconciling `done` above so an attached stream
-    // flushes it before its route closes; a late attacher from here on settles immediately instead.
-    this.turnAttach = null;
-    turnEnd.resolve();
-    void learnFromTurn(text, assistant, (sys, usr) => this.complete(sys, usr)); // best-effort; the model extractor (opt-in) uses complete()
+    turn.finish();
+    void learnFromTurn(text, turn.text, (sys, usr) => this.complete(sys, usr)); // best-effort
     // ADR-0009 Phase B (issue #12): capture the turn for traceability. Sanitized + sha only,
     // GUI-side (can't co-write DuckDB); fully guarded so it never affects the chat.
-    recordTurns({ sessionId: this.sessionId ?? "", userText: text, assistantText: assistant });
+    recordTurns({ sessionId: this.sessionId ?? "", userText: text, assistantText: turn.text });
     // P-EVAL.2 (ADR-0187): capture this turn's API latency (t_sent -> first token -> end) to the append-only
     // latency log; the single writer ingests it into api_latency for the per-model p50/p95 rollup. A turn
     // that never reached the send (tSent==0) records nothing. Guarded + fail-open inside recordLatency.
@@ -1408,6 +1439,19 @@ class Backend {
       tokensIn: usage.tokensIn, costUsd: usage.costUsd, // tokens_out has no reliable server-side per-turn count
 
     });
+    } finally {
+      clearTimeout(slow);
+      try {
+      if (this.recoveryTurn === turn) {
+        this.listener = null;
+        this.turnStartedAtMs = null;
+        this.askActive = false;
+        this.openCalls.clear();
+        this.chatGate.end();
+        for (const fn of this.permPending.values()) fn(null);
+      }
+      } finally { turn.finish(); }
+    }
   }
 
   // P-GOAL.1 (ADR-0046): the /goal loop. Run MAKER iterations on the persistent session toward `goal`,
@@ -1912,7 +1956,7 @@ class Backend {
   private async healthRecover(): Promise<void> {
     const resumeId = this.sessionId;
     this.cancel({ forRecover: true }); // keep the resume marker: this is the harness acting, not the user
-    this.restart();
+    this.restart({ preserveTurn: true });
     if (!resumeId) return;
     try {
       await this.start();
@@ -1959,6 +2003,10 @@ class Backend {
         let spawned: ACPClient | null = null;
         try {
           this.applyAttributionEnv(); // same env threading as the chat spawn
+          // P-GATE-PATH.1 (ADR-0356): the util connection is a real omp child running real tools, so it
+          // gets the same refusal as the chat spawn. Returning null degrades to the shared (also gated)
+          // connection; it never becomes an ungated shortcut. Logged because the catch below is silent.
+          if (!GATE) { console.error(`[acp:util] ${gateRefusal()}`); return null; }
           const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
           const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...isoCfg], currentWorkspace());
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything

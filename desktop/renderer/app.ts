@@ -9,6 +9,8 @@
 // the browser dev server (simulated). Pure DOM, no framework.
 
 import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
+import type { TurnStatus } from "./chat_events.ts";
+import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { mountMascot, type MascotHandle } from "./mascot.ts"; // P-MASCOT.1: LUCID the ninja (tiny, static import)
 import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
@@ -21,7 +23,7 @@ import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
 import { PREVIEW_KIND_ICON, laneTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
-import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
+import { budgetWindowState, providerBudgetRows, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
@@ -68,7 +70,7 @@ import type { PersonalStatus } from "./bridge.ts";
 import { personalStatTiles, personalStatsHtml } from "./personal_stats.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
-import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
+import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
@@ -539,16 +541,29 @@ function buildShell(): void {
             <button class="btn-mini prev-reveal" id="prevReveal" hidden data-tip="Show in folder|Open the containing folder in your file manager with this file selected.">${icon("folder", 13)}</button>
           </div>
         </div>
+        <div class="preview-zoomrow">
+          <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" title="Wheel here to zoom any preview, including PDF and remote frames">
+            <button type="button" class="btn-mini" id="prevZoomOut" aria-label="Zoom Preview out">-</button>
+            <button type="button" class="btn-mini" id="prevZoomReset" aria-label="Reset Preview zoom to 100 percent">100%</button>
+            <button type="button" class="btn-mini" id="prevZoomIn" aria-label="Zoom Preview in">+</button>
+          </div>
+          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" title="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">Grab to pan</button>
+          <button type="button" class="btn-mini" id="prevWheelZoom" aria-pressed="false" title="Toggle plain wheel zoom inside local preview documents. Off preserves scrolling; Ctrl/Meta+wheel still zooms.">Wheel zoom</button>
+          <span class="preview-zoom-hint" title="Ctrl/Meta+wheel zooms local content. For native PDFs, remote pages and nested frames, wheel over the percentage controls instead.">Ctrl/Meta+wheel; PDF/remote: wheel here</span>
+        </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
           <div class="preview-pill" id="prevPill" hidden aria-live="polite"><span class="preview-pill-dot"></span><span id="prevPillLabel">Reviewing the preview</span></div>
           <!-- P-PREVIEW.7 (ADR-0179): the explain-overlay for pages the sandbox can't run (e.g. Electron renderers). -->
           <div class="preview-notice" id="prevNotice" hidden aria-live="polite"></div>
+          <div class="preview-viewport" id="prevViewport" tabindex="0" aria-label="Preview content, scroll to pan enlarged content">
           <div class="preview-stage" id="prevStage">
             <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="Your app preview" hidden></iframe>
             <iframe id="prevFrameA" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="The agent's app preview" hidden></iframe>
+            <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
           </div>
-          <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
+          </div>
+          <div id="prevPanSurface" class="preview-pan-surface" hidden aria-hidden="true"></div>
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
@@ -1625,6 +1640,29 @@ function noteHealth(action: "probe" | "recover", reason: string): void {
   addNoteChip(reason ? `${what}: ${reason}` : what);
 }
 
+// P-TURN-RECOVERY-OWNER: one renderer owns the composer; leaving only detaches its local reader.
+let turnViewEpoch = 0;
+let activeTurnView: { detach: () => void; stop: () => Promise<void>; reconnect: () => void } | null = null;
+let recoveryChecking = false;
+function leaveTurnView(): number {
+  ++turnViewEpoch;
+  activeTurnView?.detach(); activeTurnView = null;
+  bridge.detachChat();
+  recoveryChecking = false;
+  state.streaming = false;
+  goalLoopRunning = false;
+  $("#turnReconnect")?.remove();
+  setSendEnabled();
+  return turnViewEpoch;
+}
+function showTurnReconnect(message: string, reconnect: () => void): void {
+  $("#turnReconnect")?.remove();
+  const notice = el(`<div id="turnReconnect" class="thread-tail-note"><span></span> <button type="button">Reconnect</button></div>`);
+  $("span", notice)!.textContent = message;
+  $("button", notice)!.addEventListener("click", reconnect);
+  $("#thread")!.appendChild(notice);
+}
+
 async function send(): Promise<void> {
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
@@ -1632,6 +1670,7 @@ async function send(): Promise<void> {
   const atts = state.attachments.slice();
   const images = promptImageBlocks(atts);
   if (!text && images.length === 0) return;
+  if (recoveryChecking) { showToast({ tone: "warn", title: "Checking connection", desc: "Wait for the status check, or reconnect before sending.", timeout: 4000 }); return; }
   // P-FLEET.L8: a lane runs its OWN omp child, so the master composer's "/" expansion is meaningless to it
   // - an expanded body would reach a session that never registered the command. targetCaps says so, and
   // while attached the text goes to the lane exactly as the user typed it.
@@ -1675,6 +1714,23 @@ async function send(): Promise<void> {
   ta.value = ""; autosize(ta);
   state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
   addMessage("user", text, atts);
+  const turnFrom = nextTurnFrom; nextTurnFrom = null;
+  p2pTeeUserTurn(sendText, turnFrom ?? undefined);
+  const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
+  const lane = isLaneTarget(state.composerTarget) ? state.composerTarget : null;
+  await renderChatTurn(text, (onEvent) => lane
+    ? bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void)
+    : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId });
+}
+
+// New prompts and read-only attachments share every HUD, voice, activity, and approval handler.
+async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) => void) => Promise<void>, opts: { turnId?: string; laneId?: string; context?: { role: string; text: string; turn?: number }[] } = {}): Promise<void> {
+  const owner = ++turnViewEpoch;
+  activeTurnView?.detach();
+  const owns = () => owner === turnViewEpoch;
+  let turnId = opts.turnId;
+  let terminal = false, stopped = false, settled = false, connecting = false;
+  let adopted = !!opts.turnId;
   state.streaming = true; state.streamStartedAt = Date.now(); setSendEnabled();
 
   const node = addMessage("assistant", "");
@@ -1689,7 +1745,8 @@ async function send(): Promise<void> {
   // on the first tool event so a pure-text turn shows nothing extra.
   let thoughts: ThoughtsWin | null = null;
   let reasoning: ReasoningWin | null = null; // the live "thinking" block (above the answer)
-  const permCards: { el: HTMLElement; finalize: () => void }[] = []; // Ask-mode approval prompts
+  const permCards = new Map<string, { el: HTMLElement; finalize: () => void }>();
+  const answeredPermissions = new Set<string>();
   const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
   const marks: ToolMark<ChipData>[] = []; // P-CHAT.B (ADR-0189): tool calls anchored by answer-buffer length, interleaved into the answer on settle
   const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
@@ -1702,7 +1759,7 @@ async function send(): Promise<void> {
   const toolMeta = new Map<string, { name: string; ok?: boolean }>();
   let buf = "";
   let thinkBuf = ""; // P-VOICE.7 (ADR-0269): this turn's reasoning stream - raw material for spoken thinking snapshots
-  const t0 = Date.now();
+  let t0 = Date.now();
   // Cold start: the timer is already ticking but nothing has arrived - show an intent-aware
   // "warming" line so the user always sees something meaningful before the first token/tool.
   // The think/write lines are picked ONCE per turn (stable, not reshuffling on every token).
@@ -1815,8 +1872,35 @@ async function send(): Promise<void> {
   // P-VOICE.6/.7: hands-free, a long think is DEAD AIR - indistinguishable from a crash. Open with a varied,
   // active-listening acknowledgement (restating the ask when it can be restated faithfully), then speak
   // snapshots of the live reasoning while the user waits - until the answer itself starts talking.
-  startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
+  if (!adopted) startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
   const onEvent = (e: ChatEvent) => {
+    if (!owns() || settled) return;
+    if (e.type === "connection") { setPhase(e.message); paintHud(); return; }
+    // P-TURN-RECOVERY-SNAPSHOT: canonical state replaces deltas and never becomes speech or P2P input.
+    if (e.type === "turn-snapshot") {
+      const snapshot = e.snapshot;
+      turnId = snapshot.turnId;
+      if (adopted) {
+        const prior = priorTurnContext(opts.context ?? [], snapshot.prompt);
+        node.remove();
+        renderThread(prior);
+        addMessage("user", snapshot.prompt);
+        $("#thread")!.appendChild(node);
+        text = snapshot.prompt; state.lastPrompt = snapshot.prompt;
+        adopted = false;
+      }
+      buf = snapshot.text; (node as MsgNode)._md = buf;
+      t0 = snapshot.startedAt; state.streamStartedAt = t0;
+      liveTurn.pending = snapshot.pending; liveTurn.pendingAt = Date.now();
+      sawTool = snapshot.pending.length > 0;
+      for (const card of permCards.values()) card.el.remove();
+      permCards.clear(); voiceApproval = null;
+      speechCursor = buf.length; speechFedAt = buf.length;
+      streamEl.innerHTML = renderMarkdown(buf) + (snapshot.running ? `<span class="cursor"></span>` : "");
+      setPhase(snapshot.pending.length ? slowPhaseLabel(Date.now() - t0, snapshot.pending) : snapshot.running ? "Reconnected" : "Finishing reply");
+      paintHud(); scrollChat();
+      return;
+    }
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
     if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
     else if (e.type === "thinking") {
@@ -1858,9 +1942,10 @@ async function send(): Promise<void> {
       scrollChat();
     }
     else if (e.type === "permission") {
+      if (answeredPermissions.has(e.id) || permCards.has(e.id)) return;
       setPhase("Needs approval"); paintHud();
-      const card = createPermissionCard(e, () => { if (voiceApproval?.id === e.id) voiceApproval = null; });
-      permCards.push(card);
+      const card = createPermissionCard(e, () => { answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null; });
+      permCards.set(e.id, card);
       armVoiceApproval(e, card.respond); // P-AVATAR.5: hands-free sessions hear the request + can speak the verdict
       // P-EGRESS.1 / P-EXEC.1: egress + exec approvals dock directly above the prompt bar; normal tool
       // prompts stay inline.
@@ -1894,41 +1979,71 @@ async function send(): Promise<void> {
     // clear notice + a recommended fallback the user can switch to and retry.
     else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason, e.reason); scrollChat(); }
     else if (e.type === "done") {
-      if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */
+      terminal = true;
+      buf = canonicalTurnAnswer(buf, e.text);
       // Don't clobber the no-response notice with an empty answer body.
       if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); }
       (node as MsgNode)._md = buf; stopThinkingCues(); speechFeed(buf, true); /* P-VOICE.2: speak the tail the sentence gate withheld */ finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
     }
   };
-  // P-COLLAB.15: attribute a guest-driven turn (runGuestPromptLocally set nextTurnFrom) in the live broadcast;
-  // a host-typed turn leaves it null -> the host authors it. Consume-once so it can't leak into the next turn.
-  const turnFrom = nextTurnFrom; nextTurnFrom = null;
-  p2pTeeUserTurn(sendText, turnFrom ?? undefined); // P-COLLAB.17/.15: record + broadcast the user turn (direct-P2P)
-  // P-PREVIEW-PWA.3 (ADR-0240): a renderer-hosted direct-P2P share sends roster COUNTS so the backend can
-  // build the agent-awareness preamble (a relay share is computed backend-side; counts only, never names).
-  const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
-  // P-FLEET.L8: route by TARGET. Attached, the turn runs inside the lane's own omp child and the lane's
-  // wire carries no image block / P2P attribution, so only the text crosses. A LaneEvent is structurally a
-  // subset of what this closure already handles, so the SAME renderer drives the HUD, the chips and the
-  // token meter either way; named cast per house rule, exactly as bridge.fleetPrompt unifies its own sink.
-  const lane = isLaneTarget(state.composerTarget) ? state.composerTarget : null;
-  try {
-    if (lane) await bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void);
-    else await bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare);
-  }
-  finally {
+  const settle = () => {
+    if (!owns() || settled) return;
+    settled = true;
+    $("#turnReconnect")?.remove();
     (node as MsgNode)._md = buf;
-    stopThinkingCues(); // P-VOICE.6: the turn is over - no cue may outlive it
-    speechFeed(buf, true); // P-VOICE.2: also covers an aborted / errored stream, which never emits "done"
-    if (state.streaming) { if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ } finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
-    void renderSessions(); void refreshBudget(false); void syncMode(); void refresh(); // P-PERF.3: one dashboard catch-up now the turn (and its stream) is done, since the poll no longer runs the heavy obs-DB read mid-stream
-    scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
-    maybeListen(); // P-VOICE.3: the turn has settled - if the audio already drained, open the mic now
-    // P-INTERJECT.2 (was P-ACP.4): the turn ended - fire the first HELD prompt as the next turn (push
-    // records and later holds stay staged; they drain one per turn, preserving the auto-fire UX).
+    stopThinkingCues(); if (!terminal) speechFeed(buf, true);
+    if (!terminal) { if (!(noResponse && !buf.trim())) renderAnswerBody(streamEl, buf, marks); finishHud(); }
+    state.streaming = false; activeTurnView = null; setSendEnabled();
+    void renderSessions(); void refreshBudget(false); void syncMode(); void refresh();
+    scheduleKnowledgeRefresh(); maybeListen();
+    // P-TURN-RECOVERY-DRAIN: only done or deliberate Stop may release a held prompt.
     const nq = nextHold(state.queuedItems);
-    if (nq.item) { state.queuedItems = nq.rest; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; ta2.value = nq.item.text; setSendEnabled(); void send(); }
-  }
+    if ((terminal || stopped) && nq.item) { state.queuedItems = nq.rest; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; if (!ta2.value.trim()) { ta2.value = nq.item.text; setSendEnabled(); void send(); } else { state.queuedItems = [nq.item, ...state.queuedItems]; renderQueued(); } }
+  };
+  const run = async (transport: typeof connect) => {
+    if (!owns() || settled || connecting) return;
+    connecting = true;
+    $("#turnReconnect")?.remove();
+    try { await transport(onEvent); }
+    catch (error) {
+      if (owns() && !stopped && !terminal) setPhase(`Connection interrupted: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      connecting = false;
+      if (owns()) {
+        if (terminal || stopped) settle();
+        else {
+          stopThinkingCues();
+          setPhase("Connection lost; turn status unknown"); paintHud();
+          showTurnReconnect("The turn may still be running. Reconnect to check without sending again, or Stop it.", () => void reconnect());
+        }
+      }
+    }
+  };
+  const reconnect = async () => {
+    if (!owns() || settled || connecting) return;
+    if (opts.laneId) { showTurnReconnect("Reopen this lane from the fleet to follow its current activity.", () => { demoteLane(); void promoteLane(opts.laneId!); }); return; }
+    try {
+      if (turnId) {
+        const status = await bridge.chatStatus();
+        if (!owns()) return;
+        if (!canAdoptTurn(status, turnId)) throw new Error("The original turn is no longer available; Stop to release this composer");
+      }
+      await run((sink) => bridge.attachChat(turnId, sink));
+    } catch (error) { if (owns()) showTurnReconnect(`Unable to reconnect: ${error instanceof Error ? error.message : String(error)}`, () => void reconnect()); }
+  };
+  activeTurnView = {
+    reconnect: () => void reconnect(),
+    detach: () => { clearInterval(timer); stopThinkingCues(); permCards.forEach((c) => c.el.remove()); voiceApproval = null; },
+    stop: async () => {
+      if (!owns()) return;
+      try {
+        const result = await (opts.laneId ? bridge.fleetCancel(opts.laneId) : bridge.cancelChat());
+        if (opts.laneId && !(result as { ok?: boolean } | null)?.ok) throw new Error("The lane did not confirm Stop");
+        stopped = true; if (owns()) settle();
+      } catch (error) { if (owns()) showTurnReconnect(`Stop was not confirmed: ${error instanceof Error ? error.message : String(error)}. Reconnect or try Stop again.`, () => void reconnect()); }
+    },
+  };
+  await run(connect);
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
@@ -1982,10 +2097,10 @@ function setSendEnabled(): void {
     btn.innerHTML = icon("square", 16);
     btn.setAttribute("data-tip", "Stop|Interrupt the reply + tool calls");
   } else {
-    btn.disabled = !ta.value.trim() && state.attachments.length === 0; // P-VISION.1: image-only messages can send
+    btn.disabled = recoveryChecking || (!ta.value.trim() && state.attachments.length === 0);
     btn.classList.remove("stop");
     btn.innerHTML = icon("send", 18);
-    btn.setAttribute("data-tip", "Send|Enter");
+    btn.setAttribute("data-tip", recoveryChecking ? "Checking connection|Sending is paused until session status is confirmed" : "Send|Enter");
   }
 }
 /** P-INTERJECT.2 (was P-ACP.4): the staged-prompt STACK above the composer - one chip per item, in run
@@ -2025,6 +2140,7 @@ function renderQueued(): void {
  *  `done`/finally path flips `streaming` off and fires any pre-staged prompt. */
 async function stopTurn(): Promise<void> {
   if (!state.streaming) return;
+  if (activeTurnView) { await activeTurnView.stop(); return; }
   // P-GOAL.2: a running /goal loop is cancelled at the LOOP level (halt iterations + abort the turn);
   // an ordinary turn just cancels the turn.
   try { await (goalLoopRunning ? bridge.cancelGoal() : bridge.cancelChat()); } catch { /* best-effort; it still settles */ }
@@ -2087,15 +2203,20 @@ async function promoteLane(laneId: string): Promise<void> {
   const already: ComposerTarget = { kind: "lane", laneId, name: "", cwd: "", model: "" };
   if (isLaneTarget(state.composerTarget) && sameTarget(state.composerTarget, already)) return;
   if (isLaneTarget(state.composerTarget)) demoteLane(); // one composer, one lane: leave the old one first
+  const owner = leaveTurnView();
+  recoveryChecking = true; setSendEnabled();
   const r = await bridge.fleetPromote(laneId).catch(() => null);
+  if (owner !== turnViewEpoch) return;
   if (!r?.ok || !r.lane) {
     // The engine refuses through composer_target.promoteRefusal, so its wording is shown verbatim. An
     // ABSENT reason is the module's own "did not report a status" case, not a sentence invented here;
     // promoteRefusal returns null only for a status that ALLOWS promotion, which "" is not.
     showToast({ tone: "warn", title: "Can't attach to this lane", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
+    void recoverMasterTurn();
     return;
   }
   const lane: LaneView = r.lane;
+  recoveryChecking = false;
   const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
   parkedMasterThread = snapshotThread();
   state.composerTarget = target;
@@ -2120,6 +2241,7 @@ async function promoteLane(laneId: string): Promise<void> {
 function demoteLane(): void {
   const was = state.composerTarget;
   if (!isLaneTarget(was)) return;
+  leaveTurnView();
   laneWatch?.stop();
   laneWatch = null;
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
@@ -2141,6 +2263,7 @@ function demoteLane(): void {
   parkedMasterThread = null;
   addNoteChip(demoteNotice(was));
   renderComposerTarget();
+  void recoverMasterTurn();
 }
 
 /** P-FLEET.L8: events from the FOLLOW stream. While `send()` owns a turn on this lane the same events also
@@ -2577,6 +2700,36 @@ const PROV_HINTS: Record<string, string> = {
   "google-vertex": "<b>Gemini Enterprise</b> — Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below — omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
   perplexity: "Paste a Perplexity API key for Sonar models. (Pro/Max OAuth is interactive email-OTP - it can't run through this app, so use a key here.)",
 };
+
+function providerQuotaNotice(): string {
+  return `<div class="set-note">${icon("info", 12)} <b>Subscriptions are not unlimited agent time.</b>
+    Entry subscriptions around <b>$20-30/month</b> have limited allowances for agentic use. Long-running or parallel jobs can exhaust them quickly; model, context and tool use affect consumption. Prices and limits vary by plan and region.
+    <div>The provider controls subscription allowance. <b>LUCID cannot raise or reset it.</b> Check the provider's usage page before a large job, and wait for a reset or review its upgrade/credit options if needed.</div>
+    <div><b>API keys use separate metered billing and rate limits</b>, not an unlimited extension of your subscription. A failed turn is not automatically a quota issue: check the actual error for authentication, connectivity, LUCID/tool failures or provider limits.</div>
+    <div><a href="https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan" target="_blank" rel="noopener noreferrer">OpenAI plan guidance</a> · <a href="https://chatgpt.com/pricing" target="_blank" rel="noopener noreferrer">ChatGPT plans</a> · <a href="https://chatgpt.com/codex/settings/usage" target="_blank" rel="noopener noreferrer">Codex usage</a></div>
+    <div><a href="https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan" target="_blank" rel="noopener noreferrer">Claude plan guidance</a> · <a href="https://claude.ai/upgrade" target="_blank" rel="noopener noreferrer">Claude plans</a> · <a href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer">Claude usage</a></div>
+  </div>`;
+}
+
+function cachedBudgetRow(b: NonNullable<MemorySnapshot["budgets"]>[number]): string {
+  const window = budgetWindowState(b);
+  const used = Number.isFinite(b.used) && b.used >= 0 && b.used <= 1 ? `${Math.round(b.used * 100)}%` : "unknown";
+  const remaining = window.remainingPercent == null ? "unknown" : `about ${window.remainingPercent}%`;
+  const reset = window.resetsAt == null ? "unknown" : `${esc(new Date(window.resetsAt).toLocaleString())}${window.expired ? " (passed; replenishment not confirmed)" : ` (${ageStr(window.resetsAt)})`}`;
+  return `<div class="set-note"><b>${esc(b.label)}</b>
+    <div>Cached used: <b>${used}</b> · Estimated remaining: <b>${remaining}</b></div>
+    <div>Status: ${esc(b.status || "unknown")}</div><div>Reported reset: ${reset}</div></div>`;
+}
+
+function providerQuotaBody(p: ProviderAuth): string {
+  const rows = providerBudgetRows(state.memory?.budgets ?? [], p.id);
+  return `<div class="set-note">${icon("info", 12)} <b>Subscription plan: unknown</b> (not reported to LUCID).
+    <div>${p.oauthActive ? "OAuth is connected, but this does not identify your plan or guarantee remaining allowance." : "OAuth is not connected. Any cached report below may belong to an earlier connection."}</div>
+    ${p.keySet ? "<div>An API key is also configured. These subscription reports do not measure API spending or establish which credential a request used.</div>" : ""}
+    <div>Cached reports only: the source supplies no sample timestamp or account identity. Freshness and the current account cannot be verified. Refreshing LUCID can return the same cached values; the provider's usage page is authoritative.</div>
+    </div>${rows.length ? rows.map(cachedBudgetRow).join("") : `<div class="set-note">Subscription used, remaining, status and reset: <b>unknown</b>. No matching usage report is available; this does not mean zero usage or unlimited quota.</div>`}`;
+}
+
 function provCard(p: ProviderAuth): string {
   const last4 = esc(p.keyLast4 ?? "");
   // A provider can also be configured purely through its extra fields (e.g. Vertex via ADC project+location,
@@ -2590,6 +2743,7 @@ function provCard(p: ProviderAuth): string {
   // The hint text goes in ONE <span> so rich markup (<b>/<a>) stays inline instead of becoming separate
   // flex items in the flex `.prov-hint` (that squished multi-tag hints into clipped narrow columns).
   const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)}<span>${PROV_HINTS[p.id]}</span></div>` : "";
+  const quota = p.canOauth ? `<div data-provider-quota="${esc(p.id)}">${providerQuotaBody(p)}</div>` : "";
   const oauthRow = p.canOauth
     ? `<div class="prov-row">${p.oauthActive
         ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
@@ -2632,7 +2786,7 @@ function provCard(p: ProviderAuth): string {
   }).join("");
   return `<div class="prov">
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
-    <div class="prov-body">${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
+    <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
 }
 
 /** P-GUIDE.1/.2: open a bundled advisor guide in the Preview panel (Yours lane). The engine resolves
@@ -3314,7 +3468,7 @@ function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
   // discoverable popup) so providers aren't buried in this collapsed card.
   const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place \u2014 native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
-  return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + cards + signoutAll, true);
+  return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + providerQuotaNotice() + cards + signoutAll, true);
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
 // exposes such a model (else an empty, preserved anchor). Hidden-by-default; the user must type
@@ -4245,6 +4399,62 @@ async function testLocalProviderConn(baseUrl: string): Promise<void> {
     const hint = u.startsWith("https") ? " Check the VPN tunnel, TLS cert, and port." : " Check the host/port - is the server running?";
     showToast({ tone: "danger", title: "Not reachable", desc: (r?.error ?? "no response.") + hint });
   }
+}
+
+/** P-LOCAL.6: ask the endpoint what it serves and fill the add form's model ids from its answer, so the
+ *  user stops guessing (and stops inheriting the catalog's editorial guess at a context window). */
+async function discoverLocalProviderModels(): Promise<void> {
+  const body = $("#setBody")!;
+  const u = (($("#lpBaseUrl", body) as HTMLInputElement | null)?.value ?? "").trim();
+  if (!u) { showToast({ tone: "warn", title: "Enter a base URL first", desc: "Type the endpoint's base URL, then discover its models." }); return; }
+  showToast({ title: "Asking the endpoint…", desc: u, timeout: 1400 });
+  const r = await bridge.localProviderDiscover({ baseUrl: u }).catch(() => null);
+  if (!r?.reachable) {
+    const hint = u.startsWith("https") ? " Check the VPN tunnel, TLS cert, and port." : " Check the host/port - is the server running?";
+    showToast({ tone: "danger", title: "Not reachable", desc: (r?.error ?? "no response.") + hint });
+    return;
+  }
+  if (r.authRequired) {
+    showToast({
+      tone: "warn", title: "This endpoint needs a key",
+      desc: "Add the provider with its key first (the key goes to the OS-encrypted vault), then press Discover on its row. LUCID never sends a key through this probe.",
+    });
+    return;
+  }
+  const models = r.models ?? [];
+  if (!models.length) {
+    showToast({ tone: "warn", title: "No models reported", desc: `The endpoint answered HTTP ${r.status} with an empty list. Type the model ids by hand.` });
+    return;
+  }
+  const field = $("#lpModels", body) as HTMLInputElement | null;
+  if (field) field.value = modelsFieldValue(models);
+  const sized = models.filter((m) => m.contextWindow).length;
+  const extra = [
+    sized ? `${sized} with a real context window` : "no context windows reported",
+    r.dropped ? `${r.dropped} entr${r.dropped === 1 ? "y" : "ies"} skipped as unusable` : "",
+  ].filter(Boolean).join(" \u00b7 ");
+  showToast({ tone: "ok", title: `Found ${models.length} model${models.length === 1 ? "" : "s"}`, desc: `${extra}. Edit the list if you only want some of them.` });
+}
+
+/** P-LOCAL.6: refresh a SAVED provider's model list from its endpoint. Authenticates from the vault
+ *  (main injected the secret into the engine's env at spawn), so a credentialed box works here. */
+async function rediscoverLocalProvider(id: string): Promise<void> {
+  const def = state.localProviders.find((p) => p.id === id);
+  if (!def) return;
+  showToast({ title: "Asking the endpoint…", desc: def.baseUrl, timeout: 1400 });
+  const r = await bridge.localProviderDiscover({ id }).catch(() => null);
+  if (!r?.reachable) { showToast({ tone: "danger", title: "Not reachable", desc: r?.error ?? "no response." }); return; }
+  if (r.authRequired) {
+    showToast({ tone: "warn", title: "The endpoint refused the key", desc: "Add or update the key with the Key button, then restart LUCID so the engine picks it up." });
+    return;
+  }
+  const { def: next, added, removed } = providerWithDiscovered(def, r.models ?? [], Date.now());
+  if (next === def) { showToast({ tone: "warn", title: "No models reported", desc: `HTTP ${r.status} with an empty list. The saved list was left alone.` }); return; }
+  const saved = await bridge.localProviderUpsert(next).catch(() => null);
+  if (!saved?.saved) { showToast({ tone: "danger", title: "Could not save", desc: saved?.errors?.join("; ") ?? "the provider was rejected." }); return; }
+  void hydrateLocalProviders();
+  const changes = [added.length ? `+${added.length}` : "", removed.length ? `-${removed.length}` : ""].filter(Boolean).join(" ");
+  showToast({ tone: "ok", title: `${next.models.length} model${next.models.length === 1 ? "" : "s"} from the endpoint`, desc: `${changes || "no change"}. Restart LUCID to apply.` });
 }
 
 /** Store (or rotate) an authed provider's key straight into the OS-encrypted vault, from the inline row. */
@@ -5975,6 +6185,9 @@ function closeKnowledge(): void {
 // agent built; a screenshot can be sent to chat. Mirrors the Knowledge-graph fly-out (resizable right aside,
 // mutually exclusive with the other right surfaces). The agent driving it (custom tools) is P-PREVIEW.2.
 let previewOpen = false;
+let agentPreviewRevision = 0;
+let pendingAgentPreviewPath = "";
+const dismissedAgentPreviews = new Set<string>();
 function openPreview(opts?: { reveal?: PrevLane }): void {
   previewOpen = true;
   closeSettings();
@@ -6022,12 +6235,19 @@ function syncPrevPathField(path: string): void {
 /** A file YOU chose to preview (Open, Browse, /figma, image-markup) — always lands on the Yours lane. */
 function openPreviewFile(path: string): void {
   if (!path) return;
+  dismissedAgentPreviews.delete(path); // An explicit user Open can opt this document back in.
   if (!previewOpen) openPreview({ reveal: "yours" });
   else switchPrevLane("yours");
   syncPrevPathField(path);
   loadPreview(path, "yours");
 }
 function closePreview(): void {
+  setPreviewPan(false);
+  if (pendingAgentPreviewPath) dismissedAgentPreviews.add(pendingAgentPreviewPath);
+  if (prevPathByLane.agent) dismissedAgentPreviews.add(prevPathByLane.agent);
+  ++agentPreviewRevision;
+  pendingAgentPreviewPath = "";
+  clearPreviewTesting();
   if (!previewOpen) return;
   previewOpen = false;
   stopPreviewShotLoop();
@@ -6065,27 +6285,31 @@ function closeTrainer(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** P-PREVIEW.2 (ADR-0096; auto-show, 2026-07-01): the agent just wrote a browser-previewable file — show it in
- *  the Preview panel automatically. It's just a preview, so we don't ask (the old toast disappeared before the
- *  user could click it). If the panel is already open, swap to the new file; otherwise open it on this file. */
+/** Auto-open only a verified, current target that the user has not dismissed. */
 function onPreviewAvailable(path: string): void {
-  if (!path) return;
-  // P-PREVIEW.19 (ADR-0339): only remember a target that PROVABLY previews. `/api/preview/serve` reports a
-  // failure with HTTP 200 and an HTML body, so a rendered error page is indistinguishable from a rendered
-  // document on this side; the probe (ADR-0335) is the only honest answer. Without this a path that never
-  // once rendered still became the panel's sticky re-open target, which is how a new session kept opening
-  // on `/tmp/x.pdf`. The load below still happens either way, so a genuine failure is visible NOW; what the
-  // probe governs is whether it is worth re-opening a panel for LATER.
-  void bridge.previewProbe(path).then((resolves) => {
-    if (resolves) state.lastPreviewablePath = path;
-  }).catch(() => { /* fail-closed: an unprobeable path is not remembered */ });
-  schedulePhoneAutoSend(path); // P-PREVIEW-PWA.2: auto-mirror the agent's refreshed preview to phone guests
-  // A write JUST happened, so the agent lane's loaded document is stale by definition. Clear the lane's
-  // path before openPreview so its unchanged-path guard cannot skip the reload (that guard exists to keep
-  // a running previewed app alive across mere panel toggles, not across file changes).
-  if (!previewOpen) { prevPathByLane.agent = ""; openPreview({ reveal: "agent" }); kickPreviewShotSoon(); return; }
-  loadPreview(path, "agent"); // already open → update the AGENT lane live; badges the tab if you're on Yours
-  kickPreviewShotSoon(); // refresh the cached shot once the agent frame paints, so a following preview_screenshot has it
+  if (!path || dismissedAgentPreviews.has(path)) return;
+  const revision = ++agentPreviewRevision;
+  const owner = turnViewEpoch;
+  pendingAgentPreviewPath = path;
+  state.lastPreviewablePath = "";
+  // File errors are served as HTML with HTTP 200, so loading is not proof of a valid preview.
+  const ready = resolvePreview(path).kind === "remote"
+    ? bridge.previewEgressAllows(path).then((allowed) => canPreviewRemote(path, allowed))
+    : bridge.previewProbe(path);
+  void ready.catch(() => false).then((resolves) => {
+    const current = revision === agentPreviewRevision && owner === turnViewEpoch;
+    if (!current || dismissedAgentPreviews.has(path)) return;
+    pendingAgentPreviewPath = "";
+    if (!resolves) {
+      showToast({ tone: "warn", title: "Preview unavailable", desc: "The requested document could not be verified. Preview was not opened." });
+      return;
+    }
+    if (!previewOpen) openPreview({ reveal: "agent" });
+    loadPreview(path, "agent");
+    state.lastPreviewablePath = path;
+    schedulePhoneAutoSend(path);
+    kickPreviewShotSoon();
+  });
 }
 // P-PREVIEW.3a-shot: capture a couple of times right after the agent lane loads (the frame paints async), so
 // the agent's preview_screenshot finds a FRESH shot the moment it retries after preview_open — instead of
@@ -6097,14 +6321,11 @@ function kickPreviewShotSoon(): void {
 
 // ── P-PREVIEW.6a (ADR-0153): live "reviewing / testing" indicator ────────────────────────────────
 let previewTestingTimer: ReturnType<typeof setTimeout> | undefined;
-/** Glow the Preview panel + show a "reviewing/testing" pill while the agent looks at / tests the preview.
- *  Surfaces the panel if a preview is loaded but hidden, so the user SEES the review happen live.
- *  Debounced — repeated activity keeps it lit; fades ~4.5s after the last signal (or on turn done). */
+/** Show review activity only inside an already-visible Preview. Activity never overrides dismissal. */
 function flashPreviewTesting(label: string): void {
   const panel = $("#preview") as HTMLElement | null;
   const pill = $("#prevPill") as HTMLElement | null;
-  if (!panel || !pill) return;
-  if (panel.hidden && state.lastPreviewablePath) openPreview(); // make the review visible
+  if (!panel || !pill || panel.hidden) return;
   panel.classList.add("testing");
   const lbl = $("#prevPillLabel"); if (lbl) lbl.textContent = label || "Reviewing the preview";
   pill.hidden = false;
@@ -6216,8 +6437,140 @@ const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
   l.startsWith("lane:") ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
 const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
 const prevKindByLane: Record<string, string> = { yours: "", agent: "" };
+const prevZoomByLane = new Map<PrevLane, number>();
+const prevWheelZoomByLane = new Set<PrevLane>();
+let previewPanEnabled = false;
+let previewPanPointer: number | null = null;
+let previewPanX = 0, previewPanY = 0;
+let previewPanScrollX = 0, previewPanScrollY = 0, previewPanScale = 1;
+function endPreviewPan(): void {
+  const surface = $("#prevPanSurface");
+  const pointer = previewPanPointer;
+  previewPanPointer = null;
+  surface?.classList.remove("dragging");
+  if (pointer !== null && surface?.hasPointerCapture(pointer)) surface.releasePointerCapture(pointer);
+}
+function setPreviewPan(enabled: boolean): void {
+  endPreviewPan();
+  previewPanEnabled = enabled && prevLane === "yours" && !!prevPathByLane.yours;
+  if (previewPanEnabled) setDrawTool("off");
+  const surface = $("#prevPanSurface");
+  if (surface) surface.hidden = !previewPanEnabled;
+  const button = $("#prevPan");
+  button?.setAttribute("aria-pressed", String(previewPanEnabled));
+  if (button) button.textContent = previewPanEnabled ? "Panning · Esc to exit" : "Grab to pan";
+}
+function wirePreviewPan(): void {
+  const surface = $("#prevPanSurface"), viewport = $("#prevViewport");
+  if (!surface || !viewport) return;
+  $("#prevPan")?.addEventListener("click", () => {
+    setPreviewPan(!previewPanEnabled);
+    if (previewPanEnabled) viewport.focus({ preventScroll: true });
+  });
+  surface.addEventListener("pointerdown", (e) => {
+    if (!previewPanEnabled || e.button !== 0 || !e.isPrimary || previewPanPointer !== null) return;
+    e.preventDefault();
+    previewPanPointer = e.pointerId;
+    previewPanX = e.clientX; previewPanY = e.clientY;
+    previewPanScrollX = viewport.scrollLeft; previewPanScrollY = viewport.scrollTop;
+    previewPanScale = viewport.getBoundingClientRect().width / viewport.offsetWidth || 1;
+    surface.setPointerCapture(e.pointerId);
+    surface.classList.add("dragging");
+    viewport.focus({ preventScroll: true });
+  });
+  surface.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== previewPanPointer) return;
+    e.preventDefault();
+    // Account for app-level UI scaling, not content zoom. Keep fractional movement
+    // between events; clamp at each edge so reversing never leaves a dead zone.
+    previewPanScrollX = Math.max(0, Math.min(viewport.scrollWidth - viewport.clientWidth, previewPanScrollX - (e.clientX - previewPanX) / previewPanScale));
+    previewPanScrollY = Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight, previewPanScrollY - (e.clientY - previewPanY) / previewPanScale));
+    viewport.scrollLeft = previewPanScrollX;
+    viewport.scrollTop = previewPanScrollY;
+    previewPanX = e.clientX; previewPanY = e.clientY;
+  });
+  surface.addEventListener("pointerup", endPreviewPan);
+  surface.addEventListener("pointercancel", endPreviewPan);
+  surface.addEventListener("lostpointercapture", endPreviewPan);
+  surface.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); });
+  surface.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey || prevWheelZoomByLane.has(prevLane)) wheelPreviewZoom(e.deltaY, e.deltaMode);
+    else {
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? viewport.clientHeight : 1;
+      viewport.scrollBy(e.shiftKey ? e.deltaY * unit : e.deltaX * unit, e.shiftKey ? 0 : e.deltaY * unit);
+    }
+  }, { passive: false });
+  window.addEventListener("blur", () => setPreviewPan(false));
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !previewPanEnabled) return;
+    e.preventDefault(); e.stopPropagation();
+    setPreviewPan(false);
+    $("#prevPan")?.focus({ preventScroll: true });
+  }, true);
+}
+const PREVIEW_ZOOM_MIN = 0.25, PREVIEW_ZOOM_MAX = 4;
+const previewZoom = (): number => prevZoomByLane.get(prevLane) ?? 1;
+function syncPreviewZoomControls(): void {
+  const pan = $("#prevPan") as HTMLButtonElement | null;
+  if (pan) { pan.hidden = prevLane !== "yours"; pan.disabled = !prevPathByLane.yours; }
+  const zoom = previewZoom();
+  const label = $("#prevZoomReset"); if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  const minus = $("#prevZoomOut") as HTMLButtonElement | null; if (minus) minus.disabled = zoom <= PREVIEW_ZOOM_MIN;
+  const plus = $("#prevZoomIn") as HTMLButtonElement | null; if (plus) plus.disabled = zoom >= PREVIEW_ZOOM_MAX;
+  const toggle = $("#prevWheelZoom");
+  toggle?.setAttribute("aria-pressed", String(prevWheelZoomByLane.has(prevLane)));
+}
+function sendPreviewZoomMode(): void {
+  laneFrame()?.contentWindow?.postMessage({ __lucid: "preview-zoom-mode", enabled: prevWheelZoomByLane.has(prevLane) }, "*");
+}
+function setPreviewZoom(value: number): void {
+  if (!Number.isFinite(value)) return;
+  const old = previewZoom();
+  const zoom = Math.max(PREVIEW_ZOOM_MIN, Math.min(PREVIEW_ZOOM_MAX, value));
+  const viewport = $("#prevViewport");
+  const x = viewport ? (viewport.scrollLeft + viewport.clientWidth / 2) / old : 0;
+  const y = viewport ? (viewport.scrollTop + viewport.clientHeight / 2) / old : 0;
+  prevZoomByLane.set(prevLane, zoom);
+  applyDeviceScale();
+  if (viewport) { viewport.scrollLeft = x * zoom - viewport.clientWidth / 2; viewport.scrollTop = y * zoom - viewport.clientHeight / 2; }
+  syncPreviewZoomControls();
+}
+function wheelPreviewZoom(delta: unknown, mode: unknown): void {
+  if (typeof delta !== "number" || !Number.isFinite(delta) || !delta || (mode !== 0 && mode !== 1 && mode !== 2)) return;
+  const pixels = Math.max(-120, Math.min(120, delta * (mode === 1 ? 16 : mode === 2 ? 120 : 1)));
+  setPreviewZoom(previewZoom() * Math.exp(-pixels * 0.002));
+}
+function wirePreviewZoom(): void {
+  wirePreviewPan();
+  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(previewZoom() / 1.1));
+  $("#prevZoomReset")?.addEventListener("click", () => setPreviewZoom(1));
+  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(previewZoom() * 1.1));
+  $("#prevWheelZoom")?.addEventListener("click", () => {
+    if (prevWheelZoomByLane.has(prevLane)) prevWheelZoomByLane.delete(prevLane); else prevWheelZoomByLane.add(prevLane);
+    syncPreviewZoomControls(); sendPreviewZoomMode();
+  });
+  const onWheel = (event: Event) => {
+    const e = event as WheelEvent;
+    if (e.currentTarget !== $("#prevZoomControls") && !e.ctrlKey && !e.metaKey && !prevWheelZoomByLane.has(prevLane)) return;
+    e.preventDefault(); e.stopPropagation(); wheelPreviewZoom(e.deltaY, e.deltaMode);
+  };
+  $("#prevZoomControls")?.addEventListener("wheel", onWheel, { passive: false });
+  $("#prevViewport")?.addEventListener("wheel", onWheel, { passive: false });
+  window.addEventListener("message", (event) => {
+    const frame = laneFrame();
+    if (!frame || frame.hidden || event.source !== frame.contentWindow) return;
+    const data = event.data;
+    if (!data || typeof data !== "object") return;
+    if (data.__lucid === "preview-zoom-ready") sendPreviewZoomMode();
+    else if (data.__lucid === "preview-zoom-wheel") wheelPreviewZoom(data.deltaY, data.deltaMode);
+  });
+  const body = $("#prevBody");
+  if (body && typeof ResizeObserver !== "undefined") new ResizeObserver(() => { applyDeviceScale(); syncPreviewCanvas(); }).observe(body);
+}
 /** Switch which lane's iframe is visible; the other stays loaded but hidden. Updates the shared header chrome. */
 function switchPrevLane(l: PrevLane): void {
+  setPreviewPan(false);
   prevLane = l;
   const yf = laneFrame("yours"), af = laneFrame("agent");
   if (yf) yf.hidden = l !== "yours" || !prevPathByLane.yours;
@@ -6230,6 +6583,7 @@ function switchPrevLane(l: PrevLane): void {
   const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l] ?? "";
   const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
   const notice = $("#prevNotice") as HTMLElement | null; if (notice) { notice.hidden = true; notice.innerHTML = ""; } // health is per-page, re-derived on load
+  applyDeviceScale(); syncPreviewZoomControls(); sendPreviewZoomMode();
   syncPreviewCanvas();
 }
 // ── P-PREVIEW.9: device viewports ────────────────────────────────────────────────────────────────
@@ -6258,14 +6612,17 @@ function currentViewportInfo(): Record<string, unknown> {
   const d = PREV_DEVICES[prevDevice];
   return prevDevice === "desktop" ? { device: "desktop", note: DEVICE_NOTE } : { device: prevDevice, width: d.w, height: d.h, note: DEVICE_NOTE };
 }
-/** Fit the device-sized stage into the available panel via CSS zoom (recomputed on resize). */
+/** Compose user zoom with device fit. Explicit dimensions preserve the document viewport at every scale. */
 function applyDeviceScale(): void {
-  const body = $("#prevBody"), stage = $("#prevStage") as HTMLElement | null;
-  if (!body || !stage) return;
-  if (prevDevice === "desktop") { stage.style.zoom = ""; return; }
-  const d = PREV_DEVICES[prevDevice];
-  const scale = Math.max(0.2, Math.min(1, (body.clientWidth - 28) / d.w, (body.clientHeight - 28) / d.h));
-  stage.style.zoom = String(scale);
+  const viewport = $("#prevViewport"), stage = $("#prevStage") as HTMLElement | null;
+  if (!viewport || !stage || !viewport.clientWidth || !viewport.clientHeight) return;
+  const device = prevDevice !== "desktop", d = PREV_DEVICES[prevDevice];
+  const w = Math.max(1, viewport.clientWidth - (device ? 28 : 0));
+  const h = Math.max(1, viewport.clientHeight - (device ? 28 : 0));
+  const fit = device ? Math.max(0.2, Math.min(1, w / d.w, h / d.h)) : 1;
+  stage.style.width = `${device ? d.w : w}px`;
+  stage.style.height = `${device ? d.h : h}px`;
+  stage.style.zoom = String(fit * previewZoom());
 }
 function applyDevice(device: PrevDevice): void {
   prevDevice = device;
@@ -6303,12 +6660,14 @@ function openDeviceMenu(anchor: HTMLElement): void {
   });
 }
 function loadPreview(target: string, lane: PrevLane = prevLane): void {
+  if (lane === "yours") setPreviewPan(false);
   const frame = laneFrame(lane);
   const empty = $("#prevEmpty") as HTMLElement | null;
   if (!frame || !empty) return;
   const active = lane === prevLane; // only the visible lane drives the shared header / empty / notice chrome
   const kind = active ? $("#prevKind") : null;
   prevPathByLane[lane] = target;
+  if (active) syncPreviewZoomControls();
   // P-PREVIEW.16: the path bar follows the file that is actually SHOWING. It used to be written only by
   // switchPrevLane and openPreviewFile, so an agent load into the ALREADY-VISIBLE lane left the previous
   // path sitting in the field. That field is not decoration: it IS the Open input and the Show-in-folder
@@ -6422,6 +6781,8 @@ function dropLaneTabFrame(tabId: string): void {
   laneTabFrames.delete(tabId);
   delete prevPathByLane[tabId];
   delete prevKindByLane[tabId];
+  prevZoomByLane.delete(tabId);
+  prevWheelZoomByLane.delete(tabId);
 }
 /** Close a lane tab (the X): registry + iframe + per-lane state go together; if it was the active tab,
  *  fall back the same way openPreview picks its reveal (yours-with-content, else agent, else yours). */
@@ -7235,8 +7596,7 @@ const previewCanvas = (): HTMLCanvasElement | null => $("#prevCanvas") as HTMLCa
 function syncPreviewCanvas(): void {
   const frame = laneFrame(), cv = previewCanvas(); // the markup canvas overlays whichever lane is visible
   if (!frame || !cv || frame.hidden) return;
-  const r = frame.getBoundingClientRect();
-  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  const w = Math.max(1, frame.offsetWidth), h = Math.max(1, frame.offsetHeight);
   if (cv.width === w && cv.height === h) return;
   const ctx = cv.getContext("2d");
   const prev = ctx && cv.width && cv.height ? ctx.getImageData(0, 0, cv.width, cv.height) : null;
@@ -7245,6 +7605,7 @@ function syncPreviewCanvas(): void {
 }
 function clearPreviewCanvas(): void { const cv = previewCanvas(); const c = cv?.getContext("2d"); if (cv && c) c.clearRect(0, 0, cv.width, cv.height); }
 function setDrawTool(t: "off" | "pen" | "rect" | "text"): void {
+  if (t !== "off") setPreviewPan(false);
   drawTool = t;
   const cv = previewCanvas();
   if (cv) { cv.style.pointerEvents = t === "off" ? "none" : "auto"; cv.style.cursor = t === "text" ? "text" : t === "off" ? "default" : "crosshair"; syncPreviewCanvas(); }
@@ -7256,7 +7617,7 @@ function wirePreviewCanvas(): void {
   if (!cv || previewCanvasWired) return;
   previewCanvasWired = true;
   const ctx = () => cv.getContext("2d")!;
-  const at = (e: MouseEvent) => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  const at = (e: MouseEvent) => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }; };
   cv.addEventListener("mousedown", (e) => {
     if (drawTool === "off") return;
     const p = at(e as MouseEvent);
@@ -7275,14 +7636,10 @@ function wirePreviewCanvas(): void {
   const end = () => { drawing = false; drawSnapshot = null; };
   cv.addEventListener("mouseup", end);
   cv.addEventListener("mouseleave", end);
-  // keep the canvas backing-size matched to the active frame as the panel/window resizes (preserves the drawing),
-  // and refit the device viewport (P-PREVIEW.9) so the scaled device tracks the panel width.
-  const body = $("#prevBody") as HTMLElement | null;
-  if (body && typeof ResizeObserver !== "undefined") new ResizeObserver(() => { syncPreviewCanvas(); applyDeviceScale(); }).observe(body);
 }
 /** A floating input for the text tool - type, Enter commits the text to the canvas, Esc cancels. */
 function addPreviewTextBox(p: { x: number; y: number }): void {
-  const body = $("#prevBody") as HTMLElement | null;
+  const body = $("#prevStage") as HTMLElement | null;
   if (!body) return;
   const inp = el(`<input class="prev-textin" spellcheck="false" placeholder="type, Enter to place" />`) as HTMLInputElement;
   inp.style.left = `${p.x}px`; inp.style.top = `${p.y}px`; inp.style.color = drawColor;
@@ -8141,7 +8498,49 @@ function renderThread(msgs: { role: string; text: string; turn?: number }[] | nu
 // P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
 // payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
 const RESUME_TAIL = 400;
+// P-TURN-RECOVERY-BOOT: read-only status/context first, then attach the identified live turn.
+async function adoptMasterTurn(status: TurnStatus, owner: number): Promise<void> {
+  const page = status.sessionId ? await bridge.sessionMessages(status.sessionId, RESUME_TAIL).catch(() => null) : null;
+  if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return;
+  recoveryChecking = false;
+  if (status.sessionId) $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === status.sessionId));
+  await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: page?.messages });
+}
+async function recoverMasterTurn(): Promise<void> {
+  if (isLaneTarget(state.composerTarget) || activeTurnView || goalLoopRunning) return;
+  const owner = ++turnViewEpoch;
+  $("#turnReconnect")?.remove();
+  // Status discovery is not a running turn. Keep Send blocked without offering Stop.
+  recoveryChecking = true; state.streaming = false; setSendEnabled();
+  try {
+    const [status, promoted] = await Promise.all([bridge.chatStatus(), bridge.fleetPromoted()]);
+    if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return;
+    if (promoted?.lane) {
+      state.streaming = false; setSendEnabled();
+      showTurnReconnect("A fleet lane owns the composer. Reopen it to follow its activity.", () => void promoteLane(promoted.lane!.id));
+      return;
+    }
+    if (!canAdoptTurn(status)) { recoveryChecking = false; state.streaming = false; $("#turnReconnect")?.remove(); setSendEnabled(); return; }
+    await adoptMasterTurn(status!, owner);
+  } catch (error) {
+    if (owner !== turnViewEpoch) return;
+    showTurnReconnect(`Connection unavailable: ${error instanceof Error ? error.message : String(error)}. Reconnect to check session status before sending.`, () => void recoverMasterTurn());
+  }
+}
+
 async function resumeSession(id: string): Promise<void> {
+  if (isLaneTarget(state.composerTarget)) demoteLane();
+  const owner = leaveTurnView();
+  // Status discovery is not a running turn. Keep Send blocked without offering Stop.
+  recoveryChecking = true; state.streaming = false; setSendEnabled();
+  let status: TurnStatus | null;
+  try { status = await bridge.chatStatus(); }
+  catch (error) {
+    if (owner === turnViewEpoch) showTurnReconnect(`Cannot check the active turn: ${error instanceof Error ? error.message : String(error)}`, () => void resumeSession(id));
+    return;
+  }
+  if (owner !== turnViewEpoch) return;
+  if (status?.running && status.sessionId === id && !isLaneTarget(state.composerTarget)) { await adoptMasterTurn(status, owner); return; }
   closeSettings();
   $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === id));
 
@@ -8150,6 +8549,7 @@ async function resumeSession(id: string): Promise<void> {
   let shownSig = "";
   if (cached && cached.length) { renderThread(cached); shownSig = transcriptSig(cached); }
   const page = await bridge.sessionMessages(id, RESUME_TAIL);
+  if (owner !== turnViewEpoch) return;
   if (page) {
     // P-RESUME.1: the cached paint never carries restored steps, so any steps force one re-render.
     const freshSig = transcriptSig(page.messages) + (page.steps?.length ? `+s${page.steps.length}` : "");
@@ -8165,6 +8565,8 @@ async function resumeSession(id: string): Promise<void> {
     renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
   await bridge.resumeSession(id);
+  if (owner !== turnViewEpoch) return;
+  recoveryChecking = false; state.streaming = false; setSendEnabled();
   void loadSessionMode(); // ADR-0219: reflect THIS session's CUI/Search mode + banner
   $("#input")?.focus();
 }
@@ -8285,6 +8687,8 @@ async function maybeOfferWorkspaceSetup(): Promise<void> {
   document.addEventListener("keydown", onKey);
 }
 async function applyWorkspace(path: string): Promise<void> {
+  const owner = leaveTurnView();
+  recoveryChecking = true; setSendEnabled();
   // #11 perceived-latency: setWorkspace() respawns the backend (2–5s). Reassure the user
   // up front that work is happening, then confirm when it's ready, and reflect the switch
   // immediately on the workspace bar via a "loading…" pill.
@@ -8292,6 +8696,8 @@ async function applyWorkspace(path: string): Promise<void> {
   const bar = $("#wsBar") as HTMLButtonElement | null;
   if (bar) { bar.hidden = false; bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}switching…</span>`; }
   const info = await bridge.setWorkspace(path);
+  if (owner !== turnViewEpoch) return;
+  recoveryChecking = false; setSendEnabled();
   if (info) { state.workspace = info; }
   renderWorkspaceBar();
   seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail();
@@ -8709,7 +9115,7 @@ function budgetBody(budgets: NonNullable<MemorySnapshot["budgets"]>): string {
   const rows = budgets.map((b) => {
     const on = active(b.label);
     return `<div class="bgt${on ? " on" : ""}">${on ? `<span class="bgt-tag" data-tip="Provider for your current model">current model</span>` : ""}${
-      gauge(b.label.replace(/^Claude /, ""), b.used, `<span style="color:var(--txt-4)">${esc(b.status)} · resets ${ageStr(b.resetsAt)}</span>`)}</div>`;
+      cachedBudgetRow(b)}</div>`;
   }).join("");
   // P10.3: live API-key rate-limit probes (opt-in) render as extra gauges, tagged so they're
   // distinct from omp's subscription/OAuth windows above.
@@ -8720,8 +9126,8 @@ function budgetBody(budgets: NonNullable<MemorySnapshot["budgets"]>): string {
     <span>Live API-key probe ${state.probeEnabled ? "" : ""}<button class="info-dot" data-tip="Live rate-limit probe|For providers set with an API KEY (Anthropic / OpenAI), read the real remaining limit from response headers. Off by default - each check makes one tiny request (a token or two). Your OAuth 5-hour window is already shown above and has no header to probe.">${icon("info", 11)}</button></span></label>`;
   return `<div class="bgt-head">
       <button class="btn-mini" data-budget-refresh data-tip="Re-check provider usage now">${icon("refresh", 13)} Refresh</button>
-      <span class="bgt-note">auto every 5 min</span>
-    </div>${rows}${probed}${probeToggle}`;
+      <span class="bgt-note">re-read cache every 5 min</span>
+    </div><div class="set-note">Subscription plan: <b>unknown</b>. Reports are cached; sample time and account identity are not supplied. Remaining is estimated from cached usage, not a live balance. A passed reset does not confirm replenishment. Check the provider's usage page for current allowance.</div>${rows}${probed}${probeToggle}`;
 }
 
 const RICHTIP_DUCKDB = `<div class="rt-h">${icon("shield", 14)} Where this is stored</div>
@@ -8759,7 +9165,7 @@ function renderStatus(): void {
         <circle class="ctx-arc" pathLength="100" cx="11" cy="11" r="8" style="stroke:${loadColor(ctx)};stroke-dashoffset:${100 - Math.min(100, Math.max(0, ctxPct))}"/>
       </svg><b>${ctxPct}%</b></div>
     <div class="seg-mid">
-      ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. From the provider's API-key rate-limit headers.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
+      ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} cached usage|Last reported subscription usage, not API-key billing or live rate-limit headers. Sample time and account identity are unknown. Click to re-read the cache; confirm current allowance on the provider usage page.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
       ${asksageChip()}
     </div>
     <div class="triv-slot" id="trivSlot"></div>`;
@@ -9130,9 +9536,14 @@ async function refreshBudget(manual = false): Promise<void> {
   if (state.asksage?.configured) state.asksageTokens = await bridge.asksageTokens(); // gov usage on the same cadence
   if (state.inspectorTab === "memory" && !state.inspectorRail) renderInspector();
   renderStatus();
+  const providers = [...(state.auth?.majors ?? []), ...(state.auth?.others ?? []), ...(state.auth?.gateway ?? [])];
+  for (const target of $$('[data-provider-quota]')) {
+    const p = providers.find((p) => p.id === target.getAttribute("data-provider-quota"));
+    if (p) target.innerHTML = providerQuotaBody(p);
+  }
   if (manual) showToast({
-    title: budgets?.length ? "Budget refreshed" : "No usage yet",
-    desc: budgets?.length ? "Latest provider usage pulled for your current model." : "Nothing recorded yet - send a turn, then refresh.",
+    title: budgets?.length ? "Usage cache re-read" : "Usage unavailable",
+    desc: budgets?.length ? "Cached reports loaded. Sample time is unknown; confirm current allowance on the provider's usage page." : "No usage report returned. This does not mean zero usage or unlimited allowance.",
     actions: [{ label: "OK" }], timeout: 2200,
   });
   scheduleBudgetPoll();
@@ -11618,6 +12029,7 @@ async function runGoalLoop(
   verb = "/goal",
 ): Promise<void> {
   if (state.streaming) { showToast({ tone: "warn", title: "A turn is running", desc: "Wait for it to finish before starting a loop.", timeout: 2400 }); return; }
+  const owner = leaveTurnView();
   if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
   state.lastPrompt = opts.goal;
   addMessage("user", `${verb}${opts.resume ? " (resume)" : ""}: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
@@ -11627,6 +12039,7 @@ async function runGoalLoop(
   const wrap = el(`<div class="goal-loop"></div>`); textEl.appendChild(wrap);
   let iterEl: HTMLElement | null = null, streamEl: HTMLElement | null = null, buf = "";
   const onEvent = (e: ChatEvent) => {
+    if (owner !== turnViewEpoch) return;
     if (e.type === "goal-memory") { wrap.appendChild(el(`<div class="goal-mem">${icon("folder", 12)} loop memory: <code>${esc(e.path)}</code></div>`)); scrollChat(); }
     else if (e.type === "goal-iter") {
       buf = "";
@@ -11656,7 +12069,7 @@ async function runGoalLoop(
     else if (e.type === "done") { if (streamEl) streamEl.innerHTML = renderMarkdown(buf); }
   };
   try { await (stream ?? ((on: (e: ChatEvent) => void) => bridge.runGoal(opts, on)))(onEvent); }
-  finally { state.streaming = false; goalLoopRunning = false; setSendEnabled(); void renderSessions(); void refreshBudget(false); }
+  finally { if (owner === turnViewEpoch) { state.streaming = false; goalLoopRunning = false; setSendEnabled(); void renderSessions(); void refreshBudget(false); } }
 }
 
 // ── "/" command + skill autocomplete (P-SLASH.1) ──────────────────────────────
@@ -13019,6 +13432,7 @@ function wire(): void {
   });
   $("#prevBrowse")?.addEventListener("click", () => void browsePreviewFile()); // P-PREVIEW.5: open cwd file
   $("#prevDevice")?.addEventListener("click", (e) => openDeviceMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.9: device viewports
+  wirePreviewZoom();
   $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.5: markup tools
   $("#prevCapture")?.addEventListener("click", () => void captureCurrentPreview()); // CREATOR-3b: deterministic frame capture
   $("#prevShot")?.addEventListener("click", () => void screenshotPreviewToChat());
@@ -13657,6 +14071,12 @@ function wire(): void {
       return;
     }
     if (t.closest("[data-lp-test-form]")) { await testLocalProviderConn(($("#lpBaseUrl", $("#setBody")!) as HTMLInputElement | null)?.value ?? ""); return; }
+    if (t.closest("[data-lp-discover-form]")) { await discoverLocalProviderModels(); return; }
+    if (t.closest("[data-lp-discover]")) {
+      const w = t.closest("[data-lp-id]") as HTMLElement | null;
+      if (w) await rediscoverLocalProvider(w.dataset.lpId ?? "");
+      return;
+    }
     const lpTest = t.closest("[data-lp-test]") as HTMLElement | null;
     if (lpTest) { await testLocalProviderConn(lpTest.dataset.url ?? ""); return; }
     if (t.closest("[data-lp-rekey-save]")) { const w = t.closest("[data-lp-id]") as HTMLElement | null; if (w) await saveLocalProviderKey(w); return; }
@@ -14313,9 +14733,11 @@ function wire(): void {
 
 // ───────────────────────── palette actions ─────────────────────────
 function newSession(): void {
+  const owner = leaveTurnView();
+  recoveryChecking = true; setSendEnabled();
   seedThread(); state.liveUsage = null;
   resetAgentPreviewLane(); // P-PREVIEW.19 (ADR-0339): the agent's preview belongs to the conversation that ended
-  void bridge.newSession().then(() => loadSessionMode()); // ADR-0219: fresh session defaults to CUI under lockdown
+  void bridge.newSession().then(() => { if (owner !== turnViewEpoch) return; recoveryChecking = false; setSendEnabled(); void loadSessionMode(); });
   renderStatus(); $("#input")?.focus();
 }
 
@@ -14326,6 +14748,8 @@ function newSession(): void {
  *  showing a document from a conversation the user has moved on from. The user's own tab is not
  *  conversation-scoped and is not ours to close. */
 function resetAgentPreviewLane(): void {
+  ++agentPreviewRevision; // Invalidate pending probes even when the lane is already empty.
+  pendingAgentPreviewPath = "";
   const { lanes, changed } = previewAfterNewSession({
     yours: prevPathByLane.yours ?? "",
     agent: prevPathByLane.agent ?? "",
@@ -15141,7 +15565,7 @@ function openProviderHub(onClose?: () => void): void {
   // pointer) and names the /providers command. `.set-note` = block prose, single text child per line.
   const onboardHtml = `<div class="provhub-sec"><div class="set-note">${icon("spark", 12)} <b>New here?</b> Open the <b>guided setup</b> for a walkthrough: what each provider costs, which free tiers exist, and which plan fits your work. Or type <code>/providers</code> plus what you are trying to do, and the agent walks you through it live.</div>
     <div class="prov-row"><button class="btn-mini ok" data-guide="choosing">${icon("expand", 12)} Guided setup: choose a provider</button></div></div>`;
-  const redraw = () => { body.innerHTML = onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
+  const redraw = () => { body.innerHTML = providerQuotaNotice() + onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
   const close = () => { ov.remove(); hubClose = null; document.removeEventListener("keydown", onKey); onClose?.(); };
   hubClose = close;
@@ -15436,6 +15860,7 @@ wire();
 initZoom();
 initResize();
 seedThread();
+void recoverMasterTurn();
 // Sessions panel: remember your choice across launches; default OPEN so a past
 // conversation is one click away (it used to start collapsed → expand-then-click felt like
 // a double-click). Collapse it once and it stays collapsed.

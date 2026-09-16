@@ -96,7 +96,7 @@ export interface AgentTemplateInfo {
   steps: number;
   tools: string[];
 }
-import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
+import type { LocalModelDef, LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3/.6: self-hosted/custom LLM providers
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 export type { RestoredTurn };
@@ -539,6 +539,7 @@ export interface AgentsInitResult { ok: boolean; created: string[]; skipped: str
 // needs the shape doesn't drag bridge.ts (a DOM file) into the non-DOM root typecheck. Re-exported here so
 // every existing `import { type ChatEvent } from "./bridge.ts"` keeps working unchanged.
 import type { ChatEvent } from "./chat_events.ts";
+import type { TurnStatus } from "./chat_events.ts";
 import { streamNdjson as streamNdjsonCore } from "./ndjson_stream.ts"; // reader + drop classification + P-REATTACH.1 recovery
 export type { ChatEvent };
 /** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial - each type's max auto-run tier (T0-T3). */
@@ -748,6 +749,14 @@ export interface LucidBridge {
   localProviderEnable(id: string, enabled: boolean): Promise<{ ok: boolean } | null>;
   /** Reachability/TLS probe of a base URL's /models endpoint (no key sent). */
   localProviderTest(baseUrl: string): Promise<{ reachable: boolean; status?: number; authed?: boolean; error?: string } | null>;
+  /** P-LOCAL.6: ask the endpoint what it actually serves (`GET <baseUrl>/models`). Pass `id` for a SAVED
+   *  provider, which authenticates from the vault-injected env; pass `baseUrl` for the add form, which
+   *  probes unauthenticated and reports `authRequired` when the endpoint needs a key. A key is NEVER
+   *  sent through this call: ADR-0135 keeps provider secrets off the engine's HTTP surface. */
+  localProviderDiscover(input: { baseUrl?: string; id?: string }): Promise<{
+    reachable: boolean; status?: number; authRequired?: boolean;
+    models?: LocalModelDef[]; dropped?: number; error?: string;
+  } | null>;
   /** Restart the desktop app so a spawned omp picks up new local providers (Electron only; no-op in browser). */
   relaunch(): Promise<void>;
   /** P-FIGMA.1 (ADR-0154): import a Figma file's frames as a design board → returns the local HTML path to
@@ -852,6 +861,9 @@ export interface LucidBridge {
   /** `share` (P-PREVIEW-PWA.3, ADR-0240): roster COUNTS for a renderer-hosted direct-P2P share, so the
    *  backend can build the trusted agent-awareness preamble (a relay share is computed backend-side). */
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }): Promise<void>;
+  chatStatus(): Promise<TurnStatus | null>;
+  attachChat(turnId: string | undefined, onEvent: (e: ChatEvent) => void): Promise<void>;
+  detachChat(): void;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
@@ -1318,20 +1330,34 @@ const FALLBACK_CONFIG: ConfigOption[] = [
 // Generic NDJSON event stream (used by /api/chat, /api/goal, and the fleet lanes). The reader,
 // end-classification, and P-REATTACH.1 recovery loop live in ndjson_stream.ts (extracted so a real
 // Bun.serve exercises them in tests); this wrapper only injects the auth headers every request needs.
-function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal, opts?: { tail?: boolean; reattach?: string }): Promise<void> {
+function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal, opts?: { tail?: boolean; reattach?: string; reattachBody?: () => unknown; onRecovery?: (state: "reconnecting" | "failed", message: string) => void }): Promise<void> {
   return streamNdjsonCore(path, body, onEvent, signal, { ...opts, headers: () => authHeaders({}) });
 }
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
 let chatAbort: AbortController | null = null;
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }) => {
+let chatRequestId: string | undefined;
+let chatIdentity: { turnId?: string; requestId?: string } | null = null;
+// P-TURN-RECOVERY-BRIDGE: a detached reader never cancels the engine or clears its successor.
+function readChat(path: string, body: unknown, onEvent: (e: ChatEvent) => void, initialTurnId?: string): Promise<void> {
   chatAbort?.abort();
-  chatAbort = new AbortController();
-  // P-COLLAB.15: `from` attributes a guest-driven turn in the live collab broadcast (omitted for host turns).
-  // P-PREVIEW-PWA.3: `share` carries direct-P2P roster COUNTS for the agent-awareness preamble.
-  // P-REATTACH.1: a mid-turn socket drop re-adopts the running turn via /api/chat/attach instead of
-  // freezing the composer while the engine keeps working ("chat stream write failed" in the GUI log).
-  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}) }, onEvent, chatAbort.signal, { reattach: "/api/chat/attach" }).finally(() => { chatAbort = null; });
+  const controller = new AbortController();
+  chatAbort = controller;
+  let turnId = initialTurnId;
+  const requestId = chatRequestId;
+  chatIdentity = turnId ? { turnId } : { requestId };
+  return streamNdjson(path, body, (event) => {
+    if (event.type === "turn-snapshot") {
+      turnId = event.snapshot.turnId;
+      if (chatAbort === controller) chatIdentity = { turnId };
+    }
+    onEvent(event);
+  }, controller.signal, { reattach: "/api/chat/attach", reattachBody: () => turnId ? { turnId } : { requestId }, onRecovery: (state, message) => onEvent({ type: "connection", state, message }) })
+    .finally(() => { if (chatAbort === controller) chatAbort = null; });
+}
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }) => {
+  chatRequestId = crypto.randomUUID();
+  return readChat("/api/chat", { text, requestId: chatRequestId, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}) }, onEvent);
 };
 
 // P-COLLAB.10: JOIN a shared session. /api/collab/join returns EITHER a JSON error envelope (malformed link /
@@ -1423,6 +1449,7 @@ export const bridge: LucidBridge = {
   localProviderDelete: (id) => post("/api/local-providers/delete", { id }), // P-LOCAL.3
   localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
   localProviderTest: (baseUrl) => post("/api/local-providers/test", { baseUrl }), // P-LOCAL.3 polish
+  localProviderDiscover: (input) => post("/api/local-providers/discover", input), // P-LOCAL.6 (no key in the body)
   relaunch: () => (shell?.relaunch ? shell.relaunch() : Promise.resolve()), // P-LOCAL.3 polish (Electron only)
   figmaImport: (fileUrl, pat) => post("/api/figma/import", { fileUrl, ...(pat ? { pat } : {}) }), // P-FIGMA.1
   designDoc: () => getData("/api/design"), // P-FIGMA.2
@@ -1465,6 +1492,20 @@ export const bridge: LucidBridge = {
   usage: () => getData("/api/usage"),
   codeActivity: () => getData("/api/code-activity"),
   sendPrompt: streamChat,
+  chatStatus: async () => {
+    const response = await fetch("/api/chat/status", { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Turn status unavailable (HTTP ${response.status})`);
+    const payload = await response.json();
+    const status = payload?.data;
+    if (status === null) return null;
+    if (!status || typeof status.turnId !== "string" || typeof status.running !== "boolean" || typeof status.startedAt !== "number" || !(status.sessionId === null || typeof status.sessionId === "string")) throw new Error("Turn status response was invalid");
+    return status as TurnStatus;
+  },
+  attachChat: (turnId, onEvent) => {
+    if (!turnId && !chatRequestId) return Promise.reject(new Error("The original request identity is unavailable"));
+    return readChat("/api/chat/attach", turnId ? { turnId } : { requestId: chatRequestId }, onEvent, turnId);
+  },
+  detachChat: () => { const controller = chatAbort; chatAbort = null; chatIdentity = null; controller?.abort(); },
   runGoal: (opts, onEvent) => streamNdjson("/api/goal", opts, onEvent),
   resumableLoops: () => getData("/api/goal/resumable"),
   loopRunStats: () => getData("/api/goal/stats"),
@@ -1487,7 +1528,12 @@ export const bridge: LucidBridge = {
   setMode: (modeId) => post("/api/modes", { modeId }),
   setUiMode: (uiMode) => post("/api/uimode", { uiMode }),
   respondPermission: (id, optionId) => post("/api/chat/permission", { id, optionId }),
-  cancelChat: () => { chatAbort?.abort(); return post("/api/chat/cancel", {}); },
+  cancelChat: async () => {
+    chatAbort?.abort();
+    const response = await fetch("/api/chat/cancel", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(chatIdentity ?? {}), signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Stop was not confirmed (HTTP ${response.status})`);
+    return (await response.json())?.data;
+  },
   cancelGoal: () => post("/api/goal/cancel", {}),
   // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
   fleetStatus: () => getData("/api/fleet/status"),

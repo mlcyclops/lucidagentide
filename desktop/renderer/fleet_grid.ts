@@ -73,7 +73,6 @@ export interface FleetGridDeps extends FleetFns {
 }
 
 const FLEET_DOCK_KEY = "lucid.fleetDock.v1";
-const FLEET_DOCK_OPEN_KEY = "lucid.fleetDock.open";
 const FLEET_LAYOUT_KEY = "lucid.fleetLayout.v1";
 const POLL_MS = 2500;
 const UP_ARROW = `<svg class="sd-up" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg>`;
@@ -144,11 +143,10 @@ const fleetFallback = (vw: number, vh: number): DockShape => {
   return { x: Math.max(12, vw - w - 16), y: Math.max(12, vh - 540), w, h: 480 };
 };
 
-/** Called once from app.ts with the bridge seam; builds nothing until the panel is opened. An anchored
- *  (persisted-open) panel from the previous run is restored here, like the voice dock. */
+/** Called once from app.ts with the bridge seam. Startup stays closed; only an explicit open builds
+ *  the panel and restores its saved geometry and card layout. */
 export function initFleetGrid(d: FleetGridDeps): void {
   deps = d;
-  if (storage().get(FLEET_DOCK_OPEN_KEY) === "1") openFleetGrid();
 }
 
 export function toggleFleetGrid(): void {
@@ -159,7 +157,6 @@ export function toggleFleetGrid(): void {
 
 export function openFleetGrid(): void {
   if (!deps) return;
-  storage().set(FLEET_DOCK_OPEN_KEY, "1");
   if (dock) { restore(); return; }
   dockState = loadDockState(storage(), window.innerWidth, window.innerHeight, FLEET_DOCK_KEY, fleetFallback(window.innerWidth, window.innerHeight));
   layout = loadLayout(storage().get(FLEET_LAYOUT_KEY)); // P-FLEET.L9: card order + sizes from the last run
@@ -205,7 +202,6 @@ export function openFleetGrid(): void {
 }
 
 export function closeFleetGrid(): void {
-  storage().set(FLEET_DOCK_OPEN_KEY, "0");
   stopPoll();
   removePill();
   window.removeEventListener("resize", onWinResize);

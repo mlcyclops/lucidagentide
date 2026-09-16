@@ -15,8 +15,11 @@ describe("version is single-sourced", () => {
     expect(pkg.version).toBe(APP_VERSION);
   });
 
-  test("app version is v2.2.0", () => {
-    expect(APP_VERSION).toBe("2.2.0");
+  // SHAPE, not a literal. A pinned literal here means every release bumps a test that was never about
+  // the number, which is exactly the "don't test defaults" trap: it rotted on the 2.2.0 -> 2.2.1 bump
+  // and taught nobody anything. desktop/scripts/demo_p_about_1.ts already made this call; this matches.
+  test("app version is a real semver", () => {
+    expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
   });
 });
 
@@ -24,8 +27,10 @@ describe("aboutHtml", () => {
   const html = aboutHtml(APP_VERSION);
 
   test("shows the dynamic version with a v prefix", () => {
+    // Interpolated from APP_VERSION on purpose: the assertion is that the version REACHES the panel,
+    // not which version it happens to be.
     expect(html).toContain(`v${APP_VERSION}`);
-    expect(html).toContain("v2.2.0");
+    expect(html).toMatch(/v\d+\.\d+\.\d+/);
   });
 
   test("carries the product + company identity", () => {

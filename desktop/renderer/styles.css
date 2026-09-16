@@ -2733,10 +2733,22 @@ body.preview-open .thread{font-size:.9em}
 .prev-tab-x:hover{background:color-mix(in srgb,var(--txt) 14%,transparent);color:var(--txt)}
 /* The preview rail icon's "a lane updated" badge - the agent-dot color on the rail-dot chassis. */
 .prev-rail-dot{background:var(--accent-2);box-shadow:0 0 0 2px var(--bg-1),0 0 8px var(--accent-2);animation:prevPulse 1.3s ease-out infinite}
+.preview-zoomrow{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:5px 10px;border-bottom:1px solid var(--line-soft);flex:none;min-width:0}
+.preview-zoom{display:flex;align-items:center;gap:3px;flex:none}
+.preview-zoom .btn-mini{min-width:28px;justify-content:center;font-variant-numeric:tabular-nums}
+#prevZoomReset{min-width:52px}
+#prevPan{white-space:nowrap;flex:none}
+#prevPan[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
+.preview-pan-surface{position:absolute;inset:0;z-index:4;cursor:grab;touch-action:none;user-select:none}
+.preview-pan-surface[hidden]{display:none}
+.preview-pan-surface.dragging{cursor:grabbing}
+#prevWheelZoom{white-space:nowrap;flex:none}
+#prevWheelZoom[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
+.preview-zoom-hint{flex:1;min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--txt-2)}
 /* P-PREVIEW.9: device viewports — the stage holds both lane frames; device mode centers + fit-scales them. */
-.preview-stage{flex:1;min-width:0;display:flex;position:relative}
-.preview-body.device{align-items:center;justify-content:center;overflow:auto;padding:14px}
-.preview-body.device .preview-stage{flex:none;display:block}
+.preview-stage{flex:none;min-width:0;display:flex;position:relative;margin:auto}
+.preview-viewport{position:absolute;inset:0;overflow:scroll;display:flex;align-items:flex-start;overscroll-behavior:contain}
+.preview-body.device .preview-viewport{padding:14px}
 .preview-body.device .preview-frame{flex:none;display:block;border-radius:18px;box-shadow:0 12px 38px -12px rgb(var(--sh-rgb) / .65);border:1px solid var(--line);background:#fff}
 .preview-body.device .preview-frame[hidden]{display:none}
 .prev-devpop{display:flex;flex-direction:column;gap:2px;padding:5px;min-width:210px}
@@ -2752,7 +2764,7 @@ body.preview-open .thread{font-size:.9em}
 .preview-body{flex:1;min-height:0;position:relative;display:flex;background:var(--bg-0)}
 /* P-THEME.1 theme-exempt: an iframe showing a THIRD-PARTY page. Its ground is the web's own
    default white; tinting it would lie about what the user's page looks like. */
-.preview-frame{flex:1;min-width:0;border:0;background:#fff}
+.preview-frame{flex:1;min-width:0;width:100%;height:100%;border:0;background:#fff}
 .preview-frame[hidden]{display:none}
 /* P-TRAINER.7 (ADR-0255): the immersive Trainer stage. Covers the main work area (top/left set inline to
    sit below the titlebar + right of the rail, so both stay live); the iframe carries its own chrome. */
@@ -2769,7 +2781,7 @@ body.preview-open .thread{font-size:.9em}
 .preview-pill-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 70%,transparent);animation:prevPulse 1.3s ease-out infinite}
 @keyframes prevPulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 70%,transparent)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
 /* P-PREVIEW.5: markup canvas over the frame (pointer-events toggled per tool) + the text-tool input */
-.preview-canvas{position:absolute;inset:0;z-index:2;pointer-events:none}
+.preview-canvas{position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none}
 .prev-textin{position:absolute;z-index:3;min-width:120px;background:rgb(var(--glass-rgb) / .82);border:1px solid var(--accent-2);border-radius:6px;
   padding:3px 7px;font:600 16px/1.2 ui-sans-serif,system-ui,"Segoe UI",sans-serif;outline:none;box-shadow:0 4px 16px -6px rgb(var(--sh-rgb) / .7)}
 .prev-textin::placeholder{color:rgb(var(--tint-rgb) / .4);font-weight:400}

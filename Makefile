@@ -711,6 +711,14 @@ demo-P-PROV.2: ## P-PROV.2: the Provider Hub - a dedicated popup listing every p
 demo-P-LOCAL.4: ## P-LOCAL.4: one-click local-model presets (Laguna 2.1 Poolside, Gemma 4, Qwen 3.8, +) that build ONE Local Provider fronting many models behind a single secured NGINX endpoint, through the existing P-LOCAL.3 add/validate/vault path
 	$(BUN) run desktop/scripts/demo_p_local_4.ts
 
+.PHONY: demo-P-LOCAL.5
+demo-P-LOCAL.5: ## P-LOCAL.5: GLM-5.3-Flash on a self-hosted vLLM box - a preset chip now carries its curated metadata (context window, reasoning, vision) all the way into the omp model entry instead of silently falling back to 8192/no-reasoning, plus a closed, sanitized per-model `compat` so a LAN reasoning model gets the chat-template wire shape omp cannot infer from its hostname; matched on the id the box ACTUALLY serves (`zai-org/GLM-5.3-Flash-FP8`), and asserted through the store + runtime overlay that really writes models.yml, not just the in-memory draft
+	$(BUN) run desktop/scripts/demo_p_local_5.ts
+
+.PHONY: demo-P-LOCAL.6
+demo-P-LOCAL.6: ## P-LOCAL.6: endpoint model discovery - ask `GET <baseUrl>/models` (the list omp's own discovery reads) so a model's real id and real context window come from the server instead of the catalog's editorial guess, against a REAL vLLM-shaped fixture incl. its 401; the catalog keeps only what /models cannot report (reasoning/vision/compat), an unauthenticated probe reports authRequired rather than ever putting a key on the engine's HTTP surface, and an empty answer never wipes a saved provider
+	$(BUN) run desktop/scripts/demo_p_local_6.ts
+
 .PHONY: demo-P-STT.2
 demo-P-STT.2: ## P-STT.2: guided on-device Whisper - hardware-capability gate (run only where it fits), model catalog + install/serve plan, whisper.cpp binary resolution, and the download-with-integrity flow (all pure/injected; no network, no binary)
 	$(BUN) run desktop/scripts/demo_p_stt_2.ts
@@ -1026,3 +1034,29 @@ demo-P-MAINT.1: demo-maintainer ## Alias for demo-maintainer (P-MAINT.1)
 .PHONY: demo-maintainer
 demo-maintainer: ## P-MAINT.1: the Maintainer Agent spike - an OS-SCHEDULED agent that periodically re-reviews a repo it owns. Sweeps THIS repository's own manifests (npm/pypi/cargo/go), asks OSV (the official CVE+GHSA aggregator, no API key, edge-first) which pinned versions are known-vulnerable, hydrates each hit for its official ids + CVSS severity + the FIXED version, rebuilds a CycloneDX 1.5 SBOM and diffs it against the baseline under .omp/maintainer/, then renders the GitHub issue (markdown), the Azure DevOps work item (HTML in System.Title/System.Description/System.Tags, because ADO does not render markdown), and the PR body it WOULD file - plus this host's exact OS-native registration (schtasks / launchd plist / systemd user timer + crontab) whose registered command is the wrapper that runs the fail-closed `lucid check` preflight FIRST, never omp. Also forces the OFFLINE path in-process (unreachable host, same timeout) proving an unreachable feed degrades to a pinned "advisory feed unavailable" coverage gap, never to a silent clean report. DRY RUN: files nothing, writes only the SBOM baseline
 	$(BUN) run harness/scripts/demo_maintainer.ts
+.PHONY: demo-P-PLATFORM-UPGRADE-WALKTHROUGHS
+demo-P-PLATFORM-UPGRADE-WALKTHROUGHS: ## Recovery portion: real HTTP transport faults, same-turn identity, observer lifetime and frontend restoration; no model credentials or active-engine restart
+	$(BUN) test ./desktop/renderer/ndjson_stream.test.ts ./desktop/renderer/turn_restore.test.ts ./desktop/turn_recovery.test.ts ./desktop/chat_stream.test.ts
+.PHONY: demo-P-PREVIEW-STICKY-PDF
+demo-P-PREVIEW-STICKY-PDF: ## Session-state gate; real browser race proof additionally uses desktop/scripts/demo_preview_sticky_pdf.mjs with an isolated QA page
+	$(BUN) test ./desktop/renderer/preview_session.test.ts
+.PHONY: demo-P-PREVIEW-DISMISSAL
+demo-P-PREVIEW-DISMISSAL: ## Live-endpoint isolation and state gate; real renderer dismissal scenarios additionally run via verifyPreviewSession on an isolated QA page
+	$(BUN) test ./harness/omp/preview_extension_isolation.test.ts ./desktop/renderer/preview_session.test.ts
+
+.PHONY: demo-P-PREVIEW-YOURS-PAN
+demo-P-PREVIEW-YOURS-PAN: ## Companion syntax/isolation gate; actual drag proof: verifyPreviewPan(page, fixturePath) in desktop/scripts/demo_preview_pan.mjs on an isolated Chromium page
+	node --check desktop/scripts/demo_preview_pan.mjs
+	$(BUN) test ./harness/omp/preview_extension_isolation.test.ts ./desktop/renderer/preview_session.test.ts
+
+.PHONY: demo-P-GATE-PATH.1
+demo-P-GATE-PATH.1: ## P-GATE-PATH.1 (ADR-0356): the packaged engine handed omp `B:\~BUN\harness\omp\security_extension.ts` (Bun's VIRTUAL compiled root) on every spawn, so omp logged "Cannot find module" and ran UNGATED while every surface reported healthy. Proves: a virtualized source dir falls through to the on-disk binary's repo (Windows AND posix shapes), the probe tests the gate KEYSTONE not a bare root, a throwing probe is a failed probe, an unresolvable install is unproven + names every path tried, every omp -e asset acp_backend names is really on disk, the refusal is diagnosable from its own message, a gate-less argv refuses a fleet lane BY NAME and leaves no orphan lane, and the forbidden `join(import.meta.dir, "..")` cannot return to any of the four files whose paths cross a process boundary (comment-stripped, with a guard against the stripper going vacuous)
+	$(BUN) test ./desktop/repo_root.test.ts ./desktop/fleet_lanes.test.ts ./harness/launcher/lucid_acp.test.ts
+
+.PHONY: demo-P-OMP-BOOT.1
+demo-P-OMP-BOOT.1: ## P-OMP-BOOT.1 (ADR-0357): the v2.2.0 install shipped an omp shim it never proved runnable. `runtime.ts:findOmp()` was `firstExisting([...])` and the packaged shim ALWAYS exists, so needsBootstrap() said there was nothing to do and LUCID_OMP_BIN could name a path nobody had run. (ADR-0358 corrects the attribution: this was a real defect but the field outage was the 6s probe budget, see demo-P-OMP-BOOT.2.) Proves: main's install candidates ride the ONE probed resolver (ordered after envBin, deduped, null/blank dropped), an existing-but-unrunnable bundled shim loses to a managed one, nothing-runnable reports UNPROVEN so provisioning actually runs, the boot report NAMES every path tried and carries the remedy with no stack frames or credential-shaped strings, isOmpSpawnFailure recognizes all three real v2.2.0 messages plus the v2.0.0 target shape while NEVER swallowing an unrelated ENOENT/EPERM (a first pass matched `.omp\agent\agent.db` and would have hidden real errors), and a source guard that runtime.ts cannot return to existence-based resolution or to prepending a relative dir onto the agent's PATH
+	$(BUN) test ./desktop/omp_bin.test.ts
+
+.PHONY: demo-P-OMP-BOOT.2
+demo-P-OMP-BOOT.2: ## P-OMP-BOOT.2 (ADR-0358): the REAL cause of the reported v2.2.0 outage, and the correction to ADR-0357's attribution. The capability probe had a 6 SECOND budget; the bundled omp is a shim over a 98 MB bun loading a large cli.js, so a cold antivirus-scanned launch on a 15 W laptop exceeds it. The resolver counted that timeout as a REJECTION and fell through to a bare `omp` a packaged install does not have, then cached it for the session: the field log shows 10 of 21 boots from ONE install declaring omp unrunnable while 11 ran it fine, plus 192 identical spawn stacks. Proves: a timeout is its own verdict and the slow candidate is USED (never degraded to the bare name), a candidate that actually answers still wins over a slow one, the first timeout wins in candidate order, a timed-out path is never listed as rejected, a genuine all-fail still reports not-proven, the bun and node verdict rules agree on exit 0 / non-zero / killed-with-no-exit / ETIMEDOUT while ENOENT stays a REAL failure, and source guards that runtime.ts keeps the shared budget (no local 6000) and treats indeterminate as usable
+	$(BUN) test ./desktop/omp_bin.test.ts ./desktop/about.test.ts

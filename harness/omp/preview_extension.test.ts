@@ -6,8 +6,24 @@
 // load-bearing properties: registration NEVER throws (so it can never break omp launch) and it succeeds in
 // BOTH schema modes - a healthy typebox shim, or plain JSON-Schema literals when the shim is absent/broken.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import previewExtension, { PREVIEWABLE_EXTS, normalizeToolPath, previewShotImage } from "./preview_extension.ts";
+
+// The test runner can inherit the operator's live desktop URLs. Never let sample
+// paths (including /tmp/x.pdf) or screenshot/inspection calls reach that desktop.
+// Transport-specific cases install their own endpoints inside the test body.
+const previewChannels = ["LUCID_PREVIEW_OPEN_URL", "LUCID_PREVIEW_SHOT_URL", "LUCID_PREVIEW_INSPECT_URL", "LUCID_PREVIEW_ACT_URL"] as const;
+const inheritedPreviewChannels = new Map(previewChannels.map((key) => [key, process.env[key]]));
+beforeEach(() => {
+  for (const key of previewChannels) delete process.env[key];
+});
+afterEach(() => {
+  for (const key of previewChannels) {
+    const value = inheritedPreviewChannels.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 // Minimal TypeBox shim mirroring what omp injects as `pi.typebox`: Type.Object/String/Optional produce a
 // standard JSON-schema object, with Optional-wrapped props left OUT of `required` (like real TypeBox, which

@@ -9,7 +9,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import { localPresetChipsHtml } from "./local_presets.ts"; // P-LOCAL.4: one-click model presets (Laguna/Gemma/Qwen…)
+import { enrichModelFromCatalog, localPresetChipsHtml } from "./local_presets.ts"; // P-LOCAL.4/.5/.6: the curated catalog
 import {
   LOCAL_AUTH_KINDS,
   newLocalProviderId,
@@ -37,7 +37,13 @@ export function providerStatus(p: LocalProviderDef, vaultRefs: Set<string>): { l
 function modelSummary(models: LocalModelDef[]): string {
   const n = models.length;
   const head = models.slice(0, 3).map((m) => m.id).join(", ");
-  return `${n} model${n === 1 ? "" : "s"}${head ? ` · ${esc(head)}${n > 3 ? " …" : ""}` : ""}`;
+  // P-LOCAL.5: a model the catalog does not recognize runs on omp's conservative defaults (8192-token
+  // window, no reasoning). That used to be invisible, which is the difference between a 131K context
+  // and a silently truncated one, so the row states it. Reads the STORED def, so it also shows when a
+  // hand-edited settings file has lost its metadata.
+  const bare = models.filter((m) => !m.contextWindow).length;
+  const tail = bare ? ` \u00b7 ${bare} on default 8K ctx` : "";
+  return `${n} model${n === 1 ? "" : "s"}${head ? ` \u00b7 ${esc(head)}${n > 3 ? " …" : ""}` : ""}${tail}`;
 }
 
 function providerRow(p: LocalProviderDef, vaultRefs: Set<string>): string {
@@ -51,6 +57,7 @@ function providerRow(p: LocalProviderDef, vaultRefs: Set<string>): string {
         <div class="lp-sub">${esc(p.baseUrl)} · ${modelSummary(p.models)}</div>
       </div>
       <button class="btn-mini" data-lp-test data-url="${esc(p.baseUrl)}" title="Check the endpoint is reachable (no key sent)">Test</button>
+      <button class="btn-mini" data-lp-discover title="Ask this endpoint what it serves and refresh the model list (uses the key from the vault)">Discover</button>
       ${authed ? `<button class="btn-mini" data-lp-rekey title="Add / update the key in the vault">Key</button>` : ""}
       <button class="btn-mini danger" data-lp-del title="Remove this provider">${icon("close", 12)}</button>
     </div>
@@ -91,6 +98,7 @@ export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs:
         <label class="lp-ext"><input type="checkbox" id="lpExternal" /> <span>This endpoint is on the public internet (external). Leave off for a LAN / VPN / localhost box.</span></label>
         <div class="lp-add-actions">
           <button class="btn-mini" data-lp-test-form title="Check the endpoint is reachable (no key sent)">${icon("shield", 12)} Test connection</button>
+          <button class="btn-mini" data-lp-discover-form title="Ask the endpoint what it serves and fill the model ids from its answer">${icon("bolt", 12)} Discover models</button>
           <button class="btn-mini ok" data-lp-add>${icon("check", 12)} Add provider</button>
         </div>
       </div>
@@ -104,8 +112,15 @@ export interface LpFormInput { name: string; baseUrl: string; auth: string; mode
 export function draftFromForm(inp: LpFormInput, now: number): { def?: LocalProviderDef; errors: string[]; needsKey: boolean } {
   const name = (inp.name || "").trim();
   const authKind: LocalAuthKind = (LOCAL_AUTH_KINDS as string[]).includes(inp.auth) ? (inp.auth as LocalAuthKind) : "none";
+  // A preset chip writes only its id into the models field, so the curated attributes (context window,
+  // reasoning, vision, and the compat wire shape a LAN endpoint cannot advertise) have to be recovered
+  // here. Before P-LOCAL.5 they were dropped and every preset silently fell back to omp's 8192-token,
+  // non-reasoning defaults. Matching is by SERVED id, not exact string: the user is told to edit these
+  // ids to what their box exposes (`zai-org/GLM-5.3-Flash-FP8`), and doing exactly that used to be the
+  // one thing that lost the metadata again.
   const models: LocalModelDef[] = (inp.models || "")
-    .split(/[,\n]/).map((s) => s.trim()).filter(Boolean).map((id) => ({ id, name: id }));
+    .split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
+    .map((id) => enrichModelFromCatalog({ id }));
   const def: LocalProviderDef = {
     id: newLocalProviderId(name || "provider", now),
     name,
@@ -122,4 +137,28 @@ export function draftFromForm(inp: LpFormInput, now: number): { def?: LocalProvi
   };
   const errors = validateLocalProvider(def);
   return { def: errors.length ? undefined : def, errors, needsKey: authKind !== "none" };
+}
+
+// ── P-LOCAL.6: what the endpoint answered, turned into something the UI can use ──────────────────
+
+/** The `Model ids` field value for a discovered list. Ids only and order preserved, because the field
+ *  is the user's editable source of truth: the metadata is re-derived from these ids on save. */
+export function modelsFieldValue(models: LocalModelDef[]): string {
+  return models.map((m) => m.id).join(", ");
+}
+
+/** Refresh a SAVED provider's models from what its endpoint reported, enriching each with the catalog.
+ *  The server's list is authoritative about WHICH models exist, so an id the endpoint no longer serves
+ *  is removed rather than kept as a dead entry the model picker would still offer. Returns the def
+ *  unchanged when discovery came back empty, so a transient blank answer can never wipe a provider. */
+export function providerWithDiscovered(def: LocalProviderDef, discovered: LocalModelDef[], now: number): { def: LocalProviderDef; added: string[]; removed: string[] } {
+  if (!discovered.length) return { def, added: [], removed: [] };
+  const before = new Set(def.models.map((m) => m.id));
+  const models = discovered.map((m) => enrichModelFromCatalog(m));
+  const after = new Set(models.map((m) => m.id));
+  return {
+    def: { ...def, models, updatedAt: now },
+    added: models.map((m) => m.id).filter((id) => !before.has(id)),
+    removed: [...before].filter((id) => !after.has(id)),
+  };
 }

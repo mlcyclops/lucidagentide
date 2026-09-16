@@ -181,6 +181,10 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
+## Unreleased: grab to pan in Yours
+
+Open a document in **Preview > Yours**, zoom in, then select **Grab to pan** and drag to move the enlarged preview. The cursor changes from grab to grabbing. Press **Escape** or toggle the button off to click, type, or select text inside the page again. Arrow keys and wheel scrolling work in pan mode; Ctrl/Meta+wheel still zooms. Pan and markup are mutually exclusive, and switching tabs, opening another Yours document, or closing Preview exits pan mode. This moves the outer zoomed viewport, not an embedded PDF viewer's internal page scroller. Available after loading the updated app. *(P-PREVIEW-YOURS-PAN)*
+
 ## Unreleased: seamless KG pack imports
 
 Import a `.lkgpack.zip` from Settings > Personalization or the KG panel's Packs menu. Verification stays visible until completion. On success, the pack becomes active and its page count refreshes without restarting LUCID. Settings stays open; **View graph preview** opens the visualization when you want it.

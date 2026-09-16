@@ -241,6 +241,31 @@ export const PREVIEW_BRIDGE_JS = `(function(){
   setTimeout(health,2500); // belt-and-braces: report even if the load event never fires
 })();`;
 
+/** Preview-only wheel relay. No DOM access in the parent and no sandbox grant required. */
+export const PREVIEW_ZOOM_JS = `(function(){
+  if(window.__lucidPreviewZoom) return; window.__lucidPreviewZoom=1;
+  var wheelZoom=false;
+  window.addEventListener('message',function(ev){
+    var d=ev.data;
+    if(ev.source!==window.parent || !d || d.__lucid!=='preview-zoom-mode' || typeof d.enabled!=='boolean') return;
+    wheelZoom=d.enabled;
+  });
+  window.addEventListener('wheel',function(ev){
+    if(!(wheelZoom || ev.ctrlKey || ev.metaKey) || !Number.isFinite(ev.deltaY) || !ev.deltaY) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    window.parent.postMessage({__lucid:'preview-zoom-wheel',deltaY:Math.max(-1000,Math.min(1000,ev.deltaY)),deltaMode:ev.deltaMode},'*');
+  },{passive:false,capture:true});
+  window.parent.postMessage({__lucid:'preview-zoom-ready'},'*');
+})();`;
+
+/** Preserve SVG's XML MIME and document while adding the same bounded wheel channel as HTML. */
+export function injectPreviewZoom(document: string, svg = false): string {
+  const tag = svg ? `<script xmlns="http://www.w3.org/2000/svg"><![CDATA[${PREVIEW_ZOOM_JS}]]></script>` : `<script>${PREVIEW_ZOOM_JS}</script>`;
+  const close = document.toLowerCase().lastIndexOf(svg ? "</svg>" : "</body>");
+  return close >= 0 ? document.slice(0, close) + tag + document.slice(close) : document + tag;
+}
+
 /** Inject the bridge before `</body>` (or append if there's no body tag). Idempotent-safe (the script guards
  *  on `window.__lucidInspect`). Pure — used by the `/api/preview/serve` route. */
 export function injectPreviewBridge(html: string): string {

@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
 import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
-import { validateLocalProvider, type LocalProviderDef } from "./local_providers.ts";
+import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 
 // LUCID_GUI_SETTINGS_FILE is a supported instance-isolation seam. Creator and Fleet builds point it at
@@ -482,10 +482,19 @@ export function upsertLocalProvider(def: LocalProviderDef): LocalProviderDef {
     id: def.id, name: def.name?.trim() ?? "", ompProvider: def.ompProvider, baseUrl: def.baseUrl?.trim() ?? "",
     api: def.api, authKind: def.authKind, vaultRef: def.vaultRef || undefined, headerName: def.headerName?.trim() || undefined,
     zone: def.zone, enabled: def.enabled !== false,
-    models: (def.models ?? []).map((m) => ({
-      id: m.id, name: m.name?.trim() || undefined, contextWindow: m.contextWindow, maxTokens: m.maxTokens,
-      reasoning: m.reasoning || undefined, vision: m.vision || undefined, supportsTools: m.supportsTools,
-    })),
+    // P-LOCAL.5: `compat` is part of the DECLARATION (a preset's wire shape), so it has to survive the
+    // clean copy or the runtime overlay reads a stored def that lost it and GLM's reasoning stream dies
+    // silently. Re-sanitized HERE as well as at emission: this is the file a user hand-edits, and omp
+    // discards the whole models.yml on one out-of-enum value.
+    models: (def.models ?? []).map((m) => {
+      const cm: LocalModelDef = {
+        id: m.id, name: m.name?.trim() || undefined, contextWindow: m.contextWindow, maxTokens: m.maxTokens,
+        reasoning: m.reasoning || undefined, vision: m.vision || undefined, supportsTools: m.supportsTools,
+      };
+      const compat = sanitizeModelCompat(m.compat);
+      if (compat) cm.compat = compat;
+      return cm;
+    }),
     createdAt: def.createdAt, updatedAt: def.updatedAt,
   };
   const errs = validateLocalProvider(clean);
