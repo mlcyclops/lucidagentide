@@ -55,9 +55,19 @@ jobs:
           # airgap-smoke.ts asserts `python-${PLAT}-${ARCH}`, `bun-${PLAT}-${ARCH}` and
           # `pi_natives.${PLAT}-${ARCH}*.node`. That gate is the real proof this leg works: it REFUSES
           # to upload if the arch-matched runtime is missing or lost its exec bit.
+          #
+          # APPIMAGE ONLY, and that is a MEASURED limit, not a preference. The first real arm64 run
+          # (35143077151) proved the whole chain: all three linux-arm64 runtime pins verified by sha256,
+          # the arm64 pi_natives addon linked, both binaries compiled, and LucidAgent-arm64.AppImage
+          # BUILT. deb then died because electron-builder 25.1.8 vendors an x86-only fpm and runs it
+          # through its Go app-builder helper:
+          #   fpm-1.9.3-2.3.1-linux-x86/lib/ruby/bin.real/ruby: cannot execute binary file: Exec format error
+          # So arm64 ships the target that demonstrably works. arm64 deb/rpm needs either USE_SYSTEM_FPM
+          # with a gem-installed fpm, or a newer electron-builder. NEITHER is verified here, so it stays
+          # a named follow-up rather than a guess baked into a release.
           - os: ubuntu-24.04-arm
-            label: Linux (AppImage + deb + rpm, arm64)
-            script: dist:linux
+            label: Linux (AppImage, arm64)
+            script: dist:linux:arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

@@ -2,7 +2,10 @@
   "name": "lucidagentide-desktop",
   "private": true,
   "version": "2.2.2",
-  "trustedDependencies": ["electron", "@resvg/resvg-js"],
+  "trustedDependencies": [
+    "electron",
+    "@resvg/resvg-js"
+  ],
   "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
   "homepage": "https://github.com/mlcyclops/lucidagentide",
   "author": "TechLead 187 LLC <support@lucidagentide.com>",
@@ -31,7 +34,8 @@
     "dist": "bun run runtimes && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --publish never",
     "dist:win:creator": "bun run runtimes:win && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --win --config build/electron-builder.creator.cjs --publish never",
     "dist:mac:creator": "bun run runtimes:mac && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac zip --arm64 --x64 --config build/electron-builder.creator.cjs --publish never",
-    "dist:linux:creator": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --config build/electron-builder.creator.cjs --publish never"
+    "dist:linux:creator": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --config build/electron-builder.creator.cjs --publish never",
+    "dist:linux:arm": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux AppImage --arm64 --publish never"
   },
   "build": {
     "appId": "com.lucidagentide.desktop",
@@ -40,18 +44,31 @@
       "output": "release",
       "buildResources": "build"
     },
-    "files": ["dist/**", "renderer/**", "package.json", "node_modules/monaco-editor/min/**"],
+    "files": [
+      "dist/**",
+      "renderer/**",
+      "package.json",
+      "node_modules/monaco-editor/min/**"
+    ],
     "asarUnpack": [],
     "extraResources": [
       {
         "from": "runtimes",
         "to": "runtimes",
-        "filter": ["**/*", "!README.md", "!.gitkeep"]
+        "filter": [
+          "**/*",
+          "!README.md",
+          "!.gitkeep"
+        ]
       },
       {
         "from": "whisper",
         "to": "whisper",
-        "filter": ["**/*", "!README.md", "!.gitkeep"]
+        "filter": [
+          "**/*",
+          "!README.md",
+          "!.gitkeep"
+        ]
       },
       {
         "from": "..",
@@ -96,7 +113,10 @@
       "target": [
         {
           "target": "zip",
-          "arch": ["arm64", "x64"]
+          "arch": [
+            "arm64",
+            "x64"
+          ]
         },
         {
           "target": "pkg"
@@ -110,7 +130,9 @@
     "pkg": {
       "isRelocatable": false,
       "installLocation": "/Applications",
-      "mustClose": ["com.lucidagentide.desktop"],
+      "mustClose": [
+        "com.lucidagentide.desktop"
+      ],
       "overwriteAction": "upgrade"
     },
     "win": {
@@ -118,11 +140,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -151,7 +177,11 @@
       "maintainer": "TechLead 187 LLC <support@lucidagentide.com>",
       "vendor": "TechLead 187 LLC",
       "synopsis": "Sovereignty-aware, fail-closed AI coding IDE",
-      "target": ["AppImage", "deb", "rpm"],
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
       "artifactName": "LucidAgent-${arch}.${ext}"
     },
     "deb": {
