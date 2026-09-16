@@ -49,6 +49,15 @@ jobs:
           - os: ubuntu-latest
             label: Linux (AppImage + deb + rpm, x64)
             script: dist:linux
+          # P-ARM64.B: GitHub's native arm64 Linux runner, so no cross-build and no QEMU. Everything
+          # downstream is already arch-keyed and needs no edit: fetch-runtimes.ts resolves each spec by
+          # `platform` + process.arch, runtime.ts bundled() looks for `bun-${platform}-${arch}`, and
+          # airgap-smoke.ts asserts `python-${PLAT}-${ARCH}`, `bun-${PLAT}-${ARCH}` and
+          # `pi_natives.${PLAT}-${ARCH}*.node`. That gate is the real proof this leg works: it REFUSES
+          # to upload if the arch-matched runtime is missing or lost its exec bit.
+          - os: ubuntu-24.04-arm
+            label: Linux (AppImage + deb + rpm, arm64)
+            script: dist:linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

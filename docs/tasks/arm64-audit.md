@@ -588,31 +588,54 @@ only missing input is three pinned SHA-256 hashes. That matters because
 bundled bun (or its plain alias) is absent, so an arm leg added before the hashes
 would fail CI rather than ship something broken. That is the correct order.
 
-**Row 11 is a trap, not a chore.** `desktop/package.json:155` is
-`"artifactName": "LucidAgent-x86_64.${ext}"`, a hardcoded literal, while the deb
-and rpm blocks already use `${arch}` (lines 158, 172). Changing it to `${arch}`
-is one character of work and it RENAMES THE SHIPPING x64 ASSET, because
-electron-builder substitutes `x64` there, not `x86_64`: every existing link to
-`LucidAgent-x86_64.AppImage` breaks. Deliberately NOT changed in the v2.2.1 patch
-release. It belongs to the increment that actually adds the arm leg, where the
-rename is justified because two arches must be distinguishable anyway.
+**Row 11: I WAS WRONG AND THE ORIGINAL AUDIT WAS RIGHT.** My first pass at this
+refresh claimed that templating `artifactName` as `${arch}` would RENAME the
+shipping x64 AppImage and break every existing download link, and used that to
+defer the change out of v2.2.1. That was an inference I did not verify, and the
+verdict table at the top of this document (the `x64 after templating` column,
+"unchanged") already had it right. Checked against electron-builder's installed
+source, `builder-util/out/arch.js:59-91` `getArtifactArchName(arch, ext)`:
 
-### Ordered plan to ship linux-arm64
+| arch + ext | `${arch}` yields |
+|---|---|
+| x64 + AppImage | `x86_64` (byte-identical to today) |
+| x64 + rpm | `x86_64` |
+| x64 + deb | `amd64` |
+| arm64 + AppImage | `arm64` |
+| arm64 + rpm | `aarch64` |
+| arm64 + deb | `arm64` |
 
-1. Pin the three linux-arm64 runtimes in `fetch-runtimes.ts` (bun `1.3.14`
-   `linux-aarch64`, uv `0.11.23` `aarch64-unknown-linux-gnu`, CPython
-   `3.12.13+20260623` `aarch64-unknown-linux-gnu`), each with a downloaded and
-   vendor-cross-checked SHA-256. Fail-closed by construction: a wrong hash aborts.
-2. Change `linux.artifactName` to `LucidAgent-${arch}.${ext}` and accept the x64
-   rename in the SAME release, with the release notes naming both new filenames.
-3. Add the `ubuntu-24.04-arm` leg to the `build-desktop.yml` matrix
-   (`build-desktop.yml:49-51`). GitHub now offers arm64 Linux runners, so no
-   cross-build and no QEMU is required.
-4. Let `airgap-smoke.ts` do its job unchanged: it already resolves
-   `python-${PLAT}-${ARCH}`, `bun-${PLAT}-${ARCH}`, and
-   `pi_natives.${PLAT}-${ARCH}*.node`, so it validates the arm output with no edit.
+So the change is SAFE: the README badge links at `README.md:41` and `:960`, and
+the `LucidAgent-x86_64.AppImage` fixture in `release_identity.test.ts`, are all
+untouched for x64. It has been applied. Row 11 is closed.
 
-Cost is dominated by step 1 (three downloads plus hash verification) and step 3
-(one CI leg, roughly doubling Linux build minutes). Risk is concentrated in the
-unverified DuckDB arm load path from row 6, which step 4 surfaces on the first
-arm CI run rather than at a user.
+One more audit prediction did not survive contact. This document warned
+(section on the identity gate) that a new arm AppImage "will need" attention
+because the gate classifies by filename stem. It does not: `classifyArtifact`
+(`release_identity.ts:114-136`) keys on the EXTENSION, and `checkArtifact`
+validates the flavor stem (`LucidAgent` vs `LucidCreator`), neither of which the
+arch touches. All three arm64 names classify correctly with no code change, and
+`release_identity.test.ts` now pins that so a future edit cannot regress it.
+
+### Status of the plan
+
+1. DONE. The three linux-arm64 runtimes are pinned in `fetch-runtimes.ts`:
+   bun `1.3.14` `linux-aarch64`, uv `0.11.23` `aarch64-unknown-linux-gnu`,
+   CPython `3.12.13+20260623` `aarch64-unknown-linux-gnu`. Each hash was
+   downloaded AND cross-checked against the vendor's own manifest (bun's
+   `SHASUMS256.txt`, uv's per-asset `.sha256` sidecar, python-build-standalone's
+   release `SHA256SUMS`). The method was validated by reproducing the
+   already-committed `python-linux-x64` hash from that same manifest.
+2. DONE. `linux.artifactName` is `LucidAgent-${arch}.${ext}`, with no x64 rename
+   (see the table above).
+3. DONE. The `ubuntu-24.04-arm` leg is in the `build-desktop.yml` matrix.
+4. UNCHANGED BY DESIGN, and it is the real proof: `airgap-smoke.ts` already
+   resolves `python-${PLAT}-${ARCH}`, `bun-${PLAT}-${ARCH}` and
+   `pi_natives.${PLAT}-${ARCH}*.node`, and REFUSES to upload when the
+   arch-matched runtime is missing or lost its exec bit.
+
+**Not yet proven:** no arm64 build has run. Everything above is verified
+statically (real URLs answering 200, vendor-matched hashes, electron-builder's
+own arch mapping, the identity gate's real logic). The first `ubuntu-24.04-arm`
+CI run is what turns that into evidence, and the open risk remains row 6, the
+DuckDB arm load path, which that run surfaces rather than a user.

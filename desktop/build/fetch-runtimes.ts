@@ -135,6 +135,27 @@ const SPECS: readonly RuntimeSpec[] = [
 		url: uvUrl("x86_64-unknown-linux-gnu"),
 		sha256: "e12c4cda2fe8c305510a78380a88f2c32a27e90cdcd123cefd2873388f0ebb5f",
 	},
+	// Linux arm64 (P-ARM64.B). Every hash below was downloaded and then CROSS-CHECKED against the
+	// vendor's own published manifest, never just self-hashed: bun against
+	// …/bun-v1.3.14/SHASUMS256.txt, uv against its per-asset …tar.gz.sha256 sidecar, and CPython
+	// against …/releases/download/20260623/SHA256SUMS. The method was validated by reproducing the
+	// ALREADY-COMMITTED python-linux-x64 hash below (9fa869d6…) from that same SHA256SUMS file.
+	{
+		platform: "linux",
+		name: "bun-linux-arm64",
+		kind: "zip",
+		member: "bun",
+		url: bunUrl("linux-aarch64"),
+		sha256: "a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b",
+	},
+	{
+		platform: "linux",
+		name: "uv-linux-arm64",
+		kind: "tgz",
+		member: "uv",
+		url: uvUrl("aarch64-unknown-linux-gnu"),
+		sha256: "1873a77350f6621279ae1a0d2227f2bd8b67131598f14a7eb0ba2215d3da2c98",
+	},
 	// Relocatable CPython for the scanner (air-gap) — copy the whole extracted `python/` tree.
 	// Hashes below were cross-checked against python-build-standalone's published SHA256SUMS
 	// for release 20260623 (…/releases/download/20260623/SHA256SUMS).
@@ -153,6 +174,14 @@ const SPECS: readonly RuntimeSpec[] = [
 		tree: "python",
 		url: pyUrl("x86_64-unknown-linux-gnu"),
 		sha256: "9fa869d69be54f6b8eeae64272fbd9bb0646e0e1a8da9d80e51ba5a3bee48930",
+	},
+	{
+		platform: "linux",
+		name: "python-linux-arm64",
+		kind: "tgz",
+		tree: "python",
+		url: pyUrl("aarch64-unknown-linux-gnu"),
+		sha256: "b14d074c43fdf03f01822fd07a15b3039eb0558503d1cb791791602cbe32908b",
 	},
 	{
 		platform: "darwin",

@@ -442,6 +442,15 @@ describe("classifyArtifact", () => {
     ["latest.yml", "updater-feed"],
     ["latest-mac.yml", "updater-feed"],
     ["latest-linux.yml", "updater-feed"],
+    // P-ARM64.B: the names the new ubuntu-24.04-arm leg emits. Verified against electron-builder's
+    // own getArtifactArchName (builder-util/out/arch.js:59-91), not guessed: x64 AppImage stays
+    // `x86_64` so the README links and the fixture above are untouched, while arm64 yields `arm64`
+    // for AppImage and deb but `aarch64` for rpm. classifyArtifact keys on the EXTENSION, so all
+    // three already pass; this pins that, because the audit predicted they would need a code change
+    // and shipping the arm leg on that assumption would have been a needless edit to a release gate.
+    ["LucidAgent-arm64.AppImage", "appimage"],
+    ["lucidagentide-desktop_2.2.1_arm64.deb", "deb"],
+    ["lucidagentide-desktop-2.2.1.aarch64.rpm", "rpm"],
     // The alien file, named after the actual incident report.
     ["TacticalGenAITrainer-Setup.msi", "unknown"],
   ];

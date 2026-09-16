@@ -152,7 +152,7 @@
       "vendor": "TechLead 187 LLC",
       "synopsis": "Sovereignty-aware, fail-closed AI coding IDE",
       "target": ["AppImage", "deb", "rpm"],
-      "artifactName": "LucidAgent-x86_64.${ext}"
+      "artifactName": "LucidAgent-${arch}.${ext}"
     },
     "deb": {
       "artifactName": "${name}_${version}_${arch}.${ext}",
