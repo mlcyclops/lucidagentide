@@ -1433,11 +1433,25 @@ class Backend {
     // P-EVAL.2 (ADR-0187): capture this turn's API latency (t_sent -> first token -> end) to the append-only
     // latency log; the single writer ingests it into api_latency for the per-model p50/p95 rollup. A turn
     // that never reached the send (tSent==0) records nothing. Guarded + fail-open inside recordLatency.
+    //
+    // P-TURNFAIL.1 (ADR-0361): `ok` is NOT `!errored`. `errored` is only set when `session/prompt` THREW.
+    // When omp instead RESOLVES a turn carrying `stopReason: "error"` and zero content blocks, which is
+    // what a provider 4xx looks like from here, the old expression logged `ok: true` for a turn that
+    // produced nothing. The reported field case shows exactly that:
+    //   {"model":"xai-oauth/grok-...","ttftMs":0,"totalMs":300,"tokensIn":21723,"ok":true}
+    // 21.7k tokens sent, no first token, dead in 300 ms, recorded as a SUCCESS. Diagnosing it needed
+    // three files cross-referenced by timestamp, because the one file that should have said "this turn
+    // failed" said the opposite. A turn that emitted NO output is not ok, whichever way it ended.
+    //
+    // Deliberately NOT also logging stopReason/failReason here: LatencySample is the DuckDB-ingested
+    // shape and invariant 10 freezes that schema behind numbered migrations. `ok` alone already makes
+    // this case self-evident in one line (no first token, 21.7k in, NOT ok), and stopReason still
+    // reaches the user through the no-response event above. Adding columns is its own increment.
+    const produced = sawOutput && !errored;
     if (tSent > 0) recordLatency({
       model: this.activeModel(), sessionId: this.sessionId ?? undefined,
-      tSent, tFirstToken, tEnd: Date.now(), ok: !errored,
+      tSent, tFirstToken, tEnd: Date.now(), ok: produced,
       tokensIn: usage.tokensIn, costUsd: usage.costUsd, // tokens_out has no reliable server-side per-turn count
-
     });
     } finally {
       clearTimeout(slow);
