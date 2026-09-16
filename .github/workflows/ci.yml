@@ -64,6 +64,21 @@ jobs:
           bun install
           bun x tsc --noEmit
 
+      # ADR-0359 (P-BUILD-GATE.1): COMPILE the two shipped binaries. This step exists because v2.2.1
+      # went out with 5249 green tests, two clean typechecks and a green prompt-prefix keystone, and all
+      # three release legs still died in seconds: omp 16.5.2 added a `legacy-pi-compat` plugin whose
+      # dynamic `import("omp-legacy-pi-modules")` is meant to be resolved by omp's OWN Bun build plugin,
+      # and `bun build --compile` chases the literal. Nothing in the suite or either typecheck runs a
+      # compile, so a dependency bump could break the release and every PR check would still pass. These
+      # take about 10 seconds combined and they are the only thing here that validates the ARTIFACT
+      # rather than the source. Renderer bundle included: dev.ts serves the prebuilt artifact.
+      - name: Compile the shipped binaries (engine + launcher + renderer bundle)
+        working-directory: desktop
+        run: |
+          bun run build-renderer
+          bun run compile-lucid
+          bun run compile-engine
+
       # ADR-0177/0178: the RELEASE must BOOT under the packaging filter. This guard materializes a filtered
       # install (the extraResources exclusions applied for real) and boots the real dev.ts, then requires
       # lazily-imported feature deps to load. A filter/import mismatch - e.g. v1.11.0's `desktop/collab`

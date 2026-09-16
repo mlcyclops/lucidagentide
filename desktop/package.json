@@ -1,7 +1,7 @@
 {
   "name": "lucidagentide-desktop",
   "private": true,
-  "version": "2.2.1",
+  "version": "2.2.2",
   "trustedDependencies": ["electron", "@resvg/resvg-js"],
   "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
   "homepage": "https://github.com/mlcyclops/lucidagentide",
@@ -16,7 +16,7 @@
     "runtimes:linux": "bun run build/fetch-runtimes.ts",
     "whisper": "bun run build/fetch-whisper.ts",
     "compile-lucid": "bun build --compile ../harness/launcher/lucid_acp.ts --outfile ../bin/lucid && bun run natives",
-    "compile-engine": "bun build --compile dev.ts --outfile ../bin/lucid-engine --external '*.node'",
+    "compile-engine": "bun build --compile dev.ts --outfile ../bin/lucid-engine --external '*.node' --external 'omp-legacy-pi-modules'",
     "build-renderer": "bun build renderer/app.ts --target=browser --outfile renderer/app.bundle.js --sourcemap=inline",
     "natives": "bun run build/copy-natives.ts",
     "start": "bun run build && electron .",

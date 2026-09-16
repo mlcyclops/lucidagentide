@@ -451,4 +451,13 @@
 //            "Cannot find module" to its own log and ran ungated while every surface reported healthy.
 //            One probed resolver now answers for every cross-process path, and a gate that cannot be
 //            found REFUSES the spawn rather than proceeding without it (ADR-0356).
-export const APP_VERSION = "2.2.1";
+// v2.2.2 = v2.2.1's payload, in a build that can actually be built.
+//            BUILD: v2.2.1 was tagged on 5249 green tests, two clean typechecks and a green
+//            prompt-prefix keystone, and all three release legs died in seconds on
+//            `bun build --compile dev.ts`: omp 16.5.2 added a legacy-pi-compat plugin whose dynamic
+//            `import("omp-legacy-pi-modules")` is meant to be resolved by omp's OWN Bun build plugin,
+//            and the plain CLI chases the literal. It is now `--external`, exactly like `*.node`. The
+//            real fix is structural: CI now COMPILES the shipped binaries on every push, because
+//            nothing in the suite or either typecheck had ever built the thing being released
+//            (ADR-0359). Everything v2.2.1 promised is in here unchanged.
+export const APP_VERSION = "2.2.2";

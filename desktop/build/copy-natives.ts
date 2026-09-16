@@ -79,7 +79,17 @@ if (!existsSync(pkgDir)) {
 const addons = readdirSync(pkgDir).filter((f) => f.endsWith(".node"));
 if (!addons.length) fail(`no *.node addon inside ${pkgDir} — the package looks corrupt, refusing to ship a launcher that cannot start`);
 
-mkdirSync(BIN, { recursive: true });
+// `recursive: true` is documented to be a no-op when the directory already exists, and on most hosts it
+// is. It is NOT on a OneDrive-backed Windows path, where an existing `bin/` is a reparse point and the
+// call throws EEXIST, which aborted `compile-lucid` and so blocked verifying a release build locally.
+// CI never saw it (its checkout is a plain directory), which is the worst shape for a build bug: it only
+// breaks on a developer machine, so the build stops being locally reproducible right where the checking
+// happens. An already-present target is exactly the success condition here, so swallow only that.
+try {
+  mkdirSync(BIN, { recursive: true });
+} catch (e) {
+  if ((e as { code?: string }).code !== "EEXIST") throw e;
+}
 
 let linked = 0;
 let copied = 0;
