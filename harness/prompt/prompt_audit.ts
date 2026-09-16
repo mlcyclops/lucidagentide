@@ -12,10 +12,12 @@
 // exact 7-policy append from acp_backend, plus the same -e tool extensions) fully
 // offline: echo mock model, in-memory session store, temp auth, MCP/LSP off.
 //
-// Accounting parity is load-bearing: totals reuse omp's OWN counters (countTokens,
-// estimateToolSchemaTokens, estimateSkillsTokens, computeNonMessageTokens), so the
-// audit's baseline is the number omp's /context panel would show, not a parallel
-// estimate that drifts. Residuals are computed as differences, so every section's
+// Accounting parity is load-bearing: totals reuse omp's OWN counters (the agent's
+// Tokenizer, estimateToolSchemaTokens, estimateSkillsTokens, computeNonMessageTokens)
+// through the SAME tokenizer instance omp itself resolves for /context (session-stats.ts:
+// `get #tokenizer() { return this.#host.agent.tokenizer; }`), so the audit's baseline is
+// the number omp's /context panel would show, not a parallel estimate that drifts.
+// Residuals are computed as differences, so every section's
 // parts sum EXACTLY to the section total by construction.
 //
 // Honesty rules (token_speed.ts precedent): a block that is absent reports as
@@ -30,7 +32,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { countTokens } from "@oh-my-pi/pi-agent-core";
+import type { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -127,10 +129,13 @@ export interface CaptureOptions {
   liveDiscovery?: boolean;
 }
 
-/** Mirrors pi-agent-core/tokenizer.ts gating. Display metadata only; counting always goes
- *  through omp's countTokens so numbers can never diverge from omp's own accounting. */
-function tokenizerMode(): "native" | "estimate" {
-  return process.env.PI_TOKENIZER_ACCURATE === "1" && Bun.env.NODE_ENV !== "test" ? "native" : "estimate";
+/** Mirrors pi-agent-core/tokenizer.ts gating for Tokenizer#countTokens in its default
+ *  "approximate" mode: under NODE_ENV=test it always estimates; otherwise a catalog-resolved
+ *  encoding (or PI_TOKENIZER_ACCURATE=1 forcing o200k) counts natively. Display metadata only;
+ *  counting always goes through that same Tokenizer so numbers can never diverge from omp's. */
+function tokenizerMode(tokenizer: Tokenizer): "native" | "estimate" {
+  if (Bun.env.NODE_ENV === "test") return "estimate";
+  return tokenizer.encoding !== null || process.env.PI_TOKENIZER_ACCURATE === "1" ? "native" : "estimate";
 }
 
 interface ToolLike {
@@ -233,20 +238,23 @@ export async function captureAssembly(options: CaptureOptions = {}): Promise<Aud
   );
   try {
     const session = main.session;
+    // The parity anchor: omp resolves this same instance for its /context panel
+    // (session-stats.ts `get #tokenizer() { return this.#host.agent.tokenizer; }`).
+    const tokenizer = session.agent.tokenizer;
     const blocks: string[] = session.systemPrompt ?? [];
-    const blockTokens = blocks.map((b) => countTokens(b));
+    const blockTokens = blocks.map((b) => tokenizer.countTokens(b));
 
     const tools = toolList(session);
     const auditTools: AuditTool[] = tools.map((t) => ({
       name: t.name,
-      tokens: estimateToolSchemaTokens([t]),
+      tokens: estimateToolSchemaTokens([t], tokenizer),
       source: builtinNames.has(t.name) ? "builtin" : "extension",
     }));
 
     const skills = session.skills ?? [];
     const skillRows = skills.map((s: { name: string; description: string }) => ({
       name: s.name,
-      tokens: countTokens([s.name, s.description]),
+      tokens: tokenizer.countTokens([s.name, s.description]),
     }));
 
     const contextFiles = (await loadProjectContextFiles({ cwd })).map((f) => {
@@ -254,7 +262,7 @@ export async function captureAssembly(options: CaptureOptions = {}): Promise<Aud
       return {
         // cwd-relative for readable one-line report rows; walk-up files keep their ../ prefix.
         path: rel === "" ? f.path : rel,
-        tokens: countTokens(f.content),
+        tokens: tokenizer.countTokens(f.content),
       };
     });
 
@@ -264,23 +272,23 @@ export async function captureAssembly(options: CaptureOptions = {}): Promise<Aud
     const tree = await buildWorkspaceTree(cwd, { timeoutMs: 5000 });
     const treeProbe = tree.rendered.split("\n").find((l) => l.trim().length > 0);
     if (treeProbe && blocks.some((b) => b.includes(treeProbe))) {
-      workspaceTreeTokens = countTokens(tree.rendered);
+      workspaceTreeTokens = tokenizer.countTokens(tree.rendered);
     }
 
     return {
       cwd,
-      tokenizer: tokenizerMode(),
+      tokenizer: tokenizerMode(tokenizer),
       hermetic: !liveDiscovery,
       blockTokens,
       tools: auditTools,
-      toolsTokens: estimateToolSchemaTokens(tools),
+      toolsTokens: estimateToolSchemaTokens(tools, tokenizer),
       skills: skillRows,
-      skillsTokens: estimateSkillsTokens(skills),
-      appendedPolicyTokens: countTokens(appended),
-      policyRows: policyParts().map((p) => ({ label: p.label, tokens: countTokens(p.text) })),
+      skillsTokens: estimateSkillsTokens(skills, tokenizer),
+      appendedPolicyTokens: tokenizer.countTokens(appended),
+      policyRows: policyParts().map((p) => ({ label: p.label, tokens: tokenizer.countTokens(p.text) })),
       contextFiles,
       workspaceTreeTokens,
-      nonMessageTokens: computeNonMessageTokens(session),
+      nonMessageTokens: computeNonMessageTokens(session, tokenizer),
       excluded: EXCLUDED_FROM_MEASUREMENT,
     };
   } finally {

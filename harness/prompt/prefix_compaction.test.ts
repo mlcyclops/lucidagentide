@@ -26,7 +26,7 @@ const joinBlocks = (blocks: readonly string[]): string => blocks.join("\u0000");
 
 // The omp version this regression is pinned to (R-02). A silent dependency bump trips the assertion
 // below; R-01's scheduled omp-compat CI reruns the suite against candidate versions before adopting.
-const SUPPORTED_OMP = "16.5.2";
+const SUPPORTED_OMP = "18.2.2";
 const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-utils"] as const;
 
 const PkgDeps = (() => {
@@ -52,7 +52,7 @@ test("R-02: auto-compaction never mutates the frozen prefix (layers 1-4)", async
 		// Shrink the keep-recent window so a small headless session is actually compactable (the
 		// default keeps the last 20k tokens, far more than echo turns produce). portable text summarization
 		// avoids snapcompact's vision-model requirement (the mock model has no image input).
-		session.settings.set("compaction.strategy", "context-full");
+		session.settings.set("compaction.methodOrder", ["soft"]);
 		session.settings.set("compaction.keepRecentTokens", 10);
 
 		// Build conversation history so compaction has something older than the keep window to compact.
