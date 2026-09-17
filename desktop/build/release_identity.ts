@@ -115,9 +115,15 @@ export function classifyArtifact(fileName: string): ArtifactKind {
   const base = basename(fileName);
   const lower = base.toLowerCase();
   if (!lower) return "unknown";
-  // The auto-update feed: electron-builder emits latest.yml (win) / latest-mac.yml / latest-linux.yml.
+  // The auto-update feed: electron-builder emits latest.yml (win) / latest-mac.yml / latest-linux.yml,
+  // and ARCH-SUFFIXES the non-default arches: latest-linux-arm64.yml.
   // Matched by SHAPE rather than an exhaustive list so a new platform channel is covered on arrival.
-  if (/^latest(-[a-z0-9]+)?\.ya?ml$/.test(lower)) return "updater-feed";
+  // The shape allowed only ONE hyphen segment, which is the whole channel set MINUS every arm64 one, so
+  // the first arm64 build failed this gate with `unrecognized artifact: "latest-linux-arm64.yml"` after
+  // its AppImage had already PASSED. `*` rather than `?`: the segment count is electron-builder's
+  // business, not ours, and the feed's DECLARED artifact path is still checked below (see checkArtifact),
+  // so widening the NAME shape does not weaken what the gate actually proves about the bytes.
+  if (/^latest(-[a-z0-9]+)*\.ya?ml$/.test(lower)) return "updater-feed";
   if (lower.endsWith(".pkg")) return "mac-pkg";
   // zip is a mac-only target here (desktop/package.json build.mac.target); win ships nsis + portable.
   if (lower.endsWith(".zip")) return "mac-zip";

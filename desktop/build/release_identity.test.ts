@@ -451,6 +451,13 @@ describe("classifyArtifact", () => {
     ["LucidAgent-arm64.AppImage", "appimage"],
     ["lucidagentide-desktop_2.2.1_arm64.deb", "deb"],
     ["lucidagentide-desktop-2.2.1.aarch64.rpm", "rpm"],
+    // The ONE name the P-ARM64.B audit missed, and it failed the real arm64 build (ADR-0365). The
+    // AppImage/deb/rpm names above all pass because classifyArtifact keys on the EXTENSION, but the
+    // updater feed is matched by NAME SHAPE, and that shape allowed a single hyphen segment. So the
+    // arm64 leg produced an AppImage that PASSED and a feed beside it that was "unrecognized", which
+    // fails the whole gate: nothing may be uploaded when one file cannot be identified.
+    ["latest-linux-arm64.yml", "updater-feed"],
+    ["latest-mac-arm64.yml", "updater-feed"],
     // The alien file, named after the actual incident report.
     ["TacticalGenAITrainer-Setup.msi", "unknown"],
   ];
@@ -471,6 +478,12 @@ describe("classifyArtifact", () => {
     expect(classifyArtifact("")).toBe("unknown");
     // An .exe that is neither the nsis nor the portable target is not something this repo builds.
     expect(classifyArtifact("LucidAgent.exe")).toBe("unknown");
+    // The updater-feed shape was widened from one hyphen segment to many (ADR-0365). Pin that it did
+    // NOT become "any yml": these must stay unknown, or the gate stops refusing unaccounted-for files.
+    expect(classifyArtifact("latest-linux-arm64.yml.blockmap")).toBe("unknown");
+    expect(classifyArtifact("latestfoo.yml")).toBe("unknown");
+    expect(classifyArtifact("latest-.yml")).toBe("unknown");
+    expect(classifyArtifact("notlatest-linux-arm64.yml")).toBe("unknown");
   });
 });
 
