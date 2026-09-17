@@ -32,6 +32,7 @@ import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { engineExeName, resolveEngineSpawn } from "../engine_launch.ts";
 import { bootVerdict, hardenPlan, pickSmokeRoot, requiredLayout, restorePlan } from "../engine_pf_smoke.ts";
+import { type ArchTag, candidateResourceDirs, type Plat } from "./packaged_tree.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // desktop/build
 const DESKTOP = join(HERE, "..");
@@ -71,23 +72,14 @@ function run(argv: string[], opts: { cwd?: string; okCodes?: number[] } = {}): v
 
 // --- 1) resolve the source layout: packaged repo tree, or a source-built skeleton --------------------
 
-/** The packaged repo dir (…/resources/repo) that carries the compiled engine, if one exists. */
+/** The packaged repo dir (…/resources/repo) that carries the compiled engine, if one exists. The
+ *  candidate trees come from build/packaged_tree.ts, which DERIVES electron-builder's appOutDir name
+ *  from plat+arch instead of hardcoding `win-unpacked`. The literal was only ever right for x64, so a
+ *  win-arm64 leg would have found no packaged tree and silently dropped to source mode: green, but
+ *  proving nothing about the shipped bytes. Returning null here is a legitimate "no package on disk"
+ *  (dev box), so this stays a lookup, not a gate.  */
 function packagedRepoDir(): string | null {
-  if (!existsSync(RELEASE)) return null;
-  const candidates: string[] = [];
-  const direct = PLAT === "win32" ? join(RELEASE, "win-unpacked", "resources")
-    : PLAT === "linux" ? join(RELEASE, "linux-unpacked", "resources") : null;
-  if (direct && existsSync(direct)) candidates.push(direct);
-  for (const entry of readdirSync(RELEASE)) {
-    const p = join(RELEASE, entry);
-    if (!statSync(p).isDirectory()) continue;
-    const apps = entry.endsWith(".app") ? [p] : readdirSync(p).filter((x) => x.endsWith(".app")).map((x) => join(p, x));
-    for (const app of apps) {
-      const r = join(app, "Contents", "Resources");
-      if (existsSync(r)) candidates.push(r);
-    }
-  }
-  for (const res of candidates) {
+  for (const res of candidateResourceDirs({ releaseDir: RELEASE, plat: PLAT as Plat, arch: process.arch as ArchTag })) {
     const repo = join(res, "repo");
     if (requiredLayout(PLAT).every((f) => existsSync(join(repo, f)))) return repo;
   }

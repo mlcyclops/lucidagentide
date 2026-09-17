@@ -50,11 +50,17 @@ jobs:
             label: Linux (AppImage + deb + rpm, x64)
             script: dist:linux
           # P-ARM64.B: GitHub's native arm64 Linux runner, so no cross-build and no QEMU. Everything
-          # downstream is already arch-keyed and needs no edit: fetch-runtimes.ts resolves each spec by
-          # `platform` + process.arch, runtime.ts bundled() looks for `bun-${platform}-${arch}`, and
-          # airgap-smoke.ts asserts `python-${PLAT}-${ARCH}`, `bun-${PLAT}-${ARCH}` and
-          # `pi_natives.${PLAT}-${ARCH}*.node`. That gate is the real proof this leg works: it REFUSES
-          # to upload if the arch-matched runtime is missing or lost its exec bit.
+          # downstream is already arch-keyed: fetch-runtimes.ts resolves each spec by `platform` +
+          # process.arch, runtime.ts bundled() looks for `bun-${platform}-${arch}`, and airgap-smoke.ts
+          # asserts `python-${PLAT}-${ARCH}`, `bun-${PLAT}-${ARCH}` and `pi_natives.${PLAT}-${ARCH}*.node`.
+          #
+          # CORRECTED (ADR-0363): this comment used to claim that gate "is the real proof this leg
+          # works", and it needed one edit to become true. The gate located its input by a hardcoded
+          # `linux-unpacked`, which is only the x64 name; electron-builder wrote `linux-arm64-unpacked`,
+          # so the gate died with "found no packaged resources dir" AFTER building a good AppImage, and
+          # since it gates every upload, the artifact was discarded. The output dir name is now DERIVED
+          # from plat+arch in build/packaged_tree.ts. The arch-keyed asserts above were always right;
+          # nothing was ever reaching them.
           #
           # APPIMAGE ONLY, and that is a MEASURED limit, not a preference. The first real arm64 run
           # (35143077151) proved the whole chain: all three linux-arm64 runtime pins verified by sha256,

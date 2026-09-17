@@ -18,6 +18,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { delimiter as PATH_SEP, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type ArchTag, type Plat, resolveResourcesDir } from "./packaged_tree.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // desktop/build
 const PLAT = process.platform; // "win32" | "linux" | "darwin"
@@ -44,42 +45,14 @@ function releaseDirName(): string {
 }
 const RELEASE = join(HERE, "..", releaseDirName());
 
-/** Every plausible packaged `…/resources` dir: the `*-unpacked` tree (win/linux) and any `*.app`
- *  bundle's Contents/Resources (mac, possibly one per arch). */
-function candidateResourceDirs(): string[] {
-  if (!existsSync(RELEASE)) fail(`no release dir at ${RELEASE}: did electron-builder run? (LUCID_RELEASE_DIR selects a non-default output dir)`);
-  const out: string[] = [];
-  const direct =
-    PLAT === "win32" ? join(RELEASE, "win-unpacked", "resources")
-    : PLAT === "linux" ? join(RELEASE, "linux-unpacked", "resources")
-    : null;
-  if (direct && existsSync(direct)) out.push(direct);
-  // macOS (and a belt-and-suspenders fallback): hunt for <name>.app/Contents/Resources.
-  for (const entry of readdirSync(RELEASE)) {
-    const p = join(RELEASE, entry);
-    if (!statSync(p).isDirectory()) continue;
-    const apps = entry.endsWith(".app")
-      ? [p]
-      : readdirSync(p).filter((x) => x.endsWith(".app")).map((x) => join(p, x));
-    for (const app of apps) {
-      const r = join(app, "Contents", "Resources");
-      if (existsSync(r)) out.push(r);
-    }
-  }
-  return out;
-}
-
-/** Pick the resources dir that carries THIS runner's arch-matched Python (so a mac x64 app bundle
- *  never sends an arm64 runner hunting for an x64 interpreter it can't exec). */
-function resolveResources(): string {
-  const cands = candidateResourceDirs();
-  if (!cands.length) fail("found no packaged resources dir (…-unpacked/resources or *.app/Contents/Resources)");
-  const match = cands.find((r) => existsSync(join(r, "runtimes", `python-${PLAT}-${ARCH}`)));
-  return match ?? cands[0]!;
-}
-
-const res = resolveResources();
+/** The packaged resources dir for THIS runner's plat+arch, derived from electron-builder's own
+ *  appOutDir naming rule (see build/packaged_tree.ts). Hardcoding `linux-unpacked` here is what
+ *  discarded the first working arm64 AppImage: the tree was named `linux-arm64-unpacked`. */
+const resolved = resolveResourcesDir({ releaseDir: RELEASE, plat: PLAT as Plat, arch: ARCH as ArchTag });
+if (!resolved.ok) fail(resolved.reason);
+const res = resolved.dir;
 console.log(`air-gap smoke: packaged resources = ${res}`);
+if (!resolved.exact) console.log(`  note: gating a tree other than the expected ${resolved.expected}/`);
 
 // --- 1) scanner Python: bundled interpreter runs the scanner OFFLINE ---------------------------------
 const pyDir = join(res, "runtimes", `python-${PLAT}-${ARCH}`);
