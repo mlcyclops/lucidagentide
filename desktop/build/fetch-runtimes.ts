@@ -206,7 +206,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, "..", "runtimes");
 const hashOf = (file: string): string => createHash("sha256").update(readFileSync(file)).digest("hex");
 
-mkdirSync(OUT, { recursive: true });
+// Same OneDrive reparse-point quirk documented in build/copy-natives.ts: `recursive: true` is supposed
+// to be a no-op on an existing dir, and on a OneDrive-backed Windows path it throws EEXIST instead.
+// That aborted every local `runtimes:*` run, which is the shape of build bug that only ever breaks a
+// developer machine. An already-present runtimes/ is the success condition, so swallow only EEXIST.
+try {
+	mkdirSync(OUT, { recursive: true });
+} catch (e) {
+	if ((e as { code?: string }).code !== "EEXIST") throw e;
+}
 
 // electron-builder packages on the matching OS, so by default we fetch only the current platform's
 // runtimes (RUNTIME_OS overrides — e.g. to pre-stage another OS's binaries). Filtering keeps a Windows
@@ -301,13 +309,41 @@ for (const spec of specs) {
 // bundled binary is name-suffixed (`bun-<plat>-<arch>`). On a machine with no global bun (the whole point
 // of an air-gap bundle) the shim can't find it → "bun is not installed in %PATH%" → omp never starts, so
 // there's no model list AND no OAuth. Emit a plain `bun[.exe]` alongside the suffixed one (same dir →
-// runtime.ts puts it on PATH). Runs even when the suffixed bun was cached, so a rebuild self-heals.
+// runtime.ts puts it on PATH).
+//
+// The alias MUST match the arch this package targets, and picking it used to be
+// `SPECS.find((s) => s.platform === TARGET && s.name.startsWith("bun-"))`. A linux build fetches BOTH
+// arches into one runtimes/ dir, so `.find()` returned whichever is listed first — `bun-linux-x64` —
+// and the arm64 AppImage shipped an x86-64 binary as its plain `bun`. The failure is not a missing
+// file, which is why nothing spotted it by inspection: the alias exists, is executable, is ~60 MB of
+// real bun. It just cannot run. exec() returns ENOEXEC, /bin/sh falls back to parsing the ELF as a
+// shell script, and the whole thing surfaces as `runtimes/bun: 1: Syntax error: ")" unexpected`.
+// The same hazard was latent on macOS, where it only worked because `bun-darwin-arm64` happens to be
+// listed before the x64 spec and the runner is arm64.
 if (!REFRESH) {
-	const suffixedBun = SPECS.find((s) => s.platform === TARGET && s.name.startsWith("bun-"));
-	if (suffixedBun) {
-		const src = join(OUT, suffixedBun.name);
-		const plain = join(OUT, `bun${TARGET === "win32" ? ".exe" : ""}`);
-		if (existsSync(src) && !existsSync(plain)) { cpSync(src, plain); chmodSync(plain, 0o755); console.log(`runtimes: bun (plain alias for the omp shim)`); }
+	const TARGET_ARCH = process.env.RUNTIME_ARCH ?? process.arch;
+	// The win32 specs carry the extension IN the name (`bun-win32-x64.exe`), which the old
+	// `startsWith("bun-")` match tolerated and an exact match does not. Caught on the first local run
+	// by the fail-closed throw below, which is the entire argument for having it.
+	const wanted = `bun-${TARGET}-${TARGET_ARCH}${TARGET === "win32" ? ".exe" : ""}`;
+	const suffixedBun = SPECS.find((s) => s.platform === TARGET && s.name === wanted);
+	if (!suffixedBun) {
+		// Fail closed rather than aliasing a foreign arch: a package whose omp cannot start has no
+		// models and no OAuth, and that is worse than a build that stops here and says why.
+		throw new Error(
+			`fetch-runtimes: no bun spec named "${wanted}" for ${TARGET}-${TARGET_ARCH}; ` +
+				`cannot emit the plain bun alias omp's shim needs (have: ` +
+				`${SPECS.filter((s) => s.platform === TARGET && s.name.startsWith("bun-")).map((s) => s.name).join(", ")})`,
+		);
+	}
+	const src = join(OUT, suffixedBun.name);
+	const plain = join(OUT, `bun${TARGET === "win32" ? ".exe" : ""}`);
+	// Copy UNCONDITIONALLY. The old `!existsSync(plain)` guard meant a stale alias from an earlier
+	// build of a DIFFERENT arch was kept, so the wrong-arch bug could not be fixed by rebuilding.
+	if (existsSync(src)) {
+		cpSync(src, plain);
+		chmodSync(plain, 0o755);
+		console.log(`runtimes: bun (plain alias for the omp shim -> ${suffixedBun.name})`);
 	}
 }
 
