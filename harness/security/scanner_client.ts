@@ -54,7 +54,12 @@ function resolvePython(): string {
   const posix = join(sidecarDir(), ".venv", "bin", "python");
   if (existsSync(win)) return win;
   if (existsSync(posix)) return posix;
-  return "python"; // last resort; venv strongly preferred
+  // Last resort, and on POSIX it used to be the bare name `python`, which modern Linux does not ship:
+  // Ubuntu 24.04 provides `python3` only (no python-is-python3 by default), so the spawn failed
+  // instantly and the gate reported "scanner stdin not writable" (P-SCANPY.1 / ADR-0366). `python3` is
+  // the correct name to ask for; a caller that needs a specific interpreter sets SCANNER_PYTHON, and
+  // the packaged launcher now always does (harness/launcher/lucid_acp.ts scannerPythonCandidates).
+  return process.platform === "win32" ? "python" : "python3";
 }
 
 interface Pending {

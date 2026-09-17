@@ -167,6 +167,30 @@ if (/Failed to load pi_natives|Cannot find module .*pi_natives/i.test(said)) {
 }
 console.log(`  lucid launcher OK - ${addons.length} native addon${addons.length === 1 ? "" : "s"} resolve next to the binary, no load failure`);
 
+// --- 3a) the launcher's PREFLIGHT passes, i.e. it can FIND its own bundled scanner interpreter -------
+// The `--version` probe above proves the launcher STARTS. It does not prove the launcher can reach the
+// scanner, and that difference shipped a real defect (P-SCANPY.1 / ADR-0366): on an arm64 install the
+// launcher left SCANNER_PYTHON unset, `scanner_client.resolvePython()` fell back to the bare name
+// `python`, and Ubuntu 24.04 does not provide one. `lucid check` died with "scanner sidecar
+// unreachable: scanner stdin not writable" while the bundled aarch64 CPython sat one directory away,
+// working. Found by running a packaged AppImage on real hardware, which is far too late.
+//
+// So the gate now runs the FAIL-CLOSED PREFLIGHT itself and requires exit 0. Env is deliberately NOT
+// pre-seeded: no SCANNER_PYTHON, no PATH help. The whole assertion is that the PACKAGE is
+// self-sufficient, so anything handed to it here would hide exactly the class of bug it exists to
+// catch. This is the difference between proving the bundled runtimes WORK and proving the product can
+// FIND them.
+const pre = spawnSync(launcher, ["check"], { encoding: "utf8", timeout: 180_000 });
+const preSaid = `${pre.stdout ?? ""}${pre.stderr ?? ""}`.trim();
+if (pre.status !== 0) {
+  fail(
+    `\`lucid check\` exited ${pre.status} from the packaged tree - the launcher cannot reach its own ` +
+      `bundled scanner interpreter (see ADR-0366; check harness/launcher/lucid_acp.ts scannerPythonCandidates):\n` +
+      preSaid.split("\n").slice(0, 6).join("\n"),
+  );
+}
+console.log(`  lucid check OK - fail-closed preflight passes using ONLY bundled resources: ${preSaid.split("\n").slice(-1)[0]}`);
+
 // --- 3b) compiled desktop ENGINE + prebuilt renderer (P-WINBOOT.2 / ADR-0260) ------------------------
 // The desktop app spawns the COMPILED engine (bin/lucid-engine) instead of `bun run desktop/dev.ts`, so
 // Bun never module-loads a .ts out of a protected install dir (the v1.12.0 Program Files brick). If dist

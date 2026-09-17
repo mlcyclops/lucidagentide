@@ -18,12 +18,16 @@
 // provider path is arch-independent anyway. What is arch-dependent is exactly what this checks.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, renameSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, existsSync, openSync, readdirSync, readSync, renameSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 
-const res = process.argv[2];
+// ABSOLUTE, deliberately. Several checks spawn a bundled binary with `cwd` set elsewhere (the scanner
+// runs in scanner-sidecar/, the engine in repo/), and a RELATIVE program path is resolved against that
+// new cwd, not the one `existsSync` used. The first run of this script on a Spark passed the existence
+// check and then died with ENOENT on posix_spawn for a file that was demonstrably there.
+const res = process.argv[2] ? resolve(process.argv[2]) : "";
 if (!res || !existsSync(res)) {
-  console.error(`usage: <bundled-bun> arm64_field_proof.ts <path-to-resources-dir>\ngot: ${res ?? "(nothing)"}`);
+  console.error(`usage: <bundled-bun> arm64_field_proof.ts <path-to-resources-dir>\ngot: ${process.argv[2] ?? "(nothing)"}`);
   process.exit(2);
 }
 const ARCH = process.arch;
@@ -43,15 +47,24 @@ function bad(msg: string): void {
 /** The ELF e_machine of a binary, read from the header rather than shelled out to `file` (which is not
  *  guaranteed installed). Offset 0x12, little-endian u16. AArch64 is 183 (0xB7), x86-64 is 62 (0x3E).
  *  This is the check that catches an x64 binary that slipped into an arm64 package: it would still be
- *  PRESENT and the right SIZE, and only its header says it can never run here. */
+ *  PRESENT and the right SIZE, and only its header says it can never run here.
+ *
+ *  Read with openSync/readSync: these binaries are 50-120 MB and only 20 bytes matter. The first
+ *  version used `Bun.file(p).slice(0, 20).arrayBuffer()`, which returns a PROMISE, so every binary
+ *  reported "unreadable/not ELF" while running fine one line later. A check that cannot fail for the
+ *  right reason is worse than no check, so this reads bytes synchronously and means it. */
 function elfMachine(path: string): number | null {
+  let fd: number | undefined;
   try {
-    const fd = Bun.file(path);
-    const buf = new Uint8Array(fd.slice(0, 20).arrayBuffer() as unknown as ArrayBuffer);
-    if (buf.length < 20 || buf[0] !== 0x7f || buf[1] !== 0x45 || buf[2] !== 0x4c || buf[3] !== 0x46) return null;
-    return buf[18]! | (buf[19]! << 8);
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(20);
+    if (readSync(fd, buf, 0, 20, 0) < 20) return null;
+    if (buf[0] !== 0x7f || buf[1] !== 0x45 || buf[2] !== 0x4c || buf[3] !== 0x46) return null;
+    return buf.readUInt16LE(18);
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 const ELF_NAME: Record<number, string> = { 183: "aarch64", 62: "x86-64", 243: "riscv", 40: "arm" };
@@ -160,9 +173,35 @@ else {
 console.log("\n4) fail-closed preflight (invariant 3)");
 // `lucid check` resolves the repo root by probing for the KEYSTONE file (ADR-0356). This is therefore
 // also the first field test of that resolver inside a real packaged tree on this arch.
-const check = run([launcher, "check"], { timeout: 180_000 });
-if (check.code === 0) ok(`lucid check -> ready (exit 0): ${check.out.split("\n").slice(-1)[0]?.slice(0, 140)}`);
-else bad(`lucid check exited ${check.code} with the scanner PRESENT: ${check.out.slice(0, 500)}`);
+//
+// Run it EXACTLY as shipped first: no SCANNER_PYTHON, no PATH help. Setting the env up front would
+// hide the defect this found (ADR-0366), where the launcher could not resolve the interpreter it
+// shipped with. When the shipped invocation fails, retry with the bundled interpreter named
+// explicitly, purely to SPLIT the diagnosis: "the launcher cannot find python" and "the gate or the
+// scanner is broken on this arch" are very different findings and must not share one FAIL line.
+let check = run([launcher, "check"], { timeout: 180_000 });
+// The env under which `check` PASSED. Section 5's negative must reuse it, or removing the scanner
+// would "refuse" for the interpreter reason instead and the negative would pass vacuously.
+let checkEnv: Record<string, string> | undefined;
+if (check.code === 0) {
+  ok(`lucid check -> ready (exit 0): ${check.out.split("\n").slice(-1)[0]?.slice(0, 140)}`);
+} else if (py) {
+  const forced = run([launcher, "check"], { timeout: 180_000, env: { SCANNER_PYTHON: py } });
+  if (forced.code === 0) {
+    bad(
+      `lucid check FAILS as shipped but PASSES with SCANNER_PYTHON=${py}\n` +
+        `        -> the gate and scanner work on this arch; the LAUNCHER cannot resolve the bundled\n` +
+        `           interpreter (ADR-0366). Expect this on any host with no global \`python\`.\n` +
+        `        shipped: ${check.out.split("\n").slice(-1)[0]?.slice(0, 160)}`,
+    );
+    check = forced; // section 5 can still prove fail-closed, using a working baseline
+    checkEnv = { SCANNER_PYTHON: py };
+  } else {
+    bad(`lucid check exited ${check.code} with the scanner PRESENT, and still fails with an explicit interpreter: ${forced.out.slice(0, 400)}`);
+  }
+} else {
+  bad(`lucid check exited ${check.code} with the scanner PRESENT: ${check.out.slice(0, 500)}`);
+}
 
 // --- 5) ...and REFUSES when the scanner is gone (the negative that makes check 4 mean something) ------
 // Without this, a `check` that always returned 0 would look identical to a working gate. Invariant 3
@@ -174,7 +213,7 @@ if (check.code === 0 && existsSync(scannerPy)) {
   try {
     renameSync(scannerPy, hidden);
     moved = true;
-    const refused = run([launcher, "check"], { timeout: 180_000 });
+    const refused = run([launcher, "check"], { timeout: 180_000, env: checkEnv });
     if (refused.code !== 0) ok(`lucid check REFUSES with the scanner removed (exit ${refused.code}) - fail-closed holds`);
     else bad("lucid check returned 0 with the scanner REMOVED - fail-closed is broken on this arch");
   } catch (e) {
