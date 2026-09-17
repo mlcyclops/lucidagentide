@@ -240,10 +240,19 @@ jobs:
         run: bun run build/release-identity-gate.ts --flavor agent
         working-directory: desktop
 
+      # Name carries the ARCH, not just the OS. `runner.os` is "Linux" for BOTH ubuntu-latest and
+      # ubuntu-24.04-arm, so the two Linux legs uploaded artifacts with the SAME name, and v7 permits
+      # that rather than erroring: run 35178241843 ended up with two `LucidAgentIDE-Linux` artifacts
+      # (693 MB arm64, 1.94 GB x64). Nothing is lost, because the FILES inside are arch-named, but the
+      # artifacts become unaddressable: `gh run download --pattern '*arm64*'` matches neither, and a
+      # download by name picks between them nondeterministically. Safe to rename because no consumer
+      # names them: both the Creator build and the rolling-latest publish use download-artifact with
+      # `merge-multiple: true` and no `name:` filter. The tag path is unaffected either way, since
+      # action-gh-release attaches FILES rather than artifacts.
       - name: Upload installers as artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: LucidAgentIDE-${{ runner.os }}
+          name: LucidAgentIDE-${{ runner.os }}-${{ runner.arch }}
           if-no-files-found: warn
           path: |
             desktop/release/*.dmg
