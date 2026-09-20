@@ -9,7 +9,7 @@
 //
 // Run: bun run desktop/scripts/demo_p_mascot_1.ts
 
-import { MASCOT_FRAMES, MASCOT_H, MASCOT_PALETTE, MASCOT_W, VICTORY_MS, mascotFrame, stepMascot, workActivity } from "../renderer/mascot.ts";
+import { MASCOT_FRAMES, MASCOT_H, MASCOT_PALETTE, MASCOT_W, VICTORY_MS, WORK_ACTIVITIES, mascotFrame, stepMascot, workActivity } from "../renderer/mascot.ts";
 
 const fail = (msg: string): never => { console.error(`FAIL: ${msg}`); process.exit(1); };
 const ok = (msg: string): void => console.log(`   ${msg} \u2713`);
@@ -27,7 +27,7 @@ for (const [id, f] of Object.entries(MASCOT_FRAMES)) {
   }
   if (!f.join("").includes("G")) fail(`${id}: lost the neon brand accent`);
 }
-ok(`${ids.length} frames, all 20x26, palette-clean, brand accent everywhere`);
+ok(`${ids.length} frames, all ${MASCOT_W}x${MASCOT_H}, palette-clean, brand accent everywhere`);
 
 // (2) the machine follows the session.
 let s = stepMascot(null, { speaking: false, listening: false, working: true }, 0);
@@ -38,11 +38,14 @@ if (stepMascot(null, { speaking: true, listening: true, working: true }, 0).stat
 ok("state machine: victory on landed work (uninterruptible, finishes), speaking > listening > working > idle");
 
 // (3) he keeps himself busy - and every beat resolves.
-if (workActivity(0) !== "kata" || workActivity(7000) !== "shuriken" || workActivity(14000) !== "meditate") fail("activity rotation drifted");
+for (let index = 0; index < WORK_ACTIVITIES.length; index++) {
+  if (workActivity(index * 6500) !== WORK_ACTIVITIES[index]) fail("activity rotation drifted");
+}
+if (workActivity(WORK_ACTIVITIES.length * 6500) !== WORK_ACTIVITIES[0]) fail("activity cycle did not wrap");
 for (const t of [0, 313, 5555, 777777]) {
   const f = mascotFrame({ state: "working", since: 0, until: 0 }, t);
   if (!(f in MASCOT_FRAMES)) fail(`working frame at t=${t} is not a real frame`);
 }
-ok("activities rotate kata -> shuriken -> meditate; every offset resolves to a real frame");
+ok(`activities rotate ${WORK_ACTIVITIES.join(" -> ")}; every offset resolves to a real frame`);
 
 console.log("\nALL CHECKS PASSED");

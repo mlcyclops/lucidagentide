@@ -18,11 +18,12 @@
 // P-SKILLREG.1 / ADR-0068/0069). Keys/signers come from env (managed config), fail-soft to unsigned.
 
 import { createPrivateKey, createPublicKey, sign as edSign, type KeyObject } from "node:crypto";
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, statSync, writeFileSync, copyFileSync, rmSync, type Stats } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, statSync, writeFileSync, copyFileSync, rmSync, type Stats } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { DEFAULT_POLICY, type GateDecision, scanAndDecide } from "../harness/security/gate.ts";
-import { ScannerClient } from "../harness/security/scanner_client.ts";
+import { ScannerClient, sidecarDir } from "../harness/security/scanner_client.ts";
+import { resolvedRepo } from "./repo_root.ts";
 import { KbGraphStore } from "../harness/kb/store.ts";
 import {
   buildManifest, sha256Bytes, verifyPackManifest, LKGPACK_DB_FILE, LKGPACK_MANIFEST,
@@ -114,8 +115,92 @@ export async function exportKgPack(kgId: string, destDir: string, meta: {
 
 export interface PackImportResult {
   ok: boolean; error?: string;
-  stage?: "manifest" | "integrity" | "signature" | "scan" | "write" | "ok";
+  // P-PACKSCAN.1 (ADR-0368): `scanner` is DISTINCT from `scan`. `scan` means the pack's own content was
+  // refused (a finding, a real block) and is the user's pack being untrustworthy. `scanner` means LUCID
+  // could not run its scanner at all, which is OUR fault, not the pack's, and the two must never share a
+  // message: the old behavior reported a missing sidecar directory as `page "x" flagged`, which reads as
+  // "your pack is malicious" and sent the operator hunting through a pack that was perfectly valid.
+  stage?: "manifest" | "integrity" | "signature" | "scan" | "scanner" | "write" | "ok";
   kgId?: string; kgName?: string; signed?: boolean; keyId?: string; pages?: number; findings?: number;
+  /** Where the full diagnostic for THIS attempt was written, so a failure can point at one file the
+   *  user can send. Always set on failure, even when writing the log itself partly failed. */
+  logPath?: string;
+}
+
+/** Is this block reason the scanner being unreachable rather than the content being bad?
+ *
+ *  The gate fail-closes a dead scanner into a BLOCK carrying its own reason text, so this is a string
+ *  test by necessity. Kept deliberately broad across the phrasings `scanner_client.ts` can produce
+ *  (`scanner not running`, `scanner stdin not writable`, `scan timeout after Nms`, `malformed scan
+ *  response`, `write to scanner failed`) plus the gate's own `fail-closed: scan unavailable` prefix.
+ *  A false NEGATIVE here is safe: the pack is still refused, the message is just less helpful. A false
+ *  POSITIVE would mislabel a real finding as an environment fault, so every pattern names a mechanism
+ *  and none of them match a Unicode finding's reason. */
+export function isScannerUnavailable(reason: string | undefined): boolean {
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return r.includes("scan unavailable")
+    || r.includes("scanner not running")
+    || r.includes("scanner stdin not writable")
+    || r.includes("write to scanner failed")
+    || r.includes("malformed scan response")
+    || /scan timeout after \d+ms/.test(r);
+}
+
+/** The one file a user is pointed at when a pack will not load (P-PACKSCAN.1).
+ *
+ *  Lives beside the other `lucid-*` diagnostics in the data root so a support bundle already collects
+ *  it. Append-only JSONL, one object per attempt, so a user who tried four times sends one file that
+ *  shows all four. Nothing secret goes in: the pack path, the manifest's own metadata, the stage, the
+ *  error, and the environment facts that actually decide whether the scanner can run. */
+export function packLogPath(): string {
+  return process.env.LUCID_PACK_LOG_PATH
+    || join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "lucid-kbpack.jsonl");
+}
+
+/** Append one attempt to the pack log and return the path. Never throws: a diagnostic that breaks the
+ *  thing it is diagnosing is worse than no diagnostic, so a write failure is swallowed and the caller
+ *  still gets a path to name. */
+export function logPackAttempt(entry: {
+  source: string;
+  result: PackImportResult;
+  manifest?: Pick<PackManifest, "format" | "author" | "version" | "page_count"> & { name?: string };
+  startedAt?: number;
+}): string {
+  const path = packLogPath();
+  const sidecar = sidecarDir();
+  const line = {
+    at: new Date().toISOString(),
+    ms: entry.startedAt ? Date.now() - entry.startedAt : undefined,
+    source: entry.source,
+    ok: entry.result.ok,
+    stage: entry.result.stage,
+    error: entry.result.error,
+    pages: entry.result.pages,
+    findings: entry.result.findings,
+    signed: entry.result.signed,
+    kgName: entry.result.kgName,
+    pack: entry.manifest,
+    // The environment facts that decide whether a re-scan can happen at all. This block is the reason
+    // the log exists: ADR-0368 was a wrong `scannerDir`, and nothing on screen or on disk said so.
+    env: {
+      appVersion: process.env.LUCID_APP_VERSION,
+      platform: `${process.platform}-${process.arch}`,
+      scannerDir: sidecar,
+      scannerDirExists: existsSync(sidecar),
+      scannerServerExists: existsSync(join(sidecar, "server.py")),
+      scannerPython: process.env.SCANNER_PYTHON,
+      scannerPythonExists: process.env.SCANNER_PYTHON ? existsSync(process.env.SCANNER_PYTHON) : false,
+      scannerDirFromEnv: !!(process.env.LUCID_SCANNER_DIR ?? "").trim(),
+      repoRoot: resolvedRepo().root,
+      repoProven: resolvedRepo().proven,
+    },
+  };
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, JSON.stringify(line) + "\n", "utf8");
+  } catch { /* a diagnostic must never break the operation it describes */ }
+  return path;
 }
 
 /** Verify (integrity + origin) → re-scan every page fail-closed → register a read-only KG + copy the db in.
@@ -158,10 +243,17 @@ export async function importKgPack(packDir: string, opts: {
       try { d = await decide(pg.body_md); }
       catch (e) {
         record({ tool: "kb_pack_import", severity: "high", findings: "scanner-unavailable", reason: `KG pack "${manifest.kg.name}" blocked — scanner unavailable` });
-        return { ok: false, stage: "scan", error: `scanner unavailable: ${(e as Error).message}` };
+        return { ok: false, stage: "scanner", error: `scanner unavailable: ${(e as Error).message}` };
       }
       findings += d.findings.length;
       if (d.block) {
+        // The gate catches ScanUnavailableError itself and fail-closes into a BLOCK decision, so an
+        // environment fault arrives here looking exactly like a content finding. Read the reason to tell
+        // them apart, or a broken install is permanently indistinguishable from a poisoned pack.
+        if (isScannerUnavailable(d.reason)) {
+          record({ tool: "kb_pack_import", severity: "high", findings: "scanner-unavailable", reason: `KG pack "${manifest.kg.name}" blocked — scanner unavailable` });
+          return { ok: false, stage: "scanner", error: `scanner unavailable: ${d.reason}` };
+        }
         record({ tool: "kb_pack_import", severity: "high", findings: String(d.findings.length), reason: `KG pack "${manifest.kg.name}" blocked at the gate — page "${pg.slug}": ${d.reason}` });
         return { ok: false, stage: "scan", findings, error: `page "${pg.slug}" flagged: ${d.reason}` };
       }
@@ -186,16 +278,24 @@ export async function installPackFromUrl(url: string, opts: {
   decide?: (text: string) => Promise<GateDecision>;
   record?: (b: { tool: string; severity?: string; findings?: string; reason: string }) => void;
 } = {}): Promise<PackImportResult> {
-  if (!url) return { ok: false, stage: "manifest", error: "no download url" };
+  // A PURCHASED pack that will not install is the case where a user most needs something to send, so
+  // this path logs too. The url is recorded WITHOUT its query string: an entitlement download url is a
+  // short-lived signed url whose signature is a credential, and a support log is a file people email.
+  const startedAt = Date.now();
+  const source = url ? `${url.split("?")[0]} (signed download)` : "(no url)";
+  const done = (result: PackImportResult): PackImportResult =>
+    result.ok ? result : { ...result, logPath: logPackAttempt({ source, result, startedAt }) };
+
+  if (!url) return done({ ok: false, stage: "manifest", error: "no download url" });
   const f = opts.fetchImpl ?? fetch;
   let bytes: Buffer;
   try {
     const res = await f(url);
-    if (!res.ok) return { ok: false, stage: "manifest", error: `download failed (${res.status})` };
+    if (!res.ok) return done({ ok: false, stage: "manifest", error: `download failed (${res.status})` });
     bytes = Buffer.from(await res.arrayBuffer());
-  } catch (e) { return { ok: false, stage: "manifest", error: `download failed: ${(e as Error).message}` }; }
+  } catch (e) { return done({ ok: false, stage: "manifest", error: `download failed: ${(e as Error).message}` }); }
 
-  return importPackBytes(bytes, opts);
+  return done(await importPackBytes(bytes, opts));
 }
 
 /** The ONE place a `.lkgpack.zip` becomes an importable pack directory: extract manifest + db (matched by
@@ -256,11 +356,18 @@ export function classifyPackInput(p: string): PackInput {
  *  `.lkgpack.zip`. The zip path reuses installPackFromUrl's extraction, so there is ONE unzip in the code
  *  base and the gate (integrity, origin, fail-closed re-scan) is identical for every route. */
 export async function importPackFromPath(p: string, opts: Parameters<typeof importKgPack>[1] = {}): Promise<PackImportResult> {
+  // Every attempt is logged, success or failure, at the OUTERMOST entry point so there is exactly one
+  // append per user action no matter which inner path ran (P-PACKSCAN.1). A failure carries the log path
+  // back so the UI can point the user at one file to send instead of asking them to describe a stack.
+  const startedAt = Date.now();
+  const done = (result: PackImportResult): PackImportResult =>
+    result.ok ? result : { ...result, logPath: logPackAttempt({ source: p, result, startedAt }) };
+
   const input = classifyPackInput(p);
-  if (input.kind === "reject") return { ok: false, stage: "manifest", error: input.reason };
-  if (input.kind === "dir") return importKgPack(input.packDir, opts);
+  if (input.kind === "reject") return done({ ok: false, stage: "manifest", error: input.reason });
+  if (input.kind === "dir") return done(await importKgPack(input.packDir, opts));
   let bytes: Buffer;
   try { bytes = readFileSync(input.file); }
-  catch (e) { return { ok: false, stage: "manifest", error: `could not read that file: ${(e as Error).message}` }; }
-  return importPackBytes(bytes, opts);
+  catch (e) { return done({ ok: false, stage: "manifest", error: `could not read that file: ${(e as Error).message}` }); }
+  return done(await importPackBytes(bytes, opts));
 }

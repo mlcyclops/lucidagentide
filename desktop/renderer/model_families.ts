@@ -30,6 +30,57 @@ export function familyOf(value: string): ModelFamily {
   return OTHER_FAMILY;
 }
 
+// ── P-LOCALPICK.1 (ADR-0371): local/self-hosted providers pin to the TOP of the picker ───────────
+// A user with a box on their own LAN configured it because they intend to USE it, so its models are
+// the likeliest first choice, and they were the least visible: a self-hosted id matches no family
+// regex, so `dgx-spark/glm-5.3-flash` landed in "Other models" at the very bottom. Worse, a freshly
+// DISCOVERED model is absent from omp's report until the app restarts, so the picker showed nothing
+// at all and gave no reason. These helpers are pure so both behaviours are unit-tested.
+
+/** The minimal slice of a LocalProviderDef the picker needs. Kept structural so this module stays
+ *  free of desktop imports and the tests need no fixture heavier than an object literal. */
+export interface LocalProviderRef { ompProvider: string; enabled: boolean; models: readonly { id: string }[] }
+
+/** The provider prefix of a model id ("dgx-spark/glm-5.3-flash" -> "dgx-spark"; bare ids -> ""). */
+export function providerPrefixOf(value: string): string {
+  const i = value.indexOf("/");
+  return i === -1 ? "" : value.slice(0, i);
+}
+
+/** The omp provider prefixes of the ENABLED local providers. */
+export function localPrefixSet(providers: readonly LocalProviderRef[]): Set<string> {
+  return new Set(providers.filter((p) => p.enabled && p.ompProvider).map((p) => p.ompProvider));
+}
+
+/** Split a curated list into local-provider models (pinned first) and everything else. Relative
+ *  order inside each half is preserved: the caller already curated it. */
+export function splitLocalModels(models: readonly ModelOption[], prefixes: ReadonlySet<string>): { local: ModelOption[]; rest: ModelOption[] } {
+  const local: ModelOption[] = [];
+  const rest: ModelOption[] = [];
+  for (const m of models) (prefixes.has(providerPrefixOf(m.value)) ? local : rest).push(m);
+  return { local, rest };
+}
+
+/** Models the user's enabled local providers DECLARE but omp has not reported yet: the exact set a
+ *  restart will load. This is the answer to "I discovered it and the picker does not show it", said
+ *  in the picker itself instead of a Settings banner three surfaces away. Compared on full
+ *  `<ompProvider>/<modelId>` ids, the shape omp reports custom providers under. */
+export function pendingLocalModels(
+  providers: readonly LocalProviderRef[],
+  reported: readonly ModelOption[],
+): { value: string; name: string }[] {
+  const have = new Set(reported.map((m) => m.value));
+  const out: { value: string; name: string }[] = [];
+  for (const p of providers) {
+    if (!p.enabled || !p.ompProvider) continue;
+    for (const m of p.models) {
+      const full = `${p.ompProvider}/${m.id}`;
+      if (!have.has(full)) out.push({ value: full, name: m.id });
+    }
+  }
+  return out;
+}
+
 // ── P-IDE.1c (ADR-0029): catalog curation + data-sovereignty gating ──────────
 // omp exposes no deprecation/provider metadata over ACP, so these rules live here (pure + tested).
 

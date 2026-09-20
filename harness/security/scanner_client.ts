@@ -19,15 +19,34 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Finding } from "../contracts.ts";
+// P-PACKSCAN.1 (ADR-0368): the ONE probed repo root (ADR-0356). Same import direction the launcher
+// already uses (harness/launcher/lucid_acp.ts imports it too), so this adds no new coupling.
+import { repoAsset } from "../../desktop/repo_root.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// LUCID_SCANNER_DIR lets a standalone/compiled launcher (the `lucid` binary — P-EXT.1/4) point the
-// scanner at the REAL on-disk scanner-sidecar: a `bun build --compile` binary virtualizes import.meta,
-// so the source-relative path would be wrong. Read LAZILY (not a module-level const) — the launcher
-// sets the env in main(), AFTER this module is imported, so a const would capture the stale virtual
-// path. Fail-closed-safe: a wrong/missing dir makes the scan fail (ScanUnavailableError), never "safe".
-function sidecarDir(): string {
-  return process.env.LUCID_SCANNER_DIR || join(HERE, "..", "..", "scanner-sidecar");
+
+/** Where the Python sidecar lives on disk.
+ *
+ *  LUCID_SCANNER_DIR is the explicit override the standalone launcher sets (`lucid_acp.ts`), and it
+ *  wins. Read LAZILY, never as a module-level const: the launcher sets it in main() AFTER this module
+ *  is imported, so a const would capture the stale value.
+ *
+ *  P-PACKSCAN.1 (ADR-0368): the FALLBACK is now the PROBED repo root, not `join(HERE, "..", "..")`.
+ *  This is the third appearance of the ADR-0356 bug. `HERE` comes from `import.meta.url`, which a
+ *  `bun build --compile` binary VIRTUALIZES to `B:\~BUN\root`, so the old fallback resolved to
+ *  `B:\~BUN\scanner-sidecar`, a path in no filesystem. The launcher was immune because it sets the env
+ *  explicitly; the packaged desktop ENGINE (`bin/lucid-engine`, also a compiled binary, ADR-0260) never
+ *  set it, so on every packaged install the engine's ScannerClient spawned `python server.py` with a
+ *  nonexistent cwd, the child died instantly, and EVERY engine-side scan failed closed. The visible
+ *  symptom was a KG Pack import refusing with `page "..." flagged: fail-closed: scan unavailable
+ *  (scanner not running)`, which reads like a malicious pack and was in fact a missing directory.
+ *
+ *  Still fail-closed either way: an unresolvable dir makes the scan THROW, never pass. The probe only
+ *  changes whether a correct install can find a sidecar that is sitting right there. */
+export function sidecarDir(): string {
+  const explicit = (process.env.LUCID_SCANNER_DIR ?? "").trim();
+  if (explicit) return explicit;
+  return repoAsset("scanner-sidecar");
 }
 
 export interface ScanResponse {

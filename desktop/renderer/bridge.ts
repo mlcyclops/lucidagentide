@@ -451,6 +451,9 @@ export interface KbPackExportView { ok: boolean; error?: string; path?: string; 
 export interface KbPackImportView {
   ok: boolean; error?: string; stage?: string;
   kgId?: string; kgName?: string; signed?: boolean; keyId?: string; pages?: number; findings?: number;
+  /** P-PACKSCAN.1 (ADR-0368): the diagnostic file for a FAILED import, so the refusal can name one
+   *  file the user sends for support instead of asking them to reproduce a stage name from memory. */
+  logPath?: string;
 }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.

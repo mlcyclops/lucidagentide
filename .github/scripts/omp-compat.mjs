@@ -4,7 +4,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const PACKAGES = ["pi-agent-core", "pi-ai", "pi-coding-agent", "pi-utils"].map(name => `@oh-my-pi/${name}`);
+// pi-tui joined the pin set at 18.2.6: omp 18.2.5 moved the status-line context-usage helpers (used
+// by harness/prompt/prompt_audit.ts) out of pi-coding-agent's subpaths and into pi-tui, so the five
+// packages must move in lockstep or the Tokenizer type identity splits across two copies.
+const PACKAGES = ["pi-agent-core", "pi-ai", "pi-coding-agent", "pi-tui", "pi-utils"].map(name => `@oh-my-pi/${name}`);
 const REGRESSION = "harness/prompt/prefix_compaction.test.ts";
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SUPPORTED = /^const SUPPORTED_OMP = "([^"]+)";\r?$/gm;

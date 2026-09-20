@@ -12,11 +12,19 @@
 // Runs whenever the lucid-agent role is active - immersive or parked - because the prompt bar exists in
 // both. pointer-events: none always; he can never block a click.
 
-import { MASCOT_FRAMES, MASCOT_H, MASCOT_W, mirrorFrame, paintRows } from "./mascot.ts";
+import { MASCOT_FRAMES, MASCOT_H, MASCOT_W, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, MASCOT_RUN_SWEEP_CELLS, mirrorFrame, paintRows } from "./mascot.ts";
 
+// P-MASCOT.5: 2 CSS px per art cell, the SAME integer scale the arcade paints at (`arcadeScale`
+// returns 2 on any panel 560px or wider). At scale 1 every one-pixel outline in the 40x52 grid landed
+// on a single device pixel, so the chunky pixel-art read was gone and the gait's 1px joint deltas were
+// invisible: the mini ninja looked like a different, mushier character than the arcade one.
 export const RUNNER_SCALE = 2;
 export const RUNNER_HEADROOM = MASCOT_H * RUNNER_SCALE + 10; // crawl lane above the bar
-const SPEED_RUN = 0.11;   // px/ms along the foot of the bar
+// NO-SLIP STRIDE (P-MASCOT.5): travel EXACTLY as fast as the planted heel sweeps backwards, so the
+// contact foot holds its ground position. The old 0.05 was 4 cells a beat against a 5 cell sweep, a
+// 20% forward slide every step, which is why the prompt-bar walk read as gliding on ice while the
+// arcade's run (where the WORLD moves and the feet never have to agree with it) read as running.
+const SPEED_RUN = MASCOT_RUN_SWEEP_CELLS / MASCOT_RUN_BEAT_MS; // 0.0625 cells/ms
 const SPEED_SNEAK = 0.05; // px/ms along the top edge
 const CLIMB_MS = 700;
 const MANTLE_MS = 240; // the pull-over at the top edge (P-MASCOT.3)
@@ -55,8 +63,8 @@ export function runnerCycle(l: RunnerLayout): RunnerCycle {
   const spriteW = MASCOT_W * l.scale;
   const xEdge = Math.max(spriteW, l.width - EDGE_MARGIN - spriteW);
   const xExit = Math.min(xEdge - spriteW, Math.max(8, EDGE_MARGIN));
-  const runMs = (xEdge + spriteW) / SPEED_RUN;
-  const sneakMs = Math.max(800, (xEdge - xExit) / SPEED_SNEAK);
+  const runMs = (xEdge + spriteW) / (SPEED_RUN * l.scale);
+  const sneakMs = Math.max(800, (xEdge - xExit) / (SPEED_SNEAK * l.scale));
   return { runMs, sneakMs, xEdge, xExit, total: runMs + CLIMB_MS + MANTLE_MS + sneakMs + PAUSE_MS + DROP_MS + LAND_MS + REST_MS };
 }
 
@@ -74,9 +82,10 @@ export function runnerAt(t: number, l: RunnerLayout): RunnerPose {
   const reflect = (x: number): number => (mirrored ? l.width - spriteW - x : x);
   const beat = (ms: number, frames: readonly string[]): string => frames[Math.floor(t / ms) % frames.length]!;
   if (tt < c.runMs) {
-    const x = -spriteW + tt * SPEED_RUN;
-    // Four-beat gait (contact, pass, contact, pass) at ~10.5 steps/s - the classic smooth run cycle.
-    return { phase: "run", x: reflect(x), y: groundY, frame: beat(95, ["runA", "runB", "runC", "runD"]), mirrored, clipBar: false };
+    const x = -spriteW + tt * SPEED_RUN * l.scale;
+    // Contact, down, pass, up on each leg. Local phase restarts cleanly after a rest.
+    const frame = MASCOT_RUN_FRAMES[Math.floor(tt / MASCOT_RUN_BEAT_MS) % MASCOT_RUN_FRAMES.length]!;
+    return { phase: "run", x: reflect(x), y: groundY, frame, mirrored, clipBar: false };
   }
   tt -= c.runMs;
   if (tt < CLIMB_MS) {
@@ -124,6 +133,7 @@ export function mountComposerRunner(wrap: HTMLElement): RunnerHandle {
   wrap.appendChild(cv);
   const ctx = cv.getContext("2d")!;
   const t0 = performance.now();
+  const mirroredFrames = Object.fromEntries(Object.entries(MASCOT_FRAMES).map(([id, frame]) => [id, mirrorFrame(frame)]));
   let last = "";
   let raf = 0;
   // P-MASCOT.3: rAF-driven painting - device-pixel positions at display rate make the motion glide
@@ -134,7 +144,7 @@ export function mountComposerRunner(wrap: HTMLElement): RunnerHandle {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = Math.max(1, Math.floor(wrap.clientWidth * dpr));
     const h = Math.max(1, Math.floor((wrap.clientHeight + RUNNER_HEADROOM) * dpr));
-    const scale = Math.max(2, Math.round(RUNNER_SCALE * dpr)); // ONE scale for geometry AND paint
+    const scale = Math.max(1, Math.floor(RUNNER_SCALE * dpr)); // ONE scale for geometry AND paint
     const l: RunnerLayout = { width: w, barTop: RUNNER_HEADROOM * dpr, barBottom: h, height: h, scale };
     const pose = runnerAt(performance.now() - t0, l);
     const px = Math.round(pose.x), py = Math.round(pose.y); // device-pixel snap keeps the art crisp
@@ -151,7 +161,7 @@ export function mountComposerRunner(wrap: HTMLElement): RunnerHandle {
       // single top rect is the whole visible region while crossing.
       ctx.clip();
     }
-    const rows = pose.mirrored ? mirrorFrame(MASCOT_FRAMES[pose.frame]!) : MASCOT_FRAMES[pose.frame]!;
+    const rows = pose.mirrored ? mirroredFrames[pose.frame]! : MASCOT_FRAMES[pose.frame]!;
     paintRows(ctx, rows, l.scale, px, py); // the SAME scale the pose was computed with - never diverge
     ctx.restore();
   };

@@ -11,7 +11,7 @@
 // gates on the session actually arriving (voice is reported, never awaited), Esc/Skip always works, and
 // prefers-reduced-motion collapses it to a static card. Mounts at most once per app load (caller gates).
 
-import { BLADE_DIAG, BLADE_FLAT, KEYBOARD_LEFT, KEYBOARD_RIGHT, KEYBOARD_WHOLE, MASCOT_PALETTE, keyboardLitKeys, paintFrame, paintRows } from "./mascot.ts";
+import { BLADE_DIAG, BLADE_FLAT, KEYBOARD_LEFT, KEYBOARD_RIGHT, KEYBOARD_WHOLE, MASCOT_PALETTE, MASCOT_W, MASCOT_H, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, keyboardLitKeys, paintFrame, paintRows } from "./mascot.ts";
 
 export interface BootSignals {
   /** The local gate answered (we are running, so this is true the moment the shell paints). */
@@ -53,13 +53,13 @@ export function bootRunnerX(tMs: number, stageWidthPx: number, spriteWidthPx: nu
   const PASS_MS = 2600, REST_MS = 1900;
   const cycle = PASS_MS + REST_MS;
   const tt = Math.max(0, tMs) % cycle;
-  const frames = ["runA", "runB", "runC", "runD"] as const;
-  const frame = frames[Math.floor(tMs / 95) % 4]!;
+  const frame = MASCOT_RUN_FRAMES[Math.floor(Math.max(0, tMs) / MASCOT_RUN_BEAT_MS) % MASCOT_RUN_FRAMES.length]!;
   if (tt >= PASS_MS) return { x: -2 * spriteWidthPx, frame }; // resting offscreen
   const k = tt / PASS_MS;
   return { x: -spriteWidthPx + k * (stageWidthPx + 2 * spriteWidthPx), frame };
 }
 
+const BLADE_DIAG_DOWN = [...BLADE_DIAG].reverse();
 const GLYPHS = "アイウエオカキクケコサシスセソタチツ0123456789<>*+=";
 
 // The finale: he stops, draws the blade, and slices a keyboard clean in half (user call, 2026-08-01 -
@@ -80,31 +80,32 @@ export function bootFinale(tMs: number): FinaleBeat {
   return { frame, split, kbSep: k, kbDrop: k * k, done: t >= FINALE_MS };
 }
 
-/** Paint one finale moment: ninja + the katana PROP (long blades cannot live in a 20-col character
- *  grid) + the keyboard (whole, or two jagged halves separating and dropping). Shared by the live loop
+/** Paint one finale moment: ninja + the katana prop + the keyboard (whole, or two jagged halves
+ *  separating and dropping). Props retain their original grid at twice the character cell size. Shared by the live loop
  *  AND the QA pins, so what is tested visually is exactly what ships. `nx/footY` = ninja top-left. */
 export function paintFinaleScene(ctx: CanvasRenderingContext2D, tMs: number, scale: number, nx: number, footY: number): void {
   const f = bootFinale(tMs);
   paintFrame(ctx, f.frame, scale, nx, footY);
+  const propScale = scale * 2;
   // The blade rides the beat: unsheathe = diagonal over the shoulder, cut = full horizontal extension
   // across the keyboard, follow-through = diagonal down past the hip.
-  if (f.frame === "slashUp") paintRows(ctx, BLADE_DIAG, scale, nx + 14 * scale, footY - 1 * scale);
-  else if (f.frame === "slash") paintRows(ctx, BLADE_FLAT, scale, nx + 18 * scale, footY + 14 * scale);
-  else if (f.frame === "slashEnd") paintRows(ctx, [...BLADE_DIAG].reverse(), scale, nx + 15 * scale, footY + 16 * scale);
+  if (f.frame === "slashUp") paintRows(ctx, BLADE_DIAG, propScale, nx + 14 * propScale, footY - propScale);
+  else if (f.frame === "slash") paintRows(ctx, BLADE_FLAT, propScale, nx + 18 * propScale, footY + 14 * propScale);
+  else if (f.frame === "slashEnd") paintRows(ctx, BLADE_DIAG_DOWN, propScale, nx + 15 * propScale, footY + 16 * propScale);
   // The keyboard sits on the ground to his right; its bottom aligns with his feet.
-  const kbX = nx + 21 * scale;
-  const kbY = footY + 18 * scale;
+  const kbX = nx + 21 * propScale;
+  const kbY = footY + 18 * propScale;
   if (!f.split) {
-    paintRows(ctx, KEYBOARD_WHOLE, scale, kbX, kbY);
+    paintRows(ctx, KEYBOARD_WHOLE, propScale, kbX, kbY);
     // Alive: a few caps glow and hop like typing. The cut kills the lights (keyboardLitKeys returns
     // [] once sliced), which is the whole gag - it types until the very last moment.
     ctx.fillStyle = MASCOT_PALETTE.G!;
-    for (const k of keyboardLitKeys(tMs, false)) ctx.fillRect(kbX + k.col * scale, kbY + k.row * scale, scale, scale);
+    for (const k of keyboardLitKeys(tMs, false)) ctx.fillRect(kbX + k.col * propScale, kbY + k.row * propScale, propScale, propScale);
   } else {
-    const sep = Math.floor(f.kbSep * 7 * scale);
-    const drop = Math.floor(f.kbDrop * 5 * scale);
-    paintRows(ctx, KEYBOARD_LEFT, scale, kbX - sep, kbY + Math.floor(drop * 0.6));
-    paintRows(ctx, KEYBOARD_RIGHT, scale, kbX + 12 * scale + sep, kbY + drop);
+    const sep = Math.floor(f.kbSep * 7 * propScale);
+    const drop = Math.floor(f.kbDrop * 5 * propScale);
+    paintRows(ctx, KEYBOARD_LEFT, propScale, kbX - sep, kbY + Math.floor(drop * 0.6));
+    paintRows(ctx, KEYBOARD_RIGHT, propScale, kbX + 12 * propScale + sep, kbY + drop);
   }
 }
 
@@ -200,9 +201,9 @@ export function mountBootCinematic(getSignals: () => BootSignals, onDone: () => 
     }
     ctx.globalAlpha = 1;
     // The ninja sprints the foot of the screen; a victory beat once the session is up.
-    const scale = Math.max(3, Math.round((cv.height / 220)));
-    const spriteW = 20 * scale;
-    const footY = cv.height - 26 * scale - 8;
+    const scale = Math.max(1, Math.round(cv.height / 440));
+    const spriteW = MASCOT_W * scale;
+    const footY = cv.height - MASCOT_H * scale - 8;
     if (readyAt) {
       // The finale: stop, draw, slice the keyboard, follow through (shared painter - see QA pins).
       paintFinaleScene(ctx, now - readyAt, scale, Math.floor(cv.width / 2 - spriteW * 1.6), footY);

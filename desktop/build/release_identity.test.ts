@@ -489,6 +489,45 @@ describe("classifyArtifact", () => {
 
 // --- checkArtifact -----------------------------------------------------------------------------
 
+describe("checkArtifact - the stem must END where the name says it does", () => {
+  // A local Windows build passed this gate with a stale `LucidAgentIDE-0.1.0-win-x64-portable.zip` in
+  // the release dir: "LucidAgentIDE" startsWith "LucidAgent", and a .zip embeds no identity to
+  // contradict it, so a 0.1.0 leftover was reported PASS as a mac-zip on a Windows build. Nothing
+  // published from that dir, but the same hole would let a stale or foreign artifact ride a real tag.
+  const zip = (file: string): ArtifactIdentity => ({ ...BLANK, kind: "mac-zip", file });
+
+  test("REGRESSION: a name that merely EXTENDS the stem is refused", () => {
+    const r = checkArtifact(AGENT, zip("LucidAgentIDE-0.1.0-win-x64-portable.zip"));
+    expect(r.ok).toBe(false);
+    expect(r.problem).toContain("followed by a delimiter");
+    // The message must name the offending file, or a green-but-for-one-line log is useless.
+    expect(r.problem).toContain("LucidAgentIDE-0.1.0-win-x64-portable.zip");
+  });
+
+  test("every real electron-builder name for this repo still passes", () => {
+    // The load-bearing positive half: a delimiter anchor that rejected a shipping name would break
+    // every release, which is a far worse failure than the one it fixes.
+    for (const file of [
+      "LucidAgent-mac-x64.zip",
+      "LucidAgent-mac-arm64.zip",
+    ]) expect(checkArtifact(AGENT, zip(file)).ok, file).toBe(true);
+    for (const [file, kind] of [
+      ["LucidAgent-Setup.exe", "win-nsis"],
+      ["LucidAgent-portable.exe", "win-portable"],
+      ["LucidAgent-x86_64.AppImage", "appimage"],
+      ["LucidAgent-arm64.AppImage", "appimage"],
+    ] as const) expect(checkArtifact(AGENT, { ...BLANK, kind, file }).ok, file).toBe(true);
+    // deb/rpm are named after the PACKAGE and use `_` / `-` right after it. Version matches the
+    // AGENT fixture so this asserts the NAME rule and not the (separately tested) version rule.
+    expect(checkArtifact(AGENT, { ...BLANK, kind: "deb", file: "lucidagentide-desktop_1.14.1_arm64.deb", packageName: "lucidagentide-desktop", version: "1.14.1" }).ok).toBe(true);
+  });
+
+  test("a Creator artifact is still refused for an Agent build", () => {
+    // The delimiter rule must not accidentally widen what counts as this flavor.
+    expect(checkArtifact(AGENT, zip("LucidCreator-mac-x64.zip")).ok).toBe(false);
+  });
+});
+
 describe("checkArtifact", () => {
   test("PASS: a correct Agent pkg", () => {
     expect(checkArtifact(AGENT, AGENT_PKG)).toEqual({

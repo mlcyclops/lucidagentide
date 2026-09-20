@@ -4,34 +4,95 @@
 // desktop/renderer/agent_flow.ts - P-AVATAR.4 (ADR-0251): entering the LUCID Agent role.
 //
 // PURE decisions for the enter flow, unit-tested here; app.ts wires the side effects. Picking the role
-// (or booting into it) should land the user in a WORKING hands-free session: full agent mode, a fast
-// conversation model, conversation mode on - or, when something is missing, ONE gap at a time with a
+// (or booting into it) should land the user in a WORKING hands-free session: full agent mode, a selected
+// Regular/Max model tier, conversation mode on - or, when something is missing, ONE gap at a time with a
 // deep-link fix, never a wall of setup. The Knowledge Graph is an OFFER (ask once per session), never a
 // gate. The prior model is remembered so leaving the role restores exactly what the user had.
 
-export interface ModelOptionLike { value: string; name?: string }
+import { capabilityTier, familyOf, isAuxiliaryModel, providerPrefixOf } from "./model_families.ts";
 
-/** Fast, capable conversation models, in the user's stated order (ADR-0251): GPT-5.6 Terra, then a
- *  Claude Sonnet 5 (incl. the gov-routed id), then Gemini 3.5/3.6 Flash - with sane family fallbacks.
- *  Matched against the ACCESSIBLE picker options, so a pick is always actually usable. */
-export const CONVERSATION_MODEL_PREFS: readonly RegExp[] = [
-  /gpt-5\.6-terra/i,
-  /claude-sonnet-5(\b|[-.])|google-claude-sonnet-5/i,
-  /gemini-3\.[56]-flash/i,
-  /gpt-5\.6-(luna|sol)/i,
-  /claude-sonnet-4-6/i,
-  /gemini-[\d.]+-flash/i,
-];
+export interface ModelOptionLike { value: string; name?: string; provider?: string }
+export type AgentModelTier = "regular" | "max";
 
-/** The model the conversation should run on. Null = keep the current one (it already qualifies, or
- *  nothing accessible qualifies - never force a switch that gains nothing). */
-export function resolveConversationModel(options: readonly ModelOptionLike[], current: string): string | null {
-  if (CONVERSATION_MODEL_PREFS.some((re) => re.test(current))) return null; // already on a fast model
-  for (const re of CONVERSATION_MODEL_PREFS) {
-    const hit = options.find((o) => re.test(o.value));
-    if (hit) return hit.value;
+// Route identities stay exact: OAuth, API-key and accredited gateway routes are NOT interchangeable.
+// Unrecognized/local routes have no reliable capability metadata, so retain their current model.
+const TIER_PROVIDERS: Record<string, true> = {
+  anthropic: true, openai: true, "openai-codex": true, google: true, gemini: true,
+  "google-antigravity": true, "google-gemini-cli": true, "google-vertex": true, vertex: true,
+  azure: true, "azure-openai": true, xai: true, "xai-oauth": true, grok: true,
+  "github-copilot": true, openrouter: true, asksage: true,
+  "asksage-anthropic": true, "asksage-openai": true, "asksage-google": true,
+};
+
+function tierFamily(value: string): string {
+  const family = familyOf(value).id;
+  return family !== "other" ? family : /(?:^|\/)grok-\d/i.test(value) ? "grok" : "other";
+}
+
+function tierProvider(value: string, provider?: string): string {
+  const prefix = providerPrefixOf(value);
+  if (prefix) return prefix;
+  if (provider) return provider;
+  // Infer only unambiguous bare vendor ids, never display names or arbitrary deployment aliases.
+  if (/^claude-/i.test(value)) return "anthropic";
+  if (/^(?:gpt-|o\d)/i.test(value)) return "openai";
+  if (/^gemini-/i.test(value)) return "google";
+  if (/^grok-/i.test(value)) return "xai";
+  return "";
+}
+
+/** Read ONLY the version directly attached to a known model family. Scanning all digits would let
+ *  preview dates or parameter counts outrank real versions (and lexical sorting puts 9 above 10).
+ *  Hyphenated minor versions support Claude's 4-8 spelling without treating -2026-09-20 as a version. */
+function tierVersion(value: string): number[] {
+  const match = /(?:claude-(?:(?:opus|sonnet|haiku|fable|mythos)-)?|gpt-(?:o)?|gemini-|grok-)(\d+(?:(?:\.\d+)|(?:-\d{1,2}(?!\d)))*)/i.exec(value);
+  return match ? match[1]!.split(/[.-]/).map(Number) : [];
+}
+
+function newerTierVersion(candidate: readonly number[], best: readonly number[]): boolean {
+  for (let i = 0; i < Math.max(candidate.length, best.length); i++) {
+    const difference = (candidate[i] ?? 0) - (best[i] ?? 0);
+    if (difference) return difference > 0;
   }
-  return null;
+  return false;
+}
+
+/** Resolve a role tier inside the CURRENT provider route and model family. Callers supply only
+ *  accessible options (including their auth/sovereignty restrictions); this function never invents ids.
+ *  Regular prefers Opus/Luna, otherwise retains a usable current model. Max prefers Fable 5+/Astra 6+
+ *  and falls back to the highest recognized flagship. Unknown/local models stay unchanged. Null means
+ *  keep current, including ties and an empty eligible pool. Restore/conversation decisions stay separate. */
+export function resolveAgentTierModel(options: readonly ModelOptionLike[], current: string, tier: AgentModelTier): string | null {
+  const currentOption = options.find((option) => option.value === current);
+  const provider = tierProvider(current, currentOption?.provider);
+  const family = tierFamily(current);
+  if (TIER_PROVIDERS[provider] !== true || family === "other" || family === "rag") return null;
+
+  let best: ModelOptionLike | null = null;
+  let bestPreference = -1;
+  let bestVersion: readonly number[] = [];
+  for (const option of options) {
+    if (tierProvider(option.value, option.provider) !== provider || tierFamily(option.value) !== family) continue;
+    // Reuse the picker's capability source of truth. Explicit fast variants are also never Max picks.
+    if (isAuxiliaryModel(option.value) || capabilityTier(option.value) !== 2 || /(?:^|[-_/])fast(?:$|[-_.])/i.test(option.value)) continue;
+    const version = tierVersion(option.value);
+    if (!version.length) continue;
+    const preferred = tier === "regular"
+      ? /(?:^|[-/])opus(?:$|[-.])|(?:^|[-/])luna(?:$|[-.])/i.test(option.value)
+      : /(?:^|[-/])fable(?:$|[-.])/i.test(option.value) && version[0]! >= 5
+        || /(?:^|[-/])astra(?:$|[-.])/i.test(option.value) && version[0]! >= 6;
+    if (tier === "regular" && !preferred && currentOption) continue;
+    const preference = preferred ? 1 : 0;
+    if (preference > bestPreference || preference === bestPreference && (
+      newerTierVersion(version, bestVersion)
+      || option.value === current && !newerTierVersion(bestVersion, version)
+    )) {
+      best = option;
+      bestPreference = preference;
+      bestVersion = version;
+    }
+  }
+  return best && best.value !== current ? best.value : null;
 }
 
 // ── Readiness: what the hands-free session actually needs ───────────────────────────────────────

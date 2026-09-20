@@ -14,7 +14,8 @@ import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_rest
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { mountMascot, type MascotHandle } from "./mascot.ts"; // P-MASCOT.1: LUCID the ninja (tiny, static import)
 import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
-import { nextGap, readinessChecklist, resolveConversationModel, restoreModel, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
+import { mountAgentArcade, type AgentArcadeHandle } from "./mascot_game.ts";
+import { nextGap, readinessChecklist, resolveAgentTierModel, restoreModel, type AgentModelTier, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
 import { approvalPrompt, matchApprovalUtterance, pickOption, type ApprovalOption } from "./voice_approval.ts"; // P-AVATAR.5: approve tool calls by voice
 import { mountBootCinematic } from "./boot_cinematic.ts"; // P-AVATAR.6: the hero opening over the config warm
 import { modCombo, modSymbol } from "./platform.ts";
@@ -98,7 +99,7 @@ import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, preferredDefaultModel, providerLabelOf, recommendFallbacks, sortGovFirstByLevel, topModel } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, localPrefixSet, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
@@ -341,6 +342,7 @@ function buildShell(): void {
         <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
       </div>
       <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
+      <label class="agent-tier-control" id="agentTierControl" hidden title="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
       <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
@@ -425,6 +427,14 @@ function buildShell(): void {
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
             <!-- P-FLEET.L1: the fleet grid - headless local engine lanes as streaming mini agent windows. -->
             <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - local lanes|Spawn headless LUCID engine lanes on this machine and drive them from a movable grid of mini agent windows.">${icon("bolt", 15)}</button>
+            <!-- P-CONNUI.1 (ADR-0368): the connection affordance for a session with NOTHING at stake.
+                 A failed startup status probe used to paint a paragraph into an empty thread ("Connection
+                 unavailable: signal timed out. Reconnect to check session status before sending."), which
+                 is the first thing a new user reads and reads like a broken app. It is not: there is no
+                 turn to lose on a fresh open, so the honest UI is a quiet, compact retry that appears only
+                 when a probe actually failed. The loud in-thread banner is kept for the case that earns it,
+                 a turn that may still be running. -->
+            <button class="ctool ctool-icon ctool-warn" id="ctReconnect" hidden data-tip="Reconnect|LUCID could not reach its engine to check for an active session. Nothing was lost. Click to retry.">${icon("refresh", 15)}</button>
             <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
             <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet lanes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
@@ -433,6 +443,7 @@ function buildShell(): void {
             <div class="ct-speak" id="ctSpeak" hidden><span class="ct-speak-dot"></span><canvas class="ct-eq" id="ctEqCanvas" aria-hidden="true"></canvas><span class="ct-speak-lbl" id="ctSpeakLbl">Speaking</span><button class="ct-speak-stop" id="ctEqPop" aria-label="Pop the voice panel out" data-tip="Pop out|Float the equalizer as a panel you can drag anywhere in LUCID">${icon("expand", 12)}</button><button class="ct-speak-stop" id="ctSpeakStop" aria-label="Stop reading aloud" data-tip="Stop reading">${icon("close", 12)}</button></div>
           </div>
         </div>
+        <div id="agentArcadeHost" hidden></div>
       </main>
 
       <aside class="inspector" id="inspector">
@@ -941,7 +952,10 @@ function lineHeightPx(): number {
   return Number.isFinite(lh) && lh > 0 ? lh : 28;
 }
 const JUMP_BTN_PX = 34;   // .jump-down width/height in styles.css - the stack spacing depends on it
-const JUMP_GAP_PX = 8;    // breathing room between the two stacked buttons
+// Mis-click safety: 8px between two 34px circles meant the bottom edge of "page down" and the top
+// edge of "jump to newest" were one slip apart, and hitting the wrong one throws the reading position
+// to the end of the transcript. 16px is one comfortable pointer correction.
+const JUMP_GAP_PX = 16;   // breathing room between the two stacked buttons
 function updateJump(): void {
   const c = $("#chat"), page = $("#jumpDown"), end = $("#jumpEnd");
   if (!c || !page) return;
@@ -950,7 +964,7 @@ function updateJump(): void {
     // Both sit just above the composer, whose height changes as the prompt bar grows. The run-to-end
     // button takes the lower slot (closest to the composer) and the page stepper stacks above it, so
     // the pair never overlaps the composer or each other at any prompt-bar height.
-    const base = (($(".composer-wrap")?.getBoundingClientRect().height) ?? 64) + 14;
+    const base = (($(".composer-wrap")?.getBoundingClientRect().height) ?? 64) + ($("#agentArcadeHost")?.getBoundingClientRect().height ?? 0) + 14;
     if (end) end.style.bottom = `${base}px`;
     page.style.bottom = `${base + (end ? JUMP_BTN_PX + JUMP_GAP_PX : 0)}px`;
   }
@@ -958,6 +972,14 @@ function updateJump(): void {
   end?.classList.toggle("show", show);
 }
 const scheduleJump = (): void => { if (jumpRaf) return; jumpRaf = true; requestAnimationFrame(() => { jumpRaf = false; updateJump(); }); };
+/** P-MASCOT.4: the arcade opens BELOW the composer, inside the same <main> the stage covers with
+ *  `inset:0`, so the big ninja was painted straight over the game. Publishing the game's live height
+ *  as --arcade-h lifts the stage's floor above it (and keeps the jump buttons clear of both). */
+function syncArcadeGap(): void {
+  const h = ($("#agentArcadeHost") as HTMLElement | null)?.offsetHeight ?? 0;
+  document.documentElement.style.setProperty("--arcade-h", `${Math.round(h)}px`);
+  scheduleJump();
+}
 function jumpDownOnePage(): void {
   const c = $("#chat");
   if (!c) return;
@@ -1652,6 +1674,7 @@ function leaveTurnView(): number {
   state.streaming = false;
   goalLoopRunning = false;
   $("#turnReconnect")?.remove();
+  hideQuietReconnect(); // or a dead probe's button outlives the view that offered it
   setSendEnabled();
   return turnViewEpoch;
 }
@@ -1663,7 +1686,26 @@ function showTurnReconnect(message: string, reconnect: () => void): void {
   $("#thread")!.appendChild(notice);
 }
 
+/** P-CONNUI.1 (ADR-0368): the QUIET form of "could not reach the engine".
+ *
+ *  Used when a status probe fails and there is nothing to lose: no rendered turn, so no risk of a
+ *  running reply going unnoticed. Shows the compact composer button and nothing else. The loud
+ *  `showTurnReconnect` banner stays for the cases that genuinely earn a paragraph (a turn that may
+ *  still be running, a lane that owns the composer, an unconfirmed Stop). */
+function showQuietReconnect(reconnect: () => void): void {
+  $("#turnReconnect")?.remove();
+  const btn = $("#ctReconnect") as HTMLButtonElement | null;
+  if (!btn) { showTurnReconnect("Connection unavailable. Reconnect to check session status before sending.", reconnect); return; }
+  btn.hidden = false;
+  btn.onclick = () => { hideQuietReconnect(); reconnect(); };
+}
+function hideQuietReconnect(): void {
+  const btn = $("#ctReconnect") as HTMLButtonElement | null;
+  if (btn) { btn.hidden = true; btn.onclick = null; }
+}
+
 async function send(): Promise<void> {
+  if (agentTierApplying) { showToast({ title: "Confirming model change", desc: "Wait a moment for the engine to confirm the model before sending.", timeout: 2500 }); return; }
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
   // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
@@ -2087,8 +2129,15 @@ function autosize(ta: HTMLTextAreaElement): void {
   ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden";
 }
 function setSendEnabled(): void {
+  syncAgentExtras();
   const ta = $("#input") as HTMLTextAreaElement;
   const btn = $("#send") as HTMLButtonElement;
+  // P-MASCOT.4 (user ask): the big stage ninja yields the floor while the user is composing. Any
+  // content in the composer (text or a staged attachment) fades the stage to 25%; emptying it fades
+  // him back. This function is already the choke point every composer mutation funnels through
+  // (typing, paste, attachment add/remove, queue flush, send), so the dim can never go stale, and it
+  // is a CSS class + transition rather than a paint change, so the ~10fps mascot ticker is untouched.
+  $("#agentStage")?.classList.toggle("stage-dim", !!ta.value.trim() || state.attachments.length > 0);
   // P-ACP.4: while a turn runs the button is a Stop control (always enabled) that interrupts; otherwise
   // it's Send (enabled only with text). The composer stays usable so a prompt can be pre-staged.
   if (state.streaming) {
@@ -2097,7 +2146,7 @@ function setSendEnabled(): void {
     btn.innerHTML = icon("square", 16);
     btn.setAttribute("data-tip", "Stop|Interrupt the reply + tool calls");
   } else {
-    btn.disabled = recoveryChecking || (!ta.value.trim() && state.attachments.length === 0);
+    btn.disabled = recoveryChecking || agentTierApplying || (!ta.value.trim() && state.attachments.length === 0);
     btn.classList.remove("stop");
     btn.innerHTML = icon("send", 18);
     btn.setAttribute("data-tip", recoveryChecking ? "Checking connection|Sending is paused until session status is confirmed" : "Send|Enter");
@@ -2650,12 +2699,12 @@ function renderMetricsRail(): void {
     ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
     { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
     { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
-    // P-TRIV.1 (ADR-0174): lifetime Trivia Wire score - the LAST tile, so it sits just above the
-    // gate-active corner. Only appears once the user has actually played (no dead zero tile).
+    // Shared lifetime points remain visible even when the Trivia Wire ticker is disabled.
+    // Only appears once the user has actually played (no dead zero tile).
     ...((): T[] => {
-      const tv = triviaEnabled() && triviaGame ? triviaGame.state() : null;
-      return tv && tv.answered > 0
-        ? [{ n: fmtNum(tv.score), label: "trivia", cls: "c", tip: `Trivia Wire lifetime score: ${fmtNum(tv.correct)}/${fmtNum(tv.answered)} correct. Streaks multiply points up to x3. The ticker appears in the status bar while the agent works.` }]
+      const tv = ensureTriviaGame().state();
+      return tv.score > 0 || tv.answered > 0
+        ? [{ n: fmtNum(tv.score), label: "LUCID points", cls: "c", tip: `LUCID points from arcade games and Trivia Wire. Trivia accuracy: ${fmtNum(tv.correct)}/${fmtNum(tv.answered)} correct. Trivia streaks multiply trivia points up to x3.` }]
         : [];
     })(),
   ];
@@ -2697,7 +2746,7 @@ const PROV_HINTS: Record<string, string> = {
   xai: "OAuth signs in via your X / xAI account. Which Grok models are available depends on your plan (Premium+, SuperGrok, or API). If models appear but return empty replies, check your subscription at <b>console.x.ai</b>.",
   "github-copilot": "OAuth signs in your <b>GitHub Copilot</b> subscription (Individual, or the Business / Enterprise add-on many orgs enable on their plan) and enables its model catalog - GPT, Claude and Gemini families via Copilot. Device-code flow: click Connect, then paste the code shown in the browser. On a self-hosted <b>GitHub Enterprise</b>, enter your GHE domain when prompted (blank = github.com).",
   azure: "<b>Azure OpenAI</b> (your Microsoft tenant's own deployments). Paste the <b>AZURE_OPENAI_API_KEY</b>, then set <b>Resource name</b> (or a full base URL). API version defaults to <b>v1</b>; use the deployment map only if your Azure deployment names differ from the model ids.",
-  "google-vertex": "<b>Gemini Enterprise</b> — Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below — omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
+  "google-vertex": "<b>Gemini Enterprise</b> - Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below - omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
   perplexity: "Paste a Perplexity API key for Sonar models. (Pro/Max OAuth is interactive email-OTP - it can't run through this app, so use a key here.)",
 };
 
@@ -3203,6 +3252,7 @@ function syncImmersiveWithRole(role: UserRole | null): void {
   const chip = $("#tbStage") as HTMLElement | null;
   if (chip) chip.hidden = !isAgent;
   setImmersive(isAgent);
+  syncAgentExtras();
   // P-MASCOT.2: the mini runner rides the prompt bar for the role in BOTH layouts (immersive or parked) -
   // the composer exists in both, and he never intercepts pointer events.
   if (isAgent && !miniRunner) { const wrap = document.querySelector(".composer-wrap") as HTMLElement | null; if (wrap) miniRunner = mountComposerRunner(wrap); }
@@ -3212,6 +3262,33 @@ function syncImmersiveWithRole(role: UserRole | null): void {
   else void exitAgentFlow();
 }
 let miniRunner: RunnerHandle | null = null;
+let agentArcade: AgentArcadeHandle | null = null;
+let agentTier: AgentModelTier = (() => { try { return localStorage.getItem("lucid.agent-tier") === "max" ? "max" : "regular"; } catch { return "regular"; } })();
+let agentTierApplying = false;
+let agentTierPending: Promise<void> | null = null;
+
+function syncAgentExtras(): void {
+  const active = state.userRole === "lucid-agent";
+  const control = $("#agentTierControl") as HTMLElement | null;
+  const select = $("#agentTier") as HTMLSelectElement | null;
+  if (control) control.hidden = !active;
+  if (select) { select.value = agentTier; select.disabled = state.streaming || agentTierApplying || state.configCached || state.configWarming; }
+  if (active && !agentArcade) { const host = $("#agentArcadeHost"); if (host) agentArcade = mountAgentArcade(host, arcadeScorePort); }
+  agentArcade?.update(active);
+  if (!active && agentArcade) { agentArcade.dispose(); agentArcade = null; }
+}
+
+async function applyAgentTier(): Promise<void> {
+  if (!agentPrior || state.userRole !== "lucid-agent" || state.streaming || agentTierApplying || state.configCached || state.configWarming) return;
+  const model = resolveAgentTierModel(modelOptions(), state.model, agentTier);
+  if (!model) { syncAgentExtras(); return; }
+  agentTierApplying = true;
+  setSendEnabled();
+  const pending = applyConfig("model", model, { system: true, confirm: true });
+  agentTierPending = pending;
+  try { await pending; }
+  finally { agentTierPending = null; agentTierApplying = false; setSendEnabled(); }
+}
 
 // ---- P-AVATAR.5 (ADR-0251): voice tool approval - keyword-strict, fail-closed, card stays boss ----
 // Armed per permission event in hands-free sessions. The matcher lives in voice_approval.ts (pure,
@@ -3248,21 +3325,29 @@ function consumeApprovalUtterance(text: string): boolean {
 let agentPrior: AgentPrior | null = null;
 let agentFlowTimer = 0;
 let vaultAsked = false; // the KG offer fires at most once per app session (never nag)
+// Like the KG offer, Later lasts for this renderer session, including role re-entry. A reload resets
+// it; explicit Voice settings and runtime error notices stay available without reopening the nudge.
+const deferredAgentGaps = new Set<ReadyItem["id"]>();
 let conversationArmed = false;
 let lastSpokenGap = "";
 const modelOptions = (): { value: string; name?: string }[] => {
   const opt = state.config.find((c) => c.id === "model");
-  return (opt?.options ?? []).map((o) => ({ value: String(o.value), name: o.name }));
+  const lockdown = !!(state.asksage?.only || state.managed?.asksageOnly); // ADR-0068/0224: either lockdown source clamps tiers to gov routes
+  return (opt ? curatedModels(opt) : []).filter((o) => !unavailableReason(String(o.value)) && (!lockdown || isGovModel(String(o.value)))).map((o) => ({ value: String(o.value), name: o.name }));
 };
 async function enterAgentFlow(): Promise<void> {
-  if (agentPrior) return; // already in
+  if (agentPrior) {
+    if (!agentFlowTimer) agentFlowTimer = window.setInterval(() => { void agentFlowStep(); }, 4000);
+    return;
+  }
   agentPrior = { model: state.model, uiMode: state.uiMode, autoSpeak: !!state.voice?.ttsAutoSpeak, conversation: !!state.voice?.ttsConversation };
   conversationArmed = false;
   lastSpokenGap = "";
   if (state.uiMode !== "agent") void applyConfig("mode", "agent"); // full agent mode for the hands-free session
-  const fast = resolveConversationModel(modelOptions(), state.model);
-  if (fast) void applyConfig("model", fast); // remember/restore handled by agentPrior
+  await applyAgentTier().catch(() => {}); // Failed confirmation is surfaced by applyConfig; keep the previous model.
+  if (!agentPrior || state.userRole !== "lucid-agent") return;
   await agentFlowStep();
+  if (!agentPrior || state.userRole !== "lucid-agent") return;
   window.clearInterval(agentFlowTimer);
   agentFlowTimer = window.setInterval(() => { void agentFlowStep(); }, 4000); // self-heals after any fix
 }
@@ -3270,10 +3355,19 @@ async function exitAgentFlow(): Promise<void> {
   window.clearInterval(agentFlowTimer); agentFlowTimer = 0;
   $("#agentSetupCard")?.remove();
   const prior = agentPrior;
-  agentPrior = null;
   if (!prior) return;
+  await agentTierPending?.catch(() => {});
+  if (state.userRole === "lucid-agent") return;
+  agentPrior = null;
   const back = restoreModel(prior, state.model, modelOptions());
-  if (back) void applyConfig("model", back);
+  // The next Send must run on the RESTORED model: hold the composer until the backend confirms.
+  if (back) {
+    agentTierApplying = true;
+    setSendEnabled();
+    try { await applyConfig("model", back, { system: true, confirm: true }); }
+    catch { /* applyConfig rolled back and told the user; the tier model stays active. */ }
+    finally { agentTierApplying = false; setSendEnabled(); }
+  }
   if (prior.uiMode !== state.uiMode) void applyConfig("mode", prior.uiMode);
   // Only unwind what the flow turned ON - a user who had auto-speak before keeps it.
   if (!prior.conversation && state.voice?.ttsConversation) void applyVoicePatch({ ttsAutoSpeak: prior.autoSpeak, ttsConversation: false });
@@ -3302,6 +3396,10 @@ async function agentFlowStep(): Promise<void> {
     vaultUnlocked: !!personal?.unlocked,
   });
   const gap = nextGap(items, vaultAsked);
+  if (gap?.required && deferredAgentGaps.has(gap.id)) {
+    $("#agentSetupCard")?.remove();
+    return; // Defer only the nudge, never treat a missing prerequisite as ready.
+  }
   if (gap) {
     if (gap.id === "vault") vaultAsked = true;
     renderAgentGap(gap);
@@ -3334,7 +3432,11 @@ function renderAgentGap(item: ReadyItem): void {
   </div>`);
   card.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
-    if (t.closest("[data-agent-dismiss]")) { card.remove(); return; }
+    if (t.closest("[data-agent-dismiss]")) {
+      if (item.required) deferredAgentGaps.add(item.id);
+      card.remove();
+      return;
+    }
     const fix = (t.closest("[data-agent-fix]") as HTMLElement | null)?.dataset.agentFix;
     if (!fix) return;
     card.remove();
@@ -3464,10 +3566,10 @@ function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // "Sign out of all providers" — ALWAYS available (not gated on a visible active login) so it can also clear
   // ORPHANED OAuth logins that have no card here: a broker id with no descriptor (e.g. google-antigravity) or
   // a key-only provider that still holds an oauth row. The reliable full reset, e.g. after a reinstall.
-  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login \u2014 all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
+  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login - all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
   // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
   // discoverable popup) so providers aren't buried in this collapsed card.
-  const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place \u2014 native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
+  const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place - native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
   return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + providerQuotaNotice() + cards + signoutAll, true);
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
@@ -3584,7 +3686,7 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
       <button class="btn-mini" id="voiceFav" data-tip="Favorite|Star the selected voice - favorites are listed first">${icon("spark", 12)}</button></div>
     <div class="voice-row"><label class="voice-lbl" for="voiceAutoSpeak">Auto-speak</label>
       <label class="voice-check"><input type="checkbox" id="voiceAutoSpeak" data-voice-set="ttsAutoSpeak"${vset?.ttsAutoSpeak ? " checked" : ""} />
-        <span>Read every reply aloud as it streams \u2014 the composer's voice button toggles this too.</span></label></div>
+        <span>Read every reply aloud as it streams - the composer's voice button toggles this too.</span></label></div>
     <div class="voice-row"><label class="voice-lbl" for="voiceConversation">Conversation</label>
       <label class="voice-check"><input type="checkbox" id="voiceConversation" data-voice-set="ttsConversation"${vset?.ttsConversation ? " checked" : ""}${vset?.ttsAutoSpeak ? "" : " disabled"} />
         <span>Hands-free turn-taking: the mic opens when the reply finishes speaking, and a few seconds of silence sends your turn. Needs auto-speak.</span></label></div>
@@ -3684,7 +3786,7 @@ async function loadVoices(): Promise<void> {
   const note = $("#voiceNote");
   if (!data || !data.voices.length) {
     selEl.innerHTML = `<option value="">no voices to list</option>`;
-    if (note) note.textContent = data?.note || "This engine didn't return a voice list \u2014 check its key or URL.";
+    if (note) note.textContent = data?.note || "This engine didn't return a voice list - check its key or URL.";
     return;
   }
   if (note) note.textContent = "";
@@ -3734,7 +3836,7 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
           <button class="btn-mini" data-agent-toggle="${esc(a.id)}" data-agent-on="${a.enabled ? "0" : "1"}">${a.enabled ? "Disable" : "Enable"}</button>
           <button class="btn-mini danger" data-agent-remove="${esc(a.id)}">${icon("close", 12)} Remove</button>
         </div></div></div>`).join("")
-    : `<div class="empty">No remote agents yet. Add a hermes/openclaw connection below — it's proxied through the Lucid security firewall.</div>`;
+    : `<div class="empty">No remote agents yet. Add a hermes/openclaw connection below - it's proxied through the Lucid security firewall.</div>`;
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add a remote agent</span></div>
       <div class="prov-body">
@@ -4044,7 +4146,7 @@ function secTrivia(): string {
   const on = triviaEnabled();
   const toggle = `<label class="set-toggle"><input type="checkbox" id="trivToggle" ${on ? "checked" : ""}/>
       <span><b>Show the Trivia Wire</b> - a word-game ticker that scrolls in the status bar while the agent works, or when you're idle with work to return to. Answer with a click or the A-D keys.</span></label>`;
-  if (!on) return setCard("trivia", "Trivia Wire", "status-bar game", toggle + `<div class="set-note">${icon("info", 12)} Off - the ticker stays hidden everywhere until you switch it back on here.</div>`, true);
+  if (!on) return setCard("trivia", "Trivia Wire", "status-bar game", toggle + `<div class="set-note">${icon("info", 12)} Off - the ticker stays hidden until you switch it back on here. Arcade scoring and your shared LUCID points remain active.</div>`, true);
 
   const role = state.userRole || "developer";
   const src = triviaSources();
@@ -4064,7 +4166,8 @@ function secTrivia(): string {
     ? `<div class="set-note ok">${icon("check", 12)} Using a generated ${esc(role)} pack (${pack.length} questions). <button class="btn-mini triv-reset" id="trivPackReset">${icon("restore", 11)} Use built-in</button></div>`
     : `<div class="set-note">${icon("info", 12)} Using the built-in ${esc(role)} pack. Check a source and Recycle to tailor it to your work.</div>`;
 
-  return setCard("trivia", "Trivia Wire", "status-bar game · on-device", toggle + sources + reseed + status, true);
+  const pointsNote = `<div class="set-note">${icon("info", 12)} LUCID points combine arcade and trivia earnings and are saved on this device. Recycling questions or switching packs keeps your points and trivia accuracy.</div>`;
+  return setCard("trivia", "Trivia Wire", "status-bar game · on-device", toggle + sources + reseed + status + pointsNote, true);
 }
 
 /** Run an AI re-seed: the backend gathers the checked sources, scans them fail-closed, and generates a
@@ -6016,6 +6119,63 @@ async function importPackFlow(): Promise<void> {
   await installPackFlow(() => bridge.kbPackImport({ path: picked }));
 }
 
+/** Explain a refused pack in terms of WHOSE problem it is, and hand over one file to send.
+ *
+ *  P-PACKSCAN.1 (ADR-0368): the old message was the raw error plus a bare stage name, which for the
+ *  commonest real failure read `page "doc-01-summary" flagged: fail-closed: scan unavailable (scanner
+ *  not running) (scan)`. That says "your pack is malicious" about a perfectly valid pack whose only sin
+ *  was that LUCID could not find its own scanner directory. A user cannot act on that, and it sent the
+ *  author of the pack hunting through 189 pages for poison that was never there.
+ *
+ *  So each stage now gets its own sentence: what happened, whose fault it is, and what to do. `scanner`
+ *  is OUR bug and says so. Every failure also names the log file, because "send me this one file" is
+ *  the difference between a diagnosis and a conversation. */
+function showPackFailure(r: KbPackImportView | null): void {
+  const stage = r?.stage ?? "";
+  const raw = r?.error ?? "Couldn't confirm the import. Check your KG list before retrying.";
+  const log = r?.logPath;
+  const byStage: Record<string, { title: string; desc: string }> = {
+    scanner: {
+      title: "LUCID could not run its security scanner",
+      desc: `Your pack is probably fine. LUCID refuses to install a pack it cannot scan (fail-closed), and the scanner itself did not start, so nothing was checked. This is a LUCID problem, not a problem with the pack. Restarting LUCID usually fixes it. Details: ${raw}`,
+    },
+    scan: {
+      title: "Pack refused by the scanner",
+      desc: `A page in this pack carries content LUCID blocks (hidden or spoofed characters). Nothing was installed. This is about the pack's content, so the pack's author needs to fix it. Details: ${raw}`,
+    },
+    integrity: {
+      title: "Pack failed its integrity check",
+      desc: `The pack's database does not match the checksum in its manifest, so the download is corrupt or was modified. Download it again. Details: ${raw}`,
+    },
+    signature: {
+      title: "Pack signature did not verify",
+      desc: `This pack is signed, but not by a key this install trusts. Nothing was installed. Details: ${raw}`,
+    },
+    manifest: {
+      title: "That file is not a KG Pack",
+      desc: `Pick the \u200b.lkgpack.zip you downloaded, or the manifest.json inside an already-unzipped pack. Details: ${raw}`,
+    },
+    write: {
+      title: "Pack verified but could not be installed",
+      desc: `Every check passed and writing it to disk failed, so nothing was registered. Free disk space and retry. Details: ${raw}`,
+    },
+  };
+  const m = byStage[stage] ?? { title: "Pack not installed", desc: `${raw}${stage ? ` (${stage})` : ""}` };
+  const actions: Array<{ label: string; run?: () => void }> = [];
+  if (log) {
+    actions.push({ label: "Copy log path", run: () => void navigator.clipboard?.writeText(log).catch(() => {}) });
+    actions.push({ label: "Open log folder", run: () => void bridge.revealPath?.(log).catch(() => {}) });
+  }
+  actions.push({ label: "OK" });
+  showToast({
+    tone: "danger",
+    title: m.title,
+    desc: log ? `${m.desc}\n\nSend this file for support: ${log}` : m.desc,
+    actions,
+    timeout: 0,
+  });
+}
+
 /** One completion path for local files and entitled downloads. Never mount a hidden graph. */
 let packInstallBusy = false;
 async function installPackFlow(install: () => Promise<KbPackImportView | null>): Promise<void> {
@@ -6028,7 +6188,7 @@ async function installPackFlow(install: () => Promise<KbPackImportView | null>):
   try {
     const r = await install().catch(() => null);
     if (!r?.ok || !r.kgId) {
-      showToast({ tone: "danger", title: "Pack not installed", desc: `${r?.error ?? "Couldn't confirm the import. Check your KG list before retrying."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 0 });
+      showPackFailure(r);
       return;
     }
     const v = await bridge.kbActivate(r.kgId).catch(() => null);
@@ -8520,10 +8680,19 @@ async function recoverMasterTurn(): Promise<void> {
       showTurnReconnect("A fleet lane owns the composer. Reopen it to follow its activity.", () => void promoteLane(promoted.lane!.id));
       return;
     }
-    if (!canAdoptTurn(status)) { recoveryChecking = false; state.streaming = false; $("#turnReconnect")?.remove(); setSendEnabled(); return; }
+    // A reachable engine with no adoptable turn is the NORMAL fresh-open outcome: clear both surfaces.
+    if (!canAdoptTurn(status)) { recoveryChecking = false; state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled(); return; }
     await adoptMasterTurn(status!, owner);
   } catch (error) {
     if (owner !== turnViewEpoch) return;
+    // Nothing rendered means nothing at stake: a fresh open whose probe timed out gets the quiet
+    // composer button, not a paragraph. With a conversation on screen the banner still explains itself,
+    // because there the user needs to know their history may be out of date before they send again.
+    if (!$("#thread")?.querySelector(".turn, .msg, .asst, .user")) {
+      recoveryChecking = false; setSendEnabled();
+      showQuietReconnect(() => void recoverMasterTurn());
+      return;
+    }
     showTurnReconnect(`Connection unavailable: ${error instanceof Error ? error.message : String(error)}. Reconnect to check session status before sending.`, () => void recoverMasterTurn());
   }
 }
@@ -9183,7 +9352,7 @@ function renderStatus(): void {
 // trivia.ts; this block owns just the animation loop and the input wiring. The ticker element is
 // created once and re-adopted after every renderStatus innerHTML swap so its scroll position and
 // in-flight question survive the 2s data poll.
-const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}
+const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}; score includes arcade points
 const TRIVIA_ENABLED_KEY = "lucid.trivia-enabled"; // "1" = on (default OFF - an easter egg people find; toggle in Settings -> Trivia Wire)
 const TRIVIA_SPEED = 78;                        // px/s - an easy reading clip
 const TRIVIA_EXPLAIN_SPEED = 95;
@@ -9235,10 +9404,36 @@ function loadNewsLine(): boolean {
   return true;
 }
 
+// Retain the latest tally across bank rebuilds even if storage is blocked or full.
+// All points flow through triviaGame; arcade never writes behind its cached tally.
+let trivStoredTally: string | null | undefined;
 const trivStore = () => ({
-  get: () => localStorage.getItem(TRIVIA_SCORE_KEY),
-  set: (v: string) => localStorage.setItem(TRIVIA_SCORE_KEY, v),
+  get: () => {
+    if (trivStoredTally === undefined) trivStoredTally = localStorage.getItem(TRIVIA_SCORE_KEY);
+    return trivStoredTally;
+  },
+  set: (v: string) => {
+    trivStoredTally = v;
+    localStorage.setItem(TRIVIA_SCORE_KEY, v);
+  },
 });
+
+/** Initialize scoring independently of the opt-in ticker and its timers/listeners. */
+function ensureTriviaGame(): TriviaGame {
+  if (!triviaGame) {
+    trivBank = effectiveTriviaBank(state.userRole);
+    triviaGame = createTriviaGame(trivBank, trivStore());
+  }
+  return triviaGame;
+}
+
+const arcadeScorePort = {
+  total(): number { return ensureTriviaGame().state().score; },
+  award(points: number): void {
+    ensureTriviaGame().awardBonus(points);
+    renderMetricsRail();
+  },
+};
 
 async function refreshTriviaKg(): Promise<void> {
   try { const p = await bridge.personal(); trivKgUnlocked = !!(p?.enabled && p?.unlocked); }
@@ -9298,8 +9493,8 @@ function clearTriviaPack(role: string | null | undefined): void {
   try { localStorage.removeItem(TRIVIA_PACK_PREFIX + key); } catch { /* ignore */ }
 }
 
-/** Adopt a pack: persist it, then rebuild the live game on it (lifetime score survives - it lives in
- *  trivStore, not the game). No-op before the ticker exists; ensureTrivia picks up the stored pack. */
+/** Adopt a pack, then rebuild the live game without resetting arcade/trivia points or accuracy.
+ *  No-op before scoring is initialized; ensureTriviaGame picks up the stored pack. */
 function applyTriviaPack(role: string | null | undefined, questions: readonly TriviaQuestion[], model: string): void {
   saveTriviaPack(role, questions, model);
   if (!triviaGame) return;
@@ -9308,8 +9503,8 @@ function applyTriviaPack(role: string | null | undefined, questions: readonly Tr
   loadTriviaLine();
 }
 
-/** Rebuild the game when the role's bank actually changed (lifetime score survives - it lives in
- *  the store, not the game). No-op before the ticker exists or when the bank is unchanged. */
+/** Rebuild when the role's bank changes, retaining arcade/trivia points and trivia accuracy.
+ *  No-op before scoring is initialized or when the bank is unchanged. */
 function refreshTriviaGame(): void {
   if (!triviaGame) return;
   const bank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): generated pack ?? seed bank
@@ -9323,8 +9518,7 @@ const trivReducedMotion = typeof matchMedia === "function" && matchMedia("(prefe
 
 function ensureTrivia(): void {
   if (trivEl || !triviaEnabled()) return;
-  trivBank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): adopt a generated pack when present
-  triviaGame = createTriviaGame(trivBank, trivStore());
+  ensureTriviaGame();
   // Idle-engagement inputs (P-TRIV.2): a composer keystroke restarts the idle grace, and the KG
   // unlock state is polled gently (never per frame - bridge.personal() is a fetch).
   $("#input")?.addEventListener("input", () => { trivIdleSince = Date.now(); });
@@ -9405,7 +9599,8 @@ function answerTrivia(k: number): void {
   const pills = trivIn ? Array.from(trivIn.querySelectorAll<HTMLElement>("[data-tch]")) : [];
   pills[k]?.classList.add(res.correct ? "ok" : "bad");
   if (!res.correct) pills[res.correctIndex]?.classList.add("ok");
-  renderMetricsRail(); // the score tile updates immediately
+  lastRailSig = ""; // An incorrect answer changes the accuracy tooltip without changing points.
+  renderMetricsRail(); // shared points and trivia accuracy update immediately
   setTimeout(() => { if (triviaGame?.state().phase === "explain") loadTriviaLine(); }, TRIVIA_ANSWER_LINGER_MS);
 }
 
@@ -9732,6 +9927,7 @@ function toggleSidebar(force?: boolean): void {
 }
 /** Update the composer's quick controls (persona · skills). Model/mode/thinking live in the top picker. */
 function updateComposerTools(): void {
+  syncAgentExtras();
   const set = (sel: string, v: string) => { const e = $(sel); if (e) e.textContent = v; };
   const pBtn = $("#ctPersona");
   if (pBtn) {
@@ -13807,6 +14003,16 @@ function wire(): void {
 
   // P-AVATAR.1: back into the stage after an Esc exit (chip only visible for the lucid-agent role).
   $("#tbStage")!.addEventListener("click", () => setImmersive(true));
+  $("#agentTier")!.addEventListener("change", async (event) => {
+    if (state.userRole !== "lucid-agent" || state.streaming || agentTierApplying) { syncAgentExtras(); return; }
+    const previous = agentTier;
+    agentTier = (event.target as HTMLSelectElement).value === "max" ? "max" : "regular";
+    try {
+      await applyAgentTier();
+      try { localStorage.setItem("lucid.agent-tier", agentTier); } catch { /* Session choice remains usable without storage. */ }
+    } catch { agentTier = previous; }
+    syncAgentExtras();
+  });
   // text zoom
   $("#zoomIn")!.addEventListener("click", () => nudgeZoom(0.1));
   $("#zoomOut")!.addEventListener("click", () => nudgeZoom(-0.1));
@@ -14032,7 +14238,7 @@ function wire(): void {
       clearTriviaPack(state.userRole);
       refreshTriviaGame(); // rebuild on the seed bank now that the generated pack is gone
       fillSec("trivia", secTrivia());
-      showToast({ title: "Back to the built-in pack", desc: "The generated questions were cleared for this role.", timeout: 2600 });
+      showToast({ title: "Back to the built-in pack", desc: "The generated questions were cleared for this role. Arcade and trivia points and trivia accuracy are unchanged.", timeout: 2600 });
       return;
     }
     if (t.closest("#trivReseed")) { await reseedTrivia(t.closest("#trivReseed") as HTMLButtonElement); return; }
@@ -14672,6 +14878,8 @@ function wire(): void {
   // Jump-to-latest: show the catch-up arrow on user scroll / resize; click pages down one screen.
   $("#chat")?.addEventListener("scroll", scheduleJump, { passive: true });
   window.addEventListener("resize", scheduleJump, { passive: true });
+  const arcadeHost = $("#agentArcadeHost");
+  if (arcadeHost) new ResizeObserver(syncArcadeGap).observe(arcadeHost);
   $("#jumpDown")?.addEventListener("click", jumpDownOnePage);
   $("#jumpEnd")?.addEventListener("click", jumpToEnd);
 
@@ -14724,11 +14932,43 @@ function wire(): void {
     if (t.closest("[data-asksage-refresh]")) { void refreshAsksage(); return; }
     if (t.closest("[data-budget-refresh]")) void refreshBudget(true);
   });
-  $("#newSession")!.addEventListener("click", () => newSession());
-  const w = (window as any).lucid?.win;
-  $("#winMin")!.addEventListener("click", () => w?.minimize?.());
-  $("#winMax")!.addEventListener("click", () => w?.toggleMaximize?.());
-  $("#winClose")!.addEventListener("click", () => w?.close?.());
+  $("#newSession")!.addEventListener("click", () => confirmNewSession());
+  $("#winMin")!.addEventListener("click", () => window.lucid?.win?.minimize());
+  $("#winMax")!.addEventListener("click", () => window.lucid?.win?.toggleMaximize());
+  $("#winClose")!.addEventListener("click", () => confirmWindowClose());
+}
+
+// ───────────────────────── mis-click guards (P-MASCOT.5) ─────────────────────────
+// Reported live: the titlebar and side-panel controls sit so close together that Maximise/Collapse
+// overshoots land on Close/New session, both of which destroyed work with no confirmation and no undo.
+// The buttons are also spaced apart in styles.css; this is the second half of the fix. Nothing prompts
+// when there is nothing to lose, so the common case stays one click.
+
+function confirmWindowClose(): void {
+  const draft = (($("#input") as HTMLTextAreaElement | null)?.value ?? "").trim();
+  const reason = state.streaming
+    ? "A turn is still streaming and will be cut off."
+    : draft ? "You have an unsent prompt in the composer." : "";
+  if (!reason) { window.lucid?.win?.close(); return; }
+  showToast({
+    title: "Close LUCID?",
+    desc: `${reason} Closing now loses it.`,
+    tone: "warn",
+    actions: [{ label: "Close anyway", kind: "danger", run: () => window.lucid?.win?.close() }, { label: "Stay" }],
+    timeout: 8000,
+  });
+}
+
+function confirmNewSession(): void {
+  const dirty = $$("#thread .msg").length > 0 || (($("#input") as HTMLTextAreaElement | null)?.value ?? "").trim();
+  if (!dirty) { newSession(); return; }
+  showToast({
+    title: "Start a new session?",
+    desc: "The current conversation leaves the composer view. It stays in Sessions history, so you can reopen it.",
+    tone: "warn",
+    actions: [{ label: "New session", kind: "danger", run: () => newSession() }, { label: "Cancel" }],
+    timeout: 8000,
+  });
 }
 
 // ───────────────────────── palette actions ─────────────────────────
@@ -14792,6 +15032,12 @@ const palette = createPalette(() => {
     { id: "side", title: "Toggle sidebar", icon: "layout", run: () => toggleSidebar() },
     { id: "insp", title: "Collapse / expand inspector (metrics rail)", icon: "collapse", run: () => setInspectorRail(!state.inspectorRail) },
     { id: "refresh", title: "Refresh dashboards now", icon: "refresh", run: () => refresh() },
+    // Mis-click safety: the titlebar buttons are 30px wide and two pixels apart, so every window
+    // action also has a keyboard route here. Close still runs the unsaved-work guard.
+    { id: "winmin", title: "Minimise window", icon: "minus", hint: "window", run: () => window.lucid?.win?.minimize() },
+    { id: "winmax", title: "Maximise / restore window", icon: "expand", hint: "window", run: () => window.lucid?.win?.toggleMaximize() },
+    { id: "winclose", title: "Close window", icon: "close", hint: "window", run: () => confirmWindowClose() },
+    { id: "stage", title: state.immersive ? "Leave the immersive stage" : "Enter the immersive stage", icon: "spark", hint: "Esc exits", run: () => setImmersive(!state.immersive) },
   ];
   const model = state.config.find((c) => c.id === "model");
   if (model) for (const o of model.options.slice(0, 10)) acts.push({ id: "m:" + o.value, title: `Model: ${o.name}`, icon: "spark", hint: o.value === model.currentValue ? "current" : "", run: () => applyConfig("model", o.value) });
@@ -14857,7 +15103,7 @@ let configWarmTimer: number | null = null; // the single scheduled re-poll (one 
 // model. Fire-and-forget, guarded once per launch.
 let defaultModelApplied = false;
 async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promise<void> {
-  if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming) return;
+  if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming || state.userRole === "lucid-agent") return;
   defaultModelApplied = true;
   // loadAsksage / auth race loadConfig at boot; both gate what's selectable, so make sure they're known.
   if (state.asksage == null) { const a = await bridge.asksage().catch(() => null); if (a) state.asksage = a; }
@@ -14866,6 +15112,7 @@ async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promi
     bridge.chosenModel().catch(() => ""),
     bridge.lastModel().catch(() => ""),
   ]);
+  if (agentPrior || state.streaming) return; // the role was entered mid-await: the tier owns the model now
   const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value));
   if (!candidates.length) return;
   const inList = (v: string) => !!v && candidates.some((o) => o.value === v);
@@ -14915,7 +15162,10 @@ async function loadConfig(newCycle = true): Promise<void> {
     }
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
-    if (step.action === "adopt") void maybeApplyDefaultModel(model); // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
+    if (step.action === "adopt") {
+      if (state.userRole === "lucid-agent") void applyAgentTier().catch(() => {});
+      else void maybeApplyDefaultModel(model);
+    } // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
     updateComposerTools();
     void syncMode();
     pickerRedraw?.(); // if a picker is open on the cached list, refresh it with the live one
@@ -15030,7 +15280,11 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   } finally { document.removeEventListener("visibilitychange", onVisible); }
 }
 
-async function applyConfig(configId: string, value: string, opts: { system?: boolean } = {}): Promise<void> {
+async function applyConfig(configId: string, value: string, opts: { system?: boolean; confirm?: boolean } = {}): Promise<void> {
+  if (configId === "model" && !opts.system && state.userRole === "lucid-agent" && !state.streaming) {
+    value = resolveAgentTierModel(modelOptions(), value, agentTier) ?? value;
+  }
+  const previousModel = state.model;
   // P-ACP.2/3: the mode control is the client 3-way Plan/Ask/Agent; it sets omp's session mode +
   // the permission posture in one call, not an omp config option.
   if (configId === "mode") {
@@ -15057,13 +15311,25 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
   // P-MODELDEF: a genuine USER pick becomes the sticky default (restored on the next launch). A SYSTEM
   // switch (lockdown clamp, no-response fallback, collab-guest mirror, boot default-select) never does.
   if (configId === "model" && !opts.system) void bridge.setChosenModel(value).catch(() => {});
-  void bridge.setConfig(configId, value)
+  const configured = bridge.setConfig(configId, value)
     .then((cfg) => {
+      if (opts.confirm && cfg.find((c) => c.id === configId)?.currentValue !== value) throw new Error("The engine did not confirm the selected model");
       state.config = cfg;
       const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
       updateComposerTools();
     })
-    .catch(() => showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 }));
+    .catch((error) => {
+      if (opts.confirm && configId === "model" && state.model === value) {
+        state.model = previousModel;
+        if (opt) opt.currentValue = previousModel;
+        const label = $("#modelName"); if (label) label.textContent = modelLabel(previousModel);
+        renderStatus(); if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); // undo the optimistic branch everywhere it painted
+        updateComposerTools();
+      }
+      showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 });
+      if (opts.confirm) throw error;
+    });
+  if (opts.confirm) await configured;
   // P-IDE.1e (ADR-0109) / P-MODEL.2: selecting an API-only Claude model (Fable / Mythos) raises a
   // persistent notice instead of the routine "applied" toast: no absolute privacy from the U.S.
   // government, AND pay-as-you-go billing outside the plan's included usage.
@@ -15206,7 +15472,31 @@ function familyListHTML(models: { value: string; name: string }[], sel: string, 
       <button class="cfg-fam-h" type="button" data-fam-toggle="favs"><span class="cfg-fam-name">${icon("star", 12, "fam-star")} Favorites</span><span class="cfg-fam-n">${starred.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
       <div class="cfg-fam-list">${starred.map((o) => modelRow(o, sel)).join("")}</div>
     </div>`;
-  return favSec + groupByFamily(filtered, order).map(({ fam, models: ms }) => {
+  // P-LOCALPICK.1 (ADR-0371): the user's OWN hardware pins to the VERY TOP, above Favorites. A
+  // configured local provider is the strongest intent signal in the app (nobody wires a DGX over a
+  // VPN by accident), and its models are otherwise the least findable: no family regex matches a
+  // self-hosted id, so they sank to "Other models" at the bottom. Collapsible like any family and the
+  // collapse persists; local models render ONLY here, never duplicated into a family section, because
+  // unlike Favorites there is no family muscle memory to preserve for an id no family claims.
+  //
+  // The pending row is the other half. A freshly Discovered model is ABSENT from omp's report until
+  // the app restarts, and the only explanation lived in a Settings banner three surfaces away, so the
+  // picker looked simply broken ("I discovered it, it does not show up"). Now the section itself says
+  // which declared models a restart will load, searching included, with the restart one click away.
+  const localPrefixes = localPrefixSet(state.localProviders ?? []);
+  const { local: localRows, rest } = splitLocalModels(filtered, localPrefixes);
+  // Pending rows obey the query too: searching "glm" MUST surface a pending GLM (that is the exact
+  // reported confusion), while searching "claude" must not show unrelated local noise.
+  const pending = filterModels(pendingLocalModels(state.localProviders ?? [], models), q);
+  const pendingRows = pending.map((p) => `<div class="cfg-local-pending" title="${esc(p.value)}">
+      ${icon("clock", 12)}<span><b>${esc(p.name)}</b> loads after a restart</span>
+      <button class="btn-mini" type="button" data-lp-apply>Restart now</button>
+    </div>`).join("");
+  const localSec = localRows.length === 0 && pending.length === 0 ? "" : `<div class="cfg-fam cfg-fam-local${!searching && collapsed.has("local") ? " collapsed" : ""}" data-fam="local">
+      <button class="cfg-fam-h" type="button" data-fam-toggle="local"><span class="cfg-fam-name">${icon("bolt", 12, "fam-local")} Local (self-hosted)</span><span class="cfg-fam-n">${localRows.length + pending.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
+      <div class="cfg-fam-list">${localRows.map((o) => modelRow(o, sel)).join("")}${pendingRows}</div>
+    </div>`;
+  return localSec + favSec + groupByFamily(rest, order).map(({ fam, models: ms }) => {
     const isCollapsed = !searching && collapsed.has(fam.id);
     return `<div class="cfg-fam${isCollapsed ? " collapsed" : ""}" data-fam="${fam.id}">
       <button class="cfg-fam-h" type="button" data-fam-toggle="${fam.id}"><span class="cfg-fam-name">${esc(fam.label)}</span><span class="cfg-fam-n">${ms.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
@@ -15378,11 +15668,18 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // gov-first + newest→oldest WITHIN each family (groupByFamily preserves that relative order).
   const govOk = !!state.asksage?.configured;
   const chinaOk = !!state.chinaAck;
+  // P-LOCALPICK.1 (ADR-0371): a model served from the user's OWN configured local provider bypasses
+  // the data-sovereignty gate. That gate exists because prompts EGRESS to a foreign-controlled cloud;
+  // a Local Provider is a declared internal endpoint (a DGX on the LAN, a box over the VPN), so the
+  // weights' country of origin does not change where the data goes. Without this, a user who never
+  // acknowledged China-cloud models could Discover their own self-hosted GLM and the picker would
+  // hide it with no hint, which is the edge-first posture inverted.
+  const localOk = localPrefixSet(state.localProviders ?? []);
   const visible = opt.options.filter((o) =>
     !isAuxiliaryModel(o.value) &&
     !isDeprecatedModel(o.value) &&
     (govOk || !isGovModel(o.value)) &&
-    (chinaOk || !isChinaModel(o.value)));
+    (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
   // Lockdown: only the gov-gateway models are selectable.
   const list = state.asksage?.only ? visible.filter((o) => isGovModel(o.value)) : visible;
   // Final safety: an omp catalog can list the same model twice under one provider. Drop rows that would
@@ -15692,18 +15989,32 @@ function openConfigPopover(anchor: HTMLElement): void {
         search.placeholder = "Search models…";
         return;
       }
-      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}`; // P-FAV.1: stars invalidate the memo
+      // P-LOCALPICK.1: local providers shape the pinned section, the china bypass, AND the pending
+      // rows, so they are part of the memo key or a Discover/save while the picker sits open would
+      // paint a stale list forever.
+      const lp = (state.localProviders ?? []).map((p) => `${p.ompProvider}:${p.enabled ? 1 : 0}:${(p.models ?? []).map((mm) => mm.id).join("+")}`).join(";");
+      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}|${lp}`; // P-FAV.1: stars invalidate the memo
       if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
       list.innerHTML = pickerMemo.html;
       search.placeholder = `Search ${list2.length} models…`;
     };
     draw();
+    // P-LOCALPICK.1: the pinned Local section reads state.localProviders, which only Settings and the
+    // Provider Hub hydrated before, so a picker opened first (the common cold path) would miss it.
+    // Refresh in the background and redraw once the list lands; best-effort, the picker never waits.
+    void bridge.localProvidersList?.().then((l) => { if (l) { state.localProviders = l; draw(search.value); } }).catch(() => { /* best-effort */ });
     // P-PROV.2: the always-visible footer opens the Provider Hub (closing the picker first).
     $("#cfgAddProv", node)?.addEventListener("click", () => { close(); openProviderHub(); });
     pickerRedraw = () => draw(search.value); // refresh when live config lands (cold-boot cache → live)
     attachModelTips(list); // premium per-model hover cards (delegated → survives re-render)
     search.addEventListener("input", (e) => draw((e.target as HTMLInputElement).value));
     list.addEventListener("click", (e) => {
+      // P-LOCALPICK.1: "Restart now" on a pending local model - same relaunch the Settings banner does.
+      if ((e.target as HTMLElement).closest("[data-lp-apply]")) {
+        showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 });
+        void bridge.relaunch().catch(() => { /* the app is going down anyway */ });
+        return;
+      }
       // P-FAV.1: the star is INSIDE a [data-val] row - check it first so starring never selects.
       const fs = (e.target as HTMLElement).closest("[data-fav]") as HTMLElement | null;
       if (fs) { saveFavs(toggleFav(favsOf(), fs.dataset.fav!)); draw(search.value); return; }
@@ -15774,6 +16085,12 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
   }
   listEl.addEventListener("click", (e) => {
     if (configId === "model") {
+      // P-LOCALPICK.1: "Restart now" on a pending local model - same relaunch as the Settings banner.
+      if ((e.target as HTMLElement).closest("[data-lp-apply]")) {
+        showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 });
+        void bridge.relaunch().catch(() => { /* the app is going down anyway */ });
+        return;
+      }
       // P-FAV.1: star toggle first (inside a [data-val] row) - starring never selects.
       const fs = (e.target as HTMLElement).closest("[data-fav]") as HTMLElement | null;
       if (fs) { saveFavs(toggleFav(favsOf(), fs.dataset.fav!)); listEl.innerHTML = familyListHTML(opts, c.currentValue, ($("#miniSearch", node) as HTMLInputElement)?.value ?? ""); return; }

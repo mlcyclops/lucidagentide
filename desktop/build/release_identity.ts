@@ -187,9 +187,19 @@ export function checkArtifact(expected: FlavorExpectation, got: ArtifactIdentity
     // artifactName patterns), every other target after the flavor stem.
     const linuxPkg = got.kind === "deb" || got.kind === "rpm";
     const stem = linuxPkg ? expected.debRpmName : expected.artifactStem;
-    if (!base.startsWith(stem)) {
+    // The stem must END where the name says it does. A bare `startsWith` also accepts any name that
+    // merely EXTENDS the stem with more letters, and that is not hypothetical: a local Windows build
+    // passed this gate with a stale `LucidAgentIDE-0.1.0-win-x64-portable.zip` left in the release dir,
+    // because "LucidAgentIDE" starts with "LucidAgent" and a .zip carries no embedded identity to
+    // contradict it. It was classified mac-zip on a Windows build, at version 0.1.0, and reported PASS.
+    // Every real electron-builder name for this repo puts a delimiter right after the stem
+    // (`LucidAgent-Setup.exe`, `LucidAgent-mac-arm64.pkg`, `LucidAgent-x86_64.AppImage`,
+    // `lucidagentide-desktop_2.2.1_arm64.deb`, `lucidagentide-desktop-2.2.1.aarch64.rpm`), so requiring
+    // one costs nothing and closes the hole. Same boundary lesson as ADR-0363's `mac` vs `mac-universal`.
+    const after = base.slice(stem.length);
+    if (!base.startsWith(stem) || (after !== "" && !/^[-_.]/.test(after))) {
       return finding(
-        `filename mismatch: the ${got.kind} ${linuxPkg ? "package" : "artifact"} must start with "${stem}", got "${base}"`,
+        `filename mismatch: the ${got.kind} ${linuxPkg ? "package" : "artifact"} must start with "${stem}" followed by a delimiter, got "${base}"`,
       );
     }
   }
@@ -322,9 +332,12 @@ function checkFilenameOnlyKind(expected: FlavorExpectation, got: ArtifactIdentit
   }
   if (got.productPath !== null) {
     if (got.kind === "updater-feed") {
+      // Same delimiter anchor as the filename layer: a feed declaring `LucidAgentIDE-0.1.0-...` must not
+      // pass as the `LucidAgent` flavor just because one name is a prefix of the other.
       const declared = basename(got.productPath);
-      if (!declared.startsWith(expected.artifactStem)) {
-        return `updater feed points at a foreign artifact: expected a path starting with "${expected.artifactStem}", the feed declares "${got.productPath}"`;
+      const afterStem = declared.slice(expected.artifactStem.length);
+      if (!declared.startsWith(expected.artifactStem) || (afterStem !== "" && !/^[-_.]/.test(afterStem))) {
+        return `updater feed points at a foreign artifact: expected a path starting with "${expected.artifactStem}" followed by a delimiter, the feed declares "${got.productPath}"`;
       }
     } else {
       const wantPath = `${expected.productName}.app`;

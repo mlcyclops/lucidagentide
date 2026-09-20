@@ -11,7 +11,12 @@ import { whisperCapability, type MachineSpecs, type WhisperTier } from "./whispe
 import { DEFAULT_WHISPER_TIER, isOfferedTier, offeredRecommendation, planWhisperInstall, WHISPER_MODELS, whisperModelFileNames, whisperServeUrl, whisperServerArgs, type WhisperModel } from "./whisper_install.ts";
 import type { DownloadResult, ResolvedBin } from "./whisper_manager.ts";
 
-export interface WhisperProc { pid: number; kill: () => void }
+export interface WhisperProc {
+  pid: number;
+  kill: () => void;
+  /** A native launch error or exit reason, including bounded stderr when available. */
+  failure?: () => string | null;
+}
 
 export interface WhisperRuntimeDeps {
   specs: () => MachineSpecs;
@@ -89,6 +94,12 @@ function setInstall(patch: Partial<WhisperInstallState>): void { installState = 
 
 /** A read-only snapshot for the UI: capability, which models are downloaded, and whether the server runs. */
 export function whisperStatus(deps: WhisperRuntimeDeps): WhisperStatusView {
+  const failure = proc?.failure?.();
+  if (failure) {
+    proc = null;
+    running = { port: running.port, tier: null };
+    setInstall({ active: false, phase: "error", reason: failure });
+  }
   const caps = whisperCapability(deps.specs());
   const present = new Set(deps.listModels());
   const bin = deps.resolveBin();
@@ -178,12 +189,26 @@ export async function startWhisper(deps: WhisperRuntimeDeps, opts: { tier?: Whis
     }
   }
   adopted = false;
-  proc = deps.spawn(bin.path, whisperServerArgs(modelPath, port));
+  let started: WhisperProc;
+  try {
+    started = deps.spawn(bin.path, whisperServerArgs(modelPath, port));
+  } catch (e) {
+    const reason = `Could not start whisper-server: ${e instanceof Error ? e.message : String(e)}`;
+    setInstall({ active: false, phase: "error", reason });
+    return { ok: false, reason };
+  }
+  proc = started;
   running = { port, tier: plan.tier };
   // Wait for the server to answer, then wire STT to it. whisper.cpp loads the model + inits Metal/CUDA on
   // first start, which can take several seconds (esp. larger tiers) - so poll patiently (~30s) before failing.
   await deps.sleep(300); // let the process bind before the first probe
   for (let i = 0; i < 60; i++) {
+    const failure = started.failure?.();
+    if (failure) {
+      if (proc === started) await stopWhisper();
+      setInstall({ active: false, phase: "error", reason: failure });
+      return { ok: false, reason: failure };
+    }
     if (await deps.health(port)) { deps.setSttUrl(whisperServeUrl(port)); setInstall({ active: false, fraction: 1, phase: "done", reason: undefined }); return { ok: true, tier: plan.tier }; }
     await deps.sleep(500);
   }

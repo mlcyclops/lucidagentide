@@ -351,6 +351,16 @@ demo-P-MASCOT.1: ## P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja mascot - frame-
 demo-P-MASCOT.2: ## P-MASCOT.2: the prompt-bar parkour mini ninja - route order (run/climb/sneak/pause/drop/rest), lane geometry, the silent-drop clip contract, gravity easing, direction alternation
 	$(BUN) run desktop/scripts/demo_p_mascot_2.ts
 
+.PHONY: demo-P-MASCOT.4
+demo-P-MASCOT.4: demo-P-MASCOT.1 demo-P-MASCOT.2 ## Themed palettes, expressive eyes, new activities, Regular/Max tiers, the run-only arcade, and shared LUCID points
+	$(BUN) test ./desktop/renderer/mascot.test.ts ./desktop/renderer/mascot_game.test.ts ./desktop/renderer/agent_flow.test.ts ./desktop/renderer/trivia.test.ts
+	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
+
+.PHONY: demo-P-MASCOT.5
+demo-P-MASCOT.5: demo-P-MASCOT.4 ## Arcade-parity prompt-bar runner (2x sprite, no-slip stride) + the game cabinet (Shuriken range, Kata memory, Rooftop stack) + titlebar/panel mis-click guards
+	$(BUN) test ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/mascot_minigames.test.ts
+	$(BUN) run desktop/scripts/demo_p_mascot_5.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts

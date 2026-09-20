@@ -81,7 +81,7 @@ import { parseVoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; /
 import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint } from "./settings_store.ts";
 import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
 import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
-import { downloadWhisperModel, resolveWhisperBin } from "./whisper_manager.ts";
+import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
 import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
@@ -208,7 +208,7 @@ function whisperDeps(): WhisperRuntimeDeps {
     specs: () => ({ arch: process.arch, platform: process.platform, totalRamGB: totalmem() / 1e9, cpuCores: cpus().length, accel: process.platform === "darwin" ? "metal" : "cpu" }),
     modelDir: dir,
     listModels: () => { try { return readdirSync(dir); } catch { return []; } },
-    resolveBin: () => resolveWhisperBin({ env: process.env, exists: existsSync, which: (n) => Bun.which(n), resourcesPath: process.env.LUCID_RESOURCES, stagedDir: join(dir, "bin"), platform: process.platform }),
+    resolveBin: () => resolveWhisperBin({ env: process.env, exists: existsSync, which: (n) => Bun.which(n), resourcesPath: process.env.LUCID_RESOURCES || engineDesktopDir(import.meta.dir, process.execPath, existsSync), stagedDir: join(dir, "bin"), platform: process.platform }),
     download: (model, dest, onProgress) => downloadWhisperModel(model, dest, {
       fetch: globalThis.fetch,
       writeStream: async (path, body, onBytes) => { const w = Bun.file(path).writer(); const rd = body.getReader(); let tot = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; if (value) { w.write(value); tot += value.length; onBytes(value.length); } } await w.end(); return tot; },
@@ -216,18 +216,13 @@ function whisperDeps(): WhisperRuntimeDeps {
       rename: async (a, b) => renameSync(a, b),
       remove: async (path) => { try { rmSync(path); } catch { /* best-effort */ } },
     }, onProgress),
-    // P-STT.2c: the bundled server loads its whisper/ggml libs from its OWN directory. macOS gets an
-    // @loader_path rpath at staging and Windows searches the exe's dir automatically; Linux ELF only does
-    // that if the build set $ORIGIN, so prepend the binary's dir to LD_LIBRARY_PATH to make it certain.
-    spawn: (bin, args) => {
-      const libDir = dirname(bin);
-      const env = process.platform === "linux"
-        ? { ...process.env, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ? `${libDir}:${process.env.LD_LIBRARY_PATH}` : libDir }
-        : process.env;
-      const proc = Bun.spawn([bin, ...args], { stdout: "ignore", stderr: "ignore", env });
-      return { pid: proc.pid ?? 0, kill: () => { try { proc.kill(); } catch { /* gone */ } } };
+    spawn: spawnWhisperServer,
+    health: async (port) => {
+      try {
+        const res = await fetch(`${whisperServeUrl(port)}/health`, { signal: AbortSignal.timeout(2000) });
+        return res.ok && (await res.json() as { status?: unknown }).status === "ok";
+      } catch { return false; }
     },
-    health: async (port) => { try { const res = await fetch(`${whisperServeUrl(port)}/`, { signal: AbortSignal.timeout(2000) }); return res.ok || res.status === 404; } catch { return false; } },
     setSttUrl: (url) => { setVoiceSettings({ sttProvider: "whisper", sttUrl: url }); },
     sleep: (ms) => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, ms); return promise; },
     // P-STT.6 (ADR-0267): deletion + on-disk size for the installed-models list in the Voice card.

@@ -5,7 +5,11 @@
 // I/O is injected, so success / HTTP-error / HTML-error-page cases are exercised with no network or fs.
 
 import { describe, expect, it } from "bun:test";
-import { downloadWhisperModel, resolveWhisperBin, type BinResolveIO, type DownloadIO } from "./whisper_manager.ts";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer, type BinResolveIO, type DownloadIO } from "./whisper_manager.ts";
+import type { WhisperProc } from "./whisper_runtime.ts";
 import { WHISPER_MODELS } from "./whisper_install.ts";
 
 function binIO(over: Partial<BinResolveIO> = {}): BinResolveIO {
@@ -44,6 +48,76 @@ describe("resolveWhisperBin", () => {
     expect(r?.path).toBe("C:/ws.exe");
   });
 });
+
+describe("local Whisper assets and native processes", () => {
+  it("resolves build-staged assets in a dev resources directory with spaces", () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid whisper assets "));
+    try {
+      mkdirSync(join(root, "whisper"));
+      const exe = process.platform === "win32" ? "whisper-server.exe" : "whisper-server";
+      const file = join(root, "whisper", exe);
+      writeFileSync(file, "binary discovery fixture");
+      const resolved = resolveWhisperBin({ env: {}, exists: existsSync, which: Bun.which, resourcesPath: root, platform: process.platform });
+      expect(resolved?.source).toBe("bundled");
+      expect(resolved && existsSync(resolved.path)).toBe(true);
+      expect(resolved && join(resolved.path)).toBe(file);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("does not mistake a CLI-only PATH installation for an HTTP server", () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid whisper cli "));
+    try {
+      const exe = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+      writeFileSync(join(root, exe), "CLI discovery fixture", { mode: 0o755 });
+      expect(Bun.which(exe, { PATH: root })).not.toBeNull();
+      expect(resolveWhisperBin({ env: {}, exists: existsSync, which: (name) => Bun.which(name, { PATH: root }), platform: process.platform })).toBeNull();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("preserves spaced and quoted argv and reports the real child exit and stderr", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid whisper process "));
+    let proc: WhisperProc | undefined;
+    try {
+      const script = join(root, "native child.js");
+      writeFileSync(script, 'process.stderr.write(JSON.stringify(process.argv.slice(2))); process.exit(7);');
+      const arg = 'C:/Voice models/tiny "quoted" & local.bin';
+      proc = spawnWhisperServer(process.execPath, [script, arg]);
+      const reason = await nativeFailure(proc);
+      expect(reason).toContain("exited (7)");
+      expect(reason).toContain(JSON.stringify([arg]));
+    } finally { proc?.kill(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("reports a missing executable without waiting for the health timeout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid whisper missing "));
+    const proc = spawnWhisperServer(join(root, "absent-whisper-server.exe"), []);
+    try {
+      const reason = await nativeFailure(proc);
+      expect(reason).toContain("Could not start whisper-server:");
+      expect(reason).toContain("absent-whisper-server.exe");
+    }
+    finally { proc.kill(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("bounds diagnostics from a noisy failed native process", async () => {
+    const proc = spawnWhisperServer(process.execPath, ["-e", 'process.stderr.write("x".repeat(5000) + "MODEL_LOAD_FAILED"); process.exit(3);']);
+    try {
+      const reason = await nativeFailure(proc);
+      expect(reason).toContain("MODEL_LOAD_FAILED");
+      expect(reason.length).toBeLessThan(2200);
+    } finally { proc.kill(); }
+  });
+});
+
+async function nativeFailure(proc: WhisperProc): Promise<string> {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const failure = proc.failure?.();
+    if (failure) return failure;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Native process did not report its exit");
+}
 
 const BIG = 200 * 1024 * 1024;
 function res(opts: { ok?: boolean; status?: number; body?: boolean; len?: number }): Response {

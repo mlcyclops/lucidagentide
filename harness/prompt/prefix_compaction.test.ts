@@ -26,8 +26,10 @@ const joinBlocks = (blocks: readonly string[]): string => blocks.join("\u0000");
 
 // The omp version this regression is pinned to (R-02). A silent dependency bump trips the assertion
 // below; R-01's scheduled omp-compat CI reruns the suite against candidate versions before adopting.
-const SUPPORTED_OMP = "18.2.2";
-const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-utils"] as const;
+const SUPPORTED_OMP = "18.2.6";
+// pi-tui joined at 18.2.6: omp 18.2.5 moved the status-line context-usage helpers there, so it must
+// bump in lockstep with the other four (omp-compat.mjs enforces the same five-way agreement).
+const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-tui", "@oh-my-pi/pi-utils"] as const;
 
 const PkgDeps = (() => {
 	const raw: unknown = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));

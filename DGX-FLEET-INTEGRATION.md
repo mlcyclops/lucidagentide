@@ -1,12 +1,17 @@
 # DGX Fleet Integration: what the fleet ships, and the ADRs LUCID needs
 
 - **Source:** TL187 DGX Loader repo (sibling checkout: `..\..\15-DGX\dgx`),
-  its ADRs 0001 to 0014, and its `docs/LUCID-INTEGRATION.md` voice contract.
-- **Date:** 2026-09-05. Written by the DGX Loader's agent as a handoff for
+  its ADRs 0001 to 0018, and its `docs/LUCID-INTEGRATION.md` voice contract
+  plus `docs/HANDOFF-LUCID-MODEL-PICKER.md` (the model-picker contract).
+- **Date:** 2026-09-05, with an addendum on 2026-09-17 (see the bottom
+  section, DGX ADR-0018). Written by the DGX Loader's agent as a handoff for
   the LUCID agent. Read alongside `docs/LOCAL-MODELS-UNIFIED-ENDPOINT.md`
   (P-LOCAL.4): everything here extends that model, nothing replaces it.
 - **House style honored:** no em dashes; hostnames, ports, and ids below are
   illustrative placeholders unless marked as a wire contract.
+- **Superseded facts:** the serving port and role split below were written in
+  September and have MOVED. The 2026-09-17 addendum carries the measured
+  current state; where the two disagree, the addendum is right.
 
 ## TL;DR
 
@@ -149,3 +154,108 @@ violated; fix that first.
 - Adapter serving for promoted LoRA candidates: candidates are visible in
   the registry today but not yet servable; selection UX should show them as
   "candidate, not yet servable" rather than hiding them.
+
+-----
+
+## Addendum, 2026-09-17: the model picker (DGX ADR-0018), and what moved
+
+### Measured current state, which supersedes the table above
+
+Read off the boxes, not from prose. Where this disagrees with the September
+sections, this is right.
+
+| Fact | September said | Measured 2026-09-17 |
+|---|---|---|
+| vLLM port | `:8080` | **`:8000`** |
+| Served model | (unnamed) | **`glm-5.3-flash`** |
+| Serving box | "one box leans serving" | **Alex, `spark-5495`, `10.0.0.21`** |
+| Second box | "bursty GPU work" | **Nick, `spark-a816`, tensor-parallel MEMBER of the same server** |
+
+The head's serve command, verbatim from the process table:
+
+```
+vllm serve /models/glm53-exl3 --served-model-name glm-5.3-flash
+  --host 0.0.0.0 --port 8000 --trust-remote-code
+  --quantization exl3 --load-format instanttensor
+  --tensor-parallel-size 2 --gpu-memory-utilization 0.85
+  --max-model-len 524288 --max-num-seqs 4 --block-size 2304
+  --max-num-batched-tokens 8192 --mm-processor-cache-gb 0.5
+```
+
+Four consequences for LUCID, in order of how much they cost if ignored:
+
+1. **`--max-model-len 524288`.** P-LOCAL.5 shipped GLM-5.3-Flash with an
+   editorial `131072` and its own stubbed note says so: the box answered
+   `401 {"error":"Unauthorized"}`, so `max_model_len` could not be read. It
+   has now been read. The real figure is **524288**, four times the seed, and
+   the P-LOCAL.6 discovery path resolves it correctly because the server wins.
+2. **`--tensor-parallel-size 2` means ONE server, not two endpoints.** Nick is
+   rank 1: it holds a shard, talks to Alex over the local 400Gb link, and
+   serves **no HTTP at all**. Measured on Nick: `VLLM::Worker_TP` resident,
+   114 of 121 GB of unified memory committed, nothing listening on 8000, 8080
+   or 1234. A probe against it refuses the connection and looks exactly like a
+   dead pool. **Point at the head, only ever the head.** This is NCCL plus
+   vLLM sharding, which DGX ADR-0012 correctly places outside PAIR's scope.
+3. **The endpoint is credentialed.** `--api-key` is set, so even a loopback
+   `GET /v1/models` answers `{"error":"Unauthorized"}`. Discovery therefore
+   only works on a SAVED provider whose key is in the vault, which is the
+   `authRequired` path P-LOCAL.6 already implements. Save first, discover
+   second, and that ordering is a feature rather than a wrinkle.
+4. **`--max-num-seqs 4`.** An agentic fan-out past four parallel subagents
+   QUEUES on this head. It does not error. Expect that to present as latency
+   and do not read it as a hang.
+
+### ADR-F: import a DGX Loader model endpoint (the LUCID ask)
+
+This is the half of DGX ADR-0018 that LUCID owns. The Loader half is built:
+`src/shared/modelEndpoint.ts` plus 24 tests, an IPC contract, and a
+`Send to LUCID` button on each live endpoint card in the Evals Dashboard. It
+writes `<LUCID data root>/model_endpoints/<id>.json`.
+
+**Why a file and not an API call, stated so nobody re-litigates it.** LUCID's
+control plane binds `127.0.0.1` and every `/api/*` route except `/api/health`
+requires the per-launch `x-lucid-token` minted by LUCID's own Electron main.
+The Loader has no channel to obtain it and must not: that control plane holds
+keys and passphrases. `/api/health` is the single token-exempt route, confers
+no authority, and is used only to detect that LUCID is running. So the Loader
+PUBLISHES and LUCID PULLS. A compromised Loader cannot configure LUCID. This
+is the same conclusion ADR-0017 reached for voice, reached again independently.
+
+The increment, sized for one session:
+
+1. **Scan** `<dataRoot>/model_endpoints/*.json`, exactly as voice endpoints are
+   scanned from `<dataRoot>/voice_endpoints/`. Same convention, adjacent dir.
+2. **Gate, fail-closed.** Reject a wrong `kind`, an unknown `version`, a
+   non-`http(s)` `baseUrl` or one carrying userinfo, a non-slug `id`, an
+   `ompProvider` in `RESERVED_PROVIDER_IDS`, and any secret-shaped VALUE.
+   Reuse `scanForInlineSecret` rather than the voice importer's blanket
+   rejection of credential-like key NAMES: this document legitimately carries
+   an enumerated `auth.kind` (one legal value is the literal `bearer`) and an
+   `auth.credentialName`. A key-name denylist would reject a document that
+   contains no secret at all, which is the wrong failure. Validate
+   `credentialName` against `^[A-Z][A-Z0-9_]{2,63}$` and scan values for shape.
+3. **Map to `LocalProviderDef`.** Mint `id` as `lp_<slug>_<base36>` and
+   `ompProvider` from the slug: LUCID owns that namespace and must never adopt
+   an id from the file. Carry `zone` (default `internal`) and `models[]`
+   including `compat` through as the seed declaration.
+4. **Offer, never auto-apply.** A banner or Settings row: "DGX Loader
+   published 1 model endpoint. Review and import." Importing a file from disk
+   must not silently add a provider that can then receive prompts.
+5. **Hand off to the existing path.** Save the provider, put the key in the
+   vault once, then `Discover models`, which reads the head and replaces the
+   seeded window with the server's 524288.
+
+Acceptance: a fabricated document under `model_endpoints/` produces exactly one
+offered provider; a document with a pasted key value is refused and names the
+field; `glm-5.3-flash` appears in the picker with a **524288** window after
+discovery, not 8192 and not 131072; and a real turn returns a **visible
+reasoning stream**, which is the one failure that is otherwise silent. Optional
+and worth doing later: re-scan on window focus so a `Send to LUCID` while LUCID
+is open lands without a restart.
+
+### One correction the fleet side owes LUCID
+
+An earlier note from this side read Nick's resident `VLLM::Worker_TP` and its
+114 GB as an orphaned process holding memory while serving nothing. That was
+wrong, and it is exactly the misreading item 2 above exists to prevent. A
+tensor-parallel member is SUPPOSED to look like that.

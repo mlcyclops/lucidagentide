@@ -6,7 +6,7 @@
 // alternation by cycle, and the mirror helper.
 
 import { describe, expect, it } from "bun:test";
-import { MASCOT_FRAMES, MASCOT_H, MASCOT_W, mirrorFrame } from "./mascot.ts";
+import { MASCOT_FRAMES, MASCOT_H, MASCOT_W, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, mirrorFrame } from "./mascot.ts";
 import { RUNNER_SCALE, RUNNER_TIMINGS, runnerAt, runnerCycle, type RunnerLayout, type RunnerPhase } from "./mascot_runner.ts";
 
 const T = RUNNER_TIMINGS;
@@ -16,12 +16,13 @@ const H = MASCOT_H * RUNNER_SCALE;
 
 describe("retina consistency (the missing-legs live bug, 2026-08-01)", () => {
   it("at any scale the sprite NEVER extends past the canvas bottom or above the crawl lane", () => {
-    for (const scale of [2, 3, 4]) {
-      const l: RunnerLayout = { width: 1800, barTop: 62 * (scale / 2), barBottom: 320, height: 320, scale };
+    for (const scale of [1, 2, 3, 4]) {
+      const l: RunnerLayout = { width: 900 * scale, barTop: 62 * scale, barBottom: 160 * scale, height: 160 * scale, scale };
       const c2 = runnerCycle(l);
       for (let t2 = 0; t2 < c2.total; t2 += 40) {
         const p = runnerAt(t2, l);
         expect(p.y + MASCOT_H * scale).toBeLessThanOrEqual(l.height + 1); // feet inside the canvas
+        expect(p.y).toBeGreaterThanOrEqual(0); // no high-DPI crawl-lane clipping
       }
     }
   });
@@ -47,10 +48,54 @@ describe("runnerAt - the parkour route", () => {
     }
     expect(seen).toEqual(["run", "climb", "mantle", "sneak", "pause", "drop", "land", "rest"]);
   });
-  it("the four-beat gait actually cycles four distinct frames", () => {
-    const seen = new Set<string>();
-    for (let t = 0; t < 800; t += 30) seen.add(runnerAt(t, L).frame);
-    expect(seen.has("runA") && seen.has("runB") && seen.has("runC") && seen.has("runD")).toBe(true);
+  it("plays every gait beat in order and restarts it on the mirrored pass", () => {
+    for (let i = 0; i < MASCOT_RUN_FRAMES.length; i++) {
+      const t = i * MASCOT_RUN_BEAT_MS + 1;
+      expect(runnerAt(t, L).frame).toBe(MASCOT_RUN_FRAMES[i]);
+      expect(runnerAt(c.total + t, L).frame).toBe(MASCOT_RUN_FRAMES[i]);
+    }
+  });
+  it("keeps travel per stride proportional to the painted sprite at every pixel scale", () => {
+    const dt = MASCOT_RUN_BEAT_MS * MASCOT_RUN_FRAMES.length;
+    const travel = (l: RunnerLayout) => runnerAt(dt, l).x - runnerAt(0, l).x;
+    for (const scale of [2, 3, 4]) {
+      const larger = { ...L, width: L.width * scale, scale: L.scale * scale };
+      expect(travel(larger) / scale).toBeCloseTo(travel(L));
+      expect(runnerAt(dt / 2, larger).frame).toBe(runnerAt(dt / 2, L).frame);
+    }
+  });
+  // P-MASCOT.5, reported live: "it does not have the same walk and it makes it look weird". The body
+  // advanced 4 cells a beat while the planted heel swept back 5, so every step slid forward and the
+  // run read as gliding. The contract is physical: on each beat of the run SOME sole must hold the
+  // same WORLD position it held on the previous beat. Soles are measured off the painted frames, so
+  // this fails if either the gait art or the travel speed moves without the other.
+  it("keeps a foot planted on the ground through every beat of the run (no skating)", () => {
+    const soles = (frameId: string): number[] => {
+      const bottom = MASCOT_FRAMES[frameId]![MASCOT_H - 1]!;
+      const centres: number[] = [];
+      for (let x = 0; x < MASCOT_W; x++) {
+        if (bottom[x] === ".") continue;
+        let end = x;
+        while (end + 1 < MASCOT_W && bottom[end + 1] !== ".") end++;
+        centres.push((x + end) / 2);
+        x = end;
+      }
+      return centres;
+    };
+    for (const scale of [1, 2, 3]) {
+      const l: RunnerLayout = { ...L, scale };
+      const world = (t: number): number[] => {
+        const p = runnerAt(t, l);
+        expect(p.phase).toBe("run");
+        return soles(p.frame).map((c) => p.x + c * scale);
+      };
+      for (let beat = 1; beat * MASCOT_RUN_BEAT_MS < 8 * MASCOT_RUN_BEAT_MS; beat++) {
+        const before = world((beat - 1) * MASCOT_RUN_BEAT_MS + 1);
+        const after = world(beat * MASCOT_RUN_BEAT_MS + 1);
+        const held = before.some((a) => after.some((b) => Math.abs(a - b) < 1));
+        expect({ beat, scale, held }).toEqual({ beat, scale, held: true });
+      }
+    }
   });
   it("the climb eases (slow start: quarter time covers well under quarter distance)", () => {
     const start = runnerAt(c.runMs + 1, L).y;
