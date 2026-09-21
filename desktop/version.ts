@@ -460,4 +460,17 @@
 //            real fix is structural: CI now COMPILES the shipped binaries on every push, because
 //            nothing in the suite or either typecheck had ever built the thing being released
 //            (ADR-0359). Everything v2.2.1 promised is in here unchanged.
-export const APP_VERSION = "2.2.2";
+// v2.3.0-beta.1 = Jev end to end, the Jev browser policy, named accounts, the Agent Mode pass. A
+//            PRERELEASE: tagged with a dash, so it lands as a GitHub prerelease that is never marked
+//            latest, the Homebrew cask job skips it, and the rolling `latest` channel is untouched;
+//            stable installs are not offered it and a beta install updates itself to the next beta.
+//            JEV: the Judgment card (TypeSafe key + auto|typesafe|llm, pinned to llm under AskSage
+//            lockdown, ADR-0374), the per-turn judgment trace under every reply (ADR-0377), the frozen
+//            judge() steer so "use Jev" is understood (ADR-0378), and browser_run, a TypeScript port of
+//            browser-use/jev-ultrafast where one typed judgment picks each operation and target from an
+//            isolated-world element table and every typed string is a caller-supplied named value
+//            (ADR-0379). ACCOUNTS: several OAuth identities or named keys per provider (ADR-0375).
+//            AGENT MODE: the Regular/Max tier select (and the drag region that ate its clicks), the
+//            preview-link whiteout fixed by one navigation policy (ADR-0376), the game cabinet, omp
+//            18.2.6 (ADR-0373).
+export const APP_VERSION = "2.3.0-beta.1";
