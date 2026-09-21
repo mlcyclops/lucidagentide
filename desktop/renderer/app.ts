@@ -15793,6 +15793,7 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "gemini-3.1-pro-preview": { exp: 4, iq: 5, eff: "Preview of Gemini 3.1 Pro - flagship reasoning, 1M context.", best: "Complex reasoning + huge-context analysis (preview).", ctx: "1M" },
   "gemini-3-pro": { exp: 4, iq: 5, eff: "Gemini 3 Pro - top-tier reasoning, 1M context.", best: "Hard bugs, architecture, complex reasoning.", ctx: "1M" },
   "gemini-3-pro-preview": { exp: 4, iq: 5, eff: "Preview of Gemini 3 Pro - top-tier reasoning, 1M context.", best: "Complex reasoning + architecture (preview).", ctx: "1M" },
+  "gemini-3.8-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3.8 Flash, the current Flash line; 1M context.", best: "Quick edits, lookups, high-volume long-context tasks.", ctx: "1M" },
   "gemini-3.5-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3.5 Flash; 1M context.", best: "Quick edits, lookups, high-volume long-context tasks.", ctx: "1M" },
   "gemini-3-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3 Flash; 1M context.", best: "Quick edits, lookups, high-volume tasks.", ctx: "1M" },
   "gemini-3-flash-preview": { exp: 1, iq: 3, eff: "Preview of Gemini 3 Flash - fast + cheap; 1M context.", best: "Quick edits + high-volume tasks (preview).", ctx: "1M" },

@@ -80,13 +80,15 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 # <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" /> The newest frontier models are live in LUCID <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" />
 
-### <b>Claude&nbsp;Opus&nbsp;5</b>, <b>Claude&nbsp;Fable&nbsp;5.1</b> and <b>Mythos&nbsp;5.1</b>, <b>GPT-6&nbsp;Astra</b>, and <b>Gemini&nbsp;3.1&nbsp;Pro · 3.5&nbsp;Flash</b> - all in the picker today.
+### <b>Claude&nbsp;Opus&nbsp;5</b>, <b>Claude&nbsp;Fable&nbsp;5.1</b> and <b>Mythos&nbsp;5.1</b>, <b>GPT-6&nbsp;Astra</b>, and <b>Gemini&nbsp;3.1&nbsp;Pro · 3.8&nbsp;Flash</b> - all in the picker today. And <b>Jev</b>, the <b>TypeSafe</b> typed-judgment engine, sits behind them as the judgment backend (beta).
 
 <p align="center"><b>Connect the account you already pay for</b> (OAuth subscription or an API key) and pick the model from the list - that's it. Each one carries a <b>cost + intelligence card</b> and a clear <b>U.S.-government data-privacy notice</b>, so you always know what a turn costs and where your chat history stands.</p>
 
-<p align="center"><sub><code>claude-opus-5</code> · <code>claude-fable-5-1</code> · <code>claude-mythos-5-1</code> · <code>gpt-6-astra</code> · <code>gemini-3.1-pro</code> · <code>gemini-3.5-flash</code> · plus every other model the runtime exposes, including the AskSage gov gateway (<code>gpt-5.6-luna · sol · terra</code>, <code>google-gemini-3.1-pro-com</code>) and your own local endpoints.</sub></p>
+<p align="center"><sub><code>claude-opus-5</code> · <code>claude-fable-5-1</code> · <code>claude-mythos-5-1</code> · <code>gpt-6-astra</code> · <code>gemini-3.1-pro</code> · <code>gemini-3.8-flash</code> · plus every other model the runtime exposes, including the AskSage gov gateway (<code>gpt-5.6-luna · sol · terra</code>, <code>google-gemini-3.1-pro-com</code>) and your own local endpoints.</sub></p>
 
 <p align="center"><sub><b>Context windows are declared per model</b>, so Opus 5, Fable/Mythos 5.1 and GPT-6 Astra are all billed and metered against their real <b>1M</b> window instead of inheriting a 256K assumption - and vendor-superseded ids are <b>removed</b> from the catalog rather than left to rot in the picker.</sub></p>
+
+<p align="center"><sub><b>Jev / TypeSafe support</b> (<a href="#-whats-new-in-v230-beta1-prerelease">v2.3.0-beta.1</a>): paste a TypeSafe key under <b>Settings &gt; Judgment</b> and every typed judgment - classifications, yes/no checks, scores, the agent's <code>judge()</code> calls and the <code>browser_run</code> browser policy - is answered by Jev as a typed result with probabilities and a confidence, traced under the reply. No key, or AskSage lockdown, and the same calls fall back to your chat model.</sub></p>
 
 </td>
 </tr>
