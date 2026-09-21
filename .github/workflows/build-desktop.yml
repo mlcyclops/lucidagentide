@@ -266,10 +266,18 @@ jobs:
             desktop/release/*.blockmap
             desktop/release/latest*.yml
 
+      # BETA CHANNEL (v2.3.0-beta.1): a tag whose name carries a prerelease dash (`v2.3.0-beta.1`) lands
+      # as a GitHub PRERELEASE and is never marked the repository's latest release. That is what keeps it
+      # away from everyone who is not in the beta group: the in-app updater on a stable install resolves
+      # /releases/latest (the rolling "latest" release, which only the publish_latest dispatch touches),
+      # and electron-updater skips prerelease versions unless the installed version is itself a prerelease.
+      # So a beta build updates itself to the next beta, and a stable install never sees one.
       - name: Attach installers to the Release (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           # Installers + the electron-updater feed (latest*.yml + .blockmap) so
           # in-app auto-update can find new versions.
           files: |
@@ -294,10 +302,11 @@ jobs:
   # fails the job loudly instead of leaving the cask silently stale (the pre-fix failure mode:
   # the cask tracked the rolling "latest" release, which tag builds never refresh, so
   # `brew install` served a weeks-old build - see ADR-0258).
+  # Stable tags only: a beta tag (`v2.3.0-beta.1`) must not move every `brew upgrade` user onto the beta.
   update-cask:
     name: Pin the Homebrew cask to this release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     permissions:
       contents: write

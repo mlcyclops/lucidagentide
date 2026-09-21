@@ -29,4 +29,7 @@ export const GUIDE_FILES: Record<string, string> = {
   groq: "openweight_plans.html",
   // Voice provider: creative-media work routes through the choosing guide's Creator section.
   elevenlabs: "choosing_a_provider.html",
+  // Judgment backend (P-JEV.1): not a chat model, so its guide answers "what is Jev, when do I use
+  // it, what does LUCID actually send" rather than which subscription tier to buy.
+  typesafe: "typesafe_plans.html",
 };

@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { Database } from "bun:sqlite";
+import { LUCID_INACTIVE_CAUSE, type OauthRowLite } from "./account_policy.ts"; // P-ACCT.1 (ADR-0375)
 
 /** Default profile vault, or an explicit path (tests / overrides). */
 export function vaultPath(explicit?: string): string {
@@ -88,6 +89,96 @@ export function clearAllOauthCredentials(dbPath?: string): DisconnectResult {
     try {
       db.exec("PRAGMA busy_timeout = 2000");
       const res = db.query("delete from auth_credentials where credential_type = 'oauth'").run();
+      return { removed: Number(res.changes ?? 0) };
+    } finally { db.close(); }
+  } catch (e) {
+    return { removed: 0, reason: String((e as Error)?.message ?? e) };
+  }
+}
+
+// ── P-ACCT.1 (ADR-0375): named multi-account switching over omp's own soft-disable column. ──────────
+// omp's active-credential selection is `WHERE disabled_cause IS NULL`, its token refresh touches only
+// active rows, and nothing in omp ever CLEARS the column (its own delete SETS it). So parking a row
+// under LUCID's cause is stable, reversible, and invisible to omp's other bookkeeping. These helpers
+// only ever move rows between NULL and LUCID_INACTIVE_CAUSE: a row omp disabled for its own reason
+// (logout, rotation) is never resurrected here, that is clearDisabledCredential's explicit-repair job.
+
+/** One OAuth row for account derivation: active rows plus LUCID-parked rows only. */
+export function listOauthRows(provider: string, dbPath?: string): OauthRowLite[] {
+  const p = vaultPath(dbPath);
+  if (!provider || !existsSync(p)) return [];
+  try {
+    const db = new Database(p, { readonly: true });
+    try {
+      return db.query(
+        "select identity_key as identityKey, disabled_cause as disabledCause from auth_credentials where provider = ? and credential_type = 'oauth' and (disabled_cause is null or disabled_cause = ?) order by id asc",
+      ).all(provider, LUCID_INACTIVE_CAUSE) as OauthRowLite[];
+    } finally { db.close(); }
+  } catch { return []; }
+}
+
+export interface AccountApplyResult { parked: number; unparked: number; reason?: string }
+
+/** Make ONE OAuth identity the provider's active credential: unpark its rows (only LUCID's cause),
+ *  park every OTHER active oauth row. One transaction, so a crash never leaves zero active rows for a
+ *  provider that had one. `identityKey` null targets the legacy no-identity row. */
+export function activateOauthIdentity(provider: string, identityKey: string | null, dbPath?: string): AccountApplyResult {
+  const p = vaultPath(dbPath);
+  if (!provider) return { parked: 0, unparked: 0, reason: "no provider" };
+  if (!existsSync(p)) return { parked: 0, unparked: 0, reason: "vault not found" };
+  try {
+    const db = new Database(p);
+    try {
+      db.exec("PRAGMA busy_timeout = 2000");
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const un = identityKey === null
+          ? db.query("update auth_credentials set disabled_cause = null where provider = ? and credential_type = 'oauth' and identity_key is null and disabled_cause = ?").run(provider, LUCID_INACTIVE_CAUSE)
+          : db.query("update auth_credentials set disabled_cause = null where provider = ? and credential_type = 'oauth' and identity_key = ? and disabled_cause = ?").run(provider, identityKey, LUCID_INACTIVE_CAUSE);
+        const pk = identityKey === null
+          ? db.query("update auth_credentials set disabled_cause = ? where provider = ? and credential_type = 'oauth' and identity_key is not null and disabled_cause is null").run(LUCID_INACTIVE_CAUSE, provider)
+          : db.query("update auth_credentials set disabled_cause = ? where provider = ? and credential_type = 'oauth' and (identity_key is null or identity_key != ?) and disabled_cause is null").run(LUCID_INACTIVE_CAUSE, provider, identityKey);
+        db.exec("COMMIT");
+        return { parked: Number(pk.changes ?? 0), unparked: Number(un.changes ?? 0) };
+      } catch (e) { db.exec("ROLLBACK"); throw e; }
+    } finally { db.close(); }
+  } catch (e) {
+    return { parked: 0, unparked: 0, reason: String((e as Error)?.message ?? e) };
+  }
+}
+
+/** Park EVERY active oauth row for `provider` under LUCID's cause, so an env API key (which stored
+ *  OAuth would otherwise outrank) becomes the credential omp resolves. Reversed by activateOauthIdentity. */
+export function parkAllOauth(provider: string, dbPath?: string): AccountApplyResult {
+  const p = vaultPath(dbPath);
+  if (!provider) return { parked: 0, unparked: 0, reason: "no provider" };
+  if (!existsSync(p)) return { parked: 0, unparked: 0, reason: "vault not found" };
+  try {
+    const db = new Database(p);
+    try {
+      db.exec("PRAGMA busy_timeout = 2000");
+      const res = db.query("update auth_credentials set disabled_cause = ? where provider = ? and credential_type = 'oauth' and disabled_cause is null").run(LUCID_INACTIVE_CAUSE, provider);
+      return { parked: Number(res.changes ?? 0), unparked: 0 };
+    } finally { db.close(); }
+  } catch (e) {
+    return { parked: 0, unparked: 0, reason: String((e as Error)?.message ?? e) };
+  }
+}
+
+/** Disconnect ONE identity (DELETE its rows, token blob included), leaving the provider's other
+ *  accounts alone; the multi-account sibling of disconnectCredential. `identityKey` null targets the
+ *  legacy no-identity row. */
+export function disconnectOauthIdentity(provider: string, identityKey: string | null, dbPath?: string): DisconnectResult {
+  const p = vaultPath(dbPath);
+  if (!provider) return { removed: 0, reason: "no provider" };
+  if (!existsSync(p)) return { removed: 0, reason: "vault not found" };
+  try {
+    const db = new Database(p);
+    try {
+      db.exec("PRAGMA busy_timeout = 2000");
+      const res = identityKey === null
+        ? db.query("delete from auth_credentials where provider = ? and credential_type = 'oauth' and identity_key is null").run(provider)
+        : db.query("delete from auth_credentials where provider = ? and credential_type = 'oauth' and identity_key = ?").run(provider, identityKey);
       return { removed: Number(res.changes ?? 0) };
     } finally { db.close(); }
   } catch (e) {

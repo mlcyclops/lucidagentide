@@ -8,10 +8,13 @@
 //
 // Binary resolution order: an explicit `LUCID_WHISPER_BIN`, then a binary BUNDLED with the packaged app
 // (`<resources>/whisper/whisper-server[.exe]` - the no-code, zero-prereq path the installer ships), then one
-// on PATH (a dev who already has whisper.cpp). If none resolves, the UI reports it and offers the guided
-// download of the model only (the bundle step is a packaging task, tracked in PROGRESS).
+// on PATH (a dev who already has whisper.cpp). Dev runs also use desktop/ as the resources root
+// for build-staged assets. If none resolves, the install/start route stages the pinned server.
 
+import { spawn } from "node:child_process";
+import { dirname } from "node:path";
 import { looksLikeWhisperModel, type WhisperModel } from "./whisper_install.ts";
+import type { WhisperProc } from "./whisper_runtime.ts";
 
 export interface BinResolveIO {
   env: Record<string, string | undefined>;
@@ -40,8 +43,30 @@ export function resolveWhisperBin(io: BinResolveIO): ResolvedBin | null {
     const staged = `${io.stagedDir}/${exe}`;
     if (io.exists(staged)) return { path: staged, source: "staged" };
   }
-  const onPath = io.which(exe) ?? io.which("whisper-server") ?? io.which("whisper-cli");
+  // whisper-cli transcribes files; it cannot serve HTTP or accept server arguments.
+  const onPath = io.which(exe) ?? io.which("whisper-server");
   return onPath ? { path: onPath, source: "path" } : null;
+}
+
+/** Start the native server without a shell, preserving Windows argv and bounded startup diagnostics. */
+export function spawnWhisperServer(bin: string, args: string[]): WhisperProc {
+  const libDir = dirname(bin);
+  // ELF needs an explicit library directory; macOS uses @loader_path and Windows the exe directory.
+  const env = process.platform === "linux"
+    ? { ...process.env, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ? `${libDir}:${process.env.LD_LIBRARY_PATH}` : libDir }
+    : process.env;
+  const proc = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true, env });
+  let stderr = "";
+  let failure: string | null = null;
+  proc.stderr?.setEncoding("utf8");
+  proc.stderr?.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-2000); });
+  proc.on("error", (err) => { failure = `Could not start whisper-server: ${err.message}`; });
+  proc.on("exit", (code, signal) => { failure ??= `whisper-server exited (${signal ?? code ?? "unknown"})`; });
+  return {
+    pid: proc.pid ?? 0,
+    kill: () => { try { proc.kill(); } catch { /* gone */ } },
+    failure: () => failure ? `${failure}${stderr.trim() ? `: ${stderr.trim()}` : ""}` : null,
+  };
 }
 
 export interface DownloadIO {

@@ -351,6 +351,16 @@ demo-P-MASCOT.1: ## P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja mascot - frame-
 demo-P-MASCOT.2: ## P-MASCOT.2: the prompt-bar parkour mini ninja - route order (run/climb/sneak/pause/drop/rest), lane geometry, the silent-drop clip contract, gravity easing, direction alternation
 	$(BUN) run desktop/scripts/demo_p_mascot_2.ts
 
+.PHONY: demo-P-MASCOT.4
+demo-P-MASCOT.4: demo-P-MASCOT.1 demo-P-MASCOT.2 ## Themed palettes, expressive eyes, new activities, Regular/Max tiers, the run-only arcade, and shared LUCID points
+	$(BUN) test ./desktop/renderer/mascot.test.ts ./desktop/renderer/mascot_game.test.ts ./desktop/renderer/agent_flow.test.ts ./desktop/renderer/trivia.test.ts
+	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
+
+.PHONY: demo-P-MASCOT.5
+demo-P-MASCOT.5: demo-P-MASCOT.4 ## Arcade-parity prompt-bar runner (2x sprite, no-slip stride) + the game cabinet (Shuriken range, Kata memory, Rooftop stack) + titlebar/panel mis-click guards
+	$(BUN) test ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/mascot_minigames.test.ts
+	$(BUN) run desktop/scripts/demo_p_mascot_5.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
@@ -1060,3 +1070,32 @@ demo-P-OMP-BOOT.1: ## P-OMP-BOOT.1 (ADR-0357): the v2.2.0 install shipped an omp
 .PHONY: demo-P-OMP-BOOT.2
 demo-P-OMP-BOOT.2: ## P-OMP-BOOT.2 (ADR-0358): the REAL cause of the reported v2.2.0 outage, and the correction to ADR-0357's attribution. The capability probe had a 6 SECOND budget; the bundled omp is a shim over a 98 MB bun loading a large cli.js, so a cold antivirus-scanned launch on a 15 W laptop exceeds it. The resolver counted that timeout as a REJECTION and fell through to a bare `omp` a packaged install does not have, then cached it for the session: the field log shows 10 of 21 boots from ONE install declaring omp unrunnable while 11 ran it fine, plus 192 identical spawn stacks. Proves: a timeout is its own verdict and the slow candidate is USED (never degraded to the bare name), a candidate that actually answers still wins over a slow one, the first timeout wins in candidate order, a timed-out path is never listed as rejected, a genuine all-fail still reports not-proven, the bun and node verdict rules agree on exit 0 / non-zero / killed-with-no-exit / ETIMEDOUT while ENOENT stays a REAL failure, and source guards that runtime.ts keeps the shared budget (no local 6000) and treats indeterminate as usable
 	$(BUN) test ./desktop/omp_bin.test.ts ./desktop/about.test.ts
+
+.PHONY: demo-P-JEV.1
+demo-P-JEV.1: ## P-JEV.1 (ADR-0374): Jev / TypeSafe judgment backend in Settings. The TypeSafe key card (same masked plumbing as ElevenLabs, excluded from every chat-model surface), the auto | typesafe | llm select for omp providers.judgmentProvider, delivered as a LUCID --config overlay rewritten at every omp spawn (master, util, fleet lane) from the stored choice + the LIVE AskSage lock: lockdown pins llm because a judgment ships session state to api.typesafe.ai. Proves the env name + enum against the pinned omp package bytes, the hub/count exclusion, the store round-trip, the clamp, and the overlay bytes flipping with the lock.
+	$(BUN) test $(TEST_IGNORES) desktop/judgment_policy.test.ts
+	$(BUN) run desktop/scripts/demo_p_jev_1.ts
+
+.PHONY: demo-P-ACCT.1
+demo-P-ACCT.1: ## P-ACCT.1 (ADR-0375): named multi-account providers. Several OAuth subscriptions and named API keys per provider, switchable from nested accordion cards in Settings and the Provider Hub. Switching rides omp's own soft-disable column (LUCID's cause only, never a row omp disabled itself) because omp auto-selects among active rows and stored OAuth outranks an env key. Proves derivation, lossless park/unpark on a real sqlite vault, key-switch parking, rename/remove, and the served renderer markers.
+	$(BUN) test $(TEST_IGNORES) desktop/account_policy.test.ts
+	$(BUN) run desktop/scripts/demo_p_acct_1.ts
+
+.PHONY: demo-P-UX-JEV.1
+demo-P-UX-JEV.1: ## P-UX-JEV.1 (ADR-0376): the link that restarted the front end, one LUCID sprite, one arcade control row, and the Jev guide. A link in a Preview guide could navigate the top frame, and did-fail-load then reloaded the whole window, destroying the user's unsent prompt. Navigation is now refused at the app window and links are handed to the OS browser; the injected preview shim asks the HOST to open one (fragments still work, non-web schemes refused) with no widening of the sandbox. The stage's second static ninja is gone, the composer runner yields to the arcade, its top lane runs the arcade gait, and he reacts to hover/click. Mini games reuse the ONE toolbar row, so Exit no longer stacks over Start. Proves all of it plus the served renderer bytes.
+	$(BUN) test $(TEST_IGNORES) desktop/navigation_policy.test.ts desktop/renderer/mascot_runner.test.ts desktop/guides.test.ts desktop/preview_bridge.test.ts
+	$(BUN) run desktop/scripts/demo_p_ux_jev_1.ts
+
+.PHONY: demo-P-JEV.2
+demo-P-JEV.2: ## P-JEV.2 (ADR-0377): Jev in the chat. omp answers typed judgments out of band and records none of them, so the user could never see whether Jev was used. A new in-process omp extension wraps pi-ai TypeSafeJudge / TextJudge (the only place the question, the typed answers with probabilities, the backend, the latency and any error exist), AWAITS a token-d loopback POST so the desktop has each report before omp acts on the answer, and the chat draws a per-turn judgment window with one table per judgment (question / answer + probability bars / confidence, backend, ms, judged state). A turn with no judgment while Jev is configured gets a quiet "Jev not consulted" note; an unconfigured Jev shows nothing. Proves the wrap on the real classes, the ordering, the fallback capture, the master-only relay, the active gate and the served bytes.
+	$(BUN) test $(TEST_IGNORES) harness/judgment/trace.test.ts harness/omp/judgment_extension.test.ts desktop/judgment_policy.test.ts
+	$(BUN) run desktop/scripts/demo_p_jev_2.ts
+
+.PHONY: demo-P-JEV.3
+demo-P-JEV.3: ## P-JEV.3 (ADR-0378): name Jev for the agent. "Use JEV" produced "I am not sure what JEV refers to" and an idle Jev because nothing in the prompt said Jev is reached through eval judge(). A new frozen layer-3 policy (PREFIX_VERSION 10 -> 11) names Jev / JEV / TypeSafe as the typed-judgment engine behind judge(state, questions), tells the agent to call it on request and to report the typed answer, and points at Settings > Judgment when the chat-model fallback answered. Proves the steer is in the frozen prefix, that the prefix still changes only with the version, and that the live chat append chain, the audit mirror and the 8-policy list agree byte for byte.
+	$(BUN) test $(TEST_IGNORES) harness/prompt/assembler.test.ts harness/prompt/prompt_audit.test.ts
+
+.PHONY: demo-P-JEV.4
+demo-P-JEV.4: demo-P-JEV.3 ## P-JEV.4 (ADR-0379): the Jev browser action policy, a TypeScript port of browser-use/jev-ultrafast. One new tool, browser_run, drives the already-open visible agent window toward a goal: an isolated-world DOM snapshot becomes an indexed element table, ONE typed judgment picks the operation plus a speculative target per operation, only the matching head executes through the existing sendInputEvent path, freshness guards refuse a stale decision, and every typed string is a value the calling agent supplied by name (no text-generating model, page content never becomes text). Proves the action space, the question heads, the fail-closed validation, the scripted loop through the real tool, the dev routes and main executor in the bytes, and the skill's discoverability.
+	$(BUN) test $(TEST_IGNORES) harness/browser_policy.test.ts harness/omp/browser_extension.test.ts desktop/browser_snapshot.test.ts desktop/browser_control.test.ts
+	$(BUN) run desktop/scripts/demo_p_jev_4.ts

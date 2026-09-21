@@ -1,0 +1,120 @@
+<!doctype html>
+<!-- v2 - P-MASCOT.5 arcade cabinet QA (throwaway; component CSS copied verbatim from styles.css) -->
+<html lang="en"><head><meta charset="utf-8"><title>Arcade cabinet QA</title>
+<style>
+:root{--bg-0:#0b0f14;--bg-1:#10151c;--bg-2:#161d26;--bg-3:#1d2632;--bg-4:#243040;--txt:#dbe4ee;--txt-2:#aab6c4;--txt-3:#7e8b9b;--txt-4:#5b6774;--line:#243040;--line-soft:#1d2632;--line-strong:#324258;--accent:#41ff8b;--accent-2:#7dffb4;--accent-dim:rgba(65,255,139,.12);--green:#41ff8b;--green-txt:#8cffc0;--r-sm:7px;--r-md:11px;--r-3:11px;--mono:ui-monospace,monospace;--t:.16s;--t-fast:.09s;--ease:ease}
+body{margin:0;background:#0b0f14;color:#dbe4ee;font:13px/1.4 ui-sans-serif,system-ui,sans-serif;padding:14px}
+h2{font-size:12px;color:#7e8b9b;text-transform:uppercase;letter-spacing:.05em;margin:16px 0 4px}
+/* Optional run-only game, contained below the composer rather than in the body grid. */
+.agent-arcade { min-width:0; color:var(--txt-2); font-size:11px; line-height:1.35; }
+.agent-arcade[hidden], .agent-arcade [hidden] { display:none !important; }
+.agent-arcade button, .agent-arcade select {
+  min-height:28px; padding:3px 9px; border:1px solid var(--line); border-radius:var(--r-sm); white-space:nowrap;
+  background:var(--bg-2); color:var(--txt); font:inherit; cursor:pointer;
+}
+.agent-arcade button:hover:not(:disabled) { background:var(--bg-3); border-color:var(--line-strong); }
+.agent-arcade button:disabled { opacity:.45; cursor:default; }
+.agent-arcade button:focus-visible, .agent-arcade select:focus-visible, .agent-arcade canvas:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+/* Discoverability: a 10px transparent label read as page furniture, so nobody found the game. This is a
+   real chip (one line, never wrapping - invariant 11) sitting under the composer's right edge. */
+.agent-arcade .agent-arcade-reveal {
+  display:block; margin:2px 8px 2px auto; min-height:24px; padding:3px 11px;
+  border:1px solid var(--line); border-radius:999px;
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2));
+  color:var(--txt-3); font-size:11px; font-weight:600; letter-spacing:.02em; white-space:nowrap;
+  transition:color var(--t),border-color var(--t),background var(--t);
+}
+.agent-arcade .agent-arcade-reveal:hover:not(:disabled) { color:var(--txt); border-color:var(--accent); background:var(--accent-dim); }
+.agent-arcade .agent-arcade-panel {
+  margin:4px 8px; padding:5px 8px; border:1px solid var(--line); border-radius:var(--r-md);
+  background:var(--bg-1); overflow:hidden;
+}
+/* P-MASCOT.5: six children now - game picker, character picker, score, Start, Exit, Total. */
+.agent-arcade .agent-arcade-toolbar {
+  display:grid; grid-template-columns:auto auto minmax(0,1fr) auto auto auto; gap:8px; align-items:center;
+}
+.agent-arcade .agent-arcade-game, .agent-arcade .agent-arcade-character { display:flex; gap:6px; align-items:center; min-width:0; }
+.agent-arcade .agent-arcade-game select { max-width:150px; }
+.agent-arcade .agent-arcade-character select { max-width:105px; }
+.agent-arcade .agent-arcade-score { min-width:0; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.agent-arcade .agent-arcade-total { grid-column:6; grid-row:1; color:var(--green-txt); font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.agent-arcade .agent-arcade-start { grid-column:4; grid-row:1; }
+.agent-arcade .agent-arcade-exit { grid-column:5; grid-row:1; }
+.agent-arcade .agent-arcade-canvas {
+  display:block; width:100%; height:180px; margin:4px 0; border-radius:var(--r-sm);
+  image-rendering:pixelated; touch-action:none;
+}
+.agent-arcade .agent-arcade-controls {
+  display:grid; grid-template-columns:repeat(6,auto) minmax(0,1fr); gap:4px; align-items:center;
+}
+.agent-arcade .agent-arcade-controls button[aria-pressed="true"] {
+  color:var(--green-txt); border-color:var(--green); background:var(--bg-3);
+}
+.agent-arcade .agent-arcade-status { padding-left:6px; font-size:10px; }
+.agent-arcade .agent-arcade-help { margin:4px 0 0; color:var(--txt-3); font-size:10px; line-height:1.4; }
+@media (max-width:600px) {
+  .agent-arcade .agent-arcade-panel { margin:3px 4px; padding:5px; }
+  .agent-arcade .agent-arcade-toolbar { gap:4px; grid-template-columns:minmax(0,1fr) auto auto; }
+  .agent-arcade .agent-arcade-game { grid-column:1; grid-row:1; }
+  .agent-arcade .agent-arcade-start { grid-column:2; grid-row:1; }
+  .agent-arcade .agent-arcade-exit { grid-column:3; grid-row:1; }
+  .agent-arcade .agent-arcade-game, .agent-arcade .agent-arcade-character { gap:3px; }
+  .agent-arcade .agent-arcade-character { grid-column:1; grid-row:2; }
+  .agent-arcade .agent-arcade-score { font-size:10px; grid-column:2; grid-row:2; text-align:right; }
+  .agent-arcade .agent-arcade-total { grid-column:3; grid-row:2; font-size:10px; text-align:right; }
+  .agent-arcade .agent-arcade-controls { grid-template-columns:repeat(6,minmax(0,1fr)); }
+  .agent-arcade .agent-arcade-controls button { padding:3px 1px; }
+  .agent-arcade .agent-arcade-status { grid-column:1 / -1; padding:0; }
+}
+
+/* ============================================================================================
+   Arcade mini games (mascot_minigames.ts). One switchable board mounted inside the arcade panel,
+   so this block borrows the .agent-arcade visual language rather than inventing a second one.
+   ============================================================================================ */
+.mini-game { min-width:0; color:var(--txt-2); font-size:11px; line-height:1.35; }
+.mini-game[hidden], .mini-game [hidden] { display:none !important; }
+.mini-game button {
+  min-height:28px; padding:3px 9px; border:1px solid var(--line); border-radius:var(--r-sm); white-space:nowrap;
+  background:var(--bg-2); color:var(--txt); font:inherit; cursor:pointer;
+}
+.mini-game button:hover:not(:disabled) { background:var(--bg-3); border-color:var(--line-strong); }
+.mini-game button:disabled { opacity:.45; cursor:default; }
+.mini-game button:focus-visible, .mini-game canvas:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+/* Invariant 11: every cell here is a single nowrap line, so no label can ever wrap mid phrase. */
+.mini-game .mini-game-toolbar {
+  display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; gap:8px; align-items:center;
+}
+.mini-game .mini-game-title { color:var(--txt); font-weight:650; white-space:nowrap; }
+.mini-game .mini-game-score {
+  min-width:0; text-align:right; font-variant-numeric:tabular-nums;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.mini-game .mini-game-total { color:var(--green-txt); font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.mini-game .mini-game-canvas {
+  display:block; width:100%; height:180px; margin:4px 0; border-radius:var(--r-sm);
+  image-rendering:pixelated; touch-action:none;
+}
+.mini-game .mini-game-controls {
+  display:grid; grid-template-columns:repeat(4,auto) minmax(0,1fr); gap:4px; align-items:center;
+}
+.mini-game-stack .mini-game-controls { grid-template-columns:auto minmax(0,1fr); }
+.mini-game-shuriken .mini-game-controls { grid-template-columns:repeat(3,auto) minmax(0,1fr); }
+.mini-game .mini-game-status { padding-left:6px; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Help prose is a block paragraph, never a flex row sharing a line with tags. */
+.mini-game .mini-game-help { margin:4px 0 0; color:var(--txt-3); font-size:10px; line-height:1.4; }
+@media (max-width:600px) {
+  .mini-game .mini-game-toolbar { gap:4px; grid-template-columns:minmax(0,1fr) auto; }
+  .mini-game .mini-game-title { grid-column:1; grid-row:1; }
+  .mini-game .mini-game-start { grid-column:2; grid-row:1; }
+  .mini-game .mini-game-score { grid-column:1; grid-row:2; font-size:10px; text-align:left; }
+  .mini-game .mini-game-total { grid-column:2; grid-row:2; font-size:10px; text-align:right; }
+  .mini-game .mini-game-controls,
+  .mini-game-stack .mini-game-controls,
+  .mini-game-shuriken .mini-game-controls { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .mini-game .mini-game-controls button { padding:3px 1px; }
+  .mini-game .mini-game-status { grid-column:1 / -1; padding:0; }
+}
+</style></head>
+<body><script type="module" src="./cabinet.js"></script></body></html>

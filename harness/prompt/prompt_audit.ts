@@ -37,7 +37,10 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { computeNonMessageTokens, estimateSkillsTokens, estimateToolSchemaTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
+// omp 18.2.5 moved the terminal UI modules (status line included) into @oh-my-pi/pi-tui and removed
+// the coding-agent subpaths; pi-tui is exact-pinned alongside the other four omp packages for that.
+import { computeNonMessageTokens, estimateSkillsTokens, estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import type { Tool as AiTool } from "@oh-my-pi/pi-ai";
 import { loadProjectContextFiles } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { buildWorkspaceTree } from "@oh-my-pi/pi-coding-agent/workspace-tree";
 import { createEchoModel, ensureMockApi } from "../testing/echo.ts";
@@ -47,16 +50,17 @@ import {
   DATA_INTEGRATION_POLICY,
   DELEGATION_POLICY,
   ENGAGEMENT_POLICY,
+  JEV_POLICY,
   PREVIEW_POLICY,
   SLASH_COMMAND_POLICY,
 } from "./assembler.ts";
 
 /** The desktop master chat's exact --append-system-prompt bytes (acp_backend.ts appendedPolicy). */
 export function composeAppendedPolicy(): string {
-  return `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}\n\n${DATA_INTEGRATION_POLICY}`;
+  return `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}\n\n${DATA_INTEGRATION_POLICY}\n\n${JEV_POLICY}`;
 }
 
-/** The 7 policies, individually countable (informational sub-rows of the appended total). */
+/** The 8 policies, individually countable (informational sub-rows of the appended total). */
 export function policyParts(): Array<{ label: string; text: string }> {
   return [
     { label: "delegation", text: DELEGATION_POLICY },
@@ -66,6 +70,7 @@ export function policyParts(): Array<{ label: string; text: string }> {
     { label: "agent-builder", text: AGENT_BUILDER_POLICY },
     { label: "slash-commands", text: SLASH_COMMAND_POLICY },
     { label: "data-integration", text: DATA_INTEGRATION_POLICY },
+    { label: "jev", text: JEV_POLICY },
   ];
 }
 
@@ -138,11 +143,9 @@ function tokenizerMode(tokenizer: Tokenizer): "native" | "estimate" {
   return tokenizer.encoding !== null || process.env.PI_TOKENIZER_ACCURATE === "1" ? "native" : "estimate";
 }
 
-interface ToolLike {
-  name: string;
-  description: string;
-  parameters: unknown;
-}
+// The exact slice pi-tui's estimateToolSchemaTokens (18.2.6) accepts: parameters must be a typebox
+// TSchema, which every tool registered on a live omp session carries by construction.
+type ToolLike = Pick<AiTool, "name" | "description" | "parameters">;
 
 function toolList(session: { agent?: { state?: { tools?: unknown } } }): ToolLike[] {
   const raw = session.agent?.state?.tools;
@@ -151,7 +154,9 @@ function toolList(session: { agent?: { state?: { tools?: unknown } } }): ToolLik
   for (const t of raw) {
     if (t && typeof t === "object" && "name" in t && typeof t.name === "string") {
       const description = "description" in t && typeof t.description === "string" ? t.description : "";
-      const parameters = "parameters" in t ? t.parameters : { type: "object" };
+      // Session tools are omp's own registered Tool objects; the runtime shape is TSchema even
+      // though this defensive walk types the array as unknown. Boundary cast, checked fields above.
+      const parameters = ("parameters" in t ? t.parameters : { type: "object" }) as AiTool["parameters"];
       out.push({ name: t.name, description, parameters });
     }
   }

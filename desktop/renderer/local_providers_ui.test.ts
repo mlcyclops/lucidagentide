@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/local_providers_ui.test.ts — P-LOCAL.3 (ADR-0135): the Settings → Local Providers card.
+// desktop/renderer/local_providers_ui.test.ts - P-LOCAL.3 (ADR-0135): the Settings Local Providers card.
 
 import { test, expect, describe } from "bun:test";
 import { localProvidersCardBody, providerStatus, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts";
@@ -27,7 +27,7 @@ describe("card body", () => {
     expect(h).toContain('id="lpAuth"');
     expect(h).toContain('id="lpKey"');
     expect(h).toContain("data-lp-add");
-    // the add form is its own accordion (collapsed by default — no `open` class on .lp-add)
+    // the add form is its own accordion (collapsed by default, so no `open` class on .lp-add)
     expect(h).toContain("data-lp-addtoggle");
     expect(h).toContain("lp-add-body");
     expect(h).not.toContain('class="lp-add open"');
@@ -110,7 +110,7 @@ describe("draftFromForm", () => {
 
 describe("enrichModelFromCatalog", () => {
   test("the SERVER wins on context window; the catalog supplies what /models cannot say", () => {
-    // The endpoint reported 65536 for a model the catalog guesses at 131072. The server is right:
+    // The endpoint reported 65536 for a model the catalog seeds at 524288. The server is right:
     // it is the one that loaded the weights, and a too-large window silently truncates at run time.
     const m = enrichModelFromCatalog({ id: "zai-org/GLM-5.3-Flash-FP8", contextWindow: 65536 });
     expect(m.contextWindow).toBe(65536);
@@ -120,7 +120,11 @@ describe("enrichModelFromCatalog", () => {
   });
 
   test("falls back to the catalog's window only when the server reported none", () => {
-    expect(enrichModelFromCatalog({ id: "glm-5.3-flash" }).contextWindow).toBe(131072);
+    // 524288 since P-LOCAL.7, which replaced P-LOCAL.5's editorial 131072 with the value read
+    // authenticated off the live head (`max_model_len=524288`). The fallback exists precisely for
+    // the case that blocked that measurement for a whole increment: a keyed endpoint whose
+    // unauthenticated /v1/models answers 401, so the server reports no window at all.
+    expect(enrichModelFromCatalog({ id: "glm-5.3-flash" }).contextWindow).toBe(524288);
   });
 
   test("an id matching no preset gets only its own facts", () => {

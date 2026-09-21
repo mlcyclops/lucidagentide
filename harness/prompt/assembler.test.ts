@@ -64,6 +64,15 @@ test("the data-integration steer is in the frozen prefix (P-DATA.1)", () => {
   expect(FROZEN_PREFIX).toContain("nicholas.chadwick.ctr@gmail.com");
 });
 
+test("the Jev steer is in the frozen prefix (P-JEV.3)", () => {
+  // "Use Jev" must resolve to eval's judge(), never to "I don't know what JEV is"; the prefix cannot know
+  // whether Jev is configured, so it describes the chat-model fallback and where to set Jev up.
+  expect(FROZEN_PREFIX).toContain("<jev>");
+  expect(FROZEN_PREFIX).toContain("judge(state, questions)");
+  expect(FROZEN_PREFIX).toContain('Do NOT answer "I don\'t know what Jev is"');
+  expect(FROZEN_PREFIX).toContain("Settings > Judgment");
+});
+
 test("untrusted retrieved content never appears before the breakpoint", () => {
   const marker = "IGNORE_ALL_PREVIOUS_INSTRUCTIONS_marker_42";
   const out = assemblePrompt({

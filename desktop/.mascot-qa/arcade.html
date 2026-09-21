@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC | SPDX-License-Identifier: BUSL-1.1 -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LUCID Agent / Run arcade review</title><style>:root{color-scheme:dark;--bg-0:#0a0b0f;--bg-1:#0f1117;--bg-2:#151823;--bg-3:#1b1f2b;--txt:#edeff6;--txt-2:#aeb4c6;--txt-3:#727a90;--line:#252a3a;--line-strong:#323a4f;--accent:#c64bd6;--green:#46d27e;--green-txt:#8ee8ad;--r-sm:6px;--r-md:9px}*{box-sizing:border-box}</style>
+<style id="productionArcadeCss">
+/* Optional run-only game, contained below the composer rather than in the body grid. */
+.agent-arcade { min-width:0; color:var(--txt-2); font-size:11px; line-height:1.35; }
+.agent-arcade[hidden], .agent-arcade [hidden] { display:none !important; }
+.agent-arcade button, .agent-arcade select {
+  min-height:28px; padding:3px 9px; border:1px solid var(--line); border-radius:var(--r-sm); white-space:nowrap;
+  background:var(--bg-2); color:var(--txt); font:inherit; cursor:pointer;
+}
+.agent-arcade button:hover:not(:disabled) { background:var(--bg-3); border-color:var(--line-strong); }
+.agent-arcade button:disabled { opacity:.45; cursor:default; }
+.agent-arcade button:focus-visible, .agent-arcade select:focus-visible, .agent-arcade canvas:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+.agent-arcade .agent-arcade-reveal {
+  display:block; margin:2px 8px 2px auto; min-height:24px; border-color:transparent;
+  background:transparent; color:var(--txt-3); font-size:10px;
+}
+.agent-arcade .agent-arcade-panel {
+  margin:4px 8px; padding:5px 8px; border:1px solid var(--line); border-radius:var(--r-md);
+  background:var(--bg-1); overflow:hidden;
+}
+.agent-arcade .agent-arcade-toolbar {
+  display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; gap:8px; align-items:center;
+}
+.agent-arcade .agent-arcade-character { display:flex; gap:6px; align-items:center; }
+.agent-arcade .agent-arcade-character select { max-width:105px; }
+.agent-arcade .agent-arcade-score { min-width:0; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.agent-arcade .agent-arcade-canvas {
+  display:block; width:100%; height:116px; margin:4px 0; border-radius:var(--r-sm);
+  image-rendering:pixelated; touch-action:none;
+}
+.agent-arcade .agent-arcade-controls {
+  display:grid; grid-template-columns:repeat(6,auto) minmax(0,1fr); gap:4px; align-items:center;
+}
+.agent-arcade .agent-arcade-controls button[aria-pressed="true"] {
+  color:var(--green-txt); border-color:var(--green); background:var(--bg-3);
+}
+.agent-arcade .agent-arcade-status { padding-left:6px; font-size:10px; }
+.agent-arcade .agent-arcade-help { margin:4px 0 0; color:var(--txt-3); font-size:10px; line-height:1.4; }
+@media (max-width:600px) {
+  .agent-arcade .agent-arcade-panel { margin:3px 4px; padding:5px; }
+  .agent-arcade .agent-arcade-toolbar { gap:4px; grid-template-columns:minmax(0,1fr) auto auto; }
+  .agent-arcade .agent-arcade-start { grid-column:2; grid-row:1; }
+  .agent-arcade .agent-arcade-exit { grid-column:3; grid-row:1; }
+  .agent-arcade .agent-arcade-character { gap:3px; }
+  .agent-arcade .agent-arcade-score { font-size:10px; grid-column:1 / -1; grid-row:2; text-align:left; }
+  .agent-arcade .agent-arcade-controls { grid-template-columns:repeat(6,minmax(0,1fr)); }
+  .agent-arcade .agent-arcade-controls button { padding:3px 1px; }
+  .agent-arcade .agent-arcade-status { grid-column:1 / -1; padding:0; }
+}
+</style><!-- Review 4.6: forced reload for live capture --><style>html,body{height:auto;min-height:100%;overflow:auto}body{display:block;margin:0;background:var(--bg-0);color:var(--txt);font:14px system-ui}.review{width:min(100%,1000px);margin:30px auto;padding:24px}.review h1{font-size:28px;margin:0 0 12px}.review p{color:var(--txt-2);line-height:1.6}.review-controls{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0}.review-controls button{padding:10px 14px;border:1px solid var(--line);border-radius:6px;background:var(--bg-2);color:var(--txt);cursor:pointer}.review-controls button:focus-visible{outline:2px solid var(--accent)}.review textarea{display:block;width:100%;min-height:75px;border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--bg-1);color:var(--txt);font:inherit;resize:vertical}.review .signal{font:12px monospace;color:var(--green)}.review .prompt-label{display:block;margin-bottom:8px;color:var(--txt-2)}</style></head><body><main class="review"><h1>LUCID / Run-time arcade</h1><p>Production game, underneath the prompt bar. Opt in during a run, choose your LUCID, and dodge or strike the incoming obstacles. Keyboard input stays inside the focused game.</p><p>Review controls below inject lifecycle signals only. They do not start an AI request.</p><div class="review-controls"><button id="run">Start test run</button><button id="end">Complete test run</button><button id="role">Leave Agent role</button></div><p id="runStatus" class="signal"></p><label class="prompt-label" for="reviewPrompt">Prompt remains editable while playing</label><textarea id="reviewPrompt" placeholder="Type here to verify the game releases keyboard focus"></textarea><div id="arcadeHost" hidden></div><h1 style="font-size:20px;margin:26px 0 8px">Flycatch bonus scene (production painter, real engine state)</h1><canvas id="bonusScene" width="640" height="180" style="width:100%;max-width:640px;image-rendering:pixelated;border:1px solid var(--line);border-radius:6px"></canvas></main><script src="arcade.js"></script></body></html>

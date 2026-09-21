@@ -7,7 +7,7 @@
 // GPT) and the gateway-prefix robustness are the easy things to break, so they're pinned here.
 
 import { describe, expect, it } from "bun:test";
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, MODEL_FAMILIES, preferredDefaultModel, providerLabelOf, recommendFallbacks, sortGovFirstByLevel, topModel, type ModelOption } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, localPrefixSet, MODEL_FAMILIES, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, type LocalProviderRef, type ModelOption } from "./model_families.ts";
 
 describe("familyOf", () => {
   it("classifies direct Anthropic models (incl. fable) as Claude", () => {
@@ -380,5 +380,54 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
       }
     }
     expect(preferredDefaultModel(mk("openai-codex/gpt-6-mini", "openai-codex/gpt-6-astra"))?.value).toBe("openai-codex/gpt-6-astra");
+  });
+});
+
+// P-LOCALPICK.1 (ADR-0371): local providers pin to the top and explain their pending models.
+// The incident: a user Discovered `glm-5.3-flash` on a DGX Spark Local Provider; the picker showed
+// nothing (the model loads at the next restart, and the only explanation was a Settings banner), and
+// even after a restart the id matches no family regex, so it would sink to "Other models" last.
+describe("local provider picker helpers", () => {
+  const DGX: LocalProviderRef = { ompProvider: "dgx-spark", enabled: true, models: [{ id: "glm-5.3-flash" }] };
+  const OFF: LocalProviderRef = { ompProvider: "old-box", enabled: false, models: [{ id: "llama-3.3-70b" }] };
+  const list: ModelOption[] = [
+    { value: "anthropic/claude-fable-5", name: "Claude Fable 5" },
+    { value: "dgx-spark/glm-5.3-flash", name: "GLM-5.3-Flash" },
+    { value: "zai/glm-5", name: "GLM-5" },
+  ];
+
+  it("providerPrefixOf reads the prefix and never invents one for a bare id", () => {
+    expect(providerPrefixOf("dgx-spark/glm-5.3-flash")).toBe("dgx-spark");
+    expect(providerPrefixOf("glm-5.3-flash")).toBe("");
+  });
+
+  it("localPrefixSet holds ENABLED providers only, so a disabled box cannot pin models", () => {
+    const s = localPrefixSet([DGX, OFF]);
+    expect(s.has("dgx-spark")).toBe(true);
+    expect(s.has("old-box")).toBe(false);
+  });
+
+  it("splitLocalModels pins the DGX model and leaves the CLOUD glm in the general list", () => {
+    // The cloud GLM shares the model family but not the hardware; only the self-hosted one pins.
+    const { local, rest } = splitLocalModels(list, localPrefixSet([DGX]));
+    expect(local.map((m) => m.value)).toEqual(["dgx-spark/glm-5.3-flash"]);
+    expect(rest.map((m) => m.value)).toEqual(["anthropic/claude-fable-5", "zai/glm-5"]);
+  });
+
+  it("pendingLocalModels names EXACTLY the declared models omp has not reported", () => {
+    // omp reported nothing local yet (pre-restart): the declared model is pending.
+    const before = pendingLocalModels([DGX], [{ value: "anthropic/claude-fable-5", name: "x" }]);
+    expect(before.map((p) => p.value)).toEqual(["dgx-spark/glm-5.3-flash"]);
+    // After the restart omp reports it: pending must be EMPTY, or the note would nag forever.
+    expect(pendingLocalModels([DGX], list)).toEqual([]);
+    // A disabled provider never nags.
+    expect(pendingLocalModels([OFF], [])).toEqual([]);
+  });
+
+  it("the china gate reasoning holds: the self-hosted GLM matches isChinaModel by NAME", () => {
+    // This is WHY curatedModels needs the local bypass: the id alone cannot tell a LAN deployment
+    // from a Beijing cloud, so provider zone (a configured Local Provider) is the deciding signal.
+    expect(isChinaModel("dgx-spark/glm-5.3-flash")).toBe(true);
+    expect(isChinaModel("zai/glm-5")).toBe(true);
   });
 });

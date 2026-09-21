@@ -12,7 +12,7 @@
 
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -31,8 +31,10 @@ import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
 import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
+import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrowserPageShape, settleJs, targetJs, type BrowserAction, type BrowserFreshness } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the Jev policy's page scripts
 import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
+import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
 
 // CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
 // Order: an explicit env var (launcher / dev run), then the packaged package.json's `lucidBuildFlavor`
@@ -308,14 +310,7 @@ function createWindow(): void {
     );
     Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
   });
-  // external links (e.g. duckdb.org) open in the OS browser, not a new Electron window
-  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
-  // If the dev server isn't answering yet (slow first launch), the load fails — retry a bounded number
-  // of times so a late-ready server self-heals into a rendered window instead of a permanent black one.
-  let reloadTries = 0;
-  win.webContents.on("did-fail-load", () => {
-    if (reloadTries++ < 30) setTimeout(() => win?.loadURL(`http://localhost:${PORT}`), 1000);
-  });
+  installAppNavigation(win.webContents, `http://localhost:${PORT}/`, (url) => shell.openExternal(url));
   // P-KGMARKET.4: once the renderer is up, flush any lucid://auth URL that arrived during a cold launch.
   win.webContents.on("did-finish-load", () => {
     if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
@@ -725,6 +720,91 @@ async function agentBrowserScroll(id: string, dy: number): Promise<void> {
     await browserApiPost("/api/browser/result", { id, ok: false, error: `scroll failed: ${e instanceof Error ? e.message : String(e)}` });
   }
 }
+// ── P-JEV.4 (ADR-0379): the Jev browser policy's executor half ───────────────────────────────────────
+// Both ops run the page scripts of desktop/browser_snapshot.ts in an ISOLATED world: the element cache
+// and the freshness guards live in a V8 context the page's own scripts cannot reach or monkey-patch,
+// while the DOM itself is shared. MAIN is the authority on what executes - it re-narrows the queued
+// action, re-verifies the decision's freshness reference against the live page, and re-reads geometry
+// right before input. Anything off -> NOTHING touches the page and the route learns why (stale).
+const agentSleep = (ms: number): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+};
+function policyEval(wc: Electron.WebContents, code: string): Promise<unknown> {
+  return wc.executeJavaScriptInIsolatedWorld(BROWSER_POLICY_WORLD, [{ code }]);
+}
+/** One indexed observation of the page. SNAPSHOT_JS answers null mid-navigation, so it is retried
+ *  briefly; the fingerprint keys every decision the policy makes to exactly this observation. */
+async function agentBrowserSnapshot(id: string): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    let raw: unknown = await policyEval(wc, SNAPSHOT_JS);
+    for (let retry = 0; retry < 10 && raw === null; retry++) {
+      await agentSleep(20);
+      raw = await policyEval(wc, SNAPSHOT_JS);
+    }
+    if (!isBrowserPageShape(raw)) { await browserApiPost("/api/browser/result", { id, ok: false, error: "snapshot unavailable: the page is still loading" }); return; }
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify({ url: raw.url, text: raw.text, actions: raw.actions, scroll: raw.scroll }))
+      .digest("hex");
+    await browserApiPost("/api/browser/result", { id, ok: true, page: { ...raw, fingerprint }, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `snapshot failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+/** Execute ONE chosen candidate: freshness check, then live target resolution, then real input events
+ *  (the page sees ordinary user interaction), then a short settle so the next snapshot sees the result.
+ *  Either check failing is reported as `stale` with nothing executed - the policy re-snapshots. */
+async function agentBrowserAct(id: string, action: BrowserAction, fresh: BrowserFreshness, text: string): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const scoped = action.kind === "click" || action.kind === "select";
+    const reference: unknown = scoped ? [fresh.page_key, fresh.guard] : fresh.marker;
+    const live = await policyEval(wc, freshnessJs(action));
+    if (live === null || JSON.stringify(live) !== JSON.stringify(reference)) {
+      await browserApiPost("/api/browser/result", { id, ok: false, stale: true, error: "page changed since this decision" });
+      return;
+    }
+    if (action.kind === "wait") {
+      await agentSleep(100);
+      await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+      return;
+    }
+    if (action.kind === "scroll") {
+      const step = Number.isFinite(action.delta) ? Math.max(-20_000, Math.min(20_000, Math.round(action.delta ?? 0))) : 0;
+      await wc.executeJavaScript(`window.scrollBy(0, ${step});`, true);
+    } else {
+      const target = await policyEval(wc, targetJs(action));
+      const pt = target && typeof target === "object" && "x" in target && "y" in target &&
+        typeof target.x === "number" && typeof target.y === "number" && Number.isFinite(target.x) && Number.isFinite(target.y)
+        ? { x: target.x, y: target.y } : null;
+      if (!pt) {
+        await browserApiPost("/api/browser/result", { id, ok: false, stale: true, error: "target changed or is covered" });
+        return;
+      }
+      // A select was fully applied inside targetJs (value + input/change); click and fill go through the
+      // window's own input path. CSS px -> DIP is the page zoom, since the rect is viewport-relative.
+      if (action.kind !== "select") {
+        const zoom = wc.getZoomFactor();
+        const x = Math.round(pt.x * zoom), y = Math.round(pt.y * zoom);
+        wc.sendInputEvent({ type: "mouseMove", x, y });
+        wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+        wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+        if (action.kind === "fill") {
+          wc.selectAll();
+          await wc.insertText(text);
+        }
+      }
+    }
+    await policyEval(wc, settleJs(action));
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `act failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
 async function agentBrowserClose(id: string): Promise<void> {
   if (agentWin && !agentWin.isDestroyed()) {
     agentCloseByCommand = true;
@@ -755,6 +835,13 @@ async function agentBrowserTick(): Promise<void> {
       else if (op === "drag") await agentBrowserDrag(id, "x" in raw && typeof raw.x === "number" ? raw.x : 0, "y" in raw && typeof raw.y === "number" ? raw.y : 0, "toX" in raw && typeof raw.toX === "number" ? raw.toX : 0, "toY" in raw && typeof raw.toY === "number" ? raw.toY : 0);
       else if (op === "keys") await agentBrowserKeys(id, "keys" in raw && typeof raw.keys === "string" ? raw.keys : "");
       else if (op === "type") await agentBrowserType(id, "text" in raw && typeof raw.text === "string" ? raw.text : "", "pressEnter" in raw && raw.pressEnter === true);
+      else if (op === "snapshot") await agentBrowserSnapshot(id);
+      else if (op === "act") {
+        // P-JEV.4: the action is re-narrowed HERE (main is the authority); a malformed one never executes.
+        const action = "action" in raw ? raw.action : null;
+        if (!isBrowserAction(action)) await browserApiPost("/api/browser/result", { id, ok: false, error: "act failed: malformed action" });
+        else await agentBrowserAct(id, action, "fresh" in raw && raw.fresh && typeof raw.fresh === "object" ? raw.fresh : {}, "text" in raw && typeof raw.text === "string" ? raw.text : "");
+      }
       else if (op === "close") await agentBrowserClose(id);
       else await browserApiPost("/api/browser/result", { id, ok: false, error: "unknown browser command" });
     }
@@ -769,10 +856,9 @@ function startAgentBrowserLoop(): void {
 // sign-in page that doesn't depend on the renderer's window.open reaching setWindowOpenHandler (which can
 // silently no-op in some contexts, leaving "Connect via OAuth" with a toast but no browser). Strictly
 // http/https only, so a forged request can't launch file:// or a custom-scheme handler. Returns success.
-ipcMain.handle("lucid:openExternal", async (_e, u: unknown) => {
-  const url = typeof u === "string" ? u : "";
-  if (!/^https?:\/\//i.test(url)) return false;
-  try { await shell.openExternal(url); return true; } catch { return false; }
+ipcMain.handle("lucid:openExternal", async (e, u: unknown) => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents || e.senderFrame !== win.webContents.mainFrame) return false;
+  return openExternalHttp(u, (url) => shell.openExternal(url));
 });
 
 // Reveal an export location in the OS file manager (#115). Only opens a path that actually exists, so a

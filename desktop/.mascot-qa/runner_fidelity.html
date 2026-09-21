@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- v2 - P-MASCOT.5 runner fidelity QA, uniform gait + no-slip speed (throwaway) -->
+<html lang="en"><head><meta charset="utf-8"><title>Runner fidelity QA</title>
+<style>
+  body{margin:0;background:#0d1117;color:#c9d1d9;font:13px/1.5 ui-sans-serif,system-ui,sans-serif;padding:18px}
+  h2{font-size:13px;font-weight:600;color:#8b949e;margin:18px 0 6px;letter-spacing:.04em;text-transform:uppercase}
+  .stage{position:relative;background:#0d1117;border:1px solid #21262d;border-radius:10px;overflow:visible;padding-top:130px}
+  .composer-wrap{position:relative;padding:10px 26px 18px;background:#0d1117}
+  .composer{max-width:1080px;margin:0 auto;border:1px solid #30363d;border-radius:14px;background:#161b22;padding:12px 14px;min-height:46px;color:#6e7681}
+  .composer-tools{max-width:1080px;margin:9px auto 0;display:flex;gap:7px}
+  .composer-tools span{border:1px solid #30363d;border-radius:999px;padding:3px 11px;font-size:11px;color:#8b949e}
+  #scaleOut{font-family:ui-monospace,monospace;color:#41ff8b;font-size:12px}
+  canvas#arcade{border:1px solid #21262d;border-radius:10px;display:block;image-rendering:pixelated}
+</style></head>
+<body>
+<p><span id="scaleOut"></span></p>
+<h2>Prompt bar runner (live)</h2>
+<div class="stage">
+  <div class="composer-wrap">
+    <div class="composer">Ask LUCID anything</div>
+    <div class="composer-tools"><span>Tools</span><span>Model</span><span>Send</span></div>
+  </div>
+</div>
+<h2>Arcade reference (scale 2)</h2>
+<canvas id="arcade"></canvas>
+<script type="module" src="./runner_fidelity.js"></script>
+</body></html>

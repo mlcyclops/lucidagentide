@@ -1,0 +1,257 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC
+     SPDX-License-Identifier: BUSL-1.1 -->
+<!-- Bundled TypeSafe / Jev advisor. Inline assets only; external anchors use the host preview shim. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TypeSafe and Jev: a LUCID field guide</title>
+<style>
+  :root{color-scheme:dark;--bg-0:#0a0b0f;--bg-1:#0f1117;--bg-2:#151823;--line:#252a3a;--line-soft:#1a1e2a;--txt:#edeff6;--txt-2:#aeb4c6;--txt-3:#8991a7;--accent:#c64bd6;--accent-2:#e07bf0;--cyan:#46c8dc;--green:#46d27e;--amber:#e8b23c;--red:#ef5f5f;--violet:#8b5cf6;--r-lg:12px;--r-md:9px}
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  html,body{margin:0;background:var(--bg-0);color:var(--txt);font:14px/1.65 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif}
+  .wrap{max-width:940px;margin:0 auto;padding:28px 24px 64px}
+  header{padding:26px 0 20px;border-bottom:1px solid var(--line)}
+  .brand{font-size:11px;letter-spacing:.22em;color:var(--accent-2);text-transform:uppercase;font-weight:700}
+  h1{margin:8px 0;font-size:30px;line-height:1.2;letter-spacing:-.02em}
+  .sub{color:var(--txt-2);margin:0;max-width:68ch;font-size:15px}
+  .stamp{margin-top:12px;color:var(--txt-3);font-size:12px}
+  h2{font-size:20px;line-height:1.35;margin:40px 0 10px;letter-spacing:-.01em;scroll-margin-top:18px}
+  h2 .no{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  h3{font-size:15px;margin:22px 0 6px;color:var(--accent-2)}
+  p{margin:9px 0;color:var(--txt-2);max-width:82ch}
+  b,strong{color:var(--txt)}
+  a{color:var(--cyan);text-decoration:none;word-break:normal;overflow-wrap:break-word}
+  a:hover{text-decoration:underline}
+  a:focus-visible{outline:2px solid var(--accent-2);outline-offset:4px;border-radius:2px}
+  ul,ol{margin:8px 0 12px;padding-left:22px;color:var(--txt-2)}
+  li{margin:7px 0}
+  code{background:var(--bg-2);border:1px solid var(--line-soft);border-radius:4px;padding:1px 5px;font:12px/1.5 ui-monospace,Consolas,monospace;color:#8fe0ee;overflow-wrap:anywhere}
+  .note{border-left:3px solid var(--cyan);background:var(--bg-1);border-radius:0 var(--r-md) var(--r-md) 0;padding:12px 16px;margin:18px 0}
+  .note.warn{border-left-color:var(--amber)}
+  .note.bad{border-left-color:var(--red)}
+  .note .t{font-weight:700;color:var(--txt);font-size:13px;letter-spacing:.02em}
+  .note p{margin:5px 0}
+  .verdict{background:linear-gradient(135deg,rgb(139 92 246 / .12),rgb(198 75 214 / .10));border:1px solid rgb(139 92 246 / .4);border-radius:var(--r-lg);padding:18px 20px;margin:20px 0}
+  .verdict .t{color:#e9ddff;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+  .verdict p{color:var(--txt)}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 20px;margin:16px 0}
+  .card h3{margin-top:0}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0 0}
+  .chip{white-space:nowrap;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2)}
+  .chip.info{color:#8fe0ee;border-color:rgb(70 200 220 / .35)}
+  .chip.warn{color:#f3cf7a;border-color:rgb(232 178 60 / .35)}
+  .toc{margin:18px 0 0;padding:0;list-style:none;column-count:2;column-gap:28px}
+  .toc li{margin:5px 0;break-inside:avoid}
+  .toc a{color:var(--txt-2)}
+  .toc a:hover{color:var(--accent-2)}
+  .toc .no{color:var(--accent);margin-right:7px}
+  .table-wrap{overflow-x:auto;margin:16px 0;border:1px solid var(--line);border-radius:var(--r-md)}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:570px}
+  th{color:var(--txt-3);background:var(--bg-1);text-transform:uppercase;font-size:10.5px;letter-spacing:.07em;text-align:left}
+  th,td{padding:12px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td,tr:last-child th{border-bottom:none}
+  td{color:var(--txt-2);word-break:normal;overflow-wrap:break-word}
+  td:first-child{width:23%;font-weight:600;color:var(--txt)}
+  td p{margin:0 0 7px}
+  .source{font-size:12px;color:var(--txt-3);margin-top:9px}
+  .evidence{color:#8fe0ee;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+  .foot{margin-top:42px;padding-top:16px;border-top:1px solid var(--line);color:var(--txt-3);font-size:12px}
+  @media(max-width:640px){.wrap{padding:18px 16px 44px}.toc{column-count:1}h1{font-size:26px}.card,.verdict{padding:15px}.table-wrap{margin-right:0}th,td{padding:11px 12px}}
+  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<main class="wrap">
+<header>
+  <div class="brand">LUCID / provider field guide</div>
+  <h1>TypeSafe &amp; Jev</h1>
+  <p class="sub">A small decision engine beside your agent, not another chatbot. What it does, where judgment data goes, and what the published data terms actually promise.</p>
+  <div class="stamp">Source review: September 2026. Legal page dates are listed separately below. This is a technical reading guide, not legal advice.</div>
+  <div class="chips"><span class="chip info">Typed decisions</span><span class="chip info">Text input</span><span class="chip warn">Online by default</span><span class="chip warn">Enterprise ZDR by agreement</span></div>
+</header>
+<nav aria-label="Guide sections">
+<ul class="toc">
+  <li><a href="#fit"><span class="no">01</span>What Jev does and does not do</a></li>
+  <li><a href="#pair"><span class="no">02</span>Pair it with the right tools</a></li>
+  <li><a href="#lucid"><span class="no">03</span>What LUCID actually sends</a></li>
+  <li><a href="#examples"><span class="no">04</span>Documented examples, not adoption claims</a></li>
+  <li><a href="#limits"><span class="no">05</span>Limits and security boundaries</a></li>
+  <li><a href="#legal"><span class="no">06</span>Four legal pages, four different jobs</a></li>
+  <li><a href="#residency"><span class="no">07</span>Hosting and subprocessors</a></li>
+  <li><a href="#controls"><span class="no">08</span>Controls and vendor questions</a></li>
+  <li><a href="#sources"><span class="no">09</span>Primary source shelf</a></li>
+</ul>
+</nav>
+<div class="verdict">
+  <div class="t">The short answer</div>
+  <p>Use Jev when the answer is a <b>label, a yes/no probability, or a level on a rubric</b>. Let an LLM write, search find evidence, code enforce exact rules, and a human own consequential decisions. Before enabling it for private work, review both <b>TypeSafe's handling of the submitted state</b> and <b>omp's online fallback destinations</b>.</p>
+</div>
+<section aria-labelledby="fit">
+<h2 id="fit"><span class="no">01</span>A decision engine, not a writer</h2>
+<p><b>TypeSafe</b> is the provider. <b>Jev</b> is its System One model family. Instead of continuing a chat, Jev evaluates supplied text against explicit questions. Its compact typed answers are meant for software to consume: choose an option, estimate whether a condition holds, or score against ordered descriptions.</p>
+<p class="source">Vendor model scope: <a href="https://docs.typesafe.ai/models.md">Models and supported inputs</a>. Generation limits: <a href="https://docs.typesafe.ai/model-jaggedness/jev-1.13.md">Jev 1.13 jaggedness</a>.</p>
+<div class="table-wrap" role="region" aria-label="Jev task fit" tabindex="0"><table>
+<thead><tr><th scope="col">Task</th><th scope="col">Good Jev job</th><th scope="col">Not the Jev job</th></tr></thead>
+<tbody>
+<tr><td>Classify</td><td>Route a ticket to a named category; identify which supplied skill best fits.</td><td>Invent the taxonomy, write a thoughtful reply, or carry on a conversation.</td></tr>
+<tr><td>Compare and rank</td><td>Score candidate passages for relevance or compare two records for likely duplication.</td><td>Search the web, build the initial corpus, or guarantee that a candidate is true.</td></tr>
+<tr><td>Apply a rubric</td><td>Estimate whether evidence meets a stated condition; rate clarity against named levels.</td><td>Calculate totals, count exact matches, compare dates, or prove a program correct.</td></tr>
+<tr><td>Extract a bounded choice</td><td>Select a supplied value or line ID, including a deliberate missing/none option.</td><td>Generate arbitrary JSON fields, a report, code, images, speech, or video.</td></tr>
+</tbody></table></div>
+<p>Jev accepts text, including text in JSON objects and arrays, not raw images, audio or video. The current model page names <code>jev-1.13.0</code>; aliases such as <code>jev-latest</code> can move. Results behind a moving alias can change without your workflow changing. Check the <a href="https://docs.typesafe.ai/models.md">version and input limits</a> when evaluating a workload.</p>
+</section>
+<section aria-labelledby="pair">
+<h2 id="pair"><span class="no">02</span>What belongs beside it</h2>
+<div class="table-wrap" role="region" aria-label="Companion tools" tabindex="0"><table>
+<thead><tr><th scope="col">Pair with</th><th scope="col">Division of labor</th><th scope="col">Useful pattern</th></tr></thead>
+<tbody>
+<tr><td>A writing LLM</td><td>The LLM drafts or extracts candidate text. Jev checks a narrow condition or ranks bounded alternatives.</td><td>Draft a response, judge its fit to a rubric, then let the LLM revise it. Do not mistake that check for factual verification.</td></tr>
+<tr><td>Search / retrieval</td><td>Search finds a shortlist. Jev reorders the supplied candidates or selects relevant source lines.</td><td>Retrieve first, rerank second. Ask separately whether any candidate actually answers the question.</td></tr>
+<tr><td>Ordinary code</td><td>Code parses, counts, calculates, checks permissions and applies deterministic thresholds. Jev handles the semantic ambiguity.</td><td>Judge expense type in text; compare the amount and approval limit in code.</td></tr>
+<tr><td>A human reviewer</td><td>Jev prioritizes a queue. A person resolves uncertainty and approves high-impact actions.</td><td>Suggest likely duplicate records, but route ambiguous merges to a curator.</td></tr>
+</tbody></table></div>
+<p class="source">Worked patterns: <a href="https://docs.typesafe.ai/cookbooks/rerank_typesafe.md">Retrieval reranking</a>, <a href="https://docs.typesafe.ai/cookbooks/semantic_find.md">source-line search</a>, <a href="https://docs.typesafe.ai/cookbooks/entity_alignment.md">entity alignment</a>, and <a href="https://evals.typesafe.ai/">code plus judgments in workflow evals</a>. These are examples of division of labor, not automatic LUCID features.</p>
+</section>
+<section aria-labelledby="lucid">
+<h2 id="lucid"><span class="no">03</span>What LUCID actually sends</h2>
+<p>In LUCID, open <b>Settings &gt; Judgment</b>. The TypeSafe credential is named <code>TYPESAFE_API_KEY</code>. It is separate from your conversational model's credential. Jev is an out-of-band judgment backend, not a replacement selection in the chat-model catalog.</p>
+<p>The agent's <code>judge(state, questions)</code> helper supplies the judgment input. <b>State is the material the agent explicitly passes to that call</b>: perhaps an excerpt, search candidates, a code diff, or structured records. Each question carries a type, instructions and criteria. It is <b>not automatically the entire conversation</b>, but the agent can put conversation content, source code or other sensitive material into state. Question text can contain sensitive information too. Smaller does not mean harmless.</p>
+<div class="table-wrap" role="region" aria-label="Judgment backend modes" tabindex="0"><table>
+<thead><tr><th scope="col">Setting</th><th scope="col">Pinned omp behavior</th><th scope="col">Privacy consequence</th></tr></thead>
+<tbody>
+<tr><td><code>auto</code></td><td>Use TypeSafe when a TypeSafe credential is available. Otherwise use the LLM judgment path.</td><td>Adding the key can change where future judgments go, even without changing this mode.</td></tr>
+<tr><td><code>typesafe</code></td><td>Try TypeSafe explicitly. Missing credentials or a non-abort failure can still trigger online chat fallback.</td><td>This is not a TypeSafe-only egress guarantee or a fail-closed mode.</td></tr>
+<tr><td><code>llm</code></td><td>Bypass TypeSafe. The LLM judgment path can be local or online, depending on configured models and routing.</td><td>This setting alone does not prove offline execution.</td></tr>
+<tr><td>AskSage lockdown</td><td>LUCID pins the effective judgment mode to <code>llm</code>, regardless of the stored preference, to prevent the TypeSafe route.</td><td>The clamp is not proof that every LLM route is on-device, nor a general certification of data residency.</td></tr>
+</tbody></table></div>
+<div class="note bad"><p class="t">Fallback can send the same material elsewhere</p><p>After a TypeSafe error that is not an abort, the pinned omp resolver can pass the <b>same state and questions</b> to its <b>online chat judgment chain</b>. It considers configured <code>tiny</code>, <code>smol</code> and <code>default</code> roles, their retry/fallback candidates, and the active session model. Other configured online chat providers may therefore receive the judgment material. Those providers' own terms apply. A TypeSafe ZDR agreement does not cover them.</p></div>
+<p>The helper exposes <code>choice</code>, <code>bool</code> and <code>score</code>. TypeSafe calls the yes/no probability primitive <b>Noul</b>. The request includes state, questions and a model selection. In this pinned client the default destination is <code>https://api.typesafe.ai</code>, the default model is <code>jev-latest</code>, and the advanced environment override names are <code>TYPESAFE_BASE_URL</code> and <code>TYPESAFE_DEFAULT_MODEL</code>. An override is not a residency or retention policy.</p>
+<p class="source">Implementation evidence: bundled <code>desktop/judgment_policy.ts</code>, <code>desktop/acp_backend.ts</code>, and pinned omp <code>src/judgment/index.ts</code> plus pi-ai <code>src/judgment/typesafe.ts</code>. Vendor protocol context: <a href="https://docs.typesafe.ai/models.md">TypeSafe models</a>. These LUCID routing facts are implementation-specific, not promises made by TypeSafe.</p>
+</section>
+<section aria-labelledby="examples">
+<h2 id="examples"><span class="no">04</span>Real documented examples, honestly labeled</h2>
+<p><b>Evidence boundary:</b> the following are TypeSafe-authored cookbooks and evaluations. They contain worked examples and published outputs, not independently verified customer deployments. Independent production success or customer adoption is <b>not established by these sources</b>. The cookbooks below use <code>jev-1.12</code>, not necessarily the version now behind <code>jev-latest</code>.</p>
+<div class="card"><div class="evidence">Vendor-reported experiment</div><h3>Rerank legal search results</h3><p>A BM25 first pass shortlists 30 passages for each of 40 CLERC legal queries from a 3,565-passage corpus. TypeSafe scores each query-candidate pair. The cookbook reports top-1 accuracy rising from <b>5% to 18%</b> and top-10 from <b>38% to 62%</b> on that slice. Useful evidence for a retrieval pattern, not a broad legal-research accuracy guarantee; the top result is still often wrong.</p><p class="source"><a href="https://docs.typesafe.ai/cookbooks/rerank_typesafe.md">Re-ranking cookbook: setup, corpus and results</a></p></div>
+<div class="card"><div class="evidence">Vendor-reported agent experiment</div><h3>Suggest a skill, with permission to suggest nothing</h3><p>Two TypeSafe calls first rank a 182-skill Hermes roster, then inspect the top three and allow rejection. Over 488 requests with Claude Haiku 4.5, the cookbook reports wrong-skill loads dropping from <b>16.8% to 7.3%</b> and needless loads from <b>9.8% to 4.0%</b>. These are different subsets: covered requests versus requests no skill serves. Covered requests were generated from the skills' own instructions and described as easier than real user requests. This does not establish adoption by Hermes or a LUCID skill-routing feature.</p><p class="source"><a href="https://docs.typesafe.ai/cookbooks/skill_suggestion.md">Skill suggestion: method, synthetic request construction and error rates</a></p></div>
+<div class="table-wrap" role="region" aria-label="Additional documented Jev examples" tabindex="0"><table>
+<thead><tr><th scope="col">Vendor example</th><th scope="col">What is demonstrated</th><th scope="col">What to take away</th></tr></thead>
+<tbody>
+<tr><td>Parallel questions</td><td>A regulatory briefing asks 13 questions about one pinned GDPR Wikipedia article, comparing batching with separate calls over five repeats. Most answers were identical; two showed small variation. <a href="https://docs.typesafe.ai/cookbooks/parallel_questions.md">Read the experiment</a>.</td><td>Batch independent questions over shared state. The vendor's speed comparison sums sequential single-call latencies, not a concurrent baseline. Wikipedia briefing answers are not a compliance determination.</td></tr>
+<tr><td>Entity alignment</td><td>A 450-pair beer-catalog benchmark routes records to merge, leave unlinked, or a curator, with field-match questions alongside the ordered score. <a href="https://docs.typesafe.ai/cookbooks/entity_alignment.md">Read the cookbook</a>.</td><td>Make uncertainty an explicit outcome. Published routing counts describe what it did; they do not by themselves prove the merges were accurate.</td></tr>
+<tr><td>Semantic find</td><td>Ranks 218 line IDs in GitHub's Terms of Service and asks a separate existence question. One absent-answer example still has a strongly ranked line. <a href="https://docs.typesafe.ai/cookbooks/semantic_find.md">Read the four-query demo</a>.</td><td>A winning option is relative to its alternatives. It does not establish that the answer exists. Verify the source line and tune missing/partial-answer handling.</td></tr>
+<tr><td>Confidence routing</td><td>Classifies 60 SEC filings into 75 industry groups, broadening uncertain results to a division. The sample was filtered to filings whose text supports their self-reported SIC code. <a href="https://docs.typesafe.ai/cookbooks/classification_using_confidence.md">Read the classification experiment</a>.</td><td>Use uncertainty to reduce specificity or request review. The cookbook's confidence cutoff is not a universal correctness threshold, and coarse-label success differs from exact-label accuracy.</td></tr>
+</tbody></table></div>
+<h3>Workflow evaluations are not independent ground truth</h3>
+<p><a href="https://evals.typesafe.ai/">TypeSafe's workflow eval site</a> covers security incidents, agent-trace observability, invoice processing and customer service. It compares structured code-plus-judgment workflows with standalone policy prompts. The summary gives the four workflows equal weight and measures agreement with reference labels generated from the average responses of <b>GPT-6 Astra and Claude Fable 5.1 at high thinking</b>; other models use provider-default reasoning settings. The site explicitly assumes the harness is correct.</p>
+<p>That methodology can help compare configurations within the vendor's harness. It is not an independently audited production outcome, a human-adjudicated truth set, or proof that Jev should autonomously contain a machine or approve an invoice. The useful pattern is decomposition, not a blanket claim that one model wins every task.</p>
+</section>
+<section aria-labelledby="limits">
+<h2 id="limits"><span class="no">05</span>Typed does not mean trustworthy</h2>
+<ul>
+<li><b>Injection still matters.</b> TypeSafe says Jev 1.13 does not treat state as hostile by default. Injected instructions, misleading framing and content arguing for its own classification can move its answers.</li>
+<li><b>Keep exact work in code.</b> Counting, arithmetic, numerical precision and date ordering are documented weak spots. A score is not an exact quantity reconstructed from prose.</li>
+<li><b>Keep the state focused.</b> Irrelevant detail reduces accuracy. Text-only input, bounded context, literal interpretation and multi-hop reasoning limits remain even when output has the correct type.</li>
+<li><b>Confidence is not proof.</b> A concentrated choice distribution can still be wrong. Choice probabilities, Noul probabilities and confidence are not interchangeable; thresholds do not automatically transfer across types, questions or versions.</li>
+<li><b>Independent questions are not a reasoning conversation.</b> Each is judged against the supplied state. If one decision depends on another, code must enforce that dependency or construct a later call with the needed evidence.</li>
+</ul>
+<p class="source">Vendor's explicit failure modes: <a href="https://docs.typesafe.ai/model-jaggedness/jev-1.13.md">Jev 1.13 jaggedness, reviewed September 17, 2026</a>. Input/version scope: <a href="https://docs.typesafe.ai/models.md">Models</a>.</p>
+<div class="note bad"><p class="t">Never the sole security decision</p><p>Use judgment as an advisory signal, not authorization. Deterministic permissions, trusted policy, input boundaries and required human approval must remain outside the model. A confident answer must not by itself permit a destructive tool, release a secret, bypass lockdown, or declare untrusted content safe. This is LUCID integration guidance, not a vendor safety guarantee.</p></div>
+</section>
+<section aria-labelledby="legal">
+<h2 id="legal"><span class="no">06</span>Four legal pages, four different jobs</h2>
+<p>Read <b>scope and operative wording</b>, not just which page is newest. A right to process data is not evidence of how many days a particular system actually retains it. No-training is not zero retention. Website feedback terms are not automatically the API customer-data terms.</p>
+<div class="table-wrap" role="region" aria-label="Legal document comparison" tabindex="0"><table>
+<thead><tr><th scope="col">Document / last updated</th><th scope="col">What it addresses</th><th scope="col">Important distinction</th></tr></thead>
+<tbody>
+<tr><td><a href="https://typesafe.ai/legal/terms">Terms of Use</a><br>September 19, 2026</td><td>Use of the informational Site. Section 3(c) warns against submitting confidential or proprietary material through the Site and grants broad perpetual rights over voluntary site feedback.</td><td>That feedback license is not proof of permanent API-prompt storage. Do not copy its scope onto customer API data. The current introduction's separate-agreement sentence is incomplete; confirm applicable contract documents with the vendor.</td></tr>
+<tr><td><a href="https://typesafe.ai/legal/privacy-policy">Privacy Policy</a><br>November 19, 2025</td><td>Personal data collected through the website, Playground and APIs, including prompts and other Input. Says it will not train or fine-tune models on Input and will not disclose Input to third parties other than service providers.</td><td>Also describes collection, business uses, legal disclosures, analytics and qualified retention/deletion. The no-training language does not promise no storage.</td></tr>
+<tr><td><a href="https://typesafe.ai/legal/mca">Master Customer Agreement</a><br>September 19, 2026</td><td>Customer use of the hosted interface and API, with an Order. Section 4.1 grants specified processing rights and prohibits including Customer Data in model-weight training datasets without prior customer consent.</td><td>Provides a no-training default with a consent exception, alongside continuing rights for telemetry, fraud/abuse and legal compliance. Check your Order or separate agreement, not date alone.</td></tr>
+<tr><td><a href="https://typesafe.ai/legal/data-processing">Data Processing Addendum</a><br>April 24, 2026</td><td>Customer Personal Data: customer as controller/business, TypeSafe as processor/service provider; documented instructions, subprocessors, security, transfers and retention criteria.</td><td>Section 1.3 gives the DPA priority over conflicting Agreement terms within its scope. This matters for conflicts concerning personal data; it is not blanket precedence for every kind of data.</td></tr>
+</tbody></table></div>
+<h3>Training: a default prohibition, not a universal ban on every use</h3>
+<p>The <a href="https://typesafe.ai/legal/privacy-policy">Privacy Policy, Services and How We Use sections</a> says it will not train or fine-tune AI/ML models on prompts or other Input. <a href="https://typesafe.ai/legal/mca">MCA section 4.1</a> says Customer Data will not enter a dataset used to modify model weights <b>without the customer's prior consent</b>. The <a href="https://docs.typesafe.ai/models.md">model documentation</a> also says Jev is not trained on customer requests or responses and is not per-customer fine-tuned.</p>
+<p>These support a no-training default, not an inference that data is never processed, retained or used to derive telemetry. Nor does the newer MCA automatically erase the Privacy Policy. Ask what consent mechanism and signed terms apply to your account if you need an unqualified contractual prohibition.</p>
+<h3>Processing rights versus actual storage duration</h3>
+<p><a href="https://typesafe.ai/legal/mca">MCA section 4.1</a> permits processing Input during the term to fulfill the agreement, and Customer Data during the term to provide services and calculate fees. It also grants rights <b>in perpetuity</b> to process Customer Data to derive telemetry, monitor fraud and abuse, and comply with law. That is broad continuing legal permission for those purposes. It does <b>not establish that all raw requests are in fact stored forever</b>, which systems store them, or their expiry times.</p>
+<p><a href="https://typesafe.ai/legal/mca">MCA section 4.3</a> defines telemetry to include technical logs, hashes, summary statistics and classifications, metrics and learnings related to service use, and allows processing it without restriction, including improving products. The published definition is broad. It does not demonstrate that telemetry is permanent raw prompts, that hashes are anonymous in every context, or that telemetry is technically undeletable. <a href="https://typesafe.ai/legal/data-processing">DPA sections 1.3 and 2</a> constrain processing where Customer Personal Data is involved.</p>
+<h3>Deletion is qualified; backups have no stated deadline</h3>
+<p>The <a href="https://typesafe.ai/legal/privacy-policy">Privacy Policy's Retention section</a> retains personal data as reasonably necessary for services or business/commercial purposes. On request it takes measures to delete or de-identify data when no longer reasonably necessary, unless law requires longer retention. That is not an unconditional erase-now promise.</p>
+<p><a href="https://typesafe.ai/legal/mca">MCA section 10.3</a> says TypeSafe need not store Customer Data and may delete it at its discretion, during or after the term. It also allows Customer Confidential Information to remain in standard backups notwithstanding a deletion obligation, subject to confidentiality restrictions. It gives <b>no backup deletion deadline</b>. Permission to delete is not a commitment to delete on a schedule.</p>
+<p><a href="https://typesafe.ai/legal/data-processing">DPA Schedule I, item 8</a> uses a necessity-based period, considering processing purposes and applicable laws including limitation periods. These pages do not publish a single fixed retention period covering requests, responses, operational logs and backups.</p>
+<div class="note warn"><p class="t">Enterprise zero data retention is explicitly offered</p><p>The <a href="https://docs.typesafe.ai/legal.md">official Legal documentation</a> offers <b>zero data retention (ZDR) for enterprise customers</b> and directs inquiries to <b>privacy@typesafe.ai</b>. This is an enterprise arrangement to confirm and negotiate with TypeSafe, <b>not a LUCID toggle</b> and not an automatic benefit of entering a key. Ask for the contractual scope, exclusions and effective date before sending protected material.</p></div>
+</section>
+<section aria-labelledby="residency">
+<h2 id="residency"><span class="no">07</span>US hosting is not a US-only guarantee</h2>
+<p>The <a href="https://typesafe.ai/legal/privacy-policy">Privacy Policy's International Visitors section</a> says the Services are hosted in the United States and describes non-US users transferring personal data to the US for storage and processing. The <a href="https://trust.typesafe.ai/subprocessors">Trust Center's rendered subprocessor listing</a> reviewed for this guide lists all six entries below as <b>USA</b>.</p>
+<div class="table-wrap" role="region" aria-label="Published subprocessors" tabindex="0"><table>
+<thead><tr><th scope="col">Subprocessor</th><th scope="col">Published role / data handling</th><th scope="col">Listed location</th></tr></thead>
+<tbody>
+<tr><td>Amazon Web Services (AWS)</td><td>Stores and processes customer information for live requests.</td><td>USA</td></tr>
+<tr><td>Modal</td><td>Compute for processing prompts; prompts are processed, not stored on its compute.</td><td>USA</td></tr>
+<tr><td>Nebius</td><td>Compute for processing prompts; prompts are processed, not stored on its compute.</td><td>USA</td></tr>
+<tr><td>CoreWeave</td><td>Compute for processing prompts; prompts are processed, not stored on its compute.</td><td>USA</td></tr>
+<tr><td>Slack</td><td>Customer support communications.</td><td>USA</td></tr>
+<tr><td>Google</td><td>Customer support communications.</td><td>USA</td></tr>
+</tbody></table></div>
+<p class="source">Source for all six entries: <a href="https://trust.typesafe.ai/subprocessors">TypeSafe Trust Center: subprocessors</a>. The table describes the vendor's published listing, not an independent infrastructure audit.</p>
+<p><b>Do not stretch those labels.</b> They do not establish ownership nationalities, exclusive US personnel access, an end-to-end network route, exact prompt-cache design, or the locations of every backup, log and support access path. “Not stored” on three compute providers is not a service-wide ZDR statement, particularly when AWS has a storage role.</p>
+<p><a href="https://typesafe.ai/legal/data-processing">DPA section 6</a> authorizes international transfers using adequate protections, including EU Standard Contractual Clauses and the UK Addendum. Schedule I describes the transfer frequency as continuous. These are contractual transfer arrangements, not proof of current offshore processing beyond the disclosed regions, and not evidence that the clauses are only about future outsourcing. Neither those clauses nor today's USA labels promise a US-only end-to-end service.</p>
+<p><a href="https://typesafe.ai/legal/data-processing">DPA section 3</a> gives general subprocessor authorization, requires reasonable advance notice for a new subprocessor before access to Customer Personal Data, and allows an objection on reasonable privacy/security grounds within 15 days. Ask how you receive those notices and how objections are resolved for your account.</p>
+</section>
+<section aria-labelledby="controls">
+<h2 id="controls"><span class="no">08</span>Controls you have, and promises to obtain</h2>
+<div class="table-wrap" role="region" aria-label="Data handling controls" tabindex="0"><table>
+<thead><tr><th scope="col">Control</th><th scope="col">What it can do</th><th scope="col">What it does not establish</th></tr></thead>
+<tbody>
+<tr><td>LUCID: select <code>llm</code></td><td>Bypass TypeSafe for judgments in the pinned resolver.</td><td>Offline operation, no fallback egress, or a retention policy for the chosen LLM provider.</td></tr>
+<tr><td>Minimize judgment input</td><td>Send only the fields required, redact secrets before constructing state, and keep confidential details out of questions.</td><td>Automatic anonymization or permission to send restricted data. This is a workflow discipline, not a built-in scrubber promised here.</td></tr>
+<tr><td>Review all model roles</td><td>Identify who could receive the same judgment through online fallback.</td><td>A fail-closed guarantee from the <code>typesafe</code> setting.</td></tr>
+<tr><td>Enterprise ZDR</td><td>Obtain a written enterprise arrangement from TypeSafe. <a href="https://docs.typesafe.ai/legal.md">Official offer</a>.</td><td>Automatic activation in LUCID, coverage of fallback providers, or undocumented exclusions being absent.</td></tr>
+<tr><td>Deletion request</td><td>Contact privacy@typesafe.ai and request deletion/de-identification plus confirmation of scope. <a href="https://typesafe.ai/legal/privacy-policy">Privacy retention and contact terms</a>.</td><td>Immediate universal erasure or a published fixed backup purge deadline.</td></tr>
+<tr><td>DPA oversight</td><td>Use subprocessor notice/objection rights and the qualified audit process. <a href="https://typesafe.ai/legal/data-processing">DPA sections 3 and 5.3</a>.</td><td>Unrestricted audits, automatic rejection of a new processor, or a US-only guarantee.</td></tr>
+</tbody></table></div>
+<h3>Ask TypeSafe these exact questions</h3>
+<ol>
+<li><b>Retention by data class:</b> What are the normal and maximum retention periods for raw state, questions, responses, request logs, abuse records, support attachments and backups? What creates an exception, and who authorizes it?</li>
+<li><b>Telemetry:</b> Which fields, snippets, hashes and derived classifications are retained? Can they identify us or reconstruct content? What can be excluded, deleted or de-identified, and how does the DPA apply to personal-data-bearing telemetry?</li>
+<li><b>Enterprise ZDR scope:</b> Does it cover request and response bodies, error traces, fraud/abuse monitoring, caches, every subprocessor and backups? Which account, project, endpoint and model are covered, and how do we verify activation?</li>
+<li><b>Deletion completion:</b> What happens after a deletion request and after termination? When do active stores and backups age out, how are legal holds handled, and can you provide written completion confirmation?</li>
+<li><b>Residency and access:</b> Can you contractually restrict processing, storage, backups, logs and support/personnel access to the US? Which locations and legal entities participate today, and which controls enforce the restriction?</li>
+<li><b>Contract hierarchy and consent:</b> Which Order, separate agreement, MCA, Privacy Policy and DPA versions bind our account? How do their no-training provisions interact, and what explicit prior-consent mechanism could permit training?</li>
+<li><b>Subprocessor changes:</b> How do we subscribe to advance notices, exercise the 15-day objection window, and avoid new processing while a reasonable objection remains unresolved?</li>
+</ol>
+<p>Use <b>privacy@typesafe.ai</b> for data-handling and enterprise ZDR questions, as directed by the <a href="https://docs.typesafe.ai/legal.md">Legal documentation</a>. Keep the initial inquiry free of real prompts, credentials and protected records.</p>
+<div class="verdict"><div class="t">A sensible starting point</div><p>Evaluate on public or synthetic material you are allowed to send. Check failure cases, missing answers, adversarial state and your own review thresholds. For private workloads, obtain the handling terms you need and account for every fallback destination before enabling the online route. A useful tiny judgment is still a data disclosure.</p></div>
+</section>
+<section aria-labelledby="sources">
+<h2 id="sources"><span class="no">09</span>Primary source shelf</h2>
+<p>Source titles below open the exact documents used for this guide. They are ordinary external links; this bundled page itself needs no network connection, scripts, remote fonts or images.</p>
+<h3>Product behavior and limitations</h3>
+<ul>
+<li><a href="https://docs.typesafe.ai/models.md">TypeSafe model catalog: versions, inputs and data handling</a></li>
+<li><a href="https://docs.typesafe.ai/model-jaggedness/jev-1.13.md">Jev 1.13: known failure modes and adversarial content</a></li>
+<li><a href="https://docs.typesafe.ai/cookbooks/rerank_typesafe.md">Cookbook: reranking legal passages</a></li>
+<li><a href="https://docs.typesafe.ai/cookbooks/parallel_questions.md">Cookbook: parallel questions over a shared document</a></li>
+<li><a href="https://docs.typesafe.ai/cookbooks/skill_suggestion.md">Cookbook: agent skill suggestion</a></li>
+<li><a href="https://docs.typesafe.ai/cookbooks/entity_alignment.md">Cookbook: knowledge graph entity alignment</a></li>
+<li><a href="https://docs.typesafe.ai/cookbooks/semantic_find.md">Cookbook: line-by-line semantic search</a></li>
+<li><a href="https://docs.typesafe.ai/cookbooks/classification_using_confidence.md">Cookbook: classification with confidence-based broadening</a></li>
+<li><a href="https://evals.typesafe.ai/">Workflow evals: tasks, reference labels and methodology</a></li>
+</ul>
+<h3>Legal and infrastructure</h3>
+<ul>
+<li><a href="https://docs.typesafe.ai/legal.md">Legal documentation and enterprise ZDR offer</a></li>
+<li><a href="https://typesafe.ai/legal/terms">Terms of Use: September 19, 2026</a></li>
+<li><a href="https://typesafe.ai/legal/privacy-policy">Privacy Policy: November 19, 2025</a></li>
+<li><a href="https://typesafe.ai/legal/mca">Master Customer Agreement: September 19, 2026</a></li>
+<li><a href="https://typesafe.ai/legal/data-processing">Data Processing Addendum: April 24, 2026</a></li>
+<li><a href="https://trust.typesafe.ai/subprocessors">Trust Center: current subprocessor listing</a></li>
+</ul>
+</section>
+<footer class="foot">LUCID field guide / September 2026. Vendor examples are labeled, not independently reproduced here. Published pages and model aliases can change; signed agreements and applicable law require their own review. No credentials are embedded and no TypeSafe API calls are made by this page.</footer>
+</main>
+</body>
+</html>

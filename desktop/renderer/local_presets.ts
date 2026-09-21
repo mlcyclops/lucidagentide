@@ -48,11 +48,27 @@ export interface LocalModelPreset {
 // models that fit an M3 Ultra / DGX Spark. Ids/specs are starting points - edit them to your served ids.
 export const LOCAL_MODEL_PRESETS: LocalModelPreset[] = [
   {
-    id: "glm-5.3-flash", name: "GLM-5.3-Flash", family: "GLM", contextWindow: 131072, reasoning: true,
+    // 524288 is MEASURED, not editorial (P-LOCAL.7). P-LOCAL.5 shipped 131072 and said so in its own
+    // stubbed note: the box answered `401 {"error":"Unauthorized"}` from vLLM's `--api-key` middleware,
+    // so `/v1/models` could not be read. It has now been read, authenticated, on the live head:
+    // `max_model_len=524288`, and that is the ONLY window key the server publishes, which is exactly
+    // the key omp's `openai-models-list` discovery prefers. The operator's `vllm serve` carries
+    // `--max-model-len 524288`, and vLLM refuses to start above the model's own derived maximum, so a
+    // server running at 512K is evidence the weights support it. This is still only a SEED: the
+    // Discover-models path (P-LOCAL.6) re-reads the endpoint and the server always wins, which is what
+    // keeps a deployment served at a smaller window from being over-promised here.
+    id: "glm-5.3-flash", name: "GLM-5.3-Flash", family: "GLM", contextWindow: 524288, reasoning: true,
     params: "flash MoE", fits: ["dgx-spark", "m3-ultra"],
-    // vLLM exposes GLM's thinking through the chat template, not a `reasoning_effort` param, and it
-    // returns the trace on `reasoning`. omp guesses those from the vendor hostname, which a LAN box
-    // never matches, so the preset states them outright or the reasoning stream is dropped.
+    // vLLM exposes GLM's thinking through the chat template and returns the trace on `reasoning`. omp
+    // guesses both from the vendor hostname, which a LAN box never matches, so the preset states them
+    // outright or the reasoning stream is dropped. MEASURED on the live head: a baseline request
+    // returns 450 chars of content and ZERO reasoning, while `chat_template_kwargs {enable_thinking:
+    // true}` returns a 372 char trace on `reasoning`. That is the silent loss this block prevents.
+    //
+    // `supportsReasoningEffort: false` is now known to be CONSERVATIVE rather than required: the same
+    // head accepted `reasoning_effort: "medium"` with HTTP 200 and returned a 419 char trace. Left
+    // false deliberately, because flipping it changes what omp puts on the wire and that has not been
+    // verified end to end through omp itself, only against raw vLLM. Flip it as its own increment.
     compat: { thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: false },
     note: "Zhipu GLM served by vLLM. Carries the chat-template thinking wire format that a LAN endpoint cannot advertise.",
   },

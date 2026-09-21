@@ -129,6 +129,14 @@ describe("GLM-5.3-Flash preset", () => {
     expect(presetsForPlatform("dgx-spark").map((x) => x.id)).toContain("glm-5.3-flash");
   });
 
+  it("carries the MEASURED 524288 window, not the editorial 131072 (P-LOCAL.7)", () => {
+    // P-LOCAL.5 shipped 131072 and flagged it as editorial: the endpoint answered 401 so
+    // `/v1/models` was unreadable. Read authenticated on the live head 2026-09-17:
+    // `max_model_len=524288`, the only window key the server publishes. Four times the seed.
+    // Discovery still overrides per deployment (the server wins); this is the seed being honest.
+    expect(presetById("glm-5.3-flash")!.contextWindow).toBe(524288);
+  });
+
   it("has a chip in the add form", () => {
     expect(localPresetChipsHtml()).toContain('data-lp-preset="glm-5.3-flash"');
   });
@@ -170,7 +178,7 @@ describe("presetForServedId", () => {
   it("keeps the served id as the WIRE id while borrowing only metadata", () => {
     const m = chipsToProvider(["zai-org/GLM-5.3-Flash-FP8"]).models[0]!;
     expect(m.id).toBe("zai-org/GLM-5.3-Flash-FP8"); // what the request must say
-    expect(m.contextWindow).toBe(131072);
+    expect(m.contextWindow).toBe(524288);
     expect(m.compat?.thinkingFormat).toBe("qwen-chat-template");
   });
 });

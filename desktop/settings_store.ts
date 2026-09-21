@@ -15,8 +15,10 @@
 import { closeSync, fchmodSync, fstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
+import { parseJudgmentProvider, type JudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
+import { validAccountName, type StoredAccount } from "./account_policy.ts"; // P-ACCT.1 (ADR-0375)
 import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
 import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
@@ -70,6 +72,15 @@ export interface GuiSettings {
   // (spillage protection); a "search" session allows web search (the user affirmed no CUI datasets). Absent/
   // unknown ⇒ "cui" (fail-closed). Keyed by omp session id; pruned to a bounded size.
   sessionModes?: Record<string, "cui" | "search">;
+  // P-JEV.1 (ADR-0374): omp's `providers.judgmentProvider` (auto | typesafe | llm) as the USER chose it. The
+  // value omp is told comes from judgment_policy.resolveJudgmentProvider, which pins `llm` under lockdown; the
+  // stored choice is kept so lifting the lock restores it. Absent = "auto" (omp's default).
+  judgmentProvider?: "auto" | "typesafe" | "llm";
+  // P-ACCT.1 (ADR-0375): named provider accounts. Key accounts carry their secret here (same 0600-file
+  // posture as `keys`); oauth records exist only to carry a rename of an identity that lives in omp's
+  // vault. `activeAccount` maps providerId -> accountId ("key:<uuid>" | "oauth:<identityKey>").
+  accounts?: Record<string, StoredAccount[]>;
+  activeAccount?: Record<string, string>;
   // P-FLEET.L6: fleet full-auto approvals. `fleetAutoApprove` is the default for NEW lanes (per-lane
   // toggles live in the running manager). Enabling auto anywhere is refused server-side until the user
   // has explicitly accepted the risk warning once - `fleetAutoRiskAcceptedAt` records that acceptance
@@ -704,6 +715,66 @@ export function removeCreatorTarget(id: string): boolean {
 
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }
+// ── P-ACCT.1 (ADR-0375): named provider accounts. ────────────────────────────────────────────────────
+/** Stored accounts for one provider (empty when none were ever named). */
+export function providerAccounts(providerId: string): StoredAccount[] { return load().accounts?.[providerId] ?? []; }
+/** The persisted active-account choice for one provider, if the user ever switched explicitly. */
+export function activeAccountId(providerId: string): string | undefined { return load().activeAccount?.[providerId]; }
+/** Add a named API-key account. Returns the new record, or null when the name is invalid or empty key. */
+export function addKeyAccount(providerId: string, name: string, key: string): StoredAccount | null {
+  const n = validAccountName(name);
+  const k = key.trim();
+  if (!n || !k || !providerId) return null;
+  const s = load();
+  const rec: StoredAccount = { id: `key:${randomUUID()}`, name: n, kind: "key", key: k, createdAt: Date.now() };
+  s.accounts = { ...(s.accounts ?? {}), [providerId]: [...(s.accounts?.[providerId] ?? []), rec] };
+  save(s);
+  return rec;
+}
+/** Rename an account. For an oauth-derived id with no record yet, a rename-only record is created. */
+export function renameAccount(providerId: string, accountId: string, name: string): boolean {
+  const n = validAccountName(name);
+  if (!n || !providerId || !accountId) return false;
+  const s = load();
+  const list = s.accounts?.[providerId] ?? [];
+  const hit = list.find((a) => a.id === accountId);
+  if (hit) hit.name = n;
+  else if (accountId.startsWith("oauth:")) list.push({ id: accountId, name: n, kind: "oauth", identityKey: accountId.slice("oauth:".length), createdAt: Date.now() });
+  else return false; // "key:legacy" and unknown ids carry no record to rename
+  s.accounts = { ...(s.accounts ?? {}), [providerId]: list };
+  save(s);
+  return true;
+}
+/** Remove a stored account record (key account, or an oauth rename). Clears the active pointer if it
+ *  pointed here. The caller handles the vault side (disconnectOauthIdentity) and env side. */
+export function removeAccount(providerId: string, accountId: string): boolean {
+  const s = load();
+  const list = s.accounts?.[providerId] ?? [];
+  const next = list.filter((a) => a.id !== accountId);
+  const hadRecord = next.length !== list.length;
+  if (s.accounts && hadRecord) s.accounts[providerId] = next;
+  if (s.activeAccount?.[providerId] === accountId) delete s.activeAccount[providerId];
+  save(s);
+  return hadRecord;
+}
+export function setActiveAccount(providerId: string, accountId: string): void {
+  const s = load();
+  s.activeAccount = { ...(s.activeAccount ?? {}), [providerId]: accountId };
+  save(s);
+}
+/** P-JEV.1 (ADR-0374): the user's STORED judgment-backend choice. Callers wanting the value omp is told go
+ *  through judgment_policy.resolveJudgmentProvider with the live lock state; this never applies the clamp. */
+export function judgmentProvider(): JudgmentProvider { return parseJudgmentProvider(load().judgmentProvider); }
+export function setJudgmentProvider(mode: unknown): GuiSettings {
+  const s = load();
+  const m = parseJudgmentProvider(mode);
+  if (m === "auto") delete s.judgmentProvider; else s.judgmentProvider = m;
+  save(s);
+  return s;
+}
+/** P-JEV.1: the omp `--config` overlay LUCID rewrites at every spawn, beside the settings file so the
+ *  LUCID_GUI_SETTINGS_FILE isolation seam isolates it too. */
+export function judgmentOverlayFile(): string { return join(dirname(settingsFile()), "lucid-judgment.yml"); }
 /** ADR-0221: the stored embeddings config (non-secret), or null when semantic search was never set up. */
 export type StoredEmbeddingsConfig = NonNullable<GuiSettings["embeddings"]>;
 export function embeddingsConfig(): StoredEmbeddingsConfig | null { return load().embeddings ?? null; }

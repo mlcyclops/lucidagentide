@@ -6,8 +6,8 @@
 //
 // The trainer must work with WHATEVER the user has configured - a flagship, a workhorse, a flash-class
 // model, a local Ollama build, or the AskSage gov gateway - never with a hardcoded id. This PURE module
-// is the resolver (the ADR-0250 resolveStartupModel / ADR-0251 resolveConversationModel pattern, same
-// inputs, same "matched against the ACCESSIBLE picker options" rule):
+// is the resolver (the ADR-0250 resolveStartupModel / ADR-0251 resolveAgentTierModel pattern, same
+// "matched against the ACCESSIBLE picker options" rule):
 //   1. If the CURRENT model is trainer-capable, keep it - never force a switch that gains nothing.
 //   2. Else pick the best capable candidate: distillation wants structured-output reliability, so the
 //      ranking is capability-tier first (flagship > workhorse > fast/small), direct route over the gov

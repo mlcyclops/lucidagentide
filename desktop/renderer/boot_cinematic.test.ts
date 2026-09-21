@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { BOOT_CAP_MS, BOOT_MIN_MS, FINALE_MS, bootDone, bootFinale, bootLines, bootRunnerX } from "./boot_cinematic.ts";
-import { BLADE_DIAG, BLADE_FLAT, KEYBOARD_LEFT, KEYBOARD_RIGHT, KEYBOARD_WHOLE, MASCOT_FRAMES, keyboardLitKeys } from "./mascot.ts";
+import { BLADE_DIAG, BLADE_FLAT, KEYBOARD_LEFT, KEYBOARD_RIGHT, KEYBOARD_WHOLE, MASCOT_FRAMES, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, keyboardLitKeys } from "./mascot.ts";
 
 const none = { settings: false, config: false, models: 0, voice: false };
 const all = { settings: true, config: true, models: 12, voice: true };
@@ -98,6 +98,10 @@ describe("bootFinale - stop, draw, slice the keyboard, follow through", () => {
 });
 
 describe("bootRunnerX - sprint passes with rests", () => {
+  it("shares every articulated gait beat and clamps pre-start timestamps", () => {
+    for (let i = 0; i < MASCOT_RUN_FRAMES.length; i++) expect(bootRunnerX(i * MASCOT_RUN_BEAT_MS, 900, 80).frame).toBe(MASCOT_RUN_FRAMES[i]);
+    expect(bootRunnerX(-100, 900, 80)).toEqual(bootRunnerX(0, 900, 80));
+  });
   it("crosses the full stage during a pass and rests offscreen after", () => {
     const w = 1000, s = 120;
     const start = bootRunnerX(0, w, s);
@@ -108,7 +112,7 @@ describe("bootRunnerX - sprint passes with rests", () => {
     const rest = bootRunnerX(2700, w, s); // inside the rest window
     expect(rest.x).toBeLessThan(-s);
   });
-  it("progresses monotonically within a pass and cycles the four-beat gait", () => {
+  it("progresses monotonically within a pass and cycles the shared gait", () => {
     const w = 800, s = 100;
     let prev = -Infinity;
     const frames = new Set<string>();
@@ -118,6 +122,6 @@ describe("bootRunnerX - sprint passes with rests", () => {
       prev = r.x;
       frames.add(r.frame);
     }
-    expect(frames.size).toBe(4);
+    expect([...frames]).toEqual([...MASCOT_RUN_FRAMES]);
   });
 });

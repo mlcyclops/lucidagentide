@@ -8,13 +8,15 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
+import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
-import { mountMascot, type MascotHandle } from "./mascot.ts"; // P-MASCOT.1: LUCID the ninja (tiny, static import)
+import { externalHttpUrl } from "../navigation_policy.ts";
+import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
 import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
-import { nextGap, readinessChecklist, resolveConversationModel, restoreModel, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
+import { mountAgentArcade, type AgentArcadeHandle } from "./mascot_game.ts";
+import { nextGap, readinessChecklist, resolveAgentTierModel, restoreModel, type AgentModelTier, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
 import { approvalPrompt, matchApprovalUtterance, pickOption, type ApprovalOption } from "./voice_approval.ts"; // P-AVATAR.5: approve tool calls by voice
 import { mountBootCinematic } from "./boot_cinematic.ts"; // P-AVATAR.6: the hero opening over the config warm
 import { modCombo, modSymbol } from "./platform.ts";
@@ -98,11 +100,11 @@ import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, preferredDefaultModel, providerLabelOf, recommendFallbacks, sortGovFirstByLevel, topModel } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, localPrefixSet, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
-import { buildHubSections, configuredProviderCount, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
+import { buildHubSections, configuredProviderCount, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
@@ -115,7 +117,7 @@ import { takeSpeechChunks } from "../../harness/voice/speech_stream.ts"; // P-VO
 import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues.ts"; // P-VOICE.6/.7 (ADR-0249/0257): spoken "still working" cues, active-listening openers, thinking snapshots
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
-import type { ElevenVoiceView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
+import type { AuthStatus, ElevenVoiceView, JudgmentView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
@@ -129,6 +131,9 @@ import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./li
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
 // streaming text/thinking deltas (output only; never the system prompt).
 import { TokenSpeedEngine } from "../../harness/metrics/token_speed.ts";
+// P-JEV.2 (ADR-0377): the per-turn judgment trace (Jev / TypeSafe). Pure view helpers over the report the
+// judgment extension self-reports; the arktype boundary stays in dev.ts (trace_schema.ts), out of the bundle.
+import { createJudgments, judgmentIdleNote, type JudgmentsWin } from "./judgment_trace_view.ts";
 // CREATOR-0 (ADR-0282/0283): the Creator surfaces. Both modules are PURE builders that own their view
 // types (the layering rule), so nothing here drags node-side code into the renderer.
 import { runCapture, type FrameDecoder } from "./capture_driver.ts"; // CREATOR-3b (ADR-0287 item 3): drive a previewed scene through the fixed timestep
@@ -246,6 +251,7 @@ const state = {
   chinaAck: false as boolean, // P-IDE.1c: user acknowledged the China-origin data-sovereignty warning (Settings unlock)
   thirdPartyAck: false as boolean, // user acknowledged the third-party / non-U.S. "More providers" warning
   auth: null as import("./bridge.ts").AuthStatus | null, // full provider-auth status (gateway/majors/others)
+  accounts: null as AccountsSnapshot | null, // P-ACCT.1: named accounts per provider (providerId -> AccountView[]); every mutation repaints from the server's returned snapshot
   persona: null as string | null, // active persona id (AskSage)
   personas: [] as { id: string; description: string }[],
   zoom: 1,
@@ -341,6 +347,7 @@ function buildShell(): void {
         <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
       </div>
       <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
+      <label class="agent-tier-control" id="agentTierControl" hidden title="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
       <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
@@ -425,6 +432,14 @@ function buildShell(): void {
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
             <!-- P-FLEET.L1: the fleet grid - headless local engine lanes as streaming mini agent windows. -->
             <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - local lanes|Spawn headless LUCID engine lanes on this machine and drive them from a movable grid of mini agent windows.">${icon("bolt", 15)}</button>
+            <!-- P-CONNUI.1 (ADR-0368): the connection affordance for a session with NOTHING at stake.
+                 A failed startup status probe used to paint a paragraph into an empty thread ("Connection
+                 unavailable: signal timed out. Reconnect to check session status before sending."), which
+                 is the first thing a new user reads and reads like a broken app. It is not: there is no
+                 turn to lose on a fresh open, so the honest UI is a quiet, compact retry that appears only
+                 when a probe actually failed. The loud in-thread banner is kept for the case that earns it,
+                 a turn that may still be running. -->
+            <button class="ctool ctool-icon ctool-warn" id="ctReconnect" hidden data-tip="Reconnect|LUCID could not reach its engine to check for an active session. Nothing was lost. Click to retry.">${icon("refresh", 15)}</button>
             <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
             <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet lanes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
@@ -433,6 +448,7 @@ function buildShell(): void {
             <div class="ct-speak" id="ctSpeak" hidden><span class="ct-speak-dot"></span><canvas class="ct-eq" id="ctEqCanvas" aria-hidden="true"></canvas><span class="ct-speak-lbl" id="ctSpeakLbl">Speaking</span><button class="ct-speak-stop" id="ctEqPop" aria-label="Pop the voice panel out" data-tip="Pop out|Float the equalizer as a panel you can drag anywhere in LUCID">${icon("expand", 12)}</button><button class="ct-speak-stop" id="ctSpeakStop" aria-label="Stop reading aloud" data-tip="Stop reading">${icon("close", 12)}</button></div>
           </div>
         </div>
+        <div id="agentArcadeHost" hidden></div>
       </main>
 
       <aside class="inspector" id="inspector">
@@ -941,7 +957,10 @@ function lineHeightPx(): number {
   return Number.isFinite(lh) && lh > 0 ? lh : 28;
 }
 const JUMP_BTN_PX = 34;   // .jump-down width/height in styles.css - the stack spacing depends on it
-const JUMP_GAP_PX = 8;    // breathing room between the two stacked buttons
+// Mis-click safety: 8px between two 34px circles meant the bottom edge of "page down" and the top
+// edge of "jump to newest" were one slip apart, and hitting the wrong one throws the reading position
+// to the end of the transcript. 16px is one comfortable pointer correction.
+const JUMP_GAP_PX = 16;   // breathing room between the two stacked buttons
 function updateJump(): void {
   const c = $("#chat"), page = $("#jumpDown"), end = $("#jumpEnd");
   if (!c || !page) return;
@@ -950,7 +969,7 @@ function updateJump(): void {
     // Both sit just above the composer, whose height changes as the prompt bar grows. The run-to-end
     // button takes the lower slot (closest to the composer) and the page stepper stacks above it, so
     // the pair never overlaps the composer or each other at any prompt-bar height.
-    const base = (($(".composer-wrap")?.getBoundingClientRect().height) ?? 64) + 14;
+    const base = (($(".composer-wrap")?.getBoundingClientRect().height) ?? 64) + ($("#agentArcadeHost")?.getBoundingClientRect().height ?? 0) + 14;
     if (end) end.style.bottom = `${base}px`;
     page.style.bottom = `${base + (end ? JUMP_BTN_PX + JUMP_GAP_PX : 0)}px`;
   }
@@ -958,6 +977,14 @@ function updateJump(): void {
   end?.classList.toggle("show", show);
 }
 const scheduleJump = (): void => { if (jumpRaf) return; jumpRaf = true; requestAnimationFrame(() => { jumpRaf = false; updateJump(); }); };
+/** P-MASCOT.4: the arcade opens BELOW the composer, inside the same <main> the stage covers with
+ *  `inset:0`, so the big ninja was painted straight over the game. Publishing the game's live height
+ *  as --arcade-h lifts the stage's floor above it (and keeps the jump buttons clear of both). */
+function syncArcadeGap(): void {
+  const h = ($("#agentArcadeHost") as HTMLElement | null)?.offsetHeight ?? 0;
+  document.documentElement.style.setProperty("--arcade-h", `${Math.round(h)}px`);
+  scheduleJump();
+}
 function jumpDownOnePage(): void {
   const c = $("#chat");
   if (!c) return;
@@ -1652,6 +1679,7 @@ function leaveTurnView(): number {
   state.streaming = false;
   goalLoopRunning = false;
   $("#turnReconnect")?.remove();
+  hideQuietReconnect(); // or a dead probe's button outlives the view that offered it
   setSendEnabled();
   return turnViewEpoch;
 }
@@ -1663,7 +1691,26 @@ function showTurnReconnect(message: string, reconnect: () => void): void {
   $("#thread")!.appendChild(notice);
 }
 
+/** P-CONNUI.1 (ADR-0368): the QUIET form of "could not reach the engine".
+ *
+ *  Used when a status probe fails and there is nothing to lose: no rendered turn, so no risk of a
+ *  running reply going unnoticed. Shows the compact composer button and nothing else. The loud
+ *  `showTurnReconnect` banner stays for the cases that genuinely earn a paragraph (a turn that may
+ *  still be running, a lane that owns the composer, an unconfirmed Stop). */
+function showQuietReconnect(reconnect: () => void): void {
+  $("#turnReconnect")?.remove();
+  const btn = $("#ctReconnect") as HTMLButtonElement | null;
+  if (!btn) { showTurnReconnect("Connection unavailable. Reconnect to check session status before sending.", reconnect); return; }
+  btn.hidden = false;
+  btn.onclick = () => { hideQuietReconnect(); reconnect(); };
+}
+function hideQuietReconnect(): void {
+  const btn = $("#ctReconnect") as HTMLButtonElement | null;
+  if (btn) { btn.hidden = true; btn.onclick = null; }
+}
+
 async function send(): Promise<void> {
+  if (agentTierApplying) { showToast({ title: "Confirming model change", desc: "Wait a moment for the engine to confirm the model before sending.", timeout: 2500 }); return; }
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
   // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
@@ -1745,6 +1792,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   // on the first tool event so a pure-text turn shows nothing extra.
   let thoughts: ThoughtsWin | null = null;
   let reasoning: ReasoningWin | null = null; // the live "thinking" block (above the answer)
+  let judgments: JudgmentsWin | null = null; // P-JEV.2: the typed-judgment trace (below the tool activity), created on the first report
   const permCards = new Map<string, { el: HTMLElement; finalize: () => void }>();
   const answeredPermissions = new Set<string>();
   const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
@@ -1816,6 +1864,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     setPhase("Done"); paintHud();
     reasoning?.finish(Date.now() - t0);
     thoughts?.finish(Date.now() - t0);
+    judgments?.finish(); // P-JEV.2
     subCards.forEach((c) => c.finish());
     permCards.forEach((c) => c.finalize()); // any unanswered prompt = denied (matches server fail-close)
   };
@@ -1934,6 +1983,13 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
         if (e.ok === false) m.chip.failed = true;
       }
     }
+    // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
+    // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
+    else if (e.type === "judgment") {
+      if (!judgments) { judgments = createJudgments(); (thoughts?.el ?? streamEl).after(judgments.el); }
+      judgments.add(e.report);
+      scrollChat();
+    }
     else if (e.type === "subagent") {
       sawTool = true; setPhase(`Delegating to ${e.agent}…`); paintHud();
       const card = createSubagentCard(e, () => subCards.length <= 1);
@@ -1984,6 +2040,12 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // Don't clobber the no-response notice with an empty answer body.
       if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); }
       (node as MsgNode)._md = buf; stopThinkingCues(); speechFeed(buf, true); /* P-VOICE.2: speak the tail the sentence gate withheld */ finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
+      // P-JEV.2 (ADR-0377): a finished turn with NO judgment while Jev is set up gets the quiet idle note.
+      // The extension awaits the desktop's ack per judgment, so by `done` every report of this turn has
+      // arrived: "none" here is a fact, not a race. Asked of the server so the gate is the live config
+      // (mode + key + lockdown), never a stale client copy.
+      // Lane children carry no trace yet (master-only extension), so a lane turn says nothing either way.
+      if (!judgments && !opts.laneId) void bridge.judgment().then((j) => { if (j?.configured && owns() && !judgments) hud.before(judgmentIdleNote()); });
     }
   };
   const settle = () => {
@@ -2087,6 +2149,7 @@ function autosize(ta: HTMLTextAreaElement): void {
   ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden";
 }
 function setSendEnabled(): void {
+  syncAgentExtras();
   const ta = $("#input") as HTMLTextAreaElement;
   const btn = $("#send") as HTMLButtonElement;
   // P-ACP.4: while a turn runs the button is a Stop control (always enabled) that interrupts; otherwise
@@ -2097,7 +2160,7 @@ function setSendEnabled(): void {
     btn.innerHTML = icon("square", 16);
     btn.setAttribute("data-tip", "Stop|Interrupt the reply + tool calls");
   } else {
-    btn.disabled = recoveryChecking || (!ta.value.trim() && state.attachments.length === 0);
+    btn.disabled = recoveryChecking || agentTierApplying || (!ta.value.trim() && state.attachments.length === 0);
     btn.classList.remove("stop");
     btn.innerHTML = icon("send", 18);
     btn.setAttribute("data-tip", recoveryChecking ? "Checking connection|Sending is paused until session status is confirmed" : "Send|Enter");
@@ -2650,12 +2713,12 @@ function renderMetricsRail(): void {
     ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
     { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
     { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
-    // P-TRIV.1 (ADR-0174): lifetime Trivia Wire score - the LAST tile, so it sits just above the
-    // gate-active corner. Only appears once the user has actually played (no dead zero tile).
+    // Shared lifetime points remain visible even when the Trivia Wire ticker is disabled.
+    // Only appears once the user has actually played (no dead zero tile).
     ...((): T[] => {
-      const tv = triviaEnabled() && triviaGame ? triviaGame.state() : null;
-      return tv && tv.answered > 0
-        ? [{ n: fmtNum(tv.score), label: "trivia", cls: "c", tip: `Trivia Wire lifetime score: ${fmtNum(tv.correct)}/${fmtNum(tv.answered)} correct. Streaks multiply points up to x3. The ticker appears in the status bar while the agent works.` }]
+      const tv = ensureTriviaGame().state();
+      return tv.score > 0 || tv.answered > 0
+        ? [{ n: fmtNum(tv.score), label: "LUCID points", cls: "c", tip: `LUCID points from arcade games and Trivia Wire. Trivia accuracy: ${fmtNum(tv.correct)}/${fmtNum(tv.answered)} correct. Trivia streaks multiply trivia points up to x3.` }]
         : [];
     })(),
   ];
@@ -2690,6 +2753,7 @@ function setInspectorRail(rail: boolean): void {
 // OAuth here signs in a SUBSCRIPTION/CLI tier; the full commercial catalog comes from an API key.
 // Spell that out where it bites (OpenAI/Gemini), and steer Perplexity to its working key path.
 const PROV_HINTS: Record<string, string> = {
+  typesafe: `Jev, TypeSafe AI's hosted System One judgment model (no released weights; API only). Get your key at <a href="https://console.typesafe.ai/" target="_blank" rel="noopener">console.typesafe.ai \u2197</a>. A judgment sends conversation text and tool output to api.typesafe.ai, so under AskSage lockdown LUCID pins judgments to your gov-routed models instead.`,
   elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. New to ElevenLabs? <a href="https://try.elevenlabs.io/nru4d3mgw8b5" target="_blank" rel="noopener">Create an account \u2197</a>, then get your key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">API keys \u2197</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
   openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
   google: "OAuth uses the Gemini CLI / Code Assist tier. <b>Workspace / Enterprise Google accounts</b> also need a <b>GCP project ID</b> below (personal accounts leave it blank) - without it the sign-in aborts. For the full commercial Gemini catalog, add a GEMINI_API_KEY. For the enterprise-governed backend (Gemini for Google Cloud), use the <b>Gemini Enterprise</b> card below.",
@@ -2697,7 +2761,7 @@ const PROV_HINTS: Record<string, string> = {
   xai: "OAuth signs in via your X / xAI account. Which Grok models are available depends on your plan (Premium+, SuperGrok, or API). If models appear but return empty replies, check your subscription at <b>console.x.ai</b>.",
   "github-copilot": "OAuth signs in your <b>GitHub Copilot</b> subscription (Individual, or the Business / Enterprise add-on many orgs enable on their plan) and enables its model catalog - GPT, Claude and Gemini families via Copilot. Device-code flow: click Connect, then paste the code shown in the browser. On a self-hosted <b>GitHub Enterprise</b>, enter your GHE domain when prompted (blank = github.com).",
   azure: "<b>Azure OpenAI</b> (your Microsoft tenant's own deployments). Paste the <b>AZURE_OPENAI_API_KEY</b>, then set <b>Resource name</b> (or a full base URL). API version defaults to <b>v1</b>; use the deployment map only if your Azure deployment names differ from the model ids.",
-  "google-vertex": "<b>Gemini Enterprise</b> — Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below — omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
+  "google-vertex": "<b>Gemini Enterprise</b> - Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below - omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
   perplexity: "Paste a Perplexity API key for Sonar models. (Pro/Max OAuth is interactive email-OTP - it can't run through this app, so use a key here.)",
 };
 
@@ -2730,16 +2794,22 @@ function providerQuotaBody(p: ProviderAuth): string {
     </div>${rows.length ? rows.map(cachedBudgetRow).join("") : `<div class="set-note">Subscription used, remaining, status and reset: <b>unknown</b>. No matching usage report is available; this does not mean zero usage or unlimited quota.</div>`}`;
 }
 
-function provCard(p: ProviderAuth): string {
+// P-ACCT.1: the status badge cluster (OAuth active / key ••last4 / configured / not set), shared by the
+// classic card header and the accordion summary so both always tell the same story. A provider can also be
+// configured purely through its extra fields (e.g. Vertex via ADC project+location, no primary API key) -
+// reflect that so such cards don't misreport as "not set".
+function provStatusBadges(p: ProviderAuth): string {
   const last4 = esc(p.keyLast4 ?? "");
-  // A provider can also be configured purely through its extra fields (e.g. Vertex via ADC project+location,
-  // no primary API key) — reflect that so such cards don't misreport as "not set".
   const fieldsSet = (p.fields ?? []).some((f) => f.set);
-  const status =
-    (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
+  return (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
     (p.keySet ? `<span class="abadge set">key ••${last4}</span>` : "") +
     (!p.keySet && fieldsSet ? `<span class="abadge set">configured</span>` : "") +
     (!p.oauthActive && !p.keySet && !fieldsSet ? `<span class="abadge none">not set</span>` : "");
+}
+
+function provCard(p: ProviderAuth): string {
+  const last4 = esc(p.keyLast4 ?? "");
+  const status = provStatusBadges(p);
   // The hint text goes in ONE <span> so rich markup (<b>/<a>) stays inline instead of becoming separate
   // flex items in the flex `.prov-hint` (that squished multi-tag hints into clipped narrow columns).
   const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)}<span>${PROV_HINTS[p.id]}</span></div>` : "";
@@ -2758,7 +2828,7 @@ function provCard(p: ProviderAuth): string {
   // it opens in the Preview panel via its engine-resolved path. Vendors change tiers out from under
   // users (Google killed consumer OAuth in June 2026), so the guides are load-bearing onboarding.
   const guideRow = GUIDE_FILES[p.id]
-    ? `<div class="prov-row"><button class="btn-link" data-guide="${esc(p.id)}">${icon("info", 12)} Which plan do I need? Open the guide</button></div>`
+    ? `<div class="prov-row"><button class="btn-link" data-guide="${esc(p.id)}">${icon("info", 12)} ${p.id === "typesafe" ? "Jev explained: uses, settings and data privacy" : "Which plan do I need? Open the guide"}</button></div>`
     : "";
   // OAuth-only providers (e.g. GitHub Copilot) carry no primary key env — omit the key row entirely.
   const keyRow = p.env
@@ -2787,6 +2857,131 @@ function provCard(p: ProviderAuth): string {
   return `<div class="prov">
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
     <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
+}
+
+// ── P-ACCT.1: named multi-account per provider ─────────────────────────────────────────────────
+// state.accounts is the server's snapshot (providerId -> AccountView[]); every mutation returns the
+// refreshed snapshot, so the UI always repaints from the server's truth, never a client guess.
+
+/** Accordion open-state, persisted across fillSec repaints (session-only, the dockSec pattern - a
+ *  capture-phase toggle listener on #setBody keeps this set in step with the user's clicks). */
+const PROV_ACC_OPEN = new Set<string>();
+
+/** The named-account list for one provider: switch / rename / remove rows, the add-account row (key
+ *  providers), and the OAuth hint. Renders nothing for a provider that can hold no account at all. */
+function accountsBlock(p: ProviderAuth): string {
+  const accts = state.accounts?.[p.id] ?? [];
+  if (!accts.length && !p.env && !p.oauthId) return ""; // no accounts and no way to ever have one
+  // Invariant 11: each row is ONE line with ONE text child - the name and the dim identity/last4 suffix
+  // compose into a single ellipsizing span (the suffix is a nested inline, not a sibling flex item).
+  const rows = accts.map((a) => {
+    const suffix = a.kind === "oauth" ? (a.identity ?? "") : (a.keyLast4 ? `\u2022\u2022${a.keyLast4}` : "");
+    const removeConfirm = a.kind === "oauth"
+      ? `Disconnect this account from omp: remove "${a.name}"?`
+      : `Remove "${a.name}" and its saved key?`;
+    return `<div class="acct-row${a.active ? " active" : ""}">
+      <button class="acct-switch" type="button" data-acct-switch="${esc(a.id)}" data-acct-prov="${esc(p.id)}" title="${a.active ? "Active: omp is using this account" : "Switch to this account"}"><span class="acct-dot${a.active ? " on" : ""}"></span></button>
+      <span class="acct-name">${esc(a.name)}${suffix ? `<i class="acct-suffix"> \u00b7 ${esc(suffix)}</i>` : ""}</span>
+      ${a.parked ? `<span class="abadge none">parked</span>` : ""}
+      <button class="btn-mini acct-ico" type="button" data-acct-rename="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-name="${esc(a.name)}" title="Rename this account">${icon("pen", 12)}</button>
+      ${a.removable ? `<button class="btn-mini danger acct-ico" type="button" data-acct-remove="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-confirm="${esc(removeConfirm)}" title="Remove this account">${icon("trash", 12)}</button>` : ""}
+    </div>`;
+  }).join("");
+  const addRow = p.env
+    ? `<div class="acct-add">
+        <input id="acctName-${esc(p.id)}" class="prov-key acct-add-name" placeholder="Name, e.g. Work" autocomplete="off" spellcheck="false" />
+        <input id="acctKey-${esc(p.id)}" class="prov-key" type="password" placeholder="Paste ${esc(p.env)}\u2026" />
+        <button class="btn-mini ok" type="button" data-acct-add="${esc(p.id)}">${icon("plus", 12)} Add account</button>
+      </div>`
+    : "";
+  const oauthHint = p.canOauth
+    ? `<div class="set-note">${icon("info", 12)} <span>Connect via OAuth below signs in another subscription account; it appears here once the sign-in finishes.</span></div>`
+    : "";
+  return `<div class="acct-block">${rows ? `<div class="acct-list">${rows}</div>` : ""}${addRow}${oauthHint}</div>`;
+}
+
+/** P-ACCT.1: one provider as a collapsible card - a one-line summary (name + status badges + account
+ *  pill) over the account list and the classic config card. Open state survives fillSec repaints. */
+function provAccordion(p: ProviderAuth): string {
+  const accts = state.accounts?.[p.id] ?? [];
+  const active = accts.find((a) => a.active);
+  const acctPill = accts.length
+    ? `<span class="abadge acct">${accts.length} account${accts.length === 1 ? "" : "s"}${active ? ` \u00b7 ${esc(active.name)}` : ""}</span>`
+    : "";
+  return `<details class="prov-acc" data-prov-acc="${esc(p.id)}"${PROV_ACC_OPEN.has(p.id) ? " open" : ""}>
+    <summary>${icon("chevron", 12)}<span class="prov-acc-nm">${esc(p.name)}</span><span class="prov-acc-badges">${provStatusBadges(p)}${acctPill}</span></summary>
+    <div class="prov-acc-b">${accountsBlock(p)}${provCard(p)}</div></details>`;
+}
+
+/** The four account actions (switch / add / rename / remove), shared by the Settings body and the
+ *  Provider Hub delegated click handlers. `scope` roots the add-row input lookups. A mutation adopts the
+ *  snapshot the server returns (falling back to a fresh fetch when it returns none, so the list never
+ *  drifts); the CALLER repaints. Returns false when the click was not an account action. */
+async function handleAccountAction(t: HTMLElement, scope: HTMLElement): Promise<boolean> {
+  const adopt = async (snap: AccountsSnapshot | null): Promise<boolean> => {
+    state.accounts = snap ?? (await bridge.accounts().catch(() => null)) ?? state.accounts;
+    return snap != null;
+  };
+  const sw = t.closest("[data-acct-switch]") as HTMLElement | null;
+  if (sw) {
+    const prov = sw.dataset.acctProv!;
+    const snap = await bridge.accountSwitch(prov, sw.dataset.acctSwitch!).catch(() => null);
+    if (await adopt(snap)) {
+      const name = state.accounts?.[prov]?.find((a) => a.active)?.name ?? "the selected account";
+      showToast({ title: `Switched to ${name}`, desc: "omp restarts with it; the next turn uses it.", timeout: 3600 });
+    } else showToast({ tone: "warn", title: "Couldn't switch", desc: "The server rejected the switch; the account list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  const add = t.closest("[data-acct-add]") as HTMLElement | null;
+  if (add) {
+    const prov = add.dataset.acctAdd!;
+    const nameEl = $(`#acctName-${prov}`, scope) as HTMLInputElement | null;
+    const keyEl = $(`#acctKey-${prov}`, scope) as HTMLInputElement | null;
+    const name = nameEl?.value.trim() ?? "";
+    const key = keyEl?.value.trim() ?? "";
+    if (!name || !key) { showToast({ tone: "warn", title: "Name and key required", desc: "Give the account a name (e.g. Work) and paste its API key.", timeout: 3400 }); return true; }
+    const snap = await bridge.accountAdd(prov, name, key).catch(() => null);
+    if (await adopt(snap)) {
+      if (nameEl) nameEl.value = "";
+      if (keyEl) keyEl.value = "";
+      showToast({ title: "Account added", desc: `${name} is saved on this machine. Switch to it to make omp use it.`, timeout: 3400 });
+    } else showToast({ tone: "warn", title: "Couldn't add the account", desc: "The server rejected it. Check the name and key, then try again.", timeout: 4200 });
+    return true;
+  }
+  const ren = t.closest("[data-acct-rename]") as HTMLElement | null;
+  if (ren) {
+    const cur = ren.dataset.acctName ?? "";
+    const name = (await promptText({ title: "Rename account", label: "Name", value: cur, placeholder: "e.g. Work" }))?.trim();
+    if (!name || name === cur) return true;
+    const snap = await bridge.accountRename(ren.dataset.acctProv!, ren.dataset.acctRename!, name).catch(() => null);
+    if (await adopt(snap)) showToast({ title: "Account renamed", desc: `Now listed as ${name}.`, timeout: 2800 });
+    else showToast({ tone: "warn", title: "Couldn't rename", desc: "The server rejected the rename; the list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  const rm = t.closest("[data-acct-remove]") as HTMLElement | null;
+  if (rm) {
+    if (!confirm(rm.dataset.acctConfirm ?? "Remove this account?")) return true;
+    const snap = await bridge.accountRemove(rm.dataset.acctProv!, rm.dataset.acctRemove!).catch(() => null);
+    if (await adopt(snap)) showToast({ title: "Account removed", desc: "Its credential is gone from this machine.", timeout: 3000 });
+    else showToast({ tone: "warn", title: "Couldn't remove", desc: "The server rejected the removal; the list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  return false;
+}
+
+/** Repaint the two account-bearing Settings sections from current state (post-mutation refresh).
+ *  A switch also swaps the active env key server-side, so auth refreshes in the background and the
+ *  sections refill once the newer key ••last4 / OAuth badges land. */
+function repaintAccountSections(): void {
+  fillSec("providers", secProviders(state.auth));
+  fillSec("others", secOthers(state.auth));
+  void bridge.auth().then((a) => {
+    if (!a) return;
+    state.auth = a;
+    fillSec("providers", secProviders(a));
+    fillSec("others", secOthers(a));
+    renderStatus();
+  }).catch(() => { /* best-effort */ });
 }
 
 /** P-GUIDE.1/.2: open a bundled advisor guide in the Preview panel (Yours lane). The engine resolves
@@ -3158,31 +3353,15 @@ function setImmersive(on: boolean): void {
   // within 20px, tuck past 120px - no flicker at the boundary). Everything stays reachable on the stage.
   if (on) document.addEventListener("mousemove", immersiveRailPeek);
   else { document.removeEventListener("mousemove", immersiveRailPeek); $("#app-inner")!.classList.remove("rail-peek"); }
-  if (on) mountMascotStage(); else unmountMascotStage(); // P-MASCOT.1: the ninja rides the stage
 }
 
-// ── P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja on the stage ─────────────────────────────────
-let mascot: MascotHandle | null = null;
-let mascotPoll = 0;
-function mountMascotStage(): void {
-  if (mascot || !state.immersive) return;
-  const host = $("#agentStage") as HTMLElement | null;
-  if (!host) return;
-  mascot = mountMascot(host);
-  // The mascot mirrors what the agent is DOING via the existing voice/turn state - a cheap poll beats
-  // invasive hooks into speech/dictation internals (their state machines stay untouched).
-  mascotPoll = window.setInterval(() => {
-    mascot?.update({
-      speaking: !!document.querySelector("#ctSpeak:not([hidden])"),
-      listening: !!dictation,
-      working: state.streaming,
-    });
-  }, 250);
-}
-function unmountMascotStage(): void {
-  window.clearInterval(mascotPoll); mascotPoll = 0;
-  mascot?.dispose();
-  mascot = null;
+// The stage retains its layout, but no longer paints a second background ninja.
+const runnerInputs: MascotInputs = { speaking: false, listening: false, working: false };
+function composerMascotInputs(): MascotInputs {
+  runnerInputs.speaking = !!document.querySelector("#ctSpeak:not([hidden])");
+  runnerInputs.listening = !!dictation;
+  runnerInputs.working = state.streaming;
+  return runnerInputs;
 }
 function immersiveRailPeek(ev: MouseEvent): void {
   const inner = $("#app-inner");
@@ -3203,15 +3382,52 @@ function syncImmersiveWithRole(role: UserRole | null): void {
   const chip = $("#tbStage") as HTMLElement | null;
   if (chip) chip.hidden = !isAgent;
   setImmersive(isAgent);
-  // P-MASCOT.2: the mini runner rides the prompt bar for the role in BOTH layouts (immersive or parked) -
-  // the composer exists in both, and he never intercepts pointer events.
-  if (isAgent && !miniRunner) { const wrap = document.querySelector(".composer-wrap") as HTMLElement | null; if (wrap) miniRunner = mountComposerRunner(wrap); }
-  else if (!isAgent && miniRunner) { miniRunner.dispose(); miniRunner = null; }
+  syncAgentExtras();
+  // The runner owns the mascot until Arcade opens, in either stage or parked layout.
+  if (isAgent && !miniRunner) {
+    const wrap = document.querySelector(".composer-wrap") as HTMLElement | null;
+    if (wrap) {
+      miniRunner = mountComposerRunner(wrap, composerMascotInputs);
+      miniRunner.setSuspended(agentArcade?.isOpen() ?? false);
+    }
+  } else if (!isAgent && miniRunner) { miniRunner.dispose(); miniRunner = null; }
   // P-AVATAR.4: entering the role starts the hands-free flow; leaving restores the user's world.
   if (isAgent) void enterAgentFlow();
   else void exitAgentFlow();
 }
 let miniRunner: RunnerHandle | null = null;
+let agentArcade: AgentArcadeHandle | null = null;
+let agentTier: AgentModelTier = (() => { try { return localStorage.getItem("lucid.agent-tier") === "max" ? "max" : "regular"; } catch { return "regular"; } })();
+let agentTierApplying = false;
+let agentTierPending: Promise<void> | null = null;
+
+function syncAgentExtras(): void {
+  const active = state.userRole === "lucid-agent";
+  const control = $("#agentTierControl") as HTMLElement | null;
+  const select = $("#agentTier") as HTMLSelectElement | null;
+  if (control) control.hidden = !active;
+  if (select) { select.value = agentTier; select.disabled = state.streaming || agentTierApplying || state.configCached || state.configWarming; }
+  if (active && !agentArcade) {
+    const host = $("#agentArcadeHost");
+    if (host) agentArcade = mountAgentArcade(host, arcadeScorePort, {
+      onLayout: (open) => { miniRunner?.setSuspended(open); syncArcadeGap(); },
+    });
+  }
+  agentArcade?.update(active);
+  if (!active && agentArcade) { agentArcade.dispose(); agentArcade = null; }
+}
+
+async function applyAgentTier(): Promise<void> {
+  if (!agentPrior || state.userRole !== "lucid-agent" || state.streaming || agentTierApplying || state.configCached || state.configWarming) return;
+  const model = resolveAgentTierModel(modelOptions(), state.model, agentTier);
+  if (!model) { syncAgentExtras(); return; }
+  agentTierApplying = true;
+  setSendEnabled();
+  const pending = applyConfig("model", model, { system: true, confirm: true });
+  agentTierPending = pending;
+  try { await pending; }
+  finally { agentTierPending = null; agentTierApplying = false; setSendEnabled(); }
+}
 
 // ---- P-AVATAR.5 (ADR-0251): voice tool approval - keyword-strict, fail-closed, card stays boss ----
 // Armed per permission event in hands-free sessions. The matcher lives in voice_approval.ts (pure,
@@ -3248,21 +3464,29 @@ function consumeApprovalUtterance(text: string): boolean {
 let agentPrior: AgentPrior | null = null;
 let agentFlowTimer = 0;
 let vaultAsked = false; // the KG offer fires at most once per app session (never nag)
+// Like the KG offer, Later lasts for this renderer session, including role re-entry. A reload resets
+// it; explicit Voice settings and runtime error notices stay available without reopening the nudge.
+const deferredAgentGaps = new Set<ReadyItem["id"]>();
 let conversationArmed = false;
 let lastSpokenGap = "";
 const modelOptions = (): { value: string; name?: string }[] => {
   const opt = state.config.find((c) => c.id === "model");
-  return (opt?.options ?? []).map((o) => ({ value: String(o.value), name: o.name }));
+  const lockdown = !!(state.asksage?.only || state.managed?.asksageOnly); // ADR-0068/0224: either lockdown source clamps tiers to gov routes
+  return (opt ? curatedModels(opt) : []).filter((o) => !unavailableReason(String(o.value)) && (!lockdown || isGovModel(String(o.value)))).map((o) => ({ value: String(o.value), name: o.name }));
 };
 async function enterAgentFlow(): Promise<void> {
-  if (agentPrior) return; // already in
+  if (agentPrior) {
+    if (!agentFlowTimer) agentFlowTimer = window.setInterval(() => { void agentFlowStep(); }, 4000);
+    return;
+  }
   agentPrior = { model: state.model, uiMode: state.uiMode, autoSpeak: !!state.voice?.ttsAutoSpeak, conversation: !!state.voice?.ttsConversation };
   conversationArmed = false;
   lastSpokenGap = "";
   if (state.uiMode !== "agent") void applyConfig("mode", "agent"); // full agent mode for the hands-free session
-  const fast = resolveConversationModel(modelOptions(), state.model);
-  if (fast) void applyConfig("model", fast); // remember/restore handled by agentPrior
+  await applyAgentTier().catch(() => {}); // Failed confirmation is surfaced by applyConfig; keep the previous model.
+  if (!agentPrior || state.userRole !== "lucid-agent") return;
   await agentFlowStep();
+  if (!agentPrior || state.userRole !== "lucid-agent") return;
   window.clearInterval(agentFlowTimer);
   agentFlowTimer = window.setInterval(() => { void agentFlowStep(); }, 4000); // self-heals after any fix
 }
@@ -3270,10 +3494,19 @@ async function exitAgentFlow(): Promise<void> {
   window.clearInterval(agentFlowTimer); agentFlowTimer = 0;
   $("#agentSetupCard")?.remove();
   const prior = agentPrior;
-  agentPrior = null;
   if (!prior) return;
+  await agentTierPending?.catch(() => {});
+  if (state.userRole === "lucid-agent") return;
+  agentPrior = null;
   const back = restoreModel(prior, state.model, modelOptions());
-  if (back) void applyConfig("model", back);
+  // The next Send must run on the RESTORED model: hold the composer until the backend confirms.
+  if (back) {
+    agentTierApplying = true;
+    setSendEnabled();
+    try { await applyConfig("model", back, { system: true, confirm: true }); }
+    catch { /* applyConfig rolled back and told the user; the tier model stays active. */ }
+    finally { agentTierApplying = false; setSendEnabled(); }
+  }
   if (prior.uiMode !== state.uiMode) void applyConfig("mode", prior.uiMode);
   // Only unwind what the flow turned ON - a user who had auto-speak before keeps it.
   if (!prior.conversation && state.voice?.ttsConversation) void applyVoicePatch({ ttsAutoSpeak: prior.autoSpeak, ttsConversation: false });
@@ -3302,6 +3535,10 @@ async function agentFlowStep(): Promise<void> {
     vaultUnlocked: !!personal?.unlocked,
   });
   const gap = nextGap(items, vaultAsked);
+  if (gap?.required && deferredAgentGaps.has(gap.id)) {
+    $("#agentSetupCard")?.remove();
+    return; // Defer only the nudge, never treat a missing prerequisite as ready.
+  }
   if (gap) {
     if (gap.id === "vault") vaultAsked = true;
     renderAgentGap(gap);
@@ -3334,7 +3571,11 @@ function renderAgentGap(item: ReadyItem): void {
   </div>`);
   card.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
-    if (t.closest("[data-agent-dismiss]")) { card.remove(); return; }
+    if (t.closest("[data-agent-dismiss]")) {
+      if (item.required) deferredAgentGaps.add(item.id);
+      card.remove();
+      return;
+    }
     const fix = (t.closest("[data-agent-fix]") as HTMLElement | null)?.dataset.agentFix;
     if (!fix) return;
     card.remove();
@@ -3460,14 +3701,15 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
 function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // Collapsible + default-collapsed (not in SET_OPEN): the AskSage gov gateway sits above this and is the
   // foregrounded path; the direct U.S. providers tuck away until needed.
-  const cards = (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`;
+  // P-ACCT.1: each provider is a nested collapsible card (accounts list + the classic config body).
+  const cards = (auth?.majors ?? []).map(provAccordion).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`;
   // "Sign out of all providers" — ALWAYS available (not gated on a visible active login) so it can also clear
   // ORPHANED OAuth logins that have no card here: a broker id with no descriptor (e.g. google-antigravity) or
   // a key-only provider that still holds an oauth row. The reliable full reset, e.g. after a reinstall.
-  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login \u2014 all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
+  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login - all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
   // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
   // discoverable popup) so providers aren't buried in this collapsed card.
-  const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place \u2014 native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
+  const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place - native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
   return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + providerQuotaNotice() + cards + signoutAll, true);
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
@@ -3536,9 +3778,9 @@ function secDeveloper(): string {
 // ACKNOWLEDGE gate (mirrors the China-origin unlock) because these route outside U.S. jurisdiction or
 // aggregate many origins. Expanding the section shows the warning first; the list appears once acknowledged.
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
-  // P-VOICE.1: ElevenLabs rides the `others` auth plumbing for keySet/last4, but it's a VOICE provider —
-  // render it in the Voice card, not here.
-  const list = (auth?.others ?? []).filter((p) => p.id !== "elevenlabs").map(provCard).join("") || `<div class="empty">none</div>`;
+  // P-VOICE.1 / P-JEV.1: ElevenLabs and TypeSafe ride the `others` auth plumbing for keySet/last4, but they are
+  // not chat-model providers - the Voice card and the Judgment card render them, not this list.
+  const list = (auth?.others ?? []).filter((p) => !HUB_NON_MODEL_EXCLUDE.includes(p.id)).map(provAccordion).join("") || `<div class="empty">none</div>`; // P-ACCT.1: nested collapsible cards
   if (state.thirdPartyAck) {
     return setCard("others", "More providers", "third-party · non-U.S. / custom",
       `<div class="set-note ok">${icon("check", 12)} You acknowledged the third-party risk. <button class="btn-link" id="thirdPartyRelock">Re-lock</button></div>${list}`, true);
@@ -3584,7 +3826,7 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
       <button class="btn-mini" id="voiceFav" data-tip="Favorite|Star the selected voice - favorites are listed first">${icon("spark", 12)}</button></div>
     <div class="voice-row"><label class="voice-lbl" for="voiceAutoSpeak">Auto-speak</label>
       <label class="voice-check"><input type="checkbox" id="voiceAutoSpeak" data-voice-set="ttsAutoSpeak"${vset?.ttsAutoSpeak ? " checked" : ""} />
-        <span>Read every reply aloud as it streams \u2014 the composer's voice button toggles this too.</span></label></div>
+        <span>Read every reply aloud as it streams - the composer's voice button toggles this too.</span></label></div>
     <div class="voice-row"><label class="voice-lbl" for="voiceConversation">Conversation</label>
       <label class="voice-check"><input type="checkbox" id="voiceConversation" data-voice-set="ttsConversation"${vset?.ttsConversation ? " checked" : ""}${vset?.ttsAutoSpeak ? "" : " disabled"} />
         <span>Hands-free turn-taking: the mic opens when the reply finishes speaking, and a few seconds of silence sends your turn. Needs auto-speak.</span></label></div>
@@ -3593,6 +3835,31 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
         <span>Speak the first sentence, then a short digest of the reply instead of every word - made for slow self-hosted engines like dots.tts (5-10s a clip over the VPN). The full text stays in the chat. Needs auto-speak.</span></label></div>
     <div class="set-note" id="voiceNote"></div>`;
   return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
+}
+// P-JEV.1 (ADR-0374): the Judgment card. Jev (TypeSafe System One) answers omp's typed judgments (choice /
+// yes-no / score) instead of a chat model. The key rides the same provCard plumbing as ElevenLabs; the mode
+// select drives omp's `providers.judgmentProvider`. The SERVER owns the lockdown clamp: under AskSage lockdown
+// `effective` is always "llm" and the select is disabled, with the stored choice shown so lifting the lock
+// visibly restores it. Nothing here ever enters the model picker (TypeSafe has no chat models).
+function secJudgment(auth: AuthStatus | null, j: JudgmentView | null): string {
+  const tsKey = (auth?.others ?? []).find((p) => p.id === "typesafe");
+  const keyCard = tsKey ? provCard(tsKey) : "";
+  const stored = j?.stored ?? "auto";
+  const sel = (v: boolean) => (v ? " selected" : "");
+  const lockNote = j?.locked
+    ? `<div class="set-note danger" id="judgmentLockNote">${icon("shield", 12)} <b>AskSage lockdown is on:</b> judgments are pinned to the <b>LLM chain</b> (your gov-routed models). A judgment carries conversation text and tool output to the judge, so TypeSafe's public endpoint is CUI backflow under lockdown. Your saved choice (<b>${esc(stored)}</b>) is kept and takes effect again when lockdown is turned off.</div>`
+    : "";
+  const body = `${keyCard}
+    <div class="set-note">${icon("info", 12)} <b>Judgments</b> are the small typed questions LUCID's agent loop asks about its own work (yes/no checks, choices, scores). <b>Jev</b> is TypeSafe AI's hosted System One model built for exactly that; without it, omp asks a chat model. In <b>Auto</b>, a saved TypeSafe key routes judgments to Jev; a failed TypeSafe call falls back to the online chat-model chain (omp's rule, not a LUCID choice).</div>
+    <div class="voice-row"><label class="voice-lbl" for="judgmentMode">Judgment backend</label>
+      <select id="judgmentMode" class="prov-key" data-judgment-set="mode"${j?.locked ? " disabled" : ""}>
+        <option value="auto"${sel(stored === "auto")}>Auto - Jev when a TypeSafe key is saved, else chat model</option>
+        <option value="typesafe"${sel(stored === "typesafe")}>Jev (TypeSafe) - always try Jev first</option>
+        <option value="llm"${sel(stored === "llm")}>Chat model only - never TypeSafe</option>
+      </select></div>
+    ${lockNote}
+    <div class="set-note" id="judgmentEffective">${icon("check", 12)} omp is told <b>${esc(j?.effective ?? "auto")}</b>${j?.clamped ? " (clamped by lockdown)" : ""}. Changing the backend restarts the omp child; the next turn uses it.</div>`;
+  return setCard("judgment", "Judgment", "Jev · TypeSafe System One", body, true);
 }
 // P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
 // picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
@@ -3684,7 +3951,7 @@ async function loadVoices(): Promise<void> {
   const note = $("#voiceNote");
   if (!data || !data.voices.length) {
     selEl.innerHTML = `<option value="">no voices to list</option>`;
-    if (note) note.textContent = data?.note || "This engine didn't return a voice list \u2014 check its key or URL.";
+    if (note) note.textContent = data?.note || "This engine didn't return a voice list - check its key or URL.";
     return;
   }
   if (note) note.textContent = "";
@@ -3734,7 +4001,7 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
           <button class="btn-mini" data-agent-toggle="${esc(a.id)}" data-agent-on="${a.enabled ? "0" : "1"}">${a.enabled ? "Disable" : "Enable"}</button>
           <button class="btn-mini danger" data-agent-remove="${esc(a.id)}">${icon("close", 12)} Remove</button>
         </div></div></div>`).join("")
-    : `<div class="empty">No remote agents yet. Add a hermes/openclaw connection below — it's proxied through the Lucid security firewall.</div>`;
+    : `<div class="empty">No remote agents yet. Add a hermes/openclaw connection below - it's proxied through the Lucid security firewall.</div>`;
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add a remote agent</span></div>
       <div class="prov-body">
@@ -4044,7 +4311,7 @@ function secTrivia(): string {
   const on = triviaEnabled();
   const toggle = `<label class="set-toggle"><input type="checkbox" id="trivToggle" ${on ? "checked" : ""}/>
       <span><b>Show the Trivia Wire</b> - a word-game ticker that scrolls in the status bar while the agent works, or when you're idle with work to return to. Answer with a click or the A-D keys.</span></label>`;
-  if (!on) return setCard("trivia", "Trivia Wire", "status-bar game", toggle + `<div class="set-note">${icon("info", 12)} Off - the ticker stays hidden everywhere until you switch it back on here.</div>`, true);
+  if (!on) return setCard("trivia", "Trivia Wire", "status-bar game", toggle + `<div class="set-note">${icon("info", 12)} Off - the ticker stays hidden until you switch it back on here. Arcade scoring and your shared LUCID points remain active.</div>`, true);
 
   const role = state.userRole || "developer";
   const src = triviaSources();
@@ -4064,7 +4331,8 @@ function secTrivia(): string {
     ? `<div class="set-note ok">${icon("check", 12)} Using a generated ${esc(role)} pack (${pack.length} questions). <button class="btn-mini triv-reset" id="trivPackReset">${icon("restore", 11)} Use built-in</button></div>`
     : `<div class="set-note">${icon("info", 12)} Using the built-in ${esc(role)} pack. Check a source and Recycle to tailor it to your work.</div>`;
 
-  return setCard("trivia", "Trivia Wire", "status-bar game · on-device", toggle + sources + reseed + status, true);
+  const pointsNote = `<div class="set-note">${icon("info", 12)} LUCID points combine arcade and trivia earnings and are saved on this device. Recycling questions or switching packs keeps your points and trivia accuracy.</div>`;
+  return setCard("trivia", "Trivia Wire", "status-bar game · on-device", toggle + sources + reseed + status + pointsNote, true);
 }
 
 /** Run an AI re-seed: the backend gathers the checked sources, scans them fail-closed, and generates a
@@ -4193,6 +4461,7 @@ function settingsShell(): string {
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+    setSkel("judgment", "Judgment", "Jev · TypeSafe System One", true), // P-JEV.1 (ADR-0374)
     secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
@@ -4218,12 +4487,14 @@ function hydrateSettings(): void {
     }
     if (!typing) fillSec("profile", secProfile(s));
   });
-  void bridge.auth().then((a) => {
+  void Promise.all([bridge.auth(), bridge.accounts().catch(() => null)]).then(([a, accts]) => {
     state.auth = a; // store so the AskSage gateway card can render its key entry from auth.gateway
+    if (accts) state.accounts = accts; // P-ACCT.1: the account snapshot lands before the sections fill (an OAuth just completed also refreshes through here)
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
     void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
+    void bridge.judgment().then((j) => fillSec("judgment", secJudgment(a, j))); // P-JEV.1: key state + the clamped mode
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -6016,6 +6287,63 @@ async function importPackFlow(): Promise<void> {
   await installPackFlow(() => bridge.kbPackImport({ path: picked }));
 }
 
+/** Explain a refused pack in terms of WHOSE problem it is, and hand over one file to send.
+ *
+ *  P-PACKSCAN.1 (ADR-0368): the old message was the raw error plus a bare stage name, which for the
+ *  commonest real failure read `page "doc-01-summary" flagged: fail-closed: scan unavailable (scanner
+ *  not running) (scan)`. That says "your pack is malicious" about a perfectly valid pack whose only sin
+ *  was that LUCID could not find its own scanner directory. A user cannot act on that, and it sent the
+ *  author of the pack hunting through 189 pages for poison that was never there.
+ *
+ *  So each stage now gets its own sentence: what happened, whose fault it is, and what to do. `scanner`
+ *  is OUR bug and says so. Every failure also names the log file, because "send me this one file" is
+ *  the difference between a diagnosis and a conversation. */
+function showPackFailure(r: KbPackImportView | null): void {
+  const stage = r?.stage ?? "";
+  const raw = r?.error ?? "Couldn't confirm the import. Check your KG list before retrying.";
+  const log = r?.logPath;
+  const byStage: Record<string, { title: string; desc: string }> = {
+    scanner: {
+      title: "LUCID could not run its security scanner",
+      desc: `Your pack is probably fine. LUCID refuses to install a pack it cannot scan (fail-closed), and the scanner itself did not start, so nothing was checked. This is a LUCID problem, not a problem with the pack. Restarting LUCID usually fixes it. Details: ${raw}`,
+    },
+    scan: {
+      title: "Pack refused by the scanner",
+      desc: `A page in this pack carries content LUCID blocks (hidden or spoofed characters). Nothing was installed. This is about the pack's content, so the pack's author needs to fix it. Details: ${raw}`,
+    },
+    integrity: {
+      title: "Pack failed its integrity check",
+      desc: `The pack's database does not match the checksum in its manifest, so the download is corrupt or was modified. Download it again. Details: ${raw}`,
+    },
+    signature: {
+      title: "Pack signature did not verify",
+      desc: `This pack is signed, but not by a key this install trusts. Nothing was installed. Details: ${raw}`,
+    },
+    manifest: {
+      title: "That file is not a KG Pack",
+      desc: `Pick the \u200b.lkgpack.zip you downloaded, or the manifest.json inside an already-unzipped pack. Details: ${raw}`,
+    },
+    write: {
+      title: "Pack verified but could not be installed",
+      desc: `Every check passed and writing it to disk failed, so nothing was registered. Free disk space and retry. Details: ${raw}`,
+    },
+  };
+  const m = byStage[stage] ?? { title: "Pack not installed", desc: `${raw}${stage ? ` (${stage})` : ""}` };
+  const actions: Array<{ label: string; run?: () => void }> = [];
+  if (log) {
+    actions.push({ label: "Copy log path", run: () => void navigator.clipboard?.writeText(log).catch(() => {}) });
+    actions.push({ label: "Open log folder", run: () => void bridge.revealPath?.(log).catch(() => {}) });
+  }
+  actions.push({ label: "OK" });
+  showToast({
+    tone: "danger",
+    title: m.title,
+    desc: log ? `${m.desc}\n\nSend this file for support: ${log}` : m.desc,
+    actions,
+    timeout: 0,
+  });
+}
+
 /** One completion path for local files and entitled downloads. Never mount a hidden graph. */
 let packInstallBusy = false;
 async function installPackFlow(install: () => Promise<KbPackImportView | null>): Promise<void> {
@@ -6028,7 +6356,7 @@ async function installPackFlow(install: () => Promise<KbPackImportView | null>):
   try {
     const r = await install().catch(() => null);
     if (!r?.ok || !r.kgId) {
-      showToast({ tone: "danger", title: "Pack not installed", desc: `${r?.error ?? "Couldn't confirm the import. Check your KG list before retrying."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 0 });
+      showPackFailure(r);
       return;
     }
     const v = await bridge.kbActivate(r.kgId).catch(() => null);
@@ -6861,6 +7189,39 @@ function stopPreviewInspectRelay(): void {
 // runs browser code only, by design. Instead of staying mute, explain it in-pane; when the app dir
 // detects as an Electron app, offer a USER-clicked launch as a real OS process OUTSIDE LUCID
 // (audited server-side; the sandbox stays sealed).
+// Preview documents are untrusted. A frame message can request a link, never authorize egress.
+// The host-owned confirmation requires a second user click and captures the validated destination.
+let dismissPreviewLink: (() => void) | null = null;
+window.addEventListener("message", (ev) => {
+  const frame = laneFrame();
+  const d = ev.data;
+  if (!previewOpen || !frame || frame.hidden || ev.source !== frame.contentWindow || !d || d.__lucid !== "preview-external-link") return;
+  const url = externalHttpUrl(d.url);
+  if (!url) return;
+  dismissPreviewLink?.();
+  dismissPreviewLink = showToast({
+    tone: "info", title: "Open this preview link in your browser?",
+    desc: url, meta: "The external site receives your visit. LUCID and your draft stay open.",
+    actions: [
+      { label: "Open in browser", run: () => { void openAuthUrl(url); } },
+      { label: "Cancel" },
+    ],
+  });
+});
+
+// Normal app anchors use the same OS-browser boundary, including links in rendered chat and hints.
+function openAppLink(ev: MouseEvent): void {
+  if (ev.defaultPrevented || (ev.type === "auxclick" ? ev.button !== 1 : ev.button !== 0)) return;
+  const a = ev.target instanceof Element ? ev.target.closest("a[href]") : null;
+  if (!(a instanceof HTMLAnchorElement) || a.hasAttribute("download")) return;
+  const url = externalHttpUrl(a.href);
+  if (!url || new URL(url).origin === location.origin) return;
+  ev.preventDefault();
+  void openAuthUrl(url);
+}
+document.addEventListener("click", openAppLink);
+document.addEventListener("auxclick", openAppLink);
+
 const NODE_ONLY_ERR = /require is not defined|process is not defined|module is not defined|__dirname is not defined/i;
 window.addEventListener("message", (ev) => {
   const frame = laneFrame(); // health drives the shared notice, so only heed the ACTIVE lane's frame
@@ -8520,10 +8881,19 @@ async function recoverMasterTurn(): Promise<void> {
       showTurnReconnect("A fleet lane owns the composer. Reopen it to follow its activity.", () => void promoteLane(promoted.lane!.id));
       return;
     }
-    if (!canAdoptTurn(status)) { recoveryChecking = false; state.streaming = false; $("#turnReconnect")?.remove(); setSendEnabled(); return; }
+    // A reachable engine with no adoptable turn is the NORMAL fresh-open outcome: clear both surfaces.
+    if (!canAdoptTurn(status)) { recoveryChecking = false; state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled(); return; }
     await adoptMasterTurn(status!, owner);
   } catch (error) {
     if (owner !== turnViewEpoch) return;
+    // Nothing rendered means nothing at stake: a fresh open whose probe timed out gets the quiet
+    // composer button, not a paragraph. With a conversation on screen the banner still explains itself,
+    // because there the user needs to know their history may be out of date before they send again.
+    if (!$("#thread")?.querySelector(".turn, .msg, .asst, .user")) {
+      recoveryChecking = false; setSendEnabled();
+      showQuietReconnect(() => void recoverMasterTurn());
+      return;
+    }
     showTurnReconnect(`Connection unavailable: ${error instanceof Error ? error.message : String(error)}. Reconnect to check session status before sending.`, () => void recoverMasterTurn());
   }
 }
@@ -9183,7 +9553,7 @@ function renderStatus(): void {
 // trivia.ts; this block owns just the animation loop and the input wiring. The ticker element is
 // created once and re-adopted after every renderStatus innerHTML swap so its scroll position and
 // in-flight question survive the 2s data poll.
-const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}
+const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}; score includes arcade points
 const TRIVIA_ENABLED_KEY = "lucid.trivia-enabled"; // "1" = on (default OFF - an easter egg people find; toggle in Settings -> Trivia Wire)
 const TRIVIA_SPEED = 78;                        // px/s - an easy reading clip
 const TRIVIA_EXPLAIN_SPEED = 95;
@@ -9235,10 +9605,36 @@ function loadNewsLine(): boolean {
   return true;
 }
 
+// Retain the latest tally across bank rebuilds even if storage is blocked or full.
+// All points flow through triviaGame; arcade never writes behind its cached tally.
+let trivStoredTally: string | null | undefined;
 const trivStore = () => ({
-  get: () => localStorage.getItem(TRIVIA_SCORE_KEY),
-  set: (v: string) => localStorage.setItem(TRIVIA_SCORE_KEY, v),
+  get: () => {
+    if (trivStoredTally === undefined) trivStoredTally = localStorage.getItem(TRIVIA_SCORE_KEY);
+    return trivStoredTally;
+  },
+  set: (v: string) => {
+    trivStoredTally = v;
+    localStorage.setItem(TRIVIA_SCORE_KEY, v);
+  },
 });
+
+/** Initialize scoring independently of the opt-in ticker and its timers/listeners. */
+function ensureTriviaGame(): TriviaGame {
+  if (!triviaGame) {
+    trivBank = effectiveTriviaBank(state.userRole);
+    triviaGame = createTriviaGame(trivBank, trivStore());
+  }
+  return triviaGame;
+}
+
+const arcadeScorePort = {
+  total(): number { return ensureTriviaGame().state().score; },
+  award(points: number): void {
+    ensureTriviaGame().awardBonus(points);
+    renderMetricsRail();
+  },
+};
 
 async function refreshTriviaKg(): Promise<void> {
   try { const p = await bridge.personal(); trivKgUnlocked = !!(p?.enabled && p?.unlocked); }
@@ -9298,8 +9694,8 @@ function clearTriviaPack(role: string | null | undefined): void {
   try { localStorage.removeItem(TRIVIA_PACK_PREFIX + key); } catch { /* ignore */ }
 }
 
-/** Adopt a pack: persist it, then rebuild the live game on it (lifetime score survives - it lives in
- *  trivStore, not the game). No-op before the ticker exists; ensureTrivia picks up the stored pack. */
+/** Adopt a pack, then rebuild the live game without resetting arcade/trivia points or accuracy.
+ *  No-op before scoring is initialized; ensureTriviaGame picks up the stored pack. */
 function applyTriviaPack(role: string | null | undefined, questions: readonly TriviaQuestion[], model: string): void {
   saveTriviaPack(role, questions, model);
   if (!triviaGame) return;
@@ -9308,8 +9704,8 @@ function applyTriviaPack(role: string | null | undefined, questions: readonly Tr
   loadTriviaLine();
 }
 
-/** Rebuild the game when the role's bank actually changed (lifetime score survives - it lives in
- *  the store, not the game). No-op before the ticker exists or when the bank is unchanged. */
+/** Rebuild when the role's bank changes, retaining arcade/trivia points and trivia accuracy.
+ *  No-op before scoring is initialized or when the bank is unchanged. */
 function refreshTriviaGame(): void {
   if (!triviaGame) return;
   const bank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): generated pack ?? seed bank
@@ -9323,8 +9719,7 @@ const trivReducedMotion = typeof matchMedia === "function" && matchMedia("(prefe
 
 function ensureTrivia(): void {
   if (trivEl || !triviaEnabled()) return;
-  trivBank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): adopt a generated pack when present
-  triviaGame = createTriviaGame(trivBank, trivStore());
+  ensureTriviaGame();
   // Idle-engagement inputs (P-TRIV.2): a composer keystroke restarts the idle grace, and the KG
   // unlock state is polled gently (never per frame - bridge.personal() is a fetch).
   $("#input")?.addEventListener("input", () => { trivIdleSince = Date.now(); });
@@ -9405,7 +9800,8 @@ function answerTrivia(k: number): void {
   const pills = trivIn ? Array.from(trivIn.querySelectorAll<HTMLElement>("[data-tch]")) : [];
   pills[k]?.classList.add(res.correct ? "ok" : "bad");
   if (!res.correct) pills[res.correctIndex]?.classList.add("ok");
-  renderMetricsRail(); // the score tile updates immediately
+  lastRailSig = ""; // An incorrect answer changes the accuracy tooltip without changing points.
+  renderMetricsRail(); // shared points and trivia accuracy update immediately
   setTimeout(() => { if (triviaGame?.state().phase === "explain") loadTriviaLine(); }, TRIVIA_ANSWER_LINGER_MS);
 }
 
@@ -9732,6 +10128,7 @@ function toggleSidebar(force?: boolean): void {
 }
 /** Update the composer's quick controls (persona · skills). Model/mode/thinking live in the top picker. */
 function updateComposerTools(): void {
+  syncAgentExtras();
   const set = (sel: string, v: string) => { const e = $(sel); if (e) e.textContent = v; };
   const pBtn = $("#ctPersona");
   if (pBtn) {
@@ -13807,6 +14204,16 @@ function wire(): void {
 
   // P-AVATAR.1: back into the stage after an Esc exit (chip only visible for the lucid-agent role).
   $("#tbStage")!.addEventListener("click", () => setImmersive(true));
+  $("#agentTier")!.addEventListener("change", async (event) => {
+    if (state.userRole !== "lucid-agent" || state.streaming || agentTierApplying) { syncAgentExtras(); return; }
+    const previous = agentTier;
+    agentTier = (event.target as HTMLSelectElement).value === "max" ? "max" : "regular";
+    try {
+      await applyAgentTier();
+      try { localStorage.setItem("lucid.agent-tier", agentTier); } catch { /* Session choice remains usable without storage. */ }
+    } catch { agentTier = previous; }
+    syncAgentExtras();
+  });
   // text zoom
   $("#zoomIn")!.addEventListener("click", () => nudgeZoom(0.1));
   $("#zoomOut")!.addEventListener("click", () => nudgeZoom(-0.1));
@@ -13927,6 +14334,14 @@ function wire(): void {
     const btn = $(`#${target}`, body);
     btn?.click();
   });
+  // P-ACCT.1: persist each provider accordion's open state across fillSec repaints (native <details>
+  // toggle doesn't bubble -> capture; the dockSec pattern, session-only).
+  $("#setBody")!.addEventListener("toggle", (e) => {
+    const d = e.target as HTMLElement;
+    if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("prov-acc")) return;
+    const id = d.dataset.provAcc; if (!id) return;
+    if (d.open) PROV_ACC_OPEN.add(id); else PROV_ACC_OPEN.delete(id);
+  }, true);
   // P-VOICE.1 (ADR-0115): persist a voice setting when a Voice-card control changes.
   $("#setBody")!.addEventListener("change", async (e) => {
     const t0 = e.target as HTMLElement;
@@ -13975,6 +14390,15 @@ function wire(): void {
       } else {
         showToast({ tone: "danger", title: "Import rejected", desc: "Not a valid lucid-voice-endpoint file (wrong shape, or it carries a credential-like field - secrets never travel in endpoint exports).", actions: [{ label: "OK" }], timeout: 0 });
       }
+      return;
+    }
+    // P-JEV.1 (ADR-0374): the judgment backend. The server persists, clamps under lockdown, and restarts omp
+    // when the effective pin changes; repaint from its answer so "omp is told X" is never a client guess.
+    if (t0.matches("[data-judgment-set]")) {
+      const next = await bridge.setJudgment((t0 as HTMLSelectElement).value as JudgmentView["stored"]).catch(() => null);
+      if (!next) { showToast({ tone: "warn", title: "Couldn't save judgment backend", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
+      fillSec("judgment", secJudgment(state.auth, next));
+      showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the LLM chain until it is turned off." : "omp restarts with it; the next turn uses it.", timeout: 4000 });
       return;
     }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
@@ -14032,7 +14456,7 @@ function wire(): void {
       clearTriviaPack(state.userRole);
       refreshTriviaGame(); // rebuild on the seed bank now that the generated pack is gone
       fillSec("trivia", secTrivia());
-      showToast({ title: "Back to the built-in pack", desc: "The generated questions were cleared for this role.", timeout: 2600 });
+      showToast({ title: "Back to the built-in pack", desc: "The generated questions were cleared for this role. Arcade and trivia points and trivia accuracy are unchanged.", timeout: 2600 });
       return;
     }
     if (t.closest("#trivReseed")) { await reseedTrivia(t.closest("#trivReseed") as HTMLButtonElement); return; }
@@ -14157,6 +14581,11 @@ function wire(): void {
       await loadVoices();
       showToast({ title: nowFav ? "Added to favorites" : "Removed from favorites", desc: nowFav ? "This voice now appears first in the picker." : "Removed from your favorites.", timeout: 1800 });
       return;
+    }
+    // P-ACCT.1: named account actions (switch / add / rename / remove) inside a provider accordion.
+    // The handler adopts the server's returned snapshot; repaint both account-bearing sections from it.
+    if (t.closest("[data-acct-switch],[data-acct-add],[data-acct-rename],[data-acct-remove]")) {
+      if (await handleAccountAction(t, $("#setBody")!)) { repaintAccountSections(); return; }
     }
     const save = t.closest("[data-savekey]") as HTMLElement | null;
     if (save) {
@@ -14672,6 +15101,8 @@ function wire(): void {
   // Jump-to-latest: show the catch-up arrow on user scroll / resize; click pages down one screen.
   $("#chat")?.addEventListener("scroll", scheduleJump, { passive: true });
   window.addEventListener("resize", scheduleJump, { passive: true });
+  const arcadeHost = $("#agentArcadeHost");
+  if (arcadeHost) new ResizeObserver(syncArcadeGap).observe(arcadeHost);
   $("#jumpDown")?.addEventListener("click", jumpDownOnePage);
   $("#jumpEnd")?.addEventListener("click", jumpToEnd);
 
@@ -14724,11 +15155,43 @@ function wire(): void {
     if (t.closest("[data-asksage-refresh]")) { void refreshAsksage(); return; }
     if (t.closest("[data-budget-refresh]")) void refreshBudget(true);
   });
-  $("#newSession")!.addEventListener("click", () => newSession());
-  const w = (window as any).lucid?.win;
-  $("#winMin")!.addEventListener("click", () => w?.minimize?.());
-  $("#winMax")!.addEventListener("click", () => w?.toggleMaximize?.());
-  $("#winClose")!.addEventListener("click", () => w?.close?.());
+  $("#newSession")!.addEventListener("click", () => confirmNewSession());
+  $("#winMin")!.addEventListener("click", () => window.lucid?.win?.minimize());
+  $("#winMax")!.addEventListener("click", () => window.lucid?.win?.toggleMaximize());
+  $("#winClose")!.addEventListener("click", () => confirmWindowClose());
+}
+
+// ───────────────────────── mis-click guards (P-MASCOT.5) ─────────────────────────
+// Reported live: the titlebar and side-panel controls sit so close together that Maximise/Collapse
+// overshoots land on Close/New session, both of which destroyed work with no confirmation and no undo.
+// The buttons are also spaced apart in styles.css; this is the second half of the fix. Nothing prompts
+// when there is nothing to lose, so the common case stays one click.
+
+function confirmWindowClose(): void {
+  const draft = (($("#input") as HTMLTextAreaElement | null)?.value ?? "").trim();
+  const reason = state.streaming
+    ? "A turn is still streaming and will be cut off."
+    : draft ? "You have an unsent prompt in the composer." : "";
+  if (!reason) { window.lucid?.win?.close(); return; }
+  showToast({
+    title: "Close LUCID?",
+    desc: `${reason} Closing now loses it.`,
+    tone: "warn",
+    actions: [{ label: "Close anyway", kind: "danger", run: () => window.lucid?.win?.close() }, { label: "Stay" }],
+    timeout: 8000,
+  });
+}
+
+function confirmNewSession(): void {
+  const dirty = $$("#thread .msg").length > 0 || (($("#input") as HTMLTextAreaElement | null)?.value ?? "").trim();
+  if (!dirty) { newSession(); return; }
+  showToast({
+    title: "Start a new session?",
+    desc: "The current conversation leaves the composer view. It stays in Sessions history, so you can reopen it.",
+    tone: "warn",
+    actions: [{ label: "New session", kind: "danger", run: () => newSession() }, { label: "Cancel" }],
+    timeout: 8000,
+  });
 }
 
 // ───────────────────────── palette actions ─────────────────────────
@@ -14792,6 +15255,12 @@ const palette = createPalette(() => {
     { id: "side", title: "Toggle sidebar", icon: "layout", run: () => toggleSidebar() },
     { id: "insp", title: "Collapse / expand inspector (metrics rail)", icon: "collapse", run: () => setInspectorRail(!state.inspectorRail) },
     { id: "refresh", title: "Refresh dashboards now", icon: "refresh", run: () => refresh() },
+    // Mis-click safety: the titlebar buttons are 30px wide and two pixels apart, so every window
+    // action also has a keyboard route here. Close still runs the unsaved-work guard.
+    { id: "winmin", title: "Minimise window", icon: "minus", hint: "window", run: () => window.lucid?.win?.minimize() },
+    { id: "winmax", title: "Maximise / restore window", icon: "expand", hint: "window", run: () => window.lucid?.win?.toggleMaximize() },
+    { id: "winclose", title: "Close window", icon: "close", hint: "window", run: () => confirmWindowClose() },
+    { id: "stage", title: state.immersive ? "Leave the immersive stage" : "Enter the immersive stage", icon: "spark", hint: "Esc exits", run: () => setImmersive(!state.immersive) },
   ];
   const model = state.config.find((c) => c.id === "model");
   if (model) for (const o of model.options.slice(0, 10)) acts.push({ id: "m:" + o.value, title: `Model: ${o.name}`, icon: "spark", hint: o.value === model.currentValue ? "current" : "", run: () => applyConfig("model", o.value) });
@@ -14857,7 +15326,7 @@ let configWarmTimer: number | null = null; // the single scheduled re-poll (one 
 // model. Fire-and-forget, guarded once per launch.
 let defaultModelApplied = false;
 async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promise<void> {
-  if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming) return;
+  if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming || state.userRole === "lucid-agent") return;
   defaultModelApplied = true;
   // loadAsksage / auth race loadConfig at boot; both gate what's selectable, so make sure they're known.
   if (state.asksage == null) { const a = await bridge.asksage().catch(() => null); if (a) state.asksage = a; }
@@ -14866,6 +15335,7 @@ async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promi
     bridge.chosenModel().catch(() => ""),
     bridge.lastModel().catch(() => ""),
   ]);
+  if (agentPrior || state.streaming) return; // the role was entered mid-await: the tier owns the model now
   const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value));
   if (!candidates.length) return;
   const inList = (v: string) => !!v && candidates.some((o) => o.value === v);
@@ -14915,7 +15385,10 @@ async function loadConfig(newCycle = true): Promise<void> {
     }
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
-    if (step.action === "adopt") void maybeApplyDefaultModel(model); // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
+    if (step.action === "adopt") {
+      if (state.userRole === "lucid-agent") void applyAgentTier().catch(() => {});
+      else void maybeApplyDefaultModel(model);
+    } // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
     updateComposerTools();
     void syncMode();
     pickerRedraw?.(); // if a picker is open on the cached list, refresh it with the live one
@@ -15030,7 +15503,11 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   } finally { document.removeEventListener("visibilitychange", onVisible); }
 }
 
-async function applyConfig(configId: string, value: string, opts: { system?: boolean } = {}): Promise<void> {
+async function applyConfig(configId: string, value: string, opts: { system?: boolean; confirm?: boolean } = {}): Promise<void> {
+  if (configId === "model" && !opts.system && state.userRole === "lucid-agent" && !state.streaming) {
+    value = resolveAgentTierModel(modelOptions(), value, agentTier) ?? value;
+  }
+  const previousModel = state.model;
   // P-ACP.2/3: the mode control is the client 3-way Plan/Ask/Agent; it sets omp's session mode +
   // the permission posture in one call, not an omp config option.
   if (configId === "mode") {
@@ -15057,13 +15534,25 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
   // P-MODELDEF: a genuine USER pick becomes the sticky default (restored on the next launch). A SYSTEM
   // switch (lockdown clamp, no-response fallback, collab-guest mirror, boot default-select) never does.
   if (configId === "model" && !opts.system) void bridge.setChosenModel(value).catch(() => {});
-  void bridge.setConfig(configId, value)
+  const configured = bridge.setConfig(configId, value)
     .then((cfg) => {
+      if (opts.confirm && cfg.find((c) => c.id === configId)?.currentValue !== value) throw new Error("The engine did not confirm the selected model");
       state.config = cfg;
       const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
       updateComposerTools();
     })
-    .catch(() => showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 }));
+    .catch((error) => {
+      if (opts.confirm && configId === "model" && state.model === value) {
+        state.model = previousModel;
+        if (opt) opt.currentValue = previousModel;
+        const label = $("#modelName"); if (label) label.textContent = modelLabel(previousModel);
+        renderStatus(); if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); // undo the optimistic branch everywhere it painted
+        updateComposerTools();
+      }
+      showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 });
+      if (opts.confirm) throw error;
+    });
+  if (opts.confirm) await configured;
   // P-IDE.1e (ADR-0109) / P-MODEL.2: selecting an API-only Claude model (Fable / Mythos) raises a
   // persistent notice instead of the routine "applied" toast: no absolute privacy from the U.S.
   // government, AND pay-as-you-go billing outside the plan's included usage.
@@ -15206,7 +15695,31 @@ function familyListHTML(models: { value: string; name: string }[], sel: string, 
       <button class="cfg-fam-h" type="button" data-fam-toggle="favs"><span class="cfg-fam-name">${icon("star", 12, "fam-star")} Favorites</span><span class="cfg-fam-n">${starred.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
       <div class="cfg-fam-list">${starred.map((o) => modelRow(o, sel)).join("")}</div>
     </div>`;
-  return favSec + groupByFamily(filtered, order).map(({ fam, models: ms }) => {
+  // P-LOCALPICK.1 (ADR-0371): the user's OWN hardware pins to the VERY TOP, above Favorites. A
+  // configured local provider is the strongest intent signal in the app (nobody wires a DGX over a
+  // VPN by accident), and its models are otherwise the least findable: no family regex matches a
+  // self-hosted id, so they sank to "Other models" at the bottom. Collapsible like any family and the
+  // collapse persists; local models render ONLY here, never duplicated into a family section, because
+  // unlike Favorites there is no family muscle memory to preserve for an id no family claims.
+  //
+  // The pending row is the other half. A freshly Discovered model is ABSENT from omp's report until
+  // the app restarts, and the only explanation lived in a Settings banner three surfaces away, so the
+  // picker looked simply broken ("I discovered it, it does not show up"). Now the section itself says
+  // which declared models a restart will load, searching included, with the restart one click away.
+  const localPrefixes = localPrefixSet(state.localProviders ?? []);
+  const { local: localRows, rest } = splitLocalModels(filtered, localPrefixes);
+  // Pending rows obey the query too: searching "glm" MUST surface a pending GLM (that is the exact
+  // reported confusion), while searching "claude" must not show unrelated local noise.
+  const pending = filterModels(pendingLocalModels(state.localProviders ?? [], models), q);
+  const pendingRows = pending.map((p) => `<div class="cfg-local-pending" title="${esc(p.value)}">
+      ${icon("clock", 12)}<span><b>${esc(p.name)}</b> loads after a restart</span>
+      <button class="btn-mini" type="button" data-lp-apply>Restart now</button>
+    </div>`).join("");
+  const localSec = localRows.length === 0 && pending.length === 0 ? "" : `<div class="cfg-fam cfg-fam-local${!searching && collapsed.has("local") ? " collapsed" : ""}" data-fam="local">
+      <button class="cfg-fam-h" type="button" data-fam-toggle="local"><span class="cfg-fam-name">${icon("bolt", 12, "fam-local")} Local (self-hosted)</span><span class="cfg-fam-n">${localRows.length + pending.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
+      <div class="cfg-fam-list">${localRows.map((o) => modelRow(o, sel)).join("")}${pendingRows}</div>
+    </div>`;
+  return localSec + favSec + groupByFamily(rest, order).map(({ fam, models: ms }) => {
     const isCollapsed = !searching && collapsed.has(fam.id);
     return `<div class="cfg-fam${isCollapsed ? " collapsed" : ""}" data-fam="${fam.id}">
       <button class="cfg-fam-h" type="button" data-fam-toggle="${fam.id}"><span class="cfg-fam-name">${esc(fam.label)}</span><span class="cfg-fam-n">${ms.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
@@ -15378,11 +15891,18 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // gov-first + newest→oldest WITHIN each family (groupByFamily preserves that relative order).
   const govOk = !!state.asksage?.configured;
   const chinaOk = !!state.chinaAck;
+  // P-LOCALPICK.1 (ADR-0371): a model served from the user's OWN configured local provider bypasses
+  // the data-sovereignty gate. That gate exists because prompts EGRESS to a foreign-controlled cloud;
+  // a Local Provider is a declared internal endpoint (a DGX on the LAN, a box over the VPN), so the
+  // weights' country of origin does not change where the data goes. Without this, a user who never
+  // acknowledged China-cloud models could Discover their own self-hosted GLM and the picker would
+  // hide it with no hint, which is the edge-first posture inverted.
+  const localOk = localPrefixSet(state.localProviders ?? []);
   const visible = opt.options.filter((o) =>
     !isAuxiliaryModel(o.value) &&
     !isDeprecatedModel(o.value) &&
     (govOk || !isGovModel(o.value)) &&
-    (chinaOk || !isChinaModel(o.value)));
+    (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
   // Lockdown: only the gov-gateway models are selectable.
   const list = state.asksage?.only ? visible.filter((o) => isGovModel(o.value)) : visible;
   // Final safety: an omp catalog can list the same model twice under one provider. Drop rows that would
@@ -15508,9 +16028,13 @@ async function startProviderOauth(oauthId: string, cardEl: HTMLElement | null, r
 // open-weight / non-U.S. section stays hidden behind the typed ACKNOWLEDGE (provider_hub.buildHubSections).
 let hubClose: (() => void) | null = null;
 function hubTileHtml(id: string, name: string, configured: boolean, canOauth: boolean): string {
-  const badge = configured
-    ? `<span class="provhub-badge ok">${icon("check", 10)} connected</span>`
-    : `<span class="provhub-badge">${canOauth ? "sign in / key" : "add key"}</span>`;
+  // P-ACCT.1: a multi-account provider badges the count; single-account configured stays "connected".
+  const nAccts = state.accounts?.[id]?.length ?? 0;
+  const badge = nAccts > 1
+    ? `<span class="provhub-badge ok">${nAccts} accounts</span>`
+    : configured
+      ? `<span class="provhub-badge ok">${icon("check", 10)} connected</span>`
+      : `<span class="provhub-badge">${canOauth ? "sign in / key" : "add key"}</span>`;
   return `<div class="provhub-item" data-hub-item="${esc(id)}">
     <button class="provhub-tile" type="button" data-hub-tile="${esc(id)}">
       <span class="provhub-nm">${esc(name)}</span>${badge}${icon("chevron", 14)}
@@ -15572,10 +16096,18 @@ function openProviderHub(onClose?: () => void): void {
   redraw();
   // P-LOCAL.4: pull the user's configured self-hosted endpoints so the "Local & self-hosted" section lists them.
   void bridge.localProvidersList().then((list) => { if (list) { state.localProviders = list; redraw(); } }).catch(() => { /* best-effort */ });
+  // P-ACCT.1: the account snapshot drives the "N accounts" tile badges + the expanded account lists.
+  void bridge.accounts().then((s) => { if (s) { state.accounts = s; redraw(); } }).catch(() => { /* best-effort */ });
   document.addEventListener("keydown", onKey);
   $("#provHubClose", ov)!.addEventListener("click", close);
   ov.addEventListener("click", (e) => { if (e.target === ov) close(); }); // click-away on the backdrop
-  const refreshAuth = async () => { const a = await bridge.auth().catch(() => null); if (a) { state.auth = a; renderStatus(); } };
+  // P-ACCT.1: auth and the account snapshot refresh together, so a finished OAuth sign-in also lands
+  // its new named account in the tiles and the expanded lists.
+  const refreshAuth = async () => {
+    const [a, s] = await Promise.all([bridge.auth().catch(() => null), bridge.accounts().catch(() => null)]);
+    if (a) { state.auth = a; renderStatus(); }
+    if (s) state.accounts = s;
+  };
   // Enable the ACKNOWLEDGE reveal only when the exact word is typed (mirrors the Settings gate).
   body.addEventListener("input", (e) => {
     if ((e.target as HTMLElement).id === "hubAckInput") {
@@ -15597,6 +16129,26 @@ function openProviderHub(onClose?: () => void): void {
       if (state.settingsOpen) fillSec("others", secOthers(state.auth));
       redraw();
       return;
+    }
+    // P-ACCT.1: the same four account actions as Settings, scoped to the hub body (mirrors how
+    // data-savekey is duplicated here). Repaint the hub AND, when open, the Settings sections.
+    if (t.closest("[data-acct-switch],[data-acct-add],[data-acct-rename],[data-acct-remove]")) {
+      // Which provider's tile the click lived in - read BEFORE redraw() detaches the node.
+      const provId = (t.closest("[data-acct-prov]") as HTMLElement | null)?.dataset.acctProv
+        ?? (t.closest("[data-acct-add]") as HTMLElement | null)?.dataset.acctAdd;
+      if (await handleAccountAction(t, body)) {
+        await refreshAuth(); // a switch swaps the active env key; badges must tell the new truth
+        if (state.settingsOpen) repaintAccountSections();
+        redraw();
+        // Re-expand the tile that was acted on so the refreshed account list stays visible.
+        if (provId) {
+          const wrap = $(`[data-hub-item="${provId}"]`, body);
+          const p = [...(state.auth?.gateway ?? []), ...(state.auth?.majors ?? []), ...(state.auth?.others ?? [])].find((x) => x.id === provId);
+          const cfg = wrap?.querySelector(".provhub-config") as HTMLElement | null;
+          if (wrap && cfg && p) { wrap.classList.add("open"); cfg.innerHTML = accountsBlock(p) + provCard(p); }
+        }
+        return;
+      }
     }
     // Provider config actions (own-scoped: the hub lives outside #setBody, so its own handlers do the work).
     const clear = t.closest("[data-clearkey]") as HTMLElement | null;
@@ -15633,7 +16185,7 @@ function openProviderHub(onClose?: () => void): void {
         const id = tile.dataset.hubTile!;
         const p = [...(state.auth?.gateway ?? []), ...(state.auth?.majors ?? []), ...(state.auth?.others ?? [])].find((x) => x.id === id);
         const cfg = wrap.querySelector(".provhub-config") as HTMLElement | null;
-        if (cfg && p) cfg.innerHTML = provCard(p); // reuse the exact Settings config body (OAuth / key / fields)
+        if (cfg && p) cfg.innerHTML = accountsBlock(p) + provCard(p); // P-ACCT.1: accounts list over the exact Settings config body (OAuth / key / fields)
       }
     }
   });
@@ -15692,18 +16244,32 @@ function openConfigPopover(anchor: HTMLElement): void {
         search.placeholder = "Search models…";
         return;
       }
-      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}`; // P-FAV.1: stars invalidate the memo
+      // P-LOCALPICK.1: local providers shape the pinned section, the china bypass, AND the pending
+      // rows, so they are part of the memo key or a Discover/save while the picker sits open would
+      // paint a stale list forever.
+      const lp = (state.localProviders ?? []).map((p) => `${p.ompProvider}:${p.enabled ? 1 : 0}:${(p.models ?? []).map((mm) => mm.id).join("+")}`).join(";");
+      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}|${lp}`; // P-FAV.1: stars invalidate the memo
       if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
       list.innerHTML = pickerMemo.html;
       search.placeholder = `Search ${list2.length} models…`;
     };
     draw();
+    // P-LOCALPICK.1: the pinned Local section reads state.localProviders, which only Settings and the
+    // Provider Hub hydrated before, so a picker opened first (the common cold path) would miss it.
+    // Refresh in the background and redraw once the list lands; best-effort, the picker never waits.
+    void bridge.localProvidersList?.().then((l) => { if (l) { state.localProviders = l; draw(search.value); } }).catch(() => { /* best-effort */ });
     // P-PROV.2: the always-visible footer opens the Provider Hub (closing the picker first).
     $("#cfgAddProv", node)?.addEventListener("click", () => { close(); openProviderHub(); });
     pickerRedraw = () => draw(search.value); // refresh when live config lands (cold-boot cache → live)
     attachModelTips(list); // premium per-model hover cards (delegated → survives re-render)
     search.addEventListener("input", (e) => draw((e.target as HTMLInputElement).value));
     list.addEventListener("click", (e) => {
+      // P-LOCALPICK.1: "Restart now" on a pending local model - same relaunch the Settings banner does.
+      if ((e.target as HTMLElement).closest("[data-lp-apply]")) {
+        showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 });
+        void bridge.relaunch().catch(() => { /* the app is going down anyway */ });
+        return;
+      }
       // P-FAV.1: the star is INSIDE a [data-val] row - check it first so starring never selects.
       const fs = (e.target as HTMLElement).closest("[data-fav]") as HTMLElement | null;
       if (fs) { saveFavs(toggleFav(favsOf(), fs.dataset.fav!)); draw(search.value); return; }
@@ -15774,6 +16340,12 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
   }
   listEl.addEventListener("click", (e) => {
     if (configId === "model") {
+      // P-LOCALPICK.1: "Restart now" on a pending local model - same relaunch as the Settings banner.
+      if ((e.target as HTMLElement).closest("[data-lp-apply]")) {
+        showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 });
+        void bridge.relaunch().catch(() => { /* the app is going down anyway */ });
+        return;
+      }
       // P-FAV.1: star toggle first (inside a [data-val] row) - starring never selects.
       const fs = (e.target as HTMLElement).closest("[data-fav]") as HTMLElement | null;
       if (fs) { saveFavs(toggleFav(favsOf(), fs.dataset.fav!)); listEl.innerHTML = familyListHTML(opts, c.currentValue, ($("#miniSearch", node) as HTMLInputElement)?.value ?? ""); return; }

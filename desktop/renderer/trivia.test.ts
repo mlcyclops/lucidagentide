@@ -24,8 +24,8 @@ const lcg = (seed = 42): (() => number) => {
   let s = seed >>> 0;
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 2 ** 32; };
 };
-const memStore = (initial: string | null = null): TriviaStore & { raw: string | null } => {
-  const o = { raw: initial, get: () => o.raw, set: (v: string) => { o.raw = v; } };
+const memStore = (initial: string | null = null): TriviaStore & { raw: string | null; writes: number } => {
+  const o = { raw: initial, writes: 0, get: () => o.raw, set: (v: string) => { o.raw = v; o.writes += 1; } };
   return o;
 };
 const q = (over: Partial<TriviaQuestion> = {}): TriviaQuestion => ({
@@ -154,6 +154,96 @@ describe("scoring", () => {
   });
 });
 
+describe("shared arcade points", () => {
+  test("bonus awards preserve trivia progress in question and explain phases", () => {
+    const store = memStore();
+    const g = createTriviaGame([q()], store, lcg());
+    g.answer(1);
+    for (let i = 0; i < 2; i++) {
+      const before = g.state();
+      const writes = store.writes;
+      expect(g.awardBonus(37)).toBe(before.score + 37);
+      expect(g.state()).toEqual({ ...before, score: before.score + 37 });
+      expect(g.state().question).toBe(before.question);
+      expect(store.writes).toBe(writes + 1);
+      expect(JSON.parse(store.raw!)).toEqual({ score: before.score + 37, answered: before.answered, correct: before.correct });
+      g.advance();
+    }
+  });
+  test("trivia and arcade points accumulate in either order without altering streak multipliers", () => {
+    const g = createTriviaGame([q()], memStore(), lcg());
+    expect(g.awardBonus(30)).toBe(30);
+    const first = g.answer(1)!;
+    expect(first.gained).toBe(TRIVIA_BASE_POINTS);
+    expect(g.awardBonus(17)).toBe(47 + first.gained);
+    g.advance();
+    const second = g.answer(1)!;
+    expect(second.gained).toBe(TRIVIA_BASE_POINTS * 2);
+    expect(g.state().score).toBe(47 + first.gained + second.gained);
+    expect(g.state().answered).toBe(2);
+    expect(g.state().correct).toBe(2);
+    expect(g.state().streak).toBe(2);
+  });
+  test("invalid bonuses neither mutate trivia nor write persistence", () => {
+    const store = memStore();
+    const g = createTriviaGame([q()], store, lcg());
+    g.answer(1);
+    for (let i = 0; i < 2; i++) {
+      const before = g.state();
+      const raw = store.raw;
+      const writes = store.writes;
+      for (const points of [0, -0, -1, 0.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, Number.MAX_VALUE]) {
+        expect(g.awardBonus(points)).toBe(before.score);
+        expect(g.state()).toEqual(before);
+        expect(store.raw).toBe(raw);
+        expect(store.writes).toBe(writes);
+      }
+      g.advance();
+    }
+  });
+  test("accepts the safe-integer ceiling but rejects awards that exceed it", () => {
+    const store = memStore(JSON.stringify({ score: Number.MAX_SAFE_INTEGER - 1, answered: 7, correct: 4 }));
+    const g = createTriviaGame([q()], store, lcg());
+    expect(g.awardBonus(1)).toBe(Number.MAX_SAFE_INTEGER);
+    const before = g.state();
+    const raw = store.raw;
+    const writes = store.writes;
+    expect(g.awardBonus(1)).toBe(before.score);
+    expect(g.state()).toEqual(before);
+    expect(store.raw).toBe(raw);
+    expect(store.writes).toBe(writes);
+  });
+  test("legacy tallies keep their shape and combined points survive bank replacement", () => {
+    const legacy = { score: 1234, answered: 19, correct: 11 };
+    const store = memStore(JSON.stringify(legacy));
+    const g = createTriviaGame([q()], store, lcg());
+    expect(g.awardBonus(29)).toBe(legacy.score + 29);
+    expect(JSON.parse(store.raw!)).toEqual({ ...legacy, score: legacy.score + 29 });
+    const gain = g.answer(1)!.gained;
+    const replacement = createTriviaGame([q({ q: "Replacement question?" })], store, lcg());
+    expect(replacement.state().score).toBe(legacy.score + 29 + gain);
+    expect(replacement.state().answered).toBe(legacy.answered + 1);
+    expect(replacement.state().correct).toBe(legacy.correct + 1);
+    expect(replacement.state().question.q).toBe("Replacement question?");
+    expect(replacement.awardBonus(13)).toBe(legacy.score + 42 + gain);
+    const restored = createTriviaGame([q()], store, lcg());
+    expect(restored.state().score).toBe(replacement.state().score);
+    expect(restored.state().answered).toBe(replacement.state().answered);
+    expect(restored.state().correct).toBe(replacement.state().correct);
+  });
+  test("legacy large finite tallies remain intact when a bonus cannot be represented safely", () => {
+    const legacy = { score: Number.MAX_VALUE, answered: 3, correct: 2 };
+    const store = memStore(JSON.stringify(legacy));
+    const g = createTriviaGame([q()], store, lcg());
+    const before = g.state();
+    expect(before.score).toBe(legacy.score);
+    expect(g.awardBonus(1)).toBe(legacy.score);
+    expect(g.state()).toEqual(before);
+    expect(JSON.parse(store.raw!)).toEqual(legacy);
+    expect(store.writes).toBe(0);
+  });
+});
+
 describe("persistence", () => {
   test("lifetime score survives a new game through the same store", () => {
     const store = memStore();
@@ -173,8 +263,11 @@ describe("persistence", () => {
   });
   test("a throwing store never breaks play", () => {
     const g = createTriviaGame([q()], { get: () => { throw new Error("boom"); }, set: () => { throw new Error("boom"); } }, lcg());
+    expect(g.awardBonus(23)).toBe(23);
     expect(g.answer(1)?.gained).toBe(TRIVIA_BASE_POINTS);
-    expect(g.state().score).toBe(TRIVIA_BASE_POINTS);
+    const before = g.state();
+    expect(g.awardBonus(11)).toBe(TRIVIA_BASE_POINTS + 34);
+    expect(g.state()).toEqual({ ...before, score: TRIVIA_BASE_POINTS + 34 });
   });
 });
 

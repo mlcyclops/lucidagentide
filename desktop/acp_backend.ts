@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { LiveTurn, type TurnAttachment, type TurnSnapshot, type TurnStatus } from "./turn_recovery.ts";
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
-import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
+import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
@@ -36,7 +36,9 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentProvider, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
+import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
 import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
@@ -172,9 +174,29 @@ const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
 // "other". Observability only: it never blocks, so it is deliberately fail-SOFT (unlike the gate) and
 // self-skips when LUCID_TOOL_META_URL is absent.
 const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
+// P-JEV.2 (ADR-0377): reports EVERY typed judgment (question, answers, probabilities, which backend
+// answered, latency, error) over a token'd loopback URL, because omp records none of them and has no hook
+// for them: the extension wraps pi-ai's TypeSafeJudge / TextJudge in-process. Observability only, fail-soft,
+// self-skips when LUCID_JUDGMENT_URL is absent.
+const JUDGMENT_EXT = repoAsset("harness", "omp", "judgment_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = repoAsset("harness", "omp", "acp_config.yml");
+
+/** The `--config` overlays EVERY omp child gets (master, util, fleet lane): the static isolation overlay
+ *  (present-only, fail-open on a non-security knob: the gate still scans every call) and then the LUCID
+ *  judgment overlay (P-JEV.1, ADR-0374), rewritten at each spawn from the stored choice + the LIVE lock state
+ *  so a session spawned under AskSage lockdown is pinned to `llm` even if the user saved `typesafe` earlier.
+ *  omp deep-merges later files over earlier ones. If the overlay cannot be written, refuse to spawn: with a
+ *  saved TYPESAFE_API_KEY, omp's default `auto` would route judgments to api.typesafe.ai, which under
+ *  lockdown is CUI backflow, so "could not pin" must never degrade to "unpinned". */
+function ompConfigArgs(): string[] {
+  const args = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
+  const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
+  const overlay = judgmentOverlayFile();
+  writeJudgmentOverlay(overlay, r.effective); // throws -> the caller's spawn rejects, named
+  return [...args, "--config", overlay];
+}
 
 // P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md (if any) and wrap it as standing design-invariant
 // guidance for the user-turn preamble. Re-read every turn (cheap, small file) so edits take effect live.
@@ -230,8 +252,7 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   if (!GATE) throw new Error(gateRefusal());
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
-  const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...isoCfg, "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -309,6 +330,10 @@ export type ChatEvent =
   // P-EVAL.4 (ADR-0318): the tool_meta extension reported the real name (and later the pass/fail) for a
   // call already streamed as `tool`. Display + report metadata only, never a gate.
   | { type: "tool-meta"; id: string; name: string; ok?: boolean }
+  // P-JEV.2 (ADR-0377): one typed judgment the omp child answered during this turn (question, answers with
+  // probabilities, which backend answered, latency, error). Self-reported by the judgment extension, which
+  // awaits the desktop's acknowledgement before omp acts on the answer, so this always precedes `done`.
+  | { type: "judgment"; report: JudgmentReport }
   // P-IMG.1 (ADR-0208): a tool result carried image content (generated image, chart, rendered figure). The
   // images are validated + capped in extractToolImages before this event is emitted; the UI renders them
   // inline in the reply with a download + "send to preview" (for markup) affordance.
@@ -491,6 +516,16 @@ class Backend {
     return true;
   }
 
+  /** P-JEV.2 (ADR-0377): relay one traced judgment into the live chat stream. Only the MASTER child's
+   *  reports belong to the chat turn this backend streams; a fleet lane's report (target = lane id) is
+   *  dropped here rather than drawn under the wrong reply. Returns false when it was not delivered so the
+   *  route can say so; nothing acts on it, a dropped trace costs one table row and nothing else. */
+  noteJudgment(report: JudgmentReport): boolean {
+    if (report.target !== "master" || !this.listener) return false;
+    this.emit({ type: "judgment", report });
+    return true;
+  }
+
   // P-ASKSAGE.1 (ADR-0059): a bounded ring of AskSage tool-loop diagnostics, parsed from the omp child's
   // `[ASKSAGE_DIAG]` stderr lines. Surfaced (developer-mode only) in the Logs panel so the non-streamed
   // AskSage tool loop — and the "empty-response → gives up early" anomaly — is observable from a UI test.
@@ -588,10 +623,7 @@ class Backend {
         // P-TASK.2 (ADR-0028): append the byte-stable proactive-delegation policy to omp's system
         // prompt. omp owns the system prompt on the ACP path, so --append-system-prompt is how our
         // cached, stable layer-3 policy reaches the chat model (no volatile bytes → cache stays hot).
-        // The isolation overlay ships under harness/** and resolves like GATE in dev AND packaged
-        // builds; add it ONLY if present so a missing file degrades isolation off rather than crashing
-        // `omp acp` (bundled-safety, fail-open on a non-security knob — the gate still scans every call).
-        const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
+        // The --config overlays (isolation + the P-JEV.1 judgment pin) come from ompConfigArgs() below.
         // P-LOC.1 (ADR-0031): thread the AI-LOC attribution context to the gate via env. The spawned
         // omp child inherits process.env, so the in-process gate tags each AI-authored edit with the
         // authoring model + the attribution identity + the edited workspace. Set BEFORE spawn (env is
@@ -602,7 +634,7 @@ class Backend {
         if (loadSettings().developerMode) process.env.LUCID_ASKSAGE_DEBUG = "1"; else delete process.env.LUCID_ASKSAGE_DEBUG;
         // ADR-0033: also append the build / anti-over-refusal policy so the chat model doesn't decline
         // a buildable task (e.g. "make a game/graphics/music in one HTML file") by mis-reading its scope.
-        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}\n\n${DATA_INTEGRATION_POLICY}`;
+        const appendedPolicy = `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}\n\n${DATA_INTEGRATION_POLICY}\n\n${JEV_POLICY}`;
         const previewArgs = existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []; // P-PREVIEW.3a (draft)
         const codegraphArgs = loadSettings().codeGraphAgent && existsSync(CODEGRAPH_EXT) ? ["-e", CODEGRAPH_EXT] : []; // P-KG-SYM.1: opt-in
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
@@ -615,6 +647,7 @@ class Backend {
         // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
         const toolMetaArgs = existsSync(TOOL_META_EXT) ? ["-e", TOOL_META_EXT] : [];
+        const judgmentArgs = existsSync(JUDGMENT_EXT) ? ["-e", JUDGMENT_EXT] : []; // P-JEV.2: judgment trace, see JUDGMENT_EXT
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
@@ -626,7 +659,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...isoCfg, "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...interjectChildEnv("master") });
@@ -2021,8 +2054,7 @@ class Backend {
           // gets the same refusal as the chat spawn. Returning null degrades to the shared (also gated)
           // connection; it never becomes an ungated shortcut. Logged because the catch below is silent.
           if (!GATE) { console.error(`[acp:util] ${gateRefusal()}`); return null; }
-          const isoCfg = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
-          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...isoCfg], currentWorkspace());
+          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...ompConfigArgs()], currentWorkspace());
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {

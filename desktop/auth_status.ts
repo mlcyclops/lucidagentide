@@ -80,11 +80,23 @@ export const MAJORS: Provider[] = [
   // is Application Default Credentials: `gcloud auth application-default login` mints a browser-consented
   // refresh token (or use a service-account JSON via GOOGLE_APPLICATION_CREDENTIALS), which omp reads together
   // with the project + location. A GOOGLE_CLOUD_API_KEY is the non-OAuth alternative for the key box.
+  //
+  // Air-gapped / government (ADR-0372): Gemini also runs INSIDE customer enclaves on Google Distributed
+  // Cloud air-gapped (DoD IL5/IL6 provisional authorizations; Secret and Top Secret per Google's
+  // il6-gdc-compliance-scope). Those endpoints live at a customer-local hostname signed by the GDC zone's
+  // OWN certificate authority, so trusting that CA is a hard prerequisite for ANY private deployment.
+  // NODE_EXTRA_CA_CERTS is the Node/Bun-native trust env: it rides the same setKey→env→omp seam (the omp
+  // child restarts on save and picks it up at boot; proven with a live self-signed TLS server, see
+  // docs/GEMINI-GOV-AIRGAP.md). What LUCID can NOT do yet: point omp's google-vertex provider at the
+  // enclave hostname. omp 18 hardcodes `*.googleapis.com` via resolveVertexEndpointHost with no override
+  // env; that is an upstream omp ask (invariant 1: extend, never fork). Until it lands, an enclave's
+  // OpenAI-compatible endpoint is wired through Local Providers, which take any base URL today.
   { id: "google-vertex", name: "Google Cloud · Gemini Enterprise", env: "GOOGLE_CLOUD_API_KEY", oauthId: "", canOauth: false,
     fields: [
       { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID", placeholder: "my-project-123" },
       { env: "GOOGLE_CLOUD_LOCATION", label: "Location", placeholder: "us-central1 (or global)" },
       { env: "GOOGLE_APPLICATION_CREDENTIALS", label: "Service-account JSON (blank = gcloud OAuth / ADC)", placeholder: "/path/to/sa.json — or run: gcloud auth application-default login" },
+      { env: "NODE_EXTRA_CA_CERTS", label: "Private CA bundle (air-gapped / GDC zone CA)", placeholder: "/path/to/zone-ca.pem, trust for private Gemini endpoints (GDC air-gapped, NIPRNet+)" },
     ] },
   // Perplexity (Sonar) is U.S.-based. omp supports OAuth too, but its login is interactive email-OTP /
   // the macOS app token — neither works through our non-interactive broker spawn — so we expose the
@@ -109,6 +121,11 @@ export const OTHERS: Provider[] = [
   // the key gets the same masked keySet/last4 plumbing, but the Settings UI renders it in a dedicated
   // "Voice" card (secVoice) and EXCLUDES it from the model-provider list — it never enters the model picker.
   { id: "elevenlabs", name: "ElevenLabs · Voice", env: "ELEVENLABS_API_KEY", oauthId: "", canOauth: false },
+  // P-JEV.1 (ADR-0374): TypeSafe is a JUDGMENT provider (Jev / System One answers typed choice / yes-no /
+  // score questions), not a chat model: omp's catalog has no providers/typesafe entry on purpose, so it never
+  // enters the model picker. Same keySet/last4 plumbing as ElevenLabs, rendered in its own Settings card
+  // (secJudgment) and excluded from the model-provider lists. Key-only: omp's `/login typesafe` is a key paste.
+  { id: "typesafe", name: "TypeSafe · Jev judgment", env: "TYPESAFE_API_KEY", oauthId: "", canOauth: false },
 ];
 
 function vaultRows(): any[] {
@@ -119,6 +136,12 @@ function vaultRows(): any[] {
     try { return db.query("select provider, credential_type, identity_key, disabled_cause from auth_credentials").all() as any[]; }
     finally { db.close(); }
   } catch { return []; }
+}
+
+/** P-JEV.2 (ADR-0377): is a TypeSafe key saved, by the same rule the Judgment card's `keySet` pill uses
+ *  (the settings slot first, then the process env the omp child inherits). */
+export function typesafeKeySet(): boolean {
+  return !!((load().keys ?? {})["TYPESAFE_API_KEY"] ?? process.env.TYPESAFE_API_KEY);
 }
 
 export function providerAuth(): ProviderAuthSnapshot {

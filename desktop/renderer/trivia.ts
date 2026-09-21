@@ -70,6 +70,9 @@ export interface TriviaAnswerResult { correct: boolean; gained: number; correctI
 
 export interface TriviaGame {
   state(): TriviaSnapshot;
+  /** Add positive safe-integer arcade points without changing trivia progress. Returns the total;
+   *  invalid points or an unsafe resulting total are a no-op. Persists accepted awards immediately. */
+  awardBonus(points: number): number;
   /** Answer the current question. Returns null when not answerable (wrong phase / bad index) —
    *  a second click or a stray keypress is a no-op, never a double score. */
   answer(k: number): TriviaAnswerResult | null;
@@ -123,6 +126,14 @@ export function createTriviaGame(bank: readonly TriviaQuestion[], store?: Trivia
 
   return {
     state: () => ({ phase, qNum, question: qs[cur]!, score: tally.score, answered: tally.answered, correct: tally.correct, streak, lastGain, lastCorrect }),
+    awardBonus(points: number): number {
+      if (!Number.isSafeInteger(points) || points <= 0) return tally.score;
+      const total = tally.score + points;
+      if (!Number.isSafeInteger(total)) return tally.score;
+      tally.score = total;
+      persist();
+      return tally.score;
+    },
     answer(k: number): TriviaAnswerResult | null {
       if (phase !== "question" || !Number.isInteger(k) || k < 0 || k > 3) return null;
       const ok = k === qs[cur]!.a;
