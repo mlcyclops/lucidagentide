@@ -37,6 +37,34 @@
 /** The early shim (inline JS). Self-contained IIFE, idempotent, no egress (connect-src stays 'none'). */
 export const PREVIEW_SHIM_JS = `(function(){
   if (window.__lucidShim) return; window.__lucidShim = 1;
+  // Links cannot navigate the opaque preview or its host. Ask the host to confirm an external
+  // HTTP(S) open; a postMessage is only a request, never permission to bypass the egress gate.
+  function link(e){
+    if ((e.type==='click' && e.button!==0) || (e.type==='auxclick' && e.button!==1)) return;
+    var node=e.target, a=null;
+    if (node && node.nodeType===3) node=node.parentElement;
+    if (node && node.closest) a=node.closest('a[href],area[href]');
+    if (!a) return;
+    var raw=a.getAttribute('href') || '', base=document.querySelector('base[target]');
+    var target=(a.getAttribute('target') || (base && base.getAttribute('target')) || '').toLowerCase();
+    var url=null;
+    try { url=new URL(raw,document.baseURI); } catch(_) {}
+    // Ordinary in-document TOC links still scroll. Targets cannot turn a fragment into a popup
+    // or a parent navigation, and empty hrefs cannot reload the frame.
+    if ((!target || target==='_self') && e.type==='click' && !e.ctrlKey && !e.metaKey && !e.shiftKey
+      && raw.indexOf('#')!==-1 && url && url.href.split('#')[0]===window.location.href.split('#')[0]) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (target && target!=='_self' && target!=='_blank') return;
+    if (!url || !raw || /[\\u0000-\\u0020\\u007f\\\\]/.test(raw)
+      || (url.protocol!=='http:' && url.protocol!=='https:') || !url.hostname || url.username || url.password) return;
+    // A relative local resource is not an external website. Do not open the host's API endpoints.
+    try { if (url.origin===new URL(window.location.href).origin) return; } catch(_) { return; }
+    try { window.parent.postMessage({__lucid:'preview-external-link',url:url.href},'*'); } catch(_) {}
+  }
+  window.addEventListener('click',link,true);
+  window.addEventListener('auxclick',link,true);
+
   // Shared, bounded error buffer. The inspect bridge ADOPTS this array, so preview_inspect's
   // { what: 'errors' } reports failures that happened before the bridge existed.
   var errs = window.__lucidErrs = window.__lucidErrs || [];

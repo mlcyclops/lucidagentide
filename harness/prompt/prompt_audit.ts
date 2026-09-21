@@ -50,16 +50,17 @@ import {
   DATA_INTEGRATION_POLICY,
   DELEGATION_POLICY,
   ENGAGEMENT_POLICY,
+  JEV_POLICY,
   PREVIEW_POLICY,
   SLASH_COMMAND_POLICY,
 } from "./assembler.ts";
 
 /** The desktop master chat's exact --append-system-prompt bytes (acp_backend.ts appendedPolicy). */
 export function composeAppendedPolicy(): string {
-  return `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}\n\n${DATA_INTEGRATION_POLICY}`;
+  return `${DELEGATION_POLICY}\n\n${BUILD_POLICY}\n\n${PREVIEW_POLICY}\n\n${ENGAGEMENT_POLICY}\n\n${AGENT_BUILDER_POLICY}\n\n${SLASH_COMMAND_POLICY}\n\n${DATA_INTEGRATION_POLICY}\n\n${JEV_POLICY}`;
 }
 
-/** The 7 policies, individually countable (informational sub-rows of the appended total). */
+/** The 8 policies, individually countable (informational sub-rows of the appended total). */
 export function policyParts(): Array<{ label: string; text: string }> {
   return [
     { label: "delegation", text: DELEGATION_POLICY },
@@ -69,6 +70,7 @@ export function policyParts(): Array<{ label: string; text: string }> {
     { label: "agent-builder", text: AGENT_BUILDER_POLICY },
     { label: "slash-commands", text: SLASH_COMMAND_POLICY },
     { label: "data-integration", text: DATA_INTEGRATION_POLICY },
+    { label: "jev", text: JEV_POLICY },
   ];
 }
 

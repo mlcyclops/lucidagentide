@@ -9,10 +9,12 @@
 // carries the gated tier so an iterate loop never re-prompts.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import browserExtension, { browserEndpoint, browserShotImage } from "./browser_extension.ts";
+import type { BrowserAction, BrowserPage } from "../../desktop/browser_snapshot.ts";
+import { freshnessOf } from "../../desktop/browser_snapshot.ts";
+import browserExtension, { type BrowserRunIo, browserEndpoint, browserShotImage, type JudgeLike, runBrowserGoal } from "./browser_extension.ts";
 
 const BASE = "http://127.0.0.1:5319/api/browser?t=tok";
-const ALL_TOOLS = ["browser_click", "browser_close", "browser_drag", "browser_keys", "browser_open", "browser_screenshot", "browser_scroll", "browser_type"];
+const ALL_TOOLS = ["browser_click", "browser_close", "browser_drag", "browser_keys", "browser_open", "browser_run", "browser_screenshot", "browser_scroll", "browser_type"];
 
 // ── typed mock surfaces (no `any`: the shim is untyped at runtime, so it is modelled explicitly) ───────
 type SchemaNode = Record<string, unknown>;
@@ -83,9 +85,17 @@ describe("registration", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(ALL_TOOLS);
     expect(byName(tools, "browser_open")?.approval).toBe("exec");
     // The iterate loop must never re-trip a gate: the window was already approved at open.
-    for (const name of ["browser_screenshot", "browser_scroll", "browser_click", "browser_type", "browser_close"]) {
+    for (const name of ["browser_screenshot", "browser_scroll", "browser_click", "browser_type", "browser_run", "browser_close"]) {
       expect(byName(tools, name)?.approval).toBe("read");
     }
+  });
+
+  test("browser_run is read-tier (it cannot navigate) and requires only the goal", () => {
+    const { pi, tools } = capture(null);
+    browserExtension(pi);
+    const run = byName(tools, "browser_run");
+    expect(run?.approval).toBe("read");
+    expect(schemaOf(run)).toEqual({ properties: ["goal", "maxSteps", "values"], required: ["goal"] });
   });
 
   // A shim missing Boolean is the browser-tool analogue of the proven T.Optional bug: it must route to
@@ -282,5 +292,171 @@ describe("browser_keys", () => {
     const r = await byName(tools, "browser_keys")?.execute?.("k", { keys: "pgdown" });
     expect(r?.isError).toBe(true);
     expect(r?.content[0]?.text).toContain('unknown key "pgdown"');
+  });
+});
+
+// ── browser_run (P-JEV.4, ADR-0379): the loop against a scripted judge and a stubbed io pair ──────────
+const FILL: BrowserAction = { id: "fill_1", kind: "fill", label: "Where to?", node: 1, role: "textbox", value: "" };
+const CLICK_FIELD: BrowserAction = { id: "click_1", kind: "click", label: "Where to?", node: 1, role: "textbox" };
+const SEARCH: BrowserAction = { id: "click_2", kind: "click", label: "Search", node: 2, role: "button" };
+
+function pageWith(fingerprint: string, actions: BrowserAction[]): BrowserPage {
+  return {
+    url: "https://travel.example/", title: "Travel", w: 1280, h: 800, text: "Where to? Search",
+    scroll: { y: 0, height: 2000 }, actions, marker: { m: fingerprint }, page_key: "k",
+    guards: { "1": "g1", "2": "g2" }, omitted_actions: 0, fingerprint,
+  };
+}
+
+/** A judge that answers every offered question from a script of { questionId: choice } per call, with
+ *  well-formed probabilities (the chosen id at 0.8, the rest sharing 0.2). Unscripted questions take
+ *  their first criterion, the way a real judge still answers every question it is asked. */
+function scriptedJudge(script: Record<string, string>[]): JudgeLike & { calls: number } {
+  const judge = {
+    calls: 0,
+    async judge(request: { state: unknown; questions: Record<string, unknown> }): Promise<{ answers: Record<string, unknown> }> {
+      const picks = script[judge.calls] ?? {};
+      judge.calls += 1;
+      const answers: Record<string, unknown> = {};
+      for (const [id, q] of Object.entries(request.questions)) {
+        const criteria = q && typeof q === "object" && "criteria" in q && q.criteria && typeof q.criteria === "object" ? Object.keys(q.criteria) : [];
+        const choice = picks[id] ?? criteria[0] ?? "";
+        const probabilities: Record<string, number> = {};
+        for (const c of criteria) probabilities[c] = criteria.length === 1 ? 1 : c === choice ? 0.8 : 0.2 / (criteria.length - 1);
+        answers[id] = { type: "choice", choice, probabilities, confidence: 0.61 };
+      }
+      return { answers };
+    },
+  };
+  return judge;
+}
+
+/** An io pair that serves snapshots and act responses from queues and records every act body. */
+function stubIo(snapshots: BrowserPage[], acts: unknown[]): BrowserRunIo & { actCalls: unknown[]; snapshotCalls: number } {
+  const io = {
+    actCalls: [] as unknown[],
+    snapshotCalls: 0,
+    async snapshot(): Promise<unknown> {
+      const page = snapshots[Math.min(io.snapshotCalls, snapshots.length - 1)];
+      io.snapshotCalls += 1;
+      return { ok: true, data: { page } };
+    },
+    async act(body: unknown): Promise<unknown> {
+      io.actCalls.push(body);
+      return acts[io.actCalls.length - 1] ?? { ok: true, data: { title: "Travel", url: "https://travel.example/" } };
+    },
+  };
+  return io;
+}
+
+describe("browser_run", () => {
+  test("types a named value, clicks Search, stops at DONE, and never echoes the value", async () => {
+    const p1 = pageWith("a", [FILL, CLICK_FIELD, SEARCH]);
+    const p2 = pageWith("b", [{ ...FILL, value: "London" }, CLICK_FIELD, SEARCH]);
+    const p3 = pageWith("c", [SEARCH]);
+    const io = stubIo([p1, p2, p3], []);
+    const judge = scriptedJudge([
+      { operation: "TYPE_TEXT", type_text_target: "1", type_text_value: "destination" },
+      { operation: "CLICK", click_target: "2" },
+      { operation: "DONE" },
+    ]);
+    const r = await runBrowserGoal(io, judge, "Search for trips to London", { destination: "London" }, 5);
+    expect(io.actCalls).toEqual([
+      { action: FILL, fresh: freshnessOf(p1, FILL), text: "London" },
+      { action: SEARCH, fresh: freshnessOf(p2, SEARCH) },
+    ]);
+    expect(r.isError).toBeUndefined();
+    const out = r.content[0]?.text ?? "";
+    expect(out.startsWith('browser_run done after 2 action(s) on "Travel" https://travel.example/')).toBe(true);
+    expect(out).toContain("1. TYPE_TEXT [1] Where to? typed destination (p=1.00 c=0.61)");
+    expect(out).toContain("2. CLICK [2] Search (p=0.80 c=0.61)");
+    expect(out).not.toContain("London");
+    expect(out).toContain("browser_screenshot");
+  });
+
+  test("a judgment choosing an operation that was not offered executes nothing (fail-closed)", async () => {
+    const io = stubIo([pageWith("a", [FILL, CLICK_FIELD, SEARCH])], []);
+    const judge = scriptedJudge([{ operation: "SELECT" }]);
+    const r = await runBrowserGoal(io, judge, "Search", { destination: "London" }, 5);
+    expect(r.isError).toBe(true);
+    expect(r.content[0]?.text).toContain("browser_run failed (Invalid judgment; no action executed.) after 0 action(s)");
+    expect(io.actCalls).toEqual([]);
+  });
+
+  test("a stale act re-snapshots and re-decides without spending a step", async () => {
+    const p1 = pageWith("a", [FILL, CLICK_FIELD, SEARCH]);
+    const p2 = pageWith("b", [FILL, CLICK_FIELD, SEARCH]);
+    const p3 = pageWith("c", [SEARCH]);
+    const io = stubIo([p1, p2, p3], [{ ok: false, stale: true, error: "page changed since this decision" }]);
+    const judge = scriptedJudge([
+      { operation: "CLICK", click_target: "2" },
+      { operation: "CLICK", click_target: "2" },
+      { operation: "DONE" },
+    ]);
+    // maxSteps 2: had the stale attempt counted as a step, the run would stop at max_steps before DONE.
+    const r = await runBrowserGoal(io, judge, "Search", {}, 2);
+    expect(judge.calls).toBe(3);
+    expect(io.actCalls).toHaveLength(2);
+    expect(io.actCalls[1]).toEqual({ action: SEARCH, fresh: freshnessOf(p2, SEARCH) });
+    expect(r.isError).toBeUndefined();
+    expect(r.content[0]?.text).toContain("browser_run done after 1 action(s)");
+  });
+
+  test("TYPE_TEXT with no supplied values stops with needs_values naming the field", async () => {
+    const io = stubIo([pageWith("a", [FILL, CLICK_FIELD, SEARCH])], []);
+    const judge = scriptedJudge([{ operation: "TYPE_TEXT", type_text_target: "1" }]);
+    const r = await runBrowserGoal(io, judge, "Search for London", {}, 5);
+    expect(r.isError).toBeUndefined();
+    const out = r.content[0]?.text ?? "";
+    expect(out).toContain("browser_run needs_values after 0 action(s)");
+    expect(out).toContain('Supply values={"Where to?":"..."} and call browser_run again');
+    expect(io.actCalls).toEqual([]);
+  });
+
+  test("the tool reports an unavailable judge before touching the window", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi, { judge: async () => { throw new Error("no registry"); } });
+    const { calls } = stubFetch({ ok: true, data: {} });
+    const r = await byName(tools, "browser_run")?.execute?.("r", { goal: "Search" });
+    expect(r?.isError).toBe(true);
+    expect(r?.content[0]?.text).toContain("judgment backend unavailable");
+    expect(calls).toEqual([]);
+  });
+
+  test("the tool refuses malformed values before resolving a judge or calling out", async () => {
+    let resolved = 0;
+    const { pi, tools } = capture();
+    browserExtension(pi, { judge: async () => { resolved += 1; return scriptedJudge([]); } });
+    const { calls } = stubFetch({ ok: true, data: {} });
+    const run = byName(tools, "browser_run");
+    for (const bad of ["[1]", "{\"a\":1}", "{\"a\":\"\"}", "not json", 42]) {
+      expect((await run?.execute?.("r", { goal: "Search", values: bad }))?.isError).toBe(true);
+    }
+    expect((await run?.execute?.("r", { values: "{}" }))?.isError).toBe(true); // goal is required
+    expect(resolved).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  test("the tool posts /snapshot and /act with the decision, its freshness and the value", async () => {
+    const page = pageWith("a", [FILL, CLICK_FIELD, SEARCH]);
+    const { pi, tools } = capture();
+    browserExtension(pi, { judge: async () => scriptedJudge([{ operation: "CLICK", click_target: "2" }, { operation: "DONE" }]) });
+    const calls: { url: string; body: unknown }[] = [];
+    globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const body = init?.body && typeof init.body === "string" ? JSON.parse(init.body) : null;
+      calls.push({ url, body });
+      const envelope = url.includes("/act") ? { ok: true, data: { title: "Travel", url: page.url } } : { ok: true, data: { page } };
+      return Promise.resolve(new Response(JSON.stringify(envelope), { headers: { "content-type": "application/json" } }));
+    }) as typeof globalThis.fetch;
+    const r = await byName(tools, "browser_run")?.execute?.("r", { goal: "Search", maxSteps: 3 });
+    expect(r?.isError).toBeUndefined();
+    expect(calls.map((c) => c.url)).toEqual([
+      "http://127.0.0.1:5319/api/browser/snapshot?t=tok",
+      "http://127.0.0.1:5319/api/browser/act?t=tok",
+      "http://127.0.0.1:5319/api/browser/snapshot?t=tok",
+    ]);
+    expect(calls[1]!.body).toEqual({ action: SEARCH, fresh: freshnessOf(page, SEARCH) });
+    expect(r?.content[0]?.text).toContain("browser_run done after 1 action(s)");
   });
 });

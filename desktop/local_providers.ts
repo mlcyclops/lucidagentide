@@ -39,7 +39,7 @@ export const LOCAL_AUTH_KINDS: LocalAuthKind[] = ["none", "bearer", "apikey", "b
 export const RESERVED_PROVIDER_IDS: readonly string[] = [
   "anthropic", "openai", "openai-codex", "google", "gemini", "azure", "azure-openai", "xai", "grok",
   "perplexity", "groq", "cerebras", "mistral", "openrouter", "deepseek", "moonshot", "kimi", "zai",
-  "minimax", "asksage", "elevenlabs", "ollama-cloud", "vertex",
+  "minimax", "asksage", "elevenlabs", "typesafe", "ollama-cloud", "vertex",
 ];
 
 /** The wire-shape knobs a self-hosted reasoning model needs, as a CLOSED subset of omp's `compat`

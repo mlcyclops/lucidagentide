@@ -15,9 +15,10 @@
 
 import type { AuthStatus, ProviderAuth } from "./bridge.ts";
 
-/** ElevenLabs is a VOICE provider, configured in the Voice card; never a chat model provider, so the hub
- *  excludes it from the open-weight section (matches secOthers). */
-export const HUB_VOICE_EXCLUDE: readonly string[] = ["elevenlabs"];
+/** Providers that ride the `others` auth plumbing for key storage but are NOT chat-model providers, so the hub
+ *  and the "More providers" list exclude them: ElevenLabs is VOICE (the Voice card), TypeSafe is JUDGMENT
+ *  (the Judgment card, P-JEV.1). Neither ever appears in the model picker. */
+export const HUB_NON_MODEL_EXCLUDE: readonly string[] = ["elevenlabs", "typesafe"];
 
 export type HubSectionKey = "gateway" | "frontier" | "open";
 
@@ -61,7 +62,7 @@ export interface HubOpts {
 export function buildHubSections(auth: AuthStatus | null, opts: HubOpts): HubSection[] {
   const gateway = (auth?.gateway ?? []).map(toHub);
   const frontier = (auth?.majors ?? []).map(toHub);
-  const open = (auth?.others ?? []).filter((p) => !HUB_VOICE_EXCLUDE.includes(p.id)).map(toHub);
+  const open = (auth?.others ?? []).filter((p) => !HUB_NON_MODEL_EXCLUDE.includes(p.id)).map(toHub);
 
   const sections: HubSection[] = [];
   if (gateway.length) {
@@ -83,9 +84,9 @@ export function buildHubSections(auth: AuthStatus | null, opts: HubOpts): HubSec
 }
 
 /** How many chat-model providers are configured (gov gateway + frontier + open). Drives the onboarding nudge
- *  and the hub header count. Excludes the voice-only provider. */
+ *  and the hub header count. Excludes the non-model (voice, judgment) providers. */
 export function configuredProviderCount(auth: AuthStatus | null): number {
   const all = [...(auth?.gateway ?? []), ...(auth?.majors ?? []), ...(auth?.others ?? [])]
-    .filter((p) => !HUB_VOICE_EXCLUDE.includes(p.id));
+    .filter((p) => !HUB_NON_MODEL_EXCLUDE.includes(p.id));
   return all.filter(providerConfigured).length;
 }

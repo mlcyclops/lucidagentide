@@ -302,6 +302,22 @@ export interface FleetStatusView {
   };
   masterModel: string;
 }
+// P-ACCT.1 (ADR-0375): the account list per provider. AccountView is single-sourced from the pure
+// policy module (never a secret in it - keys are last4-masked server-side).
+import type { AccountView } from "../account_policy.ts";
+export type { AccountView } from "../account_policy.ts";
+export type AccountsSnapshot = Record<string, AccountView[]>;
+/** P-JEV.1 (ADR-0374): mirrors judgment_policy.ResolvedJudgmentProvider. `stored` is the user's choice;
+ *  `effective` is what omp is told (lockdown pins "llm"); `clamped` says they differ because of the lock. */
+export interface JudgmentView {
+  stored: "auto" | "typesafe" | "llm";
+  effective: "auto" | "typesafe" | "llm";
+  clamped: boolean;
+  locked: boolean;
+  /** P-JEV.2 (ADR-0377): can Jev answer a judgment in the running child (effective mode + a saved key).
+   *  Gates the per-turn "Jev not consulted" note. */
+  configured: boolean;
+}
 // P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
 export interface VoiceSettingsView {
   sttProvider: "elevenlabs" | "whisper";
@@ -779,6 +795,18 @@ export interface LucidBridge {
   // mic transcription, and read-aloud TTS.
   voiceSettings(): Promise<VoiceSettingsView | null>;
   setVoiceSettings(patch: Partial<VoiceSettingsView>): Promise<VoiceSettingsView | null>;
+  /** P-JEV.1 (ADR-0374): the judgment backend (omp `providers.judgmentProvider`), stored vs effective. */
+  judgment(): Promise<JudgmentView | null>;
+  setJudgment(mode: JudgmentView["stored"]): Promise<JudgmentView | null>;
+  // P-ACCT.1 (ADR-0375): named multi-account per provider. Every mutation returns the refreshed
+  // snapshot (providerId -> accounts) so the UI repaints from the server's truth, never a client guess.
+  accounts(): Promise<AccountsSnapshot | null>;
+  /** Add a named API-key account (OAuth accounts are added via the normal Connect flow). */
+  accountAdd(providerId: string, name: string, key: string): Promise<AccountsSnapshot | null>;
+  accountRename(providerId: string, accountId: string, name: string): Promise<AccountsSnapshot | null>;
+  accountRemove(providerId: string, accountId: string): Promise<AccountsSnapshot | null>;
+  /** Make this account the one omp uses; the server parks/unparks OAuth rows, swaps the env key, and restarts omp. */
+  accountSwitch(providerId: string, accountId: string): Promise<AccountsSnapshot | null>;
   /** Voices for `provider`, or for the engine currently selected in settings when omitted. */
   voices(provider?: string): Promise<VoiceListView | null>;
   transcribe(audioB64: string, mime: string, language?: string): Promise<{ text: string; note: string } | null>;
@@ -1462,6 +1490,14 @@ export const bridge: LucidBridge = {
   engineeringBriefAudio: (provider, voiceId) => post("/api/brief/audio", { provider, voiceId }),
   voiceSettings: () => getData("/api/voice-settings"),
   setVoiceSettings: (patch) => post("/api/voice-settings", patch),
+  judgment: () => getData("/api/judgment"), // P-JEV.1 (ADR-0374)
+  setJudgment: (mode) => post("/api/judgment", { mode }), // P-JEV.1: server clamps + restarts omp when the pin changes
+  // P-ACCT.1 (ADR-0375): named provider accounts. Mutations answer with the refreshed snapshot.
+  accounts: () => getData("/api/accounts"),
+  accountAdd: (providerId, name, key) => post("/api/accounts/add", { providerId, name, key }),
+  accountRename: (providerId, accountId, name) => post("/api/accounts/rename", { providerId, accountId, name }),
+  accountRemove: (providerId, accountId) => post("/api/accounts/remove", { providerId, accountId }),
+  accountSwitch: (providerId, accountId) => post("/api/accounts/switch", { providerId, accountId }),
   voices: (provider) => getData(provider ? `/api/voices?provider=${encodeURIComponent(provider)}` : "/api/voices"),
   transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
   voiceDigest: (text) => post("/api/voice/digest", { text }), // P-VOICE.6: slow-engine spoken digest

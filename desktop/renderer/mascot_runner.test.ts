@@ -123,7 +123,9 @@ describe("runnerAt - the parkour route", () => {
     expect(["hang", "hangB"]).toContain(climb.frame);
     const sneak = runnerAt(c.runMs + T.CLIMB_MS + T.MANTLE_MS + 200, L);
     expect(sneak.y).toBe(L.barTop - H); // standing ON the bar's top edge
-    expect(["sneakA", "sneakB", "idleB"]).toContain(sneak.frame);
+    // The top lane uses the SAME run cycle as the foot (and as the arcade). The old separate
+    // sneak poses read as a worse, different walk directly above the prompt.
+    expect(MASCOT_RUN_FRAMES).toContain(sneak.frame);
   });
   it("the drop accelerates (gravity), lands with a squash, and rest is visible again", () => {
     const dropStart = c.runMs + T.CLIMB_MS + T.MANTLE_MS + c.sneakMs + T.PAUSE_MS;

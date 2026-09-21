@@ -1,170 +1,219 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/mascot_runner.ts - P-MASCOT.2: the mini ninja who parkours the prompt bar.
-//
-// A smaller LUCID scampers along the FOOT of the composer, slips up BEHIND it (he vanishes into the
-// bar band bottom-up - cartoon logic, sold by clipping), pops over the top edge, sneaks along it,
-// pauses, and silently drops back down (invisible while crossing the band), then rests and runs the
-// route MIRRORED the other way. The choreography is a PURE timeline (`runnerAt`) over a layout box, so
-// every phase, position, and clip decision is unit-tested; the mount is a thin canvas shell.
-//
-// Runs whenever the lucid-agent role is active - immersive or parked - because the prompt bar exists in
-// both. pointer-events: none always; he can never block a click.
+// The prompt-bar ninja shares the Arcade run frames and integer pixel geometry on both lanes.
+// Only his visible silhouette above the composer is interactive; the prompt remains unobstructed.
+import { MASCOT_FRAMES, MASCOT_H, MASCOT_W, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, MASCOT_RUN_SWEEP_CELLS, mirrorFrame, paintRows, stepMascot, mascotFrame, type MascotInputs, type MascotSnap } from "./mascot.ts";
 
-import { MASCOT_FRAMES, MASCOT_H, MASCOT_W, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, MASCOT_RUN_SWEEP_CELLS, mirrorFrame, paintRows } from "./mascot.ts";
-
-// P-MASCOT.5: 2 CSS px per art cell, the SAME integer scale the arcade paints at (`arcadeScale`
-// returns 2 on any panel 560px or wider). At scale 1 every one-pixel outline in the 40x52 grid landed
-// on a single device pixel, so the chunky pixel-art read was gone and the gait's 1px joint deltas were
-// invisible: the mini ninja looked like a different, mushier character than the arcade one.
 export const RUNNER_SCALE = 2;
-export const RUNNER_HEADROOM = MASCOT_H * RUNNER_SCALE + 10; // crawl lane above the bar
-// NO-SLIP STRIDE (P-MASCOT.5): travel EXACTLY as fast as the planted heel sweeps backwards, so the
-// contact foot holds its ground position. The old 0.05 was 4 cells a beat against a 5 cell sweep, a
-// 20% forward slide every step, which is why the prompt-bar walk read as gliding on ice while the
-// arcade's run (where the WORLD moves and the feet never have to agree with it) read as running.
-const SPEED_RUN = MASCOT_RUN_SWEEP_CELLS / MASCOT_RUN_BEAT_MS; // 0.0625 cells/ms
-const SPEED_SNEAK = 0.05; // px/ms along the top edge
+export const RUNNER_HEADROOM = MASCOT_H * RUNNER_SCALE + 10;
+const SPEED_RUN = MASCOT_RUN_SWEEP_CELLS / MASCOT_RUN_BEAT_MS;
 const CLIMB_MS = 700;
-const MANTLE_MS = 240; // the pull-over at the top edge (P-MASCOT.3)
+const MANTLE_MS = 240;
 const PAUSE_MS = 500;
 const DROP_MS = 420;
-const LAND_MS = 170;  // squash on impact (P-MASCOT.3)
+const LAND_MS = 170;
 const REST_MS = 2600;
-/** Fixed phase timings, exported for tests + demos (distance-based run/sneak come from runnerCycle). */
 export const RUNNER_TIMINGS = { CLIMB_MS, MANTLE_MS, PAUSE_MS, DROP_MS, LAND_MS, REST_MS } as const;
-const EDGE_MARGIN = 26; // how far from the bar's end he climbs/exits
+const EDGE_MARGIN = 26;
+const IDLE_INPUTS: MascotInputs = { speaking: false, listening: false, working: false };
+const idleState = (): MascotInputs => IDLE_INPUTS;
 
-/** The overlay box, in canvas coordinates: the bar band is [barTop, barBottom]. `scale` is the ACTUAL
- *  paint scale (device px per sprite cell) - geometry and painting MUST share it. LIVE BUG 2026-08-01:
- *  positions were computed at CSS scale while painting at scale*dpr, so on retina the sprite's lower
- *  half fell below the canvas (the "missing legs"); the pinned QA ran at dpr 1 and never saw it. */
+/** Coordinates and scale are device pixels, shared by geometry and painting. */
 export interface RunnerLayout { width: number; barTop: number; barBottom: number; height: number; scale: number }
-
 export type RunnerPhase = "run" | "climb" | "mantle" | "sneak" | "pause" | "drop" | "land" | "rest";
 export interface RunnerPose {
   phase: RunnerPhase;
-  x: number;      // sprite left, canvas px
-  y: number;      // sprite top, canvas px
-  frame: string;  // MASCOT_FRAMES id
+  x: number;
+  y: number;
+  frame: string;
   mirrored: boolean;
-  /** When true the painter clips OUT the bar band, so the sprite vanishes while crossing it. */
   clipBar: boolean;
 }
+export interface RunnerCycle { runMs: number; sneakMs: number; total: number; xEdge: number; xExit: number }
 
-export interface RunnerCycle {
-  runMs: number; sneakMs: number; total: number;
-  xEdge: number; xExit: number;
-}
-
-/** Per-cycle timings for a layout (distance-based phases scale with the bar's width). */
 export function runnerCycle(l: RunnerLayout): RunnerCycle {
   const spriteW = MASCOT_W * l.scale;
   const xEdge = Math.max(spriteW, l.width - EDGE_MARGIN - spriteW);
   const xExit = Math.min(xEdge - spriteW, Math.max(8, EDGE_MARGIN));
   const runMs = (xEdge + spriteW) / (SPEED_RUN * l.scale);
-  const sneakMs = Math.max(800, (xEdge - xExit) / (SPEED_SNEAK * l.scale));
+  // Historical phase name "sneak": the top lane now runs at the same no-slip stride as the foot.
+  const sneakMs = (xEdge - xExit) / (SPEED_RUN * l.scale);
   return { runMs, sneakMs, xEdge, xExit, total: runMs + CLIMB_MS + MANTLE_MS + sneakMs + PAUSE_MS + DROP_MS + LAND_MS + REST_MS };
 }
 
-/** The pose at absolute time `t` (ms). Cycles alternate direction; positions/frames are mirrored on odd
- *  cycles by reflecting x. Pure. */
-export function runnerAt(t: number, l: RunnerLayout): RunnerPose {
-  const c = runnerCycle(l);
+function setPose(out: RunnerPose, phase: RunnerPhase, x: number, y: number, frame: string, mirrored: boolean, clipBar: boolean): RunnerPose {
+  out.phase = phase; out.x = x; out.y = y; out.frame = frame; out.mirrored = mirrored; out.clipBar = clipBar;
+  return out;
+}
+
+/** Pure timeline; callers rendering continuously can reuse an output pose and cached cycle. */
+export function runnerAt(t: number, l: RunnerLayout, out: RunnerPose = { phase: "run", x: 0, y: 0, frame: "runA", mirrored: false, clipBar: false }, c: RunnerCycle = runnerCycle(l)): RunnerPose {
   const spriteW = MASCOT_W * l.scale;
   const spriteH = MASCOT_H * l.scale;
-  const cycle = Math.floor(Math.max(0, t) / c.total);
-  const mirrored = cycle % 2 === 1;
+  const mirrored = Math.floor(Math.max(0, t) / c.total) % 2 === 1;
   let tt = Math.max(0, t) % c.total;
   const groundY = l.height - spriteH;
   const topY = l.barTop - spriteH;
-  const reflect = (x: number): number => (mirrored ? l.width - spriteW - x : x);
-  const beat = (ms: number, frames: readonly string[]): string => frames[Math.floor(t / ms) % frames.length]!;
+  const edge = mirrored ? l.width - spriteW - c.xEdge : c.xEdge;
+  const exit = mirrored ? l.width - spriteW - c.xExit : c.xExit;
   if (tt < c.runMs) {
     const x = -spriteW + tt * SPEED_RUN * l.scale;
-    // Contact, down, pass, up on each leg. Local phase restarts cleanly after a rest.
-    const frame = MASCOT_RUN_FRAMES[Math.floor(tt / MASCOT_RUN_BEAT_MS) % MASCOT_RUN_FRAMES.length]!;
-    return { phase: "run", x: reflect(x), y: groundY, frame, mirrored, clipBar: false };
+    return setPose(out, "run", mirrored ? l.width - spriteW - x : x, groundY, MASCOT_RUN_FRAMES[Math.floor(tt / MASCOT_RUN_BEAT_MS) % MASCOT_RUN_FRAMES.length]!, mirrored, false);
   }
   tt -= c.runMs;
   if (tt < CLIMB_MS) {
-    // Ease-in-out on the ascent + an alternating grip, so the climb reads as pulls, not an elevator.
     const k = tt / CLIMB_MS;
-    const e = k * k * (3 - 2 * k);
-    const y = groundY + (topY - groundY) * e;
-    return { phase: "climb", x: reflect(c.xEdge), y, frame: beat(160, ["hang", "hangB"]), mirrored, clipBar: true };
+    return setPose(out, "climb", edge, groundY + (topY - groundY) * k * k * (3 - 2 * k), Math.floor(t / 160) % 2 ? "hangB" : "hang", mirrored, true);
   }
   tt -= CLIMB_MS;
-  if (tt < MANTLE_MS) {
-    return { phase: "mantle", x: reflect(c.xEdge), y: topY, frame: "mantle", mirrored, clipBar: true };
-  }
+  if (tt < MANTLE_MS) return setPose(out, "mantle", edge, topY, "mantle", mirrored, true);
   tt -= MANTLE_MS;
   if (tt < c.sneakMs) {
-    const x = c.xEdge + (c.xExit - c.xEdge) * (tt / c.sneakMs);
-    // Sneaking BACK the way he came, so the sprite faces the travel direction: flip the mirror.
-    return { phase: "sneak", x: reflect(x), y: topY, frame: beat(150, ["sneakA", "sneakB", "sneakA", "idleB"]), mirrored: !mirrored, clipBar: true };
+    const x = c.xEdge - tt * SPEED_RUN * l.scale;
+    return setPose(out, "sneak", mirrored ? l.width - spriteW - x : x, topY, MASCOT_RUN_FRAMES[Math.floor(tt / MASCOT_RUN_BEAT_MS) % MASCOT_RUN_FRAMES.length]!, !mirrored, true);
   }
   tt -= c.sneakMs;
-  if (tt < PAUSE_MS) {
-    return { phase: "pause", x: reflect(c.xExit), y: topY, frame: "sneakA", mirrored: !mirrored, clipBar: true };
-  }
+  if (tt < PAUSE_MS) return setPose(out, "pause", exit, topY, "guard", !mirrored, true);
   tt -= PAUSE_MS;
-  if (tt < DROP_MS) {
-    const k = tt / DROP_MS;
-    const y = topY + (groundY - topY) * k * k; // gravity ease-in
-    return { phase: "drop", x: reflect(c.xExit), y, frame: "fall", mirrored, clipBar: true };
-  }
+  if (tt < DROP_MS) return setPose(out, "drop", exit, topY + (groundY - topY) * (tt / DROP_MS) ** 2, "fall", mirrored, true);
   tt -= DROP_MS;
-  if (tt < LAND_MS) {
-    return { phase: "land", x: reflect(c.xExit), y: groundY, frame: "land", mirrored, clipBar: false };
-  }
-  tt -= LAND_MS;
-  return { phase: "rest", x: reflect(c.xExit), y: groundY, frame: beat(900, ["idleA", "idleB"]), mirrored, clipBar: false };
+  if (tt < LAND_MS) return setPose(out, "land", exit, groundY, "land", mirrored, false);
+  return setPose(out, "rest", exit, groundY, Math.floor(t / 900) % 2 ? "idleB" : "idleA", mirrored, false);
 }
 
-export interface RunnerHandle { dispose(): void }
+export interface RunnerHandle { setSuspended(suspended: boolean): void; dispose(): void }
 
-/** Mount the runner over `wrap` (the composer wrap). The canvas extends RUNNER_HEADROOM above the wrap
- *  and hugs its width; the wrap itself is the clip band. Never intercepts pointer events. */
-export function mountComposerRunner(wrap: HTMLElement): RunnerHandle {
+/** The canvas is pointer-transparent. Its separate button is clipped to the visible sprite ABOVE
+ * the prompt, and uses native Enter/Space activation without a global keyboard handler. */
+export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInputs = idleState): RunnerHandle {
   const cv = document.createElement("canvas");
+  cv.setAttribute("aria-hidden", "true");
   cv.style.cssText = `position:absolute;left:0;right:0;top:${-RUNNER_HEADROOM}px;height:calc(100% + ${RUNNER_HEADROOM}px);pointer-events:none;z-index:3`;
-  wrap.appendChild(cv);
-  const ctx = cv.getContext("2d")!;
-  const t0 = performance.now();
+  const hit = document.createElement("button");
+  hit.type = "button";
+  hit.className = "composer-mascot-hit";
+  // Geometry is INLINE, not from the stylesheet: an in-flow hit box would resize the composer on
+  // every frame, which retriggers the resize observer, which resets the canvas bitmap, which leaves
+  // the ninja invisible. The class only carries appearance and the focus ring.
+  hit.style.cssText = "position:absolute;padding:0;border:0;background:transparent";
+  hit.setAttribute("aria-label", "Greet LUCID ninja");
+  wrap.append(cv, hit);
+  const ctx = cv.getContext("2d");
   const mirroredFrames = Object.fromEntries(Object.entries(MASCOT_FRAMES).map(([id, frame]) => [id, mirrorFrame(frame)]));
-  let last = "";
+  const l: RunnerLayout = { width: 1, barTop: 1, barBottom: 1, height: 1, scale: 1 };
+  const pose: RunnerPose = { phase: "run", x: 0, y: 0, frame: "runA", mirrored: false, clipBar: false };
+  let cycle = runnerCycle(l);
+  let snap: MascotSnap | null = null;
+  let dpr = 1;
   let raf = 0;
-  // P-MASCOT.3: rAF-driven painting - device-pixel positions at display rate make the motion glide
-  // (the old 50ms interval moved him in ~5px hops). The pose key still skips repaints at rest.
-  const tick = (): void => {
-    raf = requestAnimationFrame(tick);
-    if (document.hidden) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.max(1, Math.floor(wrap.clientWidth * dpr));
-    const h = Math.max(1, Math.floor((wrap.clientHeight + RUNNER_HEADROOM) * dpr));
-    const scale = Math.max(1, Math.floor(RUNNER_SCALE * dpr)); // ONE scale for geometry AND paint
-    const l: RunnerLayout = { width: w, barTop: RUNNER_HEADROOM * dpr, barBottom: h, height: h, scale };
-    const pose = runnerAt(performance.now() - t0, l);
-    const px = Math.round(pose.x), py = Math.round(pose.y); // device-pixel snap keeps the art crisp
-    const key = `${pose.frame}:${px}:${py}:${pose.mirrored}`;
-    if (key === last && cv.width === w && cv.height === h) return;
-    last = key;
-    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
-    ctx.clearRect(0, 0, w, h);
-    ctx.save();
-    if (pose.clipBar) {
-      ctx.beginPath();
-      ctx.rect(0, 0, w, l.barTop); // above the bar
-      // Nothing below barBottom exists inside this overlay (the band runs to the canvas foot), so a
-      // single top rect is the whole visible region while crossing.
-      ctx.clip();
+  let disposed = false;
+  let suspended = false;
+  let routeTime = 0;
+  let lastTime = performance.now();
+  let reactionUntil = 0;
+  let reactionStart = 0;
+  let greeting = false;
+  let lastFrame = "";
+  let lastX = NaN, lastY = NaN;
+  let lastMirror = false, lastClip = false;
+  const events = new AbortController();
+  const options = { signal: events.signal };
+
+  function measure(): void {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    l.width = Math.max(1, Math.floor(wrap.clientWidth * dpr));
+    l.height = Math.max(1, Math.floor((wrap.clientHeight + RUNNER_HEADROOM) * dpr));
+    l.barTop = Math.round(RUNNER_HEADROOM * dpr);
+    l.barBottom = l.height;
+    l.scale = Math.max(1, Math.floor(RUNNER_SCALE * dpr));
+    cycle = runnerCycle(l);
+    // Assigning width/height resets the bitmap even when the value is unchanged, so a repeated
+    // measure would erase the sprite. Only resize when the size actually moved.
+    if (cv.width !== l.width || cv.height !== l.height) { cv.width = l.width; cv.height = l.height; }
+    lastFrame = "";
+  }
+  function react(clicked: boolean): void {
+    if (suspended || disposed) return;
+    const now = performance.now();
+    if (!clicked && now < reactionUntil) return;
+    greeting = clicked;
+    reactionStart = now;
+    reactionUntil = now + (clicked ? 650 : 400);
+  }
+  hit.addEventListener("pointerenter", () => react(false), options);
+  hit.addEventListener("focus", () => react(false), options);
+  hit.addEventListener("click", () => react(true), options);
+
+  function tick(now: number): void {
+    raf = 0;
+    if (disposed || suspended || document.hidden || !ctx) return;
+    const dt = Math.min(50, now - lastTime);
+    lastTime = now;
+    snap = stepMascot(snap, getState(), now);
+    const reacting = now < reactionUntil;
+    const active = snap.state !== "idle";
+    if (!active && !reacting && document.activeElement !== hit) routeTime += dt;
+    runnerAt(routeTime, l, pose, cycle);
+    if (active) {
+      // Real session state always wins over a greeting and keeps the sprite above the input.
+      pose.frame = mascotFrame(snap, now);
+      pose.y = l.barTop - MASCOT_H * l.scale;
+      pose.x = Math.max(0, Math.min(l.width - MASCOT_W * l.scale, pose.x));
+      pose.clipBar = true;
+    } else if (reacting) {
+      pose.frame = greeting ? (now - reactionStart < 220 ? "victoryA" : "victoryB") : "guard";
     }
-    const rows = pose.mirrored ? mirroredFrames[pose.frame]! : MASCOT_FRAMES[pose.frame]!;
-    paintRows(ctx, rows, l.scale, px, py); // the SAME scale the pose was computed with - never diverge
-    ctx.restore();
+    const px = Math.round(pose.x), py = Math.round(pose.y);
+    if (pose.frame !== lastFrame || px !== lastX || py !== lastY || pose.mirrored !== lastMirror || pose.clipBar !== lastClip) {
+      lastFrame = pose.frame; lastX = px; lastY = py; lastMirror = pose.mirrored; lastClip = pose.clipBar;
+      ctx.clearRect(0, 0, l.width, l.height);
+      ctx.save();
+      if (pose.clipBar) { ctx.beginPath(); ctx.rect(0, 0, l.width, l.barTop); ctx.clip(); }
+      paintRows(ctx, pose.mirrored ? mirroredFrames[pose.frame]! : MASCOT_FRAMES[pose.frame]!, l.scale, px, py);
+      ctx.restore();
+      // Never intercept the input band, including when the sprite climbs behind it.
+      const left = Math.max(0, px), top = Math.max(0, py);
+      const width = Math.max(0, Math.min(l.width, px + MASCOT_W * l.scale) - left);
+      const height = Math.max(0, Math.min(l.barTop, py + MASCOT_H * l.scale) - top);
+      hit.hidden = width === 0 || height === 0;
+      hit.style.left = `${left / dpr}px`;
+      hit.style.top = `${top / dpr - RUNNER_HEADROOM}px`;
+      hit.style.width = `${width / dpr}px`;
+      hit.style.height = `${height / dpr}px`;
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  function schedule(): void {
+    lastTime = performance.now();
+    if (!raf && !disposed && !suspended && !document.hidden && ctx) raf = requestAnimationFrame(tick);
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { cancelAnimationFrame(raf); raf = 0; } else schedule();
+  }, options);
+  window.addEventListener("resize", measure, options);
+  const observer = new ResizeObserver(measure);
+  observer.observe(wrap);
+  hit.hidden = true;
+  measure();
+  schedule();
+  return {
+    setSuspended(value) {
+      if (disposed || suspended === value) return;
+      suspended = value;
+      cv.hidden = value;
+      hit.hidden = true;
+      lastFrame = "";
+      if (value) { cancelAnimationFrame(raf); raf = 0; if (document.activeElement === hit) hit.blur(); }
+      else schedule();
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+      events.abort();
+      cv.remove(); hit.remove();
+    },
   };
-  tick();
-  return { dispose() { cancelAnimationFrame(raf); cv.remove(); } };
 }

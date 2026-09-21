@@ -12,6 +12,8 @@ const RAW: Record<string, string> = {
   chat: P("M4 5.5h16v10a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.2V17H5.5A1.5 1.5 0 0 1 4 15.5z"),
   // shield (security)
   shield: P("M12 3 5 5.6v5c0 4.3 3 7.6 7 9.4 4-1.8 7-5.1 7-9.4v-5z") + P("M9 11.6l2.1 2.1L15 9.8"),
+  // P-JEV.2: a balance scale for typed judgments (Jev) - beam, post, two pans
+  scale: P("M12 4.5v15") + P("M9 19.5h6") + P("M5 7.5h14") + P("M7 7.5 4 13.5a3 3 0 0 0 6 0z") + P("M17 7.5 14 13.5a3 3 0 0 0 6 0z"),
   // memory / context (concentric synapse)
   brain:
     P("M12 4.5a3 3 0 0 0-3 3 2.6 2.6 0 0 0-1.6 4.6A2.7 2.7 0 0 0 9 16.8 2.4 2.4 0 0 0 12 19a2.4 2.4 0 0 0 3-2.2 2.7 2.7 0 0 0 1.6-4.7A2.6 2.6 0 0 0 15 7.5a3 3 0 0 0-3-3z") +

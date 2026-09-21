@@ -34,9 +34,9 @@ describe("drift guards against the production spawn (acp_backend.ts)", () => {
     const src = await Bun.file(ACP_BACKEND).text();
     // The literal template expression in acp_backend.ts (backslash-n in source):
     const needle =
-      "${DELEGATION_POLICY}\\n\\n${BUILD_POLICY}\\n\\n${PREVIEW_POLICY}\\n\\n${ENGAGEMENT_POLICY}\\n\\n${AGENT_BUILDER_POLICY}\\n\\n${SLASH_COMMAND_POLICY}\\n\\n${DATA_INTEGRATION_POLICY}";
+      "${DELEGATION_POLICY}\\n\\n${BUILD_POLICY}\\n\\n${PREVIEW_POLICY}\\n\\n${ENGAGEMENT_POLICY}\\n\\n${AGENT_BUILDER_POLICY}\\n\\n${SLASH_COMMAND_POLICY}\\n\\n${DATA_INTEGRATION_POLICY}\\n\\n${JEV_POLICY}";
     expect(src).toContain(needle);
-    // And the audit joins the same 7 policies in the same order with the same separator.
+    // And the audit joins the same 8 policies in the same order with the same separator.
     const composed = composeAppendedPolicy();
     let cursor = -1;
     for (const p of policyParts()) {
@@ -44,7 +44,7 @@ describe("drift guards against the production spawn (acp_backend.ts)", () => {
       expect(at).toBeGreaterThan(cursor);
       cursor = at;
     }
-    expect(policyParts()).toHaveLength(7);
+    expect(policyParts()).toHaveLength(8);
   });
 
   test("every measured extension is one acp_backend actually spawns", async () => {

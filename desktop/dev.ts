@@ -101,9 +101,11 @@ import { addInterject, drainInterjects, pendingInterjectCount } from "./interjec
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
+import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
 import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
-import { providerAuth, type ProviderAuthSnapshot } from "./auth_status.ts";
+import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
+import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
 import { cloneRepo, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
@@ -277,6 +279,34 @@ import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
 import { asksageOnly, sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode; ADR-0217: the AskSage lockdown flag
 import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // ADR-0221: BYO-embeddings config
+import { judgmentProvider, setJudgmentProvider } from "./settings_store.ts"; // P-JEV.1 (ADR-0374): the judgment backend choice
+import { jevActive, resolveJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1: the lockdown clamp; P-JEV.2: the Jev-active rule
+import { activeAccountId, addKeyAccount, providerAccounts, removeAccount, renameAccount, setActiveAccount } from "./settings_store.ts"; // P-ACCT.1 (ADR-0375)
+import { activateOauthIdentity, disconnectOauthIdentity, listOauthRows, parkAllOauth } from "./auth_vault.ts"; // P-ACCT.1: omp-vault appliers
+import { deriveAccounts, LEGACY_KEY_ACCOUNT_ID, type AccountView } from "./account_policy.ts"; // P-ACCT.1: pure derivation
+import { GATEWAY, MAJORS, OTHERS, type Provider as ProviderDesc } from "./auth_status.ts";
+
+// P-ACCT.1: one provider descriptor by id, across every section (gateway + majors + others).
+function providerById(id: string): ProviderDesc | undefined {
+  return [...GATEWAY, ...MAJORS, ...OTHERS].find((x) => x.id === id);
+}
+// P-ACCT.1: the full accounts snapshot the renderer consumes: providerId -> derived account views.
+// Only providers that actually HAVE at least one account appear, so the payload stays small and the
+// UI renders account chrome only where it means something.
+function accountsSnapshot(): Record<string, AccountView[]> {
+  const out: Record<string, AccountView[]> = {};
+  const keys = loadSettings().keys ?? {};
+  for (const prov of [...GATEWAY, ...MAJORS, ...OTHERS]) {
+    const views = deriveAccounts({
+      oauthRows: prov.oauthId ? listOauthRows(prov.oauthId) : [],
+      stored: providerAccounts(prov.id),
+      legacyKey: prov.env ? keys[prov.env] || undefined : undefined,
+      activeId: activeAccountId(prov.id),
+    });
+    if (views.length) out[prov.id] = views;
+  }
+  return out;
+}
 
 // ADR-0221: the desktop's Embedder — an ApiEmbedder built from the stored config + the vault secret injected as
 // LUCID_EMBEDDINGS_KEY by main, or null when semantic search is off/incomplete (retrieval stays lexical).
@@ -1089,9 +1119,11 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/fleet/status",       // P-FLEET.L1: the master's fleet_status tool
   "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
+  "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
+  "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
 ]);
 // P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
 // sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
@@ -2405,6 +2437,32 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await readBody<Record<string, unknown>>(req); return json({ ok: true, data: setVoiceSettings(b as never) }); }
         return json({ ok: true, data: voiceSettings() });
       }
+      // P-JEV.1 (ADR-0374): the judgment backend (omp `providers.judgmentProvider`). GET returns the stored
+      // choice AND the effective value after the lockdown clamp, so the card can say why they differ. POST
+      // persists the choice and restarts the omp child, because the overlay is written at spawn.
+      // P-JEV.2 (ADR-0377): both answers also carry `configured`: can Jev answer a judgment in the running
+      // child (effective mode + a saved TypeSafe key). The chat's per-turn "Jev not consulted" note is gated
+      // on it, so a user who never set Jev up is never told about it.
+      if (p === "/api/judgment") {
+        if (req.method === "POST") {
+          const b = await readBody<{ mode?: unknown }>(req);
+          const before = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective;
+          setJudgmentProvider(b.mode);
+          const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
+          if (r.effective !== before) backend.restart();
+          return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+        }
+        const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
+        return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+      }
+      // P-JEV.2 (ADR-0377): the omp child reports each typed judgment here (the judgment extension wraps
+      // pi-ai's judge classes in-process and AWAITS this POST, so the chat has the row before omp acts on the
+      // answer). Same token'd self-report shape as /api/tool/meta. Parsed at this boundary, never trusted
+      // because it was JSON; an unparseable body is ignored, never an error the child could stall on.
+      if (p === "/api/judgment/trace" && req.method === "POST") {
+        const report = parseJudgmentReport(await readBody<unknown>(req));
+        return json({ ok: true, data: { noted: !!report && backend.noteJudgment(report) } });
+      }
       // P-VOICE.1 + P-VOICE.2 (ADR-0247): list the selectable voices for ONE engine, so the picker works for
       // every engine rather than only ElevenLabs. OpenAI and Kokoro publish a FIXED voice set with no list
       // endpoint, so those come from the static catalog; ElevenLabs is per-account and fetched live.
@@ -2799,6 +2857,40 @@ const server = Bun.serve({
         if (!r.ok) return json({ ok: false, error: r.error ?? "key press failed" });
         return json({ ok: true, data: { keys, title: r.title ?? "", url: r.url ?? "" } });
       }
+      // P-JEV.4 (ADR-0379): the Jev browser policy's two primitives. `snapshot` reads the indexed element
+      // table MAIN builds in its isolated world (the model picks an offered index, never a selector or a
+      // coordinate); `act` executes ONE chosen candidate only after main re-verifies the freshness reference
+      // the decision was made against - a stale page comes back as { stale: true } with nothing executed,
+      // so the tool re-snapshots instead of acting on a page the model never saw. Fail-closed throughout.
+      if (p === "/api/browser/snapshot" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "snapshot" });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok || !r.page) return json({ ok: false, error: r.error ?? "snapshot failed" });
+        setBrowserStatus({ ...(r.title ? { title: r.title } : {}), ...(r.url ? { url: r.url } : {}) });
+        return json({ ok: true, data: { page: r.page } });
+      }
+      if (p === "/api/browser/act" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ action?: unknown; fresh?: unknown; text?: unknown }>(req);
+        if (!isBrowserAction(b.action)) return json({ ok: false, error: "browser_act needs a snapshot action (id, kind, label, and node/delta for its kind)" });
+        const fresh = b.fresh && typeof b.fresh === "object" && !Array.isArray(b.fresh) ? b.fresh : null;
+        if (!fresh) return json({ ok: false, error: "browser_act needs the freshness reference of the snapshot the decision was made against" });
+        const text = b.text === undefined ? undefined : String(b.text);
+        if (b.action.kind === "fill") {
+          if (!text || text.length > 2000) return json({ ok: false, error: "browser_act fill needs text of 1 to 2000 characters" });
+        } else if (text !== undefined) {
+          return json({ ok: false, error: "browser_act only accepts text for a fill action" });
+        }
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "act", action: b.action, fresh, ...(text !== undefined ? { text } : {}) });
+        const r = await waitBrowserResult(id, 15_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "act failed", ...(r.stale === true ? { stale: true } : {}) });
+        return json({ ok: true, data: { title: r.title ?? "", url: r.url ?? "" } });
+      }
       // Close is idempotent and shared by three callers (agent tool, pill button, Stop-agent path):
       // an already-closed window answers ok so a stop sequence never trips over a race with the user's X.
       if (p === "/api/browser/close" && req.method === "POST") {
@@ -2835,14 +2927,20 @@ const server = Bun.serve({
       // Drained by MAIN's 500ms poll loop (x-lucid-token header; main minted the token).
       if (p === "/api/browser/commands") return json({ ok: true, data: { commands: drainBrowserCommands() } });
       if (p === "/api/browser/result" && req.method === "POST") {
-        const b = await readBody<{ id?: unknown; ok?: unknown; error?: unknown; png?: unknown; title?: unknown; url?: unknown }>(req);
+        const b = await readBody<{ id?: unknown; ok?: unknown; error?: unknown; png?: unknown; title?: unknown; url?: unknown; page?: unknown; stale?: unknown }>(req);
         if (typeof b.id === "string" && b.id) {
+          // P-JEV.4 (ADR-0379): a snapshot page is forwarded only when it is on-shape AND main fingerprinted
+          // it - the policy keys every decision to that fingerprint, so an unfingerprinted page is no page.
+          const page = isBrowserPageShape(b.page) && "fingerprint" in b.page && typeof b.page.fingerprint === "string"
+            ? { ...b.page, fingerprint: b.page.fingerprint } : null;
           completeBrowserCommand(b.id, {
             ok: b.ok === true,
             ...(typeof b.error === "string" ? { error: b.error } : {}),
             ...(typeof b.png === "string" && b.png.startsWith("data:image/") ? { png: b.png } : {}),
             ...(typeof b.title === "string" ? { title: b.title } : {}),
             ...(typeof b.url === "string" ? { url: b.url } : {}),
+            ...(page ? { page } : {}),
+            ...(typeof b.stale === "boolean" ? { stale: b.stale } : {}),
           });
         }
         return json({ ok: true, data: { settled: typeof b.id === "string" && !!b.id } });
@@ -3595,6 +3693,65 @@ const server = Bun.serve({
         const r = clearAllOauthCredentials();
         return json({ ok: true, data: providerAuth(), removed: r.removed });
       }
+      // ── P-ACCT.1 (ADR-0375): named provider accounts. GET = the full snapshot; the mutations answer
+      // with the refreshed snapshot so the renderer repaints from server truth. Switching is the only
+      // route that touches omp state: it parks/unparks oauth rows in agent.db (omp's own soft-disable
+      // column, LUCID's cause only) and swaps the single env-key slot, then restarts the omp child.
+      if (p === "/api/accounts") return json({ ok: true, data: accountsSnapshot() });
+      if (p === "/api/accounts/add" && req.method === "POST") {
+        const b = await readBody<{ providerId?: unknown; name?: unknown; key?: unknown }>(req);
+        const prov = providerById(String(b.providerId ?? ""));
+        if (!prov?.env) return json({ ok: false, error: "unknown provider or no key slot" });
+        const rec = addKeyAccount(prov.id, String(b.name ?? ""), String(b.key ?? ""));
+        if (!rec) return json({ ok: false, error: "invalid name or empty key" });
+        return json({ ok: true, data: accountsSnapshot() });
+      }
+      if (p === "/api/accounts/rename" && req.method === "POST") {
+        const b = await readBody<{ providerId?: unknown; accountId?: unknown; name?: unknown }>(req);
+        renameAccount(String(b.providerId ?? ""), String(b.accountId ?? ""), String(b.name ?? ""));
+        return json({ ok: true, data: accountsSnapshot() });
+      }
+      if (p === "/api/accounts/remove" && req.method === "POST") {
+        const b = await readBody<{ providerId?: unknown; accountId?: unknown }>(req);
+        const prov = providerById(String(b.providerId ?? ""));
+        const accountId = String(b.accountId ?? "");
+        if (!prov) return json({ ok: false, error: "unknown provider" });
+        if (accountId.startsWith("oauth:")) {
+          // Disconnect ONE identity: rows (token blob included) gone; other accounts untouched.
+          const idk = accountId.slice("oauth:".length);
+          disconnectOauthIdentity(prov.oauthId, idk === "unknown" ? null : idk);
+        } else if (accountId === LEGACY_KEY_ACCOUNT_ID) {
+          setKey(prov.env, ""); // the legacy slot IS the env slot
+        } else {
+          const rec = providerAccounts(prov.id).find((a) => a.id === accountId);
+          // Removing the account whose key sits in the live env slot clears that slot too.
+          if (rec?.key && (loadSettings().keys ?? {})[prov.env] === rec.key) setKey(prov.env, "");
+        }
+        removeAccount(prov.id, accountId);
+        backend.restart();
+        return json({ ok: true, data: accountsSnapshot() });
+      }
+      if (p === "/api/accounts/switch" && req.method === "POST") {
+        const b = await readBody<{ providerId?: unknown; accountId?: unknown }>(req);
+        const prov = providerById(String(b.providerId ?? ""));
+        const accountId = String(b.accountId ?? "");
+        if (!prov) return json({ ok: false, error: "unknown provider" });
+        const view = (accountsSnapshot()[prov.id] ?? []).find((a) => a.id === accountId);
+        if (!view) return json({ ok: false, error: "unknown account" });
+        if (view.kind === "oauth") {
+          // Stored OAuth outranks an env key in omp, so unparking the identity is sufficient.
+          const idk = accountId.slice("oauth:".length);
+          activateOauthIdentity(prov.oauthId, idk === "unknown" ? null : idk);
+        } else {
+          // A key account only wins once NO active oauth row remains (omp precedence), so park them all.
+          parkAllOauth(prov.oauthId);
+          const rec = providerAccounts(prov.id).find((a) => a.id === accountId);
+          if (rec?.key) setKey(prov.env, rec.key); // legacy slot already holds its own key
+        }
+        setActiveAccount(prov.id, accountId);
+        backend.restart();
+        return json({ ok: true, data: accountsSnapshot() });
+      }
       // P-IMG.1 (ADR-0208): "Send to preview" for a chat image. Validate the image through the strict gate,
       // write a self-contained wrapper HTML (image embedded as a data: URI — allowed by the preview frame CSP)
       // into the workspace, and hand back its path. The existing local-file preview pipeline then renders it
@@ -3616,6 +3773,7 @@ const server = Bun.serve({
         if (req.method === "POST") {
           const b = await readBody<{ baseUrl?: unknown; only?: unknown; limit?: unknown; datasets?: unknown; queryModel?: unknown; persona?: unknown }>(req);
           const prev = asksageConfig();
+          const judgeBefore = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective; // P-JEV.1
           setAsksage({
             baseUrl: typeof b.baseUrl === "string" ? b.baseUrl : undefined,
             only: typeof b.only === "boolean" ? b.only : undefined,
@@ -3625,8 +3783,11 @@ const server = Bun.serve({
             persona: typeof b.persona === "string" ? b.persona : undefined,
           });
           const next = asksageConfig();
-          // The omp child reads datasets/model/persona/base from env at spawn - restart to apply.
-          if ((typeof b.baseUrl === "string" && next.base !== prev.base) || (b.datasets !== undefined && next.datasets.join(",") !== prev.datasets.join(",")) || (b.queryModel !== undefined && next.queryModel !== prev.queryModel) || (b.persona !== undefined && next.persona !== prev.persona)) backend.restart();
+          // The omp child reads datasets/model/persona/base from env at spawn - restart to apply. P-JEV.1: a
+          // lockdown flip that changes the judgment pin (auto/typesafe -> llm, or back) restarts too, so a
+          // saved TypeSafe key stops receiving judgments the moment the lock goes on, not at the next spawn.
+          const judgeAfter = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective;
+          if ((typeof b.baseUrl === "string" && next.base !== prev.base) || (b.datasets !== undefined && next.datasets.join(",") !== prev.datasets.join(",")) || (b.queryModel !== undefined && next.queryModel !== prev.queryModel) || (b.persona !== undefined && next.persona !== prev.persona) || judgeAfter !== judgeBefore) backend.restart();
         }
         const c = asksageConfig();
         return json({ ok: true, data: { configured: c.configured, base: c.base, only: c.only, limit: c.limit, datasets: c.datasets, queryModel: c.queryModel, persona: c.persona } });
@@ -4700,6 +4861,10 @@ process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/
 // real tool name exists ONLY inside omp's hook API - the ACP update carries a coarse `kind` and an
 // intent-shadowed title. Unset means the extension self-skips, and reports fall back to the coarse kind.
 process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${TOKEN}`;
+// P-JEV.2 (ADR-0377): the judgment extension POSTs every typed judgment (question, answers, backend,
+// latency, error) here, because omp records none of them and has no hook for them. Unset means the
+// extension self-skips and the chat draws no judgment row.
+process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${TOKEN}`;
 // P-KG.3: the agent's memory_recall / memory_retain tools reach the UNLOCKED personal knowledge graph
 // through these. Both fail closed when the vault is locked: recall returns no hits and retain refuses,
 // so a locked vault can never be mistaken for an empty one (which would teach the model it has no memory)

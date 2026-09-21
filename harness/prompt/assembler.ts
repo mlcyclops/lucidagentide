@@ -47,8 +47,11 @@ import type { TrustLabel } from "../contracts.ts";
  *  v10 (ADR-0266, P-DATA.1): added the data-integration policy to layer 3 - when the user prompt-stuffs a
  *      dataset (huge pastes, "keep this in the prompt"), explain context rot and route them to the right
  *      integration (native ingest, MCP for datastores, a real RAG pipeline, secure GraphQL/cloud vendor
- *      connections), with the custom-integration contract contact as the declared fallback. */
-export const PREFIX_VERSION = "10";
+ *      connections), with the custom-integration contract contact as the declared fallback.
+ *  v11 (ADR-0378, P-JEV.3): added the Jev policy to layer 3 - name Jev (TypeSafe) as the typed-judgment
+ *      engine reached only through eval's judge(), so "use Jev" calls it instead of asking what JEV is,
+ *      and the agent reports the typed answer + points at Settings > Judgment when the fallback answered. */
+export const PREFIX_VERSION = "11";
 
 export const UNTRUSTED_START = "UNTRUSTED_CONTENT_START";
 export const UNTRUSTED_END = "UNTRUSTED_CONTENT_END";
@@ -243,6 +246,28 @@ If the user does not want to follow these steps, or their integration has no nat
 to contact nicholas.chadwick.ctr@gmail.com and request a contract for their custom integration request.
 </data-integration>`;
 
+// P-JEV.3 (ADR-0378): name Jev for the agent. Jev (TypeSafe, api.typesafe.ai) is LUCID's typed-judgment
+// backend, reached ONLY through the eval helper `judge()`; nothing in omp's prompt or tool docs says so, so
+// a user who typed "use Jev" got "I'm not sure what JEV refers to" and Jev sat idle. Frozen (layer 3,
+// cached) so the mapping is byte-stable + always present; whether Jev is CONFIGURED is volatile and stays
+// out of the prefix, which is why the text describes the fallback instead of asserting the backend.
+export const JEV_POLICY = `<jev>
+"Jev" (also written JEV, or "TypeSafe") is LUCID's typed-judgment engine, not a chat model and not a tool
+name. You reach it ONLY through the eval helper judge(state, questions) (Python or JS): it returns typed
+answers - a choice with per-label probabilities and confidence, a yes/no probability, or a score over
+ordered levels - for classification, ranking, yes/no checks, and rubric grading over ONE piece of state.
+- When the user says to use Jev / JEV / TypeSafe, or asks for a judgment, classification, rating, or
+  confidence, call judge() from eval with the material to judge as the state and one question per decision;
+  batch independent questions into one call. Do NOT answer "I don't know what Jev is".
+- Pass only the material the judgment needs as state (an excerpt, candidates, a diff, records), never the
+  whole conversation; the state and the questions leave the machine.
+- Report the typed answer (the choice or level, its probability, the confidence), and say that Jev judged
+  it. LUCID's judgment trace under your reply shows the user exactly what was asked and which backend
+  answered; if Jev is not configured, omp answers the same call with the chat model (weaker, keyword
+  based) and the trace names that model, so tell the user Settings > Judgment is where Jev is set up.
+- A plain question that needs no judgment does not use Jev; do not call judge() just to say it was used.
+</jev>`;
+
 const LAYER_3_CODING = `<coding>
 Match the surrounding code's idiom, naming, and comment density. Verification is
 part of completion: code is not done until the relevant checks (tests, lint,
@@ -262,7 +287,9 @@ ${AGENT_BUILDER_POLICY}
 
 ${SLASH_COMMAND_POLICY}
 
-${DATA_INTEGRATION_POLICY}`;
+${DATA_INTEGRATION_POLICY}
+
+${JEV_POLICY}`;
 
 // ── Layer 4 — security policy & trust-boundary rules ────────────────────────
 // This layer defines the data/instruction boundary the whole product enforces.

@@ -294,6 +294,8 @@ export interface AgentArcadeHandle {
   /** Eligibility is the LUCID Agent role alone. It used to also require a live turn, which meant the
    *  Arcade chip only existed mid-reply: an idle agent session showed no game at all. */
   update(agentMode: boolean): void;
+  /** Whether the game panel is showing, which is when the Arcade sprite owns the screen. */
+  isOpen(): boolean;
   dispose(): void;
 }
 
@@ -486,8 +488,13 @@ export function drawArcadeBonus(ctx: CanvasRenderingContext2D, state: ArcadeStat
   if (bonus.pinchMs) ctx.fillText('PINCH', aimX, Math.max(32, aimY - 32));
 }
 
+export interface ArcadeOptions {
+  /** Fires synchronously when the panel opens or closes, so the host can yield the mascot to it. */
+  onLayout?: (open: boolean) => void;
+}
+
 /** Local, opt-in diversion. The caller alone decides whether an actual agent run is active. */
-export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort): AgentArcadeHandle {
+export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort, options: ArcadeOptions = {}): AgentArcadeHandle {
   const root = document.createElement('section');
   root.className = 'agent-arcade';
   root.hidden = true;
@@ -500,8 +507,10 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort)
         <label class="agent-arcade-character">Ninja <select aria-label="Arcade character"></select></label>
         <output class="agent-arcade-score" aria-label="Arcade score">Level 1 · Run 0 · Hearts 3</output>
         <output class="agent-arcade-total" aria-label="Combined arcade and trivia score">Total 0</output>
-        <button type="button" class="agent-arcade-start">Start</button>
-        <button type="button" class="agent-arcade-exit">Exit</button>
+        <span class="agent-arcade-actions">
+          <button type="button" class="agent-arcade-start">Start</button>
+          <button type="button" class="agent-arcade-exit">Exit</button>
+        </span>
       </div>
       <canvas class="agent-arcade-canvas" tabindex="0" aria-label="Ninja obstacle course. Arrow keys move, Up or Alt jumps, Down ducks, Control punches, Down plus Control kicks."></canvas>
       <div class="agent-arcade-controls" role="group" aria-label="Arcade controls">
@@ -584,11 +593,8 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort)
     canvas.hidden = !course;
     controlsRow.hidden = !course;
     characterLabel.hidden = !course;
-    score.hidden = !course;
-    // A mini game brings its own toolbar (title, score, total, Start) and help line, so the
-    // panel-level ones would read twice; the panel keeps only the game picker and Exit.
-    start.hidden = !course;
-    totalOutput.hidden = !course;
+    // Every game shares the ONE toolbar row (picker, score, total, Start, Exit), so the controls
+    // never stack across two toolbars.
     help.hidden = !course;
     start.textContent = 'Start';
     stop();
@@ -596,11 +602,12 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort)
       started = false;
       state = createArcadeState(state.width);
       lastMode = null; lastScore = -1; lastHearts = -1; lastTotal = -1;
+      score.setAttribute('aria-label', 'Arcade score');
       help.textContent = courseHelp;
       resize();
     } else {
       const def = MINI_GAMES.find((g) => g.id === id)!;
-      miniHandle = def.mount(altHost, miniPort);
+      miniHandle = def.mount(altHost, { start, score, total: totalOutput, cabinet: panel }, miniPort);
       altHost.hidden = false;
     }
     totalOutput.textContent = `Total ${miniPort.total()}`;
@@ -796,7 +803,7 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort)
 
   function begin(): void {
     if (!eligible || document.hidden || disposed) return;
-    if (activeGame !== 'course') { miniHandle?.start(); start.textContent = 'Restart'; return; }
+    if (activeGame !== 'course') { miniHandle?.start(); return; } // the mini game labels Start itself
     if (!context) return;
     if (playing) { pause(); return; }
     if (!started || state.phase === 'lost') state = createArcadeState(state.width);
@@ -814,11 +821,13 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort)
     stop();
     if (activeGame !== 'course') { gameSelect.value = 'course'; switchGame('course'); }
     started = false;
+    const wasOpen = !panel.hidden;
     panel.hidden = true;
     reveal.hidden = false;
     reveal.setAttribute('aria-expanded', 'false');
     start.textContent = 'Start';
     state = createArcadeState(state.width);
+    if (wasOpen) options.onLayout?.(false);
   }
 
   reveal.addEventListener('click', () => {
@@ -826,6 +835,7 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort)
     panel.hidden = false;
     reveal.hidden = true;
     reveal.setAttribute('aria-expanded', 'true');
+    options.onLayout?.(true);
     status.textContent = context ? 'Local only. Play any time, including while the agent works.' : 'Canvas is unavailable in this window.';
     start.disabled = !context;
     for (const button of controls) button.disabled = true;
@@ -909,12 +919,14 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort)
       root.hidden = !eligible;
       host.hidden = !eligible;
     },
+    isOpen() { return !disposed && !panel.hidden; },
     dispose() {
       if (disposed) return;
       disposed = true;
       const active = document.activeElement;
       if (active instanceof HTMLElement && root.contains(active)) active.blur();
       stop();
+      if (!panel.hidden) options.onLayout?.(false);
       if (miniHandle) { miniHandle.dispose(); miniHandle = null; }
       events.abort();
       observer.disconnect();

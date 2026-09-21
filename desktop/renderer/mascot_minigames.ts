@@ -9,7 +9,7 @@ import { MASCOT_H, MASCOT_THEMES, MASCOT_W, paintFrame } from './mascot.ts';
 import type { ArcadeScorePort } from './mascot_game.ts';
 
 export interface MiniGameHandle {
-  /** Begin or restart a run. Safe to call repeatedly. */
+  /** Toggle Start/Pause/Resume, or restart a finished run. */
   start(): void;
   /** Pause and release input; keeps the last frame painted. */
   stop(): void;
@@ -17,11 +17,19 @@ export interface MiniGameHandle {
   dispose(): void;
 }
 
+export interface MiniGameToolbar {
+  start: HTMLButtonElement;
+  score: HTMLOutputElement;
+  total: HTMLOutputElement;
+  /** The cabinet includes the shared toolbar in the focus boundary. */
+  cabinet: HTMLElement;
+}
+
 export interface MiniGameDef {
   id: 'shuriken' | 'kata' | 'stack';
   name: string;
   blurb: string;
-  mount(host: HTMLElement, scorePort?: ArcadeScorePort): MiniGameHandle;
+  mount(host: HTMLElement, toolbar: MiniGameToolbar, scorePort?: ArcadeScorePort): MiniGameHandle;
 }
 
 const CANVAS_HEIGHT = 180;
@@ -643,17 +651,11 @@ interface MiniGameSpec<S> {
 
 let runCounter = 0;
 
-function mountMiniGame<S>(host: HTMLElement, scorePort: ArcadeScorePort | undefined, spec: MiniGameSpec<S>): MiniGameHandle {
+function mountMiniGame<S>(host: HTMLElement, toolbar: MiniGameToolbar, scorePort: ArcadeScorePort | undefined, spec: MiniGameSpec<S>): MiniGameHandle {
   const root = document.createElement('section');
   root.className = `mini-game mini-game-${spec.id}`;
   root.setAttribute('aria-label', spec.name);
   root.innerHTML = `
-    <div class="mini-game-toolbar">
-      <span class="mini-game-title">${spec.name}</span>
-      <output class="mini-game-score" aria-label="${spec.name} run readout"></output>
-      <output class="mini-game-total" aria-label="Combined arcade score">Total 0</output>
-      <button type="button" class="mini-game-start">Start</button>
-    </div>
     <canvas class="mini-game-canvas" tabindex="0" aria-label="${spec.ariaLabel}"></canvas>
     <div class="mini-game-controls" role="group" aria-label="${spec.name} controls">
       ${spec.buttons.map(button => `<button type="button" data-action="${button.action}" aria-label="${button.aria}">${button.label}</button>`).join('')}
@@ -663,9 +665,8 @@ function mountMiniGame<S>(host: HTMLElement, scorePort: ArcadeScorePort | undefi
   host.appendChild(root);
 
   const canvas = root.querySelector<HTMLCanvasElement>('canvas')!;
-  const startButton = root.querySelector<HTMLButtonElement>('.mini-game-start')!;
-  const scoreOutput = root.querySelector<HTMLOutputElement>('.mini-game-score')!;
-  const totalOutput = root.querySelector<HTMLOutputElement>('.mini-game-total')!;
+  const { start: startButton, score: scoreOutput, total: totalOutput } = toolbar;
+  scoreOutput.setAttribute('aria-label', `${spec.name} run readout`);
   const status = root.querySelector<HTMLElement>('.mini-game-status')!;
   const controls = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-action]'));
   const context = canvas.getContext('2d');
@@ -778,7 +779,7 @@ function mountMiniGame<S>(host: HTMLElement, scorePort: ArcadeScorePort | undefi
     playing = true;
     lastTime = 0;
     lastReadout = '';
-    startButton.textContent = 'Restart';
+    startButton.textContent = 'Pause';
     status.textContent = spec.readyText;
     for (const button of controls) button.disabled = false;
     canvas.focus({ preventScroll: true });
@@ -791,7 +792,7 @@ function mountMiniGame<S>(host: HTMLElement, scorePort: ArcadeScorePort | undefi
     if (!started || spec.over(state)) { begin(); return; }
     playing = true;
     lastTime = 0;
-    startButton.textContent = 'Restart';
+    startButton.textContent = 'Pause';
     status.textContent = spec.readyText;
     for (const button of controls) button.disabled = false;
     canvas.focus({ preventScroll: true });
@@ -805,10 +806,6 @@ function mountMiniGame<S>(host: HTMLElement, scorePort: ArcadeScorePort | undefi
     paint();
   }
 
-  startButton.addEventListener('click', () => {
-    if (playing) begin();
-    else resume();
-  }, listenerOptions);
   for (const button of controls) {
     button.addEventListener('click', () => {
       act(button.dataset.action ?? '');
@@ -824,8 +821,8 @@ function mountMiniGame<S>(host: HTMLElement, scorePort: ArcadeScorePort | undefi
     if (event.repeat) return;
     act(action);
   }, listenerOptions);
-  root.addEventListener('focusout', event => {
-    if (!(event.relatedTarget instanceof Node) || !root.contains(event.relatedTarget)) pause();
+  toolbar.cabinet.addEventListener('focusout', event => {
+    if (!(event.relatedTarget instanceof Node) || !toolbar.cabinet.contains(event.relatedTarget)) pause();
   }, listenerOptions);
   window.addEventListener('blur', pause, listenerOptions);
   document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); }, listenerOptions);
@@ -841,7 +838,7 @@ function mountMiniGame<S>(host: HTMLElement, scorePort: ArcadeScorePort | undefi
   resize();
 
   return {
-    start() { begin(); },
+    start() { if (playing) pause(); else resume(); },
     stop() {
       if (disposed || !playing) return;
       pause();
@@ -953,14 +950,14 @@ const STACK_SPEC: MiniGameSpec<StackState> = {
 export const MINI_GAMES: readonly MiniGameDef[] = [
   {
     id: SHURIKEN_SPEC.id, name: SHURIKEN_SPEC.name, blurb: SHURIKEN_SPEC.blurb,
-    mount: (host, scorePort) => mountMiniGame(host, scorePort, SHURIKEN_SPEC),
+    mount: (host, toolbar, scorePort) => mountMiniGame(host, toolbar, scorePort, SHURIKEN_SPEC),
   },
   {
     id: KATA_SPEC.id, name: KATA_SPEC.name, blurb: KATA_SPEC.blurb,
-    mount: (host, scorePort) => mountMiniGame(host, scorePort, KATA_SPEC),
+    mount: (host, toolbar, scorePort) => mountMiniGame(host, toolbar, scorePort, KATA_SPEC),
   },
   {
     id: STACK_SPEC.id, name: STACK_SPEC.name, blurb: STACK_SPEC.blurb,
-    mount: (host, scorePort) => mountMiniGame(host, scorePort, STACK_SPEC),
+    mount: (host, toolbar, scorePort) => mountMiniGame(host, toolbar, scorePort, STACK_SPEC),
   },
 ];

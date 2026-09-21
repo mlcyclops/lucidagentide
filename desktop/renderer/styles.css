@@ -870,6 +870,58 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .tc-line.tc-del{background:rgb(var(--red-rgb) / .13);color:var(--red-txt)}
 .tc-line.tc-meta{color:var(--txt-4);opacity:.72}
 
+/* P-JEV.2 (ADR-0377): the per-turn judgment trace (Jev / TypeSafe). Reuses the .thoughts shell; the body is
+   one card per judgment: a header row of short chips, a real table (question / typed answer + probability
+   bars / confidence), and the judged state behind <details>. Invariant 11: every chip is nowrap; the
+   question id ellipsizes; the ONLY wrapping text is prose (instructions, the error line), each in ONE block
+   element, never raw text beside inline tags inside a flex row. */
+.judgments{width:100%;border-left:2px solid var(--violet)}
+.judgments .thoughts-spin{color:var(--violet-ic)}
+.judgments.done.jev .thoughts-spin{color:var(--violet-ic)}
+.judgments.done:not(.jev) .thoughts-spin{color:var(--txt-4)}
+.judgments.idle{width:fit-content;border-left-color:var(--line)}
+.judgments.idle .thoughts-head{cursor:default}
+.judgments.idle .thoughts-head:hover{background:transparent}
+.judgments.idle .thoughts-spin{color:var(--txt-4)}
+.judgments.open .thoughts-body{max-height:70vh}
+.jd{border-top:1px solid var(--line-soft);padding:8px 11px 10px;font-size:12px;color:var(--txt-3)}
+.jd-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-family:var(--mono);font-size:11.5px;margin-bottom:6px}
+.jd-head>span{white-space:nowrap}
+.jd-purpose{color:var(--violet-txt);font-weight:600}
+.jd-who{color:var(--cyan)}
+.jd-ms{color:var(--txt-4)}
+.jd.failed .jd-who{color:var(--red-txt)}
+/* prose: one block, absolutely-positioned icon (the .set-note pattern), so the sentence never shatters */
+.jd-err{position:relative;padding:4px 0 6px 18px;color:var(--amber-txt);line-height:1.45}
+.jd-err .ic{position:absolute;left:0;top:6px}
+.jd-err span{display:block}
+.jd-wrap{overflow-x:auto;scrollbar-width:thin;border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-0)}
+.jd-table{width:100%;min-width:520px;border-collapse:collapse;font-size:12px}
+.jd-table th{text-align:left;font-weight:600;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--txt-4);padding:6px 10px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+.jd-table td{padding:7px 10px;vertical-align:top;border-bottom:1px solid var(--line-soft)}
+.jd-table tr:last-child td{border-bottom:0}
+.jd-table td:first-child{min-width:220px;width:44%}
+.jd-table td:nth-child(2){min-width:200px}
+.jd-conf{white-space:nowrap;font-family:var(--mono);color:var(--txt-2)}
+.jd-id{font-family:var(--mono);font-weight:600;color:var(--txt-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jd-type{display:inline-block;font-weight:500;font-size:10px;color:var(--violet-txt);background:rgb(var(--violet-rgb, 139 92 246) / .16);
+  border-radius:999px;padding:0 6px;margin-left:4px;vertical-align:1px;white-space:nowrap}
+.jd-instr{margin-top:3px;color:var(--txt-3);line-height:1.45}
+.jd-ans{font-family:var(--mono);font-weight:600;color:var(--txt-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jd-ans.none{color:var(--txt-4);font-weight:500}
+.jd-bars{margin-top:5px;display:grid;gap:3px}
+.jd-bar{display:grid;grid-template-columns:minmax(72px,140px) 1fr 40px;align-items:center;gap:6px;font-family:var(--mono);font-size:11px}
+.jd-bar-l{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-3)}
+.jd-bar-t{height:5px;border-radius:999px;background:var(--line-soft);overflow:hidden}
+.jd-bar-f{display:block;height:100%;background:var(--violet);border-radius:999px}
+.jd-bar-p{text-align:right;color:var(--txt-4);white-space:nowrap}
+.jd-state{margin-top:7px}
+.jd-state summary{cursor:pointer;color:var(--txt-4);font-family:var(--mono);font-size:11px;white-space:nowrap}
+.jd-state pre{margin:6px 0 0;padding:8px 10px;max-height:32vh;overflow:auto;scrollbar-width:thin;background:var(--bg-0);
+  border:1px solid var(--line-soft);border-radius:8px;font-family:var(--mono);font-size:11.5px;line-height:1.5;
+  white-space:pre-wrap;word-break:break-word;color:var(--txt-2)}
+
 /* reasoning ("thinking") block - P-ACP.1 (ADR-0027). Sits ABOVE the answer; streams the model's
    thought text live, then auto-collapses to a "Thought for Ns" summary when the answer takes over. */
 .reasoning{margin:2px 0 8px;border:1px solid var(--line);border-left:2px solid var(--accent-dim);
@@ -1064,6 +1116,11 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .reportlink a:hover{text-decoration:underline}
 
 .composer-wrap{padding:10px 26px 18px}
+/* The ninja's hit target: an invisible button tracking only his visible pixels ABOVE the prompt, so
+   he can be hovered, clicked and tabbed to without ever covering the input or its buttons. */
+.composer-mascot-hit{position:absolute;z-index:4;padding:0;border:0;background:transparent;cursor:pointer}
+.composer-mascot-hit[hidden]{display:none}
+.composer-mascot-hit:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r-sm)}
 /* P-SLASH.1: "/" command + skill autocomplete, floating just above the composer. */
 .composer-row{position:relative}
 .slash-ac{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
@@ -2472,10 +2529,6 @@ body.lucid-capturing #toasts{visibility:hidden}
    painted straight over the playfield. Lift the stage floor instead of moving the game. */
 .agent-stage{position:absolute;inset:0 0 var(--arcade-h,0px);z-index:0;pointer-events:none;overflow:hidden;
   transition:opacity .5s var(--ease-out,ease),bottom .2s var(--ease-out,ease)}
-/* P-MASCOT.4: the stage yields while the user is composing - anything in the composer (text or a
-   staged attachment) fades the whole stage (ninja, glow, cap) to 25%, and emptying it fades him back.
-   Opacity on the CONTAINER, not the canvas, so the glow and caption dim as one piece. */
-.agent-stage.stage-dim{opacity:.25}
 .agent-stage-glow{position:absolute;inset:-20%;
   background:
     radial-gradient(58% 46% at 50% 38%, rgb(var(--hero-rgb) / .16), transparent 66%),
@@ -3355,6 +3408,40 @@ body.preview-open .thread{font-size:.9em}
 .prov-row{display:flex;align-items:center;gap:8px}
 /* "Sign out of all providers" footer — a quiet, right-aligned reset under the provider cards. */
 .prov-signout{display:flex;justify-content:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+/* ── P-ACCT.1: nested collapsible provider cards + named account rows ─────────────────────────
+   The accordion summary is ONE line (invariant 11): the name span owns the flexible space and
+   ellipsizes; badges never wrap. The body holds the account list, then the classic .prov card. */
+.prov-acc{border:1px solid var(--line);border-radius:11px;margin-bottom:10px;background:var(--bg-2);overflow:hidden;transition:border-color var(--t)}
+.prov-acc:hover{border-color:var(--line-strong)}
+.prov-acc>summary{display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;list-style:none;user-select:none}
+.prov-acc>summary::-webkit-details-marker{display:none}
+.prov-acc>summary>.ic{color:var(--txt-3);transition:transform .15s ease;flex:none}
+.prov-acc[open]>summary>.ic{transform:rotate(90deg)}
+.prov-acc-nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px;font-weight:600;color:var(--txt);letter-spacing:.1px}
+.prov-acc-badges{display:flex;align-items:center;gap:6px;flex:none}
+.prov-acc-badges .abadge{white-space:nowrap}
+.prov-acc-b{padding:2px 11px 11px}
+.prov-acc-b .prov{margin-bottom:0}
+/* the "N accounts · <active name>" summary pill */
+.abadge.acct{background:var(--accent-dim);color:var(--accent-2);white-space:nowrap;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 26%,transparent)}
+/* account rows: radio-style switch dot + ONE ellipsizing text span per row (invariant 11) */
+.acct-block{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.acct-list{display:flex;flex-direction:column;gap:6px}
+.acct-row{display:flex;align-items:center;gap:8px}
+.acct-switch{-webkit-app-region:no-drag;background:none;border:none;padding:2px;cursor:pointer;display:inline-flex;flex:none}
+.acct-dot{width:13px;height:13px;border-radius:50%;border:1.5px solid var(--line-strong);display:block;transition:border-color var(--t),background var(--t)}
+.acct-switch:hover .acct-dot{border-color:var(--accent)}
+.acct-dot.on{border-color:var(--green);background:radial-gradient(circle,var(--green) 0 44%,transparent 50%)}
+.acct-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:var(--txt-2)}
+.acct-row.active .acct-name{font-weight:600;color:var(--txt)}
+.acct-name .acct-suffix{font-style:normal;color:var(--txt-4)}
+.acct-row .abadge{white-space:nowrap;flex:none}
+.acct-ico{padding:3px 6px;flex:none}
+/* the add-account row: name + key inputs share the line with the Add button (wraps on narrow panels) */
+.acct-add{display:flex;align-items:center;gap:8px;flex-wrap:wrap;row-gap:6px}
+.acct-add .acct-add-name{flex:0 1 150px;min-width:90px}
+.acct-add .prov-key{flex:1 1 140px}
+.acct-add .btn-mini{flex:none;white-space:nowrap}
 /* P-PROV.2: the Provider Hub popup (dedicated provider chooser) + its Settings/picker entry points. Reuses
    .modal-ov / .modal chrome; tiles are same-size logo rows that expand an inline config (the .prov body). */
 .modal.provhub{width:min(680px,92vw);max-width:680px;padding:0;text-align:left;max-height:86vh;display:flex;flex-direction:column;overflow:hidden}
@@ -5210,17 +5297,18 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   margin:4px 8px; padding:5px 8px; border:1px solid var(--line); border-radius:var(--r-md);
   background:var(--bg-1); overflow:hidden;
 }
-/* P-MASCOT.5: six children now - game picker, character picker, score, Start, Exit, Total. */
+/* ONE toolbar row for every game: pickers, score, total, then Start and Exit as an inseparable
+   pair. Wrapping is by the panel's own width (flex), never a viewport media query, so a narrow
+   <main> beside open rails wraps whole chips instead of colliding or stacking the two buttons. */
 .agent-arcade .agent-arcade-toolbar {
-  display:grid; grid-template-columns:auto auto minmax(0,1fr) auto auto auto; gap:8px; align-items:center;
+  display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center;
 }
-.agent-arcade .agent-arcade-game, .agent-arcade .agent-arcade-character { display:flex; gap:6px; align-items:center; min-width:0; }
+.agent-arcade .agent-arcade-game, .agent-arcade .agent-arcade-character { display:flex; gap:6px; align-items:center; min-width:0; white-space:nowrap; }
 .agent-arcade .agent-arcade-game select { max-width:150px; }
 .agent-arcade .agent-arcade-character select { max-width:105px; }
-.agent-arcade .agent-arcade-score { min-width:0; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.agent-arcade .agent-arcade-total { grid-column:6; grid-row:1; color:var(--green-txt); font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.agent-arcade .agent-arcade-start { grid-column:4; grid-row:1; }
-.agent-arcade .agent-arcade-exit { grid-column:5; grid-row:1; }
+.agent-arcade .agent-arcade-score { flex:1 1 120px; min-width:0; text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.agent-arcade .agent-arcade-total { color:var(--green-txt); font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.agent-arcade .agent-arcade-actions { display:flex; flex:none; gap:6px; margin-left:auto; white-space:nowrap; }
 .agent-arcade .agent-arcade-canvas {
   display:block; width:100%; height:180px; margin:4px 0; border-radius:var(--r-sm);
   image-rendering:pixelated; touch-action:none;
@@ -5235,14 +5323,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .agent-arcade .agent-arcade-help { margin:4px 0 0; color:var(--txt-3); font-size:10px; line-height:1.4; }
 @media (max-width:600px) {
   .agent-arcade .agent-arcade-panel { margin:3px 4px; padding:5px; }
-  .agent-arcade .agent-arcade-toolbar { gap:4px; grid-template-columns:minmax(0,1fr) auto auto; }
-  .agent-arcade .agent-arcade-game { grid-column:1; grid-row:1; }
-  .agent-arcade .agent-arcade-start { grid-column:2; grid-row:1; }
-  .agent-arcade .agent-arcade-exit { grid-column:3; grid-row:1; }
+  .agent-arcade .agent-arcade-toolbar { gap:4px; }
   .agent-arcade .agent-arcade-game, .agent-arcade .agent-arcade-character { gap:3px; }
-  .agent-arcade .agent-arcade-character { grid-column:1; grid-row:2; }
-  .agent-arcade .agent-arcade-score { font-size:10px; grid-column:2; grid-row:2; text-align:right; }
-  .agent-arcade .agent-arcade-total { grid-column:3; grid-row:2; font-size:10px; text-align:right; }
+  .agent-arcade .agent-arcade-score, .agent-arcade .agent-arcade-total { font-size:10px; }
   .agent-arcade .agent-arcade-controls { grid-template-columns:repeat(6,minmax(0,1fr)); }
   .agent-arcade .agent-arcade-controls button { padding:3px 1px; }
   .agent-arcade .agent-arcade-status { grid-column:1 / -1; padding:0; }
@@ -5261,16 +5344,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .mini-game button:hover:not(:disabled) { background:var(--bg-3); border-color:var(--line-strong); }
 .mini-game button:disabled { opacity:.45; cursor:default; }
 .mini-game button:focus-visible, .mini-game canvas:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-/* Invariant 11: every cell here is a single nowrap line, so no label can ever wrap mid phrase. */
-.mini-game .mini-game-toolbar {
-  display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; gap:8px; align-items:center;
-}
-.mini-game .mini-game-title { color:var(--txt); font-weight:650; white-space:nowrap; }
-.mini-game .mini-game-score {
-  min-width:0; text-align:right; font-variant-numeric:tabular-nums;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-}
-.mini-game .mini-game-total { color:var(--green-txt); font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap; }
+/* No toolbar of its own: a mini game drives the cabinet's single shared Start / score / total row. */
 .mini-game .mini-game-canvas {
   display:block; width:100%; height:180px; margin:4px 0; border-radius:var(--r-sm);
   image-rendering:pixelated; touch-action:none;
@@ -5284,11 +5358,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* Help prose is a block paragraph, never a flex row sharing a line with tags. */
 .mini-game .mini-game-help { margin:4px 0 0; color:var(--txt-3); font-size:10px; line-height:1.4; }
 @media (max-width:600px) {
-  .mini-game .mini-game-toolbar { gap:4px; grid-template-columns:minmax(0,1fr) auto; }
-  .mini-game .mini-game-title { grid-column:1; grid-row:1; }
-  .mini-game .mini-game-start { grid-column:2; grid-row:1; }
-  .mini-game .mini-game-score { grid-column:1; grid-row:2; font-size:10px; text-align:left; }
-  .mini-game .mini-game-total { grid-column:2; grid-row:2; font-size:10px; text-align:right; }
   .mini-game .mini-game-controls,
   .mini-game-stack .mini-game-controls,
   .mini-game-shuriken .mini-game-controls { grid-template-columns:repeat(4,minmax(0,1fr)); }

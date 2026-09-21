@@ -11,6 +11,7 @@
 
 import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Agent Builder spec type
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
+import type { JudgmentReport } from "../../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the judgment trace (DOM-free)
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (DOM-free)
 import type { TurnSnapshot } from "../turn_recovery.ts";
 export type { TurnStatus, TurnSnapshot } from "../turn_recovery.ts";
@@ -38,6 +39,9 @@ export type ChatEvent =
   // P-EVAL.4 (ADR-0318): the real tool name (and later its pass/fail) for a call already streamed as
   // `tool`, self-reported from inside omp where the hook API does have it. Display + report metadata.
   | { type: "tool-meta"; id: string; name: string; ok?: boolean }
+  // P-JEV.2 (ADR-0377): one typed judgment (Jev / chat model) the omp child answered during this turn,
+  // self-reported by the judgment extension with the question, the answers and which backend answered.
+  | { type: "judgment"; report: JudgmentReport }
   | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string } // P-IMG.1 (ADR-0208): a tool result produced image(s) → render inline + download + push-to-preview
   | { type: "preview-snapshot"; image: string; label?: string } // P-PREVIEW-PWA.1 (ADR-0237): a scaled-down capture of the host's Preview panel, broadcast to phone guests only (never fed to the local desktop transcript)
   | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task ids from the delegation rawInput (absent when all auto-generated)

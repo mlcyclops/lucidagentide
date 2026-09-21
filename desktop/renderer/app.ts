@@ -8,11 +8,12 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
+import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
-import { mountMascot, type MascotHandle } from "./mascot.ts"; // P-MASCOT.1: LUCID the ninja (tiny, static import)
+import { externalHttpUrl } from "../navigation_policy.ts";
+import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
 import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
 import { mountAgentArcade, type AgentArcadeHandle } from "./mascot_game.ts";
 import { nextGap, readinessChecklist, resolveAgentTierModel, restoreModel, type AgentModelTier, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
@@ -103,7 +104,7 @@ import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFa
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
-import { buildHubSections, configuredProviderCount, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
+import { buildHubSections, configuredProviderCount, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
@@ -116,7 +117,7 @@ import { takeSpeechChunks } from "../../harness/voice/speech_stream.ts"; // P-VO
 import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues.ts"; // P-VOICE.6/.7 (ADR-0249/0257): spoken "still working" cues, active-listening openers, thinking snapshots
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
-import type { ElevenVoiceView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
+import type { AuthStatus, ElevenVoiceView, JudgmentView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
@@ -130,6 +131,9 @@ import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./li
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
 // streaming text/thinking deltas (output only; never the system prompt).
 import { TokenSpeedEngine } from "../../harness/metrics/token_speed.ts";
+// P-JEV.2 (ADR-0377): the per-turn judgment trace (Jev / TypeSafe). Pure view helpers over the report the
+// judgment extension self-reports; the arktype boundary stays in dev.ts (trace_schema.ts), out of the bundle.
+import { createJudgments, judgmentIdleNote, type JudgmentsWin } from "./judgment_trace_view.ts";
 // CREATOR-0 (ADR-0282/0283): the Creator surfaces. Both modules are PURE builders that own their view
 // types (the layering rule), so nothing here drags node-side code into the renderer.
 import { runCapture, type FrameDecoder } from "./capture_driver.ts"; // CREATOR-3b (ADR-0287 item 3): drive a previewed scene through the fixed timestep
@@ -247,6 +251,7 @@ const state = {
   chinaAck: false as boolean, // P-IDE.1c: user acknowledged the China-origin data-sovereignty warning (Settings unlock)
   thirdPartyAck: false as boolean, // user acknowledged the third-party / non-U.S. "More providers" warning
   auth: null as import("./bridge.ts").AuthStatus | null, // full provider-auth status (gateway/majors/others)
+  accounts: null as AccountsSnapshot | null, // P-ACCT.1: named accounts per provider (providerId -> AccountView[]); every mutation repaints from the server's returned snapshot
   persona: null as string | null, // active persona id (AskSage)
   personas: [] as { id: string; description: string }[],
   zoom: 1,
@@ -1787,6 +1792,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   // on the first tool event so a pure-text turn shows nothing extra.
   let thoughts: ThoughtsWin | null = null;
   let reasoning: ReasoningWin | null = null; // the live "thinking" block (above the answer)
+  let judgments: JudgmentsWin | null = null; // P-JEV.2: the typed-judgment trace (below the tool activity), created on the first report
   const permCards = new Map<string, { el: HTMLElement; finalize: () => void }>();
   const answeredPermissions = new Set<string>();
   const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
@@ -1858,6 +1864,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     setPhase("Done"); paintHud();
     reasoning?.finish(Date.now() - t0);
     thoughts?.finish(Date.now() - t0);
+    judgments?.finish(); // P-JEV.2
     subCards.forEach((c) => c.finish());
     permCards.forEach((c) => c.finalize()); // any unanswered prompt = denied (matches server fail-close)
   };
@@ -1976,6 +1983,13 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
         if (e.ok === false) m.chip.failed = true;
       }
     }
+    // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
+    // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
+    else if (e.type === "judgment") {
+      if (!judgments) { judgments = createJudgments(); (thoughts?.el ?? streamEl).after(judgments.el); }
+      judgments.add(e.report);
+      scrollChat();
+    }
     else if (e.type === "subagent") {
       sawTool = true; setPhase(`Delegating to ${e.agent}…`); paintHud();
       const card = createSubagentCard(e, () => subCards.length <= 1);
@@ -2026,6 +2040,12 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // Don't clobber the no-response notice with an empty answer body.
       if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); }
       (node as MsgNode)._md = buf; stopThinkingCues(); speechFeed(buf, true); /* P-VOICE.2: speak the tail the sentence gate withheld */ finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
+      // P-JEV.2 (ADR-0377): a finished turn with NO judgment while Jev is set up gets the quiet idle note.
+      // The extension awaits the desktop's ack per judgment, so by `done` every report of this turn has
+      // arrived: "none" here is a fact, not a race. Asked of the server so the gate is the live config
+      // (mode + key + lockdown), never a stale client copy.
+      // Lane children carry no trace yet (master-only extension), so a lane turn says nothing either way.
+      if (!judgments && !opts.laneId) void bridge.judgment().then((j) => { if (j?.configured && owns() && !judgments) hud.before(judgmentIdleNote()); });
     }
   };
   const settle = () => {
@@ -2132,12 +2152,6 @@ function setSendEnabled(): void {
   syncAgentExtras();
   const ta = $("#input") as HTMLTextAreaElement;
   const btn = $("#send") as HTMLButtonElement;
-  // P-MASCOT.4 (user ask): the big stage ninja yields the floor while the user is composing. Any
-  // content in the composer (text or a staged attachment) fades the stage to 25%; emptying it fades
-  // him back. This function is already the choke point every composer mutation funnels through
-  // (typing, paste, attachment add/remove, queue flush, send), so the dim can never go stale, and it
-  // is a CSS class + transition rather than a paint change, so the ~10fps mascot ticker is untouched.
-  $("#agentStage")?.classList.toggle("stage-dim", !!ta.value.trim() || state.attachments.length > 0);
   // P-ACP.4: while a turn runs the button is a Stop control (always enabled) that interrupts; otherwise
   // it's Send (enabled only with text). The composer stays usable so a prompt can be pre-staged.
   if (state.streaming) {
@@ -2739,6 +2753,7 @@ function setInspectorRail(rail: boolean): void {
 // OAuth here signs in a SUBSCRIPTION/CLI tier; the full commercial catalog comes from an API key.
 // Spell that out where it bites (OpenAI/Gemini), and steer Perplexity to its working key path.
 const PROV_HINTS: Record<string, string> = {
+  typesafe: `Jev, TypeSafe AI's hosted System One judgment model (no released weights; API only). Get your key at <a href="https://console.typesafe.ai/" target="_blank" rel="noopener">console.typesafe.ai \u2197</a>. A judgment sends conversation text and tool output to api.typesafe.ai, so under AskSage lockdown LUCID pins judgments to your gov-routed models instead.`,
   elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. New to ElevenLabs? <a href="https://try.elevenlabs.io/nru4d3mgw8b5" target="_blank" rel="noopener">Create an account \u2197</a>, then get your key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">API keys \u2197</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
   openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
   google: "OAuth uses the Gemini CLI / Code Assist tier. <b>Workspace / Enterprise Google accounts</b> also need a <b>GCP project ID</b> below (personal accounts leave it blank) - without it the sign-in aborts. For the full commercial Gemini catalog, add a GEMINI_API_KEY. For the enterprise-governed backend (Gemini for Google Cloud), use the <b>Gemini Enterprise</b> card below.",
@@ -2779,16 +2794,22 @@ function providerQuotaBody(p: ProviderAuth): string {
     </div>${rows.length ? rows.map(cachedBudgetRow).join("") : `<div class="set-note">Subscription used, remaining, status and reset: <b>unknown</b>. No matching usage report is available; this does not mean zero usage or unlimited quota.</div>`}`;
 }
 
-function provCard(p: ProviderAuth): string {
+// P-ACCT.1: the status badge cluster (OAuth active / key ••last4 / configured / not set), shared by the
+// classic card header and the accordion summary so both always tell the same story. A provider can also be
+// configured purely through its extra fields (e.g. Vertex via ADC project+location, no primary API key) -
+// reflect that so such cards don't misreport as "not set".
+function provStatusBadges(p: ProviderAuth): string {
   const last4 = esc(p.keyLast4 ?? "");
-  // A provider can also be configured purely through its extra fields (e.g. Vertex via ADC project+location,
-  // no primary API key) — reflect that so such cards don't misreport as "not set".
   const fieldsSet = (p.fields ?? []).some((f) => f.set);
-  const status =
-    (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
+  return (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
     (p.keySet ? `<span class="abadge set">key ••${last4}</span>` : "") +
     (!p.keySet && fieldsSet ? `<span class="abadge set">configured</span>` : "") +
     (!p.oauthActive && !p.keySet && !fieldsSet ? `<span class="abadge none">not set</span>` : "");
+}
+
+function provCard(p: ProviderAuth): string {
+  const last4 = esc(p.keyLast4 ?? "");
+  const status = provStatusBadges(p);
   // The hint text goes in ONE <span> so rich markup (<b>/<a>) stays inline instead of becoming separate
   // flex items in the flex `.prov-hint` (that squished multi-tag hints into clipped narrow columns).
   const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)}<span>${PROV_HINTS[p.id]}</span></div>` : "";
@@ -2807,7 +2828,7 @@ function provCard(p: ProviderAuth): string {
   // it opens in the Preview panel via its engine-resolved path. Vendors change tiers out from under
   // users (Google killed consumer OAuth in June 2026), so the guides are load-bearing onboarding.
   const guideRow = GUIDE_FILES[p.id]
-    ? `<div class="prov-row"><button class="btn-link" data-guide="${esc(p.id)}">${icon("info", 12)} Which plan do I need? Open the guide</button></div>`
+    ? `<div class="prov-row"><button class="btn-link" data-guide="${esc(p.id)}">${icon("info", 12)} ${p.id === "typesafe" ? "Jev explained: uses, settings and data privacy" : "Which plan do I need? Open the guide"}</button></div>`
     : "";
   // OAuth-only providers (e.g. GitHub Copilot) carry no primary key env — omit the key row entirely.
   const keyRow = p.env
@@ -2836,6 +2857,131 @@ function provCard(p: ProviderAuth): string {
   return `<div class="prov">
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
     <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
+}
+
+// ── P-ACCT.1: named multi-account per provider ─────────────────────────────────────────────────
+// state.accounts is the server's snapshot (providerId -> AccountView[]); every mutation returns the
+// refreshed snapshot, so the UI always repaints from the server's truth, never a client guess.
+
+/** Accordion open-state, persisted across fillSec repaints (session-only, the dockSec pattern - a
+ *  capture-phase toggle listener on #setBody keeps this set in step with the user's clicks). */
+const PROV_ACC_OPEN = new Set<string>();
+
+/** The named-account list for one provider: switch / rename / remove rows, the add-account row (key
+ *  providers), and the OAuth hint. Renders nothing for a provider that can hold no account at all. */
+function accountsBlock(p: ProviderAuth): string {
+  const accts = state.accounts?.[p.id] ?? [];
+  if (!accts.length && !p.env && !p.oauthId) return ""; // no accounts and no way to ever have one
+  // Invariant 11: each row is ONE line with ONE text child - the name and the dim identity/last4 suffix
+  // compose into a single ellipsizing span (the suffix is a nested inline, not a sibling flex item).
+  const rows = accts.map((a) => {
+    const suffix = a.kind === "oauth" ? (a.identity ?? "") : (a.keyLast4 ? `\u2022\u2022${a.keyLast4}` : "");
+    const removeConfirm = a.kind === "oauth"
+      ? `Disconnect this account from omp: remove "${a.name}"?`
+      : `Remove "${a.name}" and its saved key?`;
+    return `<div class="acct-row${a.active ? " active" : ""}">
+      <button class="acct-switch" type="button" data-acct-switch="${esc(a.id)}" data-acct-prov="${esc(p.id)}" title="${a.active ? "Active: omp is using this account" : "Switch to this account"}"><span class="acct-dot${a.active ? " on" : ""}"></span></button>
+      <span class="acct-name">${esc(a.name)}${suffix ? `<i class="acct-suffix"> \u00b7 ${esc(suffix)}</i>` : ""}</span>
+      ${a.parked ? `<span class="abadge none">parked</span>` : ""}
+      <button class="btn-mini acct-ico" type="button" data-acct-rename="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-name="${esc(a.name)}" title="Rename this account">${icon("pen", 12)}</button>
+      ${a.removable ? `<button class="btn-mini danger acct-ico" type="button" data-acct-remove="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-confirm="${esc(removeConfirm)}" title="Remove this account">${icon("trash", 12)}</button>` : ""}
+    </div>`;
+  }).join("");
+  const addRow = p.env
+    ? `<div class="acct-add">
+        <input id="acctName-${esc(p.id)}" class="prov-key acct-add-name" placeholder="Name, e.g. Work" autocomplete="off" spellcheck="false" />
+        <input id="acctKey-${esc(p.id)}" class="prov-key" type="password" placeholder="Paste ${esc(p.env)}\u2026" />
+        <button class="btn-mini ok" type="button" data-acct-add="${esc(p.id)}">${icon("plus", 12)} Add account</button>
+      </div>`
+    : "";
+  const oauthHint = p.canOauth
+    ? `<div class="set-note">${icon("info", 12)} <span>Connect via OAuth below signs in another subscription account; it appears here once the sign-in finishes.</span></div>`
+    : "";
+  return `<div class="acct-block">${rows ? `<div class="acct-list">${rows}</div>` : ""}${addRow}${oauthHint}</div>`;
+}
+
+/** P-ACCT.1: one provider as a collapsible card - a one-line summary (name + status badges + account
+ *  pill) over the account list and the classic config card. Open state survives fillSec repaints. */
+function provAccordion(p: ProviderAuth): string {
+  const accts = state.accounts?.[p.id] ?? [];
+  const active = accts.find((a) => a.active);
+  const acctPill = accts.length
+    ? `<span class="abadge acct">${accts.length} account${accts.length === 1 ? "" : "s"}${active ? ` \u00b7 ${esc(active.name)}` : ""}</span>`
+    : "";
+  return `<details class="prov-acc" data-prov-acc="${esc(p.id)}"${PROV_ACC_OPEN.has(p.id) ? " open" : ""}>
+    <summary>${icon("chevron", 12)}<span class="prov-acc-nm">${esc(p.name)}</span><span class="prov-acc-badges">${provStatusBadges(p)}${acctPill}</span></summary>
+    <div class="prov-acc-b">${accountsBlock(p)}${provCard(p)}</div></details>`;
+}
+
+/** The four account actions (switch / add / rename / remove), shared by the Settings body and the
+ *  Provider Hub delegated click handlers. `scope` roots the add-row input lookups. A mutation adopts the
+ *  snapshot the server returns (falling back to a fresh fetch when it returns none, so the list never
+ *  drifts); the CALLER repaints. Returns false when the click was not an account action. */
+async function handleAccountAction(t: HTMLElement, scope: HTMLElement): Promise<boolean> {
+  const adopt = async (snap: AccountsSnapshot | null): Promise<boolean> => {
+    state.accounts = snap ?? (await bridge.accounts().catch(() => null)) ?? state.accounts;
+    return snap != null;
+  };
+  const sw = t.closest("[data-acct-switch]") as HTMLElement | null;
+  if (sw) {
+    const prov = sw.dataset.acctProv!;
+    const snap = await bridge.accountSwitch(prov, sw.dataset.acctSwitch!).catch(() => null);
+    if (await adopt(snap)) {
+      const name = state.accounts?.[prov]?.find((a) => a.active)?.name ?? "the selected account";
+      showToast({ title: `Switched to ${name}`, desc: "omp restarts with it; the next turn uses it.", timeout: 3600 });
+    } else showToast({ tone: "warn", title: "Couldn't switch", desc: "The server rejected the switch; the account list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  const add = t.closest("[data-acct-add]") as HTMLElement | null;
+  if (add) {
+    const prov = add.dataset.acctAdd!;
+    const nameEl = $(`#acctName-${prov}`, scope) as HTMLInputElement | null;
+    const keyEl = $(`#acctKey-${prov}`, scope) as HTMLInputElement | null;
+    const name = nameEl?.value.trim() ?? "";
+    const key = keyEl?.value.trim() ?? "";
+    if (!name || !key) { showToast({ tone: "warn", title: "Name and key required", desc: "Give the account a name (e.g. Work) and paste its API key.", timeout: 3400 }); return true; }
+    const snap = await bridge.accountAdd(prov, name, key).catch(() => null);
+    if (await adopt(snap)) {
+      if (nameEl) nameEl.value = "";
+      if (keyEl) keyEl.value = "";
+      showToast({ title: "Account added", desc: `${name} is saved on this machine. Switch to it to make omp use it.`, timeout: 3400 });
+    } else showToast({ tone: "warn", title: "Couldn't add the account", desc: "The server rejected it. Check the name and key, then try again.", timeout: 4200 });
+    return true;
+  }
+  const ren = t.closest("[data-acct-rename]") as HTMLElement | null;
+  if (ren) {
+    const cur = ren.dataset.acctName ?? "";
+    const name = (await promptText({ title: "Rename account", label: "Name", value: cur, placeholder: "e.g. Work" }))?.trim();
+    if (!name || name === cur) return true;
+    const snap = await bridge.accountRename(ren.dataset.acctProv!, ren.dataset.acctRename!, name).catch(() => null);
+    if (await adopt(snap)) showToast({ title: "Account renamed", desc: `Now listed as ${name}.`, timeout: 2800 });
+    else showToast({ tone: "warn", title: "Couldn't rename", desc: "The server rejected the rename; the list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  const rm = t.closest("[data-acct-remove]") as HTMLElement | null;
+  if (rm) {
+    if (!confirm(rm.dataset.acctConfirm ?? "Remove this account?")) return true;
+    const snap = await bridge.accountRemove(rm.dataset.acctProv!, rm.dataset.acctRemove!).catch(() => null);
+    if (await adopt(snap)) showToast({ title: "Account removed", desc: "Its credential is gone from this machine.", timeout: 3000 });
+    else showToast({ tone: "warn", title: "Couldn't remove", desc: "The server rejected the removal; the list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  return false;
+}
+
+/** Repaint the two account-bearing Settings sections from current state (post-mutation refresh).
+ *  A switch also swaps the active env key server-side, so auth refreshes in the background and the
+ *  sections refill once the newer key ••last4 / OAuth badges land. */
+function repaintAccountSections(): void {
+  fillSec("providers", secProviders(state.auth));
+  fillSec("others", secOthers(state.auth));
+  void bridge.auth().then((a) => {
+    if (!a) return;
+    state.auth = a;
+    fillSec("providers", secProviders(a));
+    fillSec("others", secOthers(a));
+    renderStatus();
+  }).catch(() => { /* best-effort */ });
 }
 
 /** P-GUIDE.1/.2: open a bundled advisor guide in the Preview panel (Yours lane). The engine resolves
@@ -3207,31 +3353,15 @@ function setImmersive(on: boolean): void {
   // within 20px, tuck past 120px - no flicker at the boundary). Everything stays reachable on the stage.
   if (on) document.addEventListener("mousemove", immersiveRailPeek);
   else { document.removeEventListener("mousemove", immersiveRailPeek); $("#app-inner")!.classList.remove("rail-peek"); }
-  if (on) mountMascotStage(); else unmountMascotStage(); // P-MASCOT.1: the ninja rides the stage
 }
 
-// ── P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja on the stage ─────────────────────────────────
-let mascot: MascotHandle | null = null;
-let mascotPoll = 0;
-function mountMascotStage(): void {
-  if (mascot || !state.immersive) return;
-  const host = $("#agentStage") as HTMLElement | null;
-  if (!host) return;
-  mascot = mountMascot(host);
-  // The mascot mirrors what the agent is DOING via the existing voice/turn state - a cheap poll beats
-  // invasive hooks into speech/dictation internals (their state machines stay untouched).
-  mascotPoll = window.setInterval(() => {
-    mascot?.update({
-      speaking: !!document.querySelector("#ctSpeak:not([hidden])"),
-      listening: !!dictation,
-      working: state.streaming,
-    });
-  }, 250);
-}
-function unmountMascotStage(): void {
-  window.clearInterval(mascotPoll); mascotPoll = 0;
-  mascot?.dispose();
-  mascot = null;
+// The stage retains its layout, but no longer paints a second background ninja.
+const runnerInputs: MascotInputs = { speaking: false, listening: false, working: false };
+function composerMascotInputs(): MascotInputs {
+  runnerInputs.speaking = !!document.querySelector("#ctSpeak:not([hidden])");
+  runnerInputs.listening = !!dictation;
+  runnerInputs.working = state.streaming;
+  return runnerInputs;
 }
 function immersiveRailPeek(ev: MouseEvent): void {
   const inner = $("#app-inner");
@@ -3253,10 +3383,14 @@ function syncImmersiveWithRole(role: UserRole | null): void {
   if (chip) chip.hidden = !isAgent;
   setImmersive(isAgent);
   syncAgentExtras();
-  // P-MASCOT.2: the mini runner rides the prompt bar for the role in BOTH layouts (immersive or parked) -
-  // the composer exists in both, and he never intercepts pointer events.
-  if (isAgent && !miniRunner) { const wrap = document.querySelector(".composer-wrap") as HTMLElement | null; if (wrap) miniRunner = mountComposerRunner(wrap); }
-  else if (!isAgent && miniRunner) { miniRunner.dispose(); miniRunner = null; }
+  // The runner owns the mascot until Arcade opens, in either stage or parked layout.
+  if (isAgent && !miniRunner) {
+    const wrap = document.querySelector(".composer-wrap") as HTMLElement | null;
+    if (wrap) {
+      miniRunner = mountComposerRunner(wrap, composerMascotInputs);
+      miniRunner.setSuspended(agentArcade?.isOpen() ?? false);
+    }
+  } else if (!isAgent && miniRunner) { miniRunner.dispose(); miniRunner = null; }
   // P-AVATAR.4: entering the role starts the hands-free flow; leaving restores the user's world.
   if (isAgent) void enterAgentFlow();
   else void exitAgentFlow();
@@ -3273,7 +3407,12 @@ function syncAgentExtras(): void {
   const select = $("#agentTier") as HTMLSelectElement | null;
   if (control) control.hidden = !active;
   if (select) { select.value = agentTier; select.disabled = state.streaming || agentTierApplying || state.configCached || state.configWarming; }
-  if (active && !agentArcade) { const host = $("#agentArcadeHost"); if (host) agentArcade = mountAgentArcade(host, arcadeScorePort); }
+  if (active && !agentArcade) {
+    const host = $("#agentArcadeHost");
+    if (host) agentArcade = mountAgentArcade(host, arcadeScorePort, {
+      onLayout: (open) => { miniRunner?.setSuspended(open); syncArcadeGap(); },
+    });
+  }
   agentArcade?.update(active);
   if (!active && agentArcade) { agentArcade.dispose(); agentArcade = null; }
 }
@@ -3562,7 +3701,8 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
 function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // Collapsible + default-collapsed (not in SET_OPEN): the AskSage gov gateway sits above this and is the
   // foregrounded path; the direct U.S. providers tuck away until needed.
-  const cards = (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`;
+  // P-ACCT.1: each provider is a nested collapsible card (accounts list + the classic config body).
+  const cards = (auth?.majors ?? []).map(provAccordion).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`;
   // "Sign out of all providers" — ALWAYS available (not gated on a visible active login) so it can also clear
   // ORPHANED OAuth logins that have no card here: a broker id with no descriptor (e.g. google-antigravity) or
   // a key-only provider that still holds an oauth row. The reliable full reset, e.g. after a reinstall.
@@ -3638,9 +3778,9 @@ function secDeveloper(): string {
 // ACKNOWLEDGE gate (mirrors the China-origin unlock) because these route outside U.S. jurisdiction or
 // aggregate many origins. Expanding the section shows the warning first; the list appears once acknowledged.
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
-  // P-VOICE.1: ElevenLabs rides the `others` auth plumbing for keySet/last4, but it's a VOICE provider —
-  // render it in the Voice card, not here.
-  const list = (auth?.others ?? []).filter((p) => p.id !== "elevenlabs").map(provCard).join("") || `<div class="empty">none</div>`;
+  // P-VOICE.1 / P-JEV.1: ElevenLabs and TypeSafe ride the `others` auth plumbing for keySet/last4, but they are
+  // not chat-model providers - the Voice card and the Judgment card render them, not this list.
+  const list = (auth?.others ?? []).filter((p) => !HUB_NON_MODEL_EXCLUDE.includes(p.id)).map(provAccordion).join("") || `<div class="empty">none</div>`; // P-ACCT.1: nested collapsible cards
   if (state.thirdPartyAck) {
     return setCard("others", "More providers", "third-party · non-U.S. / custom",
       `<div class="set-note ok">${icon("check", 12)} You acknowledged the third-party risk. <button class="btn-link" id="thirdPartyRelock">Re-lock</button></div>${list}`, true);
@@ -3695,6 +3835,31 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
         <span>Speak the first sentence, then a short digest of the reply instead of every word - made for slow self-hosted engines like dots.tts (5-10s a clip over the VPN). The full text stays in the chat. Needs auto-speak.</span></label></div>
     <div class="set-note" id="voiceNote"></div>`;
   return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
+}
+// P-JEV.1 (ADR-0374): the Judgment card. Jev (TypeSafe System One) answers omp's typed judgments (choice /
+// yes-no / score) instead of a chat model. The key rides the same provCard plumbing as ElevenLabs; the mode
+// select drives omp's `providers.judgmentProvider`. The SERVER owns the lockdown clamp: under AskSage lockdown
+// `effective` is always "llm" and the select is disabled, with the stored choice shown so lifting the lock
+// visibly restores it. Nothing here ever enters the model picker (TypeSafe has no chat models).
+function secJudgment(auth: AuthStatus | null, j: JudgmentView | null): string {
+  const tsKey = (auth?.others ?? []).find((p) => p.id === "typesafe");
+  const keyCard = tsKey ? provCard(tsKey) : "";
+  const stored = j?.stored ?? "auto";
+  const sel = (v: boolean) => (v ? " selected" : "");
+  const lockNote = j?.locked
+    ? `<div class="set-note danger" id="judgmentLockNote">${icon("shield", 12)} <b>AskSage lockdown is on:</b> judgments are pinned to the <b>LLM chain</b> (your gov-routed models). A judgment carries conversation text and tool output to the judge, so TypeSafe's public endpoint is CUI backflow under lockdown. Your saved choice (<b>${esc(stored)}</b>) is kept and takes effect again when lockdown is turned off.</div>`
+    : "";
+  const body = `${keyCard}
+    <div class="set-note">${icon("info", 12)} <b>Judgments</b> are the small typed questions LUCID's agent loop asks about its own work (yes/no checks, choices, scores). <b>Jev</b> is TypeSafe AI's hosted System One model built for exactly that; without it, omp asks a chat model. In <b>Auto</b>, a saved TypeSafe key routes judgments to Jev; a failed TypeSafe call falls back to the online chat-model chain (omp's rule, not a LUCID choice).</div>
+    <div class="voice-row"><label class="voice-lbl" for="judgmentMode">Judgment backend</label>
+      <select id="judgmentMode" class="prov-key" data-judgment-set="mode"${j?.locked ? " disabled" : ""}>
+        <option value="auto"${sel(stored === "auto")}>Auto - Jev when a TypeSafe key is saved, else chat model</option>
+        <option value="typesafe"${sel(stored === "typesafe")}>Jev (TypeSafe) - always try Jev first</option>
+        <option value="llm"${sel(stored === "llm")}>Chat model only - never TypeSafe</option>
+      </select></div>
+    ${lockNote}
+    <div class="set-note" id="judgmentEffective">${icon("check", 12)} omp is told <b>${esc(j?.effective ?? "auto")}</b>${j?.clamped ? " (clamped by lockdown)" : ""}. Changing the backend restarts the omp child; the next turn uses it.</div>`;
+  return setCard("judgment", "Judgment", "Jev · TypeSafe System One", body, true);
 }
 // P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
 // picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
@@ -4296,6 +4461,7 @@ function settingsShell(): string {
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+    setSkel("judgment", "Judgment", "Jev · TypeSafe System One", true), // P-JEV.1 (ADR-0374)
     secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
@@ -4321,12 +4487,14 @@ function hydrateSettings(): void {
     }
     if (!typing) fillSec("profile", secProfile(s));
   });
-  void bridge.auth().then((a) => {
+  void Promise.all([bridge.auth(), bridge.accounts().catch(() => null)]).then(([a, accts]) => {
     state.auth = a; // store so the AskSage gateway card can render its key entry from auth.gateway
+    if (accts) state.accounts = accts; // P-ACCT.1: the account snapshot lands before the sections fill (an OAuth just completed also refreshes through here)
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
     void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
+    void bridge.judgment().then((j) => fillSec("judgment", secJudgment(a, j))); // P-JEV.1: key state + the clamped mode
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -7021,6 +7189,39 @@ function stopPreviewInspectRelay(): void {
 // runs browser code only, by design. Instead of staying mute, explain it in-pane; when the app dir
 // detects as an Electron app, offer a USER-clicked launch as a real OS process OUTSIDE LUCID
 // (audited server-side; the sandbox stays sealed).
+// Preview documents are untrusted. A frame message can request a link, never authorize egress.
+// The host-owned confirmation requires a second user click and captures the validated destination.
+let dismissPreviewLink: (() => void) | null = null;
+window.addEventListener("message", (ev) => {
+  const frame = laneFrame();
+  const d = ev.data;
+  if (!previewOpen || !frame || frame.hidden || ev.source !== frame.contentWindow || !d || d.__lucid !== "preview-external-link") return;
+  const url = externalHttpUrl(d.url);
+  if (!url) return;
+  dismissPreviewLink?.();
+  dismissPreviewLink = showToast({
+    tone: "info", title: "Open this preview link in your browser?",
+    desc: url, meta: "The external site receives your visit. LUCID and your draft stay open.",
+    actions: [
+      { label: "Open in browser", run: () => { void openAuthUrl(url); } },
+      { label: "Cancel" },
+    ],
+  });
+});
+
+// Normal app anchors use the same OS-browser boundary, including links in rendered chat and hints.
+function openAppLink(ev: MouseEvent): void {
+  if (ev.defaultPrevented || (ev.type === "auxclick" ? ev.button !== 1 : ev.button !== 0)) return;
+  const a = ev.target instanceof Element ? ev.target.closest("a[href]") : null;
+  if (!(a instanceof HTMLAnchorElement) || a.hasAttribute("download")) return;
+  const url = externalHttpUrl(a.href);
+  if (!url || new URL(url).origin === location.origin) return;
+  ev.preventDefault();
+  void openAuthUrl(url);
+}
+document.addEventListener("click", openAppLink);
+document.addEventListener("auxclick", openAppLink);
+
 const NODE_ONLY_ERR = /require is not defined|process is not defined|module is not defined|__dirname is not defined/i;
 window.addEventListener("message", (ev) => {
   const frame = laneFrame(); // health drives the shared notice, so only heed the ACTIVE lane's frame
@@ -14133,6 +14334,14 @@ function wire(): void {
     const btn = $(`#${target}`, body);
     btn?.click();
   });
+  // P-ACCT.1: persist each provider accordion's open state across fillSec repaints (native <details>
+  // toggle doesn't bubble -> capture; the dockSec pattern, session-only).
+  $("#setBody")!.addEventListener("toggle", (e) => {
+    const d = e.target as HTMLElement;
+    if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("prov-acc")) return;
+    const id = d.dataset.provAcc; if (!id) return;
+    if (d.open) PROV_ACC_OPEN.add(id); else PROV_ACC_OPEN.delete(id);
+  }, true);
   // P-VOICE.1 (ADR-0115): persist a voice setting when a Voice-card control changes.
   $("#setBody")!.addEventListener("change", async (e) => {
     const t0 = e.target as HTMLElement;
@@ -14181,6 +14390,15 @@ function wire(): void {
       } else {
         showToast({ tone: "danger", title: "Import rejected", desc: "Not a valid lucid-voice-endpoint file (wrong shape, or it carries a credential-like field - secrets never travel in endpoint exports).", actions: [{ label: "OK" }], timeout: 0 });
       }
+      return;
+    }
+    // P-JEV.1 (ADR-0374): the judgment backend. The server persists, clamps under lockdown, and restarts omp
+    // when the effective pin changes; repaint from its answer so "omp is told X" is never a client guess.
+    if (t0.matches("[data-judgment-set]")) {
+      const next = await bridge.setJudgment((t0 as HTMLSelectElement).value as JudgmentView["stored"]).catch(() => null);
+      if (!next) { showToast({ tone: "warn", title: "Couldn't save judgment backend", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
+      fillSec("judgment", secJudgment(state.auth, next));
+      showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the LLM chain until it is turned off." : "omp restarts with it; the next turn uses it.", timeout: 4000 });
       return;
     }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
@@ -14363,6 +14581,11 @@ function wire(): void {
       await loadVoices();
       showToast({ title: nowFav ? "Added to favorites" : "Removed from favorites", desc: nowFav ? "This voice now appears first in the picker." : "Removed from your favorites.", timeout: 1800 });
       return;
+    }
+    // P-ACCT.1: named account actions (switch / add / rename / remove) inside a provider accordion.
+    // The handler adopts the server's returned snapshot; repaint both account-bearing sections from it.
+    if (t.closest("[data-acct-switch],[data-acct-add],[data-acct-rename],[data-acct-remove]")) {
+      if (await handleAccountAction(t, $("#setBody")!)) { repaintAccountSections(); return; }
     }
     const save = t.closest("[data-savekey]") as HTMLElement | null;
     if (save) {
@@ -15805,9 +16028,13 @@ async function startProviderOauth(oauthId: string, cardEl: HTMLElement | null, r
 // open-weight / non-U.S. section stays hidden behind the typed ACKNOWLEDGE (provider_hub.buildHubSections).
 let hubClose: (() => void) | null = null;
 function hubTileHtml(id: string, name: string, configured: boolean, canOauth: boolean): string {
-  const badge = configured
-    ? `<span class="provhub-badge ok">${icon("check", 10)} connected</span>`
-    : `<span class="provhub-badge">${canOauth ? "sign in / key" : "add key"}</span>`;
+  // P-ACCT.1: a multi-account provider badges the count; single-account configured stays "connected".
+  const nAccts = state.accounts?.[id]?.length ?? 0;
+  const badge = nAccts > 1
+    ? `<span class="provhub-badge ok">${nAccts} accounts</span>`
+    : configured
+      ? `<span class="provhub-badge ok">${icon("check", 10)} connected</span>`
+      : `<span class="provhub-badge">${canOauth ? "sign in / key" : "add key"}</span>`;
   return `<div class="provhub-item" data-hub-item="${esc(id)}">
     <button class="provhub-tile" type="button" data-hub-tile="${esc(id)}">
       <span class="provhub-nm">${esc(name)}</span>${badge}${icon("chevron", 14)}
@@ -15869,10 +16096,18 @@ function openProviderHub(onClose?: () => void): void {
   redraw();
   // P-LOCAL.4: pull the user's configured self-hosted endpoints so the "Local & self-hosted" section lists them.
   void bridge.localProvidersList().then((list) => { if (list) { state.localProviders = list; redraw(); } }).catch(() => { /* best-effort */ });
+  // P-ACCT.1: the account snapshot drives the "N accounts" tile badges + the expanded account lists.
+  void bridge.accounts().then((s) => { if (s) { state.accounts = s; redraw(); } }).catch(() => { /* best-effort */ });
   document.addEventListener("keydown", onKey);
   $("#provHubClose", ov)!.addEventListener("click", close);
   ov.addEventListener("click", (e) => { if (e.target === ov) close(); }); // click-away on the backdrop
-  const refreshAuth = async () => { const a = await bridge.auth().catch(() => null); if (a) { state.auth = a; renderStatus(); } };
+  // P-ACCT.1: auth and the account snapshot refresh together, so a finished OAuth sign-in also lands
+  // its new named account in the tiles and the expanded lists.
+  const refreshAuth = async () => {
+    const [a, s] = await Promise.all([bridge.auth().catch(() => null), bridge.accounts().catch(() => null)]);
+    if (a) { state.auth = a; renderStatus(); }
+    if (s) state.accounts = s;
+  };
   // Enable the ACKNOWLEDGE reveal only when the exact word is typed (mirrors the Settings gate).
   body.addEventListener("input", (e) => {
     if ((e.target as HTMLElement).id === "hubAckInput") {
@@ -15894,6 +16129,26 @@ function openProviderHub(onClose?: () => void): void {
       if (state.settingsOpen) fillSec("others", secOthers(state.auth));
       redraw();
       return;
+    }
+    // P-ACCT.1: the same four account actions as Settings, scoped to the hub body (mirrors how
+    // data-savekey is duplicated here). Repaint the hub AND, when open, the Settings sections.
+    if (t.closest("[data-acct-switch],[data-acct-add],[data-acct-rename],[data-acct-remove]")) {
+      // Which provider's tile the click lived in - read BEFORE redraw() detaches the node.
+      const provId = (t.closest("[data-acct-prov]") as HTMLElement | null)?.dataset.acctProv
+        ?? (t.closest("[data-acct-add]") as HTMLElement | null)?.dataset.acctAdd;
+      if (await handleAccountAction(t, body)) {
+        await refreshAuth(); // a switch swaps the active env key; badges must tell the new truth
+        if (state.settingsOpen) repaintAccountSections();
+        redraw();
+        // Re-expand the tile that was acted on so the refreshed account list stays visible.
+        if (provId) {
+          const wrap = $(`[data-hub-item="${provId}"]`, body);
+          const p = [...(state.auth?.gateway ?? []), ...(state.auth?.majors ?? []), ...(state.auth?.others ?? [])].find((x) => x.id === provId);
+          const cfg = wrap?.querySelector(".provhub-config") as HTMLElement | null;
+          if (wrap && cfg && p) { wrap.classList.add("open"); cfg.innerHTML = accountsBlock(p) + provCard(p); }
+        }
+        return;
+      }
     }
     // Provider config actions (own-scoped: the hub lives outside #setBody, so its own handlers do the work).
     const clear = t.closest("[data-clearkey]") as HTMLElement | null;
@@ -15930,7 +16185,7 @@ function openProviderHub(onClose?: () => void): void {
         const id = tile.dataset.hubTile!;
         const p = [...(state.auth?.gateway ?? []), ...(state.auth?.majors ?? []), ...(state.auth?.others ?? [])].find((x) => x.id === id);
         const cfg = wrap.querySelector(".provhub-config") as HTMLElement | null;
-        if (cfg && p) cfg.innerHTML = provCard(p); // reuse the exact Settings config body (OAuth / key / fields)
+        if (cfg && p) cfg.innerHTML = accountsBlock(p) + provCard(p); // P-ACCT.1: accounts list over the exact Settings config body (OAuth / key / fields)
       }
     }
   });

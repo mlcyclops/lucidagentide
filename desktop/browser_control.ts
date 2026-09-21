@@ -14,7 +14,9 @@
 // A user closing the window is a KILL SWITCH: failAllBrowserCommands drops the queue and settles every
 // pending waiter with the error, so no route (and no agent tool call) is left hanging.
 
-export type BrowserOp = "open" | "capture" | "scroll" | "close" | "click" | "type" | "drag" | "keys";
+import type { BrowserAction, BrowserFreshness, BrowserPage } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): policy op payloads
+
+export type BrowserOp = "open" | "capture" | "scroll" | "close" | "click" | "type" | "drag" | "keys" | "snapshot" | "act";
 
 /** One queued instruction for the Electron main's agent-browser executor.
  *
@@ -37,6 +39,10 @@ export interface BrowserCommand {
   pressEnter?: boolean;
   /** keys only: the raw combo the agent asked for ("Control+a"); main re-parses it as the authority. */
   keys?: string;
+  /** P-JEV.4 (ADR-0379) act only: the snapshot candidate Jev chose (main re-validates it), plus the
+   *  freshness reference of the page the decision was made against. `text` doubles as the fill text. */
+  action?: BrowserAction;
+  fresh?: BrowserFreshness;
 }
 
 /** The executor's report for one command. `png` is a data:image/png;base64 URL (capture only). */
@@ -46,6 +52,10 @@ export interface BrowserCommandResult {
   png?: string;
   title?: string;
   url?: string;
+  /** P-JEV.4 (ADR-0379) snapshot only: the indexed page observation, fingerprinted by main. */
+  page?: BrowserPage;
+  /** P-JEV.4 act only: the freshness or target check failed and NOTHING was executed. */
+  stale?: boolean;
 }
 
 /** The live agent-browser session, as the renderer pill and GET /api/browser/status see it. */

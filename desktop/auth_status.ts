@@ -121,6 +121,11 @@ export const OTHERS: Provider[] = [
   // the key gets the same masked keySet/last4 plumbing, but the Settings UI renders it in a dedicated
   // "Voice" card (secVoice) and EXCLUDES it from the model-provider list — it never enters the model picker.
   { id: "elevenlabs", name: "ElevenLabs · Voice", env: "ELEVENLABS_API_KEY", oauthId: "", canOauth: false },
+  // P-JEV.1 (ADR-0374): TypeSafe is a JUDGMENT provider (Jev / System One answers typed choice / yes-no /
+  // score questions), not a chat model: omp's catalog has no providers/typesafe entry on purpose, so it never
+  // enters the model picker. Same keySet/last4 plumbing as ElevenLabs, rendered in its own Settings card
+  // (secJudgment) and excluded from the model-provider lists. Key-only: omp's `/login typesafe` is a key paste.
+  { id: "typesafe", name: "TypeSafe · Jev judgment", env: "TYPESAFE_API_KEY", oauthId: "", canOauth: false },
 ];
 
 function vaultRows(): any[] {
@@ -131,6 +136,12 @@ function vaultRows(): any[] {
     try { return db.query("select provider, credential_type, identity_key, disabled_cause from auth_credentials").all() as any[]; }
     finally { db.close(); }
   } catch { return []; }
+}
+
+/** P-JEV.2 (ADR-0377): is a TypeSafe key saved, by the same rule the Judgment card's `keySet` pill uses
+ *  (the settings slot first, then the process env the omp child inherits). */
+export function typesafeKeySet(): boolean {
+  return !!((load().keys ?? {})["TYPESAFE_API_KEY"] ?? process.env.TYPESAFE_API_KEY);
 }
 
 export function providerAuth(): ProviderAuthSnapshot {
