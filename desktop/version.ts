@@ -485,4 +485,11 @@
 //            compile-appcontainer step in dist:win, and network-on isolation is gated on the loopback
 //            exemption so a fresh install never cuts chat traffic between the UI and the engine.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.3";
+// v2.3.0-beta.4 = beta.3 plus user-approved standing directory grants for the AppContainer sandbox
+//            (P-SANDBOX.8): the agent can request access to a directory outside the granted set via
+//            sandbox_grant_dir, nothing mutates the host without an explicit user yes in the grant
+//            dialog, approvals ride a one-shot pending slot so the endpoint honors only a fresh
+//            matching approval, ACLs are applied/revoked through the bundled helper's --apply-acl /
+//            --revoke-acl, and every grant is listed and revocable in the Security panel.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.4";
