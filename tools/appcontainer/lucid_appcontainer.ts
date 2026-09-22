@@ -11,6 +11,9 @@
 //   - derive/create an AppContainer SID for a stable LUCID moniker;
 //   - build SECURITY_CAPABILITIES with an EMPTY capability set (no `internetClient` ⇒ the AppContainer
 //     has NO outbound network — that IS the --deny-network guarantee, enforced by the Windows net stack);
+//   - GRANT filesystem DACL ACEs to that container SID (workspace rw; tool dir / --home / --grant-rx
+//     rx; --grant-rw rw) — without them an AppContainer child can read/write NOTHING outside the OS
+//     dirs, cwd included. Persistent host changes ⇒ logged, scoped, and reversible (`--revoke-acl`);
 //   - CreateProcessW the wrapped argv inside that AppContainer via a PROC_THREAD_ATTRIBUTE_SECURITY_
 //     CAPABILITIES attribute list; wait; propagate the child's exit code.
 //
@@ -20,6 +23,8 @@
 // runs the child. A helper that can't contain must block, never passthrough (that would be false security).
 
 import { dlopen, FFIType, ptr, CString } from "bun:ffi";
+import { existsSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 // ── the flag contract (mirrors harness/runs/sandbox_exec.ts appContainerArgs) ─────────────────────────
 export interface HelperPlan {
@@ -27,6 +32,10 @@ export interface HelperPlan {
   home?: string;
   /** "deny" (no network) | "loopback" (mediated, via the proxy) — the two network postures. */
   net: "deny" | "loopback";
+  /** extra dirs to ACL-grant READ+EXECUTE to the container SID (`--grant-rx`, repeatable). */
+  grantRx: string[];
+  /** extra dirs to ACL-grant read/write (GENERIC_ALL) to the container SID (`--grant-rw`, repeatable). */
+  grantRw: string[];
   cmd: string;
   cmdArgs: string[];
 }
@@ -36,6 +45,7 @@ export interface HelperPlan {
  *  (fail-closed at the boundary, before any spawn). */
 export function parseHelperArgs(argv: string[]): HelperPlan | { error: string } {
   let workspace = "", home: string | undefined, deny = false, loopback = false;
+  const grantRx: string[] = [], grantRw: string[] = [];
   let i = 0;
   for (; i < argv.length; i++) {
     const a = argv[i]!;
@@ -44,13 +54,15 @@ export function parseHelperArgs(argv: string[]): HelperPlan | { error: string } 
     else if (a === "--loopback-only") loopback = true;
     else if (a === "--workspace") { workspace = argv[++i] ?? ""; if (!workspace) return { error: "--workspace needs a path" }; }
     else if (a === "--home") { home = argv[++i] ?? ""; if (!home) return { error: "--home needs a path" }; }
+    else if (a === "--grant-rx") { const d = argv[++i] ?? ""; if (!d) return { error: "--grant-rx needs a path" }; grantRx.push(d); }
+    else if (a === "--grant-rw") { const d = argv[++i] ?? ""; if (!d) return { error: "--grant-rw needs a path" }; grantRw.push(d); }
     else return { error: `unknown flag: ${a}` };
   }
   const rest = argv.slice(i);
   if (!rest.length) return { error: "no command after --" };
   if (deny === loopback) return { error: "exactly one of --deny-network / --loopback-only is required" };
   if (!workspace) return { error: "--workspace is required" };
-  return { workspace, home, net: deny ? "deny" : "loopback", cmd: rest[0]!, cmdArgs: rest.slice(1) };
+  return { workspace, home, net: deny ? "deny" : "loopback", grantRx, grantRw, cmd: rest[0]!, cmdArgs: rest.slice(1) };
 }
 
 /** Quote one argv token for a Windows command line (CreateProcessW parses CommandLineToArgvW rules). */
@@ -73,6 +85,92 @@ export function buildCommandLine(cmd: string, args: string[]): string {
   return [cmd, ...args].map(quoteArg).join(" ");
 }
 
+// ── filesystem ACL grants (the missing half of containment) ───────────────────────────────────────────
+// An AppContainer process is DENIED everything its container SID is not explicitly granted; "ALL
+// APPLICATION PACKAGES" only covers OS dirs (C:\Windows, Program Files). Without grants the child cannot
+// even read/write the workspace — cwd alone confers nothing. So BEFORE spawning we grant the container
+// SID an inheritable ACE on exactly the dirs the plan names. Every grant is a PERSISTENT host DACL
+// change, therefore: scoped to the named dirs only, attributed to the stable moniker SID
+// (LucidAgentIDE.Sandbox.v1 — auditable & bulk-revocable), logged to stderr, and reversible via the
+// `--revoke-acl <path>` admin subcommand.
+
+export interface AclTarget {
+  path: string;
+  /** "rw" = GENERIC_ALL; "rx" = GENERIC_READ|GENERIC_EXECUTE (never write outside the workspace). */
+  mode: "rw" | "rx";
+}
+
+/** PURE: the parent directory of a Windows path (both separators; no filesystem access). */
+export function parentDir(p: string): string {
+  const t = p.replace(/[\\/]+$/, "");
+  const i = Math.max(t.lastIndexOf("\\"), t.lastIndexOf("/"));
+  return i > 0 ? t.slice(0, i) : t;
+}
+
+/** PURE: is this path already readable by "ALL APPLICATION PACKAGES" out of the box? Windows ships
+ *  package-readable DACLs on the OS dirs, so granting there would be a pointless persistent mutation. */
+export function isPackageReadablePath(p: string): boolean {
+  const n = p.replace(/\//g, "\\").toLowerCase();
+  return /^[a-z]:\\windows(\\|$)/.test(n) || /^[a-z]:\\program files( \(x86\))?(\\|$)/.test(n);
+}
+
+/**
+ * PURE: which dirs get which ACL grant for this plan. `resolvedCmd` is the absolute path of plan.cmd as
+ * resolved by the (impure) caller via Bun.which — null/undefined when un-resolvable, in which case the
+ * rx grant for the tool dir is simply skipped (the caller notes it; CreateProcessW's own search may
+ * still find the exe under an already-readable dir). Grants: workspace → rw; the tool's dir → rx unless
+ * it is already package-readable (OS dirs); --home → rx ONLY (agents read config from home, never write
+ * it); every --grant-rx/--grant-rw dir verbatim. Deduped by path — rw wins over rx.
+ */
+export function aclTargets(plan: HelperPlan, resolvedCmd?: string | null): AclTarget[] {
+  const want: AclTarget[] = [{ path: plan.workspace, mode: "rw" }];
+  if (resolvedCmd) {
+    const dir = parentDir(resolvedCmd);
+    if (!isPackageReadablePath(dir)) want.push({ path: dir, mode: "rx" });
+  }
+  if (plan.home) want.push({ path: plan.home, mode: "rx" });
+  for (const d of plan.grantRx) want.push({ path: d, mode: "rx" });
+  for (const d of plan.grantRw) want.push({ path: d, mode: "rw" });
+  // dedupe (case-insensitive, separator-normalized); rw beats rx for the same dir.
+  const byKey = new Map<string, AclTarget>();
+  for (const t of want) {
+    const key = t.path.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+    const prev = byKey.get(key);
+    if (!prev || (prev.mode === "rx" && t.mode === "rw")) byKey.set(key, prev ? { ...prev, mode: "rw" } : t);
+  }
+  return [...byKey.values()];
+}
+
+// ACL access masks / modes (WinNT.h, AccCtrl.h).
+const GENERIC_ALL = 0x10000000; // "rw"
+const GENERIC_READ_EXECUTE = 0xa0000000; // GENERIC_READ | GENERIC_EXECUTE — "rx"
+const GRANT_ACCESS = 1;
+const REVOKE_ACCESS = 4;
+const SUB_CONTAINERS_AND_OBJECTS_INHERIT = 3; // CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE
+const SE_FILE_OBJECT = 1;
+const DACL_SECURITY_INFORMATION = 4;
+const TRUSTEE_IS_SID = 0; // TRUSTEE_FORM
+
+/**
+ * PURE: one EXPLICIT_ACCESS_W, x64 layout (48 bytes) — the input record for SetEntriesInAclW.
+ *   +0  grfAccessPermissions u32      +4  grfAccessMode u32 (GRANT_ACCESS=1 / REVOKE_ACCESS=4)
+ *   +8  grfInheritance u32 (=3)       +12 (pad)
+ *   +16 TRUSTEE_W (32 bytes): +16 pMultipleTrustee=NULL, +24 MultipleTrusteeOperation=0, +28 (pad),
+ *       +32 TrusteeForm=TRUSTEE_IS_SID(0), +36 TrusteeType=0, +40 ptstrName = the AppContainer PSID.
+ * Byte-layout-critical ⇒ unit-tested; the PSID is an opaque pointer-sized integer (bigint).
+ */
+export function buildExplicitAccessW(access: number, accessMode: number, sid: bigint): Uint8Array {
+  const ea = new Uint8Array(48);
+  const dv = new DataView(ea.buffer);
+  dv.setUint32(0, access >>> 0, true); // grfAccessPermissions
+  dv.setUint32(4, accessMode >>> 0, true); // grfAccessMode
+  dv.setUint32(8, SUB_CONTAINERS_AND_OBJECTS_INHERIT, true); // grfInheritance
+  // TRUSTEE_W: everything zero (pMultipleTrustee NULL, NO_MULTIPLE_TRUSTEE, TRUSTEE_IS_SID, type 0) …
+  dv.setUint32(32, TRUSTEE_IS_SID, true); // (explicit for readability — already 0)
+  dv.setBigUint64(40, sid, true); // … except ptstrName = PSID
+  return ea;
+}
+
 const APPCONTAINER_NAME = "LucidAgentIDE.Sandbox.v1";
 
 // ── Win32 constants ───────────────────────────────────────────────────────────────────────────────────
@@ -89,6 +187,63 @@ function wide(s: string): Uint8Array {
   return buf; // last 2 bytes already 0 (the terminator)
 }
 
+/** The AppContainer SID (PSID, opaque pointer) for our stable moniker: create the profile, or derive
+ *  when it already exists. Windows-only; throws on failure (⇒ fail-closed). Shared by the run path AND
+ *  the ACL grant/revoke paths so every persistent DACL change is attributed to the SAME auditable SID. */
+function containerSid(): bigint {
+  const userenv = dlopen("userenv.dll", {
+    CreateAppContainerProfile: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.ptr], returns: FFIType.i32 },
+    DeriveAppContainerSidFromAppContainerName: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+  });
+  const sidOut = new BigUint64Array(1); // PSID*
+  const name = wide(APPCONTAINER_NAME);
+  const disp = wide("LucidAgentIDE Sandbox");
+  const desc = wide("Runtime-isolated agent subprocess (P-SANDBOX)");
+  let hr = userenv.symbols.CreateAppContainerProfile(ptr(name), ptr(disp), ptr(desc), null, 0, ptr(sidOut));
+  if (hr === ERROR_ALREADY_EXISTS_HR || (hr >>> 0) === ERROR_ALREADY_EXISTS_HR) {
+    hr = userenv.symbols.DeriveAppContainerSidFromAppContainerName(ptr(name), ptr(sidOut));
+  }
+  if (hr !== 0) throw new Error(`AppContainer SID failed (hr=0x${(hr >>> 0).toString(16)})`);
+  const sid = sidOut[0]!; // PSID (bigint pointer)
+  if (!sid) throw new Error("AppContainer SID is null");
+  return sid;
+}
+
+/**
+ * Mutate `path`'s DACL: read it (GetNamedSecurityInfoW), merge ONE EXPLICIT_ACCESS_W for the container
+ * SID (SetEntriesInAclW — whose merge semantics also make re-grants IDEMPOTENT: an identical ACE is
+ * coalesced, never stacked), write it back (SetNamedSecurityInfoW). `accessMode` GRANT_ACCESS adds the
+ * inheritable ACE; REVOKE_ACCESS strips every ACE for the SID (the `--revoke-acl` path). Windows-only;
+ * throws on any Win32 failure so callers fail-closed BEFORE any spawn. NOT pure — the FFI edge.
+ */
+function modifyDacl(path: string, access: number, accessMode: number, sid: bigint): void {
+  const advapi = dlopen("advapi32.dll", {
+    GetNamedSecurityInfoW: { args: [FFIType.ptr, FFIType.u32, FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.u32 },
+    // OldAcl / NewAcl / pDacl are pointer-sized values passed BY VALUE ⇒ u64 (same convention as HANDLEs above).
+    SetEntriesInAclW: { args: [FFIType.u32, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.u32 },
+    SetNamedSecurityInfoW: { args: [FFIType.ptr, FFIType.u32, FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.u64], returns: FFIType.u32 },
+  });
+  const kfree = dlopen("kernel32.dll", { LocalFree: { args: [FFIType.u64], returns: FFIType.u64 } });
+
+  const wpath = wide(path);
+  const daclOut = new BigUint64Array(1); // PACL (points INTO the SD — freed with it, never separately)
+  const sdOut = new BigUint64Array(1); // PSECURITY_DESCRIPTOR (LocalFree'd)
+  let rc = advapi.symbols.GetNamedSecurityInfoW(ptr(wpath), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, null, null, ptr(daclOut), null, ptr(sdOut));
+  if (rc !== 0) throw new Error(`GetNamedSecurityInfoW(${path}) failed (err=${rc})`);
+
+  const ea = buildExplicitAccessW(access, accessMode, sid);
+  const newAclOut = new BigUint64Array(1);
+  rc = advapi.symbols.SetEntriesInAclW(1, ptr(ea), daclOut[0]!, ptr(newAclOut));
+  if (rc !== 0) {
+    kfree.symbols.LocalFree(sdOut[0]!);
+    throw new Error(`SetEntriesInAclW(${path}) failed (err=${rc})`);
+  }
+  rc = advapi.symbols.SetNamedSecurityInfoW(ptr(wpath), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, null, null, newAclOut[0]!, 0n);
+  kfree.symbols.LocalFree(newAclOut[0]!);
+  kfree.symbols.LocalFree(sdOut[0]!);
+  if (rc !== 0) throw new Error(`SetNamedSecurityInfoW(${path}) failed (err=${rc})`);
+}
+
 /**
  * Run `plan.cmd plan.cmdArgs` inside an AppContainer, returning the child's exit code. BOTH network
  * postures use the SAME container: an EMPTY capability set ⇒ no `internetClient` ⇒ NO direct outbound
@@ -103,10 +258,6 @@ function wide(s: string): Uint8Array {
 export function runInAppContainer(plan: HelperPlan): number {
   if (process.platform !== "win32") throw new Error("lucid-appcontainer runs on Windows only");
 
-  const userenv = dlopen("userenv.dll", {
-    CreateAppContainerProfile: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.ptr], returns: FFIType.i32 },
-    DeriveAppContainerSidFromAppContainerName: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
-  });
   const k32 = dlopen("kernel32.dll", {
     InitializeProcThreadAttributeList: { args: [FFIType.ptr, FFIType.u32, FFIType.u32, FFIType.ptr], returns: FFIType.i32 },
     UpdateProcThreadAttribute: { args: [FFIType.ptr, FFIType.u32, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
@@ -120,17 +271,24 @@ export function runInAppContainer(plan: HelperPlan): number {
   });
 
   // 1) AppContainer SID for our moniker (create the profile, or derive if it already exists).
-  const sidOut = new BigUint64Array(1); // PSID*
-  const name = wide(APPCONTAINER_NAME);
-  const disp = wide("LucidAgentIDE Sandbox");
-  const desc = wide("Runtime-isolated agent subprocess (P-SANDBOX)");
-  let hr = userenv.symbols.CreateAppContainerProfile(ptr(name), ptr(disp), ptr(desc), null, 0, ptr(sidOut));
-  if (hr === ERROR_ALREADY_EXISTS_HR || (hr >>> 0) === ERROR_ALREADY_EXISTS_HR) {
-    hr = userenv.symbols.DeriveAppContainerSidFromAppContainerName(ptr(name), ptr(sidOut));
+  const sid = containerSid();
+
+  // 1b) resolve the tool's absolute path (Bun.which for bare names; the filesystem for anything with a
+  // separator) and GRANT the filesystem ACLs the plan names — BEFORE any spawn, so a failed grant
+  // throws and fail-closes without ever running the child. Un-resolvable cmd ⇒ pass it through
+  // unchanged (CreateProcessW's own search may still find it) but skip its rx grant, with a note.
+  const resolvedCmd = /[\\/]/.test(plan.cmd)
+    ? (existsSync(plan.cmd) ? resolvePath(plan.cmd) : null)
+    : (Bun.which(plan.cmd) ?? null);
+  if (!resolvedCmd) {
+    process.stderr.write(`[lucid-appcontainer] note: cannot resolve '${plan.cmd}' to an absolute path - skipping its rx grant\n`);
+  } else if (isPackageReadablePath(parentDir(resolvedCmd))) {
+    process.stderr.write(`[lucid-appcontainer] note: ${parentDir(resolvedCmd)} is already package-readable - skipping rx grant\n`);
   }
-  if (hr !== 0) throw new Error(`AppContainer SID failed (hr=0x${(hr >>> 0).toString(16)})`);
-  const sid = sidOut[0]!; // PSID (bigint pointer)
-  if (!sid) throw new Error("AppContainer SID is null");
+  for (const t of aclTargets(plan, resolvedCmd)) {
+    modifyDacl(t.path, t.mode === "rw" ? GENERIC_ALL : GENERIC_READ_EXECUTE, GRANT_ACCESS, sid);
+    process.stderr.write(`[lucid-appcontainer] acl grant ${t.path} ${t.mode}\n`);
+  }
 
   // 2) SECURITY_CAPABILITIES { PSID AppContainerSid; PSID_AND_ATTRIBUTES Capabilities=NULL; DWORD Count=0; DWORD Reserved; }
   const secCaps = new Uint8Array(24);
@@ -154,12 +312,12 @@ export function runInAppContainer(plan: HelperPlan): number {
   sdv.setBigUint64(104, BigInt(ptr(attrList)), true); // lpAttributeList
 
   // 5) CreateProcessW — mutable command line buffer; EXTENDED_STARTUPINFO_PRESENT; child cwd = workspace.
-  const cmdline = wide(buildCommandLine(plan.cmd, plan.cmdArgs));
+  const cmdline = wide(buildCommandLine(resolvedCmd ?? plan.cmd, plan.cmdArgs));
   const cwd = wide(plan.workspace);
   const pi = new Uint8Array(24); // PROCESS_INFORMATION { hProcess, hThread, dwProcessId, dwThreadId }
   const okCreate = k32.symbols.CreateProcessW(null, ptr(cmdline), null, null, 0, EXTENDED_STARTUPINFO_PRESENT, null, ptr(cwd), ptr(siex), ptr(pi));
   k32.symbols.DeleteProcThreadAttributeList(ptr(attrList));
-  if (sid) userenv; // (SID freed by process teardown; LocalFree omitted deliberately — short-lived helper)
+  // (SID freed by process teardown; FreeSid omitted deliberately — short-lived helper)
   if (!okCreate) throw new Error(`CreateProcessW failed (err=${k32.symbols.GetLastError()})`);
 
   const pdv = new DataView(pi.buffer);
@@ -197,11 +355,34 @@ function loopbackExemption(op: "add" | "delete"): number {
   return r.exitCode ?? 3;
 }
 
+/** Admin subcommand: strip every ACE our container SID holds on `path` (REVOKE_ACCESS removes grant AND
+ *  deny entries for the trustee, whatever their mask) — the UNDO for the persistent grants above. */
+function revokeAcl(path: string): number {
+  if (process.platform !== "win32") {
+    process.stderr.write("[lucid-appcontainer] --revoke-acl is Windows-only\n");
+    return 3;
+  }
+  try {
+    modifyDacl(path, GENERIC_ALL, REVOKE_ACCESS, containerSid());
+    process.stderr.write(`[lucid-appcontainer] acl revoke ${path}\n`);
+    return 0;
+  } catch (e) {
+    process.stderr.write(`[lucid-appcontainer] acl revoke failed: ${String((e as Error).message ?? e)}\n`);
+    return 3;
+  }
+}
+
 // ── entrypoint (only when run/compiled as the binary, not when imported by tests) ──────────────────────
 export function main(argv: string[]): number {
   // Admin subcommands (install-time): register/unregister the loopback exemption for our AppContainer SID.
   if (argv[0] === "--register-loopback") return loopbackExemption("add");
   if (argv[0] === "--unregister-loopback") return loopbackExemption("delete");
+  // Admin subcommand: reverse a persistent filesystem grant made for the container SID.
+  if (argv[0] === "--revoke-acl") {
+    const p = argv[1];
+    if (!p) { process.stderr.write("[lucid-appcontainer] FAIL-CLOSED: --revoke-acl needs a path\n"); return 2; }
+    return revokeAcl(p);
+  }
 
   const plan = parseHelperArgs(argv);
   if ("error" in plan) {
