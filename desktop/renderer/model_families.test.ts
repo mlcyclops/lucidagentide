@@ -344,6 +344,10 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
     const got = preferredDefaultModel(mk("anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-5"));
     expect(got?.value).toBe("anthropic/claude-opus-5");
   });
+  it("Opus 5.5 outranks Opus 5 when both are offered: its entry precedes, and the Opus 5 entry is end-anchored", () => {
+    expect(preferredDefaultModel(mk("anthropic/claude-opus-5", "anthropic/claude-opus-5-5"))?.value).toBe("anthropic/claude-opus-5-5");
+    expect(preferredDefaultModel(mk("anthropic/claude-opus-5"))?.value).toBe("anthropic/claude-opus-5"); // no 5.5 offered -> Opus 5 still hits its own entry
+  });
   it("a bigger version digit does not win across families: Opus 5 beats gpt-6-astra by LIST ORDER", () => {
     expect(preferredDefaultModel(mk("openai-codex/gpt-6-astra", "anthropic/claude-opus-5"))?.value).toBe("anthropic/claude-opus-5");
     expect(preferredDefaultModel(mk("anthropic/claude-opus-5", "openai-codex/gpt-6-astra"))?.value).toBe("anthropic/claude-opus-5"); // input order is irrelevant
@@ -375,7 +379,7 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
   });
   it("no curated entry can ever select a small/fast model", () => {
     for (const pat of DEFAULT_MODEL_PREFERENCE) {
-      for (const small of ["claude-opus-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite"]) {
+      for (const small of ["claude-opus-5-mini", "claude-opus-5-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite"]) {
         expect(pat.test(small)).toBe(false);
       }
     }

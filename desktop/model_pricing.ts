@@ -30,6 +30,10 @@ const TABLE: [RegExp, Price][] = [
   // the models that bill as pay-as-you-go credits outside a plan's included usage, so a low estimate is
   // exactly the wrong direction to be wrong in.
   [/fable|mythos/, { inPerM: 10.0, outPerM: 50.0 }],
+  // Opus 5.5 (2026-09-22) cut the flagship rate again to $4/$20 (cache read $0.20 / write $5 per Mtok on
+  // the API; Price carries no cache fields, so those live in this comment). Must be matched BEFORE the
+  // Opus 5 row, whose `[-.]` tail would otherwise eat the second "5" and price 5.5 at the 5 rate.
+  [/opus-?5[-.]5(\b|[-.])/, { inPerM: 4.0, outPerM: 20.0 }],
   // Opus 5 halved the Opus price to $5/$25. It must be matched BEFORE the generic /opus/ row, which
   // still correctly prices 4.6/4.7/4.8 at $15/$75.
   [/opus-?5(\b|[-.])/, { inPerM: 5.0, outPerM: 25.0 }],

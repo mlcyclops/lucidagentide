@@ -30,6 +30,10 @@ describe("listPrice tiers", () => {
     expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 });
     expect(listPrice("anthropic/claude-opus-4-8")).toEqual({ inPerM: 15, outPerM: 75 }); // older Opus unchanged
   });
+  test("Opus 5.5 is priced at its own $4/$20 rate, NOT the Opus 5 row whose `[-.]` tail would eat it", () => {
+    expect(listPrice("anthropic/claude-opus-5-5")).toEqual({ inPerM: 4, outPerM: 20 });
+    expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 }); // Opus 5 unchanged
+  });
   test("Fable / Mythos are priced at the frontier rate, not the sonnet-ish default", () => {
     for (const m of ["anthropic/claude-fable-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1"]) {
       expect(listPrice(m)).toEqual({ inPerM: 10, outPerM: 50 });

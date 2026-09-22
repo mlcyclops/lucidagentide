@@ -208,7 +208,7 @@ const state = {
   // P-MODEL.2: pre-config placeholder for the badge, replaced the moment loadConfig lands. It must be a
   // CURRENT flagship, not a stale one: this string is painted before any real model is known, so a stale
   // value here reads to the user as "the app defaults to an old model" (the reported Opus 4.8 bug).
-  model: "claude-opus-5",
+  model: "claude-opus-5-5",
   security: null as SecuritySnapshot | null,
   memory: null as MemorySnapshot | null,
   ledger: null as import("./bridge.ts").UsageLedger | null, // P10.2 cross-model usage ledger
@@ -289,10 +289,10 @@ const shortModelId = (v: string) => v.replace(/^anthropic\//, "").replace(/^asks
 // omp's reported usage `size` is unreliable for the AskSage gateway models (it reports
 // 256k for a 1M Gemini), so we prefer this. Keep in sync with tools/memory_data.ts CTX_WINDOW.
 const MODEL_CTX: Record<string, number> = {
-  // P-MODEL.2: Fable/Mythos 5.1 and Opus 5 are all 1M-context; GPT-6 (astra) ships at 1M too, which is
-  // the first OpenAI generation to match Claude's window, so it must not inherit the 256K GPT-5 default.
+  // P-MODEL.2: Fable/Mythos 5.1 and Opus 5.5 / Opus 5 are all 1M-context; GPT-6 (astra) ships at 1M too,
+  // which is the first OpenAI generation to match Claude's window, so it must not inherit the 256K GPT-5 default.
   "claude-fable-5-1": 1_000_000, "claude-mythos-5-1": 1_000_000,
-  "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
+  "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
   "gpt-6-astra": 1_000_000,
@@ -15759,6 +15759,10 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "claude-mythos-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
   "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   "claude-mythos-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
+  // P-MODEL.2: Opus 5.5 (2026-09-22) opens the Claude 5.5 family. Anthropic's own framing: Fable-5.1-level
+  // results on most work at 40% lower running cost than Opus 5 ($4/$20 per Mtok), with adaptive thinking
+  // always on, and their new agentic-coding lead (Terminal-Bench 4.0 66.4% at xhigh, GDPval-AA v2.1 1846).
+  "claude-opus-5-5": { exp: 3, iq: 5, eff: "First of the Claude 5.5 family: Fable-5.1-level results on most work at 40% lower cost than Opus 5, with adaptive thinking always on.", best: "Hard bugs, architecture, and long-horizon agentic coding.", ctx: "1M" },
   "claude-opus-5": { exp: 3, iq: 5, eff: "Frontier-class reasoning at about half the prior Opus price; a low/medium/high effort toggle trades cost for depth.", best: "Hard bugs, architecture, and long-horizon agentic coding.", ctx: "1M" },
   "claude-opus-4-8": { exp: 4, iq: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
   "claude-opus-4-7": { exp: 4, iq: 5, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
