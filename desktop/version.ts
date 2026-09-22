@@ -492,4 +492,11 @@
 //            matching approval, ACLs are applied/revoked through the bundled helper's --apply-acl /
 //            --revoke-acl, and every grant is listed and revocable in the Security panel.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.4";
+// v2.3.0-beta.5 = beta.4 plus Claude Opus 5.5 (claude-opus-5-5, 2026-09-22) as the curated default:
+//            top of DEFAULT_MODEL_PREFERENCE above Opus 5, $4/$20 per Mtok pricing (cache read $0.20 /
+//            write $5), 1M context and 128K max output wired through MODEL_CTX / session_metrics,
+//            intelligence card and README flagship banner updated; the id arrives dynamically via the
+//            signed-in Anthropic plan until omp catalogs it. Ships the AppContainer sandbox package
+//            unchanged (helper binary + sandbox_grant_extension).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.5";
