@@ -694,8 +694,8 @@ demo-P-SANDBOX.7b: ## P-SANDBOX.7b (ADR-0174): mediated --loopback-only for the 
 	$(BUN) run harness/scripts/demo_p_sandbox_7b.ts
 
 .PHONY: build-appcontainer
-build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into dist/
-	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile dist/lucid-appcontainer.exe
+build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into bin/ (ships via the `repo` extraResources; resolveBackend probes <repo>/bin first, PATH second)
+	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile bin/lucid-appcontainer.exe
 
 .PHONY: demo-P-REPORT.9
 demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregation for the Engineering Report — remote-URL parse (GitHub vs not), commits aggregated across branches (deduped) + line totals, the Cross-repo activity annex, fail-soft on a failed fetch (local refs still shown), PRs skipped with a reason on non-GitHub/unauthed remotes, and untrusted commit/PR text neutralized (no HTML/fence breakout)

@@ -31,7 +31,7 @@ function postureLine(s: SandboxStateView): string {
       <span>Exec runs runtime-isolated via <b>${esc(BACKEND_LABEL[s.backend ?? "noop"] ?? s.backend ?? "?")}</b> — declared network/exec caps enforced.</span></div>`;
   }
   return `<div class="sbx-row warn"><span class="pill dismissed">not isolated</span>
-    <span>Exec is <b>not runtime-isolated</b> on ${esc(s.platform)} (disclosed passthrough). The argv gate + in-process scanner still apply; a native backend is a follow-up.</span></div>`;
+    <span>Exec is <b>not runtime-isolated</b> on ${esc(s.platform)} (disclosed passthrough). The argv gate + in-process scanner still apply; no capable sandbox backend on this host — on Windows the bundled lucid-appcontainer helper is missing or failed its containment probe.</span></div>`;
 }
 
 /** The mediated-egress line (only meaningful when isolated). Pure. */

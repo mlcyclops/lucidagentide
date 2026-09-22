@@ -35,7 +35,7 @@
 // `lucid-appcontainer` helper land here; the native helper itself + Linux slirp raw-socket forwarding are
 // follow-ups. Pure + hermetic: `which` is injectable and `ctx.proxy` is a plain path/URL record.
 
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import type { ProfileCaps } from "./profiles.ts";
 
 /** Presence probe for a binary on PATH. Injectable so tests never depend on the host. */
@@ -89,6 +89,33 @@ const seatbeltDefaultProbe: ProbeFn = (bin) => {
   let ok = false;
   try {
     ok = Bun.spawnSync({ cmd: [bin, "-p", "(version 1)(allow default)", "/usr/bin/true"], stdout: "ignore", stderr: "ignore", stdin: "ignore" }).exitCode === 0;
+  } catch {
+    ok = false; // binary vanished between which() and here, or is not executable
+  }
+  probeCache.set(bin, ok);
+  return ok;
+};
+
+/** Does `lucid-appcontainer` actually WORK here, not merely exist?
+ *
+ *  Same doctrine as bwrap/Seatbelt above: presence is not capability. The helper can exist yet be
+ *  unable to contain — `CreateAppContainerProfile` denied (mandatory-profile policy), a blocked
+ *  DLL load, or a filesystem-ACL grant refused on this host. The helper is FAIL-CLOSED (a child
+ *  it cannot contain never runs), so committing to it without a probe reproduces the exact
+ *  bwrap-on-Ubuntu-24.04 failure: every wrapped spawn dies and the session never opens. Run the
+ *  smallest real container once (`cmd /c exit 0` inside a throwaway workspace), cached per run. */
+const appContainerDefaultProbe: ProbeFn = (bin) => {
+  const cached = probeCache.get(bin);
+  if (cached !== undefined) return cached;
+  let ok = false;
+  try {
+    ok =
+      Bun.spawnSync({
+        cmd: [bin, "--workspace", tmpdir(), "--deny-network", "--", "cmd", "/c", "exit 0"],
+        stdout: "ignore",
+        stderr: "ignore",
+        stdin: "ignore",
+      }).exitCode === 0;
   } catch {
     ok = false; // binary vanished between which() and here, or is not executable
   }
@@ -268,15 +295,22 @@ export function appContainerArgs(caps: ProfileCaps, ctx: SandboxCtx): string[] {
 }
 
 /** Windows AppContainer backend (P-SANDBOX.6, ADR-0172) via the first-party `lucid-appcontainer` helper.
- *  Real OS-level containment (AppContainer SID + WFP egress). `isolates` is true; `available()` = the
- *  helper is on PATH (bundled by P-SANDBOX.7). Until the helper ships this is never selected, so Windows
- *  stays the disclosed passthrough exactly as in .1-.5. Pure: `which` injectable, flags a pure function. */
+ *  Real OS-level containment (AppContainer SID + workspace/tool-dir ACL grants + capability-less network).
+ *  `isolates` is true; `helper` is either the bare name (PATH lookup, the dev loop after
+ *  `make build-appcontainer`) or the ABSOLUTE packaged path (`<repo>/bin/lucid-appcontainer.exe`, shipped
+ *  by P-SANDBOX.7 inside the `repo` extraResources — the caller resolves it via repo_root, ADR-0356).
+ *  `available()` = presence AND a functional probe (the smallest real container), same
+ *  presence-is-not-capability doctrine as bwrap/Seatbelt. Pure: `which`/`probe` injectable. */
 export class AppContainerBackend implements SandboxBackend {
   readonly name = "appcontainer" as const;
   readonly isolates = true;
-  constructor(private readonly which: WhichFn = defaultWhich, private readonly helper = "lucid-appcontainer") {}
+  constructor(
+    private readonly which: WhichFn = defaultWhich,
+    private readonly helper = "lucid-appcontainer",
+    private readonly probe: ProbeFn = appContainerDefaultProbe,
+  ) {}
   available(): boolean {
-    return this.which(this.helper);
+    return this.which(this.helper) && this.probe(this.helper);
   }
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const env: Record<string, string> = {};
@@ -307,7 +341,7 @@ export class NoopBackend implements SandboxBackend {
 export function sandboxDisclosure(platform: NodeJS.Platform = process.platform): string {
   return (
     `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) — no sandbox backend available. ` +
-    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs the lucid-appcontainer helper, P-SANDBOX.7).`
+    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs a WORKING lucid-appcontainer helper — missing here, or it failed its containment probe).`
   );
 }
 
@@ -327,6 +361,10 @@ export interface ResolveBackendOpts {
   requireIsolation?: boolean;
   which?: WhichFn;
   probe?: ProbeFn;
+  /** P-SANDBOX.7: absolute path to the packaged `lucid-appcontainer.exe` when the caller has one
+   *  (desktop resolves `<repo>/bin/lucid-appcontainer.exe` via repo_root and passes it ONLY when it
+   *  exists on disk). Absent ⇒ bare-name PATH lookup, which is the dev loop. */
+  appContainerHelper?: string;
 }
 
 /** Pick the backend for this platform. PURE given its inputs (platform/which/probe injectable). */
@@ -347,9 +385,10 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
     if (seatbelt.available()) return { ok: true, backend: seatbelt, disclosed: false };
   }
   if (platform === "win32") {
-    // P-SANDBOX.6 (ADR-0172): Windows gets containment via the first-party `lucid-appcontainer` helper.
-    // Until the helper is bundled (P-SANDBOX.7) this is unavailable ⇒ disclosed passthrough, as in .1-.5.
-    const ac = new AppContainerBackend(which);
+    // P-SANDBOX.6/.7 (ADR-0172/0173): Windows gets containment via the first-party `lucid-appcontainer`
+    // helper — the packaged absolute path when the caller resolved one, else PATH (dev loop). The
+    // functional probe keeps a present-but-incapable helper from being committed to (bwrap doctrine).
+    const ac = new AppContainerBackend(which, opts.appContainerHelper ?? "lucid-appcontainer", opts.probe ?? appContainerDefaultProbe);
     if (ac.available()) return { ok: true, backend: ac, disclosed: false };
   }
   if (opts.requireIsolation) {
@@ -365,7 +404,9 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
               ? "managed policy requires runtime isolation, but sandbox-exec cannot apply a Seatbelt profile in this environment - this process is itself running under a sandbox (nested profiles are not permitted); launch LUCID from Finder or an unsandboxed shell"
               : "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
             : platform === "win32"
-              ? "managed policy requires runtime isolation, but the lucid-appcontainer helper is not installed (Windows AppContainer; ships in P-SANDBOX.7)"
+              ? which(opts.appContainerHelper ?? "lucid-appcontainer")
+                ? "managed policy requires runtime isolation, but the lucid-appcontainer helper failed its containment probe on this host — the smallest real AppContainer could not be established (profile creation or the workspace ACL grant refused); exec would be fail-closed blocked by the helper anyway"
+                : "managed policy requires runtime isolation, but the lucid-appcontainer helper is not installed (Windows AppContainer; `<repo>/bin/lucid-appcontainer.exe`, built by `make build-appcontainer`)"
               : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet`,
     };
   }

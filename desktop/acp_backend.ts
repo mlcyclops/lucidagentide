@@ -589,7 +589,14 @@ class Backend {
    *  can't start, `wrap` falls back to network-off (fail-closed). Async because starting the proxy is. */
   private async resolveSandboxPlan(argv: string[]): Promise<{ cmd: string; args: string[]; env: Record<string, string> }> {
     const at = new Date().toISOString(); // P-SANDBOX.5 (ADR-0169): surface the posture in the Security panel
-    const res = resolveBackend({ requireIsolation: managedRequireIsolation(managedConfig().config) });
+    // P-SANDBOX.7 (ADR-0173): the packaged Windows helper ships at <repo>/bin/lucid-appcontainer.exe
+    // (bin/** rides the `repo` extraResources), resolved through repo_root — NEVER import.meta.dir
+    // (ADR-0356) — and passed ONLY when it exists on disk; bare-name PATH lookup stays the dev loop.
+    const acHelper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
+    const res = resolveBackend({
+      requireIsolation: managedRequireIsolation(managedConfig().config),
+      appContainerHelper: acHelper && existsSync(acHelper) ? acHelper : undefined,
+    });
     if (!res.ok) {
       this.sandboxExecBlock = res.reason;
       setSandboxState({ backend: null, isolated: false, disclosed: false, platform: process.platform, execBlocked: res.reason, proxied: false, at });
