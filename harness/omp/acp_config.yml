@@ -54,3 +54,8 @@ tools:
     # …) always prompts. Defense in depth ON TOP OF the scanner, which still scans every call fail-closed.
     bash: prompt
     eval: prompt
+    # P-SANDBOX.8: a standing directory grant is a persistent host DACL change - force the PROMPT in
+    # every approval mode. The desktop intercepts it (acp_backend onRequest → askSandboxGrant), shows the
+    # grant dialog, and parks the approved {path,mode} for the loopback endpoint to consume; without an
+    # approval the endpoint applies nothing (fail-closed).
+    sandbox_grant_dir: prompt

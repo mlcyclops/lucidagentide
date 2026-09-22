@@ -22,7 +22,7 @@
 // mediated case, which needs a WFP/loopback-exemption follow-up) — the helper EXITS NON-ZERO and never
 // runs the child. A helper that can't contain must block, never passthrough (that would be false security).
 
-import { dlopen, FFIType, ptr, CString } from "bun:ffi";
+import { dlopen, FFIType, ptr, read as ffiRead, CString, type Pointer } from "bun:ffi";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 
@@ -355,6 +355,103 @@ function loopbackExemption(op: "add" | "delete"): number {
   return r.exitCode ?? 3;
 }
 
+// ── standalone ACL subcommands (P-SANDBOX.8): user-approved standing directory grants ─────────────────
+// The desktop's grant flow (desktop/sandbox_grants.ts) shells here so EVERY persistent DACL change —
+// grant, probe, undo — goes through the one binary that owns the container SID, and is logged the same way.
+
+/** PURE: the `--apply-acl` mode vocabulary ("rx"/"rw", the aclTargets words); anything else is refused. */
+export function parseAclMode(m: string | undefined): "rx" | "rw" | null {
+  return m === "rx" || m === "rw" ? m : null;
+}
+
+/** Subcommand: grant the container SID one inheritable ACE on `path` — the standalone form of the
+ *  per-spawn grants in runInAppContainer (same modifyDacl, same idempotent merge, same log line). */
+function applyAcl(mode: "rx" | "rw", path: string): number {
+  if (process.platform !== "win32") {
+    process.stderr.write("[lucid-appcontainer] --apply-acl is Windows-only\n");
+    return 3;
+  }
+  try {
+    modifyDacl(path, mode === "rw" ? GENERIC_ALL : GENERIC_READ_EXECUTE, GRANT_ACCESS, containerSid());
+    process.stderr.write(`[lucid-appcontainer] acl grant ${path} ${mode}\n`);
+    return 0;
+  } catch (e) {
+    process.stderr.write(`[lucid-appcontainer] acl grant failed: ${String((e as Error).message ?? e)}\n`);
+    return 3;
+  }
+}
+
+/** The container SID as its S-1-15-2-… string (ConvertSidToStringSidW), for matching icacls output. */
+function containerSidString(): string {
+  const advapi = dlopen("advapi32.dll", {
+    // PSID passed BY VALUE (pointer-sized int, same convention as modifyDacl's pDacl args) ⇒ u64.
+    ConvertSidToStringSidW: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+  });
+  const kfree = dlopen("kernel32.dll", { LocalFree: { args: [FFIType.u64], returns: FFIType.u64 } });
+  const out = new BigUint64Array(1); // LPWSTR* (LocalFree'd)
+  if (!advapi.symbols.ConvertSidToStringSidW(containerSid(), ptr(out))) throw new Error("ConvertSidToStringSidW failed");
+  const base = Number(out[0]!); // user-mode pointer < 2^48 — exact as a JS number
+  let s = "";
+  for (let i = 0; ; i++) {
+    const c = ffiRead.u16(base as Pointer, i * 2);
+    if (!c) break;
+    s += String.fromCharCode(c);
+  }
+  kfree.symbols.LocalFree(out[0]!);
+  return s;
+}
+
+/** PURE: does an `icacls <path>` listing hold an EXPLICIT ACE for this SID? icacls prints AppContainer
+ *  trustees as the raw S-1-15-2-… string (they resolve to no account name). Two traps this parser
+ *  survives (both observed live): (1) console-width wrapping can split an ACE mid-SID, so ALL whitespace
+ *  is collapsed before matching; (2) an ACE inherited from a parent grant carries the (I) flag and MUST
+ *  NOT count — it is the parent's row, and REVOKE_ACCESS on this path cannot remove it. */
+export function icaclsListsSid(output: string, sidStr: string): boolean {
+  if (!sidStr) return false; // an empty needle must never read as "granted everywhere"
+  const flat = output.replace(/\s+/g, "").toLowerCase();
+  const needle = `${sidStr.toLowerCase()}:`;
+  for (let i = flat.indexOf(needle); i !== -1; i = flat.indexOf(needle, i + needle.length)) {
+    // Collect this ACE's parenthesized flag groups: (I)(OI)(CI)(RX)…
+    let j = i + needle.length;
+    let flags = "";
+    while (flat[j] === "(") {
+      const close = flat.indexOf(")", j);
+      if (close === -1) break;
+      flags += flat.slice(j, close + 1);
+      j = close + 1;
+    }
+    if (!/\(i\)/.test(flags)) return true; // explicit ((IO) does not match — the group must be exactly (i))
+  }
+  return false;
+}
+
+/** Subcommand: exit 0 when the container SID holds an EXPLICIT ACE on `path` itself, 1 when not, 3 on
+ *  error. Inherited ACEs deliberately do NOT count: they flow from (and are revoked at) a parent grant.
+ *  IMPLEMENTATION CHOICE: parse `icacls <path>` (ships with Windows) for the SID string instead of
+ *  GetNamedSecurityInfoW + GetExplicitEntriesFromAclW — the FFI route means walking a variable-length
+ *  EXPLICIT_ACCESS_W array of nested TRUSTEE_W structs byte-by-byte for a boolean this command answers
+ *  reliably in one line; the grant/revoke WRITES stay real Win32 (modifyDacl). */
+function checkAcl(path: string): number {
+  if (process.platform !== "win32") {
+    process.stderr.write("[lucid-appcontainer] --check-acl is Windows-only\n");
+    return 3;
+  }
+  try {
+    const sidStr = containerSidString();
+    const r = Bun.spawnSync(["icacls.exe", path], { stdout: "pipe", stderr: "pipe" });
+    if (r.exitCode !== 0) {
+      process.stderr.write(`[lucid-appcontainer] acl check failed: icacls exit ${r.exitCode}: ${new TextDecoder().decode(r.stderr).trim()}\n`);
+      return 3;
+    }
+    const granted = icaclsListsSid(new TextDecoder().decode(r.stdout), sidStr);
+    process.stderr.write(`[lucid-appcontainer] acl check ${path}: ${granted ? "granted" : "absent"} (${sidStr})\n`);
+    return granted ? 0 : 1;
+  } catch (e) {
+    process.stderr.write(`[lucid-appcontainer] acl check failed: ${String((e as Error).message ?? e)}\n`);
+    return 3;
+  }
+}
+
 /** Admin subcommand: strip every ACE our container SID holds on `path` (REVOKE_ACCESS removes grant AND
  *  deny entries for the trustee, whatever their mask) — the UNDO for the persistent grants above. */
 function revokeAcl(path: string): number {
@@ -382,6 +479,18 @@ export function main(argv: string[]): number {
     const p = argv[1];
     if (!p) { process.stderr.write("[lucid-appcontainer] FAIL-CLOSED: --revoke-acl needs a path\n"); return 2; }
     return revokeAcl(p);
+  }
+  // P-SANDBOX.8: standalone grant + probe, driven by the desktop's user-approved directory-grant flow.
+  if (argv[0] === "--apply-acl") {
+    const mode = parseAclMode(argv[1]);
+    const p = argv[2];
+    if (!mode || !p) { process.stderr.write("[lucid-appcontainer] FAIL-CLOSED: --apply-acl needs <rx|rw> <path>\n"); return 2; }
+    return applyAcl(mode, p);
+  }
+  if (argv[0] === "--check-acl") {
+    const p = argv[1];
+    if (!p) { process.stderr.write("[lucid-appcontainer] FAIL-CLOSED: --check-acl needs a path\n"); return 2; }
+    return checkAcl(p);
   }
 
   const plan = parseHelperArgs(argv);

@@ -14939,6 +14939,22 @@ function wire(): void {
     if (dnsAdd) { openWhitelistQuickAdd(dnsAdd, dnsAdd.dataset.dnsAdd!); return; } // P-NETWL.4
     const head = (e.target as HTMLElement).closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; const acc = head.closest(".acc")!; const open = acc.classList.toggle("open"); open ? OPEN.add(k) : OPEN.delete(k); return; }
+    // P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal, audited
+    // server-side). The row leaves the list only when the ACE really came off — a failed revoke keeps
+    // it visible so a persistent host mutation can never silently outlive the panel.
+    const grantRevoke = (e.target as HTMLElement).closest("[data-grant-revoke]") as HTMLElement | null;
+    if (grantRevoke) {
+      const path = grantRevoke.dataset.grantRevoke!;
+      (grantRevoke as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.sandboxGrantRevoke(path);
+        await refresh(); // repaint the grants list (row gone on success, kept on failure)
+        showToast(r?.revoked
+          ? { title: "Grant revoked", desc: `The sandbox no longer has access to ${path}.`, actions: [{ label: "OK" }], timeout: 4000 }
+          : { tone: "warn", title: "Revoke failed", desc: r?.detail || "The ACL change did not apply. The grant stays listed.", actions: [{ label: "OK" }], timeout: 5000 });
+      })();
+      return;
+    }
     // Approve & retry: the audited fail-closed override for one live gate block (ADR-0019 C).
     const approve = (e.target as HTMLElement).closest("[data-approve]") as HTMLElement | null;
     if (approve) {

@@ -9,7 +9,7 @@
 // deny-network container cannot reach the net); the parser is where the boundary correctness lives.
 
 import { expect, test } from "bun:test";
-import { aclTargets, buildCommandLine, buildExplicitAccessW, checkNetIsolationArgs, isPackageReadablePath, main, parentDir, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
+import { aclTargets, buildCommandLine, buildExplicitAccessW, checkNetIsolationArgs, icaclsListsSid, isPackageReadablePath, main, parentDir, parseAclMode, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
 import type { HelperPlan } from "./lucid_appcontainer.ts";
 
 // ── the flag-contract parser ──────────────────────────────────────────────────
@@ -143,4 +143,45 @@ test("buildExplicitAccessW lays out access/mode/inheritance and the SID trustee 
 test("checkNetIsolationArgs builds the CheckNetIsolation LoopbackExempt add/delete for our AppContainer", () => {
   expect(checkNetIsolationArgs("add")).toEqual(["LoopbackExempt", "-a", "-n=LucidAgentIDE.Sandbox.v1"]);
   expect(checkNetIsolationArgs("delete")).toEqual(["LoopbackExempt", "-d", "-n=LucidAgentIDE.Sandbox.v1"]);
+});
+
+// ── P-SANDBOX.8: the standalone --apply-acl / --check-acl subcommands (arg validation only — the
+// Win32/icacls sides mutate host state and are verified live, like runInAppContainer) ──────────────
+test("parseAclMode accepts only the rx/rw vocabulary", () => {
+  expect(parseAclMode("rx")).toBe("rx");
+  expect(parseAclMode("rw")).toBe("rw");
+  expect(parseAclMode("read")).toBeNull(); // the tool-facing words never reach the helper untranslated
+  expect(parseAclMode("")).toBeNull();
+  expect(parseAclMode(undefined)).toBeNull();
+});
+
+test("main() fail-closes --apply-acl on a missing/invalid mode or path (exit 2, no mutation attempted)", () => {
+  expect(main(["--apply-acl"])).toBe(2);
+  expect(main(["--apply-acl", "rx"])).toBe(2); // no path
+  expect(main(["--apply-acl", "rz", "C:\\data"])).toBe(2); // unknown mode
+});
+
+test("main() fail-closes --check-acl without a path (exit 2)", () => {
+  expect(main(["--check-acl"])).toBe(2);
+});
+
+test("icaclsListsSid matches an EXPLICIT ACE case-insensitively, never an empty SID", () => {
+  const out = "C:\\data S-1-15-2-111-222:(OI)(CI)(RX)\n        BUILTIN\\Administrators:(F)\n";
+  expect(icaclsListsSid(out, "s-1-15-2-111-222")).toBe(true);
+  expect(icaclsListsSid(out, "S-1-15-2-999-888")).toBe(false);
+  expect(icaclsListsSid(out, "")).toBe(false); // an empty needle must not read as "granted everywhere"
+});
+
+test("icaclsListsSid ignores INHERITED ACEs — (I) flows from a parent grant and is not this path's row", () => {
+  const inheritedOnly = "C:\\data S-1-15-2-111-222:(I)(F)\n        S-1-15-2-111-222:(I)(OI)(CI)(IO)(F)\n";
+  expect(icaclsListsSid(inheritedOnly, "S-1-15-2-111-222")).toBe(false);
+  // …but (IO) alone is inherit-only propagation of an EXPLICIT ACE here, not an inherited one.
+  expect(icaclsListsSid("C:\\d S-1-15-2-111-222:(OI)(CI)(IO)(RX)\n", "S-1-15-2-111-222")).toBe(true);
+});
+
+test("icaclsListsSid survives console-width wrapping that splits an ACE mid-SID (observed live)", () => {
+  const wrapped = "C:\\data S-1-15-2-111-2225555\n55:(OI)(CI)(RX)\n";
+  expect(icaclsListsSid(wrapped, "S-1-15-2-111-222555555")).toBe(true);
+  const wrappedInherited = "C:\\data S-1-15-2-111-2225555\n55:(I)(OI)(CI)(RX)\n";
+  expect(icaclsListsSid(wrappedInherited, "S-1-15-2-111-222555555")).toBe(false);
 });

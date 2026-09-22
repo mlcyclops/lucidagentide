@@ -11,7 +11,7 @@
 import { accordion } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import type { SandboxStateView, SandboxStatusView } from "./bridge.ts";
+import type { SandboxGrantView, SandboxStateView, SandboxStatusView } from "./bridge.ts";
 
 const BACKEND_LABEL: Record<string, string> = {
   bwrap: "Linux bubblewrap",
@@ -42,15 +42,38 @@ function egressLine(s: SandboxStateView): string {
     : `<div class="sbx-row warn"><span class="pill dismissed">network-off</span><span>No egress proxy this session — subprocess network is denied (fail-closed).</span></div>`;
 }
 
+const GRANT_MODE_LABEL: Record<string, string> = { rx: "read-only", rw: "read-write" };
+
+/** P-SANDBOX.8: the user-approved standing directory grants (AppContainer ACEs), each with Revoke.
+ *  Every row is a PERSISTENT host DACL change, so the list is always visible while any grant stands. Pure. */
+function grantsSection(grants: SandboxGrantView[]): string {
+  if (!grants.length) return "";
+  const rows = grants
+    .map(
+      (g) => `<div class="sbx-grant">
+        <div class="sbx-grant-head"><span class="pill${g.mode === "rw" ? " dismissed" : ""}">${GRANT_MODE_LABEL[g.mode] ?? g.mode}</span><b class="sbx-host">${esc(g.path)}</b>
+          <button class="btn-mini dismiss" data-grant-revoke="${esc(g.path)}" data-tip="Revoke|Remove the sandbox's ACE on this directory (helper --revoke-acl) and drop it from this list. The agent loses access immediately.">${icon("close", 13)} Revoke</button></div>
+        <div class="sbx-blk-reason">${esc(g.reason || "no reason given")} · ${esc(g.grantedAt.slice(0, 10))}</div></div>`,
+    )
+    .join("");
+  return `<div class="sbx-blocks"><div class="sbx-blocks-hd">${icon("shield", 13)} Directory grants (standing, until revoked)</div>${rows}</div>`;
+}
+
 /**
  * Render the "Runtime sandbox" accordion. Empty string until the first omp spawn resolves a state
- * (nothing to show yet). `open` controls the initial expanded state.
+ * (nothing to show yet) — unless standing directory grants exist, which must stay visible/revocable
+ * even before a spawn. `open` controls the initial expanded state.
  */
 export function renderSandboxSection(status: SandboxStatusView | null | undefined, open = false): string {
   const s = status?.state;
-  if (!s) return "";
+  const grants = status?.grants ?? [];
+  if (!s && !grants.length) return "";
+  if (!s) {
+    // Grants-only view (no spawn yet this session): the persistent host mutations still need a surface.
+    return accordion("sec.sandbox", "Runtime sandbox", `${grants.length} directory grant${grants.length === 1 ? "" : "s"}`, grantsSection(grants), open, String(grants.length));
+  }
   const blocks = status?.egressBlocks ?? [];
-  let inner = postureLine(s) + egressLine(s);
+  let inner = postureLine(s) + egressLine(s) + grantsSection(grants);
 
   if (blocks.length) {
     const rows = blocks
