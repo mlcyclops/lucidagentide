@@ -265,6 +265,40 @@ the header independently, so a tampered header fails twice.
   treated as corruption; the reader's cursor advances only past fully verified lines.
 - Readers SHOULD poll (stat `mtime`+`size`) rather than rely on filesystem change
   notification, which is unreliable on network and cloud-sync folders.
+
+### 6.1 Out-of-line bodies (`blobs/`) — normative
+
+Large bodies (`meeting.record`, oversized `knowledge.chunk`) travel **out of line** so a
+segment stays index-sized and a device can fold thousands of items without pulling
+gigabytes it may never open. The envelope is unchanged: no new header field exists for
+this, and an implementation that adds one is not v1.
+
+- **Reference.** The journal line's encrypted body carries
+  `blob = {item, epoch, alg, bytes, sha256}`. It is therefore inside the ciphertext and
+  covered by the authoring device's signature — an attacker who can write to the folder
+  cannot redirect a reader to a different blob or a different digest.
+- **File.** `blobs/<item id>.enc` is the ChaCha20-Poly1305 sealing of the out-of-line body
+  serialized as UTF-8 JSON. It is NOT canonicalized: §2 bans floats in a *header*, and a
+  real meeting record legitimately contains them. Integrity comes from the AEAD tag plus
+  the signed `sha256`, not from canonical bytes.
+- **Key.** `HKDF-SHA256(ikm = epoch_key, salt = utf8(item_id + "#blob"),
+  info = utf8("lucid/ki/body/v1"), length = 32)`.
+  The salt **MUST** differ from the line body's content key (§5). Both seal under a
+  constant nonce, so one key may seal exactly one plaintext; reusing the item's content
+  key for the blob would encrypt two plaintexts under one key/nonce pair and publish their
+  XOR. This is the single most dangerous thing to get wrong in this section.
+- **Nonce** = 12 zero bytes, safe for the same reason as §5: the key is unique per blob.
+- **AAD** = `utf8("lucid/ki/blob/v1|" + item_id)`, binding the ciphertext to the item that
+  names it.
+- **Reading** is strictly: size check → compare `sha256` against the value in the signed
+  line → decrypt. A reader MUST NOT decrypt before the digest matches.
+- **Pending is not failure.** A missing, short, or digest-mismatched blob is a **pending
+  body** with a readable reason; the item's index stays usable and the body arrives when
+  replication finishes. A fold MUST NOT fail because a blob has not landed, and MUST NOT
+  touch `blobs/` at all — pulls happen on demand, never during the fold.
+- **Writing** is temp-file + atomic replace, and the blob MUST be written **before** the
+  line that references it, so a reader never sees a reference to a file that does not
+  exist yet.
 - The relay (later) carries the same segments; the format does not change with transport.
 
 ---
