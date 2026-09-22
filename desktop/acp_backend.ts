@@ -44,6 +44,7 @@ import { loopbackExempted, resolveBackend, sandboxDisclosure, wrapForProfile, ty
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
+import { loadGrants, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
@@ -113,6 +114,13 @@ const EGRESS_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
   { optionId: "egress:danger", name: "Always allow every site", kind: "danger" },
   { optionId: "egress:deny", name: "Block", kind: "reject" },
 ];
+// P-SANDBOX.8: the directory-grant dialog's choices. A grant is standing (an ACE persists on the host
+// until revoked in the Security panel), so the allow label says exactly that — no "once" variant: a
+// one-shot ACE is a lie (the DACL change would outlive the call anyway).
+const SANDBOX_GRANT_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
+  { optionId: "grant:allow", name: "Grant until revoked", kind: "allow" },
+  { optionId: "grant:deny", name: "Deny", kind: "reject" },
+];
 // P-EGRESS.2 (ADR-0094): opening a LOCAL file in a browser has no "site" to remember, so it offers only
 // open-once / block (a host-pin would persist a junk key for a file path). Still a PROMPT — never auto-allow.
 const EGRESS_LOCAL_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
@@ -151,6 +159,10 @@ const SLASH_CMD_EXT = repoAsset("harness", "omp", "slash_command_extension.ts");
 // P-FLEET.L1: registers the read-tier `fleet_status` tool so the master agent's model can see the local
 // lane fleet (metadata only). Only added when the file exists - a missing extension never blocks omp launch.
 const FLEET_EXT = repoAsset("harness", "omp", "fleet_extension.ts");
+// P-SANDBOX.8: registers the `sandbox_grant_dir` tool so the agent can REQUEST standing access to a
+// user-named directory outside the AppContainer's grants. acp_config.yml forces the PROMPT; the dialog
+// below (askSandboxGrant) is the only path that parks an approval the loopback endpoint will honor.
+const SANDBOX_GRANT_EXT = repoAsset("harness", "omp", "sandbox_grant_extension.ts");
 // P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
 // (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
 const CODEGRAPH_EXT = repoAsset("harness", "omp", "codegraph_extension.ts");
@@ -661,6 +673,7 @@ class Backend {
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
         const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
         const fleetArgs = existsSync(FLEET_EXT) ? ["-e", FLEET_EXT] : []; // P-FLEET.L1: fleet_status
+        const sandboxGrantArgs = existsSync(SANDBOX_GRANT_EXT) ? ["-e", SANDBOX_GRANT_EXT] : []; // P-SANDBOX.8: sandbox_grant_dir
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
@@ -680,7 +693,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...interjectChildEnv("master") });
@@ -836,6 +849,10 @@ class Backend {
             const tc = params?.toolCall ?? params?.tool_call ?? {};
             const toolName = [tc.kind, tc.title, tc.name, tc.toolName, params?.tool, params?.toolName].filter(Boolean).join(" ").toLowerCase();
             const target = egressTarget(tc);
+            // P-SANDBOX.8: the agent asks for standing access to a user-named directory. Handled FIRST
+            // (before the exec/egress classifiers can mis-bucket it): always the grant dialog, never an
+            // auto-approve — a persistent host DACL change requires an explicit human yes.
+            if (toolName.includes("sandbox_grant_dir")) return this.askSandboxGrant(params, opts);
             // P-EXEC.1 (ADR-0066): an exec tool (bash/eval). Classify the command BEFORE the Agent
             // auto-approve — read-only auto-approves, risky gates, a catastrophic set always prompts. A
             // shell command is handled here (not egress), so `curl … | sh` is caught as catastrophic exec.
@@ -1167,6 +1184,72 @@ class Backend {
         settle(approve());
       });
     });
+  }
+  /** P-SANDBOX.8: forward a `sandbox_grant_dir` request as the directory-grant dialog. On the user's
+   *  "Grant until revoked", park the approved {path,mode} in the grants store's ONE-SHOT pending slot
+   *  BEFORE replying allow — the loopback endpoint consumes it and refuses any POST no fresh approval
+   *  matches (defense in depth). Fail-closed: non-Windows, a missing helper, a malformed call, no live
+   *  UI, or a timeout ⇒ deny (cancelled), logged/audited. */
+  private askSandboxGrant(params: unknown, opts: { optionId?: string; kind?: string }[]): Promise<unknown> | { outcome: { outcome: string } } {
+    const cancelled = { outcome: { outcome: "cancelled" } };
+    const tc: unknown = params && typeof params === "object"
+      ? ("toolCall" in params ? params.toolCall : "tool_call" in params ? params.tool_call : undefined)
+      : undefined;
+    const ri: unknown = tc && typeof tc === "object"
+      ? ("rawInput" in tc ? tc.rawInput : "input" in tc ? tc.input : undefined)
+      : undefined;
+    const riPath = ri && typeof ri === "object" && "path" in ri ? ri.path : undefined;
+    const dirPath = typeof riPath === "string" ? riPath.trim() : "";
+    const riMode = ri && typeof ri === "object" && "mode" in ri ? ri.mode : undefined;
+    const modeWord = riMode === "read-write" ? "read-write" : "read";
+    const mode: GrantMode = riMode === "read-write" ? "rw" : "rx";
+    const riReason = ri && typeof ri === "object" && "reason" in ri ? ri.reason : undefined;
+    const reason = typeof riReason === "string" ? riReason.trim().slice(0, 200) : "";
+    // Preconditions the DIALOG depends on (can't grant what the helper can't apply): not Windows, or the
+    // bundled helper is missing ⇒ reply cancelled without asking, and say why in the engine log.
+    const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
+    if (!helper || !existsSync(helper)) {
+      console.error(`[sandbox-grant] cancelled without asking: ${process.platform === "win32" ? "the bundled lucid-appcontainer helper is missing" : `directory grants need Windows AppContainer ACEs (platform ${process.platform})`} · ${dirPath || "(no path)"}`);
+      return cancelled;
+    }
+    if (!dirPath) {
+      console.error("[sandbox-grant] cancelled without asking: the tool call named no directory");
+      return cancelled;
+    }
+    if (!(this.askActive && this.listener)) {
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `blocked (no UI to ask) · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      return cancelled;
+    }
+    const id = `perm_${++this.permSeq}`;
+    this.pendingPerms++;
+    this.emit({ type: "permission", id, tool: "sandbox_grant_dir", detail: `${modeWord} access to ${dirPath}${reason ? ` — ${reason}` : ""}`, egress: false, options: SANDBOX_GRANT_OPTIONS });
+    const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+    const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
+    const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : cancelled;
+    const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : cancelled;
+    const { promise, resolve } = Promise.withResolvers<unknown>();
+    const settle = (o: unknown) => { clearTimeout(t); this.permPending.delete(id); this.recoveryTurn?.resolvePermission(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
+    // Fail-closed TIMEOUT is a real deny — audited like the egress/exec dialogs (P-ENT.4).
+    const t = setTimeout(() => {
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${gateDenyReason(null, true)} · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      settle(block());
+    }, Backend.PERM_MS);
+    this.permPending.set(id, (optionId) => {
+      const granted = optionId === "grant:allow";
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: granted ? "allow" : "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${granted ? "grant until revoked" : gateDenyReason(optionId)} · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      if (!granted) { settle(block()); return; }
+      // Park the approval BEFORE replying allow, so the extension's POST finds it on file. A failed
+      // write denies the call (fail-closed) — an allow the endpoint would refuse anyway helps nobody.
+      try {
+        saveGrants(setPending(loadGrants(), { path: dirPath, mode, reason, at: new Date().toISOString() }));
+      } catch (e) {
+        console.error("[sandbox-grant] could not record the approval - denying:", e);
+        settle(block());
+        return;
+      }
+      settle(approve());
+    });
+    return promise;
   }
   /** P-EXEC.1 (ADR-0066): forward a risky exec request as the per-command approval dialog (command +
    *  program key + why). The user's choice folds into the exec store (allow-program / danger) or the

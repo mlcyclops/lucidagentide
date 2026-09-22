@@ -136,7 +136,9 @@ export interface SandboxStateView {
   execBlocked: string | null; proxied: boolean; at: string;
 }
 export interface SandboxBlockView { host: string; channel: string; type: string; reason: string; at: string }
-export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[] }
+// P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
+export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: string; reason: string }
+export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[]; grants?: SandboxGrantView[] }
 export interface MemorySnapshot {
   session: null | {
     path: string; model: string; turns: number; window: number;
@@ -695,6 +697,8 @@ export interface LucidBridge {
   security(): Promise<SecuritySnapshot | null>;
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
+  /** P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal). */
+  sandboxGrantRevoke(path: string): Promise<{ revoked: boolean; detail: string } | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
   /** Bulk-acknowledge every active gate block. Releases NOTHING: each call stays blocked, audit kept. */
   securityDismissAll(): Promise<{ dismissed: number } | null>;
@@ -1433,6 +1437,7 @@ export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
+  sandboxGrantRevoke: (path) => post("/api/security/sandbox-grant/revoke", { path }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
   securityDismissAll: () => post("/api/security/dismiss-all", {}),
   securityAck: (input) => post("/api/security/ack", input),

@@ -65,3 +65,33 @@ test("isolated + no blocks shows the reassuring 'none refused' line", () => {
   const h = renderSandboxSection(st({ isolated: true }));
   expect(h).toContain("No subprocess reach-outs have been refused");
 });
+
+// ── P-SANDBOX.8: the standing directory-grants list ──────────────────────────
+test("directory grants render path, mode label, date, and a Revoke button; hostile paths are ESCAPED", () => {
+  const status: SandboxStatusView = {
+    ...st(),
+    grants: [
+      { path: "C:\\data\\<img src=x>", mode: "rw", grantedAt: "2026-02-03T10:00:00.000Z", reason: "user asked" },
+      { path: "D:\\repo", mode: "rx", grantedAt: "2026-02-01T09:00:00.000Z", reason: "" },
+    ],
+  };
+  const h = renderSandboxSection(status);
+  expect(h).toContain("Directory grants");
+  expect(h).toContain("read-write");
+  expect(h).toContain("read-only");
+  expect(h).toContain("2026-02-03");
+  expect(h).not.toContain("<img src=x"); // escaped
+  expect(h).toContain('data-grant-revoke="D:\\repo"');
+});
+
+test("grants stay visible/revocable even before a spawn resolves a state (grants-only accordion)", () => {
+  const h = renderSandboxSection({ state: null, egressBlocks: [], grants: [{ path: "C:\\data", mode: "rx", grantedAt: "2026-02-01T00:00:00.000Z", reason: "r" }] });
+  expect(h).toContain("Runtime sandbox");
+  expect(h).toContain("1 directory grant");
+  expect(h).toContain("data-grant-revoke");
+});
+
+test("no grants → no grants section (and the no-state guard still returns empty)", () => {
+  expect(renderSandboxSection({ state: null, egressBlocks: [], grants: [] })).toBe("");
+  expect(renderSandboxSection(st())).not.toContain("Directory grants");
+});

@@ -86,6 +86,8 @@ import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
+import { addGrant, applyGrantAce, consumePending, loadGrants, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
+import { repoAsset } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
@@ -1117,6 +1119,7 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/preview/serve", "/api/preview/shot", "/api/preview/open", "/api/preview/inspect", "/api/preview/act",
   "/api/kb/retrieve",        // ADR-0220: the knowledge_search tool grounds on the local compiled KB
   "/api/fleet/status",       // P-FLEET.L1: the master's fleet_status tool
+  "/api/sandbox/grant",      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool POSTs the approved grant claim
   "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
@@ -1663,7 +1666,58 @@ const server = Bun.serve({
       // in even when the DuckDB snapshot is null, so a fresh machine still shows quarantines.
       if (p === "/api/security") {
         const snap = await securitySnapshotMemo(); // memoized + single-flight (P-PERF.3); live/sandbox/acks stay fresh (in-memory, cheap)
-        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: sandboxStatus(), acks: ackView() } });
+        // P-SANDBOX.8: the standing directory grants ride the sandbox slice so the panel lists them with Revoke.
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView() }, acks: ackView() } });
+      }
+      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool claims a user-approved directory grant.
+      // Defense in depth over the dialog: win32 + bundled helper + an EXISTING directory + a FRESH
+      // one-shot approval acp_backend parked for exactly this {path,mode} — anything else applies
+      // nothing (fail-closed). On success the helper stamps the ACE and the grant is recorded for the
+      // Security panel (listed, revocable). Every outcome is a legible verdict for the agent.
+      if (p === "/api/sandbox/grant" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown; mode?: unknown; reason?: unknown }>(req);
+        const dirPath = String(b.path ?? "").trim();
+        const mode: GrantMode = b.mode === "read-write" ? "rw" : "rx";
+        const reason = String(b.reason ?? "").slice(0, 200);
+        const deny = (why: string) => {
+          console.error(`[sandbox-grant] refused: ${why} · ${mode} ${dirPath || "(no path)"}`);
+          return json({ ok: true, data: { granted: false, detail: why } });
+        };
+        if (process.platform !== "win32") return deny("directory grants are Windows-only (AppContainer ACEs)");
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        if (!existsSync(helper)) return deny("the bundled lucid-appcontainer helper is missing");
+        let isDir = false;
+        try { isDir = statSync(dirPath).isDirectory(); } catch { /* missing → not a dir */ }
+        if (!dirPath || !isDir) return deny(`not an existing directory: ${dirPath || "(no path)"}`);
+        // ONE-SHOT claim: any attempt consumes the parked approval; only a fresh exact match proceeds.
+        const claim = consumePending(loadGrants(), dirPath, mode, Date.now());
+        saveGrants(claim.store);
+        if (!claim.ok) return deny(`no matching user approval (${claim.reason ?? "unknown"}) - ask again so the user sees the dialog`);
+        const applied = applyGrantAce(helper, mode, dirPath);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: applied.ok ? "allow" : "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${applied.ok ? "acl granted" : `acl grant failed: ${applied.detail}`} · ${mode} ${dirPath}`.slice(0, 200) });
+        if (!applied.ok) return deny(`the ACL grant did not apply: ${applied.detail}`);
+        saveGrants(addGrant(loadGrants(), { path: dirPath, mode, grantedAt: new Date().toISOString(), reason }));
+        console.log(`[sandbox-grant] granted ${mode} on ${dirPath}${reason ? ` (${reason})` : ""}`);
+        return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} — standing until the user revokes it in the Security panel (${applied.detail})` } });
+      }
+      // P-SANDBOX.8: revoke one standing directory grant from the Security panel. The record leaves the
+      // list ONLY when the helper's `--revoke-acl` succeeded — a failed revoke keeps the row visible
+      // (an ACE that persists while the panel forgets it would be invisible standing access).
+      if (p === "/api/security/sandbox-grant/revoke" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        const dirPath = String(b.path ?? "").trim();
+        if (!dirPath) return json({ ok: true, data: { revoked: false, detail: "no path" } });
+        const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
+        if (!helper || !existsSync(helper)) return json({ ok: true, data: { revoked: false, detail: "the bundled lucid-appcontainer helper is missing - cannot remove the ACE" } });
+        const r = revokeGrantAce(helper, dirPath);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant_revoke", decision: r.ok ? "allow" : "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${r.ok ? "acl revoked" : `revoke failed: ${r.detail}`} · ${dirPath}`.slice(0, 200) });
+        if (r.ok) {
+          saveGrants(removeGrant(loadGrants(), dirPath));
+          console.log(`[sandbox-grant] revoked ${dirPath}`);
+        } else {
+          console.error(`[sandbox-grant] revoke failed for ${dirPath}: ${r.detail}`);
+        }
+        return json({ ok: true, data: { revoked: r.ok, detail: r.detail } });
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
@@ -4857,6 +4911,10 @@ process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retr
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
 process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${TOKEN}`;
+// P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
+// claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
+// fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
+process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the
 // real tool name exists ONLY inside omp's hook API - the ACP update carries a coarse `kind` and an
 // intent-shadowed title. Unset means the extension self-skips, and reports fall back to the coarse kind.
