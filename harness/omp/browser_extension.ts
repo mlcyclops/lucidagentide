@@ -50,7 +50,7 @@ export interface JudgeLike {
 }
 
 /** Injectable dependencies. `judge` resolves the judge per call from the ExtensionContext (the 5th
- *  execute argument); the default reaches omp's resolveJudge with the online backend. */
+ *  execute argument); the default reaches omp's resolveJudge (the `judge` model-role chain). */
 export interface BrowserExtensionDeps {
   judge?: (ctx: unknown) => Promise<JudgeLike>;
 }
@@ -125,13 +125,16 @@ export function clampSteps(raw: unknown): number {
   return Math.min(MAX_STEPS, Math.max(1, Math.round(n)));
 }
 
-/** omp's `ONLINE_MEMORY_MODEL_KEY` (tiny/models.ts): the chat-chain backend a judgment falls back to.
- *  Spelled here because `tiny/models` is not one of the module keys omp's legacy-pi shim serves from the
- *  host bundle, and a fall-through import would load a duplicate source copy with its own worker state. */
-const ONLINE_JUDGE_BACKEND = "online";
-
 /** Resolve omp's own judge for this session (TypeSafe when configured, else the online tiny/smol chain)
  *  from the ExtensionContext's model registry. Throws when the context or the imports do not line up.
+ *
+ *  omp 18.2.7 removed `JudgeDeps.backend`: a judge now falls through the `judge` MODEL-ROLE chain
+ *  (ChainJudge over `resolveRoleChain("judge", ...)`). The old `backend: "online"` pin existed so a
+ *  browser_run judgment never fell back to the ON-DEVICE tiny model (P-JEV.4 policy decisions need the
+ *  online chat chain). The built-in judge chain (`typesafe/jev-latest, @tiny, @smol, @default` in omp's
+ *  priority.json) resolves @tiny/@smol through the ONLINE smol priority list; a `local-inference` model
+ *  only enters the chain when the user deliberately routes the judge/tiny role there. Default routing
+ *  therefore preserves the pinned intent, so nothing replaces the removed field here.
  *  Dynamic imports on purpose: omp's package index is the whole coding agent, and this extension must
  *  load (and be unit-tested) without pulling it in. The three specifiers are exactly the keys omp's
  *  `omp:legacy-pi-shim` Bun plugin routes onto the HOST's bundled instances (`config/settings`,
@@ -144,7 +147,7 @@ async function resolveDefaultJudge(ctx: unknown): Promise<JudgeLike> {
   const { resolveJudge } = await import("@oh-my-pi/pi-coding-agent/judgment");
   const { ModelRegistry } = await import("@oh-my-pi/pi-coding-agent/config/model-registry");
   if (!(registry instanceof ModelRegistry)) throw new Error("the extension context's model registry is not omp's");
-  return resolveJudge({ settings, registry, backend: ONLINE_JUDGE_BACKEND });
+  return resolveJudge({ settings, registry });
 }
 
 /** A run-ending condition the loop reports (never thrown past runBrowserGoal). */
