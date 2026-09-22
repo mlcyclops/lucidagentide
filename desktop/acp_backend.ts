@@ -40,7 +40,7 @@ import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentPr
 import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
-import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { loopbackExempted, resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -592,10 +592,25 @@ class Backend {
     // P-SANDBOX.7 (ADR-0173): the packaged Windows helper ships at <repo>/bin/lucid-appcontainer.exe
     // (bin/** rides the `repo` extraResources), resolved through repo_root — NEVER import.meta.dir
     // (ADR-0356) — and passed ONLY when it exists on disk; bare-name PATH lookup stays the dev loop.
+    // P-SANDBOX.7b (ADR-0174): a mediated (network-on) profile inside an AppContainer reaches the
+    // loopback egress proxy ONLY when the one-time elevated loopback exemption is registered.
+    // Without it, committing to isolation cuts EVERY byte of the child's traffic — provider APIs
+    // included, i.e. a dead chat session — so network-on profiles stay the DISCLOSED passthrough
+    // until `lucid-appcontainer --register-loopback` has run; network-off profiles isolate
+    // regardless (they need no loopback and no exemption).
+    const profileCaps = caps("trusted-local");
     const acHelper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
+    const acBundled = !!acHelper && existsSync(acHelper);
+    const acUsable = acBundled && (!profileCaps.canNetwork || loopbackExempted());
+    if (acBundled && !acUsable) {
+      console.error(
+        `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered — this network-on session runs as the disclosed passthrough. ` +
+          `Enable full Windows isolation once, from an elevated shell: "${acHelper}" --register-loopback  (then restart LUCID).`,
+      );
+    }
     const res = resolveBackend({
       requireIsolation: managedRequireIsolation(managedConfig().config),
-      appContainerHelper: acHelper && existsSync(acHelper) ? acHelper : undefined,
+      appContainerHelper: acUsable ? acHelper! : undefined,
     });
     if (!res.ok) {
       this.sandboxExecBlock = res.reason;
@@ -603,7 +618,6 @@ class Backend {
       console.error(`[sandbox] FAIL-CLOSED: ${res.reason} - exec is BLOCKED for this session (ADR-0157).`);
       return { cmd: argv[0]!, args: argv.slice(1), env: {} };
     }
-    const profileCaps = caps("trusted-local");
     let proxy: SandboxProxy | undefined;
     if (res.backend.isolates && profileCaps.canNetwork) {
       const ep = await ensureEgressProxy({ dnsPort: 53, onEvent: this.egressAudit });

@@ -123,6 +123,39 @@ const appContainerDefaultProbe: ProbeFn = (bin) => {
   return ok;
 };
 
+/** The stable AppContainer moniker every LUCID-contained child runs under (mirrors the helper's
+ *  APPCONTAINER_NAME — one name so ACL grants, WFP state and the loopback exemption all attribute
+ *  to the same SID). */
+export const APPCONTAINER_MONIKER = "LucidAgentIDE.Sandbox.v1";
+
+/** PURE: does a `CheckNetIsolation LoopbackExempt -s` listing exempt our AppContainer?
+ *  AppContainers are denied loopback BY DEFAULT, and mediated (network-on) profiles reach the egress
+ *  proxy ONLY over loopback — so without this exemption an isolated network-on child has no route to
+ *  ANYTHING (provider APIs included). Listing needs no elevation; REGISTERING does
+ *  (`lucid-appcontainer --register-loopback`, ADR-0174, one-time per host). Matching is
+ *  case-insensitive: CheckNetIsolation prints monikers lowercased. */
+export function listingExemptsMoniker(listing: string, moniker: string = APPCONTAINER_MONIKER): boolean {
+  return listing.toLowerCase().includes(moniker.toLowerCase());
+}
+
+let loopbackExemptCache: boolean | undefined;
+
+/** Is the exemption registered on THIS host? Cached per run (a WFP config change mid-run is not a
+ *  supported flow — restart the app after `--register-loopback`). Never throws: an unreadable
+ *  listing means "not exempt", which degrades to the disclosed passthrough, never to a dead child. */
+export function loopbackExempted(): boolean {
+  if (loopbackExemptCache !== undefined) return loopbackExemptCache;
+  let ok = false;
+  try {
+    const r = Bun.spawnSync({ cmd: ["CheckNetIsolation.exe", "LoopbackExempt", "-s"], stdin: "ignore", stderr: "ignore" });
+    ok = r.exitCode === 0 && listingExemptsMoniker(r.stdout.toString());
+  } catch {
+    ok = false;
+  }
+  loopbackExemptCache = ok;
+  return ok;
+}
+
 export interface SandboxCtx {
   /** The workspace the agent works in — bound read-write inside the sandbox. */
   workspace: string;
