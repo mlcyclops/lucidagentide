@@ -104,4 +104,8 @@ describe("resolveStartupModel - P-MODEL.2 curated default", () => {
     const r = resolveStartupModel({ lastUsed: "openai-codex/gpt-5.5", current: "", options: FRESH, isConfigured: () => true });
     expect(r).toEqual({ value: "openai-codex/gpt-5.5", source: "last-used" });
   });
+  it("a catalog carrying Opus 5.5 (2026-09-22) opens on it - entry #1, above Opus 5", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "anthropic/claude-opus-4-8", options: [...FRESH, opt("anthropic/claude-opus-5-5")], isConfigured: configuredBy("anthropic/", "openai-codex/") });
+    expect(r).toEqual({ value: "anthropic/claude-opus-5-5", source: "best-configured" });
+  });
 });

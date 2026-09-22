@@ -22,6 +22,9 @@ describe("resolveAgentTierModel - accessible provider-isolated tiers", () => {
     expect(resolveAgentTierModel(anthropic, anthropic[0]!.value, "regular")).toBe("anthropic/claude-opus-5");
     const codex = models("openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-terra");
     expect(resolveAgentTierModel(codex, codex[0]!.value, "regular")).toBe("openai-codex/gpt-5.6-luna");
+    // Opus 5.5 (2026-09-22): the hyphenated-minor spelling parses as [5,5] and outranks Opus 5's [5].
+    const opus55 = models("anthropic/claude-opus-5", "anthropic/claude-opus-5-5", "anthropic/claude-fable-5.1");
+    expect(resolveAgentTierModel(opus55, opus55[2]!.value, "regular")).toBe("anthropic/claude-opus-5-5");
   });
 
   it("Max prefers accessible Fable 5+ and Astra 6+", () => {

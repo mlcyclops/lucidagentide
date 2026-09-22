@@ -1353,8 +1353,8 @@ async function post(path: string, body: unknown): Promise<any> {
 // for the offline case, and a long speculative catalog here would show models the user may not have.
 // Keep the head in sync with model_families.DEFAULT_MODEL_PREFERENCE when a new flagship ships.
 const FALLBACK_CONFIG: ConfigOption[] = [
-  { id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-opus-5", options: [
-    { value: "anthropic/claude-opus-5", name: "Claude Opus 5" }, { value: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, { value: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
+  { id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-opus-5-5", options: [
+    { value: "anthropic/claude-opus-5-5", name: "Claude Opus 5.5" }, { value: "anthropic/claude-opus-5", name: "Claude Opus 5" }, { value: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, { value: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
   ] },
   { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }] },
   { id: "thinking", name: "Thinking", category: "thought_level", type: "select", currentValue: "high", options: [
