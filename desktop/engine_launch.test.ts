@@ -9,8 +9,9 @@ import { engineDesktopDir, engineExeName, resolveEngineSpawn } from "./engine_la
 
 describe("engineDesktopDir", () => {
   test("dev run: import.meta.dir IS the desktop dir (renderer/ exists there)", () => {
+    // Probe path built with the same join() the implementation uses, so the fixture holds on every host.
     const here = "C:\\repo\\desktop";
-    const exists = (p: string) => p === "C:\\repo\\desktop\\renderer";
+    const exists = (p: string) => p === join(here, "renderer");
     expect(engineDesktopDir(here, "C:\\somewhere\\bun.exe", exists)).toBe(here);
   });
   test("compiled: import.meta.dir is a virtual bunfs path -> derive desktop from the binary at <repo>/bin", () => {
@@ -36,8 +37,11 @@ describe("engineExeName", () => {
 describe("resolveEngineSpawn", () => {
   const bun = "C:\\rt\\bun.exe";
   test("packaged + the compiled binary present -> spawn the binary, no args", () => {
-    const exe = "C:\\Program Files\\LucidAgentIDE\\resources\\repo\\bin\\lucid-engine.exe";
-    const r = resolveEngineSpawn({ packaged: true, repoRoot: "C:\\Program Files\\LucidAgentIDE\\resources\\repo", bun, exists: (p) => p === exe, platform: "win32" });
+    // Both the exists() probe and the expectation derive from the same join() the implementation uses
+    // (same construction as the posix sibling below), so the test holds on every host.
+    const repo = "C:\\Program Files\\LucidAgentIDE\\resources\\repo";
+    const exe = join(repo, "bin", engineExeName("win32"));
+    const r = resolveEngineSpawn({ packaged: true, repoRoot: repo, bun, exists: (p) => p === exe, platform: "win32" });
     expect(r).toEqual({ cmd: exe, args: [], compiled: true });
   });
   test("packaged but the binary is MISSING -> fall back to `bun run desktop/dev.ts` (app still starts)", () => {
