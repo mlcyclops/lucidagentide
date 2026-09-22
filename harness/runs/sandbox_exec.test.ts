@@ -38,6 +38,12 @@ const none = () => false;
 // otherwise the default probe shells out to the host's real sandbox-exec and these stop being hermetic.
 const seatbeltWorks = () => true;
 const seatbeltBlocked = () => false;
+// AppContainer functional probes: the helper being present and the helper being ABLE to contain are
+// different facts (profile creation or the workspace ACL grant can be refused on a host), so every
+// win32 resolveBackend call injects both - otherwise the default probe shells out to the host's real
+// helper and these stop being hermetic.
+const acWorks = () => true;
+const acBroken = () => false;
 const ARGV = ["/opt/omp", "acp", "-e", "/repo/gate.ts"];
 const CTX = { workspace: "/work/ws", home: "/home/u" };
 const PROXY = { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0.1:8888" };
@@ -105,7 +111,7 @@ test("darwin with sandbox-exec resolves the Seatbelt ISOLATING backend (P-SANDBO
 });
 
 test("win32 WITH the lucid-appcontainer helper resolves the ISOLATING AppContainer backend (P-SANDBOX.6)", () => {
-  const r = resolveBackend({ platform: "win32", which: has("lucid-appcontainer") });
+  const r = resolveBackend({ platform: "win32", which: has("lucid-appcontainer"), probe: acWorks });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.backend.name).toBe("appcontainer");
@@ -137,7 +143,7 @@ test("managed require-isolation is SATISFIED by an available sandbox-exec on mac
   const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec"), probe: seatbeltWorks });
   expect(mac.ok).toBe(true);
   if (mac.ok) expect(mac.backend.name).toBe("seatbelt");
-  const win = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer") });
+  const win = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer"), probe: acWorks });
   expect(win.ok).toBe(true);
   if (win.ok) expect(win.backend.name).toBe("appcontainer");
 });
@@ -258,7 +264,7 @@ test("seatbelt through wrapForProfile: a network-off downgrade profile yields a 
 
 // ── Windows AppContainer (P-SANDBOX.6) ────────────────────────────────────────
 
-const AC = new AppContainerBackend(has("lucid-appcontainer"));
+const AC = new AppContainerBackend(has("lucid-appcontainer"), "lucid-appcontainer", acWorks);
 
 test("appContainerArgs canNetwork:false → --deny-network (total deny), binds the workspace", () => {
   const a = appContainerArgs(caps("container-local"), CTX);
@@ -289,10 +295,34 @@ test("appContainer preserves the wrapped argv verbatim after the -- separator", 
   expect(plan.args.slice(sep + 1)).toEqual(ARGV);
 });
 
-test("appContainer available() only when the helper is on PATH (absent ⇒ false ⇒ disclosed passthrough)", () => {
-  expect(new AppContainerBackend(has("lucid-appcontainer")).available()).toBe(true);
-  expect(new AppContainerBackend(none).available()).toBe(false);
-  expect(new AppContainerBackend(has("bwrap")).available()).toBe(false); // a different tool doesn't count
+test("appContainer available() needs presence AND a passing containment probe (P-SANDBOX.7)", () => {
+  expect(new AppContainerBackend(has("lucid-appcontainer"), "lucid-appcontainer", acWorks).available()).toBe(true);
+  expect(new AppContainerBackend(none, "lucid-appcontainer", acWorks).available()).toBe(false);
+  expect(new AppContainerBackend(has("bwrap"), "lucid-appcontainer", acWorks).available()).toBe(false); // a different tool doesn't count
+  // present but INCAPABLE (profile creation / ACL grant refused) ⇒ unavailable, same bwrap doctrine
+  expect(new AppContainerBackend(has("lucid-appcontainer"), "lucid-appcontainer", acBroken).available()).toBe(false);
+});
+
+test("win32 with a present-but-incapable helper DISCLOSES rather than committing to a dead backend", () => {
+  const r = resolveBackend({ platform: "win32", which: has("lucid-appcontainer"), probe: acBroken });
+  expect(r.ok && r.backend.name === "noop" && r.disclosed).toBe(true);
+});
+
+test("win32 require-isolation with a present-but-incapable helper REFUSES and names the probe failure", () => {
+  const r = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer"), probe: acBroken });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.reason).toMatch(/containment probe/);
+});
+
+test("the packaged helper path (P-SANDBOX.7) becomes the plan's cmd verbatim", () => {
+  const packaged = "C:\\app\\resources\\repo\\bin\\lucid-appcontainer.exe";
+  const r = resolveBackend({ platform: "win32", which: has(packaged), appContainerHelper: packaged, probe: acWorks });
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    expect(r.backend.name).toBe("appcontainer");
+    const plan = r.backend.wrap(ARGV, caps("container-local"), CTX);
+    expect(plan.cmd).toBe(packaged);
+  }
 });
 
 test("appContainer through wrapForProfile: a network-off downgrade yields a --deny-network isolated plan", () => {
