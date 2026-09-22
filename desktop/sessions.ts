@@ -245,6 +245,25 @@ function msgText(message: any): string {
 // tail-limited page; `userTotal` re-syncs the recorder's turn counter on every resume read.
 export interface TranscriptPage { messages: { role: string; text: string; turn?: number }[]; total: number; userTotal: number }
 
+/** The `{ type: "session" }` record of a transcript: its id and cwd. Found by SCANNING for the record,
+ *  never by reading line one: omp 18 prepends a fixed-width `{ type: "title" }` slot as the first line of
+ *  every session file, so "line one is the session record" stopped being true for every session written
+ *  since the 18.x pin, and a reader built on it matched no file at all (the sidebar listed sessions the
+ *  chat could not load). The scan stops at the record; on a file with none, the filename stands in. */
+export function sessionRecord(content: string, fallbackId: string): { id: string; cwd: string } {
+  for (const ln of content.split("\n")) {
+    if (!ln) continue;
+    let o: unknown;
+    try { o = JSON.parse(ln); } catch { continue; }
+    if (o && typeof o === "object" && "type" in o && o.type === "session") {
+      const id = "id" in o && typeof o.id === "string" && o.id ? o.id : fallbackId;
+      const cwd = "cwd" in o && typeof o.cwd === "string" ? o.cwd : "";
+      return { id, cwd };
+    }
+  }
+  return { id: fallbackId, cwd: "" };
+}
+
 /** Read a session's user/assistant transcript (for resuming into the chat), tail-first when limited. */
 export function sessionMessages(id: string, limit = 0, root: string = join(homedir(), ".omp", "agent", "sessions")): TranscriptPage {
   if (!existsSync(root)) return { messages: [], total: 0, userTotal: 0 };
@@ -255,9 +274,7 @@ export function sessionMessages(id: string, limit = 0, root: string = join(homed
       for (const f of readdirSync(dir)) {
         if (!f.endsWith(".jsonl")) continue;
         const content = readFileSync(join(dir, f), "utf8");
-        let sid = f;
-        try { sid = JSON.parse(content.split("\n", 1)[0] ?? "")?.id ?? f; } catch { /* keep f */ }
-        if (sid !== id && f !== id) continue;
+        if (sessionRecord(content, f).id !== id && f !== id) continue;
         const out: { role: string; text: string; turn?: number }[] = [];
         let users = 0;
         for (const ln of content.split("\n")) {
@@ -296,15 +313,9 @@ export function deleteSession(id: string, cwd: string = currentWorkspace(), root
       for (const f of readdirSync(dir)) {
         if (!f.endsWith(".jsonl")) continue;
         const p = join(dir, f);
-        // Resolve id + cwd from the session record (first matching line), like listSessions.
+        // Resolve id + cwd from the session record, wherever it sits in the header (see sessionRecord).
         let sid = f, scwd = "";
-        try {
-          for (const ln of readFileSync(p, "utf8").split("\n")) {
-            if (!ln) continue;
-            let o: any; try { o = JSON.parse(ln); } catch { continue; }
-            if (o.type === "session") { sid = o.id ?? f; scwd = o.cwd ?? ""; break; }
-          }
-        } catch { /* keep filename fallback */ }
+        try { ({ id: sid, cwd: scwd } = sessionRecord(readFileSync(p, "utf8"), f)); } catch { /* keep filename fallback */ }
         if (sid !== id && f !== id) continue;
         if (scwd && norm(scwd) !== want) return { ok: false, error: "session belongs to another workspace" };
         try { rmSync(p, { force: true }); return { ok: true }; }

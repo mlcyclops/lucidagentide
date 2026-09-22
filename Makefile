@@ -1099,3 +1099,7 @@ demo-P-JEV.3: ## P-JEV.3 (ADR-0378): name Jev for the agent. "Use JEV" produced 
 demo-P-JEV.4: demo-P-JEV.3 ## P-JEV.4 (ADR-0379): the Jev browser action policy, a TypeScript port of browser-use/jev-ultrafast. One new tool, browser_run, drives the already-open visible agent window toward a goal: an isolated-world DOM snapshot becomes an indexed element table, ONE typed judgment picks the operation plus a speculative target per operation, only the matching head executes through the existing sendInputEvent path, freshness guards refuse a stale decision, and every typed string is a value the calling agent supplied by name (no text-generating model, page content never becomes text). Proves the action space, the question heads, the fail-closed validation, the scripted loop through the real tool, the dev routes and main executor in the bytes, and the skill's discoverability.
 	$(BUN) test $(TEST_IGNORES) harness/browser_policy.test.ts harness/omp/browser_extension.test.ts desktop/browser_snapshot.test.ts desktop/browser_control.test.ts
 	$(BUN) run desktop/scripts/demo_p_jev_4.ts
+
+.PHONY: demo-P-SESS.3
+demo-P-SESS.3: ## P-SESS.3 (ADR-0380): past sessions load again on omp 18. The title slot omp 18 writes as line one of every session file hid the session record from a reader that trusted line one; one scanning sessionRecord() now resolves every transcript's id, proven by a fixture carrying the real omp 18 header.
+	$(BUN) test $(TEST_IGNORES) desktop/sessions_index.test.ts desktop/sessions.test.ts

@@ -473,7 +473,7 @@
 //            AGENT MODE: the Regular/Max tier select (and the drag region that ate its clicks), the
 //            preview-link whiteout fixed by one navigation policy (ADR-0376), the game cabinet, omp
 //            18.2.6 (ADR-0373).
-// v2.3.0-beta.2 = beta.1 plus omp 18.2.7: the harness bump lands via the #357 rebase-merge, and the
+// v2.3.0-beta.6 = beta.1 plus omp 18.2.7: the harness bump lands via the #357 rebase-merge, and the
 //            browser_run judge seam is adapted to 18.2.7's judgment API so the Jev browser policy keeps
 //            answering typed judgments instead of falling back to the chat model. Also in the window:
 //            the engine_launch test fixtures build their paths with the host path module (green on
@@ -499,4 +499,8 @@
 //            signed-in Anthropic plan until omp catalogs it. Ships the AppContainer sandbox package
 //            unchanged (helper binary + sandbox_grant_extension).
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.5";
+// v2.3.0-beta.6 = beta.5 plus the session-load fix. omp 18 prepends a fixed-width title slot as line one of
+//            every session file; the transcript reader trusted line one for the session id, so the sidebar
+//            listed every session and the chat could load none of them (P-SESS.3, ADR-0380).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.6";
