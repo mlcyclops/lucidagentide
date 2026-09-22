@@ -479,4 +479,10 @@
 //            the engine_launch test fixtures build their paths with the host path module (green on
 //            Windows), and the README banner picks up Gemini 3.8 Flash with the Jev / TypeSafe call-out.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.2";
+// v2.3.0-beta.3 = beta.2 plus the Windows AppContainer runtime sandbox (P-SANDBOX.7): the engine runs
+//            inside an AppContainer with filesystem ACLs granted to its SID (ADR-0173), the backend is
+//            wired end-to-end with the packaged lucid-appcontainer helper, a functional probe, and a
+//            compile-appcontainer step in dist:win, and network-on isolation is gated on the loopback
+//            exemption so a fresh install never cuts chat traffic between the UI and the engine.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.3";
