@@ -473,4 +473,10 @@
 //            AGENT MODE: the Regular/Max tier select (and the drag region that ate its clicks), the
 //            preview-link whiteout fixed by one navigation policy (ADR-0376), the game cabinet, omp
 //            18.2.6 (ADR-0373).
-export const APP_VERSION = "2.3.0-beta.1";
+// v2.3.0-beta.2 = beta.1 plus omp 18.2.7: the harness bump lands via the #357 rebase-merge, and the
+//            browser_run judge seam is adapted to 18.2.7's judgment API so the Jev browser policy keeps
+//            answering typed judgments instead of falling back to the chat model. Also in the window:
+//            the engine_launch test fixtures build their paths with the host path module (green on
+//            Windows), and the README banner picks up Gemini 3.8 Flash with the Jev / TypeSafe call-out.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.2";
