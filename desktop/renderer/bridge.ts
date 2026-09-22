@@ -439,6 +439,12 @@ export interface SkillRemoveView { ok: boolean; name: string; removed?: boolean;
 export interface SkillCandidateView { name: string; description: string; body: string; rationale?: string }
 export interface SkillStudioAnalyzeView { window: "today" | "week"; model: string; candidates: SkillCandidateView[] }
 
+// P-MEET.1: the Meetings panel's payloads. The engine module is the single definition (it does the
+// normalization), so these are aliases rather than a second, drifting copy of the same shapes.
+export type { MeetingRow, MeetingsView, UpcomingEvent } from "../meetings_hub.ts";
+export type { MeetingDetail as MeetingDetailView, TodoRow as MeetingTodoView } from "../meetings_hub.ts";
+import type { MeetingsView, MeetingDetail as MeetingDetailView, TodoRow as MeetingTodoView } from "../meetings_hub.ts";
+
 // P-KB.2b (ADR-0099/0100): the compiled knowledge base + the page-graph view.
 export interface KbBlockedView { stage: "source" | "page"; slug?: string; reason: string; trustLabel: string; findings: number }
 export interface KbIngestResultView { documentId: string; status: "compiled" | "quarantined"; pagesCompiled: number; pagesQuarantined: number; links: number; pageIds: string[]; blocked: KbBlockedView[] }
@@ -1085,6 +1091,13 @@ export interface LucidBridge {
   setEmbeddingsConfig(config: EmbeddingsConfigView | null): Promise<{ config: EmbeddingsConfigView | null; active: boolean; error?: string } | null>;
   embeddingsTest(input: { baseUrl: string; model: string; authKind: string; headerName?: string; secret?: string }): Promise<{ ok: boolean; dim?: number; error?: string } | null>;
   embeddingsReindex(): Promise<{ ok: boolean; kgs?: number; pages?: number; stored?: number; error?: string } | null>;
+  // P-MEET.1: the Meetings panel's read-only view of the Lucid Meeting Hub (127.0.0.1:5123). The engine
+  // holds the pairing bearer; the renderer only ever sees rows. `meetingsPair` is the one call that
+  // returns a secret, and ONLY so the renderer can hand it to the OS vault (credStore is main-only).
+  meetings(query?: { limit?: number; offset?: number; q?: string }): Promise<MeetingsView | null>;
+  meetingDetail(file: string): Promise<{ ok: boolean; locked: boolean; meeting: MeetingDetailView | null; error: string | null } | null>;
+  meetingTodoMark(id: string, done: boolean): Promise<{ ok: boolean; todo: MeetingTodoView | null; error: string | null } | null>;
+  meetingsPair(code: string): Promise<{ ok: boolean; error: string | null; token: string; vaultRef: string } | null>;
   auth(): Promise<AuthStatus | null>;
   /** P-GUIDE.1/.2: guide id (provider id or "choosing") -> absolute path of the bundled advisor guide
    *  (served into the Preview panel by path). Missing files are omitted server-side. */
@@ -1782,6 +1795,18 @@ export const bridge: LucidBridge = {
   setEmbeddingsConfig: (config) => post("/api/embeddings-config", { config }),
   embeddingsTest: (input) => post("/api/embeddings/test", input),
   embeddingsReindex: () => post("/api/embeddings/reindex", {}),
+  // P-MEET.1
+  meetings: (query) => {
+    const p = new URLSearchParams();
+    if (query?.limit !== undefined) p.set("limit", String(query.limit));
+    if (query?.offset !== undefined) p.set("offset", String(query.offset));
+    if (query?.q) p.set("q", query.q);
+    const qs = p.toString();
+    return getData(qs ? `/api/meetings?${qs}` : "/api/meetings");
+  },
+  meetingDetail: (file) => getData(`/api/meetings/detail?file=${encodeURIComponent(file)}`),
+  meetingTodoMark: (id, done) => post("/api/meetings/todo", { id, done }),
+  meetingsPair: (code) => post("/api/meetings/pair", { code }),
   auth: () => getData("/api/auth"),
   guides: () => getData("/api/guides"), // P-GUIDE.1: absolute paths of bundled advisor guides
 

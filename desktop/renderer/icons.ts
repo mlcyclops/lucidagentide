@@ -44,6 +44,9 @@ const RAW: Record<string, string> = {
   bolt: P("M12 3 6 13h5l-1 8 6-11h-5z"),
   // clock (scheduled automations) - ring + hands
   clock: P("M12 5a7 7 0 1 0 0 14 7 7 0 0 0 0-14z") + P("M12 8.5V12l2.5 1.6"),
+  // P-MEET.1: calendar (Meetings) - frame, two hangers, the header rule, one marked day
+  calendar: P("M4.5 6.5h15v12a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z") + P("M8 4.5v4") + P("M16 4.5v4")
+    + P("M4.5 10.5h15") + "<circle cx='9' cy='14.5' r='1.2' fill='currentColor' stroke='none'/>",
   // close
   close: P("M6 6l12 12") + P("M18 6 6 18"),
   // trash / delete
