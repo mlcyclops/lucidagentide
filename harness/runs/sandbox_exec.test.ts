@@ -13,6 +13,7 @@ import {
   appContainerArgs,
   AppContainerBackend,
   BwrapBackend,
+  listingExemptsMoniker,
   NoopBackend,
   resolveBackend,
   sandboxDisclosure,
@@ -312,6 +313,12 @@ test("win32 require-isolation with a present-but-incapable helper REFUSES and na
   const r = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer"), probe: acBroken });
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.reason).toMatch(/containment probe/);
+});
+
+test("listingExemptsMoniker: only a listing carrying OUR moniker counts, case-insensitively (P-SANDBOX.7b)", () => {
+  expect(listingExemptsMoniker("\nList Loopback Exempted AppContainers \n\nOK.\n")).toBe(false); // no exemptions (live -s shape)
+  expect(listingExemptsMoniker("[1] -----\n    Name: lucidagentide.sandbox.v1\n    SID: S-1-15-2-1\nOK.")).toBe(true); // CheckNetIsolation lowercases
+  expect(listingExemptsMoniker("[1] -----\n    Name: microsoft.windows.authhost.a\nOK.")).toBe(false); // someone else's exemption
 });
 
 test("the packaged helper path (P-SANDBOX.7) becomes the plan's cmd verbatim", () => {
