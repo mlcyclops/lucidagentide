@@ -9392,7 +9392,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
       + (hm.facts.length ? table([{ key: "entity", label: "entity" }, { key: "statement", label: "statement" }, { key: "trust_label", label: "trust", pill: true }], hm.facts) : ""),
       OPEN.has("mem.layers"));
   } else {
-    h += `<div class="empty">No harness memory yet - appears once the gate runs, or run <code>bun run demo-P4.3</code>.</div>`;
+    h += `<div class="empty">No harness memory yet - the memory layers fill in once the security gate records activity in a session.</div>`;
   }
   return h;
 }

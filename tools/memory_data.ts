@@ -16,7 +16,9 @@
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { DuckDBInstance } from "@duckdb/node-api";
+import { Db } from "../harness/memory/db.ts";
+import { resolveMigrationsDir } from "../harness/migrations_dir.ts";
+import { readHarnessMirror, snapshotHarnessMemory, type HarnessMemory } from "../harness/memory/obs_mirror.ts";
 import { pathWithin } from "../desktop/path_guard.ts";
 import { aggregateAiLoc, readAiLocSamples } from "../desktop/ailoc_read.ts"; // P-LOC.4 (ADR-0211): AI-LOC from the GUI-owned ledger
 
@@ -333,16 +335,19 @@ function _compactionPolicyUncached(): Record<string, string> | undefined {
 }
 
 
-// ── Lucid harness memory (agent_obs.duckdb, READ_ONLY) ────────────────────────
-export interface HarnessMemory {
-  counts: { working: number; archive: number; entities: number; facts: number };
-  layers: { layer: string; rows: string; detail: string }[];
-  facts: { entity: string; statement: string; trust_label: string }[];
-  gate: { promoted: number; blocked: number };
-}
+// ── Lucid harness memory (agent_obs.duckdb READ_ONLY, else its lock-free mirror) ──────────────
+export type { HarnessMemory };
 
-/** Path to the live observability DB written by the security gate. */
-export const OBS_DB_PATH = join(import.meta.dir, "..", "agent_obs.duckdb");
+/** Path to the live observability DB written by the security gate.
+ *  NOT `join(import.meta.dir, "..")`: in the shipped `bun build --compile` engine (ADR-0260)
+ *  import.meta.dir is a VIRTUAL bunfs path, so that resolved to `B:\~BUN\root\agent_obs.duckdb`,
+ *  existsSync was false, and the Memory panel showed its empty state forever in installed builds
+ *  (the ADR-0303 bug class). Derive the repo root by PROBING through the memory store's real
+ *  migrations directory — dev runs, LUCID_RESOURCES, and the execPath fallback all covered. */
+export const OBS_DB_PATH = join(
+  resolveMigrationsDir("harness/memory", join(import.meta.dir, "..", "harness", "memory")),
+  "..", "..", "..", "agent_obs.duckdb",
+);
 
 // P-PERF.3: harnessMemory + aiLocSummary each open a fresh READ_ONLY DuckDB per call (~1s each as the obs DB
 // grows) — both on the memory-snapshot poll path, so they blocked model streaming. Semantic-memory + AI-LOC
@@ -357,50 +362,20 @@ export async function harnessMemory(): Promise<HarnessMemory | null> {
   return data;
 }
 async function _harnessMemoryUncached(): Promise<HarnessMemory | null> {
-  if (!existsSync(OBS_DB_PATH)) return null;
-  try {
-    const instance = await DuckDBInstance.create(OBS_DB_PATH, { access_mode: "READ_ONLY" });
-    const conn = await instance.connect();
-    const one = async (sql: string): Promise<number> => {
+  if (existsSync(OBS_DB_PATH)) {
+    try {
+      const db = await Db.openReadOnly(OBS_DB_PATH);
       try {
-        return Number((((await conn.runAndReadAll(sql)).getRowObjects()[0] as any)?.n) ?? 0);
-      } catch {
-        return 0;
+        return await snapshotHarnessMemory(db);
+      } finally {
+        db.close();
       }
-    };
-    const rows = async (sql: string): Promise<any[]> => {
-      try {
-        return (await conn.runAndReadAll(sql)).getRowObjects() as any[];
-      } catch {
-        return [];
-      }
-    };
-
-    const working = await one("SELECT count(*)::INT n FROM working_state");
-    const archive = await one("SELECT count(*)::INT n FROM archive_chunks");
-    const entities = await one("SELECT count(*)::INT n FROM semantic_entities");
-    const facts = await one("SELECT count(*)::INT n FROM semantic_facts");
-    const blocked = await one("SELECT count(*)::INT n FROM telemetry_events WHERE event = 'memory_promotion_blocked'");
-    const factRows = (await rows(
-      `SELECT e.name AS entity, f.statement, f.trust_label
-       FROM semantic_facts f JOIN semantic_entities e ON e.entity_id = f.entity_id
-       ORDER BY f.promoted_at DESC LIMIT 8`,
-    )).map((r) => ({ entity: String(r.entity), statement: String(r.statement), trust_label: String(r.trust_label) }));
-
-    instance.closeSync();
-    return {
-      counts: { working, archive, entities, facts },
-      layers: [
-        { layer: "working", rows: String(working), detail: "current goal / next-step / blockers per run" },
-        { layer: "archive", rows: String(archive), detail: "raw source-of-truth spans (immutable)" },
-        { layer: "semantic", rows: `${facts} facts / ${entities} entities`, detail: "promoted facts w/ provenance + trust" },
-      ],
-      facts: factRows,
-      gate: { promoted: facts, blocked },
-    };
-  } catch {
-    return null; // missing schema, or held read-write by the live gate
+    } catch {
+      // The gate's omp child holds the DB read-write; DuckDB refuses ANY cross-process open of it
+      // (even READ_ONLY — the ADR-0211 bug class). Fall through to the writer-maintained mirror.
+    }
   }
+  return readHarnessMirror(OBS_DB_PATH);
 }
 
 // ── P-LOC.2 (ADR-0031): AI-LOC attribution roll-up for the dashboard ──────────
