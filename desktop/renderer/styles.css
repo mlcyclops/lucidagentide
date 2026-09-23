@@ -5370,3 +5370,370 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   .mini-game .mini-game-controls button { padding:3px 1px; }
   .mini-game .mini-game-status { grid-column:1 / -1; padding:0; }
 }
+
+/* ── P-FLEET.L17: Fleet Orbit - the hub-and-spoke fleet view ──────────────────────────────────────── */
+/* The hub is the master session; every lane is a spoke on an ellipse around it. The overlay sits at
+   z 92: above the IDE slide-out panel (90) but below .popover (95) and #tip (260), so menus and
+   tooltips still stack over the map. Colors are the fleet grid's OWN state language (--lane custom
+   properties per lane-<status>), so the two surfaces can never drift apart. */
+.orbit-view{position:fixed;inset:0;z-index:92;display:flex;flex-direction:column;
+  background:color-mix(in srgb,var(--bg-0) 88%,transparent);
+  backdrop-filter:blur(14px) saturate(112%);-webkit-backdrop-filter:blur(14px) saturate(112%);
+  opacity:0;transition:opacity 220ms var(--ease-out)}
+.orbit-view.open{opacity:1}
+.orbit-nebula{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(56% 42% at 50% 46%,rgb(var(--accent-rgb) / .10),transparent 62%),
+    radial-gradient(52% 44% at 18% 82%,rgb(var(--cyan-rgb) / .06),transparent 60%),
+    radial-gradient(46% 40% at 84% 14%,rgb(var(--accent-rgb) / .05),transparent 60%);
+  animation:orbitNebula 16s ease-in-out infinite alternate}
+@keyframes orbitNebula{from{opacity:.75;transform:scale(1)}to{opacity:1;transform:scale(1.04)}}
+.orbit-head{position:relative;display:flex;align-items:center;gap:12px;padding:12px 16px;
+  border-bottom:1px solid var(--line-soft)}
+.orbit-title{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--txt)}
+.orbit-title .ic{color:var(--accent)}
+.orbit-sub{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--txt-4)}
+.orbit-census{display:inline-flex;align-items:center;gap:9px}
+.orbit-census-zero{font-size:11px;color:var(--txt-4);font-style:italic}
+.orbit-hud{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);white-space:nowrap}
+.orbit-hud.hot{color:var(--amber-txt,var(--amber))}
+.orbit-headgap{flex:1}
+.orbit-btn{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+/* GPU path (P-FLEET.L17): `contain` bounds invalidation to the stage; the SVG (whose dash-flow lines
+   DO repaint) is isolated onto its own composited layer so a flowing spoke never re-rasterizes the
+   cards above it. Cards, float wrappers, pings and the nebula animate transform/opacity ONLY, so with
+   hardware acceleration on (the Electron shell keeps it on and heals GPU deaths rather than disabling
+   it) the idle constellation costs the CPU near-nothing. */
+.orbit-stage{position:relative;flex:1;overflow:hidden;contain:layout paint}
+.orbit-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;
+  will-change:transform;transform:translateZ(0)}
+/* Decorative ring: a slow dashed drift sells the "orbit" without moving a single card. */
+.orbit-ringline{fill:none;stroke:var(--line-soft);stroke-width:1;stroke-dasharray:3 9;
+  animation:orbitRingDrift 60s linear infinite}
+@keyframes orbitRingDrift{to{stroke-dashoffset:-240}}
+/* Spokes: the line carries the lane color; data flows along it only while the lane WORKS, and the two
+   states that block on a human pulse - the identical rule the grid's cards animate by. */
+.orbit-line{stroke:var(--line-strong);stroke-width:1.5;transition:stroke 240ms}
+.orbit-line[data-status="starting"]{stroke-dasharray:2 6;animation:orbitFlow 1.4s linear infinite;opacity:.6}
+.orbit-line[data-status="working"]{stroke:rgb(var(--cyan-rgb) / .75);stroke-width:2;
+  stroke-dasharray:7 9;animation:orbitFlow .9s linear infinite}
+.orbit-line[data-status="awaiting-input"]{stroke:var(--amber);animation:orbitLineAmber 2.6s ease-in-out infinite}
+.orbit-line[data-status="needs-approval"]{stroke:var(--red);stroke-width:2.5;animation:orbitLineRed 1.6s ease-in-out infinite}
+.orbit-line[data-status="done"]{stroke:rgb(var(--green-rgb) / .6)}
+.orbit-line[data-status="error"]{stroke:rgb(var(--red-rgb) / .55);stroke-dasharray:4 5}
+.orbit-line[data-status="stopped"]{stroke:var(--line);opacity:.5}
+.orbit-line.promoted{stroke-width:3;filter:drop-shadow(0 0 4px rgb(var(--accent-rgb) / .6))}
+@keyframes orbitFlow{to{stroke-dashoffset:-16}}
+@keyframes orbitLineAmber{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes orbitLineRed{0%,100%{opacity:.6}50%{opacity:1}}
+/* The hub. Two expanding ping rings: the heartbeat of the whole view. */
+.orbit-hub{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;cursor:pointer;
+  display:grid;place-items:center;border-radius:50%}
+.orbit-hub-core{position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;
+  width:148px;height:148px;justify-content:center;border-radius:50%;text-align:center;
+  background:radial-gradient(circle at 50% 34%,color-mix(in srgb,var(--accent) 22%,var(--bg-2)),var(--bg-1) 72%);
+  border:1px solid color-mix(in srgb,var(--accent) 55%,var(--line));
+  box-shadow:0 0 34px -6px rgb(var(--accent-rgb) / .45),var(--shadow-md);
+  transition:transform var(--t) var(--spring),box-shadow var(--t)}
+.orbit-hub:hover .orbit-hub-core{transform:scale(1.05);box-shadow:0 0 44px -4px rgb(var(--accent-rgb) / .6),var(--shadow-md)}
+.orbit-hub-core b{font-size:15px;color:var(--txt)}
+.orbit-hub-mark{color:var(--accent)}
+.orbit-hub-mark svg{width:22px;height:22px}
+.orbit-hub-model{font-family:var(--mono);font-size:9.5px;color:var(--txt-3);max-width:120px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-hub-here{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-4)}
+.orbit-hub.here .orbit-hub-here{color:var(--accent-2)}
+.orbit-hub-ping{position:absolute;width:148px;height:148px;border-radius:50%;pointer-events:none;
+  border:1px solid rgb(var(--accent-rgb) / .5);animation:orbitPing 3.2s var(--ease-out) infinite;
+  will-change:transform,opacity}
+.orbit-hub-ping.p2{animation-delay:1.6s}
+@keyframes orbitPing{from{transform:scale(1);opacity:.7}to{transform:scale(1.9);opacity:0}}
+/* Spoke cards. Positioned by --tx/--ty off dead center; the transform TRANSITION is the fly-out, the
+   fly-home, and every reseat when the census changes - one property, every animation. */
+.orbit-node{position:absolute;left:50%;top:50%;width:172px;z-index:3;cursor:pointer;
+  transform:translate(calc(-50% + var(--tx,0px)),calc(-50% + var(--ty,0px)));
+  transition:transform 560ms var(--spring),opacity 320ms var(--ease-out);
+  will-change:transform,opacity}
+.orbit-node.orbit-enter .orbit-node-float{transform:scale(.25);opacity:0}
+.orbit-node.orbit-exit{opacity:0;transition-duration:400ms}
+.orbit-node-float{transition:transform 560ms var(--spring),opacity 360ms var(--ease-out)}
+.orbit-node-card{position:relative;display:flex;flex-direction:column;gap:4px;padding:9px 11px 8px;
+  border-radius:12px;border:1px solid var(--line);background:color-mix(in srgb,var(--bg-1) 92%,transparent);
+  background-image:var(--emboss);box-shadow:var(--shadow-sm);
+  animation:orbitFloat var(--fdur,6s) ease-in-out var(--fd,0s) infinite alternate;
+  transition:transform var(--t) var(--spring),box-shadow var(--t),border-color var(--t);
+  will-change:transform}
+.orbit-node:hover .orbit-node-card{transform:translateY(-3px) scale(1.04);
+  border-color:color-mix(in srgb,var(--accent) 60%,var(--line));
+  box-shadow:0 10px 30px -8px rgb(var(--accent-rgb) / .45),var(--shadow-md)}
+@keyframes orbitFloat{from{transform:translateY(-2px)}to{transform:translateY(3px)}}
+.orbit-node-head{display:flex;align-items:center;gap:6px;min-width:0}
+.orbit-led{flex:none;width:8px;height:8px;border-radius:50%;background:var(--lane,var(--txt-4));
+  box-shadow:0 0 8px var(--lane-dim,transparent)}
+.orbit-name{flex:1;min-width:0;font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-incomposer{flex:none;display:inline-flex;align-items:center;gap:3px;font-size:9px;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--accent-2)}
+.orbit-glance{font-size:10.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-meta{display:flex;align-items:center;gap:6px;min-width:0}
+.orbit-model{font-family:var(--mono);font-size:9px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-approve{display:flex;flex-direction:column;gap:4px;padding:5px 6px;border-radius:8px;
+  background:rgb(var(--red-rgb) / .12);border:1px solid rgb(var(--red-rgb) / .4)}
+.orbit-approve-sum{font-size:10px;color:var(--txt-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.orbit-approve-btns{display:flex;gap:5px}
+.orbit-allow{color:var(--green-txt,var(--green))}
+.orbit-deny{color:var(--red-txt,var(--red))}
+.orbit-revive{display:flex}
+.orbit-cta{display:flex;align-items:center;gap:4px;font-size:9.5px;color:var(--accent-2);
+  max-height:0;opacity:0;overflow:hidden;transition:max-height var(--t) var(--ease),opacity var(--t)}
+.orbit-node:hover .orbit-cta,.orbit-node:focus-visible .orbit-cta{max-height:16px;opacity:1}
+/* State frames: the SAME custom-property scheme the grid cards use, so a color tweak lands on both. */
+.orbit-node.lane-starting{--lane:var(--txt-4)}
+.orbit-node.lane-starting .orbit-led{animation:hudpulse 1.6s ease-in-out infinite}
+.orbit-node.lane-working{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35)}
+.orbit-node.lane-working .orbit-node-card{border-color:rgb(var(--cyan-rgb) / .5)}
+.orbit-node.lane-working .orbit-led{animation:hudpulse 2.2s ease-in-out infinite}
+.orbit-node.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
+.orbit-node.lane-awaiting-input .orbit-node-card{border-color:var(--amber)}
+.orbit-node.lane-awaiting-input .orbit-node-card::after{box-shadow:0 0 14px 2px rgb(var(--amber-rgb) / .4);animation:orbitGlow 2.6s ease-in-out infinite}
+.orbit-node.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5)}
+.orbit-node.lane-needs-approval .orbit-node-card{border-color:var(--red)}
+.orbit-node.lane-needs-approval .orbit-node-card::after{box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6);animation:orbitGlow 1.6s ease-in-out infinite}
+/* GPU path (P-FLEET.L17): the glow layer is a pseudo-element whose SHADOW is painted once; only its
+   OPACITY animates, which runs on the compositor thread. Animating box-shadow itself (the grid cards'
+   fleetGlow keyframes) re-rasterizes the card on the CPU every frame - fine for a docked grid, wasteful
+   for a full-screen constellation. */
+.orbit-node-card::after{content:"";position:absolute;inset:-2px;border-radius:inherit;pointer-events:none;
+  opacity:0;will-change:opacity}
+@keyframes orbitGlow{0%,100%{opacity:.1}50%{opacity:1}}
+.orbit-node.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .35)}
+.orbit-node.lane-done .orbit-node-card{border-color:rgb(var(--green-rgb) / .5)}
+.orbit-node.lane-error{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
+.orbit-node.lane-error .orbit-node-card{border-color:var(--red)}
+.orbit-node.lane-stopped{--lane:var(--txt-4)}
+.orbit-node.lane-stopped .orbit-node-card{opacity:.55}
+.orbit-node.promoted .orbit-node-card{box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent),var(--shadow-md)}
+.orbit-empty{position:absolute;left:50%;top:calc(50% + 118px);transform:translateX(-50%);z-index:2;
+  display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;
+  color:var(--txt-3);font-size:12.5px;animation:rise var(--t-slow) var(--ease-out)}
+.orbit-empty p{margin:0}
+/* ── P-FLEET.L17: the spoke takeover banner ── */
+/* Fixed at the top of the SCREEN (not the composer) so "which spoke am I on" survives any scroll. Sits
+   under .popover (95) so its own switch menu opens above it. */
+.spoke-banner{position:fixed;top:48px;left:50%;z-index:94;display:flex;align-items:center;gap:9px;
+  padding:6px 8px 6px 14px;border-radius:999px;
+  border:1px solid color-mix(in srgb,var(--accent) 55%,var(--line));
+  background:color-mix(in srgb,var(--accent) 12%,var(--bg-1));
+  box-shadow:0 8px 30px -8px rgb(var(--accent-rgb) / .5),var(--shadow-md);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  opacity:0;transform:translate(-50%,-16px);
+  transition:opacity 240ms var(--ease-out),transform 240ms var(--spring)}
+.spoke-banner.show{opacity:1;transform:translate(-50%,0)}
+.spoke-beacon{position:relative;flex:none;width:9px;height:9px;border-radius:50%;background:var(--accent)}
+.spoke-beacon::after{content:"";position:absolute;inset:-3px;border-radius:50%;
+  border:1px solid rgb(var(--accent-rgb) / .7);animation:orbitPing 2.2s var(--ease-out) infinite}
+.spoke-kicker{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--txt-3);white-space:nowrap}
+.spoke-name{font-size:13px;color:var(--txt);max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spoke-menu-btn{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:none;
+  border:1px solid var(--line);border-radius:999px;background:var(--bg-1);color:var(--txt-2);
+  font-size:11px;padding:3px 10px;cursor:pointer;transition:color var(--t),border-color var(--t)}
+.spoke-menu-btn:hover{color:var(--txt);border-color:var(--accent-2)}
+/* The switch menu (rendered inside .popover). */
+.spoke-switch{display:flex;flex-direction:column;gap:1px;padding:2px;min-width:238px}
+.spoke-sw-row{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:0;border-radius:8px;
+  background:none;color:var(--txt-2);cursor:pointer;font:inherit;font-size:12.5px;text-align:left;
+  transition:background var(--t-fast),color var(--t-fast)}
+.spoke-sw-row:hover{background:var(--bg-2);color:var(--txt)}
+.spoke-sw-row.current{background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--txt);cursor:default}
+.spoke-sw-row span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spoke-sw-row svg{flex:none;color:var(--accent)}
+.spoke-sw-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--lane,var(--txt-4));
+  box-shadow:0 0 6px var(--lane-dim,transparent)}
+.spoke-sw-row.lane-working{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .45)}
+.spoke-sw-row.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .5)}
+.spoke-sw-row.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .6)}
+.spoke-sw-row.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .45)}
+.spoke-sw-row.lane-error{--lane:var(--red)}
+.spoke-sw-row.lane-stopped{--lane:var(--txt-4)}
+.spoke-sw-here{margin-left:auto;flex:none;font-size:9.5px;font-style:normal;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--accent-2)}
+.spoke-sw-st{margin-left:auto;flex:none;font-size:10px;font-style:normal;color:var(--txt-4)}
+.spoke-sw-div{height:1px;background:var(--line-soft);margin:3px 6px}
+/* Motion hygiene: every orbit ornament is decorative; a reduced-motion user gets the same information
+   from the static colors. */
+@media (prefers-reduced-motion: reduce){
+  .orbit-nebula,.orbit-ringline,.orbit-line,.orbit-hub-ping,.orbit-node-card,.orbit-node-card::after,.spoke-beacon::after,.spoke-chip.hot::after{animation:none !important}
+  .orbit-node-card::after,.spoke-chip.hot::after{opacity:.5}
+  .orbit-node,.orbit-node-float{transition:none}
+}
+
+/* ── P-FLEET.L17: spoke vitals - THIS lane's security + memory, on the takeover banner ────────────── */
+.spoke-vitals{display:inline-flex;align-items:center;gap:5px;flex:none}
+.spoke-chip{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;flex:none;
+  border:1px solid var(--line);border-radius:999px;background:var(--bg-1);color:var(--txt-3);
+  font-size:10px;padding:2px 8px;cursor:pointer;transition:color var(--t),border-color var(--t)}
+.spoke-chip b{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums}
+.spoke-chip:hover{color:var(--txt);border-color:var(--accent-2)}
+.spoke-chip .ic{color:var(--accent-2)}
+.spoke-chip.warn{border-color:var(--amber);color:var(--amber-txt,var(--amber))}
+.spoke-chip.warn .ic{color:var(--amber)}
+.spoke-chip{position:relative}
+.spoke-chip.hot{border-color:var(--red);color:var(--red-txt,var(--red))}
+/* GPU path: same one-paint shadow + opacity pulse as the orbit cards. */
+.spoke-chip.hot::after{content:"";position:absolute;inset:-2px;border-radius:inherit;pointer-events:none;
+  box-shadow:0 0 12px 2px rgb(var(--red-rgb) / .55);will-change:opacity;animation:orbitGlow 1.6s ease-in-out infinite}
+.spoke-chip.hot .ic{color:var(--red)}
+.spoke-vit{display:flex;flex-direction:column;gap:9px;padding:4px 2px;min-width:260px}
+.spoke-vit-h{display:flex;align-items:baseline;gap:8px;min-width:0}
+.spoke-vit-h b{font-size:13px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spoke-vit-h span{font-family:var(--mono);font-size:9.5px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spoke-vit-s{display:flex;flex-direction:column;gap:5px;padding:8px 9px;border:1px solid var(--line-soft);
+  border-radius:10px;background:var(--bg-2)}
+.spoke-vit-s h4{margin:0;display:flex;align-items:center;gap:6px;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--txt-3);font-weight:600}
+.spoke-vit-s h4 .ic{color:var(--accent-2)}
+.spoke-vit-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:11px}
+.spoke-vit-row>span{color:var(--txt-4);white-space:nowrap}
+.spoke-vit-row>b{color:var(--txt-2);font-weight:600;text-align:right;min-width:0}
+.spoke-vit-mono{font-family:var(--mono);font-size:10px}
+.spoke-vit-kinds{display:inline-flex;flex-wrap:wrap;gap:3px;justify-content:flex-end}
+.spoke-vit-kind{font-style:normal;font-family:var(--mono);font-size:9.5px;color:var(--amber-txt,var(--amber));
+  border:1px solid rgb(var(--amber-rgb) / .4);border-radius:5px;padding:0 5px;background:rgb(var(--amber-rgb) / .08)}
+.spoke-vit-dim{color:var(--txt-4);font-size:11px}
+.spoke-vit-bar{height:5px;border-radius:999px;background:var(--bg-sunk,var(--bg-0));overflow:hidden}
+.spoke-vit-bar i{display:block;height:100%;border-radius:999px;background:var(--accent);transition:width var(--t-slow) var(--ease)}
+.spoke-vit-bar i.warn{background:var(--amber)}
+.spoke-vit-bar i.hot{background:var(--red)}
+.spoke-vit-ask{display:flex;flex-direction:column;gap:5px;padding:6px 7px;border-radius:8px;
+  background:rgb(var(--red-rgb) / .12);border:1px solid rgb(var(--red-rgb) / .4)}
+.spoke-vit-ask>span{font-size:10.5px;color:var(--txt-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.spoke-vit-btns{display:flex;gap:5px}
+.spoke-sw-keys{font-family:var(--mono);font-size:9.5px;color:var(--txt-4);padding:4px 10px 6px;white-space:nowrap}
+
+/* ── P-FLEET.L17: Lite mode - the same hub and spoke as a still page ─────────────────────────────── */
+/* For clients without GPU compositing (software rasterizer, reduced-motion, low memory, or a measured
+   frame rate under the floor). The INFORMATION is identical - layout, state colors, census, approvals,
+   clicks, hotkeys - only the physics leave: no infinite animations, no transform transitions, and no
+   backdrop blur (the single most expensive effect under software rendering). */
+.orbit-view.static{backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--bg-0)}
+.orbit-view.static .orbit-nebula{display:none}
+.orbit-view.static .orbit-hub-ping{display:none}
+.orbit-view.static .orbit-ringline,
+.orbit-view.static .orbit-line{animation:none;stroke-dasharray:none}
+.orbit-view.static .orbit-line[data-status="starting"]{stroke-dasharray:2 6}
+.orbit-view.static .orbit-node{transition:none;will-change:auto}
+.orbit-view.static .orbit-node-float{transition:none;will-change:auto}
+.orbit-view.static .orbit-node-card{animation:none;will-change:auto;transition:none}
+.orbit-view.static .orbit-node-card::after{animation:none;will-change:auto;opacity:.5}
+.orbit-view.static .orbit-led{animation:none !important}
+.orbit-view.static .orbit-svg{will-change:auto;transform:none}
+.orbit-view.static .orbit-hub-core{transition:none}
+.orbit-view.static .orbit-cta{transition:none}
+.spoke-banner.static{backdrop-filter:none;-webkit-backdrop-filter:none}
+.spoke-banner.static .spoke-beacon::after{display:none}
+.spoke-banner.static .spoke-chip.hot::after{animation:none;opacity:.6}
+
+/* ── P-FLEET.L17: historical spokes (recovery) ───────────────────────────────────────────────────── */
+.orbit-ghost-n{font-family:var(--mono);font-size:9.5px;font-weight:700;color:var(--accent-2);
+  background:color-mix(in srgb,var(--accent) 14%,transparent);border-radius:999px;padding:0 5px;margin-left:2px}
+.orbit-ghosts{display:flex;flex-direction:column;gap:2px;padding:2px;min-width:290px}
+.orbit-ghosts-h{display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--txt-3);padding:5px 8px 6px}
+.orbit-ghosts-h .ic{color:var(--accent-2)}
+.orbit-ghosts-h span{font-family:var(--mono);color:var(--txt-4)}
+.orbit-ghosts-empty{padding:10px 12px;font-size:11.5px;color:var(--txt-4);max-width:280px;line-height:1.5}
+.orbit-ghost{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:9px;
+  transition:background var(--t-fast)}
+.orbit-ghost:hover{background:var(--bg-2)}
+/* A ghost is a memory: hollow dashed dot, the fleet's idle gray. */
+.orbit-ghost-dot{flex:none;width:9px;height:9px;border-radius:50%;border:1.5px dashed var(--txt-4);opacity:.8}
+.orbit-ghost-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.orbit-ghost-id b{font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-ghost-id small{font-size:10px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-ghost-err{color:var(--red-txt,var(--red)) !important}
+.orbit-ghost-err:empty{display:none}
+.orbit-ghost-x{flex:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;
+  border:0;border-radius:6px;background:transparent;color:var(--txt-4);cursor:pointer;
+  transition:color var(--t-fast),background var(--t-fast)}
+.orbit-ghost-x:hover{color:var(--red);background:rgb(var(--red-rgb) / .12)}
+
+/* ── P-FLEET.L17: in-orbit side panels (Recover + New spoke) ─────────────────────────────────────── */
+/* Children of the STAGE, not floating popovers: they share the orbit's own stacking context, so no
+   overlay layering can swallow them, and the fleet stays visible behind. */
+.orbit-panel{position:absolute;top:14px;right:14px;bottom:14px;width:min(400px,92vw);z-index:5;
+  display:flex;flex-direction:column;border:1px solid var(--line-strong);border-radius:14px;
+  background:var(--bg-1);background-image:var(--emboss);box-shadow:var(--shadow-lg);
+  opacity:0;transform:translateX(16px);
+  transition:opacity var(--t) var(--ease-out),transform var(--t) var(--spring)}
+.orbit-panel.show{opacity:1;transform:none}
+.orbit-view.static .orbit-panel{transition:none}
+.orbit-panel-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:10px;
+  display:flex;flex-direction:column;gap:4px}
+.orbit-panel-h{display:flex;align-items:center;gap:8px;padding:2px 4px 8px;font-size:13px;color:var(--txt)}
+.orbit-panel-h .ic{color:var(--accent-2)}
+.orbit-panel-h span{font-family:var(--mono);font-size:10.5px;color:var(--txt-4)}
+.orbit-panel-h [data-orbit-panel-close]{margin-left:auto}
+.orbit-ghost.archived{opacity:.62}
+.orbit-ghost-del:hover{color:var(--red);background:rgb(var(--red-rgb) / .12)}
+.orbit-arch-toggle{display:flex;align-items:center;gap:6px;margin-top:6px;padding:6px 9px;border:0;
+  border-radius:8px;background:none;color:var(--txt-3);cursor:pointer;font:inherit;font-size:11px;
+  letter-spacing:.08em;text-transform:uppercase;text-align:left;transition:background var(--t-fast)}
+.orbit-arch-toggle:hover{background:var(--bg-2)}
+.orbit-arch-toggle .ic{transition:transform var(--t-fast)}
+.orbit-arch-toggle.open .ic{transform:rotate(90deg)}
+.orbit-arch-toggle span{font-family:var(--mono);color:var(--txt-4)}
+/* the on-orbit + Spoke form */
+.orbit-spawn-l{display:flex;flex-direction:column;gap:4px;padding:5px 4px;font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--txt-3)}
+.orbit-spawn-l input,.orbit-spawn-l select{width:100%;background:var(--bg-2);border:1px solid var(--line);
+  border-radius:8px;color:var(--txt);font:inherit;font-size:12px;padding:7px 9px;letter-spacing:normal;text-transform:none}
+.orbit-spawn-l input:focus,.orbit-spawn-l select:focus{outline:none;border-color:var(--accent)}
+.orbit-spawn-row{display:flex;align-items:center;gap:6px}
+.orbit-spawn-row input{flex:1;min-width:0}
+.orbit-spawn-go{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.orbit-panel .orbit-ghost-err{padding:2px 6px}
+
+/* P-FLEET.L17: the grid card header is now a takeover surface too (click = the orbit's spoke click;
+   the grip alone keeps the reorder gesture). The pointer cursor says so; controls override it. */
+.fleet-card[data-lane] .fleet-card-head{cursor:pointer}
+.fleet-card[data-lane] .fleet-card-head button,.fleet-card[data-lane] .fleet-card-head select{cursor:pointer}
+.fleet-card[data-lane] .fleet-card-head:hover .fleet-lane-name{color:var(--accent-2)}
+
+/* ── P-FLEET.L18: lane groups on the grid + the default-view pin ─────────────────────────────────── */
+/* A group divider spans the whole grid row. Presentation only: collapsing hides cards, never lanes. */
+.fleet-group-head{grid-column:1 / -1;display:flex;align-items:center;gap:7px;min-width:0;
+  padding:4px 6px 3px;margin-top:2px;border-bottom:1px solid var(--line-soft)}
+.fleet-group-head b{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--txt-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-group-head span{font-family:var(--mono);font-size:9.5px;color:var(--txt-4)}
+.fleet-group-head [data-grp-disband]{margin-left:auto}
+.fleet-grp-btn{flex:none;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;
+  border:0;border-radius:5px;background:transparent;color:var(--txt-4);cursor:pointer;
+  transition:color var(--t-fast),background var(--t-fast),transform var(--t-fast)}
+.fleet-grp-btn:hover{color:var(--txt);background:var(--bg-0)}
+.fleet-group-head [data-grp-toggle] .ic{transform:rotate(90deg);transition:transform var(--t-fast)}
+.fleet-group-head.closed [data-grp-toggle] .ic{transform:none}
+.fleet-card.grp-hidden{display:none}
+/* the per-card group chip: bare glyph when unfiled, name pill when filed */
+.fleet-grp-chip{flex:none;display:inline-flex;align-items:center;gap:3px;max-width:96px;min-width:0;
+  border:1px solid transparent;border-radius:999px;background:transparent;color:var(--txt-4);
+  font-size:9.5px;padding:1px 4px;cursor:pointer;transition:color var(--t-fast),border-color var(--t-fast)}
+.fleet-grp-chip:hover{color:var(--txt-2);border-color:var(--line)}
+.fleet-grp-chip.named{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.fleet-grp-chip span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-grp-new{display:flex;align-items:center;gap:6px;padding:6px 8px}
+.fleet-grp-new input{flex:1;min-width:0;background:var(--bg-2);border:1px solid var(--line);border-radius:7px;
+  color:var(--txt);font:inherit;font-size:11.5px;padding:5px 8px}
+.fleet-grp-new input:focus{outline:none;border-color:var(--accent)}
+/* the default-view pin, both headers: hollow star until pinned */
+.orbit-pin .ic,.fleet-pin .ic{fill:none}
+.orbit-pin.on,.fleet-pin.on{color:var(--amber-txt,var(--amber));border-color:rgb(var(--amber-rgb) / .5)}
+.orbit-pin.on .ic,.fleet-pin.on .ic{fill:currentColor}
+
+/* P-FLEET.L18: the on-orbit form's repo affordances (mirrors the grid form's anatomy). */
+.orbit-spawn-l i{font-style:normal;font-size:8.5px;color:var(--txt-4);letter-spacing:.06em;margin-left:2px}
+.orbit-spawn-note{display:block;font-size:10.5px;line-height:1.5;color:var(--txt-3);padding:0 6px}
+.orbit-spawn-note.bad{color:var(--red-txt,var(--red))}
+.orbit-spawn-auth{display:flex;flex-direction:column;gap:5px;padding:5px 4px}
+.orbit-spawn-auth input[type="password"]{width:100%;background:var(--bg-2);border:1px solid var(--line);
+  border-radius:8px;color:var(--txt);font:inherit;font-size:12px;padding:7px 9px}
+.orbit-spawn-auth input[type="password"]:focus{outline:none;border-color:var(--accent)}
+.orbit-spawn-save{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--txt-3);cursor:pointer}

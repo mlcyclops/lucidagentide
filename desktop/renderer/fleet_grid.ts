@@ -22,6 +22,12 @@
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { popover } from "./ui.ts"; // P-FLEET.L18: the per-card group menu
+// P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
+// shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
+import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
+// P-FLEET.L18: named lane groups - pure model; this file owns only chips, dividers and storage.
+import { assignLane, createGroup, groupSections, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed, type LaneGroups } from "./lane_groups.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
 import { isAutoPreviewPath } from "./preview_tabs.ts";
@@ -128,6 +134,9 @@ const runs = new Map<string, LaneRun>();
 /** P-FLEET.L9: card order + per-card size, persisted apart from the dock shape. A corrupt payload loads as
  *  an EMPTY layout by design (lane_layout.loadLayout), which reconcile then refills from the server. */
 let layout: LaneLayout = { order: [], size: {} };
+/** P-FLEET.L18: named groups (presentation only). Loaded with the layout, persisted beside it. */
+let groups: LaneGroups = loadGroups(null);
+const FLEET_GROUPS_KEY = "lucid.fleetGroups.v1";
 
 // localStorage-backed persistence; a broken/absent store degrades to in-memory (the dock still works).
 function storage(): DockStorage {
@@ -136,6 +145,21 @@ function storage(): DockStorage {
 }
 function persist(): void { if (dockState) saveDockState(storage(), dockState, FLEET_DOCK_KEY); }
 function persistLayout(): void { storage().set(FLEET_LAYOUT_KEY, saveLayout(layout)); }
+/** Persist groups, shedding assignments for lanes that no longer exist. Empty groups survive - the
+ *  user just made one to file the NEXT lane into. */
+function persistGroups(): void {
+  groups = pruneLanes(groups, [...runs.keys()]);
+  storage().set(FLEET_GROUPS_KEY, saveGroups(groups));
+}
+
+/** P-FLEET.L18: the grid header's default-view pin (fleet_orbit owns the one storage key). */
+function paintGridPin(): void {
+  const pin = dock ? ($("[data-fleet-pin]", dock) as HTMLElement | null) : null;
+  if (!pin) return;
+  const on = fleetHome() === "grid";
+  pin.classList.toggle("on", on);
+  pin.innerHTML = `${icon("star", 12)}${on ? " Default" : ""}`;
+}
 
 /** Wide and shallow: a grid of cards wants width first. Clamped to the viewport on load. */
 const fleetFallback = (vw: number, vh: number): DockShape => {
@@ -160,12 +184,16 @@ export function openFleetGrid(): void {
   if (dock) { restore(); return; }
   dockState = loadDockState(storage(), window.innerWidth, window.innerHeight, FLEET_DOCK_KEY, fleetFallback(window.innerWidth, window.innerHeight));
   layout = loadLayout(storage().get(FLEET_LAYOUT_KEY)); // P-FLEET.L9: card order + sizes from the last run
+  groups = loadGroups(storage().get(FLEET_GROUPS_KEY)); // P-FLEET.L18: named groups from the last run
+  lastGroupSig = ""; // a fresh dock has no dividers yet - an unchanged signature must not skip building them
   dockState.minimized = false; // an explicit open always shows the panel, never just the pill
   dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local lanes">
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Lanes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
+      <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same lanes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
+      <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
       <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local lane">${icon("plus", 12)} Lane</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (lanes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (lanes keep running)">${icon("close", 15)}</button>
@@ -181,6 +209,7 @@ export function openFleetGrid(): void {
     <div class="share-dock-rz sw" data-dock-rz="sw" aria-hidden="true"></div>
   </div>`);
   document.body.appendChild(dock);
+  paintGridPin();
   applyShape();
   wireDrag();
   wireResize();
@@ -322,11 +351,34 @@ function applySizes(): void { for (const run of runs.values()) applySize(run); }
  *  placed node detaches and reinserts it, which restarts the awaiting-input / needs-approval glow: the
  *  cards would visibly pulse-stutter every 2.5s poll, the same trap the minimized pill documents. */
 function applyOrder(grid: HTMLElement): void {
-  const want = layout.order.filter((id) => runs.get(id)?.card);
-  const have = [...grid.querySelectorAll<HTMLElement>(".fleet-card[data-lane]")].map((c) => c.dataset.lane ?? "");
-  if (want.length === have.length && want.every((id, i) => id === have[i])) return;
-  for (const id of want) { const card = runs.get(id)?.card; if (card) grid.append(card); }
+  // P-FLEET.L18: the flat order folds into GROUP sections (named groups first, ungrouped tail); within
+  // a section the relative order is still layout.order, so drag-to-reorder semantics survive intact.
+  const live = layout.order.filter((id) => runs.get(id)?.card);
+  const sections = groupSections(live, groups);
+  // The change signature covers order, membership AND collapse - re-appending an unchanged card
+  // restarts its state-glow animation (the pill lesson), so an unchanged frame must cost nothing.
+  const sig = sections.map((s) => `${s.group ?? "\u0001"}${groups.collapsed[s.group ?? ""] ? "^" : ""}:${s.ids.join(",")}`).join("|");
+  if (sig === lastGroupSig && grid.querySelectorAll(".fleet-card[data-lane]").length === live.length) return;
+  lastGroupSig = sig;
+  for (const d of grid.querySelectorAll(".fleet-group-head")) d.remove();
+  for (const s of sections) {
+    const closed = s.group !== null && !!groups.collapsed[s.group];
+    if (s.group !== null) {
+      grid.append(el(`<div class="fleet-group-head${closed ? " closed" : ""}" data-group="${esc(s.group)}">
+        <button class="fleet-grp-btn" data-grp-toggle="${esc(s.group)}" data-tip="${closed ? "Expand" : "Collapse"}|The lanes keep running either way; collapse only tidies the grid.">${icon("chevron", 11)}</button>
+        <b>${esc(s.group)}</b><span>${s.ids.length}</span>
+        <button class="fleet-grp-btn" data-grp-disband="${esc(s.group)}" data-tip="Disband group|Frees its lanes back to the ungrouped tail. Never touches the lanes themselves.">${icon("close", 11)}</button>
+      </div>`));
+    }
+    for (const id of s.ids) {
+      const card = runs.get(id)?.card;
+      if (!card) continue;
+      card.classList.toggle("grp-hidden", closed);
+      grid.append(card);
+    }
+  }
 }
+let lastGroupSig = "";
 
 /** The laid-out rectangles, in `layout.order`, frozen at pointerdown. snapSlot reads row identity off
  *  `y + h` (bottom-anchored cards share a bottom edge, never a top), so these must be real viewport rects. */
@@ -353,10 +405,12 @@ function onDockPointerDown(ev: Event): void {
   // windows aren't easily draggable": the header is the only drag surface, and it is packed with buttons,
   // a select and chips, all of which are correctly excluded below - which left almost no draggable pixels
   // in a real lane header. An explicit grip is a target the user can actually aim at.
-  if (t.closest("[data-fleet-grip]")) { startCardDrag(e, head); return; }
+  if (t.closest("[data-fleet-grip]")) { startCardDrag(e, head, true); return; }
   // Elsewhere on the header: controls act, they do not drag, and the textarea/select inside a card must
-  // keep their own gestures.
-  if (!t.closest("button") && !t.closest("select") && !t.closest("input") && !t.closest("textarea")) startCardDrag(e, head);
+  // keep their own gestures. P-FLEET.L17: a press that RELEASES within the drag slop is a CLICK, and a
+  // header click is the same takeover as clicking the lane's spoke in the orbit (grip excluded - its one
+  // job is reordering).
+  if (!t.closest("button") && !t.closest("select") && !t.closest("input") && !t.closest("textarea")) startCardDrag(e, head, false);
 }
 
 function startCardResize(e: PointerEvent, rz: HTMLElement): void {
@@ -396,12 +450,23 @@ function startCardResize(e: PointerEvent, rz: HTMLElement): void {
 
 /** Drag the header to reorder. The rects are collected ONCE, so inserting the placeholder (which reflows
  *  the grid under the pointer) cannot feed the next snapSlot a moved target and make the drop jitter. */
-function startCardDrag(e: PointerEvent, head: HTMLElement): void {
+function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): void {
   const card = head.closest(".fleet-card[data-lane]") as HTMLElement | null; if (!card) return;
   const id = card.dataset.lane ?? ""; if (!id) return;
   const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null; if (!grid) return;
   const rects = cardRects(grid);
-  if (rects.length < 2) return; // one card has nowhere to go, and a lone placeholder is just noise
+  if (rects.length < 2) {
+    // One card has nowhere to DRAG, but its header click must still take over (P-FLEET.L17) - the
+    // single-lane fleet is exactly where a new user tries the gesture first.
+    if (!fromGrip) {
+      const clickUp = (): void => {
+        window.removeEventListener("pointerup", clickUp); window.removeEventListener("pointercancel", clickUp);
+        deps?.promoteLane?.(id);
+      };
+      window.addEventListener("pointerup", clickUp); window.addEventListener("pointercancel", clickUp);
+    }
+    return;
+  }
   e.preventDefault();
   const ox = e.clientX, oy = e.clientY;
   try { head.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
@@ -432,7 +497,12 @@ function startCardDrag(e: PointerEvent, head: HTMLElement): void {
     window.removeEventListener("pointercancel", up);
     card.classList.remove("dragging");
     slotEl.remove();
-    if (!moved) return;
+    if (!moved) {
+      // P-FLEET.L17: released within the slop = a CLICK on the header = the orbit's spoke takeover.
+      // The grip stays reorder-only, and app.ts promoteLane already refuses bad states with the reason.
+      if (!fromGrip) deps?.promoteLane?.(id);
+      return;
+    }
     // Commit through the target's ID, not the raw slot index: `rects` is the cards on screen and
     // `layout.order` is every live lane, and translating keeps the drop honest if the two ever differ.
     const target = rects[slot]?.id ?? id;
@@ -631,8 +701,9 @@ function buildCard(run: LaneRun): HTMLElement {
     <div class="fleet-card-head">
       <span class="fleet-grip" data-fleet-grip title="Drag to reorder this lane" aria-hidden="true"></span>
       <span class="fleet-led" aria-hidden="true"></span>
-      <span class="fleet-lane-name" data-fleet-name></span>
+      <span class="fleet-lane-name" data-fleet-name data-tip="Open in composer|Click the header to drive this lane from the full composer - the same takeover as clicking its spoke in the orbit. Drag the grip to reorder."></span>
       <span class="fleet-cwd-chip" data-fleet-cwd></span>
+      <button class="fleet-grp-chip" data-fleet-grp data-tip="Group|File this lane under a named group on the grid. Presentation only - the lane's work is untouched."></button>
       <span class="fleet-usage" data-fleet-usage data-tone="ok" hidden></span>
       <span class="fleet-health" data-fleet-health data-health-action="quiet" hidden></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
@@ -739,6 +810,14 @@ function paintFrame(run: LaneRun): void {
   }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
   if (cwd) { cwd.textContent = baseName(v.cwd); cwd.title = v.cwd; }
+  // P-FLEET.L18: the group chip - the assigned name, or a bare glyph inviting one.
+  const grp = $("[data-fleet-grp]", card) as HTMLElement | null;
+  if (grp) {
+    const name = groups.byLane[v.id];
+    const html = name ? `${icon("graph", 10)}<span>${esc(name)}</span>` : icon("graph", 10);
+    if (grp.innerHTML !== html) grp.innerHTML = html;
+    grp.classList.toggle("named", !!name);
+  }
   // P-TOKENS.1: the lane's OWN context fill, MEASURED - the chip stays hidden until a `usage` event has
   // actually reported, because an unreported window is not an empty one. token_meter owns the thresholds, so
   // this chip and the composer's token button turn amber and red at the same fill.
@@ -1494,10 +1573,74 @@ async function submitSpawn(): Promise<void> {
 
 // ---------------------------------------------------------------- delegated events
 
+/** P-FLEET.L18: the per-card group menu - pick an existing group, clear, or create one inline. The
+ *  rows reuse the spoke-switch menu classes so the fleet's two menus cannot drift apart visually. */
+function openGroupMenu(run: LaneRun, anchor: HTMLElement): void {
+  const cur = groups.byLane[run.view.id] ?? null;
+  const rows = [
+    `<button class="spoke-sw-row${cur === null ? " current" : ""}" data-grp-pick="">${icon("close", 12)}<span>No group</span></button>`,
+    ...groups.groups.map((n) => `<button class="spoke-sw-row${cur === n ? " current" : ""}" data-grp-pick-name="${esc(n)}">${icon("graph", 12)}<span>${esc(n)}</span></button>`),
+    `<div class="spoke-sw-div" aria-hidden="true"></div>`,
+    `<div class="fleet-grp-new"><input type="text" data-grp-newname placeholder="New group\u2026" maxlength="40"><button class="btn-mini" data-grp-createnew>${icon("plus", 11)} Create</button></div>`,
+  ].join("");
+  const p = popover(anchor, `<div class="spoke-switch">${rows}</div>`);
+  const commit = (name: string | null): void => {
+    if (name === null) groups = assignLane(groups, run.view.id, null);
+    else {
+      const made = createGroup(groups, name);
+      if (!made.name) return; // a blank name creates nothing and keeps the menu open
+      groups = assignLane(made.next, run.view.id, made.name);
+    }
+    persistGroups();
+    paintFrame(run);
+    const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+    if (grid) applyOrder(grid);
+    p.close();
+  };
+  p.node.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-grp-pick]")) { commit(null); return; }
+    const pick = t.closest("[data-grp-pick-name]") as HTMLElement | null;
+    if (pick) { commit(pick.dataset.grpPickName ?? null); return; }
+    if (t.closest("[data-grp-createnew]")) commit(($("[data-grp-newname]", p.node) as HTMLInputElement | null)?.value ?? "");
+  });
+  const input = $("[data-grp-newname]", p.node) as HTMLInputElement | null;
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); commit(input.value); } });
+  input?.focus();
+}
+
 function onClick(ev: Event): void {
   const t = ev.target as HTMLElement;
   if (t.closest("[data-fleet-close]")) { closeFleetGrid(); return; }
   if (t.closest("[data-dock-min]")) { minimize(); return; }
+  // P-FLEET.L18: back to the map, and the default-view pin.
+  if (t.closest("[data-fleet-orbit]")) { openFleetOrbit(); return; }
+  if (t.closest("[data-fleet-pin]")) { setFleetHome("grid"); paintGridPin(); return; }
+  // P-FLEET.L18: group divider controls + the per-card group chip.
+  const gt = t.closest("[data-grp-toggle]") as HTMLElement | null;
+  if (gt) {
+    groups = toggleCollapsed(groups, gt.dataset.grpToggle ?? "");
+    persistGroups();
+    const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+    if (grid) applyOrder(grid);
+    return;
+  }
+  const gd = t.closest("[data-grp-disband]") as HTMLElement | null;
+  if (gd) {
+    groups = removeGroup(groups, gd.dataset.grpDisband ?? "");
+    persistGroups();
+    const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+    if (grid) applyOrder(grid);
+    for (const r of runs.values()) if (r.card) paintFrame(r); // chips lose their freed group name
+    return;
+  }
+  const gc = t.closest("[data-fleet-grp]") as HTMLElement | null;
+  if (gc) {
+    const gcard = gc.closest(".fleet-card[data-lane]") as HTMLElement | null;
+    const grun = runs.get(gcard?.dataset.lane ?? "");
+    if (grun) openGroupMenu(grun, gc);
+    return;
+  }
   if (t.closest("[data-fleet-add]")) { toggleSpawnForm(); return; }
   if (t.closest("[data-spawn-go]")) { void submitSpawn(); return; }
   if (t.closest("[data-spawn-cancel]")) { toggleSpawnForm(); return; }

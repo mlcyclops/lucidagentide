@@ -23,7 +23,7 @@ import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
 import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
-import { PREVIEW_KIND_ICON, laneTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
+import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
 import { budgetWindowState, providerBudgetRows, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -92,7 +92,8 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { initFleetGrid, mountFleetPill, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { fleetHome, initFleetOrbit, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
@@ -434,8 +435,9 @@ function buildShell(): void {
             <!-- P-VOICE.2 (ADR-0247): the read-aloud control - engine + voice picker and the auto-speak switch.
                  It sits beside the mic so talking TO the agent and listening TO it are one pair of controls. -->
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
-            <!-- P-FLEET.L1: the fleet grid - headless local engine lanes as streaming mini agent windows. -->
-            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - local lanes|Spawn headless LUCID engine lanes on this machine and drive them from a movable grid of mini agent windows.">${icon("bolt", 15)}</button>
+            <!-- P-FLEET.L1/L17: the fleet - headless local engine lanes. Opens the hub-and-spoke ORBIT map;
+                 the classic grid of mini agent windows is one click away inside it. -->
+            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - hub &amp; spoke|Your lanes as spokes around the Main hub. Click a spoke to drive it from the full composer; the classic grid is one click away.">${icon("bolt", 15)}</button>
             <!-- P-CONNUI.1 (ADR-0368): the connection affordance for a session with NOTHING at stake.
                  A failed startup status probe used to paint a paragraph into an empty thread ("Connection
                  unavailable: signal timed out. Reconnect to check session status before sending."), which
@@ -1973,6 +1975,13 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // P-EVAL.4 (ADR-0318): `e.name` here is only omp's coarse ACP `kind`. Keep it as `kind` and keep the
       // toolCallId, so a `tool-meta` report can upgrade the label to the real tool name.
       marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail, id: e.id, kind: e.name } });
+      // P-FLEET.L17: a previewable write from an ATTACHED LANE opens/updates that lane's Preview tab,
+      // exactly as the fleet card path (P-PREVIEW.10) does. Lanes never emit "preview-available" - the
+      // write's own path is the signal - so without this the spoke takeover had no preview pane at all.
+      if (opts.laneId && e.code?.path && isAutoPreviewPath(e.code.path)) {
+        const lt = state.composerTarget;
+        previewShowLaneFile(opts.laneId, isLaneTarget(lt) ? lt.name : "lane", e.code.path);
+      }
       scrollChat();
     }
     // P-EVAL.4 (ADR-0318): the real tool name (and later its pass/fail) arrived for a call already
@@ -2287,6 +2296,9 @@ async function promoteLane(laneId: string): Promise<void> {
   const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
   parkedMasterThread = snapshotThread();
   state.composerTarget = target;
+  // P-FLEET.L17: the ring, the rail and the spoke banner now speak for the LANE - the master's last
+  // sample would be a lie until the lane's first usage event replaces it, so show unknown instead.
+  state.liveUsage = null;
   // Seed from the lane's own history, so the user lands in the conversation rather than an empty pane.
   const turns = seedTurns(r.transcript ?? []);
   renderThread(turns);
@@ -2325,6 +2337,7 @@ function demoteLane(): void {
     showToast({ tone: "warn", title: "The lane still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
   state.composerTarget = MASTER_TARGET;
+  state.liveUsage = null; // P-FLEET.L17: the lane's samples leave with it; the master's next turn refills.
   // Restore BEFORE the notice: renderThread clears the thread, so a notice appended first would be wiped.
   renderThread(parkedMasterThread);
   parkedMasterThread = null;
@@ -2355,6 +2368,11 @@ function onLaneWatchEvent(e: LaneEvent): void {
   }
   if (e.type === "tool") {
     addNoteChip(e.detail ? `${e.name}: ${e.detail}` : e.name);
+    // P-FLEET.L17: mid-turn watches carry the lane's writes too - same preview routing as the prompt
+    // stream, so WHEN you attached never decides whether the preview pane fills.
+    if (e.code?.path && isAutoPreviewPath(e.code.path) && isLaneTarget(state.composerTarget)) {
+      previewShowLaneFile(state.composerTarget.laneId, state.composerTarget.name, e.code.path);
+    }
     return;
   }
   if (e.type === "usage") {
@@ -2397,6 +2415,9 @@ function openLaneWatchNode(): { node: HTMLElement; stream: HTMLElement; buf: str
  *  its flex row, so the chip never shatters into slivers; the full folder + model live in the hover title.
  *  A null badge IS the master target - the main composer shows no badge at all. */
 function renderComposerTarget(): void {
+  // P-FLEET.L17: the takeover banner at the TOP of the screen tracks the same target as the chip - it
+  // paints on every attach/detach, before any early return below, so the two can never disagree.
+  renderSpokeBanner(state.composerTarget);
   const wrap = $(".composer-wrap") as HTMLElement | null;
   if (!wrap) return;
   const badge = targetBadge(state.composerTarget);
@@ -14308,7 +14329,41 @@ function wire(): void {
     promoteLane: (laneId) => void promoteLane(laneId),
     demoteLane: () => demoteLane(),
   });
-  $("#ctFleet")?.addEventListener("click", () => toggleFleetGrid());
+  // P-FLEET.L17: the hub-and-spoke Orbit map over the SAME lanes. It reuses the grid's promote/demote
+  // pair (attach is app.ts-owned either way) and opens the grid dock for spawning and per-lane work,
+  // so the two views can never disagree about what a lane is doing.
+  initFleetOrbit({
+    fleetStatus: bridge.fleetStatus,
+    fleetAnswer: bridge.fleetAnswer,
+    fleetRespawn: bridge.fleetRespawn,
+    fleetSpawn: bridge.fleetSpawn, // P-FLEET.L17 recovery: respawn a historical spoke by its old identity
+    timelineList: bridge.timelineList, // P-FLEET.L17 recovery: the P-FLEET.L5 durable ledger feeds the ghosts
+    promoteLane: (laneId) => void promoteLane(laneId),
+    demoteLane: () => demoteLane(),
+    openGrid: () => openFleetGrid(),
+    pickFolder: (opts) => pickFolderDialog(opts ?? {}), // the same real OS dialog the grid form uses
+    getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
+    // P-FLEET.L18: the on-orbit form clones too - identical vault path as the grid form's deps above.
+    saveGitToken: async ({ host, token, label }) => {
+      if (!bridge.isElectron || !bridge.credStore) return { ok: false, error: "the encrypted vault needs the LUCID desktop app" };
+      const ref = gitCredRef(host);
+      if (!ref) return { ok: false, error: `unusable host "${host}"` };
+      const r = await bridge.credStore({ ref, kind: "apikey", secret: token, label });
+      if (r && "error" in r) return { ok: false, error: String(r.error) };
+      state.creds = await bridge.credList().catch(() => state.creds);
+      return { ok: true };
+    },
+    vaultAvailable: () => bridge.isElectron && !!bridge.credStore,
+    getTarget: () => state.composerTarget,
+    getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
+    getMasterCwd: () => state.workspace?.current ?? "",
+    // While attached, liveUsage carries the LANE's own samples (both stream paths write it), so the
+    // banner's memory chip speaks for the spoke. Promote/demote null it, so it is never the master's.
+    getLaneUsage: () => (isLaneTarget(state.composerTarget) ? state.liveUsage : null),
+  });
+  // P-FLEET.L18: the Fleet button opens whichever view the user PINNED (orbit by default); each view's
+  // header links to the other, so neither choice ever strands you.
+  $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
   // P-FLEET.L5: the reviewable timeline dock.
   initTimelineDock({ timelineList: bridge.timelineList, timelineSession: bridge.timelineSession });
   $("#ctTimeline")?.addEventListener("click", () => toggleTimelineDock());
