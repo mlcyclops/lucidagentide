@@ -14,6 +14,8 @@
 import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
+import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
+import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { renderTurnEvalReport, evalMetricsForTurn, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
@@ -455,6 +457,23 @@ process.on("exit", () => { try { collabRelay?.stop(); } catch { /* already gone 
 process.on("exit", () => { void stopWhisper(); });
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => { void stopWhisper(); process.exit(0); });
+}
+// P-PORTGUARD.2: never OUTLIVE the Electron main that spawned this engine. main.ts kills this child
+// from app.on("quit"), but that handler never runs when the main process dies any other way (crash,
+// Task Manager, app.exit(), an updater swapping the binary), and Windows does not reap a spawned child
+// with its parent. The orphan kept port 5319 - and its whisper/headroom children - forever, so the NEXT
+// launch could not bind and died with "Failed to start server. Is port 5319 in use?" (2026-09-23).
+// Exiting through process.exit(0) runs the "exit" handlers above, so the managed children go down too.
+// Standalone runs (bun run desktop/dev.ts) set no LUCID_MAIN_PID and are never watched.
+const parentWatch = parentWatchConfig(process.env, process.pid);
+if (parentWatch) {
+  const watchdog = setInterval(() => {
+    if (parentAlive(parentWatch.pid, (pid) => process.kill(pid, 0))) return;
+    clearInterval(watchdog);
+    console.error(`[engine] parent process ${parentWatch.pid} is gone - exiting so port ${PORT} and the managed children are released`);
+    process.exit(0);
+  }, parentWatch.intervalMs);
+  watchdog.unref?.(); // diagnostic, never a reason to keep the loop alive
 }
 // P-STT.6 + P-STT.7: autostart the managed offline Whisper so dictation works out of the box - in the
 // INSTALLED app (bundled binary) AND in a dev run that has a resolvable binary (the runtime-staged
@@ -1572,7 +1591,16 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
 }
 
 
-const server = Bun.serve({
+// P-PORTGUARD.2: the bind is the engine's first load-bearing act, and it CAN fail - something else may
+// already hold the port (in the field: this app's own orphaned engine). Unguarded, Bun's throw escaped
+// module evaluation and engine.log got a bare "[Uncaught Exception] ... Is port 5319 in use?" stack while
+// the window sat behind a dialog blaming the install. Catch it, say what happened in one line a human can
+// act on, and exit with ENGINE_EXIT_PORT_BUSY so main names the owning process instead of guessing.
+// The body stays at its original indentation on purpose: the wrapper is 4 lines, not a 3300-line reflow.
+const server = startEngineServer();
+function startEngineServer() {
+try {
+return Bun.serve({
   port: PORT,
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
   // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
@@ -4891,6 +4919,17 @@ const server = Bun.serve({
     return new Response("not found", { status: 404 });
   },
 });
+} catch (err) {
+  const e = err as NodeJS.ErrnoException;
+  if (e?.code !== "EADDRINUSE" && !/is port \d+ in use/i.test(e?.message ?? "")) throw err; // not ours to explain
+  console.error(
+    `[engine] FATAL: cannot start - port ${PORT} is already in use (EADDRINUSE). Another process is ` +
+    `listening on 127.0.0.1:${PORT}; most often that is a leftover ${basename(process.execPath)} from a ` +
+    `previous session. End it and relaunch, or set LUCID_PORT to a free port for a separate instance.`,
+  );
+  process.exit(ENGINE_EXIT_PORT_BUSY);
+}
+}
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in

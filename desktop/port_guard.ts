@@ -87,23 +87,32 @@ export function formatPortIncident(i: PortIncidentInput): string {
     `- Expected engine: ${i.engineDescription}`,
     `- Health-nonce verdict: ${i.verdict}`,
   ];
-  if (i.observed) {
-    // "unknown" per field rather than dropping the line: a partially attributed squatter is still
-    // far more actionable than a bare verdict (the incident was solved BY pid + start time).
-    lines.push(
-      "- Observed listener:",
-      `  - Name: ${i.observed.name ?? "unknown"}`,
-      `  - PID: ${i.observed.pid ?? "unknown"}`,
-      `  - Started: ${i.observed.startedAt ?? "unknown"}`,
-      `  - Command: ${i.observed.command ?? "unknown"}`,
-    );
-  } else {
-    lines.push(
-      "- Observed listener: process attribution FAILED (the owner probe returned nothing usable)." +
-        " Something is answering this port, but the listening process could not be identified.",
-    );
-  }
+  lines.push(...formatSquatter(i.observed));
   return lines.join("\n") + "\n";
+}
+
+/**
+ * The "who actually holds the port" lines, shared by BOTH dialogs that need them: the ADR-0305
+ * foreign-listener incident block above, and the P-PORTGUARD.2 port-busy report (where the engine
+ * lost the bind outright, so there is no health verdict to classify). One renderer means the
+ * forensics a user ships us are identical whichever way the port was lost.
+ */
+export function formatSquatter(observed: SquatterInfo | null): string[] {
+  // "unknown" per field rather than dropping the line: a partially attributed squatter is still
+  // far more actionable than a bare verdict (the incident was solved BY pid + start time).
+  if (observed) {
+    return [
+      "- Observed listener:",
+      `  - Name: ${observed.name ?? "unknown"}`,
+      `  - PID: ${observed.pid ?? "unknown"}`,
+      `  - Started: ${observed.startedAt ?? "unknown"}`,
+      `  - Command: ${observed.command ?? "unknown"}`,
+    ];
+  }
+  return [
+    "- Observed listener: process attribution FAILED (the owner probe returned nothing usable)." +
+      " Something is answering this port, but the listening process could not be identified.",
+  ];
 }
 
 /**

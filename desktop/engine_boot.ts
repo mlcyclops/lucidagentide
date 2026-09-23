@@ -27,6 +27,16 @@ const PERMISSION_SIGNAL = /\b(EPERM|EACCES)\b|access is denied|operation not per
 const ERROR_SIGNAL = /\b(error|EPERM|EACCES|denied|not permitted|panic|uncaught|throw)\b/i;
 /** A Windows system-protected root that Bun's loader cannot map a script out of. */
 const PROTECTED_WIN_ROOT = /[\\/]Program Files( \(x86\))?[\\/]|[\\/]Windows[\\/]/i;
+/** A raw tail carries a port-bind refusal: libuv's code, POSIX prose, or Bun's own phrasing
+ *  ("Failed to start server. Is port 5319 in use?", which is what engine.log actually contained). */
+const PORT_BUSY_SIGNAL = /\bEADDRINUSE\b|address already in use|is port \d+ in use/i;
+
+/**
+ * P-PORTGUARD.2: the exit code the engine uses when it could not BIND its port. A distinct code (not
+ * bun's generic 1) is what lets main classify this without pattern-matching prose: the engine owns the
+ * diagnosis, main owns the attribution. 48 is outside the shell-signal range and unused elsewhere.
+ */
+export const ENGINE_EXIT_PORT_BUSY = 48;
 
 /**
  * True when `repoRoot` sits inside a Windows system-protected location (Program Files or
@@ -44,8 +54,13 @@ export function isProtectedInstallRoot(repoRoot: string): boolean {
 export function bestEngineLine(tail: string): string {
   const lines = tail.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   if (!lines.length) return "";
-  for (let i = lines.length - 1; i >= 0; i--) if (ERROR_SIGNAL.test(lines[i])) return lines[i];
-  return lines[lines.length - 1];
+  // Indexed reads are narrowed explicitly: dev.ts now imports this module, so it is checked under
+  // desktop/tsconfig.server.json's noUncheckedIndexedAccess as well as the Electron-main project.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (ERROR_SIGNAL.test(line)) return line;
+  }
+  return lines[lines.length - 1]!;
 }
 
 /** Minimal write probe so the writability check is injectable (real fs in main, fake in tests). */
@@ -72,7 +87,7 @@ export function probeDirWritable(dir: string, probe: WriteProbe): boolean {
   }
 }
 
-export type EngineFailureKind = "protected-location" | "engine-exited" | "timeout";
+export type EngineFailureKind = "port-busy" | "protected-location" | "engine-exited" | "timeout";
 
 export interface EngineFailureInput {
   /** Electron app.isPackaged - a dev run never blames the install location. */
@@ -114,6 +129,29 @@ export function classifyEngineFailure(input: EngineFailureInput): EngineFailureR
   const { packaged, repoRoot, repoWritable, protectedRoot, exited, exitCode, lastLogLine, port, logPath, platform } = input;
   const lastLine = lastLogLine ? `\n\nLast engine message:\n${lastLogLine}` : "";
   const permissionSignal = PERMISSION_SIGNAL.test(lastLogLine);
+
+  // P-PORTGUARD.2: the engine died because something else already held the port, so it never served
+  // anything. This is checked FIRST because it is DIRECT evidence (an exit code the engine minted, or
+  // the bind error itself) while the protected-location branch below is a path heuristic - a packaged
+  // install under Program Files whose port is merely busy must not be told to reinstall.
+  // The dominant field cause is LUCID's own ORPHANED engine: the Electron main was killed without
+  // running its quit handler (crash, Task Manager, a forced update), the spawned engine survived, and
+  // the NEXT launch found 5319 taken. That is why the recovery names the leftover process first.
+  if (exited && (exitCode === ENGINE_EXIT_PORT_BUSY || PORT_BUSY_SIGNAL.test(lastLogLine))) {
+    const endIt = platform === "win32"
+      ? `End any leftover "lucid-engine" process in Task Manager (Details tab), then relaunch.`
+      : `End any leftover lucid-engine process (\`pkill -f lucid-engine\`), then relaunch.`;
+    return {
+      kind: "port-busy",
+      title: `Another process is already using port ${port}`,
+      detail:
+        `The local engine could not start because port ${port} was already taken, so it exited immediately.\n\n` +
+        `Most often this is a leftover engine from a previous session that outlived its window. ` +
+        `${endIt} If a different program genuinely needs that port, start this app with LUCID_PORT set ` +
+        `to a free port instead (that creates a separate, deliberately isolated instance).\n\n` +
+        `The engine's startup output is in:\n${logPath}${lastLine}`,
+    };
+  }
 
   if (packaged && (protectedRoot || !repoWritable || permissionSignal)) {
     const win = platform === "win32";
