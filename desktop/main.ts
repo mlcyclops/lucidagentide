@@ -25,7 +25,7 @@ import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDir
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
-import { formatPortIncident, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
+import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
@@ -210,7 +210,7 @@ function startDevServer(): void {
     // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
     // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
     // its agent-browser poll loop against the child's /api/browser routes.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid) },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -1020,7 +1020,17 @@ app.whenReady().then(async () => {
       logPath: engineLogPath(),
       platform: process.platform,
     });
-    dialog.showErrorBox(report.title, report.detail);
+    // P-PORTGUARD.2: when the engine lost the BIND there is no health verdict to classify (nothing of
+    // ours ever listened), but the user still needs to know WHICH process to end - "port 5319 is busy"
+    // without a pid is the same dead end the ADR-0305 incident block exists to prevent. Attribute it
+    // with the same probe and the same renderer, and put it in engine.log too.
+    let detail = report.detail;
+    if (report.kind === "port-busy") {
+      const owner = formatSquatter(await probePortOwner()).join("\n");
+      detail = `${detail}\n\nWhat is holding port ${PORT}:\n${owner}`;
+      appendEngineLog(`\n--- ${new Date().toISOString()} port-busy incident (P-PORTGUARD.2) ---\n- Port: ${PORT}\n${owner}\n`);
+    }
+    dialog.showErrorBox(report.title, detail);
   }
   initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

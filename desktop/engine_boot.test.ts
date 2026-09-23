@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import {
   bestEngineLine,
   classifyEngineFailure,
+  ENGINE_EXIT_PORT_BUSY,
   isProtectedInstallRoot,
   probeDirWritable,
   type EngineFailureInput,
@@ -113,6 +114,33 @@ describe("classifyEngineFailure", () => {
   test("a DEV run never blames the install location, even under Program Files", () => {
     const r = classifyEngineFailure({ ...base, packaged: false, protectedRoot: true, repoWritable: false, exited: true, exitCode: 1 });
     expect(r.kind).toBe("engine-exited");
+  });
+  test("port-busy by the engine's own exit code, with the recovery the user can act on", () => {
+    const r = classifyEngineFailure({ ...base, exited: true, exitCode: ENGINE_EXIT_PORT_BUSY, lastLogLine: "[engine] FATAL: cannot start - port 5319 is already in use (EADDRINUSE)." });
+    expect(r.kind).toBe("port-busy");
+    expect(r.title).toContain("5319");
+    expect(r.detail).toContain("Task Manager");
+    expect(r.detail).toContain("LUCID_PORT");
+  });
+  test("port-busy from the raw bun message alone (a package cut before the exit code existed)", () => {
+    const r = classifyEngineFailure({ ...base, exited: true, exitCode: 1, lastLogLine: "[Uncaught Exception] Error: Failed to start server. Is port 5319 in use?" });
+    expect(r.kind).toBe("port-busy");
+  });
+  test("a busy port never gets blamed on the install location", () => {
+    // The 2026-09-23 incident on a per-user install: the protected-location branch would have sent the
+    // user to reinstall for a port an orphaned engine was holding. Direct evidence outranks the heuristic.
+    const r = classifyEngineFailure({ ...base, protectedRoot: true, repoWritable: false, exited: true, exitCode: ENGINE_EXIT_PORT_BUSY });
+    expect(r.kind).toBe("port-busy");
+  });
+  test("a live engine is never called port-busy just because an old bind error is in the tail", () => {
+    const r = classifyEngineFailure({ ...base, exited: false, lastLogLine: "Failed to start server. Is port 5319 in use?" });
+    expect(r.kind).toBe("timeout");
+  });
+  test("non-Windows port-busy drops the Task Manager wording", () => {
+    const r = classifyEngineFailure({ ...base, platform: "linux", exited: true, exitCode: ENGINE_EXIT_PORT_BUSY });
+    expect(r.kind).toBe("port-busy");
+    expect(r.detail).not.toContain("Task Manager");
+    expect(r.detail).toContain("pkill");
   });
   test("non-Windows protected-location wording drops the Windows-only paths", () => {
     const r = classifyEngineFailure({ ...base, platform: "darwin", repoWritable: false, repoRoot: "/Applications/LucidAgent.app/Contents/Resources/repo" });

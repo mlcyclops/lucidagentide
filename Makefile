@@ -912,6 +912,9 @@ demo-P-WINBOOT.2C: ## P-WINBOOT.2C (ADR-0261): the Program Files boot GATE - sta
 .PHONY: demo-portguard
 demo-portguard: ## P-PORTGUARD.1 (ADR-0305): the engine port handshake - main only renders a health answer carrying its per-launch nonce, so a foreign process squatting the engine port fails LOUDLY with a copy/paste incident report (process name, pid, start date/time, command line), never a silent roll onto a stranger's UI
 	$(BUN) run desktop/scripts/demo_portguard.ts
+.PHONY: demo-portguard-2
+demo-portguard-2: ## P-PORTGUARD.2 (ADR-0381): the engine cannot outlive its window - main hands it LUCID_MAIN_PID, it polls that pid and exits when the Electron main dies any way the quit handler cannot see (crash, Task Manager, app.exit, an updater), so an orphan can never keep port 5319 from the next launch; and a lost bind is a DIAGNOSIS (exit 48 + one plain line + the process holding the port) instead of an uncaught "Failed to start server" stack, ranked above the protected-location heuristic so a busy port is never blamed on the install folder. Proven LIVE: a real bind race and a real orphaning
+	$(BUN) run desktop/scripts/demo_p_portguard_2.ts
 .PHONY: demo-preview-open
 demo-preview-open: ## P-PREVIEW.11 (ADR-0308): the agent's `preview_open` opens the panel again - omp's intent tracing rewrites a custom tool's ACP call title to the model's intent prose (and the update carries no tool-name field at all), so the old title match silently swallowed every preview; the tool now REPORTS ITSELF over its own token'd channel like preview_screenshot/inspect/act, best-effort so an unreachable or older desktop degrades instead of failing, and fail-closed so a refused target is never reported
 	$(BUN) run desktop/scripts/demo_preview_open.ts

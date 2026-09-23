@@ -61,7 +61,9 @@ assert(isProtectedInstallRoot(PROGRAM_FILES) && !isProtectedInstallRoot(PER_USER
 console.log("\n[4] main.ts is wired to fail FAST and ACTIONABLY (not a 30s blank box)");
 const main = readFileSync(join(import.meta.dir, "..", "main.ts"), "utf8");
 assert(main.includes('dev.on("exit"'), "the engine child's exit is watched");
-assert(/if \(engineExit\) return false;/.test(main), "waitForServer bails the moment the engine dies, instead of polling for the full window");
+// ADR-0305 turned waitForServer's boolean into a ServerWait verdict; the invariant it encodes is
+// unchanged - a dead engine ends the wait instead of burning the full window.
+assert(/if \(engineExit\) return \{ status: "down" \};/.test(main), "waitForServer bails the moment the engine dies, instead of polling for the full window");
 assert(main.includes("classifyEngineFailure({"), "the failure dialog is built by the classifier");
 assert(main.includes("bestEngineLine(engineTail)") && main.includes(".slice(-4000)"), "a bounded engine tail feeds the dialog's last-message line");
 assert(!main.includes("The bundled background service did not respond"), "the old generic-only message is gone");
