@@ -8859,6 +8859,13 @@ function renderThread(msgs: { role: string; text: string; turn?: number }[] | nu
     }
     for (const g of steps ?? []) if (g.turn > maxUserTurn && maxUserTurn > 0) attachRestoredSteps(g);
   } else seedThread();
+  // A replaced thread opens on its NEWEST message. The per-message scrollChat() calls above cannot do
+  // this: the first one (thread still empty, so "near bottom") queues the single follow-frame, the
+  // rest coalesce into it, and that frame re-checks nearBottom only AFTER the whole transcript is in
+  // the DOM. By then scrollTop is 0 (innerHTML="" collapsed it) over thousands of px of content, the
+  // check fails, and the session opened parked at its first message. jumpToEnd lands on the bottom
+  // and clears the previous session's lastWroteTop, so live output on this thread follows again.
+  jumpToEnd();
 }
 // P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
 // payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
