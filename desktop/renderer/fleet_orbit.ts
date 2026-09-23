@@ -19,7 +19,7 @@ import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts"; // P
 import { ageStr, esc } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { popover } from "./ui.ts";
-import type { FleetStatusView, LaneView, LucidBridge } from "./bridge.ts";
+import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SwitchEntry } from "./orbit_layout.ts";
 
@@ -49,7 +49,8 @@ export interface FleetOrbitDeps {
   getMasterModel: () => string;
   getMasterCwd: () => string;
   /** The attached lane's OWN measured context fill (P-FLEET.L8 routes lane usage into state.liveUsage
-   *  while promoted). null until the lane's first usage sample lands - shown as unknown, never faked. */
+   *  while promoted; P-FLEET.L19 seeds it on attach from the engine's last sample, and `size` is the
+   *  same window the status ring divides by). null only for a lane that has never reported. */
   getLaneUsage: () => { used: number; size: number; cost: number } | null;
 }
 
@@ -568,8 +569,10 @@ function onViewClick(ev: Event): void {
   if (t.closest("[data-orbit-spawn]")) { togglePanel("spawn"); return; }
   if (t.closest("[data-orbit-panel]")) { onPanelClick(t); return; }
   if (t.closest("[data-orbit-hub]")) { goHome(); return; }
+  const approveSession = t.closest("[data-orbit-allow-session]") as HTMLElement | null;
+  if (approveSession) { void answer(approveSession.dataset.orbitAllowSession!, true, "session"); return; }
   const approve = t.closest("[data-orbit-allow]") as HTMLElement | null;
-  if (approve) { void answer(approve.dataset.orbitAllow!, true); return; }
+  if (approve) { void answer(approve.dataset.orbitAllow!, true, "once"); return; }
   const deny = t.closest("[data-orbit-deny]") as HTMLElement | null;
   if (deny) { void answer(deny.dataset.orbitDeny!, false); return; }
   const respawn = t.closest("[data-orbit-respawn]") as HTMLElement | null;
@@ -594,9 +597,12 @@ function takeover(laneId: string): void {
   closeFleetOrbit();
 }
 
-async function answer(laneId: string, allow: boolean): Promise<void> {
-  await deps?.fleetAnswer(laneId, allow, "once");
+/** P-FLEET.L19: every surface offers the grid's scope choice. "session" also allows every same-kind ask
+ *  for the rest of the lane's session; the engine ignores scope on a deny (fail-closed). */
+async function answer(laneId: string, allow: boolean, scope: ApprovalScope = "once"): Promise<void> {
+  await deps?.fleetAnswer(laneId, allow, scope);
   void refresh(false);
+  void bannerRefresh(); // the composer's ask dock and the banner chip settle now, not at the next poll
 }
 
 // ------------------------------------------------------------------------------------------ reconcile
@@ -699,7 +705,8 @@ function buildNode(lane: LaneView): HTMLElement {
         <div class="orbit-approve" hidden>
           <span class="orbit-approve-sum"></span>
           <span class="orbit-approve-btns">
-            <button class="btn-mini orbit-allow" data-orbit-allow="${esc(lane.id)}">${icon("check", 12)} Allow</button>
+            <button class="btn-mini orbit-allow" data-orbit-allow="${esc(lane.id)}" data-tip="Allow once|Approve only this ask. The next one asks again.">${icon("check", 12)} Once</button>
+            <button class="btn-mini orbit-allow" data-orbit-allow-session="${esc(lane.id)}" data-tip="Allow for session|Approve this ask and every same-kind ask for the rest of this spoke's session.">${icon("check", 12)} Session</button>
             <button class="btn-mini orbit-deny" data-orbit-deny="${esc(lane.id)}">${icon("close", 12)} Deny</button>
           </span>
         </div>
@@ -795,7 +802,7 @@ function layoutStage(lanes: LaneView[]): void {
 
 let banner: HTMLElement | null = null;
 let menuPop: { close: () => void } | null = null;
-let vitalsPop: { node: HTMLElement; close: () => void } | null = null;
+let vitalsPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
 let bannerTimer: number | null = null;
 /** The banner's freshest LaneView for the attached lane, from its own 2.5s poll. */
 let bannerLane: LaneView | null = null;
@@ -807,6 +814,7 @@ export function renderSpokeBanner(target: ComposerTarget): void {
     vitalsPop?.close(); vitalsPop = null;
     if (bannerTimer != null) { window.clearInterval(bannerTimer); bannerTimer = null; }
     bannerLane = null;
+    paintAskDock(null, "", undefined); // the ask stays on the spoke's orbit/grid card; the composer left it
     if (banner) { banner.classList.remove("show"); const b = banner; banner = null; window.setTimeout(() => b.remove(), 260); }
     return;
   }
@@ -845,8 +853,11 @@ async function bannerRefresh(): Promise<void> {
   const s = await deps.fleetStatus();
   if (!banner) return;
   bannerLane = s?.lanes.find((l) => l.id === t.laneId) ?? null;
+  // A failed poll (null status) says nothing about the ask, so it never clears a docked prompt.
+  const now = deps.getTarget();
+  if (s && isLaneTarget(now) && now.laneId === t.laneId) paintAskDock(t.laneId, t.name, bannerLane?.pendingApproval);
   paintVitalChips();
-  if (vitalsPop) paintVitals(vitalsPop.node);
+  if (vitalsPop) { paintVitals(vitalsPop.node); vitalsPop.reposition(); } // an ask arriving grows the card
 }
 
 /** The two glance chips: context fill (escalates at the composer's own 70/90 lines) and security
@@ -870,6 +881,69 @@ function paintVitalChips(): void {
   sec.classList.toggle("warn", !l?.pendingApproval && !!l?.autoApprove);
 }
 
+// ------------------------------------------------------------------ P-FLEET.L19: the spoke's ask dock
+//
+// While the composer drives a spoke, that spoke's pending approval is DOCKED above the prompt bar (the
+// master's own exec/egress cards live in the same place and share the styling). It is not a popover: no
+// outside click, Esc or scroll can dismiss it, because a lane blocks on the answer and a prompt the user
+// cannot get back is a lane stuck forever. It leaves only when the ask is answered (here, the orbit, the
+// grid, or the vitals popover), when the lane stops asking, or when the composer leaves the spoke.
+// Sources: the banner's 2.5s status poll (truth) plus noteSpokeAsk from app.ts for the instant paint.
+
+let askDock: HTMLElement | null = null;
+let askKey = "";
+/** The ask just answered here. A status poll already in flight can still report it, and repainting it for
+ *  one poll would read as "my click did nothing"; a genuinely new ask carries a different key. */
+let answeredAsk: { key: string; at: number } | null = null;
+const ASK_ECHO_MS = 3000;
+
+/** app.ts calls this when a lane stream (prompt or watch) reports a permission ask, so the dock appears
+ *  with the ask instead of up to one poll later. Asks from lanes the composer is not driving are ignored;
+ *  their cards in the orbit and the grid carry them. */
+export function noteSpokeAsk(laneId: string, ask: { summary: string; kind: string }): void {
+  const t = deps?.getTarget();
+  if (!t || !isLaneTarget(t) || t.laneId !== laneId) return;
+  paintAskDock(laneId, t.name, ask);
+}
+
+function paintAskDock(laneId: string | null, name: string, ask: { summary: string; kind: string } | undefined): void {
+  if (!laneId || !ask) { askDock?.remove(); askDock = null; askKey = ""; return; }
+  const key = `${laneId}\u0001${ask.kind}\u0001${ask.summary}`;
+  if (answeredAsk && answeredAsk.key === key && Date.now() - answeredAsk.at < ASK_ECHO_MS) return;
+  if (askDock?.isConnected && key === askKey) return;
+  const wrap = $(".composer-wrap") as HTMLElement | null;
+  if (!wrap) return;
+  askDock?.remove();
+  askKey = key;
+  const node = el(`<div id="spokeAskDock" role="alertdialog" aria-label="Spoke approval">
+    <div class="perm perm-egress perm-exec">
+      <div class="perm-eg-head">${icon("shield", 13)}<span class="spoke-ask-title"></span></div>
+      <div class="perm-egress-target"><code class="perm-url spoke-ask-sum"></code></div>
+      <div class="perm-exec-why"><code class="perm-prog spoke-ask-kind"></code><span>Stays here until you answer. Clicking elsewhere never dismisses it.</span></div>
+      <div class="perm-actions perm-actions-col">
+        <button class="perm-btn eg-allow" data-spoke-ask="once">Allow once</button>
+        <button class="perm-btn eg-allow" data-spoke-ask="session">Allow for this session (every ${esc(ask.kind)} ask on this spoke)</button>
+        <button class="perm-btn eg-block" data-spoke-ask="deny">Deny</button>
+      </div>
+    </div>
+  </div>`);
+  ($(".spoke-ask-title", node) as HTMLElement).textContent = `${name} wants to run a gated action`;
+  ($(".spoke-ask-sum", node) as HTMLElement).textContent = ask.summary;
+  ($(".spoke-ask-kind", node) as HTMLElement).textContent = ask.kind;
+  node.addEventListener("click", (ev) => {
+    const b = (ev.target as HTMLElement).closest("[data-spoke-ask]") as HTMLElement | null;
+    if (!b) return;
+    const v = b.dataset.spokeAsk;
+    for (const btn of node.querySelectorAll("button")) (btn as HTMLButtonElement).disabled = true;
+    answeredAsk = { key, at: Date.now() };
+    if (askDock === node) { askDock = null; askKey = ""; }
+    node.remove();
+    void answer(laneId, v !== "deny", v === "session" ? "session" : "once");
+  });
+  (wrap.querySelector(".composer-row") ?? wrap.firstElementChild)?.before(node);
+  askDock = node;
+}
+
 /** The full vitals popover: THIS spoke's security posture and memory figures, live while open. */
 async function openVitals(): Promise<void> {
   if (!deps || !banner) return;
@@ -880,11 +954,14 @@ async function openVitals(): Promise<void> {
   const p = popover(anchor, `<div class="spoke-vit"></div>`, () => { vitalsPop = null; });
   vitalsPop = p;
   paintVitals(p.node);
+  // popover() measured the EMPTY shell and capped max-height to it; the painted card is ~340px taller.
+  // Without this the vitals opened as a 10px sliver, so its Allow/Deny could not be reached at all.
+  p.reposition();
   p.node.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest("[data-vit-answer]") as HTMLElement | null;
     if (!btn || !bannerLane) return;
-    void answer(bannerLane.id, btn.dataset.vitAnswer === "allow");
-    window.setTimeout(() => void bannerRefresh(), 400);
+    const v = btn.dataset.vitAnswer;
+    void answer(bannerLane.id, v !== "deny", v === "session" ? "session" : "once");
   });
 }
 
@@ -904,7 +981,8 @@ function paintVitals(node: HTMLElement): void {
     <div class="spoke-vit-s"><h4>${icon("shield", 13)} Security \u00b7 this spoke</h4>
       <div class="spoke-vit-row"><span>approval mode</span><b>${l.autoApprove ? "full auto (risk accepted)" : "ask me each time"}</b></div>
       ${l.pendingApproval ? `<div class="spoke-vit-ask"><span>${esc(l.pendingApproval.summary)}</span>
-        <span class="spoke-vit-btns"><button class="btn-mini orbit-allow" data-vit-answer="allow">${icon("check", 12)} Allow</button>
+        <span class="spoke-vit-btns"><button class="btn-mini orbit-allow" data-vit-answer="once">${icon("check", 12)} Allow once</button>
+        <button class="btn-mini orbit-allow" data-vit-answer="session">${icon("check", 12)} Allow for session</button>
         <button class="btn-mini orbit-deny" data-vit-answer="deny">${icon("close", 12)} Deny</button></span></div>` : ""}
       <div class="spoke-vit-row"><span>allowed for session</span><b class="spoke-vit-kinds">${allow}</b></div>
       <div class="spoke-vit-row"><span>open tool calls</span><b>${l.openCalls}</b></div>

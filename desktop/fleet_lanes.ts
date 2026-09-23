@@ -82,6 +82,10 @@ export interface LaneView {
   /** P-HEALTH.1: the harness's last self-action on this lane, so the card can say "the harness probed
    *  this and it answered" instead of leaving the user to guess whether anything happened. */
   lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
+  /** P-FLEET.L19: the lane's LAST measured context accounting (the P-FLEET.L7 usage figures), kept by the
+   *  manager so a composer attaching to an idle lane shows its real fill at once instead of "ctx --"
+   *  until the lane's next turn. Absent until omp reports once; never estimated. */
+  usage?: { used: number; size: number; cost: number };
 }
 
 /** P-FLEET.L3: a pasted image riding a lane prompt - the P-VISION.1 shape the master chat uses. */
@@ -254,6 +258,8 @@ interface Lane {
   health: HealthEpisode;
   /** The harness's last self-action on this lane, surfaced in status so the user can see it worked. */
   lastHealth: { action: "probe" | "recover"; reason: string; at: number } | null;
+  /** P-FLEET.L19: the last usage_update omp reported for this lane, surfaced as LaneView.usage. */
+  lastUsage: { used: number; size: number; cost: number } | null;
   /** P-FLEET.L8: the MAIN composer is attached to this lane, so the card renders as promoted and the
    *  lane's events also reach the composer. The lane keeps running either way: attachment moves the
    *  renderer's prompt target, never the ACP session. */
@@ -350,6 +356,7 @@ export class FleetLaneManager {
       openCalls: new Map(),
       health: newEpisode(t),
       lastHealth: null,
+      lastUsage: null,
       promoted: false,
       transcript: [],
       liveText: "",
@@ -984,9 +991,12 @@ export class FleetLaneManager {
         // P-FLEET.L7: omp reports CONTEXT fill, the window, and cost. It does NOT report per-turn output
         // tokens on this path, so the lane forwards exactly the three measured figures and invents
         // nothing; the renderer labels its own output estimate as an estimate.
-        case "usage_update":
-          this.#emit(lane, { type: "usage", used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) });
+        case "usage_update": {
+          const usage = { used: Number(u.used ?? 0), size: Number(u.size ?? 0), cost: Number(u.cost?.amount ?? 0) };
+          lane.lastUsage = usage; // P-FLEET.L19: status carries it, so an attach to an idle lane is not blind
+          this.#emit(lane, { type: "usage", ...usage });
           break;
+        }
       }
     };
     lane.client.onRequest = async (method, params) => {
@@ -1143,6 +1153,7 @@ export class FleetLaneManager {
       promoted: lane.promoted,
       openCalls: lane.openCalls.size,
       ...(lane.lastHealth ? { lastHealth: { ...lane.lastHealth } } : {}),
+      ...(lane.lastUsage ? { usage: { ...lane.lastUsage } } : {}),
       ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary, kind: lane.pending.kind } } : {}),
     };
   }

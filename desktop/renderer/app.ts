@@ -93,7 +93,7 @@ import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOpti
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
 import { initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
-import { fleetHome, initFleetOrbit, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
@@ -752,10 +752,7 @@ function renderComposerThumbs(): void {
 }
 /** Validate + stage a pasted/dropped image (data URL) for the next message. */
 function addPastedImage(dataUrl: string, name?: string): void {
-  // P-FLEET.L8: a lane's wire carries no image block, so staging one here would drop it silently at send.
-  // Refuse at the single choke point both paste and drop funnel through, and say why in the module's words.
-  const caps = targetCaps(state.composerTarget);
-  if (!caps.images) { showToast({ tone: "warn", title: "Images can't be sent to a lane", desc: caps.why, actions: [{ label: "OK" }], timeout: 9000 }); return; }
+  // P-FLEET.L19: staged images go to whichever target the composer drives; a spoke's prompt carries them too.
   const r = acceptAttachment(state.attachments, dataUrl, `att_${++attSeq}`, name);
   if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't attach image", desc: r.reason ?? "" }); return; }
   state.attachments.push(r.attachment);
@@ -1772,7 +1769,8 @@ async function send(): Promise<void> {
   const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
   const lane = isLaneTarget(state.composerTarget) ? state.composerTarget : null;
   await renderChatTurn(text, (onEvent) => lane
-    ? bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void)
+    // P-FLEET.L19: pasted images ride the lane prompt as ACP image blocks (the lane's P-FLEET.L3 wire).
+    ? bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void, images.map((b) => ({ data: b.data, mimeType: b.mimeType })))
     : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId });
 }
 
@@ -2009,6 +2007,14 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       subCards.push(card);
       streamEl.after(card.el); // delegation card sits just below the answer
       scrollChat();
+    }
+    else if (e.type === "permission" && opts.laneId) {
+      // P-FLEET.L19: a LANE's ask carries {summary, kind} and is answered through fleetAnswer, not the
+      // master's respondPermission; it has no id or options, so the master card cannot render it. The
+      // persistent spoke ask dock above the composer owns it (with the once / session / deny choice).
+      const ask = e as unknown as { summary?: string; kind?: string };
+      setPhase("Needs approval"); paintHud();
+      noteSpokeAsk(opts.laneId, { summary: String(ask.summary ?? "a privileged action"), kind: String(ask.kind ?? "action") });
     }
     else if (e.type === "permission") {
       if (answeredPermissions.has(e.id) || permCards.has(e.id)) return;
@@ -2297,8 +2303,9 @@ async function promoteLane(laneId: string): Promise<void> {
   parkedMasterThread = snapshotThread();
   state.composerTarget = target;
   // P-FLEET.L17: the ring, the rail and the spoke banner now speak for the LANE - the master's last
-  // sample would be a lie until the lane's first usage event replaces it, so show unknown instead.
-  state.liveUsage = null;
+  // sample would be a lie. P-FLEET.L19: seed from the lane's OWN last measured sample (the engine keeps
+  // it), so an idle spoke shows its real fill at once; unknown only when it has never reported.
+  state.liveUsage = lane.usage ? { ...lane.usage } : null;
   // Seed from the lane's own history, so the user lands in the conversation rather than an empty pane.
   const turns = seedTurns(r.transcript ?? []);
   renderThread(turns);
@@ -2310,6 +2317,7 @@ async function promoteLane(laneId: string): Promise<void> {
   // delimiters, and it is fire-and-forget because a failed note must never block the attach.
   void bridge.interject(laneId, promoteAgentNote(target)).catch(() => { /* the attach still stands */ });
   renderComposerTarget();
+  renderStatus(); renderMetricsRail(); // P-FLEET.L19: the ring switches to the spoke now, not at the next poll
   // The FOLLOW: it owns no turn, which is precisely what lets it join one already in flight.
   laneWatch = bridge.fleetWatch(laneId, onLaneWatchEvent);
   laneWatch.done.catch(() => { /* the stream ending (or being aborted on demote) is not an error here */ });
@@ -2343,6 +2351,7 @@ function demoteLane(): void {
   parkedMasterThread = null;
   addNoteChip(demoteNotice(was));
   renderComposerTarget();
+  renderStatus(); renderMetricsRail(); // P-FLEET.L19: back to the master's own figures immediately
   void recoverMasterTurn();
 }
 
@@ -2355,6 +2364,12 @@ function onLaneWatchEvent(e: LaneEvent): void {
     // would duplicate it. Only a still-EMPTY thread is seeded from the watch.
     if ($("#thread .msg")) return;
     renderThread(seedTurns(e.turns));
+    return;
+  }
+  // P-FLEET.L19: an ask surfaces in the spoke ask dock whoever started the turn (this composer, the
+  // lane's grid card, or its queue). The dock dedupes, so the prompt stream reporting it too is harmless.
+  if (e.type === "permission") {
+    if (isLaneTarget(state.composerTarget)) noteSpokeAsk(state.composerTarget.laneId, { summary: e.summary, kind: e.kind });
     return;
   }
   if (state.streaming) return; // our own turn is rendering these already
@@ -2439,13 +2454,6 @@ function renderComposerTarget(): void {
  *  silently do nothing. targetCaps also carries the one-paragraph why, which is what the refusals quote. */
 function applyTargetCaps(): void {
   const caps = targetCaps(state.composerTarget);
-  if (!caps.images) {
-    // A staged image could never reach the lane, so it is dropped on attach instead of being sent nowhere.
-    state.attachments = [];
-    const strip = $("#composerThumbs") as HTMLElement | null;
-    if (strip) { strip.innerHTML = ""; strip.hidden = true; }
-    setSendEnabled();
-  }
   const modes = $("#modeToggle") as HTMLElement | null;
   if (modes && !caps.modes) modes.hidden = true;
   else if (modes) renderSessionMode(); // back on master: the toggle's own lockdown rule decides again
@@ -2715,7 +2723,7 @@ function renderMetricsRail(): void {
   const tiles = $("#railTiles");
   if (!tiles) return;
   const s = state.memory?.session, lu = state.liveUsage, sec = state.security;
-  const cur = lu ? lu.used : (s?.current ?? 0);
+  const cur = lu ? lu.used : isLaneTarget(state.composerTarget) ? 0 : (s?.current ?? 0); // P-FLEET.L19: never the master's fill on a spoke
   const turns = s?.turns ?? 0;
   const hit = s?.cache.hit ?? 0;
   const avg = turns ? Math.round(cur / turns) : 0;
@@ -9542,23 +9550,29 @@ function asksageChip(): string {
 function renderStatus(): void {
   const m = state.memory, s = m?.session;
   const lu = state.liveUsage;
-  const curTok = lu ? lu.used : (s?.current ?? 0);
-  // Prefer the selected model's real context window over omp's reported size
+  // P-FLEET.L19: attached to a spoke, the ring speaks for the LANE only. Its fill is the lane's own
+  // sample (seeded on promote from LaneView.usage) over the LANE's model window; the master's figures
+  // never stand in for it, so a lane with no sample yet reads "--" instead of the master's fill.
+  const tgt = state.composerTarget;
+  const onLane = isLaneTarget(tgt);
+  const curTok = lu ? lu.used : onLane ? 0 : (s?.current ?? 0);
+  // Prefer the model's real context window over omp's reported size
   // (which is wrong for the AskSage gateway models); fall back for unknown models.
-  const winTok = modelCtx(state.model) ?? (lu ? lu.size : (s?.window ?? 0));
+  const winTok = modelCtx(onLane ? tgt.model : state.model) ?? (lu ? lu.size : onLane ? 0 : (s?.window ?? 0));
   const ctx = winTok ? curTok / winTok : 0;
   const budget = m?.budgets?.[0];
   const ctxPct = Math.round(ctx * 100);
+  const noSample = onLane && !lu;
   // Minimal status bar: a context-fill RING · (Claude API status / Gov usage when present) · the
   // Trivia Wire's flexible gap. The model seg was removed (redundant - the titlebar model badge
   // already shows it) and the gate-active pill retired (the gate's WORK surfaces in the Security
   // panel + rail badge); the cache/session-cost pills live on in the Memory panel.
   $("#statusbar")!.innerHTML = `
-    <div class="seg ctx" data-tip="Context window|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? " · live this session" : ""}">
+    <div class="seg ctx" data-tip="${noSample ? `Context window · ${esc(tgt.name)}|This spoke has not reported its context fill yet. It fills in with the spoke's next reply.` : `Context window${onLane ? ` · ${esc(tgt.name)}` : ""}|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? onLane ? " · this spoke's own sample" : " · live this session" : ""}`}">
       <svg class="ctx-ring" viewBox="0 0 22 22" width="17" height="17" aria-hidden="true">
         <circle class="ctx-track" cx="11" cy="11" r="8"/>
         <circle class="ctx-arc" pathLength="100" cx="11" cy="11" r="8" style="stroke:${loadColor(ctx)};stroke-dashoffset:${100 - Math.min(100, Math.max(0, ctxPct))}"/>
-      </svg><b>${ctxPct}%</b></div>
+      </svg><b>${noSample ? "--" : `${ctxPct}%`}</b></div>
     <div class="seg-mid">
       ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} cached usage|Last reported subscription usage, not API-key billing or live rate-limit headers. Sample time and account identity are unknown. Click to re-read the cache; confirm current allowance on the provider usage page.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
       ${asksageChip()}
@@ -14359,7 +14373,13 @@ function wire(): void {
     getMasterCwd: () => state.workspace?.current ?? "",
     // While attached, liveUsage carries the LANE's own samples (both stream paths write it), so the
     // banner's memory chip speaks for the spoke. Promote/demote null it, so it is never the master's.
-    getLaneUsage: () => (isLaneTarget(state.composerTarget) ? state.liveUsage : null),
+    // P-FLEET.L19: the window is the one the status ring uses (the lane model's real window, omp's size
+    // as the fallback), so the banner chip and the ring can never show two different percentages.
+    getLaneUsage: () => {
+      const t = state.composerTarget, lu = state.liveUsage;
+      if (!isLaneTarget(t) || !lu) return null;
+      return { used: lu.used, size: modelCtx(t.model) ?? lu.size, cost: lu.cost };
+    },
   });
   // P-FLEET.L18: the Fleet button opens whichever view the user PINNED (orbit by default); each view's
   // header links to the other, so neither choice ever strands you.

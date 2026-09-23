@@ -971,6 +971,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 /* P-EGRESS.1 (ADR-0062): per-website egress approval, DOCKED above the prompt bar. Subdued to match the
    app - outline buttons (no bright fills), amber only as a thin accent, color on hover. */
 #egressDock{max-width:min(1080px,94vw);margin:0 auto 10px;display:flex;flex-direction:column;gap:8px}
+/* P-FLEET.L19: the attached spoke's pending ask. Same shell as the exec card, same slot above the prompt;
+   a red accent because the lane is blocked on this answer. Never dismissed by outside clicks. */
+#spokeAskDock{max-width:min(1080px,94vw);margin:0 auto 10px;display:flex;flex-direction:column;animation:rise var(--t) var(--ease-out)}
+#spokeAskDock .perm-egress{border-left-color:var(--red)}
+#spokeAskDock .perm-eg-head .ic{color:var(--red)}
+#spokeAskDock .perm-url{white-space:pre-wrap;word-break:break-word}
 .perm-egress{margin:0;border:1px solid var(--line);border-left:2px solid color-mix(in srgb,var(--amber) 55%,var(--line));
   border-radius:11px;background:var(--bg-1)}
 .perm-eg-head{display:flex;align-items:center;gap:7px;padding:9px 12px 5px;color:var(--txt-2);font-weight:600;font-size:13px}
@@ -5478,7 +5484,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-approve{display:flex;flex-direction:column;gap:4px;padding:5px 6px;border-radius:8px;
   background:rgb(var(--red-rgb) / .12);border:1px solid rgb(var(--red-rgb) / .4)}
 .orbit-approve-sum{font-size:10px;color:var(--txt-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.orbit-approve-btns{display:flex;gap:5px}
+.orbit-approve-btns{display:flex;gap:4px}
+/* P-FLEET.L19: Once / Session / Deny share the card width equally instead of spilling past its edge. */
+.orbit-approve-btns .btn-mini{flex:1 1 0;min-width:0;justify-content:center;padding-inline:4px;white-space:nowrap}
 .orbit-allow{color:var(--green-txt,var(--green))}
 .orbit-deny{color:var(--red-txt,var(--red))}
 .orbit-revive{display:flex}
