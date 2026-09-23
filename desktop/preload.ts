@@ -45,6 +45,10 @@ contextBridge.exposeInMainWorld("lucid", {
   showInFolder: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:showInFolder", path),
   // P-LOCAL.3 polish: restart the app so a freshly-spawned omp picks up new/changed local providers.
   relaunch: (): Promise<void> => ipcRenderer.invoke("lucid:relaunch"),
+  // P-RECOVER.1 (ADR-0384): restart ONLY the engine when the window has lost it. Main refuses while the
+  // engine answers its nonce health check ("engine-healthy") and allows one restart a minute ("rate-limited").
+  // On ok:true the renderer reloads the window.
+  restartEngine: (): Promise<{ ok: boolean; reason: string; incidentId?: string }> => ipcRenderer.invoke("lucid:engineRestart"),
   // P-KGMARKET.4 (ADR-0206): the OS forwards the lucid://auth?token=... deep link (after hosted marketplace
   // sign-in) to the main process, which relays it here for market_boot.handleAuthCallback.
   onAuthCallback: (cb: (url: string) => void): void => { ipcRenderer.on("lucid:authCallback", (_e, url: string) => cb(url)); },

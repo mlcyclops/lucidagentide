@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { ScannerClient } from "../security/scanner_client.ts";
 import { scanAndDecide, type GatePolicy } from "../security/gate.ts";
 import { buildNotification, summarizeNotification } from "../security/notification.ts";
+import { writeStderrNotice } from "./stderr_notice.ts"; // P-RECOVER.1 (ADR-0384): a closed stderr never crashes omp
 import type { Db } from "../memory/db.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -161,17 +162,24 @@ export default function securityExtension(pi: any): void {
       return;
     }
 
-    const notification = buildNotification({
-      source: toolName,
-      trustLabel: decision.trustLabel,
-      findings: decision.findings,
-      blocked: `tool_call:${toolName}`,
-      reason: decision.reason,
-      failClosed: decision.failClosed,
-    });
-    process.stderr.write(`\n🛡️  [LucidAgentIDE] ${summarizeNotification(notification)}\n`);
-    if (isTask) void recordTaskDispatch(decision); // blocked task → routed to read-only security-review
-    void rememberActivity(toolName, text); // fire-and-forget; never blocks the gate
+    // P-RECOVER.1 (ADR-0384): everything between the decision and the return is advisory. A throw in the
+    // notice (a closed stderr raised EPIPE here and crashed omp) or in the bookkeeping must never skip
+    // the block, so the return below is reached unconditionally.
+    try {
+      const notification = buildNotification({
+        source: toolName,
+        trustLabel: decision.trustLabel,
+        findings: decision.findings,
+        blocked: `tool_call:${toolName}`,
+        reason: decision.reason,
+        failClosed: decision.failClosed,
+      });
+      writeStderrNotice(`\n🛡️  [LucidAgentIDE] ${summarizeNotification(notification)}\n`);
+    } catch { /* notice lost; the block stands */ }
+    try {
+      if (isTask) void recordTaskDispatch(decision); // blocked task → routed to read-only security-review
+      void rememberActivity(toolName, text); // fire-and-forget; never blocks the gate
+    } catch { /* bookkeeping lost; the block stands */ }
     return { block: true, reason: `Blocked by LucidAgentIDE security gate: ${decision.reason}` };
   });
 

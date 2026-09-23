@@ -11,6 +11,9 @@
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
+// P-RECOVER.1 (ADR-0384): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
+import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
+import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { externalHttpUrl } from "../navigation_policy.ts";
 import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
@@ -1674,12 +1677,21 @@ function noteHealth(action: "probe" | "recover", reason: string): void {
 // P-TURN-RECOVERY-OWNER: one renderer owns the composer; leaving only detaches its local reader.
 let turnViewEpoch = 0;
 let activeTurnView: { detach: () => void; stop: () => Promise<void>; reconnect: () => void } | null = null;
-let recoveryChecking = false;
+let recoveryChecking: boolean = false;
+// P-RECOVER.1 (ADR-0384): "Checking connection" blocks Send, so it must always end. Every status check
+// clears it on its own paths; this cap clears it when a path forgot to, or when the engine never answered.
+const RECOVERY_CHECK_MAX_MS = 20_000;
+let recoveryCheckTimer = 0;
+function setRecoveryChecking(on: boolean): void {
+  recoveryChecking = on;
+  window.clearTimeout(recoveryCheckTimer);
+  recoveryCheckTimer = on ? window.setTimeout(() => { setRecoveryChecking(false); setSendEnabled(); }, RECOVERY_CHECK_MAX_MS) : 0;
+}
 function leaveTurnView(): number {
   ++turnViewEpoch;
   activeTurnView?.detach(); activeTurnView = null;
   bridge.detachChat();
-  recoveryChecking = false;
+  setRecoveryChecking(false);
   state.streaming = false;
   goalLoopRunning = false;
   $("#turnReconnect")?.remove();
@@ -1688,6 +1700,9 @@ function leaveTurnView(): number {
   return turnViewEpoch;
 }
 function showTurnReconnect(message: string, reconnect: () => void): void {
+  // P-RECOVER.1 (ADR-0384): while the supervisor works on THIS view its notice is the one voice at the
+  // thread tail. The manual banner is held and comes back if the supervisor cannot fix it.
+  if (recoveryActive?.hooks.defers && recoveryActive.hooks.alive()) { recoveryActive.deferred = { message, reconnect }; return; }
   $("#turnReconnect")?.remove();
   const notice = el(`<div id="turnReconnect" class="thread-tail-note"><span></span> <button type="button">Reconnect</button></div>`);
   $("span", notice)!.textContent = message;
@@ -1711,6 +1726,125 @@ function showQuietReconnect(reconnect: () => void): void {
 function hideQuietReconnect(): void {
   const btn = $("#ctReconnect") as HTMLButtonElement | null;
   if (btn) { btn.hidden = true; btn.onclick = null; }
+}
+
+// ── P-RECOVER.1 (ADR-0384): the recovery supervisor's driver ────────────────────────────────────────
+// recovery_supervisor.ts DECIDES (pure, tested); this performs what it decides and says so at the thread
+// tail. One run at a time, a capped number of automatic runs per window, the engine restart at most
+// once per page (it reloads the window), so a stuck "reconnecting" always ends in an answer.
+interface RecoveryHooks {
+  /** The view (or composer state) the run serves is still the current one. */
+  alive: () => boolean;
+  /** Hold the manual Reconnect banner while the run works (a live turn view). */
+  defers: boolean;
+  /** Follow the running turn again. Resolves whether a reattach started. */
+  reattach: () => Promise<boolean>;
+  /** Stop waiting and reload the thread from the session. */
+  resync: () => Promise<boolean>;
+  /** The run ended well. May return one more sentence for the notice. */
+  onDone?: () => string | undefined;
+  /** Offered as "Try again" when the run gives up. */
+  retry?: () => void;
+}
+interface ActiveRecovery { hooks: RecoveryHooks; startedAt: number; deferred: { message: string; reconnect: () => void } | null }
+let recoveryActive: ActiveRecovery | null = null;
+const recoveryStarts: number[] = [];
+let engineRestartUsed = false;
+
+function superviseRecovery(trigger: RecoveryTrigger, waiting: boolean, hooks: RecoveryHooks): void {
+  if (recoveryActive) return; // the run in flight answers every trigger that arrives meanwhile
+  const now = Date.now();
+  if (!mayStartRun(recoveryStarts, now)) return; // budget spent: the manual Reconnect path stays
+  recoveryStarts.push(now);
+  if (recoveryStarts.length > 16) recoveryStarts.shift();
+  const active: ActiveRecovery = { hooks, startedAt: now, deferred: null };
+  recoveryActive = active;
+  void driveRecovery(active, startRecovery(trigger, { waiting, engineRestartUsed }))
+    .catch((error) => console.error("[P-RECOVER] supervisor failed", error))
+    .finally(() => { if (recoveryActive === active) recoveryActive = null; });
+}
+
+async function driveRecovery(active: ActiveRecovery, first: RecoveryStep): Promise<void> {
+  let s = first;
+  let incidentId: string | undefined;
+  while (s.action.type !== "done" && s.action.type !== "give-up") {
+    const a = s.action;
+    if (!active.hooks.alive()) { clearRecoveryNotice(); return; } // the user moved on: stop quietly
+    showRecoveryNotice(progressText(a));
+    if (a.type === "probe") {
+      if (a.delayMs) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        window.setTimeout(resolve, a.delayMs);
+        await promise;
+      }
+      if (!active.hooks.alive()) { clearRecoveryNotice(); return; }
+      s = afterProbe(s.run, await bridge.engineProbe());
+    } else if (a.type === "reattach" || a.type === "resync") {
+      active.deferred = null; // anything held from before this attempt is stale now
+      const ok = await (a.type === "reattach" ? active.hooks.reattach() : active.hooks.resync()).catch(() => false);
+      s = afterRemedy(s.run, { action: a.type, ok });
+    } else if (a.type === "recover-agent") {
+      const r = await bridge.recoveryRecover();
+      if (r?.incidentId) incidentId = r.incidentId;
+      s = afterRemedy(s.run, { action: "recover-agent", ok: !!r?.ok });
+    } else {
+      engineRestartUsed = true;
+      const r = await bridge.restartEngine();
+      if (r?.incidentId) incidentId = r.incidentId;
+      s = afterRemedy(s.run, { action: "restart-engine", ok: !!r?.ok, reason: r ? r.reason : "unavailable" });
+    }
+  }
+  if (recoveryActive === active) recoveryActive = null; // so a held banner can be shown for real below
+  const end = s.action;
+  if (end.type === "done" && end.how === "engine-restarted") {
+    // The engine behind this window was replaced: the page must load from it again. The new page finds
+    // the engine-unreachable incident unseen and offers the report (startupRecovery).
+    showRecoveryNotice(doneText(end.how));
+    window.setTimeout(() => location.reload(), 1200);
+    return;
+  }
+  const held = active.deferred;
+  if (held && active.hooks.alive()) showTurnReconnect(held.message, held.reconnect);
+  // The report: the one this run's remedy wrote, else one the engine wrote meanwhile (recovery-exhausted).
+  const list = incidentId || end.type === "give-up" ? await bridge.incidents() : [];
+  const inc = incidentId ? list.find((i) => i.id === incidentId) : list.find((i) => !i.seen && i.createdAt >= active.startedAt - 10 * 60_000);
+  if (inc) void bridge.incidentSeen(inc.id);
+  if (end.type === "done") {
+    const extra = active.hooks.onDone?.();
+    const text = extra ? `${doneText(end.how)} ${extra}` : doneText(end.how);
+    if (inc) showIncidentNotice(inc, text, "recoveryNotice");
+    else showRecoveryNotice(text, { autoHideMs: 10_000 });
+    return;
+  }
+  if (end.type !== "give-up") return;
+  const actions: NoticeAction[] = [];
+  if (inc) actions.push({ label: "Submit report", primary: true, run: () => openIncidentSubmit(inc) });
+  const retry = active.hooks.retry;
+  if (retry) actions.push({ label: "Try again", run: () => { clearRecoveryNotice(); retry(); } });
+  const text = giveUpText(end.reason, end.detail);
+  showRecoveryNotice(inc ? `${text} ${REPORT_SAVED}` : text, { actions });
+}
+
+/** Hooks for a run that serves the master composer rather than a live turn view: a refused send, or a
+ *  status check that could not reach the engine. Reattaching means adopting the running turn. */
+function masterRecoveryHooks(owner: number, extra: Partial<RecoveryHooks> = {}): RecoveryHooks {
+  return {
+    alive: () => owner === turnViewEpoch && !isLaneTarget(state.composerTarget),
+    defers: false,
+    reattach: async () => { void recoverMasterTurn(); return true; },
+    resync: async () => false,
+    onDone: () => { void recoverMasterTurn(); return undefined; },
+    retry: () => void recoverMasterTurn(),
+    ...extra,
+  };
+}
+
+/** Resync a stuck turn view: the turn is gone, so show what the session actually holds. */
+async function resyncFromSession(): Promise<boolean> {
+  const st = await bridge.recoveryState();
+  const sid = st?.currentSessionId ?? ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null;
+  if (!sid) return false;
+  return resumeSession(sid, { loaded: true });
 }
 
 async function send(): Promise<void> {
@@ -1782,6 +1916,9 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   let turnId = opts.turnId;
   let terminal = false, stopped = false, settled = false, connecting = false;
   let adopted = !!opts.turnId;
+  // P-RECOVER.1 (ADR-0384): a real prompt always opens with a turn-snapshot, so a stream error BEFORE one
+  // means the engine refused the send ("A chat turn is already running") and no turn exists.
+  let sawSnapshot = false, refused = false;
   state.streaming = true; state.streamStartedAt = Date.now(); setSendEnabled();
 
   const node = addMessage("assistant", "");
@@ -1928,9 +2065,34 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   if (!adopted) startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
   const onEvent = (e: ChatEvent) => {
     if (!owns() || settled) return;
-    if (e.type === "connection") { setPhase(e.message); paintHud(); return; }
+    if (e.type === "connection") {
+      setPhase(e.message); paintHud();
+      // P-RECOVER.1 (ADR-0384): find out WHY instead of reconnecting blind (master turns; a lane owns its child).
+      if (!opts.laneId) superviseRecovery({ kind: "connection", state: e.state }, true, turnHooks);
+      return;
+    }
+    // The engine's stream-failure envelope ({type:"error"}) is outside ChatEvent, so compare the wire string.
+    const wireType: string = e.type;
+    if (wireType === "error" && !sawSnapshot && !adopted && !opts.laneId) { refused = true; return; }
+    if (e.type === "done" && refused) {
+      terminal = true;
+      stopThinkingCues(); finishHud(); setPhase("Not sent"); paintHud();
+      streamEl.textContent = "Not sent: the engine reported that another turn was still running. Checking the engine.";
+      state.streaming = false; setSendEnabled();
+      superviseRecovery({ kind: "send-failed", reason: "already-running" }, false, masterRecoveryHooks(owner, {
+        onDone: () => {
+          const ta = $("#input") as HTMLTextAreaElement | null;
+          if (!ta || ta.value.trim() || !text) return undefined;
+          ta.value = text; autosize(ta); setSendEnabled();
+          return "Your message is back in the composer. Send it again when you are ready.";
+        },
+        retry: undefined, // the user's next send is the retry
+      }));
+      return;
+    }
     // P-TURN-RECOVERY-SNAPSHOT: canonical state replaces deltas and never becomes speech or P2P input.
     if (e.type === "turn-snapshot") {
+      sawSnapshot = true;
       const snapshot = e.snapshot;
       turnId = snapshot.turnId;
       if (adopted) {
@@ -2096,6 +2258,21 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       }
       await run((sink) => bridge.attachChat(turnId, sink));
     } catch (error) { if (owns()) showTurnReconnect(`Unable to reconnect: ${error instanceof Error ? error.message : String(error)}`, () => void reconnect()); }
+  };
+  // P-RECOVER.1 (ADR-0384): what the supervisor may do to THIS view.
+  const turnHooks: RecoveryHooks = {
+    alive: owns,
+    defers: true,
+    reattach: async () => {
+      if (!owns() || settled) return false;
+      if (connecting) return true; // the stream's own reattach loop is already following the turn
+      if (turnId && !canAdoptTurn(await bridge.chatStatus().catch(() => null), turnId)) return false;
+      if (!owns() || settled) return false;
+      void reconnect();
+      return true;
+    },
+    resync: resyncFromSession,
+    retry: () => void reconnect(),
   };
   activeTurnView = {
     reconnect: () => void reconnect(),
@@ -2271,7 +2448,7 @@ async function promoteLane(laneId: string): Promise<void> {
   if (isLaneTarget(state.composerTarget) && sameTarget(state.composerTarget, already)) return;
   if (isLaneTarget(state.composerTarget)) demoteLane(); // one composer, one lane: leave the old one first
   const owner = leaveTurnView();
-  recoveryChecking = true; setSendEnabled();
+  setRecoveryChecking(true); setSendEnabled();
   const r = await bridge.fleetPromote(laneId).catch(() => null);
   if (owner !== turnViewEpoch) return;
   if (!r?.ok || !r.lane) {
@@ -2283,7 +2460,7 @@ async function promoteLane(laneId: string): Promise<void> {
     return;
   }
   const lane: LaneView = r.lane;
-  recoveryChecking = false;
+  setRecoveryChecking(false);
   const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
   parkedMasterThread = snapshotThread();
   state.composerTarget = target;
@@ -8867,7 +9044,7 @@ const RESUME_TAIL = 400;
 async function adoptMasterTurn(status: TurnStatus, owner: number): Promise<void> {
   const page = status.sessionId ? await bridge.sessionMessages(status.sessionId, RESUME_TAIL).catch(() => null) : null;
   if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return;
-  recoveryChecking = false;
+  setRecoveryChecking(false);
   if (status.sessionId) $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === status.sessionId));
   await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: page?.messages });
 }
@@ -8876,7 +9053,7 @@ async function recoverMasterTurn(): Promise<void> {
   const owner = ++turnViewEpoch;
   $("#turnReconnect")?.remove();
   // Status discovery is not a running turn. Keep Send blocked without offering Stop.
-  recoveryChecking = true; state.streaming = false; setSendEnabled();
+  setRecoveryChecking(true); state.streaming = false; setSendEnabled();
   try {
     const [status, promoted] = await Promise.all([bridge.chatStatus(), bridge.fleetPromoted()]);
     if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return;
@@ -8886,7 +9063,7 @@ async function recoverMasterTurn(): Promise<void> {
       return;
     }
     // A reachable engine with no adoptable turn is the NORMAL fresh-open outcome: clear both surfaces.
-    if (!canAdoptTurn(status)) { recoveryChecking = false; state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled(); return; }
+    if (!canAdoptTurn(status)) { setRecoveryChecking(false); state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled(); return; }
     await adoptMasterTurn(status!, owner);
   } catch (error) {
     if (owner !== turnViewEpoch) return;
@@ -8894,27 +9071,78 @@ async function recoverMasterTurn(): Promise<void> {
     // composer button, not a paragraph. With a conversation on screen the banner still explains itself,
     // because there the user needs to know their history may be out of date before they send again.
     if (!$("#thread")?.querySelector(".turn, .msg, .asst, .user")) {
-      recoveryChecking = false; setSendEnabled();
+      setRecoveryChecking(false); setSendEnabled();
       showQuietReconnect(() => void recoverMasterTurn());
       return;
     }
     showTurnReconnect(`Connection unavailable: ${error instanceof Error ? error.message : String(error)}. Reconnect to check session status before sending.`, () => void recoverMasterTurn());
+    // P-RECOVER.1 (ADR-0384): a conversation is on screen and the engine did not answer: find out why.
+    superviseRecovery({ kind: "connection", state: "failed" }, false, masterRecoveryHooks(owner));
   }
 }
 
-async function resumeSession(id: string): Promise<void> {
+/** P-RECOVER.1 (ADR-0384): settle what the previous run left behind. Main recorded an unclean exit (or
+ *  the processes it stopped) before this engine started; the engine kept the previous master session id.
+ *  Try that session once, VERIFIED, say plainly whether it worked, and offer the report either way.
+ *  Other unseen incidents (e.g. an engine restart that reloaded this window) get the notice only. */
+async function startupRecovery(): Promise<void> {
+  const st = await bridge.recoveryState();
+  const unseen = st?.incidents.filter((i) => !i.seen) ?? [];
+  if (!unseen.length) return;
+  const startup = unseen.find((i) => i.kind === "unclean-shutdown" || i.kind === "leftover-processes");
+  // The resume re-renders the thread, so it goes first and the other notices land after it.
+  if (startup) await settleStartupIncident(startup, st?.previous?.sessionId ?? null);
+  for (const inc of unseen.filter((i) => i !== startup).slice(0, 3)) {
+    showIncidentNotice(inc);
+    void bridge.incidentSeen(inc.id);
+  }
+}
+
+async function settleStartupIncident(inc: IncidentView, previousId: string | null): Promise<void> {
+  const headline = incidentHeadline(inc.kind, "pending");
+  const settle = async (outcome: "recovered" | "not-recovered", note: string, lead: string) => {
+    const updated = await bridge.incidentUpdate(inc.id, outcome, note);
+    void bridge.incidentSeen(inc.id);
+    showIncidentNotice(updated ?? inc, lead, "recoveryNotice");
+  };
+  if (!previousId) {
+    await settle("recovered", "There was no previous chat session to restore.", headline);
+    return;
+  }
+  // A turn the boot check already adopted owns the thread; never pull it away for the old session.
+  if (activeTurnView || isLaneTarget(state.composerTarget)) {
+    await settle("not-recovered", "A live turn was open at launch, so the previous session was not restored.", headline);
+    return;
+  }
+  showRecoveryNotice(`${headline} Restoring your previous session\u2026`);
+  const r = await bridge.recoveryResume(previousId);
+  // A failed resume records its own session-unrecoverable incident; the startup notice below covers it.
+  if (r?.incidentId && r.incidentId !== inc.id) void bridge.incidentSeen(r.incidentId);
+  if (r?.ok) {
+    await resumeSession(r.sessionId ?? previousId, { loaded: true });
+    await settle("recovered", "The previous chat session was restored after launch.", `${headline} Your previous session was restored.`);
+    return;
+  }
+  clearRecoveryNotice();
+  await settle("not-recovered", "The previous chat session could not be restored; a new session was started.", "Your previous session could not be recovered. A new session was started.");
+}
+
+/** Open session `id` in the thread. `loaded`: the engine already has it loaded (a verified P-RECOVER.1
+ *  resume, or a resync of the current session), so only the transcript is fetched and rendered.
+ *  Resolves true when the thread shows the session (or its live turn), false when it could not. */
+async function resumeSession(id: string, opts: { loaded?: boolean } = {}): Promise<boolean> {
   if (isLaneTarget(state.composerTarget)) demoteLane();
   const owner = leaveTurnView();
   // Status discovery is not a running turn. Keep Send blocked without offering Stop.
-  recoveryChecking = true; state.streaming = false; setSendEnabled();
+  setRecoveryChecking(true); state.streaming = false; setSendEnabled();
   let status: TurnStatus | null;
   try { status = await bridge.chatStatus(); }
   catch (error) {
-    if (owner === turnViewEpoch) showTurnReconnect(`Cannot check the active turn: ${error instanceof Error ? error.message : String(error)}`, () => void resumeSession(id));
-    return;
+    if (owner === turnViewEpoch) showTurnReconnect(`Cannot check the active turn: ${error instanceof Error ? error.message : String(error)}`, () => void resumeSession(id, opts));
+    return false;
   }
-  if (owner !== turnViewEpoch) return;
-  if (status?.running && status.sessionId === id && !isLaneTarget(state.composerTarget)) { await adoptMasterTurn(status, owner); return; }
+  if (owner !== turnViewEpoch) return false;
+  if (status?.running && status.sessionId === id && !isLaneTarget(state.composerTarget)) { void adoptMasterTurn(status, owner); return true; }
   closeSettings();
   $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === id));
 
@@ -8923,7 +9151,7 @@ async function resumeSession(id: string): Promise<void> {
   let shownSig = "";
   if (cached && cached.length) { renderThread(cached); shownSig = transcriptSig(cached); }
   const page = await bridge.sessionMessages(id, RESUME_TAIL);
-  if (owner !== turnViewEpoch) return;
+  if (owner !== turnViewEpoch) return false;
   if (page) {
     // P-RESUME.1: the cached paint never carries restored steps, so any steps force one re-render.
     const freshSig = transcriptSig(page.messages) + (page.steps?.length ? `+s${page.steps.length}` : "");
@@ -8938,11 +9166,12 @@ async function resumeSession(id: string): Promise<void> {
   } else if (!shownSig) {
     renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
-  await bridge.resumeSession(id);
-  if (owner !== turnViewEpoch) return;
-  recoveryChecking = false; state.streaming = false; setSendEnabled();
+  if (!opts.loaded) await bridge.resumeSession(id);
+  if (owner !== turnViewEpoch) return false;
+  setRecoveryChecking(false); state.streaming = false; setSendEnabled();
   void loadSessionMode(); // ADR-0219: reflect THIS session's CUI/Search mode + banner
   $("#input")?.focus();
+  return !!page || !!shownSig;
 }
 
 /** Delete a session from history (with confirm). Backend closes the live session first if it's
@@ -9062,7 +9291,7 @@ async function maybeOfferWorkspaceSetup(): Promise<void> {
 }
 async function applyWorkspace(path: string): Promise<void> {
   const owner = leaveTurnView();
-  recoveryChecking = true; setSendEnabled();
+  setRecoveryChecking(true); setSendEnabled();
   // #11 perceived-latency: setWorkspace() respawns the backend (2–5s). Reassure the user
   // up front that work is happening, then confirm when it's ready, and reflect the switch
   // immediately on the workspace bar via a "loading…" pill.
@@ -9071,7 +9300,7 @@ async function applyWorkspace(path: string): Promise<void> {
   if (bar) { bar.hidden = false; bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}switching…</span>`; }
   const info = await bridge.setWorkspace(path);
   if (owner !== turnViewEpoch) return;
-  recoveryChecking = false; setSendEnabled();
+  setRecoveryChecking(false); setSendEnabled();
   if (info) { state.workspace = info; }
   renderWorkspaceBar();
   seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail();
@@ -15247,10 +15476,10 @@ function confirmNewSession(): void {
 // ───────────────────────── palette actions ─────────────────────────
 function newSession(): void {
   const owner = leaveTurnView();
-  recoveryChecking = true; setSendEnabled();
+  setRecoveryChecking(true); setSendEnabled();
   seedThread(); state.liveUsage = null;
   resetAgentPreviewLane(); // P-PREVIEW.19 (ADR-0339): the agent's preview belongs to the conversation that ended
-  void bridge.newSession().then(() => { if (owner !== turnViewEpoch) return; recoveryChecking = false; setSendEnabled(); void loadSessionMode(); });
+  void bridge.newSession().then(() => { if (owner !== turnViewEpoch) return; setRecoveryChecking(false); setSendEnabled(); void loadSessionMode(); });
   renderStatus(); $("#input")?.focus();
 }
 
@@ -16496,6 +16725,7 @@ initZoom();
 initResize();
 seedThread();
 void recoverMasterTurn();
+void startupRecovery(); // P-RECOVER.1 (ADR-0384): resume the previous session after an unclean exit, report either way
 // Sessions panel: remember your choice across launches; default OPEN so a past
 // conversation is one click away (it used to start collapsed → expand-then-click felt like
 // a double-click). Collapse it once and it stays collapsed.

@@ -198,7 +198,25 @@ export class ACPClient {
   }
 
   stop(): void {
-    try { this.proc?.kill(); } catch { /* ignore */ }
+    const proc = this.proc;
+    // P-RECOVER.1 (ADR-0384): on Windows `omp.exe` is a Bun shim and the real agent is a `bun.exe cli.js`
+    // GRANDCHILD. kill() ends only the shim, so the agent outlived stop() until it noticed stdin EOF (or
+    // never, when wedged). taskkill /T ends the whole tree. Ownership is proven: this is the pid WE
+    // spawned and it has not exited (a reused pid is impossible while our handle is still live), and
+    // taskkill is named by its absolute System32 path so PATH cannot substitute another binary.
+    // Fire-and-forget; if taskkill cannot run or fails, fall back to kill() on the direct child.
+    if (proc && !this.dead && proc.pid !== undefined && proc.exitCode === null && proc.signalCode === null && process.platform === "win32") {
+      const fallback = () => { try { proc.kill(); } catch { /* ignore */ } };
+      try {
+        const taskkill = join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe");
+        const tk = spawn(taskkill, ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+        tk.on("error", fallback);
+        tk.on("exit", (code) => { if (code !== 0) fallback(); });
+        tk.unref();
+      } catch { fallback(); }
+    } else {
+      try { proc?.kill(); } catch { /* ignore */ }
+    }
     // kill() is async on every platform; drain now so callers awaiting a reply fail fast.
     this.die("acp: agent connection stopped", null);
   }

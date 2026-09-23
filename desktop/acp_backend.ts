@@ -16,6 +16,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { LiveTurn, type TurnAttachment, type TurnSnapshot, type TurnStatus } from "./turn_recovery.ts";
+import { engineIncident, logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0384)
+import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0384)
+import type { IncidentEvent, IncidentKind, IncidentOutcome } from "./incident_report.ts";
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
@@ -56,7 +59,7 @@ import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, r
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
 import { type PendingCall, type PendingView, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
-import { HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
+import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
@@ -323,6 +326,19 @@ const SESSION_MS = 30_000;   // session/new, session/set_config_option
 // Whole-completion ceiling for ONE utility extraction (spawn + handshake + session + prompt). The import
 // runs hundreds of these back-to-back behind utilLock, so one wedged call must never stall the queue.
 const COMPLETE_MS = 180_000;
+// P-RECOVER.1 (ADR-0384): a recovery's session/load is bounded. Unbounded, one hung load held the watchdog's
+// healthBusy forever, so no later recovery could ever run. Generous: omp replays the whole history on load.
+const RESUME_MS = 120_000;
+/** The refusal a second concurrent chat turn gets. Exported so dev.ts can pass it through verbatim. */
+export const TURN_ALREADY_RUNNING = "A chat turn is already running";
+
+/** P-RECOVER.1: one bounded line for a recovery log/incident. ACP errors arrive as plain `{ code, message }`
+ *  objects (ACPClient rejects with the JSON-RPC error as-is), not Error instances. */
+function errText(e: unknown): string {
+  if (e instanceof Error) return e.message.slice(0, 200);
+  if (e && typeof e === "object" && "message" in e && typeof e.message === "string") return e.message.slice(0, 200);
+  return String(e).slice(0, 200);
+}
 
 /** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
 export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal };
@@ -419,7 +435,30 @@ function absWorkspacePath(p: string): string {
 
 class Backend {
   private acp: ACPClient | null = null;
-  private sessionId: string | null = null;
+  // P-RECOVER.1 (ADR-0384): every write of the master session id goes through the setter, so the id is
+  // persisted (dev.ts: ~/.omp/lucid-last-session-<PORT>.json) whichever of the many paths set it. That file
+  // is what the NEXT engine offers to resume after an unclean exit.
+  private liveSessionId: string | null = null;
+  private get sessionId(): string | null { return this.liveSessionId; }
+  private set sessionId(v: string | null) {
+    const changed = v !== this.liveSessionId;
+    this.liveSessionId = v;
+    if (v && changed) { try { this.persistSession?.(v); } catch { /* bookkeeping never breaks a chat */ } }
+  }
+  private persistSession: ((id: string) => void) | null = null;
+  private incidentsDir = incidentDir();
+  private acpLogPath = join(homedir(), ".omp", "lucid-acp.log");
+  /** P-RECOVER.1: the session a DEAD master was holding. start() resumes it on the replacement child, and
+   *  keeps it across a failed spawn so the next attempt still resumes rather than starting fresh. */
+  private reviveId: string | null = null;
+  /** P-RECOVER.1: an on-demand revival is under way and has not yet written its incident. */
+  private revivePending = false;
+  /** P-RECOVER.1: the event sink of the current chat turn. clearTurnRecovery releases the listener only
+   *  when it is still THIS sink, so a util completeShared() listener is never clobbered. */
+  private turnSink: ((e: ChatEvent) => void) | null = null;
+  /** P-RECOVER.1: true while a session/load replays history. The replay is old conversation, and it must
+   *  not stream into a live turn's pane (or its step sidecar) when a revival happens mid-prompt. */
+  private replaying = false;
   private starting: Promise<void> | null = null;
   private sessioning: Promise<void> | null = null; // dedupe concurrent session/new (getConfig races it with a timeout)
   private listener: ((e: ChatEvent) => void) | null = null;
@@ -503,7 +542,7 @@ class Backend {
   // P-RESUME.1 (ADR-0171): every event funnels through here, so this is the ONE tee that records
   // thinking/tool/failure steps into the per-session sidecar (survives session switches). Cheap for
   // hot token chunks (noteStepEvent returns immediately on any other type) and never throws.
-  private emit(e: ChatEvent): void { noteStepEvent(this.sessionId, e); this.listener?.(e); }
+  private emit(e: ChatEvent): void { if (this.replaying) return; noteStepEvent(this.sessionId, e); this.listener?.(e); }
 
   /** P-PREVIEW.11 (ADR-0308): open the Preview panel on `path`, driven by the `preview_open` tool's OWN
    *  HTTP call (dev.ts /api/preview/open) instead of pattern-matching omp's ACP call title.
@@ -710,6 +749,11 @@ class Backend {
   }
 
   private async start(): Promise<void> {
+    // P-RECOVER.1 (ADR-0384): a dead connection is ABSENT. Returning early on it (the old `if (this.acp)`)
+    // handed every caller a corpse that rejects each request with "agent process exited" until the 30s
+    // watchdog noticed, and after the watchdog's budget it never did. The util connection already had
+    // this rule (startUtil); the master now shares it, and resumes the session the dead child held.
+    if (this.acp?.isDead) this.dropDeadMaster();
     if (this.acp) return;
     if (!this.starting) {
       this.starting = (async () => {
@@ -1056,11 +1100,19 @@ class Backend {
           try { acp.stop(); } catch { /* ignore */ }
           throw e;
         }
+        // P-RECOVER.1: log the death the moment it happens (main tees stderr into engine.log). The revival
+        // itself is on demand, in start(), so a child that dies while idle costs nothing until it is needed.
+        acp.onExit = (code) => { if (this.acp === acp) console.error(`[recover] master agent process exited (code ${code ?? "null"})`); };
+        // A revival resumes the dead child's session BEFORE the connection is published: until then every
+        // other caller awaits `starting`, so none can see a session-less child and mint a fresh session
+        // that the resume would then silently replace.
+        if (this.revivePending || this.reviveId) await this.finishRevival(acp);
         this.acp = acp;
       })().catch((e) => {
         // A failed handshake must not poison every later call: drop the memoized promise so the NEXT
         // start() respawns. Without this, one timed-out initialize disables chat until app restart.
         this.starting = null;
+        if (this.revivePending) this.failRevival(e);
         throw e;
       });
     }
@@ -1399,6 +1451,18 @@ class Backend {
   private clearTurnRecovery(): void {
     const turn = this.recoveryTurn;
     this.recoveryTurn = null;
+    // P-RECOVER.1 (ADR-0384): the session-switch wedge. Clearing only `recoveryTurn` left the cleared turn's
+    // listener armed and its session/prompt still running in omp, so every later prompt() threw "already
+    // running" while /api/chat/status said idle, until the watchdog recovered ~7 minutes later. A cleared
+    // turn now gives up both: omp is told to stop it (the pending request then settles as cancelled and its
+    // prompt() unwinds without touching the new turn), and its sink stops being the listener. Only ITS sink:
+    // a util completeShared() listener is never clobbered. A session switch is the user acting, so a
+    // pending watchdog resume must not revive the cleared run either.
+    this.recoverMark.clear();
+    const cancelId = turn?.running ? (turn.sessionId ?? this.sessionId) : null;
+    if (cancelId && this.acp && !this.acp.isDead) { try { this.acp.notify("session/cancel", { sessionId: cancelId }); } catch { /* best-effort */ } }
+    if (this.turnSink && this.listener === this.turnSink) { this.listener = null; this.turnStartedAtMs = null; }
+    this.turnSink = null;
     this.askActive = false;
     this.openCalls.clear();
     this.chatGate.end();
@@ -1430,9 +1494,13 @@ class Backend {
    *  key changes - the new env is picked up on the fresh spawn). */
   restart(options?: { preserveTurn?: boolean }): void {
     if (!options?.preserveTurn) this.clearTurnRecovery();
-    try { this.acp?.stop(); } catch { /* ignore */ }
+    // Detach before stopping so the exit handler knows this death was deliberate (no "[recover]" line).
+    const old = this.acp;
+    this.acp = null;
+    try { old?.stop(); } catch { /* ignore */ }
     try { this.utilAcp?.stop(); } catch { /* ignore */ } // P-KG-INGEST.4: respawn the util omp too (fresh env/keys)
-    this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
+    this.starting = null; this.sessionId = null; this.listener = null;
+    this.reviveId = null; this.revivePending = false; // P-RECOVER.1: a deliberate restart supersedes an on-demand revival
     this.utilAcp = null; this.utilStarting = null; this.utilSink = null;
     this.memoryRecallDelivered = false; // persona/skill/profile are re-delivered every turn anyway (#54)
     this.availableModes = []; this.currentModeId = "default"; // re-captured from the fresh session
@@ -1458,7 +1526,7 @@ class Backend {
    *  P-STALL.2 (ADR-0263): the turn waits as long as the work takes - no time cutoff. Stop ends it, and
    *  a dead omp child rejects the in-flight request (ACPClient drains pending on exit). */
   async prompt(text: string, onEventRaw: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], options?: { signal?: AbortSignal; prompt?: string; requestId?: string }): Promise<void> {
-    if (this.recoveryTurn?.running || this.listener) throw new Error("A chat turn is already running");
+    if (this.recoveryTurn?.running || this.listener) throw new Error(TURN_ALREADY_RUNNING);
     const turn = new LiveTurn<ChatEvent>(options?.prompt ?? text, this.sessionId, () => pendingSnapshot(this.openCalls, Date.now()), options?.requestId);
     this.recoveryTurn = turn;
     this.openCalls.clear();
@@ -1510,6 +1578,7 @@ class Backend {
       try { onEvent(e); } catch { enqueueErr++; }
     };
     this.listener = sink;
+    this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
     this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.recoverMark.clear(); // P-HEALTH.2: a new run never inherits a previous run's recovery marker
@@ -1581,6 +1650,7 @@ class Backend {
           // would stream into nothing and its permission requests would never reach the UI - which is the
           // "listener clobber" failure mode this increment exists to close, not to reintroduce.
           this.listener = sink;
+          this.turnSink = sink;
           this.askActive = true;
           content = [{ type: "text" as const, text: buildResumeNote({
             request: text, progress: turn.text, pending: rec.pending,
@@ -1616,6 +1686,7 @@ class Backend {
       endStepTurn(this.sessionId); // P-RESUME.1: persist the buffered thinking for this turn
       }
       if (this.listener === sink) { this.listener = null; this.turnStartedAtMs = null; }
+      if (this.turnSink === sink) this.turnSink = null;
     }
     if (this.recoveryTurn !== turn) return;
     // P-NORESP.1: the turn produced NO content at all (no token/thinking/tool) — either a silent empty
@@ -2112,17 +2183,21 @@ class Backend {
   private recoverMark = new RecoverMarker();
   /** The in-flight recovery. A rejected request awaits this, so the resume happens only after the respawn
    *  and `session/load` have finished and `sessionId` is either restored or definitively null. */
-  private recovering: Promise<void> | null = null;
+  private recovering: Promise<unknown> | null = null;
+  /** P-RECOVER.1: the stall episode (by its start stamp) that already wrote its recovery-exhausted incident. */
+  private exhaustedEpisodeAt: number | null = null;
 
-
-  /** Where the master session stands right now. Read-only: takes no action, mutates nothing. */
-  healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null } {
+  /** Where the master session stands right now. Read-only: takes no action, mutates nothing.
+   *  P-RECOVER.1: `exhausted` = the ladder stopped retrying (the window offers Recover); `dead` = the
+   *  child is gone (the next use revives it). */
+  healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null; exhausted: boolean; dead: boolean } {
     const now = Date.now();
-    const v = healthVerdict({
+    const input: HealthInput = {
       busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
-    });
-    return { action: v.action, silentMs: v.silentMs, reason: v.reason, pending: pendingSnapshot(this.openCalls, now), last: this.lastHealth };
+    };
+    const v = healthVerdict(input);
+    return { action: v.action, silentMs: v.silentMs, reason: v.reason, pending: pendingSnapshot(this.openCalls, now), last: this.lastHealth, exhausted: this.ladderExhausted(v, input), dead: input.dead };
   }
 
   /** Run the ladder once and act on it. Returns what it did, or null when nothing was warranted.
@@ -2131,11 +2206,23 @@ class Backend {
   async healthTick(): Promise<{ action: "probe" | "recover"; reason: string } | null> {
     if (this.healthBusy) return null;
     const now = Date.now();
-    const v = healthVerdict({
+    const input: HealthInput = {
       busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
-    });
-    if (v.action !== "probe" && v.action !== "recover") return null;
+    };
+    const v = healthVerdict(input);
+    if (v.action !== "probe" && v.action !== "recover") {
+      // P-RECOVER.1 (ADR-0384): the first frame of an episode where the ladder has given up writes ONE
+      // report. Before this the pin at "needs a manual restart" was silent: nothing on disk said so.
+      if (this.ladderExhausted(v, input) && this.exhaustedEpisodeAt !== this.healthEpisode.startedAt) {
+        this.exhaustedEpisodeAt = this.healthEpisode.startedAt;
+        console.error(`[recover] automatic recovery stopped retrying after ${this.healthEpisode.recovers} attempts`);
+        this.recordRecovery("recovery-exhausted", "not-recovered",
+          `LUCID's automatic recovery restarted the chat agent process ${this.healthEpisode.recovers} times without the chat making progress, and stopped retrying so it would not loop. The chat needs a manual recovery.`,
+          [{ at: this.healthEpisode.startedAt, what: "The chat stopped making progress." }, { at: now, what: v.reason }]);
+      }
+      return null;
+    }
     this.healthBusy = true;
     try {
       this.lastHealth = { action: v.action, reason: v.reason, at: now };
@@ -2157,8 +2244,15 @@ class Backend {
         reason: v.reason, at: now, silentMs: v.silentMs,
         pending: pendingSnapshot(this.openCalls, now).map((p) => p.label),
       });
-      this.recovering = this.healthRecover();
-      await this.recovering;
+      console.error(`[recover] watchdog: ${v.reason}`);
+      const hadSession = this.sessionId !== null;
+      const pending = this.healthRecover();
+      this.recovering = pending;
+      const r = await pending;
+      // P-RECOVER.1 (ADR-0384): every automatic recovery leaves a report, whether or not it worked.
+      this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+        "The chat session stopped making progress (or its agent process exited), so LUCID's watchdog cancelled the turn, restarted the agent process, and tried to resume the same session.",
+        [{ at: now, what: v.reason }, { at: Date.now(), what: !r.ok ? `The recovery did not complete (${r.error ?? "unknown error"}).` : hadSession ? "The agent process was restarted and the chat session was resumed." : "The agent process was restarted. No chat session was open." }]);
       return { action: "recover", reason: v.reason };
     } finally {
       this.healthBusy = false;
@@ -2171,17 +2265,171 @@ class Backend {
    *  a fresh session on the next prompt and silently throw the thread away, which is worse than the stall
    *  it was fixing. A resume that fails leaves sessionId null, so the next prompt starts clean rather
    *  than talking to a half-dead child (fail-closed: no session is better than a phantom one). */
-  private async healthRecover(): Promise<void> {
+  private async healthRecover(): Promise<{ ok: boolean; error?: string }> {
     const resumeId = this.sessionId;
     this.cancel({ forRecover: true }); // keep the resume marker: this is the harness acting, not the user
     this.restart({ preserveTurn: true });
-    if (!resumeId) return;
     try {
       await this.start();
-      await this.acp!.request("session/load", { sessionId: resumeId, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
-      this.sessionId = resumeId;
-    } catch {
+    } catch (e) {
+      console.error(`[recover] the replacement agent process could not be started: ${errText(e)}`);
+      return { ok: false, error: errText(e) };
+    }
+    return resumeId ? this.loadVerified(resumeId) : { ok: true };
+  }
+
+  // -- P-RECOVER.1 (ADR-0384): self-recovery the user can see, and a report of every one ------------------
+
+  /** `session/load` on the live master, VERIFIED: the one resume primitive the watchdog, the on-demand
+   *  revival and the recovery API share. Success restores the id; failure leaves it null so the next prompt
+   *  starts clean (fail-closed, as P-HEALTH.2). omp replays the whole history as session/update during a
+   *  load; that is old conversation, so it is muted rather than streamed into a live turn's pane. */
+  private async loadVerified(id: string, acp: ACPClient | null = this.acp): Promise<{ ok: boolean; error?: string }> {
+    this.replaying = true;
+    try {
+      if (!acp) throw new Error("no agent process");
+      await acp.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: RESUME_MS });
+      this.sessionId = id;
+      console.error("[recover] chat session resumed on the agent process");
+      return { ok: true };
+    } catch (e) {
       this.sessionId = null;
+      console.error(`[recover] chat session could not be resumed: ${errText(e)}`);
+      return { ok: false, error: errText(e) };
+    } finally {
+      this.replaying = false;
+    }
+  }
+
+  /** Write one incident. Best-effort (the store returns null rather than throw). The log tail is the omp
+   *  children's shared stderr log, redacted by the store before it touches disk and never part of the
+   *  public issue body. `summary`/`events` are harness-authored: never prompts, transcripts or model text. */
+  private recordRecovery(kind: IncidentKind, outcome: IncidentOutcome, summary: string, events: IncidentEvent[]): string | undefined {
+    const tail = logTail(this.acpLogPath);
+    const meta = recordIncident(engineIncident(kind, outcome, summary, events, tail ? [{ name: "lucid-acp.log", text: tail }] : undefined), this.incidentsDir);
+    if (meta) console.error(`[recover] incident ${meta.id} recorded (${kind}, ${outcome})`);
+    return meta?.id;
+  }
+
+  /** A dead master is forgotten and start() replaces it, resuming the session it held. Everything that
+   *  belonged to the dead child goes with it: parked permissions are denied (fail-closed) and open calls
+   *  can never settle. No kill here: the child is already gone, and a pid it no longer owns is never
+   *  signalled. */
+  private dropDeadMaster(): void {
+    this.acp = null;
+    this.starting = null;
+    if (this.sessionId) this.reviveId = this.sessionId;
+    this.sessionId = null;
+    this.revivePending = true;
+    for (const fn of this.permPending.values()) fn(null);
+    this.permPending.clear(); this.pendingPerms = 0;
+    this.openCalls.clear();
+    console.error(`[recover] master agent process is gone; starting a replacement${this.reviveId ? " and resuming the same chat session" : ""}`);
+  }
+
+  /** The replacement child is up: resume the dead child's session and write the incident. */
+  private async finishRevival(acp: ACPClient): Promise<void> {
+    const at = Date.now();
+    const id = this.reviveId;
+    this.reviveId = null;
+    this.revivePending = false;
+    const r: { ok: boolean; error?: string } = id ? await this.loadVerified(id, acp) : { ok: true };
+    const after = !id ? "No chat session was open, so there was nothing to resume."
+      : r.ok ? "The same chat session was resumed on the new agent process."
+      : `The chat session could not be resumed (${r.error ?? "unknown error"}). The next message starts a new chat session.`;
+    this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+      "The agent process behind the chat had exited. LUCID started a replacement the next time the chat needed it and tried to resume the same session.",
+      [{ at, what: "The chat agent process was found exited; a replacement was started." }, { at: Date.now(), what: after }]);
+  }
+
+  /** The replacement could not be spawned. One incident per revival; `reviveId` stays so the next start()
+   *  still resumes the session instead of silently starting fresh. */
+  private failRevival(e: unknown): void {
+    this.revivePending = false;
+    this.recordRecovery("agent-child-failed", "not-recovered",
+      "The agent process behind the chat had exited, and LUCID could not start a replacement. It will try again with the next message.",
+      [{ at: Date.now(), what: `Starting a replacement agent process failed (${errText(e)}).` }]);
+  }
+
+  /** Has the ladder spent its recovery budget and pinned at `quiet`? Mirrors health_watch's recoverOrStop:
+   *  a quiet verdict with the budget spent, on a frame where the ladder WOULD otherwise recover (a dead
+   *  child, or a turn silent past recoverMs with no tool call open). */
+  private ladderExhausted(v: HealthVerdict, i: HealthInput): boolean {
+    if (v.action !== "quiet" || i.episode.recovers < HEALTH_DEFAULTS.maxRecovers) return false;
+    return i.dead || (i.busy && i.openCalls === 0 && v.silentMs >= HEALTH_DEFAULTS.recoverMs);
+  }
+
+  /** Configure where recovery bookkeeping goes. dev.ts wires the last-session persister (it owns PORT);
+   *  tests point the incident directory and log at a temp dir. */
+  configureRecovery(opts: { persistSession?: (id: string) => void; incidentDir?: string; acpLog?: string }): void {
+    if (opts.persistSession) this.persistSession = opts.persistSession;
+    if (opts.incidentDir) this.incidentsDir = opts.incidentDir;
+    if (opts.acpLog) this.acpLogPath = opts.acpLog;
+  }
+
+  /** POST /api/recovery/resume: a VERIFIED resume of `id` as the master session. Unlike loadSession (the
+   *  sidebar, which swallows a failed load), ok is true only when omp accepted the session/load. A failure
+   *  records a session-unrecoverable incident and leaves no session, so the next prompt starts fresh.
+   *  Serialized with the watchdog. `id` is shape-validated by the route. */
+  async resumeSession(id: string): Promise<{ ok: boolean; sessionId?: string; error?: string; incidentId?: string }> {
+    if (this.healthBusy) return { ok: false, error: "A recovery is already in progress. Try again in a moment." };
+    this.healthBusy = true;
+    const at = Date.now();
+    try {
+      this.clearTurnRecovery();
+      if (this.sessionId === id && this.acp && !this.acp.isDead) return { ok: true, sessionId: id };
+      let r: { ok: boolean; error?: string };
+      try {
+        await this.start();
+        r = await this.loadVerified(id);
+      } catch (e) {
+        this.sessionId = null;
+        r = { ok: false, error: errText(e) };
+      }
+      if (r.ok) return { ok: true, sessionId: id };
+      this.memoryRecallDelivered = false; // a fresh session gets the one-time recall again
+      const incidentId = this.recordRecovery("session-unrecoverable", "not-recovered",
+        "LUCID tried to reopen the previous chat session and the agent could not load it. A new chat session starts with the next message.",
+        [{ at, what: "Resuming the previous chat session was requested." }, { at: Date.now(), what: `The agent could not load it (${r.error ?? "unknown error"}).` }]);
+      return { ok: false, error: "The previous chat session could not be loaded. A new session will start with your next message.", ...(incidentId ? { incidentId } : {}) };
+    } finally {
+      this.healthBusy = false;
+      this.healthActivityAt = Date.now();
+    }
+  }
+
+  /** POST /api/recovery/recover: the window asks for the same in-place recovery the watchdog performs
+   *  (cancel, drop the child tree, respawn, session/load the same id), on demand. Serialized with the
+   *  watchdog through `healthBusy`. A live turn is marked exactly as the watchdog marks it, so its run
+   *  resumes in place (bounded by RESUME_MAX_PER_RUN). The user acting restores the watchdog's budget. */
+  async recoverMaster(): Promise<{ ok: boolean; sessionId: string | null; reason: string; incidentId?: string }> {
+    if (this.healthBusy) return { ok: false, sessionId: this.sessionId, reason: "A recovery is already in progress. Try again in a moment." };
+    this.healthBusy = true;
+    const now = Date.now();
+    const hadSession = this.sessionId !== null;
+    const wasDead = this.acp?.isDead ?? false;
+    try {
+      console.error("[recover] recovery of the master agent process requested from the window");
+      const reason = "Recovery was requested from the window, so the harness is cancelling and respawning the agent process in place.";
+      this.lastHealth = { action: "recover", reason, at: now };
+      try { this.listener?.({ type: "health", action: "recover", reason }); } catch { /* stream gone */ }
+      if (this.recoveryTurn?.running) {
+        this.recoverMark.set({ reason, at: now, silentMs: Math.max(0, now - this.healthActivityAt), pending: pendingSnapshot(this.openCalls, now).map((p) => p.label) });
+      }
+      const pending = this.healthRecover();
+      this.recovering = pending;
+      const r = await pending;
+      this.healthEpisode = newEpisode(Date.now());
+      const result = !r.ok ? `The agent process could not be recovered (${r.error ?? "unknown error"}).${hadSession ? " The next message starts a new chat session." : ""}`
+        : hadSession ? "The agent process was restarted and the chat session was resumed."
+        : "The agent process was restarted. No chat session was open.";
+      const incidentId = this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+        "The chat stopped making progress and recovery was requested from the window. LUCID cancelled the turn, restarted the agent process, and tried to resume the same session.",
+        [{ at: now, what: `Recovery was requested from the window (agent process ${wasDead ? "had exited" : "was still running"}).` }, { at: Date.now(), what: result }]);
+      return { ok: r.ok, sessionId: this.sessionId, reason: result, ...(incidentId ? { incidentId } : {}) };
+    } finally {
+      this.healthBusy = false;
+      this.healthActivityAt = Date.now();
     }
   }
 
@@ -2356,7 +2604,9 @@ class Backend {
       // Only restore if WE are still the active listener (a chat turn may have taken over a long overlap).
       const clobber = myListener !== null && this.listener !== myListener;
       this.turnDiag(`complete.shared clobberAvoided=${clobber} chars=${text.length}`);
-      if (!clobber) this.listener = prev;
+      // P-RECOVER.1: restore the previous listener only if it is still the live turn's sink. A turn cleared
+      // meanwhile (session switch) released its sink, and restoring it would re-create the wedge.
+      if (!clobber) this.listener = prev !== null && prev !== this.turnSink ? null : prev;
       if (sid) this.acp?.request("session/close", { sessionId: sid }, { timeoutMs: SESSION_MS }).catch(() => {});
     }
   }
