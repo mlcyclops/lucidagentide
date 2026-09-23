@@ -36,6 +36,13 @@ describe("resolveAgentTierModel - accessible provider-isolated tiers", () => {
     expect(resolveAgentTierModel(models("openai/gpt-5-astra", "openai/gpt-6"), "openai/gpt-5-astra", "max")).toBe("openai/gpt-6");
   });
 
+  it("GPT-6 tiers: Regular lands on Luna 6 over Luna 5.6, Sol steps down to Luna, and Max climbs Sol or Luna to Astra", () => {
+    const six = models("openai-codex/gpt-6-astra", "openai-codex/gpt-6-sol", "openai-codex/gpt-6-luna", "openai-codex/gpt-5.6-luna");
+    expect(resolveAgentTierModel(six, "openai-codex/gpt-6-astra", "regular")).toBe("openai-codex/gpt-6-luna");
+    expect(resolveAgentTierModel(six, "openai-codex/gpt-6-sol", "regular")).toBe("openai-codex/gpt-6-luna");
+    expect(resolveAgentTierModel(six, "openai-codex/gpt-6-luna", "max")).toBe("openai-codex/gpt-6-astra");
+    expect(resolveAgentTierModel(six, "openai-codex/gpt-6-sol", "max")).toBe("openai-codex/gpt-6-astra");
+  });
   it("never crosses API, OAuth or accredited gateway routes", () => {
     const options = models("openai-codex/gpt-5.6-luna", "openai/gpt-6-astra", "asksage-openai/gpt-6-astra", "anthropic/claude-fable-5");
     expect(resolveAgentTierModel(options, options[0]!.value, "max")).toBeNull();

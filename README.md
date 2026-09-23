@@ -80,13 +80,13 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 # <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" /> The newest frontier models are live in LUCID <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" />
 
-### <b>Claude&nbsp;Opus&nbsp;5.5&nbsp;·&nbsp;Opus&nbsp;5</b>, <b>Claude&nbsp;Fable&nbsp;5.1</b> and <b>Mythos&nbsp;5.1</b>, <b>GPT-6&nbsp;Astra</b>, and <b>Gemini&nbsp;3.1&nbsp;Pro · 3.8&nbsp;Flash</b> - all in the picker today. And <b>Jev</b>, the <b>TypeSafe</b> typed-judgment engine, sits behind them as the judgment backend (beta).
+### <b>Claude&nbsp;Opus&nbsp;5.5&nbsp;·&nbsp;Opus&nbsp;5</b>, <b>Claude&nbsp;Fable&nbsp;5.1</b> and <b>Mythos&nbsp;5.1</b>, <b>GPT-6&nbsp;Astra · Sol · Luna</b>, and <b>Gemini&nbsp;3.1&nbsp;Pro · 3.8&nbsp;Flash</b> - all in the picker today. And <b>Jev</b>, the <b>TypeSafe</b> typed-judgment engine, sits behind them as the judgment backend (beta).
 
 <p align="center"><b>Connect the account you already pay for</b> (OAuth subscription or an API key) and pick the model from the list - that's it. Each one carries a <b>cost + intelligence card</b> and a clear <b>U.S.-government data-privacy notice</b>, so you always know what a turn costs and where your chat history stands.</p>
 
-<p align="center"><sub><code>claude-opus-5-5</code> · <code>claude-opus-5</code> · <code>claude-fable-5-1</code> · <code>claude-mythos-5-1</code> · <code>gpt-6-astra</code> · <code>gemini-3.1-pro</code> · <code>gemini-3.8-flash</code> · plus every other model the runtime exposes, including the AskSage gov gateway (<code>gpt-5.6-luna · sol · terra</code>, <code>google-gemini-3.1-pro-com</code>) and your own local endpoints.</sub></p>
+<p align="center"><sub><code>claude-opus-5-5</code> · <code>claude-opus-5</code> · <code>claude-fable-5-1</code> · <code>claude-mythos-5-1</code> · <code>gpt-6-astra</code> · <code>gpt-6-sol</code> · <code>gpt-6-luna</code> · <code>gemini-3.1-pro</code> · <code>gemini-3.8-flash</code> · plus every other model the runtime exposes, including the AskSage gov gateway (<code>gpt-5.6-luna · sol · terra</code>, <code>google-gemini-3.1-pro-com</code>) and your own local endpoints.</sub></p>
 
-<p align="center"><sub><b>Context windows are declared per model</b>, so Opus 5.5 and Opus 5, Fable/Mythos 5.1 and GPT-6 Astra are all billed and metered against their real <b>1M</b> window instead of inheriting a 256K assumption - and vendor-superseded ids are <b>removed</b> from the catalog rather than left to rot in the picker.</sub></p>
+<p align="center"><sub><b>Context windows are declared per model</b>, so Opus 5.5 and Opus 5, Fable/Mythos 5.1 and GPT-6 Astra, Sol and Luna are all billed and metered against their real <b>1M</b> window instead of inheriting a 256K assumption - and vendor-superseded ids are <b>removed</b> from the catalog rather than left to rot in the picker.</sub></p>
 
 <p align="center"><sub><b>Jev / TypeSafe support</b> (<a href="#-whats-new-in-v230-beta1-prerelease">v2.3.0-beta.1</a>): paste a TypeSafe key under <b>Settings &gt; Judgment</b> and every typed judgment - classifications, yes/no checks, scores, the agent's <code>judge()</code> calls and the <code>browser_run</code> browser policy - is answered by Jev as a typed result with probabilities and a confidence, traced under the reply. No key, or AskSage lockdown, and the same calls fall back to your chat model.</sub></p>
 
@@ -192,6 +192,18 @@ Open a document in **Preview > Yours**, zoom in, then select **Grab to pan** and
 Import a `.lkgpack.zip` from Settings > Personalization or the KG panel's Packs menu. Verification stays visible until completion. On success, the pack becomes active and its page count refreshes without restarting LUCID. Settings stays open; **View graph preview** opens the visualization when you want it.
 
 The preview shows at most **100 nodes and 200 links**, with full graph totals in the header. It uses static placement, not a force simulation or animated particles. Click a node to load its page; Find a node searches the displayed preview. All pages remain available to knowledge retrieval, including pages outside the preview. Imports still verify integrity and origin, scan every page fail-closed, and install read-only as untrusted data. Existing installations need the updated build; importing after that does not require a restart. *(P-KGPACK.8, [ADR-0341](DECISIONS.md))*
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.7 (prerelease)
+
+> **🔌 The port that stayed busy, and two more GPT-6 tiers.** Upgrading from an earlier beta could leave the previous session's engine holding port 5319, so every launch died on the bind. Beta.7 ends that orphan after asking you, and the picker gains GPT-6 Sol and Luna.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.7](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.7). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🧹 An orphaned engine is reaped, with a warning** - PR #367 (P-PORTGUARD.2) stops the engine from outliving the app from now on, and names the process when the port is busy. It deliberately does not kill whatever holds the port, because an arbitrary listener cannot be proven to be ours. Beta.7 draws that line: when the owner probe attributes the listener to a LUCID engine (the `lucid-engine` binary, or the `bun run desktop/dev.ts` fallback), a dialog names it (pid, start time, command line) and offers **Stop it and continue** or **Quit**; Stop ends the process tree, the omp session under it included, waits for the socket to close, then starts normally. Anything else on the port is left alone and the existing foreign-listener dialog applies. *(P-PORTGUARD.3, [ADR-0382](DECISIONS.md))*
+- **🪐 GPT-6 Sol and Luna in the picker** - omp 18.2.10 catalogs the two new tiers natively, so the pin moves from 18.2.7 and the picker offers whichever your provider carries. LUCID adds what the catalog does not: cost cards (Astra $10/$50, Sol $2/$10, Luna $0.10/$0.50 per Mtok), 1M context declared per id, a fresh-install default that ranks Astra, then Sol, then Luna (a provider without Astra opens on Sol, never the fast tier), and the Agent role's Regular/Max tier walking Sol down to Luna and Luna up to Astra. *(P-MODEL.4, [ADR-0383](DECISIONS.md))*
+- **📂 Past sessions load again** - carried from beta.6: omp 18 writes a title slot as line one of every session file and the transcript reader trusted line one. *(P-SESS.3, [ADR-0380](DECISIONS.md))*
+
+---
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.1 (prerelease)
 

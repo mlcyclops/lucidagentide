@@ -295,7 +295,7 @@ const MODEL_CTX: Record<string, number> = {
   "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
-  "gpt-6-astra": 1_000_000,
+  "gpt-6-astra": 1_000_000, "gpt-6-sol": 1_000_000, "gpt-6-luna": 1_000_000,
   "gpt-5.6-luna": 256_000, "gpt-5.6-sol": 256_000, "gpt-5.6-terra": 256_000,
   "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
   "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
@@ -15774,6 +15774,10 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   // It rolls out in stages, so it may be absent from a given account's list; when the provider offers it
   // the picker shows it, and when it does not, nothing here fabricates it.
   "gpt-6-astra": { exp: 4, iq: 5, eff: "OpenAI's current flagship, with a 1M context window.", best: "Hard reasoning, architecture, and very long-context analysis.", ctx: "1M" },
+  // GPT-6 tier codenames (omp 18.2.10, 2026-09-23): Sol is the mid tier at a fifth of Astra's price, Luna the
+  // fast tier at a hundredth. Same 1M window and effort levels; the picker offers whichever the provider carries.
+  "gpt-6-sol": { exp: 2, iq: 4, eff: "GPT-6 mid tier: most of Astra's reasoning at $2/$10 per Mtok; 1M context.", best: "Everyday coding, analysis and long-context work at a workhorse price.", ctx: "1M" },
+  "gpt-6-luna": { exp: 1, iq: 3, eff: "GPT-6 fast tier at $0.10/$0.50 per Mtok; 1M context.", best: "Quick edits, lookups, and high-volume long-context tasks.", ctx: "1M" },
   // AskSage · OpenAI. GPT-5.6 ships three tier codenames (luna=mid / sol / terra); luna is the default RAG model.
   "gpt-5.6-luna": { exp: 3, iq: 5, eff: "Newest mid-tier GPT-5.6; the default RAG model.", best: "General gov coding, analysis, and RAG grounding.", ctx: "256K" },
   "gpt-5.6-sol": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },

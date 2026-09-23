@@ -1106,3 +1106,11 @@ demo-P-JEV.4: demo-P-JEV.3 ## P-JEV.4 (ADR-0379): the Jev browser action policy,
 .PHONY: demo-P-SESS.3
 demo-P-SESS.3: ## P-SESS.3 (ADR-0380): past sessions load again on omp 18. The title slot omp 18 writes as line one of every session file hid the session record from a reader that trusted line one; one scanning sessionRecord() now resolves every transcript's id, proven by a fixture carrying the real omp 18 header.
 	$(BUN) test $(TEST_IGNORES) desktop/sessions_index.test.ts desktop/sessions.test.ts
+
+.PHONY: demo-P-PORTGUARD.3
+demo-P-PORTGUARD.3: demo-portguard-2 ## P-PORTGUARD.3 (ADR-0382): reap our OWN orphaned engine after a warning. ADR-0381 refused to kill an arbitrary listener; this draws the line on the owner probe's evidence (process name lucid-engine, its image path, or the bun run desktop/dev.ts fallback), names the process in a dialog, and ends its tree only on the user's Stop. Both directions pinned: a stranger's bun server.ts and a name that merely contains lucid-engine are never reaped.
+	$(BUN) test $(TEST_IGNORES) desktop/orphan_engine.test.ts desktop/port_guard.test.ts desktop/engine_boot.test.ts
+
+.PHONY: demo-P-MODEL.4
+demo-P-MODEL.4: ## P-MODEL.4 (ADR-0383): GPT-6 Sol and Luna. omp 18.2.7 -> 18.2.10 carries both ids natively; LUCID adds the cataloged prices (Astra 10/50, Sol 2/10, Luna 0.10/0.50), the 1M windows and cards, an Astra > Sol > Luna fresh-install order, and pins the Regular/Max walk across the three tiers.
+	$(BUN) test $(TEST_IGNORES) desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts harness/prompt/prefix_compaction.test.ts

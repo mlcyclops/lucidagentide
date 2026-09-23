@@ -14,6 +14,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shel
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
@@ -26,6 +27,7 @@ import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-026
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
 import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
+import { classifyPortHolder, orphanDialog, reapSpec } from "./orphan_engine.ts"; // P-PORTGUARD.3 (ADR-0382): reap our own orphan, after a warning
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
@@ -277,6 +279,50 @@ async function probePortOwner(): Promise<SquatterInfo | null> {
     });
     return parseOwnerProbe(process.platform, stdout);
   } catch { return null; }
+}
+
+// P-PORTGUARD.3 (ADR-0382): is anything accepting connections on the engine port right now? A TCP
+// connect, not an HTTP fetch: it answers in milliseconds, and a non-HTTP listener still counts as busy.
+function portAccepting(): Promise<boolean> {
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  const sock = connect({ host: "127.0.0.1", port: PORT });
+  const done = (v: boolean): void => { resolve(v); sock.destroy(); };
+  sock.once("connect", () => done(true));
+  sock.once("error", () => done(false));
+  sock.setTimeout(500, () => done(false));
+  return promise;
+}
+
+/** Reap OUR OWN orphaned engine before spawning a new one, after the user agrees (P-PORTGUARD.3).
+ *  Upgraders from a build without ADR-0381's parent watch arrive with the previous session's engine (and
+ *  its omp child) still holding the port; the parent watch cannot help them because the orphan predates
+ *  it. Only a listener the owner probe attributes to a LUCID engine is offered for reaping (see
+ *  orphan_engine.classifyPortHolder); anything else is left to the ADR-0305 / ADR-0381 dialogs. Returns
+ *  false when the user chose Quit. */
+async function reapOrphanedEngine(): Promise<boolean> {
+  if (!(await portAccepting())) return true;
+  const observed = await probePortOwner();
+  const holder = classifyPortHolder(observed, process.pid);
+  if (holder.kind !== "ours" || !observed) return true;
+  const d = orphanDialog({ port: PORT, productName: BUILD.productName, observed, evidence: holder.evidence });
+  appendEngineLog(`\n--- ${new Date().toISOString()} orphaned engine on port ${PORT} (P-PORTGUARD.3) ---\n${d.detail}\n`);
+  const { response } = await dialog.showMessageBox({ type: "warning", title: d.title, message: d.message, detail: d.detail, buttons: [...d.buttons], defaultId: d.defaultId, cancelId: d.cancelId });
+  if (response !== 0) { appendEngineLog(`- User chose Quit; the orphan (pid ${holder.pid}) was left running.\n`); return false; }
+  const spec = reapSpec(process.platform, holder.pid);
+  try {
+    if (spec) { const done = Promise.withResolvers<void>(); execFile(spec.cmd, spec.args, { timeout: 5000 }, () => done.resolve()); await done.promise; }
+    else process.kill(holder.pid, "SIGTERM");
+  } catch (e) { appendEngineLog(`- Reap failed: ${e instanceof Error ? e.message : String(e)}\n`); }
+  // Wait for the socket to close; a POSIX orphan that ignored SIGTERM gets SIGKILL after 3s.
+  const deadline = Date.now() + 6000;
+  let escalated = false;
+  while (Date.now() < deadline && (await portAccepting())) {
+    if (!spec && !escalated && Date.now() > deadline - 3000) { escalated = true; try { process.kill(holder.pid, "SIGKILL"); } catch { /* already gone */ } }
+    const tick = Promise.withResolvers<void>(); setTimeout(tick.resolve, 200); await tick.promise;
+  }
+  const freed = !(await portAccepting());
+  appendEngineLog(`- User chose Stop; pid ${holder.pid} ${freed ? "ended and the port is free" : "did not release the port in time (the bind will report it)"}.\n`);
+  return true;
 }
 
 function createWindow(): void {
@@ -962,6 +1008,9 @@ app.whenReady().then(async () => {
       }
     } catch (err) { console.error("[main] os_crypt canonical backfill failed:", err); }
   }
+  // P-PORTGUARD.3 (ADR-0382): an engine WE left behind (a build before the parent watch, or a crash it
+  // could not observe) is offered for reaping before the bind is even attempted. Quit = leave it alone.
+  if (!(await reapOrphanedEngine())) { splash?.close(); app.exit(0); return; }
   startDevServer();
   const serverUp = await waitForServer();
   // P-PORTGUARD.1 (ADR-0305): a FOREIGN process answered the engine port. Never render it - the window

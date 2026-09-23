@@ -198,7 +198,13 @@ export function topModel<T extends { value: string }>(models: readonly T[], acce
 export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
   /claude-opus-5[-.]5(?![\w.-])/,                                       // Opus 5.5 (2026-09-22): Fable-5.1-level on most work, 40% cheaper to run than Opus 5
   /claude-opus-5(?![\w.-])/,                                            // Opus 5: 1M ctx Anthropic flagship, the prior house default
-  /gpt-6(?:\.\d+)?(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/,  // GPT-6 + tier codenames (gpt-6-astra)
+  // GPT-6 tier codenames (omp 18.2.10, 2026-09-23): Astra is the flagship, Sol the mid tier, Luna the fast
+  // tier. Three entries, not one, so a provider carrying Sol and Luna but not Astra defaults to Sol: a
+  // single catch-all put Luna and Sol on one rank and left the pick to survivor order.
+  /gpt-6(?:\.\d+)?-astra(?![\w.-])/,
+  /gpt-6(?:\.\d+)?-sol(?![\w.-])/,
+  /gpt-6(?:\.\d+)?(?:-(?!mini|nano|lite|flash|oss|luna)[a-z]+)?(?![\w.-])/, // any other GPT-6 tier, and bare gpt-6
+  /gpt-6(?:\.\d+)?-luna(?![\w.-])/,
   /claude-fable-5[-.]1(?![\w.-])/,                                      // Fable 5.1 (API-credit billed, see isApiOnlyModel)
   /claude-mythos-5[-.]1(?![\w.-])/,                                     // Mythos 5.1, shipped alongside Fable 5.1
   /claude-fable-5(?![\w.-])/,

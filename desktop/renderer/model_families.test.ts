@@ -356,6 +356,12 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
     const got = preferredDefaultModel(mk("openai-codex/gpt-6-astra", "openai-codex/gpt-5.5", "google-antigravity/gemini-3.1-pro"));
     expect(got?.value).toBe("openai-codex/gpt-6-astra");
   });
+  it("GPT-6 tiers rank Astra, then Sol, then Luna: a provider without Astra defaults to Sol, never the fast tier", () => {
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6-astra"))?.value).toBe("openai/gpt-6-astra");
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai/gpt-6-sol"))?.value).toBe("openai/gpt-6-sol");
+    expect(preferredDefaultModel(mk("openai/gpt-6-sol", "openai/gpt-6-luna"))?.value).toBe("openai/gpt-6-sol"); // input order is irrelevant
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai-codex/gpt-5.5"))?.value).toBe("openai/gpt-6-luna"); // Luna still beats the prior generation
+  });
   it("respects the accept predicate (an unconfigured provider is invisible)", () => {
     const got = preferredDefaultModel(mk("anthropic/claude-opus-5", "openai-codex/gpt-6-astra"), (v) => v.startsWith("openai-codex/"));
     expect(got?.value).toBe("openai-codex/gpt-6-astra");

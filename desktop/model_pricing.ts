@@ -46,6 +46,12 @@ const TABLE: [RegExp, Price][] = [
   // known GPT-5 tier price used as a placeholder: OpenAI has not published GPT-6 rates, and an
   // in-family estimate is a better-informed guess than an unrelated default. The user's own metered
   // usage supersedes this the moment they run the model once (priceFor prefers "actual").
+  // GPT-6 tiers (2026-09-23, from omp 18.2.10's catalog, provider openai): Astra $10/$50, Sol $2/$10,
+  // Luna $0.10/$0.50 per Mtok. Ordered before the generic GPT row, which stays the estimate for ids the
+  // catalog has not priced (a bare `gpt-6`, GPT-7). `[-.]?` tolerates `gpt-6.1-sol` style revisions.
+  [/gpt-?6(?:\.\d+)?-astra/, { inPerM: 10.0, outPerM: 50.0 }],
+  [/gpt-?6(?:\.\d+)?-sol/, { inPerM: 2.0, outPerM: 10.0 }],
+  [/gpt-?6(?:\.\d+)?-luna/, { inPerM: 0.10, outPerM: 0.50 }],
   [/gpt-?\d|codex/, { inPerM: 1.25, outPerM: 10.0 }],
   [/gemini/, { inPerM: 1.25, outPerM: 10.0 }],
 ];

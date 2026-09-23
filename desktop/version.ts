@@ -503,4 +503,11 @@
 //            every session file; the transcript reader trusted line one for the session id, so the sidebar
 //            listed every session and the chat could load none of them (P-SESS.3, ADR-0380).
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.6";
+// v2.3.0-beta.7 = beta.6 plus the orphan reaper and GPT-6 Sol / Luna. PORT: PR #367 (P-PORTGUARD.2,
+//            ADR-0381) keeps the engine from outliving the app from now on; beta.7 reaps the orphan that
+//            upgraders ALREADY have, after a warning that names it, and only when the owner probe says it is
+//            a LUCID engine (P-PORTGUARD.3, ADR-0382). MODELS: omp pinned 18.2.7 -> 18.2.10, whose catalog
+//            carries gpt-6-sol and gpt-6-luna natively; LUCID adds the cost cards, the 1M windows, the
+//            Astra > Sol > Luna default order and the Regular/Max walk (P-MODEL.4, ADR-0383).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.7";

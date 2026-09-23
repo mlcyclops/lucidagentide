@@ -39,9 +39,15 @@ describe("listPrice tiers", () => {
       expect(listPrice(m)).toEqual({ inPerM: 10, outPerM: 50 });
     }
   });
-  test("a new GPT generation falls into the GPT family estimate, not the unknown default", () => {
-    expect(listPrice("openai-codex/gpt-6-astra").inPerM).toBe(1.25);
+  test("the GPT-6 tiers carry their cataloged rates: Astra, Sol, Luna are three different prices", () => {
+    expect(listPrice("openai-codex/gpt-6-astra")).toEqual({ inPerM: 10, outPerM: 50 });
+    expect(listPrice("openai/gpt-6-sol")).toEqual({ inPerM: 2, outPerM: 10 });
+    expect(listPrice("openai/gpt-6-luna")).toEqual({ inPerM: 0.10, outPerM: 0.50 });
     expect(listPrice("openai-codex/gpt-6-mini").inPerM).toBe(0.25); // small-tier markers still win
+  });
+  test("an unpriced GPT generation still falls into the GPT family estimate, not the unknown default", () => {
+    expect(listPrice("openai/gpt-6").inPerM).toBe(1.25);
+    expect(listPrice("openai/gpt-7-astra").inPerM).toBe(1.25);
   });
   test("unknown ⇒ a sane default", () => {
     expect(listPrice("acme/whatever-7")).toEqual({ inPerM: 3, outPerM: 15 });
