@@ -194,6 +194,7 @@ describe("master child revival", () => {
     process.env.FAKE_ACP_MODE = "crash";
     await backend.prompt("this turn loses its agent", () => {});
     expect(backend.healthStatus().dead).toBe(true);
+    await until(() => trace().some((t) => t.method === "session/new")); // the trace can lag the agent's reply
     const deadPid = trace().find((t) => t.method === "session/new")!.pid; // the crash exits before tracing its prompt
 
     process.env.FAKE_ACP_MODE = "clean";
@@ -236,14 +237,20 @@ describe("in-place recovery (POST /api/recovery/recover)", () => {
   test("respawns the child and resumes the same session; a concurrent request is refused, not doubled", async () => {
     process.env.FAKE_ACP_MODE = "clean";
     expect((await backend.resumeSession("live-session-3")).ok).toBe(true);
-    const before = trace().find((t) => t.method === "session/load")!.pid;
+    // The trace is appended by a second stdin listener in the agent, so it can land after the agent's
+    // reply: wait for the line, never read it in the same tick (a CI run on Windows lost that race).
+    const loadsOf = () => trace().filter((t) => t.method === "session/load" && t.sessionId === "live-session-3");
+    await until(() => loadsOf().length >= 1);
+    const before = loadsOf()[0]!.pid;
     const [a, b] = await Promise.all([backend.recoverMaster(), backend.recoverMaster()]);
     const won = a.ok ? a : b;
     const lost = a.ok ? b : a;
     expect(won).toMatchObject({ ok: true, sessionId: "live-session-3" });
     expect(lost.ok).toBe(false);
     expect(lost.reason).toContain("already in progress");
-    const loads = trace().filter((t) => t.method === "session/load" && t.sessionId === "live-session-3");
+    // Both calls have settled, so every load that will ever be sent has been sent; only the trace can lag.
+    await until(() => new Set(loadsOf().map((t) => t.pid)).size >= 2);
+    const loads = loadsOf();
     expect(new Set(loads.map((t) => t.pid)).size).toBe(2); // exactly one respawn loaded the session
     expect(loads.at(-1)!.pid).not.toBe(before);
     expect(incidents().map((i) => [i.kind, i.outcome])).toEqual([["agent-child-failed", "recovered"]]);
