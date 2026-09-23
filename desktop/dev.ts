@@ -36,7 +36,9 @@ import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
 import { assessSystem, sampleSystem, topProcesses, type ProcGroup, type ProfileIo, type SystemSnapshot, type SystemVerdict } from "./system_profile.ts"; // P-SYSRES.1: resource guard
-import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { buildLocalAgentManifest, writeLocalAgentManifest } from "./local_agent_manifest.ts"; // P-LEGIBLE.1 (ADR-0384)
+import { mcpServersForAcp } from "./settings_store.ts"; // P-LEGIBLE.1: the configured MCP servers the manifest declares
 import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
 import {
   CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
@@ -1171,6 +1173,26 @@ const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => bac
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-LEGIBLE.1 (ADR-0384): publish the metadata-only local-agent manifest into this install's userData, so
+// endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
+// when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
+// launch, so MCP changes surface at the next start. Advisory: a failed write is logged, never fatal.
+if (process.env.LUCID_DATA_ROOT) {
+  const manifest = buildLocalAgentManifest({
+    build: BUILD,
+    version: APP_VERSION,
+    port: PORT,
+    hostExecutable: process.env.LUCID_HOST_EXE || null,
+    engineExecutable: basename(process.execPath),
+    // Agent mode answers omp's per-tool asks itself (the in-process gate and the exec/egress tier prompts
+    // still apply), and fleet full-auto removes the human ask for lanes.
+    autoApprove: uiModePosture("agent").permissionMode === "auto" || !!loadSettings().fleetAutoApprove,
+    mcpServers: mcpServersForAcp(),
+    now: new Date(),
+  });
+  const written = writeLocalAgentManifest(process.env.LUCID_DATA_ROOT, manifest);
+  if (!written.ok) console.error(`[legibility] local-agent manifest not written: ${written.error}`);
+}
 // P-HEALTH.1: the harness watches its OWN sessions so a stalled long run never needs an app restart. The
 // master session and every lane climb the same ladder (quiet, then the canned status probe, then a
 // cancel-and-resume in place). The ticker is coarse on purpose: the thresholds are minutes, and a tick

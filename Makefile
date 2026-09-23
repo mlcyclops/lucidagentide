@@ -1138,3 +1138,7 @@ demo-P-PORTGUARD.3: demo-portguard-2 ## P-PORTGUARD.3 (ADR-0382): reap our OWN o
 .PHONY: demo-P-MODEL.4
 demo-P-MODEL.4: ## P-MODEL.4 (ADR-0383): GPT-6 Sol and Luna. omp 18.2.7 -> 18.2.10 carries both ids natively; LUCID adds the cataloged prices (Astra 10/50, Sol 2/10, Luna 0.10/0.50), the 1M windows and cards, an Astra > Sol > Luna fresh-install order, and pins the Regular/Max walk across the three tiers.
 	$(BUN) test $(TEST_IGNORES) desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts harness/prompt/prefix_compaction.test.ts
+
+.PHONY: demo-P-LEGIBLE.1
+demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / Agent 365 without a content path. Each launch writes a metadata-only local-agent manifest (Defender's vendor / relatedProcess / autoApprove / mcpServers / localMcps vocabulary) to userData; MCP entries keep only name, type, URL origin or command basename, so no header, arg, env, path or query can leak. No hook seam, no listener, gate untouched.
+	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
