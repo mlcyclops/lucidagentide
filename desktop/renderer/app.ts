@@ -14957,6 +14957,21 @@ function wire(): void {
       })();
       return;
     }
+    // P-SANDBOX.13 (ADR-0391): Add folder. The engine opens the Explorer picker and grants only the pick.
+    const sbxAdd = (e.target as HTMLElement).closest("[data-sbx-add]") as HTMLElement | null;
+    if (sbxAdd) {
+      const mode = sbxAdd.dataset.sbxAdd === "rw" ? "rw" : "rx";
+      (sbxAdd as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.sandboxGrantAdd(mode);
+        await refresh();
+        if (r?.cancelled) return; // a deliberate cancel needs no toast
+        showToast(r?.added
+          ? { title: "Folder added", desc: r.detail, actions: [{ label: "OK" }], timeout: 5000 }
+          : { tone: "warn", title: "Folder not added", desc: r?.detail || "The permission did not apply.", actions: [{ label: "OK" }], timeout: 6000 });
+      })();
+      return;
+    }
     const grantRevoke = (e.target as HTMLElement).closest("[data-grant-revoke]") as HTMLElement | null;
     if (grantRevoke) {
       const path = grantRevoke.dataset.grantRevoke!;

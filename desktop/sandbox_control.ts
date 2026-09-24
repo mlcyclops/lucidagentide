@@ -55,3 +55,35 @@ export function planModeChange(req: ModeRequest, v: SandboxControlView): ModeAct
   }
   return { action: "set-on", registerFirst: !v.registered };
 }
+
+// ── P-SANDBOX.13 (ADR-0391): folders the user adds from the panel, and the ones LUCID always allows ─────
+
+/** PURE: may the user grant the sandbox this picked folder? The path comes from the native Explorer
+ *  dialog the ENGINE opened (never from the caller), so this only rejects picks that are too broad or
+ *  pointless: a drive root, the whole user profile, the OS dirs (already readable by every AppContainer,
+ *  and not a standard user's to re-ACL), and a relative / UNC path. Returns null when allowed, else the
+ *  sentence the panel shows. Windows paths compared case-insensitively. */
+export function refuseGrantPath(path: string, home: string): string | null {
+  const n = path.replace(/\//g, "\\").replace(/\\+$/, "");
+  const lower = n.toLowerCase();
+  if (!/^[a-z]:\\/i.test(n + "\\")) return "pick a folder on a local drive (a network path cannot be granted)";
+  if (/^[a-z]:$/i.test(n)) return "a whole drive is too broad - pick a folder inside it";
+  if (lower === home.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase()) return "your whole user folder is too broad - pick a folder inside it";
+  if (/^[a-z]:\\windows(\\|$)/.test(lower) || /^[a-z]:\\program files( \(x86\))?(\\|$)/.test(lower)) return "Windows and Program Files are already readable by the sandbox and cannot be changed here";
+  return null;
+}
+
+export interface RuntimeFolderView {
+  path: string;
+  mode: "rx" | "rw";
+  why: string;
+}
+
+/** PURE: the folders LUCID itself gives the contained agent so it can run (see appContainerRuntimeGrants),
+ *  labelled for the panel, so the list the user sees is the COMPLETE answer to "what can it reach". */
+export function runtimeFolderView(i: { workspace: string; grantRx: string[]; grantRw: string[]; tmpDir: string }): RuntimeFolderView[] {
+  const out: RuntimeFolderView[] = [{ path: i.workspace, mode: "rw", why: "the current workspace" }];
+  for (const p of i.grantRw) out.push({ path: p, mode: "rw", why: "the agent's own state (sessions, settings, audit)" });
+  for (const p of i.grantRx) out.push({ path: p, mode: "rx", why: "LUCID's runtime (app files, bun, your shell)" });
+  return out.filter((f) => f.path !== i.tmpDir);
+}

@@ -4,7 +4,7 @@
 // desktop/renderer/sandbox_panel.test.ts — P-SANDBOX.5 (ADR-0169): the "Runtime sandbox" panel builder.
 
 import { expect, test } from "bun:test";
-import { controlSection, renderSandboxSection } from "./sandbox_panel.ts";
+import { addFolderRow, controlSection, renderSandboxSection } from "./sandbox_panel.ts";
 import type { SandboxStateView, SandboxStatusView } from "./bridge.ts";
 
 const st = (over: Partial<SandboxStateView> = {}): SandboxStatusView => ({
@@ -120,4 +120,28 @@ test("the switch renders even before the first spawn, and Off reads as the user'
   expect(renderSandboxSection({ state: null, egressBlocks: [], grants: [], control: ctl() })).toContain('data-sbx-mode="off"');
   const h = renderSandboxSection({ state: { backend: "noop", isolated: false, disclosed: true, platform: "win32", execBlocked: null, proxied: false, at: "" }, egressBlocks: [], control: ctl({ userOff: true }) });
   expect(h).toContain("you turned the Windows sandbox off");
+});
+
+// ── P-SANDBOX.13 (ADR-0391): add folders, and see everything the sandbox can reach ──
+test("Add folder offers read-only and read-write, and never carries a path (the engine opens the picker)", () => {
+  const h = addFolderRow(ctl());
+  expect(h).toContain('data-sbx-add="rx"');
+  expect(h).toContain('data-sbx-add="rw"');
+  expect(h).not.toContain(":\\");
+  expect(addFolderRow(ctl({ available: false }))).toBe("");
+});
+
+test("the section lists user folders (with Revoke) and LUCID's always-allowed folders (without)", () => {
+  const h = renderSandboxSection({
+    state: { backend: "appcontainer", isolated: true, disclosed: false, platform: "win32", execBlocked: null, proxied: true, at: "" },
+    egressBlocks: [],
+    control: ctl(),
+    grants: [{ path: "C:\\Users\\U\\Pictures\\Screenshots", mode: "rx", grantedAt: "2026-09-24T00:00:00.000Z", reason: "added by you in the Security panel" }],
+    runtimeFolders: [{ path: "C:\\ws", mode: "rw", why: "the current workspace" }],
+  });
+  expect(h).toContain("Screenshots");
+  expect(h).toContain("data-grant-revoke");
+  expect(h).toContain("Always allowed");
+  expect(h).toContain("the current workspace");
+  expect((h.match(/data-grant-revoke/g) ?? []).length).toBe(1); // the runtime folders are not revocable
 });

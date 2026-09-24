@@ -705,6 +705,10 @@ demo-P-SANDBOX.10: ## P-SANDBOX.10 (ADR-0387): the AppContainer pill needs the R
 demo-P-SANDBOX.12: ## P-SANDBOX.12 (ADR-0390): the Security panel's Windows sandbox switch - Off is a per-user LUCID setting (no admin, honored at the next spawn), On registers the loopback exemption behind UAC only when missing, Remove from Windows unregisters it, managed require-isolation locks the switch (note, no button)
 	$(BUN) run harness/scripts/demo_p_sandbox_12.ts
 
+.PHONY: demo-P-SANDBOX.13
+demo-P-SANDBOX.13: ## P-SANDBOX.13 (ADR-0391): Add folder (read-only / read-write) from the Security panel - the ENGINE opens the native Explorer picker and grants only the pick (no caller can name a path), too-broad picks refused, audited, and the panel lists user folders (revocable) plus LUCID's always-allowed runtime folders
+	$(BUN) run harness/scripts/demo_p_sandbox_13.ts
+
 .PHONY: build-appcontainer
 build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into bin/ (ships via the `repo` extraResources; resolveBackend probes <repo>/bin first, PATH second)
 	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile bin/lucid-appcontainer.exe

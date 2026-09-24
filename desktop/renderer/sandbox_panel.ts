@@ -11,7 +11,7 @@
 import { accordion } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import type { SandboxControlView, SandboxGrantView, SandboxStateView, SandboxStatusView } from "./bridge.ts";
+import type { RuntimeFolderView, SandboxControlView, SandboxGrantView, SandboxStateView, SandboxStatusView } from "./bridge.ts";
 
 const BACKEND_LABEL: Record<string, string> = {
   bwrap: "Linux bubblewrap",
@@ -67,6 +67,24 @@ function egressLine(s: SandboxStateView): string {
 
 const GRANT_MODE_LABEL: Record<string, string> = { rx: "read-only", rw: "read-write" };
 
+/** P-SANDBOX.13 (ADR-0391): Add folder (read-only / read-write). The engine opens the Explorer picker
+ *  itself; the panel never sends a path. Shown whenever the Windows sandbox can be used. Pure. */
+export function addFolderRow(c: SandboxControlView | undefined): string {
+  if (!c?.available) return "";
+  return `<div class="sbx-ctl"><div class="sbx-ctl-txt">Give the sandbox access to another folder. Windows opens its folder picker; nothing is granted until you choose one.</div>
+    <div class="sbx-ctl-btns"><button class="btn-mini ok" data-sbx-add="rx" data-tip="Add folder (read-only)|The agent can read this folder but not change it.">${icon("plus", 13)} Add folder (read-only)</button><button class="btn-mini" data-sbx-add="rw" data-tip="Add folder (read-write)|The agent can read, create and change files in this folder.">${icon("plus", 13)} Add folder (read-write)</button></div></div>`;
+}
+
+/** P-SANDBOX.13: the folders LUCID always allows so the agent can run, listed read-only. Pure. */
+function runtimeFoldersSection(folders: RuntimeFolderView[]): string {
+  if (!folders.length) return "";
+  const rows = folders
+    .map((f) => `<div class="sbx-grant"><div class="sbx-grant-head"><span class="pill${f.mode === "rw" ? " dismissed" : ""}">${GRANT_MODE_LABEL[f.mode] ?? f.mode}</span><b class="sbx-host" title="${esc(f.path)}">${esc(f.path)}</b></div>
+      <div class="sbx-blk-reason">${esc(f.why)}</div></div>`)
+    .join("");
+  return `<div class="sbx-blocks"><div class="sbx-blocks-hd">${icon("shield", 13)} Always allowed (LUCID's runtime)</div>${rows}</div>`;
+}
+
 /** P-SANDBOX.8: the user-approved standing directory grants (AppContainer ACEs), each with Revoke.
  *  Every row is a PERSISTENT host DACL change, so the list is always visible while any grant stands. Pure. */
 function grantsSection(grants: SandboxGrantView[]): string {
@@ -91,13 +109,14 @@ export function renderSandboxSection(status: SandboxStatusView | null | undefine
   const s = status?.state;
   const grants = status?.grants ?? [];
   const ctl = controlSection(status?.control);
+  const folders = addFolderRow(status?.control) + grantsSection(grants) + runtimeFoldersSection(status?.runtimeFolders ?? []);
   if (!s && !grants.length && !ctl) return "";
   if (!s) {
     // Grants-only view (no spawn yet this session): the persistent host mutations still need a surface.
-    return accordion("sec.sandbox", "Runtime sandbox", grants.length ? `${grants.length} directory grant${grants.length === 1 ? "" : "s"}` : "not started", ctl + grantsSection(grants), open, grants.length ? String(grants.length) : undefined);
+    return accordion("sec.sandbox", "Runtime sandbox", grants.length ? `${grants.length} directory grant${grants.length === 1 ? "" : "s"}` : "not started", ctl + folders, open, grants.length ? String(grants.length) : undefined);
   }
   const blocks = status?.egressBlocks ?? [];
-  let inner = postureLine(s, status?.control) + egressLine(s) + ctl + grantsSection(grants);
+  let inner = postureLine(s, status?.control) + egressLine(s) + ctl + folders;
 
   if (blocks.length) {
     const rows = blocks

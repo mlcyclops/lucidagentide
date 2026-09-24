@@ -89,7 +89,7 @@ import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { addGrant, applyGrantAce, consumePending, loadGrants, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
-import { repoAsset } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
+import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
@@ -257,8 +257,8 @@ function whisperDeps(): WhisperRuntimeDeps {
   };
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedRequireIsolation, skipAllowed } from "./managed_config.ts";
-import { planModeChange, sandboxControlView, type ModeRequest, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
-import { loopbackExempted, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12
+import { planModeChange, refuseGrantPath, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { appContainerRuntimeGrants, loopbackExempted, parseOmpShellPath, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
@@ -1697,7 +1697,7 @@ return Bun.serve({
       if (p === "/api/security") {
         const snap = await securitySnapshotMemo(); // memoized + single-flight (P-PERF.3); live/sandbox/acks stay fresh (in-memory, cheap)
         // P-SANDBOX.8: the standing directory grants ride the sandbox slice so the panel lists them with Revoke.
-        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView(), control: sandboxControlNow() }, acks: ackView() } });
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView(), control: sandboxControlNow(), runtimeFolders: sandboxRuntimeFoldersNow() }, acks: ackView() } });
       }
       // P-SANDBOX.8: the omp child's sandbox_grant_dir tool claims a user-approved directory grant.
       // Defense in depth over the dialog: win32 + bundled helper + an EXISTING directory + a FRESH
@@ -1760,6 +1760,27 @@ return Bun.serve({
         console.log(`[sandbox] panel request ${mode}: ${detail}`);
         if (changed && mode !== "unregister") backend.restart();
         return json({ ok: true, data: { changed, detail, control: sandboxControlNow() } });
+      }
+      // P-SANDBOX.13 (ADR-0391): the user adds a folder from the Security panel. The PATH NEVER COMES FROM
+      // THE CALLER: the engine opens the native Explorer dialog itself and grants only what a person picks
+      // there, so nothing holding the loopback token (the agent included) can name a folder to grant.
+      if (p === "/api/security/sandbox-grant/add" && req.method === "POST") {
+        const b = await readBody<{ mode?: unknown }>(req);
+        const mode: GrantMode = b.mode === "rw" ? "rw" : "rx";
+        const ctl = sandboxControlNow();
+        if (!ctl.available) return json({ ok: true, data: { added: false, detail: "the Windows sandbox helper is not available on this host" } });
+        const picked = await pickFolderNative({ title: `Give the LUCID sandbox ${mode === "rw" ? "read-write" : "read-only"} access to a folder`, buttonLabel: mode === "rw" ? "Allow read-write" : "Allow read-only" });
+        if (!picked.supported) return json({ ok: true, data: { added: false, detail: "no native folder dialog is available on this host" } });
+        if (!picked.path) return json({ ok: true, data: { added: false, cancelled: true, detail: "cancelled" } });
+        const refused = refuseGrantPath(picked.path, homedir());
+        if (refused) return json({ ok: true, data: { added: false, detail: refused } });
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        const applied = applyGrantAce(helper, mode, picked.path);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: applied.ok ? "allow" : "block", severity: "medium", tool: "sandbox_panel", reason: `${applied.ok ? "acl granted by the user" : `acl grant failed: ${applied.detail}`} · ${mode} ${picked.path}`.slice(0, 200) });
+        if (!applied.ok) return json({ ok: true, data: { added: false, detail: `the permission did not apply: ${applied.detail}` } });
+        saveGrants(addGrant(loadGrants(), { path: picked.path, mode, grantedAt: new Date().toISOString(), reason: "added by you in the Security panel" }));
+        console.log(`[sandbox-grant] user added ${mode} on ${picked.path}`);
+        return json({ ok: true, data: { added: true, path: picked.path, detail: `the sandbox can now ${mode === "rw" ? "read and write" : "read"} ${picked.path}` } });
       }
       // P-SANDBOX.8: revoke one standing directory grant from the Security panel. The record leaves the
       // list ONLY when the helper's `--revoke-acl` succeeded — a failed revoke keeps the row visible
@@ -5036,4 +5057,14 @@ function sandboxControlNow(): SandboxControlView {
     policyRequiresIsolation: managedRequireIsolation(managedConfig().config),
     registered: helperBundled && loopbackExempted(),
   });
+}
+
+/** P-SANDBOX.13 (ADR-0391): the folders LUCID itself grants the contained agent, for the panel's list. The
+ *  same inputs acp_backend passes to appContainerRuntimeGrants, so the list matches the real grants. */
+function sandboxRuntimeFoldersNow(): RuntimeFolderView[] {
+  if (!sandboxControlNow().available) return [];
+  let shellPath: string | null = null;
+  try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config */ }
+  const g = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: process.env.LUCID_OMP_BIN, shellPath });
+  return runtimeFolderView({ workspace: currentWorkspace(), grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir });
 }
