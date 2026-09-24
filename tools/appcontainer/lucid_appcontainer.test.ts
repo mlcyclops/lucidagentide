@@ -9,7 +9,7 @@
 // deny-network container cannot reach the net); the parser is where the boundary correctness lives.
 
 import { expect, test } from "bun:test";
-import { aclTargets, buildCommandLine, buildExplicitAccessW, checkNetIsolationArgs, icaclsListsSid, isPackageReadablePath, main, parentDir, parseAclMode, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
+import { aclTargets, buildCommandLine, buildExplicitAccessW, buildStartupInfoExW, creationFlags, inheritableHandleList, checkNetIsolationArgs, icaclsListsSid, isPackageReadablePath, main, parentDir, parseAclMode, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
 import type { HelperPlan } from "./lucid_appcontainer.ts";
 
 // ── the flag-contract parser ──────────────────────────────────────────────────
@@ -184,4 +184,30 @@ test("icaclsListsSid survives console-width wrapping that splits an ACE mid-SID 
   expect(icaclsListsSid(wrapped, "S-1-15-2-111-222555555")).toBe(true);
   const wrappedInherited = "C:\\data S-1-15-2-111-2225555\n55:(I)(OI)(CI)(RX)\n";
   expect(icaclsListsSid(wrappedInherited, "S-1-15-2-111-222555555")).toBe(false);
+});
+
+// ── P-SANDBOX.9 (ADR-0386): the child owns the helper's std handles (ACP rides stdio) ──
+test("inheritableHandleList drops NULL / INVALID_HANDLE_VALUE and dedupes (HANDLE_LIST rejects repeats)", () => {
+  const INVALID = 0xffffffffffffffffn;
+  expect(inheritableHandleList({ stdin: 0x10n, stdout: 0x20n, stderr: 0x30n })).toEqual([0x10n, 0x20n, 0x30n]);
+  expect(inheritableHandleList({ stdin: 0x10n, stdout: 0x20n, stderr: 0x20n })).toEqual([0x10n, 0x20n]);
+  expect(inheritableHandleList({ stdin: 0n, stdout: INVALID, stderr: 0x30n })).toEqual([0x30n]);
+  expect(inheritableHandleList({ stdin: 0n, stdout: 0n, stderr: INVALID })).toEqual([]);
+});
+
+test("buildStartupInfoExW: cb=112, STARTF_USESTDHANDLES, std handles at +80/+88/+96, attr list at +104", () => {
+  const si = buildStartupInfoExW(0xabcdefn, { stdin: 0x11n, stdout: 0x22n, stderr: 0xffffffffffffffffn });
+  const dv = new DataView(si.buffer);
+  expect(si.length).toBe(112);
+  expect(dv.getUint32(0, true)).toBe(112);
+  expect(dv.getUint32(60, true)).toBe(0x100);
+  expect(dv.getBigUint64(80, true)).toBe(0x11n);
+  expect(dv.getBigUint64(88, true)).toBe(0x22n);
+  expect(dv.getBigUint64(96, true)).toBe(0n); // INVALID_HANDLE_VALUE is never handed to the child
+  expect(dv.getBigUint64(104, true)).toBe(0xabcdefn);
+});
+
+test("creationFlags: always EXTENDED_STARTUPINFO_PRESENT; CREATE_NO_WINDOW only when the helper has no console", () => {
+  expect(creationFlags(true)).toBe(0x00080000);
+  expect(creationFlags(false)).toBe(0x08080000);
 });

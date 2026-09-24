@@ -12,6 +12,11 @@ import { expect, test } from "bun:test";
 import {
   appContainerArgs,
   AppContainerBackend,
+  appContainerProbeArgv,
+  appContainerProbePassed,
+  appContainerRuntimeGrants,
+  APPCONTAINER_PROBE_MARKER,
+  proxyChildEnv,
   BwrapBackend,
   listingExemptsMoniker,
   NoopBackend,
@@ -435,4 +440,67 @@ test("managedRequireIsolation is tighten-only: absent/false/unmanaged means no r
   expect(managedRequireIsolation({})).toBe(false);
   expect(managedRequireIsolation({ security: { exec: { requireIsolation: false } } })).toBe(false);
   expect(managedRequireIsolation({ security: { exec: { requireIsolation: true } } })).toBe(true);
+});
+
+// ── P-SANDBOX.9 (ADR-0386): contained chat actually works ─────────────────────
+
+test("proxyChildEnv steers omp too: PI_PROXY + ALL_PROXY ride with HTTP(S)_PROXY, loopback bypasses", () => {
+  const env = proxyChildEnv("http://127.0.0.1:8888");
+  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "PI_PROXY", "ALL_PROXY", "all_proxy"]) expect(env[k]).toBe("http://127.0.0.1:8888");
+  expect(env.NO_PROXY).toBe("localhost,127.0.0.1,::1");
+});
+
+test("every isolating backend sets PI_PROXY on a mediated wrap (omp 18 reads only PI_PROXY for inference)", () => {
+  expect(AC.wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY }).env.PI_PROXY).toBe("http://127.0.0.1:8888");
+  expect(new SeatbeltBackend(has("sandbox-exec"), seatbeltWorks).wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY }).env.PI_PROXY).toBe("http://127.0.0.1:8888");
+  expect(new BwrapBackend(hasBwrap, bwrapWorks).wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY }).env.PI_PROXY).toBe("http://127.0.0.1:8888");
+  // network-off never gets a proxy (there is nothing to steer at)
+  expect(AC.wrap(ARGV, caps("container-local"), CTX).env.PI_PROXY).toBeUndefined();
+});
+
+test("appContainerArgs passes the runtime grants and the temp dir as --grant-rx / --grant-rw", () => {
+  const a = appContainerArgs(caps("trusted-local"), { ...CTX, proxy: PROXY, grantRx: ["C:\\repo"], grantRw: ["C:\\Users\\u\\.omp"], tmpDir: "C:\\Users\\u\\.omp\\lucid-sandbox-tmp" });
+  expect(a.join(" ")).toContain("--grant-rx C:\\repo");
+  expect(a.join(" ")).toContain("--grant-rw C:\\Users\\u\\.omp");
+  expect(a.join(" ")).toContain("--grant-rw C:\\Users\\u\\.omp\\lucid-sandbox-tmp");
+  expect(a).toContain("--loopback-only");
+});
+
+test("appContainer wrap points TEMP/TMP at the granted temp dir (the user's %TEMP% is not granted)", () => {
+  const plan = AC.wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY, tmpDir: "C:\\t" });
+  expect(plan.env.TEMP).toBe("C:\\t");
+  expect(plan.env.TMP).toBe("C:\\t");
+  expect(AC.wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY }).env.TEMP).toBeUndefined();
+});
+
+test("appContainerRuntimeGrants: bundled omp -> repo + bun dir rx, ~/.omp rw, temp inside it", () => {
+  const g = appContainerRuntimeGrants({
+    repoRoot: "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo",
+    home: "C:\\Users\\u",
+    bunBin: "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\runtimes\\bun-win32-x64.exe",
+    ompBin: "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo\\node_modules\\.bin\\omp.exe",
+  });
+  expect(g.grantRx).toEqual([
+    "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo",
+    "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\runtimes",
+  ]); // omp under the repo adds nothing
+  expect(g.grantRw).toEqual(["C:\\Users\\u\\.omp"]);
+  expect(g.tmpDir).toBe("C:\\Users\\u\\.omp\\lucid-sandbox-tmp");
+});
+
+test("appContainerRuntimeGrants: an omp outside the repo is granted by its install root; bare names are skipped", () => {
+  const g = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\u", bunBin: "bun", ompBin: "C:\\Users\\u\\.bun\\bin\\omp.exe" });
+  expect(g.grantRx).toEqual(["C:\\r", "C:\\Users\\u\\.bun"]);
+  // same dir twice (case differs) is granted once
+  const d = appContainerRuntimeGrants({ repoRoot: "C:\\R", home: "C:\\h", bunBin: "c:\\r\\bun.exe", ompBin: null });
+  expect(d.grantRx).toEqual(["C:\\R"]);
+});
+
+test("the AppContainer probe is a stdio round trip: exit 0 WITHOUT the echoed marker does not pass", () => {
+  const argv = appContainerProbeArgv("lucid-appcontainer", "C:\\tmp");
+  expect(argv.slice(0, 4)).toEqual(["lucid-appcontainer", "--workspace", "C:\\tmp", "--deny-network"]);
+  expect(argv.join(" ")).toContain(`echo ${APPCONTAINER_PROBE_MARKER}`);
+  expect(appContainerProbePassed({ exitCode: 0, stdout: `${APPCONTAINER_PROBE_MARKER}\r\n` })).toBe(true);
+  expect(appContainerProbePassed({ exitCode: 0, stdout: "" })).toBe(false); // the beta.7 helper: runs, but no stdio
+  expect(appContainerProbePassed({ exitCode: 3, stdout: APPCONTAINER_PROBE_MARKER })).toBe(false);
 });

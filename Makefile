@@ -693,6 +693,10 @@ demo-P-SANDBOX.7: ## P-SANDBOX.7 (ADR-0173): the native Windows AppContainer hel
 demo-P-SANDBOX.7b: ## P-SANDBOX.7b (ADR-0174): mediated --loopback-only for the AppContainer helper - the empty-caps container has NO direct internet (verified live: curl → http_code=000) and a one-time ADMIN loopback exemption (--register-loopback via CheckNetIsolation) lets it reach ONLY the loopback proxy; the no-internet guarantee holds with or without the exemption; off-Windows every mode fail-closes
 	$(BUN) run harness/scripts/demo_p_sandbox_7b.ts
 
+.PHONY: demo-P-SANDBOX.9
+demo-P-SANDBOX.9: ## P-SANDBOX.9 (ADR-0386): a green AppContainer pill means a working chat - the helper hands its std handles to the contained omp (ACP rides stdio), the container is granted the repo + bun runtime (rx) and ~/.omp (rw, TEMP inside), PI_PROXY steers omp inference at the mediating proxy, --register-loopback creates the profile first, and the probe is a stdio round trip
+	$(BUN) run harness/scripts/demo_p_sandbox_9.ts
+
 .PHONY: build-appcontainer
 build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into bin/ (ships via the `repo` extraResources; resolveBackend probes <repo>/bin first, PATH second)
 	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile bin/lucid-appcontainer.exe
