@@ -5003,3 +5003,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** `ACPClient` rejects with `rpcError()` (message + data + code as a real Error) instead of the raw JSON-RPC object, so the no-response card stops saying "[object Object]" and names the provider's failure. Unit-tested.
 - **stubbed:** the contained turn that surfaced it (green pill, proxy carrying omp's traffic, turn fails in 1s) is not yet diagnosed; this change is what makes it diagnosable.
 - **next:** read the real error from the next build (or from the user's ~/.omp/logs omp log) and fix the contained provider path.
+
+## P-SANDBOX.11: a shellPath pinned in omp's config is reachable in the AppContainer (ADR-0389)
+- **shipped:** the readable error (P-NORESP.2) named the next wall: omp throws when the user's pinned `shellPath` (a per-user MinGit sh.exe) does not exist, and inside the container it does not. The engine now reads `shellPath` from `~/.omp/agent/config.yml` and grants rx on the shell's install root; grants under Windows / Program Files are skipped (already readable, and not writable by a standard user). Unit-tested.
+- **stubbed:** not covered by the Windows CI smoke, and the runtime probe does not exercise the shell, so this is proven by the next contained turn on the user's host.
+- **next:** install the build, send a turn with the pill green; then the security-panel sandbox controls (toggle, folder grants via the native picker, enterprise-managed) as their own increment.
