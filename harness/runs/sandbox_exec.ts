@@ -250,6 +250,21 @@ export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; b
   return { grantRx, grantRw: [ompHome], tmpDir: w.join(ompHome, "lucid-sandbox-tmp") };
 }
 
+/** PURE: did the REAL agent runtime start inside the container? P-SANDBOX.10 (ADR-0387). The stdio
+ *  probe (P-SANDBOX.9) proves the helper wires a pipe; it does not prove that omp's bun can boot under
+ *  the grants. beta.7+.9 lit the pill and then every turn died with bun's `CouldntReadCurrentDirectory`
+ *  (bun walks every ancestor of its cwd at startup and treats an unopenable one as fatal,
+ *  oven-sh/bun#28220). So before committing a session to the AppContainer, the engine runs
+ *  `<omp> --version` through the SAME wrap (flags, grants, env, workspace) and requires a clean exit
+ *  with output. Anything else keeps the disclosed passthrough, with the reason, so chat stays up. */
+export function runtimeProbeVerdict(r: { exitCode: number | null; stdout: string; stderr: string; timedOut?: boolean }): { ok: true } | { ok: false; reason: string } {
+  const tail = (t: string) => t.trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" | ").slice(0, 300);
+  if (r.timedOut) return { ok: false, reason: "the contained agent runtime did not answer --version in time" };
+  if (r.exitCode !== 0) return { ok: false, reason: `the contained agent runtime exited ${r.exitCode ?? "abnormally"}${tail(r.stderr) ? `: ${tail(r.stderr)}` : ""}` };
+  if (!r.stdout.trim()) return { ok: false, reason: "the contained agent runtime printed no version (stdio not carried)" };
+  return { ok: true };
+}
+
 /** A concrete spawn plan: what to ACTUALLY exec. `env` entries are ADDED to the child env. */
 export interface SandboxPlan {
   cmd: string;

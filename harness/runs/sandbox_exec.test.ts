@@ -17,6 +17,7 @@ import {
   appContainerRuntimeGrants,
   APPCONTAINER_PROBE_MARKER,
   proxyChildEnv,
+  runtimeProbeVerdict,
   BwrapBackend,
   listingExemptsMoniker,
   NoopBackend,
@@ -503,4 +504,16 @@ test("the AppContainer probe is a stdio round trip: exit 0 WITHOUT the echoed ma
   expect(appContainerProbePassed({ exitCode: 0, stdout: `${APPCONTAINER_PROBE_MARKER}\r\n` })).toBe(true);
   expect(appContainerProbePassed({ exitCode: 0, stdout: "" })).toBe(false); // the beta.7 helper: runs, but no stdio
   expect(appContainerProbePassed({ exitCode: 3, stdout: APPCONTAINER_PROBE_MARKER })).toBe(false);
+});
+
+// ── P-SANDBOX.10 (ADR-0387): the pill needs the REAL runtime to boot in the container ──
+test("runtimeProbeVerdict: only a clean exit WITH output commits the session to the AppContainer", () => {
+  expect(runtimeProbeVerdict({ exitCode: 0, stdout: "omp 18.2.10\n", stderr: "" })).toEqual({ ok: true });
+  // the field failure: bun cannot open a cwd ancestor inside the container
+  const bunDied = runtimeProbeVerdict({ exitCode: 1, stdout: "", stderr: "error: An internal error occurred (CouldntReadCurrentDirectory)\n" });
+  expect(bunDied.ok).toBe(false);
+  if (!bunDied.ok) expect(bunDied.reason).toContain("CouldntReadCurrentDirectory");
+  expect(runtimeProbeVerdict({ exitCode: 0, stdout: "  ", stderr: "" }).ok).toBe(false); // no stdio carried
+  expect(runtimeProbeVerdict({ exitCode: null, stdout: "", stderr: "", timedOut: true }).ok).toBe(false);
+  expect(runtimeProbeVerdict({ exitCode: 3, stdout: "", stderr: "" }).ok).toBe(false); // helper fail-closed
 });

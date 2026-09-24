@@ -697,6 +697,10 @@ demo-P-SANDBOX.7b: ## P-SANDBOX.7b (ADR-0174): mediated --loopback-only for the 
 demo-P-SANDBOX.9: ## P-SANDBOX.9 (ADR-0386): a green AppContainer pill means a working chat - the helper hands its std handles to the contained omp (ACP rides stdio), the container is granted the repo + bun runtime (rx) and ~/.omp (rw, TEMP inside), PI_PROXY steers omp inference at the mediating proxy, --register-loopback creates the profile first, and the probe is a stdio round trip
 	$(BUN) run harness/scripts/demo_p_sandbox_9.ts
 
+.PHONY: demo-P-SANDBOX.10
+demo-P-SANDBOX.10: ## P-SANDBOX.10 (ADR-0387): the AppContainer pill needs the REAL runtime to boot - bundled bun 1.3.14 -> 1.4.2 (1.3.14 cannot start a script in the container, no ACL fixes it), the engine probes the contained omp --version through the same wrap before committing (passthrough with the reason otherwise), and a Windows CI smoke runs the real contained omp on the bundled bun
+	$(BUN) run harness/scripts/demo_p_sandbox_10.ts
+
 .PHONY: build-appcontainer
 build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into bin/ (ships via the `repo` extraResources; resolveBackend probes <repo>/bin first, PATH second)
 	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile bin/lucid-appcontainer.exe
