@@ -5033,3 +5033,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** `security.sandbox` policy (GPO `SandboxAllowUserOff`, `SandboxReadFolders`, `SandboxReadWriteFolders`, `SandboxLockFolders`): the switch can be locked on without the require-isolation exec block, admin folders (%VAR% expanded, bounded like user picks, missing ones skipped and logged) ride every contained spawn and show in the panel as policy, and user and agent folder adds can be locked (revoke still works). Em dashes removed from the Runtime sandbox section and the engine reasons it shows, with a test. `make demo-P-SANDBOX.14`.
 - **stubbed:** ADMX/ADML templates for the four values (private add-on repo); not exercised on a GPO-managed Windows host yet.
 - **next:** push a test GPO (SandboxReadFolders + SandboxLockFolders) to the Windows host and confirm the panel note and the policy folders; then P-SIGN.1 (code signing).
+
+## P-REL.1: cut a beta prerelease from a workflow dispatch (ADR-0395)
+- **shipped:** `build-desktop.yml` `beta_release` input: on master it builds the committed prerelease version and creates tag v<version> plus a GitHub prerelease via the API (never latest, no cask move); guards refuse a non-prerelease version, a non-master ref, or publish_latest. Needed because the agent session cannot push tags, which left v2.3.0-beta.8 merged but unreleased.
+- **stubbed:** first exercised by the v2.3.0-beta.8 dispatch itself.
+- **next:** confirm the beta.8 prerelease lists its installers; then P-SIGN.1 (code signing).
