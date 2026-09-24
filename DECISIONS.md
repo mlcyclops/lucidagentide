@@ -24018,3 +24018,22 @@ Every request is audited as a `sandbox_mode` security event. The endpoint is `PO
 **Decision.** The panel gets **Add folder (read-only)** and **Add folder (read-write)** buttons. `POST /api/security/sandbox-grant/add` reads only the mode. The engine then opens the native Explorer folder dialog itself (`pickFolderNative`, P-FS.2) and grants only the folder a person picks there. A cancel does nothing. `refuseGrantPath` refuses a whole drive, the whole user profile, Windows and Program Files (already readable by every AppContainer, and not a standard user's to re-ACL), and network or relative paths, each with a sentence the panel shows. A pick is applied through the same `applyGrantAce` path as P-SANDBOX.8 (UAC retry when the user lacks WRITE_DAC), recorded in the grants store, and audited as a `sandbox_grant` event from `sandbox_panel`. The list then shows the user's folders with Revoke, plus, read-only, the folders LUCID always allows so the agent can run (workspace, `~/.omp`, the app, bun, a pinned shell). It is computed from the same `appContainerRuntimeGrants` inputs the engine spawns with, so the list is the full answer to "what can the sandbox reach".
 
 **Consequences.** Something holding the token can still make the dialog appear, but only a person clicking in an OS dialog can choose what is granted. The underlying token exposure (the child receives the same token that header-only routes accept, so it could call routes like `/api/security/approve`) predates this increment and is a follow-up of its own. Folder grants apply at the ACL level immediately, and the running contained agent sees them without a restart. Enterprise control of these folders (pre-approved lists, locking user grants) is P-SANDBOX.14.
+
+## ADR-0392 -- P-MODEL.5: Grok 4.7 in the model picker, and xAI Grok as its own family (2026-09-24)
+
+**Context.** The user asked for Grok 4.7 in the model picker. omp 18.2.10's catalog already carries `grok-4.7` (and `grok-4.6`) for the `xai` and `xai-oauth` providers: $2/$6 per Mtok (cache read $0.50), $4/$12 past 200K input tokens, a 500K context window, reasoning, and text + image input. So the picker already listed it, and no omp bump was needed. LUCID's own layers knew no Grok at all:
+- no context window: the status bar and Memory panel fell back to omp's reported size;
+- no price row: cost estimates used the Sonnet-ish default of $3/$15;
+- no curated card;
+- no family: every Grok landed in "Other models" at the bottom of the picker, and the no-response card's "lower model, same family" paired a failing Grok with whatever else was in "Other".
+
+Separately, `modelCtx` looked up only the AskSage/Anthropic-stripped id, so any other provider-prefixed id (`xai-oauth/grok-4.7`, `openai-codex/gpt-6-sol`) never matched its context row. The hover cards already fell back to the bare id.
+
+**Decision.** Extend LUCID's layers, never restate the catalog:
+- a `grok-4.6` / `grok-4.7` pricing row at $2/$6 (older Grok ids are left to their own estimate);
+- `MODEL_CTX` 500K for both;
+- curated cards for both;
+- a new `xai Grok` family (`/grok/i`, after Gemini, also placed in the AskSage family order);
+- `modelCtx` falls back to the provider-stripped id, like the cards.
+
+**Consequences.** Grok 4.7 now appears in its own "xAI Grok" group with a correct 500K window, a $2/$6 estimate (metered usage still supersedes it) and a card. A failing Grok now falls back to another Grok, and a failing Claude or GPT is never paired with a Grok as "same family". The `modelCtx` fix also corrects the context denominator for GPT-6 on `openai-codex`. Not verified live: a signed-in xAI account showing Grok 4.7 in the group (the catalog is the evidence; the picker only filters it).

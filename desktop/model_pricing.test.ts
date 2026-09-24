@@ -79,3 +79,14 @@ describe("assumedCacheRate", () => {
     expect(assumedCacheRate({ totals: { cacheHitRate: 2 } })).toBe(0.35); // out of range ⇒ default
   });
 });
+
+describe("Grok 4.6 / 4.7 (omp 18.2.10 catalog)", () => {
+  test("price at the cataloged $2/$6 per Mtok, with or without a provider prefix", () => {
+    for (const id of ["xai-oauth/grok-4.7", "xai/grok-4.7", "grok-4.7", "xai/grok-4.6", "github-copilot/grok-4.7"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 2.0, outPerM: 6.0 });
+    }
+  });
+  test("older Grok ids the catalog prices differently are not swept into the 4.6/4.7 row", () => {
+    expect(listPrice("xai/grok-4.20-0309-reasoning")).not.toEqual({ inPerM: 2.0, outPerM: 6.0 });
+  });
+});

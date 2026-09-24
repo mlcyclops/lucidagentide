@@ -5018,3 +5018,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** Security > Runtime sandbox gets Add folder (read-only / read-write). The engine opens the Explorer folder dialog itself and grants only the pick (the request carries no path, so the agent cannot grant itself folders); drive roots, the whole profile, Windows / Program Files and network paths are refused with a reason; every add is audited. The list now shows user folders (Revoke) plus LUCID's always-allowed runtime folders. `demo-P-SANDBOX.13`; renderer rebuilt and the served /app.js grepped for `data-sbx-add` / "Always allowed".
 - **stubbed:** the Explorer dialog and the ACL apply run only on a real Windows host. Pre-existing: the omp child's loopback token also opens header-only routes; flagged in ADR-0391 as its own follow-up.
 - **next:** P-SANDBOX.14, the enterprise policy keys (allow/deny the switch, pre-approved folders, lock user-added folders).
+
+## P-MODEL.5: Grok 4.7 in the model picker, xAI Grok as its own family (ADR-0392)
+- **shipped:** omp 18.2.10 already catalogs grok-4.7 / grok-4.6 (xai + xai-oauth: $2/$6, $4/$12 past 200K, 500K ctx), so no omp bump. LUCID adds the pricing row, the 500K context rows, curated cards, and an "xAI Grok" picker family (Grok was sinking into "Other models", and same-family fallbacks paired it with unrelated models). `modelCtx` now falls back to the provider-stripped id (also fixes GPT-6 on openai-codex). Renderer rebuilt; served /app.js carries the family and the card.
+- **stubbed:** not seen in a live signed-in xAI picker; catalog evidence only.
+- **next:** sign in to xAI and confirm Grok 4.7 lists under "xAI Grok" with its 500K window; P-SANDBOX.14 (enterprise policy keys) remains queued.

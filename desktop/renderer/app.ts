@@ -296,6 +296,8 @@ const MODEL_CTX: Record<string, number> = {
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
   "gpt-6-astra": 1_000_000, "gpt-6-sol": 1_000_000, "gpt-6-luna": 1_000_000,
+  // Grok 4.6 / 4.7 (omp 18.2.10 catalog, xai + xai-oauth): 500K context.
+  "grok-4.7": 500_000, "grok-4.6": 500_000,
   "gpt-5.6-luna": 256_000, "gpt-5.6-sol": 256_000, "gpt-5.6-terra": 256_000,
   "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
   "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
@@ -307,7 +309,9 @@ const MODEL_CTX: Record<string, number> = {
   "google-gemini-2.5-pro": 1_000_000, "google-gemini-2.5-flash": 1_000_000,
   "rag": 256_000,
 };
-const modelCtx = (v: string): number | undefined => MODEL_CTX[shortModelId(v)];
+// Provider-prefixed ids (`xai-oauth/grok-4.7`, `openai-codex/gpt-6-sol`) fall back to the bare id, the
+// same fallback the hover cards already use (stripProvider below); without it those windows never matched.
+const modelCtx = (v: string): number | undefined => MODEL_CTX[shortModelId(v)] ?? MODEL_CTX[v.replace(/^[^/]*\//, "")];
 // Friendly label for the CURRENTLY-selected model - resolve its name from config,
 // falling back to the bare value before config has loaded.
 function modelLabel(value: string): string {
@@ -15808,6 +15812,10 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   // fast tier at a hundredth. Same 1M window and effort levels; the picker offers whichever the provider carries.
   "gpt-6-sol": { exp: 2, iq: 4, eff: "GPT-6 mid tier: most of Astra's reasoning at $2/$10 per Mtok; 1M context.", best: "Everyday coding, analysis and long-context work at a workhorse price.", ctx: "1M" },
   "gpt-6-luna": { exp: 1, iq: 3, eff: "GPT-6 fast tier at $0.10/$0.50 per Mtok; 1M context.", best: "Quick edits, lookups, and high-volume long-context tasks.", ctx: "1M" },
+  // Grok 4.7 / 4.6 (omp 18.2.10, xai + xai-oauth): $2/$6 per Mtok ($4/$12 past 200K input), 500K context,
+  // reasoning with an effort toggle, text + image input.
+  "grok-4.7": { exp: 2, iq: 4, eff: "xAI's newest Grok: strong reasoning at $2/$6 per Mtok, doubling past 200K input; 500K context.", best: "Everyday coding and analysis with long context at a low price.", ctx: "500K" },
+  "grok-4.6": { exp: 2, iq: 4, eff: "Prior Grok at the same $2/$6 price and 500K context.", best: "A version pin for Grok work.", ctx: "500K" },
   // AskSage · OpenAI. GPT-5.6 ships three tier codenames (luna=mid / sol / terra); luna is the default RAG model.
   "gpt-5.6-luna": { exp: 3, iq: 5, eff: "Newest mid-tier GPT-5.6; the default RAG model.", best: "General gov coding, analysis, and RAG grounding.", ctx: "256K" },
   "gpt-5.6-sol": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },
