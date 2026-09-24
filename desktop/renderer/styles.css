@@ -2529,7 +2529,11 @@ body.lucid-capturing #toasts{visibility:hidden}
 /* Hover-peek (user call, 2026-08-01): the mouse near the left edge slides the rail back in as a push
    drawer (still a grid item - never out of flow, see the hazard note above); moving away tucks it. */
 #app-inner.immersive.rail-peek .rail{width:54px;min-width:54px;opacity:1;pointer-events:auto;padding:10px 0;border-right:1px solid var(--line-soft)}
-#app-inner.immersive .sidebar,#app-inner.immersive .inspector{width:0!important;min-width:0;opacity:0;border:0;box-shadow:none;pointer-events:none;overflow:hidden}
+/* The sessions sidebar rides the same peek: while the rail is out, the hamburger can open it and it
+   pushes in at its normal width (its own .collapsed rule still zeroes it when the user closed it).
+   Without this the width:0!important below held the chat list shut on the stage, so every session
+   looked missing (live-bug 2026-09-24). The inspector never peeks. */
+#app-inner.immersive:not(.rail-peek) .sidebar,#app-inner.immersive .inspector{width:0!important;min-width:0;opacity:0;border:0;box-shadow:none;pointer-events:none;overflow:hidden}
 /* --arcade-h is the live height of the open arcade (app.ts syncArcadeGap). The stage covers <main>,
    and the game mounts inside that same main BELOW the composer, so without this the big ninja is
    painted straight over the playfield. Lift the stage floor instead of moving the game. */
