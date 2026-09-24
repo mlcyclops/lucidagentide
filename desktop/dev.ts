@@ -1769,8 +1769,10 @@ return Bun.serve({
         const mode: GrantMode = b.mode === "rw" ? "rw" : "rx";
         const ctl = sandboxControlNow();
         if (!ctl.available) return json({ ok: true, data: { added: false, detail: "the Windows sandbox helper is not available on this host" } });
-        const picked = await pickFolderNative({ title: `Give the LUCID sandbox ${mode === "rw" ? "read-write" : "read-only"} access to a folder`, buttonLabel: mode === "rw" ? "Allow read-write" : "Allow read-only" });
-        if (!picked.supported) return json({ ok: true, data: { added: false, detail: "no native folder dialog is available on this host" } });
+        // P-SANDBOX.13b (ADR-0393): helperFallback opens the shell's folder dialog through the bundled helper
+        // when PowerShell's Constrained Language Mode (Smart App Control / WDAC) refuses the scripted picker.
+        const picked = await pickFolderNative({ title: `Give the LUCID sandbox ${mode === "rw" ? "read-write" : "read-only"} access to a folder`, buttonLabel: mode === "rw" ? "Allow read-write" : "Allow read-only", helperFallback: repoAsset("bin", "lucid-appcontainer.exe") });
+        if (!picked.supported) return json({ ok: true, data: { added: false, detail: `no folder dialog could open: ${picked.reason ?? "unknown cause"}` } });
         if (!picked.path) return json({ ok: true, data: { added: false, cancelled: true, detail: "cancelled" } });
         const refused = refuseGrantPath(picked.path, homedir());
         if (refused) return json({ ok: true, data: { added: false, detail: refused } });
@@ -2762,6 +2764,7 @@ return Bun.serve({
         const r = await pickFolderNative({
           title: typeof b.title === "string" ? b.title : undefined,
           buttonLabel: typeof b.buttonLabel === "string" ? b.buttonLabel : undefined,
+          helperFallback: process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : undefined, // P-SANDBOX.13b
         });
         return json({ ok: true, data: r });
       }

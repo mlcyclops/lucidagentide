@@ -9,8 +9,9 @@
 // deny-network container cannot reach the net); the parser is where the boundary correctness lives.
 
 import { expect, test } from "bun:test";
-import { aclTargets, buildCommandLine, buildExplicitAccessW, buildStartupInfoExW, creationFlags, inheritableHandleList, checkNetIsolationArgs, icaclsListsSid, isPackageReadablePath, main, parentDir, parseAclMode, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
+import { aclTargets, buildBrowseInfoW, buildCommandLine, buildExplicitAccessW, buildStartupInfoExW, creationFlags, inheritableHandleList, checkNetIsolationArgs, icaclsListsSid, isPackageReadablePath, main, parentDir, PICK_CANCEL_MARK, PICK_PICKED_MARK, parseAclMode, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
 import type { HelperPlan } from "./lucid_appcontainer.ts";
+import { CANCEL_MARK, PICKED_MARK, parseWinPick } from "../../desktop/native_dialog.ts";
 
 // ── the flag-contract parser ──────────────────────────────────────────────────
 test("parses a valid --deny-network plan", () => {
@@ -210,4 +211,25 @@ test("buildStartupInfoExW: cb=112, STARTF_USESTDHANDLES, std handles at +80/+88/
 test("creationFlags: always EXTENDED_STARTUPINFO_PRESENT; CREATE_NO_WINDOW only when the helper has no console", () => {
   expect(creationFlags(true)).toBe(0x00080000);
   expect(creationFlags(false)).toBe(0x08080000);
+});
+
+// ── P-SANDBOX.13b (ADR-0393): the folder dialog without PowerShell ──
+test("buildBrowseInfoW: 64 bytes, owner +0, display buffer +16, title +24, flags +32", () => {
+  const b = buildBrowseInfoW(0x11n, 0x22n, 0x33n, 0x41);
+  const dv = new DataView(b.buffer);
+  expect(b.length).toBe(64);
+  expect(dv.getBigUint64(0, true)).toBe(0x11n);
+  expect(dv.getBigUint64(8, true)).toBe(0n); // pidlRoot: the desktop
+  expect(dv.getBigUint64(16, true)).toBe(0x22n);
+  expect(dv.getBigUint64(24, true)).toBe(0x33n);
+  expect(dv.getUint32(32, true)).toBe(0x41);
+  expect(dv.getBigUint64(40, true)).toBe(0n); // no callback
+});
+
+test("--pick-folder speaks the engine's picker markers, so parseWinPick reads it unchanged", () => {
+  expect(PICK_PICKED_MARK).toBe(PICKED_MARK);
+  expect(PICK_CANCEL_MARK).toBe(CANCEL_MARK);
+  expect(parseWinPick(`${PICK_PICKED_MARK}C:\\Users\\U\\Pictures\\Screenshots`)).toEqual({ status: "picked", path: "C:\\Users\\U\\Pictures\\Screenshots" });
+  expect(parseWinPick(PICK_CANCEL_MARK)).toEqual({ status: "cancelled" });
+  expect(main(["--pick-folder", "t"])).toBe(3); // off-Windows: refuses, never pretends a pick
 });

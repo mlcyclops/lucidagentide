@@ -16,6 +16,7 @@ import {
   linuxPickCommands,
   macPickSource,
   parseWinPick,
+  winPickFailureReason,
   winPickScript,
 } from "./native_dialog.ts";
 
@@ -47,4 +48,11 @@ test("linux candidates: zenity first, kdialog fallback, title as its own argv el
   expect(cmds[0]![0]).toBe("zenity");
   expect(cmds[1]![0]).toBe("kdialog");
   for (const argv of cmds) expect(argv).toContain("My title; rm -rf /"); // argv array = no shell parsing
+});
+
+// P-SANDBOX.13b (ADR-0393): a picker that cannot open says why, and names Smart App Control's CLM.
+test("winPickFailureReason names Constrained Language Mode, else the first stderr line", () => {
+  expect(winPickFailureReason("Cannot add type. Definition of new types is not supported in this language mode.\r\nAt line:2")).toContain("Constrained Language Mode");
+  expect(winPickFailureReason("\r\nAdd-Type : something else broke\r\n")).toBe("the folder dialog script failed: Add-Type : something else broke");
+  expect(winPickFailureReason("")).toBe("the folder dialog script produced no result");
 });
