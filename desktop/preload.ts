@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld("__LUCID_MARKET__", marketBootConfig());
 
 contextBridge.exposeInMainWorld("lucid", {
   isElectron: true,
+  // P-SANDBOX.15 (ADR-0396): the per-launch UI token, from main over IPC (the served HTML no longer carries it).
+  token: (): string => { try { return String(ipcRenderer.sendSync("lucid:token") ?? ""); } catch { return ""; } },
   setZoom: (factor: number) => { try { webFrame.setZoomFactor(factor); } catch { /* ignore */ } },
   pickFolder: (opts?: { title?: string; defaultPath?: string; buttonLabel?: string }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder", opts ?? {}),
   // P-NETWL.1 (ADR-0106): native FILE picker (auth config / token / PEM / API-key upload).

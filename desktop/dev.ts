@@ -387,7 +387,7 @@ import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): rea
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
-import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
+import { apiAuthorized, isAllowedRequest, reqShape } from "./origin_guard.ts";
 
 /** Sanitize an untrusted /api/goal `dial` payload into a LoopDial — only known command types + valid
  *  risk tiers survive; everything else is dropped (the backend clamps it by the managed ceiling anyway). */
@@ -1132,6 +1132,15 @@ const CREATOR_DIR = process.env.LUCID_CREATOR_DIR || join(process.env.LUCID_DATA
 // no other channel from this child back up to its parent). Still one random value per launch; a
 // standalone `bun run desktop/dev.ts` has no main and mints its own exactly as before.
 const TOKEN = process.env.LUCID_MAIN_TOKEN || randomBytes(32).toString("hex");
+// P-SANDBOX.15 (ADR-0396): whether an Electron main launched us (it delivers TOKEN to its window over IPC,
+// so the served HTML must not carry it). Captured, then the variable is REMOVED from process.env so no omp
+// child or fleet lane (they inherit process.env) ever holds the UI token.
+const HAS_MAIN = !!process.env.LUCID_MAIN_TOKEN;
+delete process.env.LUCID_MAIN_TOKEN;
+// P-SANDBOX.15 (ADR-0396): the omp children's OWN token. Every LUCID_*_URL handed to a child carries this,
+// never TOKEN, and the engine accepts it only on AGENT_ROUTES (below), so the agent cannot reach human-only
+// routes such as /api/security/approve or the sandbox switch.
+const AGENT_TOKEN = randomBytes(32).toString("hex");
 // Routes the OMP CHILD (or the Electron main) calls directly. They cannot set an `x-lucid-token` header,
 // so each inherits a ready URL with `?t=<TOKEN>` and these paths additionally accept the query token.
 // Everything else stays header-only. Hoisted to module scope (was a 17-clause `||` chain rebuilt on every
@@ -1149,6 +1158,9 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
   "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
 ]);
+// P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. Only
+// /api/preview/serve is left out: the renderer's iframe loads it with the UI token, and no child calls it.
+const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve"));
 // P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
 // sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
 // another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
@@ -1634,9 +1646,9 @@ return Bun.serve({
       // browser_* tools (via the token'd LUCID_BROWSER_URL it inherits), same ?t= convention. The two
       // main-process endpoints (/commands, /result) and the status push stay header-only: main MINTED the
       // token (LUCID_MAIN_TOKEN) and sends it as x-lucid-token on every poll.
-      const queryTokenOk = QUERY_TOKEN_ROUTES.has(p);
-      const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
-      if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
+      // P-SANDBOX.15 (ADR-0396): the agent's token (AGENT_TOKEN) opens AGENT_ROUTES only; TOKEN opens all.
+      const authorized = apiAuthorized({ path: p, headerToken: req.headers.get("x-lucid-token"), queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES });
+      if (!authorized) return new Response("forbidden", { status: 403 });
     }
     try {
       if (p === "/app.js") {
@@ -4946,9 +4958,12 @@ return Bun.serve({
       // to the real renderer; no-store so it's never cached across launches.
       // P-TRAINER.7: trainer.html is a same-origin iframe that calls the token-gated /api/trainer routes, so
       // it needs the per-launch token meta injected exactly like index.html.
+      // P-SANDBOX.15 (ADR-0396): NOT when an Electron main launched us. `GET /` needs no token, so any local
+      // process (the agent's own curl included) could read the meta tag; under Electron the preload fetches
+      // the token from main over IPC instead. Only a standalone browser dev run (`bun run web`) still injects.
       if (rel === "index.html" || rel === "trainer.html") {
         const html = (await Bun.file(join(ROOT, rel)).text())
-          .replace("</head>", `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
+          .replace("</head>", HAS_MAIN ? "</head>" : `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       }
       const file = Bun.file(join(ROOT, rel));
@@ -4995,51 +5010,51 @@ return Bun.serve({
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
 // THIS process) and inherits process.env, so setting it here — after the server binds — is enough; no
 // ACPClient env plumbing needed. 127.0.0.1 (not localhost) matches the loopback bind.
-process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${AGENT_TOKEN}`;
 // P-PREVIEW.6b (ADR-0153): the agent's preview_inspect tool GETs this (with ?selector=&what=) to read the DOM.
-process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${AGENT_TOKEN}`;
 // P-PREVIEW.6c (ADR-0153): preview_click / preview_type GET this (with ?action=&selector=&value=) to act.
-process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${AGENT_TOKEN}`;
 // P-PREVIEW.11 (ADR-0308): preview_open POSTs {path} here so the panel opens from the TOOL's own call.
 // The old path (acp_backend matching "preview_open: <path>" in the ACP title) is dead under intent
 // tracing, which rewrites that title to the model's intent prose; it stays only as a fallback.
-process.env.LUCID_PREVIEW_OPEN_URL = `http://127.0.0.1:${server.port}/api/preview/open?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_OPEN_URL = `http://127.0.0.1:${server.port}/api/preview/open?t=${AGENT_TOKEN}`;
 // ADR-0220: the `knowledge_search` tool (omp subprocess) POSTs the user's query here to ground on the local
 // compiled knowledge base. Token'd URL, same pattern as the preview tools; retrieval returns delimited untrusted DATA.
-process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${TOKEN}`;
+process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${AGENT_TOKEN}`;
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
-process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${TOKEN}`;
+process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
 // P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
-process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${TOKEN}`;
+process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the
 // real tool name exists ONLY inside omp's hook API - the ACP update carries a coarse `kind` and an
 // intent-shadowed title. Unset means the extension self-skips, and reports fall back to the coarse kind.
-process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${TOKEN}`;
+process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${AGENT_TOKEN}`;
 // P-JEV.2 (ADR-0377): the judgment extension POSTs every typed judgment (question, answers, backend,
 // latency, error) here, because omp records none of them and has no hook for them. Unset means the
 // extension self-skips and the chat draws no judgment row.
-process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${TOKEN}`;
+process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${AGENT_TOKEN}`;
 // P-KG.3: the agent's memory_recall / memory_retain tools reach the UNLOCKED personal knowledge graph
 // through these. Both fail closed when the vault is locked: recall returns no hits and retain refuses,
 // so a locked vault can never be mistaken for an empty one (which would teach the model it has no memory)
 // nor silently swallow a write (which would teach it that it does).
-process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${TOKEN}`;
-process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${TOKEN}`;
+process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${AGENT_TOKEN}`;
+process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${AGENT_TOKEN}`;
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
 // token'd drain endpoint (same pattern as LUCID_FLEET_STATUS_URL - /api requires the per-launch token,
 // which a child can only carry as ?t=). Per-child LUCID_INTERJECT_TARGET rides the spawn env overlay
 // (interjectChildEnv in acp_backend.ts for the master, the fleet env dep above for lanes).
 process.env.LUCID_DEV_URL = `http://127.0.0.1:${server.port}`;
-process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${TOKEN}`;
+process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${AGENT_TOKEN}`;
 // P-BROWSER.1 (wave 2): the omp child's browser_* tools reach the agent-browser routes through this
 // token'd BASE (the extension appends /open, /capture, /scroll, /close, /shot and keeps the ?t=).
 // Gated on LUCID_MAIN_TOKEN: without the Electron main there is no window executor, so the env stays
 // unset and browser_extension.ts skips registration entirely (bun-only / plain-browser dev runs).
-if (process.env.LUCID_MAIN_TOKEN) process.env.LUCID_BROWSER_URL = `http://127.0.0.1:${server.port}/api/browser?t=${TOKEN}`;
+if (HAS_MAIN) process.env.LUCID_BROWSER_URL = `http://127.0.0.1:${server.port}/api/browser?t=${AGENT_TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp

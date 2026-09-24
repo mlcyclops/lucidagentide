@@ -1312,6 +1312,8 @@ export interface WhitelistEntryView {
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
 interface NativeShell {
   isElectron?: boolean;
+  /** P-SANDBOX.15 (ADR-0396): the per-launch UI token from main over IPC ("" when refused). */
+  token?(): string;
   setZoom?(factor: number): void;
   pickFolder?(opts?: PickFolderOpts): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
@@ -1333,12 +1335,18 @@ interface NativeShell {
 declare global { interface Window { lucid?: NativeShell } }
 const shell: NativeShell | undefined = typeof window !== "undefined" ? window.lucid : undefined;
 
-// ADR-0024: the per-launch capability token, injected into the served HTML by dev.ts. We echo it
-// on every /api call so the server can tell the real renderer from a forged request. Read once at
-// load; absent in a stray non-injected page (then calls are simply rejected, fail-closed).
-const TOKEN = typeof document !== "undefined"
-  ? (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? ""
-  : "";
+// ADR-0024: the per-launch capability token. We echo it on every /api call so the server can tell the real
+// renderer from a forged request. Read once at load; absent in a stray page (then calls are rejected,
+// fail-closed). P-SANDBOX.15 (ADR-0396): under Electron it comes from the preload (main, over IPC), and a
+// same-origin child frame (trainer.html) reads its parent's; only a standalone browser dev run still finds
+// it in a <meta> tag the engine injects.
+function readToken(): string {
+  if (typeof document === "undefined") return "";
+  try { const t = window.lucid?.token?.(); if (t) return t; } catch { /* no preload */ }
+  try { if (window.parent !== window) { const t = (window.parent as Window).lucid?.token?.(); if (t) return t; } } catch { /* cross-origin parent */ }
+  return (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? "";
+}
+const TOKEN = readToken();
 const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
   ({ ...(TOKEN ? { "x-lucid-token": TOKEN } : {}), ...extra });
 

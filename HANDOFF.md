@@ -133,18 +133,14 @@ locally.
 
 ## Next increment
 
-**P-SANDBOX.15**: scope the omp child's loopback token. The contained omp
-receives the same token that header-only engine routes accept, so it could call
-routes like `/api/security/approve`. Give the child a token limited to the
-routes it needs (the agent-facing grant claim, telemetry) and refuse it on
-every human-only route. P-SANDBOX.13 already designed around this (the Add
-folder route never takes a path from the caller); this closes it.
+**P-SIGN.1** (code signing): needs the owner's choice of Azure Artifact
+Signing or a traditional certificate. Signing also lifts the Smart App Control
+block on install.
 
-Queued behind it:
-- **P-SIGN.1** (code signing): needs the owner's choice of Azure Artifact
-  Signing or a traditional certificate. Signing also lifts the Smart App
-  Control block on install.
+Queued alongside it:
 - ADMX/ADML templates for the four P-SANDBOX.14 values (private add-on repo).
+- Verify P-SANDBOX.15 (ADR-0396) in a packaged build: the window must still
+  authenticate (preload `lucid.token()` over IPC) with no token in the HTML.
 
 ## Lessons learned (2026-09-24, the AppContainer arc)
 
@@ -170,7 +166,8 @@ Queued behind it:
   asking for a local tag push.
 - **The loopback token is shared with the agent.** Any route that widens access
   must not accept a caller-supplied target: the engine opens the picker itself
-  (ADR-0391). P-SANDBOX.15 removes the shared token.
+  (ADR-0391). P-SANDBOX.15 (ADR-0396) gave the agent its own narrower token and took the
+  UI token out of the served HTML under Electron.
 - **JSON-RPC errors are objects.** Wrap them with `rpcError` before they reach
   a string context, or the chat shows `[object Object]` (ADR-0388).
 
