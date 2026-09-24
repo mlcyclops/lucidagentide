@@ -510,4 +510,13 @@
 //            carries gpt-6-sol and gpt-6-luna natively; LUCID adds the cost cards, the 1M windows, the
 //            Astra > Sol > Luna default order and the Regular/Max walk (P-MODEL.4, ADR-0383).
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.7";
+// v2.3.0-beta.8 = beta.7 plus a Windows AppContainer sandbox that chat actually works inside. The contained
+//            omp owns its stdio, reads its runtime and writes its state, proxies inference via PI_PROXY, and
+//            the pill lights only after the real runtime boots through the same wrap (bundled bun 1.3.14 ->
+//            1.4.2) (P-SANDBOX.9/.10/.11, ADR-0386/0387/0389). The Security panel gains the sandbox switch,
+//            Add folder with the native picker (a helper dialog under Smart App Control) and the full list of
+//            what the sandbox can reach (P-SANDBOX.12/.13/.13b, ADR-0390/0391/0393), plus enterprise policy
+//            for the switch and folders (P-SANDBOX.14, ADR-0394). Agent errors reach the chat as words
+//            (P-NORESP.2, ADR-0388); Grok 4.7 and an xAI Grok picker family (P-MODEL.5, ADR-0392).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.8";
