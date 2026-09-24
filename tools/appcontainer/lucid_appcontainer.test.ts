@@ -231,5 +231,7 @@ test("--pick-folder speaks the engine's picker markers, so parseWinPick reads it
   expect(PICK_CANCEL_MARK).toBe(CANCEL_MARK);
   expect(parseWinPick(`${PICK_PICKED_MARK}C:\\Users\\U\\Pictures\\Screenshots`)).toEqual({ status: "picked", path: "C:\\Users\\U\\Pictures\\Screenshots" });
   expect(parseWinPick(PICK_CANCEL_MARK)).toEqual({ status: "cancelled" });
-  expect(main(["--pick-folder", "t"])).toBe(3); // off-Windows: refuses, never pretends a pick
+  // Off Windows it refuses, never pretends a pick. On Windows it would open a real modal dialog and wait for a
+  // person, so the test never calls it there (it hung the Windows CI gate until cancelled).
+  if (process.platform !== "win32") expect(main(["--pick-folder", "t"])).toBe(3);
 });
