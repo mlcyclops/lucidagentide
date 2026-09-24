@@ -88,7 +88,7 @@ import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
-import { addGrant, applyGrantAce, consumePending, loadGrants, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
+import { addGrant, applyGrantAce, consumePending, loadGrants, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { repoAsset } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
@@ -133,7 +133,7 @@ import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailabl
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 // CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
 // route reports (both flavors resolve it through the same seam).
 import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreatorEndpoint, removeCreatorTarget, upsertCreatorEndpoint, upsertCreatorTarget, type CreatorRemoteTargetDef } from "./settings_store.ts";
@@ -256,7 +256,9 @@ function whisperDeps(): WhisperRuntimeDeps {
     },
   };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedRequireIsolation, skipAllowed } from "./managed_config.ts";
+import { planModeChange, sandboxControlView, type ModeRequest, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { loopbackExempted, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
@@ -1695,7 +1697,7 @@ return Bun.serve({
       if (p === "/api/security") {
         const snap = await securitySnapshotMemo(); // memoized + single-flight (P-PERF.3); live/sandbox/acks stay fresh (in-memory, cheap)
         // P-SANDBOX.8: the standing directory grants ride the sandbox slice so the panel lists them with Revoke.
-        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView() }, acks: ackView() } });
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView(), control: sandboxControlNow() }, acks: ackView() } });
       }
       // P-SANDBOX.8: the omp child's sandbox_grant_dir tool claims a user-approved directory grant.
       // Defense in depth over the dialog: win32 + bundled helper + an EXISTING directory + a FRESH
@@ -1727,6 +1729,37 @@ return Bun.serve({
         saveGrants(addGrant(loadGrants(), { path: dirPath, mode, grantedAt: new Date().toISOString(), reason }));
         console.log(`[sandbox-grant] granted ${mode} on ${dirPath}${reason ? ` (${reason})` : ""}`);
         return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} — standing until the user revokes it in the Security panel (${applied.detail})` } });
+      }
+      // P-SANDBOX.12 (ADR-0390): the Security panel's sandbox switch. Off is a LUCID setting (no admin);
+      // On registers the loopback exemption behind UAC when it is missing; "unregister" removes it. Every
+      // change is audited, and the agent is restarted so the next spawn takes the new posture.
+      if (p === "/api/security/sandbox/mode" && req.method === "POST") {
+        const b = await readBody<{ mode?: unknown }>(req);
+        const mode = String(b.mode ?? "");
+        if (mode !== "off" && mode !== "auto" && mode !== "unregister") return json({ ok: true, data: { changed: false, detail: "unknown mode" } });
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        const plan = planModeChange({ mode } as ModeRequest, sandboxControlNow());
+        let changed = false;
+        let detail = "";
+        if (plan.action === "refuse") detail = plan.reason;
+        else if (plan.action === "set-off") { setSandboxWindowsMode("off"); changed = true; detail = "the sandbox is off - the agent restarts as the disclosed passthrough"; }
+        else if (plan.action === "unregister") {
+          const launched = setLoopbackRegistrationElevated(helper, false);
+          resetLoopbackExemptCache();
+          changed = launched && !loopbackExempted();
+          detail = changed ? "the sandbox's Windows loopback registration was removed" : launched ? "the helper ran but the registration is still present" : "the administrator prompt was declined";
+        } else {
+          if (plan.registerFirst) {
+            const launched = setLoopbackRegistrationElevated(helper, true);
+            resetLoopbackExemptCache();
+            if (!launched || !loopbackExempted()) detail = launched ? "the helper ran but Windows still lists no loopback exemption" : "the administrator prompt was declined - the sandbox stays off";
+          }
+          if (!detail) { setSandboxWindowsMode("auto"); changed = true; detail = "the sandbox is on - the agent restarts inside the AppContainer if its runtime boots there"; }
+        }
+        emitSecurityEvent({ category: "approval", type: "sandbox_mode", decision: changed ? "allow" : "block", severity: "medium", tool: "sandbox_mode", reason: `${mode}: ${detail}`.slice(0, 200) });
+        console.log(`[sandbox] panel request ${mode}: ${detail}`);
+        if (changed && mode !== "unregister") backend.restart();
+        return json({ ok: true, data: { changed, detail, control: sandboxControlNow() } });
       }
       // P-SANDBOX.8: revoke one standing directory grant from the Security panel. The record leaves the
       // list ONLY when the helper's `--revoke-acl` succeeded — a failed revoke keeps the row visible
@@ -4991,3 +5024,16 @@ await refreshRecall();
 backend.startAutomationScheduler();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
+
+/** P-SANDBOX.12 (ADR-0390): the facts the panel's sandbox switch is drawn from (see sandbox_control.ts). */
+function sandboxControlNow(): SandboxControlView {
+  const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
+  const helperBundled = !!helper && existsSync(helper);
+  return sandboxControlView({
+    platform: process.platform,
+    helperBundled,
+    mode: loadSettings().sandboxWindowsMode,
+    policyRequiresIsolation: managedRequireIsolation(managedConfig().config),
+    registered: helperBundled && loopbackExempted(),
+  });
+}

@@ -153,6 +153,11 @@ let loopbackExemptCache: boolean | undefined;
 /** Is the exemption registered on THIS host? Cached per run (a WFP config change mid-run is not a
  *  supported flow — restart the app after `--register-loopback`). Never throws: an unreadable
  *  listing means "not exempt", which degrades to the disclosed passthrough, never to a dead child. */
+/** P-SANDBOX.12 (ADR-0390): forget the cached answer after LUCID itself (un)registers the exemption. */
+export function resetLoopbackExemptCache(): void {
+  loopbackExemptCache = undefined;
+}
+
 export function loopbackExempted(): boolean {
   if (loopbackExemptCache !== undefined) return loopbackExemptCache;
   let ok = false;

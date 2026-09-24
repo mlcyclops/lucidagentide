@@ -4,7 +4,7 @@
 // desktop/renderer/sandbox_panel.test.ts — P-SANDBOX.5 (ADR-0169): the "Runtime sandbox" panel builder.
 
 import { expect, test } from "bun:test";
-import { renderSandboxSection } from "./sandbox_panel.ts";
+import { controlSection, renderSandboxSection } from "./sandbox_panel.ts";
 import type { SandboxStateView, SandboxStatusView } from "./bridge.ts";
 
 const st = (over: Partial<SandboxStateView> = {}): SandboxStatusView => ({
@@ -94,4 +94,30 @@ test("grants stay visible/revocable even before a spawn resolves a state (grants
 test("no grants → no grants section (and the no-state guard still returns empty)", () => {
   expect(renderSandboxSection({ state: null, egressBlocks: [], grants: [] })).toBe("");
   expect(renderSandboxSection(st())).not.toContain("Directory grants");
+});
+
+// ── P-SANDBOX.12 (ADR-0390): the sandbox switch ──
+const ctl = (o: Partial<{ available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean }> = {}) =>
+  ({ available: true, userOff: false, policyLocked: false, registered: true, ...o });
+
+test("the switch: on offers Turn off; off offers Turn on (+ Remove from Windows while registered)", () => {
+  expect(controlSection(ctl())).toContain('data-sbx-mode="off"');
+  const off = controlSection(ctl({ userOff: true }));
+  expect(off).toContain('data-sbx-mode="auto"');
+  expect(off).toContain('data-sbx-mode="unregister"');
+  expect(controlSection(ctl({ userOff: true, registered: false }))).not.toContain("unregister");
+});
+
+test("policy-locked shows a note and never a button; unavailable shows nothing", () => {
+  const locked = controlSection(ctl({ policyLocked: true }));
+  expect(locked).toContain("policy");
+  expect(locked).not.toContain("data-sbx-mode");
+  expect(controlSection(ctl({ available: false }))).toBe("");
+  expect(controlSection(undefined)).toBe("");
+});
+
+test("the switch renders even before the first spawn, and Off reads as the user's choice", () => {
+  expect(renderSandboxSection({ state: null, egressBlocks: [], grants: [], control: ctl() })).toContain('data-sbx-mode="off"');
+  const h = renderSandboxSection({ state: { backend: "noop", isolated: false, disclosed: true, platform: "win32", execBlocked: null, proxied: false, at: "" }, egressBlocks: [], control: ctl({ userOff: true }) });
+  expect(h).toContain("you turned the Windows sandbox off");
 });

@@ -23996,3 +23996,17 @@ Pack previews use `GraphPerfOpts.staticLayout`: deterministic sunflower placemen
 **Decision.** The engine reads a top-level `shellPath` from `~/.omp/agent/config.yml` (`parseOmpShellPath`: plain, single-quoted and double-quoted scalars, with YAML backslash unescaping and trailing comments). It grants the container rx on that shell's install root (`shellInstallRoot` strips a trailing `bin` and then `usr`, so MinGit's `git.exe` and coreutils come along). `appContainerRuntimeGrants` also stops emitting grants under `C:\Windows` and `C:\Program Files`: every AppContainer can already read those, and a standard user cannot write their DACLs, so such a grant could only fail closed.
 
 **Consequences.** One more persistent, logged and revocable rx grant, on the user's own shell install. The CI smoke does not yet cover a pinned `shellPath`. The runtime probe (`omp --version`) does not resolve the shell either, so a shell problem still surfaces on the first turn rather than at probe time. It now does so with a readable message (ADR-0388).
+
+## ADR-0390 -- P-SANDBOX.12: the Windows sandbox switch in the Security panel (2026-09-24)
+
+**Context.** Turning the Windows AppContainer on or off needed an elevated command line (`lucid-appcontainer --register-loopback` or `--unregister-loopback`) and a restart. While the contained path was being debugged, that left the user unable to get chat back without a terminal, and it gave an organization no clear line between the user's choice and policy.
+
+**Decision.** The Security panel's Runtime sandbox section gets a switch, decided by the pure `desktop/sandbox_control.ts`:
+- **Turn off** is a per-user LUCID setting (`sandboxWindowsMode: "off"`). It needs no administrator rights and takes effect when the agent restarts, which the engine does right away. The session then runs as the disclosed passthrough, and the panel says it is off by the user's choice.
+- **Turn on** clears the setting. When the one-time loopback exemption is missing, the engine first registers it behind a UAC prompt, the same `Start-Process -Verb RunAs` path the directory grants already use, and reports success only after `CheckNetIsolation` lists it.
+- **Remove from Windows**, offered only while the sandbox is off and registered, runs the elevated `--unregister-loopback`, for users who want the host change gone.
+- **Managed require-isolation wins.** The user's Off is ignored at spawn, the request is refused, and the panel shows a policy note instead of a button.
+
+Every request is audited as a `sandbox_mode` security event. The endpoint is `POST /api/security/sandbox/mode` behind the existing loopback token.
+
+**Consequences.** Getting chat back no longer needs a terminal. The enterprise hook is the existing `ExecRequireIsolation` policy; finer policy (allow or deny the switch, pre-approved folders) is P-SANDBOX.14. Turning on still lands on whatever the host can run: the engine's runtime probe (ADR-0387) keeps a runtime that won't boot on the passthrough. Folder add and list with the native picker is P-SANDBOX.13.

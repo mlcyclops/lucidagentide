@@ -11,7 +11,7 @@
 import { accordion } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import type { SandboxGrantView, SandboxStateView, SandboxStatusView } from "./bridge.ts";
+import type { SandboxControlView, SandboxGrantView, SandboxStateView, SandboxStatusView } from "./bridge.ts";
 
 const BACKEND_LABEL: Record<string, string> = {
   bwrap: "Linux bubblewrap",
@@ -20,8 +20,31 @@ const BACKEND_LABEL: Record<string, string> = {
   noop: "disclosed passthrough",
 };
 
+/** P-SANDBOX.12 (ADR-0390): the user's Windows sandbox switch. Policy-locked ⇒ a note, never a button;
+ *  off ⇒ "Turn on" (+ "Remove from Windows" while the loopback registration stands); on ⇒ "Turn off".
+ *  Text sits in ONE block element beside the buttons (invariant 11: never raw text among flex items). Pure. */
+export function controlSection(c: SandboxControlView | undefined): string {
+  if (!c?.available) return "";
+  if (c.policyLocked) {
+    return `<div class="sbx-row muted"><span>The sandbox is <b>required by your organization's policy</b> and cannot be turned off here.</span></div>`;
+  }
+  if (c.userOff) {
+    const remove = c.registered
+      ? `<button class="btn-mini dismiss" data-sbx-mode="unregister" data-tip="Remove from Windows|Removes the sandbox's one-time loopback registration (asks for administrator approval). Turning the sandbox on again re-registers it.">${icon("close", 13)} Remove from Windows</button>`
+      : "";
+    return `<div class="sbx-ctl"><div class="sbx-ctl-txt">You turned the sandbox <b>off</b>. The agent runs as the disclosed passthrough; the argv gate and the scanner still apply.</div>
+      <div class="sbx-ctl-btns"><button class="btn-mini ok" data-sbx-mode="auto" data-tip="Turn on|Run the agent inside the Windows AppContainer again. The first time, Windows asks for administrator approval once.">${icon("shield", 13)} Turn on</button>${remove}</div></div>`;
+  }
+  return `<div class="sbx-ctl"><div class="sbx-ctl-txt">The Windows sandbox is <b>on</b> when this host can run the agent inside it.</div>
+    <div class="sbx-ctl-btns"><button class="btn-mini dismiss" data-sbx-mode="off" data-tip="Turn off|Run the agent as the disclosed passthrough instead. No administrator approval needed; the agent restarts.">${icon("close", 13)} Turn off</button></div></div>`;
+}
+
 /** The one-line posture: BLOCKED (red) ⇒ isolated (green) ⇒ disclosed passthrough (amber). Pure. */
-function postureLine(s: SandboxStateView): string {
+function postureLine(s: SandboxStateView, c?: SandboxControlView): string {
+  if (!s.isolated && !s.execBlocked && c?.userOff) {
+    return `<div class="sbx-row warn"><span class="pill dismissed">off</span>
+    <span>Exec is <b>not runtime-isolated</b>: you turned the Windows sandbox off. The argv gate + in-process scanner still apply.</span></div>`;
+  }
   if (s.execBlocked) {
     return `<div class="sbx-row bad"><span class="pill quarantined">exec blocked</span>
       <span>Exec is <b>fail-closed BLOCKED</b> — managed policy requires runtime isolation and none is available. ${esc(s.execBlocked)}</span></div>`;
@@ -67,13 +90,14 @@ function grantsSection(grants: SandboxGrantView[]): string {
 export function renderSandboxSection(status: SandboxStatusView | null | undefined, open = false): string {
   const s = status?.state;
   const grants = status?.grants ?? [];
-  if (!s && !grants.length) return "";
+  const ctl = controlSection(status?.control);
+  if (!s && !grants.length && !ctl) return "";
   if (!s) {
     // Grants-only view (no spawn yet this session): the persistent host mutations still need a surface.
-    return accordion("sec.sandbox", "Runtime sandbox", `${grants.length} directory grant${grants.length === 1 ? "" : "s"}`, grantsSection(grants), open, String(grants.length));
+    return accordion("sec.sandbox", "Runtime sandbox", grants.length ? `${grants.length} directory grant${grants.length === 1 ? "" : "s"}` : "not started", ctl + grantsSection(grants), open, grants.length ? String(grants.length) : undefined);
   }
   const blocks = status?.egressBlocks ?? [];
-  let inner = postureLine(s) + egressLine(s) + grantsSection(grants);
+  let inner = postureLine(s, status?.control) + egressLine(s) + ctl + grantsSection(grants);
 
   if (blocks.length) {
     const rows = blocks

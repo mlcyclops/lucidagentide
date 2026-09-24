@@ -1911,6 +1911,12 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .lb-meta{font-family:var(--mono);font-size:10.5px;color:var(--txt-4);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lb-approved{margin-top:6px;font-size:11px;color:var(--green);display:flex;align-items:center;gap:5px}
 /* P-SANDBOX.5 (ADR-0169): the Runtime-sandbox Security-panel section. */
+/* P-SANDBOX.12: the sandbox switch. Text is ONE block element; buttons sit in their own nowrap row (invariant 11). */
+.sbx-ctl{padding:6px 0 4px}
+.sbx-ctl-txt{font-size:12.5px;line-height:1.5;color:var(--txt-2)}
+.sbx-ctl-txt b{color:var(--txt)}
+.sbx-ctl-btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.sbx-ctl-btns .btn-mini{white-space:nowrap}
 .sbx-row{display:flex;align-items:flex-start;gap:9px;font-size:12.5px;line-height:1.5;color:var(--txt-2);padding:5px 0}
 .sbx-row b{color:var(--txt)}
 .sbx-row .pill{flex:none;margin-top:1px}

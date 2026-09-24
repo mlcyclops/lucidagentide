@@ -44,6 +44,7 @@ import { appContainerRuntimeGrants, loopbackExempted, parseOmpShellPath, resolve
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
+import { userTurnedSandboxOff } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { loadGrants, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
@@ -638,8 +639,12 @@ class Backend {
     const profileCaps = caps("trusted-local");
     const acHelper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
     const acBundled = !!acHelper && existsSync(acHelper);
-    const acUsable = acBundled && (!profileCaps.canNetwork || loopbackExempted());
-    if (acBundled && !acUsable) {
+    // P-SANDBOX.12 (ADR-0390): the user's Off switch (a LUCID setting, no admin needed). Managed
+    // require-isolation wins: a policy-required sandbox is never turned off from the panel.
+    const userOff = acBundled && userTurnedSandboxOff(loadSettings().sandboxWindowsMode, managedRequireIsolation(managedConfig().config));
+    if (userOff) console.error("[sandbox] the Windows AppContainer is turned OFF in the Security panel - this session runs as the disclosed passthrough (ADR-0390).");
+    const acUsable = acBundled && !userOff && (!profileCaps.canNetwork || loopbackExempted());
+    if (acBundled && !userOff && !acUsable) {
       console.error(
         `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered — this network-on session runs as the disclosed passthrough. ` +
           `Enable full Windows isolation once, from an elevated shell: "${acHelper}" --register-loopback  (then restart LUCID).`,

@@ -138,7 +138,9 @@ export interface SandboxStateView {
 export interface SandboxBlockView { host: string; channel: string; type: string; reason: string; at: string }
 // P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
 export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: string; reason: string }
-export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[]; grants?: SandboxGrantView[] }
+// P-SANDBOX.12 (ADR-0390): what the panel's sandbox switch may offer (see desktop/sandbox_control.ts).
+export interface SandboxControlView { available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean }
+export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[]; grants?: SandboxGrantView[]; control?: SandboxControlView }
 export interface MemorySnapshot {
   session: null | {
     path: string; model: string; turns: number; window: number;
@@ -699,6 +701,7 @@ export interface LucidBridge {
   securityApprove(id: string): Promise<BlockRecord | null>;
   /** P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal). */
   sandboxGrantRevoke(path: string): Promise<{ revoked: boolean; detail: string } | null>;
+  sandboxMode(mode: "off" | "auto" | "unregister"): Promise<{ changed: boolean; detail: string; control?: SandboxControlView } | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
   /** Bulk-acknowledge every active gate block. Releases NOTHING: each call stays blocked, audit kept. */
   securityDismissAll(): Promise<{ dismissed: number } | null>;
@@ -1438,6 +1441,7 @@ export const bridge: LucidBridge = {
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
   sandboxGrantRevoke: (path) => post("/api/security/sandbox-grant/revoke", { path }),
+  sandboxMode: (mode) => post("/api/security/sandbox/mode", { mode }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
   securityDismissAll: () => post("/api/security/dismiss-all", {}),
   securityAck: (input) => post("/api/security/ack", input),
