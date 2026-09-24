@@ -4998,3 +4998,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** a Windows-runner lab pinned the field failure (bun 1.3.14 cannot start any script inside the AppContainer; no ancestor ACL, drive roots included, fixes it; bun 1.4.2 boots the contained omp with no extra grants). Bundled bun 1.3.14 -> 1.4.2 (vendor-hash cross-checked). The engine runs the contained `omp --version` through the same wrap before committing, and otherwise keeps chat on the disclosed passthrough with the reason. New `appcontainer-smoke.yml` runs the real contained omp on the bundled bun for every sandbox PR. `demo-P-SANDBOX.10` added.
 - **stubbed:** the smoke proves the contained omp boots and answers --version, not a provider turn through the loopback proxy. A real contained chat turn on the Windows 11 host is still unproven.
 - **next:** build an installer from this, install it on the Windows 11 box (loopback exemption still registered), confirm the pill is green AND an Opus 5.5 turn answers; then extend the smoke with a contained CONNECT through the egress proxy.
+
+## P-NORESP.2: an agent error reaches the chat as words (ADR-0388)
+- **shipped:** `ACPClient` rejects with `rpcError()` (message + data + code as a real Error) instead of the raw JSON-RPC object, so the no-response card stops saying "[object Object]" and names the provider's failure. Unit-tested.
+- **stubbed:** the contained turn that surfaced it (green pill, proxy carrying omp's traffic, turn fails in 1s) is not yet diagnosed; this change is what makes it diagnosable.
+- **next:** read the real error from the next build (or from the user's ~/.omp/logs omp log) and fix the contained provider path.
