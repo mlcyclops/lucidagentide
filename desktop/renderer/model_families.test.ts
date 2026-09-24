@@ -441,3 +441,17 @@ describe("local provider picker helpers", () => {
     expect(isChinaModel("zai/glm-5")).toBe(true);
   });
 });
+
+// ── P-MODEL.5 (ADR-0392): xAI Grok is its own family ──
+describe("Grok family", () => {
+  it("groups Grok 4.7 (any provider prefix) under xAI Grok, not Other", () => {
+    for (const v of ["xai-oauth/grok-4.7", "xai/grok-4.7", "github-copilot/grok-4.7", "xai/grok-4.20-0309-non-reasoning"]) expect(familyOf(v).id).toBe("grok");
+    const g = groupByFamily([{ value: "xai/grok-4.7", name: "Grok 4.7" }, { value: "dgx/glm-5", name: "GLM" }]);
+    expect(g.map((x) => x.fam.id)).toEqual(["grok", "other"]);
+  });
+  it("a failing Grok falls back to another Grok, and a failing Claude never to a Grok as 'same family'", () => {
+    const opts = [{ value: "xai/grok-4.7", name: "Grok 4.7" }, { value: "xai/grok-4.20-0309-non-reasoning", name: "Grok 4.20" }, { value: "anthropic/claude-opus-5-5", name: "Opus 5.5" }];
+    expect(recommendFallbacks("xai/grok-4.7", opts).sameFamily?.value).toBe("xai/grok-4.20-0309-non-reasoning");
+    expect(recommendFallbacks("anthropic/claude-opus-5-5", opts).sameFamily).toBeNull();
+  });
+});

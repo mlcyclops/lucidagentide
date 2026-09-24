@@ -18,6 +18,9 @@ export const MODEL_FAMILIES: ModelFamily[] = [
   { id: "gpt-o", label: "OpenAI o-series", icon: "brain", match: /gpt-o\d/i },
   { id: "gpt", label: "OpenAI GPT", icon: "command", match: /gpt/i },
   { id: "gemini", label: "Google Gemini", icon: "graph", match: /gemini/i },
+  // P-MODEL.5 (ADR-0392): xAI Grok gets its own group. Unmatched, every Grok (4.7 included) sank into
+  // "Other models" at the bottom of the picker, and "same family" fallbacks paired it with unrelated models.
+  { id: "grok", label: "xAI Grok", icon: "eye", match: /grok/i },
   { id: "rag", label: "AskSage RAG", icon: "search", match: /(^|[/-])rag$/i },
 ];
 // Catch-all for anything unmatched (e.g. a newly-added open-source provider). `/.^/` never matches,
@@ -295,7 +298,7 @@ export function groupByFamily(models: ModelOption[], order?: string[]): { fam: M
 
 /** Family order when the AskSage gov gateway is configured: GPT + o-series + Gemini ABOVE Claude
  *  (the gov gateway's OpenAI/Google models are the user's primary surface in that mode). */
-export const ASKSAGE_FAMILY_ORDER = ["gpt-o", "gpt", "gemini", "claude", "rag", "other"];
+export const ASKSAGE_FAMILY_ORDER = ["gpt-o", "gpt", "gemini", "claude", "grok", "rag", "other"];
 
 // ── P-NORESP.1: fallback recommendation when a model returns nothing (overloaded) ────────────
 /** A human label for the PROVIDER behind a model id — for a "no response from X" message. */

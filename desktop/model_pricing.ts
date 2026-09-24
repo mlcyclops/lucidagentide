@@ -53,6 +53,10 @@ const TABLE: [RegExp, Price][] = [
   [/gpt-?6(?:\.\d+)?-sol/, { inPerM: 2.0, outPerM: 10.0 }],
   [/gpt-?6(?:\.\d+)?-luna/, { inPerM: 0.10, outPerM: 0.50 }],
   [/gpt-?\d|codex/, { inPerM: 1.25, outPerM: 10.0 }],
+  // Grok 4.6 / 4.7 (2026-09-24, from omp 18.2.10's catalog, providers xai + xai-oauth): $2/$6 per Mtok
+  // (cache read $0.50), rising to $4/$12 once a prompt exceeds 200K input tokens. Price has no tier
+  // fields, so the base rate is the estimate; metered usage supersedes it as with every row here.
+  [/grok-?4[.-][67](\b|[-.])/, { inPerM: 2.0, outPerM: 6.0 }],
   [/gemini/, { inPerM: 1.25, outPerM: 10.0 }],
 ];
 const DEFAULT_PRICE: Price = { inPerM: 3.00, outPerM: 15.0 }; // sonnet-ish, when nothing matches
