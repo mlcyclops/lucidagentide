@@ -25,6 +25,7 @@ const route = dev.slice(dev.indexOf('"/api/security/sandbox-grant/add"'), dev.in
 ok(route.includes("pickFolderNative(") && route.includes("readBody<{ mode?: unknown }>"), "the add route reads only the mode, then opens the native picker");
 ok(!/b\.path/.test(route), "it never reads a path from the request body");
 ok(route.includes("emitSecurityEvent("), "every add is an audited security event");
+ok(route.includes("helperFallback:"), "P-SANDBOX.13b: when PowerShell cannot open the dialog (Smart App Control's Constrained Language Mode), the helper opens it");
 
 console.log("\n[2] picks that are too broad or pointless are refused with a reason");
 ok(refuseGrantPath("C:\\Users\\User\\Pictures\\Screenshots", home) === null, "a normal folder (the Screenshots example) is allowed");

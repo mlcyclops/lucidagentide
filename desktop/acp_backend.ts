@@ -39,13 +39,13 @@ import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts";
 import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentProvider, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
-import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
+import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn } from "./managed_config.ts";
 import { appContainerRuntimeGrants, loopbackExempted, parseOmpShellPath, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { userTurnedSandboxOff } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
-import { loadGrants, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
+import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
@@ -640,13 +640,14 @@ class Backend {
     const acHelper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
     const acBundled = !!acHelper && existsSync(acHelper);
     // P-SANDBOX.12 (ADR-0390): the user's Off switch (a LUCID setting, no admin needed). Managed
-    // require-isolation wins: a policy-required sandbox is never turned off from the panel.
-    const userOff = acBundled && userTurnedSandboxOff(loadSettings().sandboxWindowsMode, managedRequireIsolation(managedConfig().config));
+    // require-isolation wins: a policy-required sandbox is never turned off from the panel. P-SANDBOX.14
+    // (ADR-0394): so does a managed sandbox.allowUserOff === false.
+    const userOff = acBundled && userTurnedSandboxOff(loadSettings().sandboxWindowsMode, managedSandboxLocksOn(managedConfig().config));
     if (userOff) console.error("[sandbox] the Windows AppContainer is turned OFF in the Security panel - this session runs as the disclosed passthrough (ADR-0390).");
     const acUsable = acBundled && !userOff && (!profileCaps.canNetwork || loopbackExempted());
     if (acBundled && !userOff && !acUsable) {
       console.error(
-        `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered — this network-on session runs as the disclosed passthrough. ` +
+        `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered - this network-on session runs as the disclosed passthrough. ` +
           `Enable full Windows isolation once, from an elevated shell: "${acHelper}" --register-loopback  (then restart LUCID).`,
       );
     }
@@ -674,6 +675,10 @@ class Backend {
       let shellPath: string | null = null;
       try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config: omp discovers a shell itself */ }
       acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0], shellPath });
+      // P-SANDBOX.14 (ADR-0394): the admin-approved folders ride every contained spawn (the runtime probe
+      // below uses the same ctx, so a grant the helper cannot apply keeps the session off the container).
+      const policy = managedPolicyFolderPlan();
+      acGrants = { ...acGrants, grantRx: [...acGrants.grantRx, ...policy.grantRx], grantRw: [...acGrants.grantRw, ...policy.grantRw] };
       try { mkdirSync(acGrants.tmpDir, { recursive: true }); } catch { /* the helper's grant then fails closed, loudly */ }
     }
     const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy, ...acGrants }, resolution: res });
@@ -1271,13 +1276,20 @@ class Backend {
       console.error("[sandbox-grant] cancelled without asking: the tool call named no directory");
       return cancelled;
     }
+    // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list; never ask the user for a grant the
+    // endpoint would refuse anyway.
+    if (managedSandboxFoldersLocked(managedConfig().config)) {
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `blocked (folders managed by policy) · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      console.error(`[sandbox-grant] cancelled without asking: your organization manages the sandbox's folders · ${dirPath}`);
+      return cancelled;
+    }
     if (!(this.askActive && this.listener)) {
       emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `blocked (no UI to ask) · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
       return cancelled;
     }
     const id = `perm_${++this.permSeq}`;
     this.pendingPerms++;
-    this.emit({ type: "permission", id, tool: "sandbox_grant_dir", detail: `${modeWord} access to ${dirPath}${reason ? ` — ${reason}` : ""}`, egress: false, options: SANDBOX_GRANT_OPTIONS });
+    this.emit({ type: "permission", id, tool: "sandbox_grant_dir", detail: `${modeWord} access to ${dirPath}${reason ? ` - ${reason}` : ""}`, egress: false, options: SANDBOX_GRANT_OPTIONS });
     const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
     const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
     const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : cancelled;

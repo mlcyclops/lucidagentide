@@ -193,6 +193,21 @@ Import a `.lkgpack.zip` from Settings > Personalization or the KG panel's Packs 
 
 The preview shows at most **100 nodes and 200 links**, with full graph totals in the header. It uses static placement, not a force simulation or animated particles. Click a node to load its page; Find a node searches the displayed preview. All pages remain available to knowledge retrieval, including pages outside the preview. Imports still verify integrity and origin, scan every page fail-closed, and install read-only as untrusted data. Existing installations need the updated build; importing after that does not require a restart. *(P-KGPACK.8, [ADR-0341](DECISIONS.md))*
 
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.8 (prerelease)
+
+> **🛡 Chat works inside the Windows sandbox, and you control it.** On beta.7 a green AppContainer pill could still mean every turn died. Beta.8 makes the contained agent actually run, and adds a sandbox switch, folder access you pick in a Windows dialog, and policy keys for administrators.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.8](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.8). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🟢 A green pill means a working chat** - four stacked causes killed every contained turn (the helper never handed its std handles to omp, the container could not read its own runtime, omp 18 proxies inference only via `PI_PROXY`, and a loopback registration could store a nameless SID). Each is fixed, bun moves to 1.4.2 (1.3.14 cannot start a script in the container), and the pill now lights only after the real runtime boots through the same wrap; otherwise the session stays on the disclosed passthrough with the reason logged. A Windows CI smoke runs the contained omp for real. *(P-SANDBOX.9/.10/.11, [ADR-0386](DECISIONS.md), [ADR-0387](DECISIONS.md), [ADR-0389](DECISIONS.md))*
+- **🎚 The sandbox switch** - Security > Runtime sandbox turns the Windows sandbox off without admin rights, on again with one administrator prompt when needed, and can remove its Windows registration entirely. *(P-SANDBOX.12, [ADR-0390](DECISIONS.md))*
+- **📁 Add folders from a Windows dialog** - **Add folder (read-only)** and **(read-write)** open a Windows folder picker; nothing is granted until you choose, too-broad picks (a drive, your whole profile, Windows) are refused, and the panel lists every folder the sandbox can reach. Under Smart App Control, where PowerShell cannot build the picker, the bundled helper opens the dialog instead. *(P-SANDBOX.13/.13b, [ADR-0391](DECISIONS.md), [ADR-0393](DECISIONS.md))*
+- **🏢 Enterprise policy** - `SandboxAllowUserOff`, `SandboxReadFolders`, `SandboxReadWriteFolders` and `SandboxLockFolders` (Group Policy or the policy file) keep the switch on, grant admin-approved folders at every contained spawn, and lock user and agent folder adds. *(P-SANDBOX.14, [ADR-0394](DECISIONS.md))*
+- **💬 Errors read as words** - an agent error reaches the chat as its message, never `[object Object]`. *(P-NORESP.2, [ADR-0388](DECISIONS.md))*
+- **✨ Grok 4.7** - pricing, the 500K window and a card, and an **xAI Grok** family in the picker. *(P-MODEL.5, [ADR-0392](DECISIONS.md))*
+
+---
+
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.7 (prerelease)
 
 > **🔌 The port that stayed busy, and two more GPT-6 tiers.** Upgrading from an earlier beta could leave the previous session's engine holding port 5319, so every launch died on the bind. Beta.7 ends that orphan after asking you, and the picker gains GPT-6 Sol and Luna.

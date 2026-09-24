@@ -5023,3 +5023,13 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** omp 18.2.10 already catalogs grok-4.7 / grok-4.6 (xai + xai-oauth: $2/$6, $4/$12 past 200K, 500K ctx), so no omp bump. LUCID adds the pricing row, the 500K context rows, curated cards, and an "xAI Grok" picker family (Grok was sinking into "Other models", and same-family fallbacks paired it with unrelated models). `modelCtx` now falls back to the provider-stripped id (also fixes GPT-6 on openai-codex). Renderer rebuilt; served /app.js carries the family and the card.
 - **stubbed:** not seen in a live signed-in xAI picker; catalog evidence only.
 - **next:** sign in to xAI and confirm Grok 4.7 lists under "xAI Grok" with its 500K window; P-SANDBOX.14 (enterprise policy keys) remains queued.
+
+## P-SANDBOX.13b: the folder dialog opens under Smart App Control (ADR-0393)
+- **shipped:** on the Smart App Control host, Add folder said "no native folder dialog": the PowerShell picker's Add-Type is refused in Constrained Language Mode. `lucid-appcontainer --pick-folder` now opens the shell's Browse For Folder dialog via plain shell32 FFI (same markers), `pickFolderNative` falls back to it (sandbox Add folder + the workspace picker), and failures say why. Unit tests for the struct layout, markers and CLM detection.
+- **stubbed:** the dialog runs only on a Windows desktop session; proven by the next install on the host.
+- **next:** install, press Add folder (read-only), pick Pictures\Screenshots; then P-SANDBOX.14 (enterprise policy keys) or P-SIGN.1 (code signing, which would also lift the CLM restriction for signed scripts).
+
+## P-SANDBOX.14: enterprise policy for the Windows sandbox switch and folders (ADR-0394)
+- **shipped:** `security.sandbox` policy (GPO `SandboxAllowUserOff`, `SandboxReadFolders`, `SandboxReadWriteFolders`, `SandboxLockFolders`): the switch can be locked on without the require-isolation exec block, admin folders (%VAR% expanded, bounded like user picks, missing ones skipped and logged) ride every contained spawn and show in the panel as policy, and user and agent folder adds can be locked (revoke still works). Em dashes removed from the Runtime sandbox section and the engine reasons it shows, with a test. `make demo-P-SANDBOX.14`.
+- **stubbed:** ADMX/ADML templates for the four values (private add-on repo); not exercised on a GPO-managed Windows host yet.
+- **next:** push a test GPO (SandboxReadFolders + SandboxLockFolders) to the Windows host and confirm the panel note and the policy folders; then P-SIGN.1 (code signing).

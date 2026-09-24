@@ -560,6 +560,91 @@ function revokeAcl(path: string): number {
   }
 }
 
+// ── folder picker (P-SANDBOX.13b, ADR-0393): the Security panel's "Add folder" dialog, without PowerShell ──
+// The engine's native picker (desktop/native_dialog.ts) compiles a C# shim with PowerShell Add-Type. On a
+// host where Smart App Control / WDAC enforces PowerShell's Constrained Language Mode, Add-Type is refused
+// and the picker reported "no native folder dialog". This helper already runs on such hosts, so it opens
+// the shell's Browse For Folder dialog directly (SHBrowseForFolderW, a plain shell32 call; no COM vtables,
+// no script host). Output uses the same markers the engine already parses (parseWinPick).
+export const PICK_PICKED_MARK = "LUCID_PICKED::";
+export const PICK_CANCEL_MARK = "LUCID_CANCELLED::";
+const BIF_RETURNONLYFSDIRS = 0x0001;
+const BIF_NEWDIALOGSTYLE = 0x0040; // resizable, with "Make New Folder"; needs an STA (CoInitializeEx)
+const MAX_PATH_W = 1024; // wide chars; generous for long paths
+
+/**
+ * PURE: BROWSEINFOW, x64 layout (64 bytes):
+ *   +0 hwndOwner · +8 pidlRoot · +16 pszDisplayName · +24 lpszTitle · +32 ulFlags u32 (+4 pad)
+ *   +40 lpfn · +48 lParam · +56 iImage i32 (+4 pad)
+ * Byte-layout-critical, so unit-tested; pointers are opaque bigints.
+ */
+export function buildBrowseInfoW(owner: bigint, displayBuf: bigint, title: bigint, flags: number): Uint8Array {
+  const b = new Uint8Array(64);
+  const dv = new DataView(b.buffer);
+  dv.setBigUint64(0, owner, true);
+  dv.setBigUint64(16, displayBuf, true);
+  dv.setBigUint64(24, title, true);
+  dv.setUint32(32, flags >>> 0, true);
+  return b;
+}
+
+/** Subcommand: show the folder dialog; print PICKED::<path> or CANCELLED::. Exit 0 either way, 3 on error. */
+function pickFolder(title: string): number {
+  if (process.platform !== "win32") {
+    process.stderr.write("[lucid-appcontainer] --pick-folder is Windows-only\n");
+    return 3;
+  }
+  try {
+    const ole = dlopen("ole32.dll", {
+      CoInitializeEx: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.i32 },
+      CoTaskMemFree: { args: [FFIType.u64], returns: FFIType.void },
+    });
+    const shell = dlopen("shell32.dll", {
+      SHBrowseForFolderW: { args: [FFIType.ptr], returns: FFIType.u64 },
+      SHGetPathFromIDListW: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+    });
+    const user = dlopen("user32.dll", {
+      GetForegroundWindow: { args: [], returns: FFIType.u64 },
+      ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
+    });
+    const k32 = dlopen("kernel32.dll", { GetConsoleWindow: { args: [], returns: FFIType.u64 } });
+    // The engine spawns us with windowsHide (STARTF_USESHOWWINDOW + SW_HIDE), and Windows applies that to
+    // the process's FIRST ShowWindow call, which would otherwise be the dialog: it would open invisible.
+    // Spend that first call on our own (hidden) console window.
+    const con = k32.symbols.GetConsoleWindow();
+    if (con) user.symbols.ShowWindow(con, 0); // SW_HIDE
+    ole.symbols.CoInitializeEx(null, 0x2); // COINIT_APARTMENTTHREADED
+    const display = new Uint8Array(MAX_PATH_W * 2);
+    const wTitle = wide(title || "Choose a folder");
+    const bi = buildBrowseInfoW(user.symbols.GetForegroundWindow(), BigInt(ptr(display)), BigInt(ptr(wTitle)), BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE);
+    const pidl = shell.symbols.SHBrowseForFolderW(ptr(bi));
+    if (!pidl) {
+      process.stdout.write(PICK_CANCEL_MARK);
+      return 0;
+    }
+    const out = new Uint8Array(MAX_PATH_W * 2);
+    const ok = shell.symbols.SHGetPathFromIDListW(pidl, ptr(out));
+    ole.symbols.CoTaskMemFree(pidl);
+    if (!ok) {
+      process.stderr.write("[lucid-appcontainer] the picked item is not a file-system folder\n");
+      process.stdout.write(PICK_CANCEL_MARK);
+      return 0;
+    }
+    let path = "";
+    const dv = new DataView(out.buffer);
+    for (let i = 0; i < MAX_PATH_W; i++) {
+      const c = dv.getUint16(i * 2, true);
+      if (!c) break;
+      path += String.fromCharCode(c);
+    }
+    process.stdout.write(PICK_PICKED_MARK + path);
+    return 0;
+  } catch (e) {
+    process.stderr.write(`[lucid-appcontainer] pick-folder failed: ${String((e as Error).message ?? e)}\n`);
+    return 3;
+  }
+}
+
 // ── entrypoint (only when run/compiled as the binary, not when imported by tests) ──────────────────────
 export function main(argv: string[]): number {
   // Admin subcommands (install-time): register/unregister the loopback exemption for our AppContainer SID.
@@ -578,6 +663,7 @@ export function main(argv: string[]): number {
     if (!mode || !p) { process.stderr.write("[lucid-appcontainer] FAIL-CLOSED: --apply-acl needs <rx|rw> <path>\n"); return 2; }
     return applyAcl(mode, p);
   }
+  if (argv[0] === "--pick-folder") return pickFolder(argv[1] ?? "");
   if (argv[0] === "--check-acl") {
     const p = argv[1];
     if (!p) { process.stderr.write("[lucid-appcontainer] FAIL-CLOSED: --check-acl needs a path\n"); return 2; }

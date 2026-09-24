@@ -88,7 +88,7 @@ import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
-import { addGrant, applyGrantAce, consumePending, loadGrants, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
+import { addGrant, applyGrantAce, consumePending, loadGrants, managedPolicyFolderPlan, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
@@ -256,8 +256,8 @@ function whisperDeps(): WhisperRuntimeDeps {
     },
   };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedRequireIsolation, skipAllowed } from "./managed_config.ts";
-import { planModeChange, refuseGrantPath, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
+import { planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { appContainerRuntimeGrants, loopbackExempted, parseOmpShellPath, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
@@ -1719,6 +1719,8 @@ return Bun.serve({
         let isDir = false;
         try { isDir = statSync(dirPath).isDirectory(); } catch { /* missing → not a dir */ }
         if (!dirPath || !isDir) return deny(`not an existing directory: ${dirPath || "(no path)"}`);
+        // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list (checked before the one-shot claim).
+        if (managedSandboxFoldersLocked(managedConfig().config)) return deny("your organization manages which folders the sandbox can reach");
         // ONE-SHOT claim: any attempt consumes the parked approval; only a fresh exact match proceeds.
         const claim = consumePending(loadGrants(), dirPath, mode, Date.now());
         saveGrants(claim.store);
@@ -1728,7 +1730,7 @@ return Bun.serve({
         if (!applied.ok) return deny(`the ACL grant did not apply: ${applied.detail}`);
         saveGrants(addGrant(loadGrants(), { path: dirPath, mode, grantedAt: new Date().toISOString(), reason }));
         console.log(`[sandbox-grant] granted ${mode} on ${dirPath}${reason ? ` (${reason})` : ""}`);
-        return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} — standing until the user revokes it in the Security panel (${applied.detail})` } });
+        return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} - standing until the user revokes it in the Security panel (${applied.detail})` } });
       }
       // P-SANDBOX.12 (ADR-0390): the Security panel's sandbox switch. Off is a LUCID setting (no admin);
       // On registers the loopback exemption behind UAC when it is missing; "unregister" removes it. Every
@@ -1767,10 +1769,13 @@ return Bun.serve({
       if (p === "/api/security/sandbox-grant/add" && req.method === "POST") {
         const b = await readBody<{ mode?: unknown }>(req);
         const mode: GrantMode = b.mode === "rw" ? "rw" : "rx";
-        const ctl = sandboxControlNow();
-        if (!ctl.available) return json({ ok: true, data: { added: false, detail: "the Windows sandbox helper is not available on this host" } });
-        const picked = await pickFolderNative({ title: `Give the LUCID sandbox ${mode === "rw" ? "read-write" : "read-only"} access to a folder`, buttonLabel: mode === "rw" ? "Allow read-write" : "Allow read-only" });
-        if (!picked.supported) return json({ ok: true, data: { added: false, detail: "no native folder dialog is available on this host" } });
+        // P-SANDBOX.14 (ADR-0394): refused before any dialog opens when policy owns the folder list.
+        const refusedAdd = refuseUserFolderAdd(sandboxControlNow());
+        if (refusedAdd) return json({ ok: true, data: { added: false, detail: refusedAdd } });
+        // P-SANDBOX.13b (ADR-0393): helperFallback opens the shell's folder dialog through the bundled helper
+        // when PowerShell's Constrained Language Mode (Smart App Control / WDAC) refuses the scripted picker.
+        const picked = await pickFolderNative({ title: `Give the LUCID sandbox ${mode === "rw" ? "read-write" : "read-only"} access to a folder`, buttonLabel: mode === "rw" ? "Allow read-write" : "Allow read-only", helperFallback: repoAsset("bin", "lucid-appcontainer.exe") });
+        if (!picked.supported) return json({ ok: true, data: { added: false, detail: `no folder dialog could open: ${picked.reason ?? "unknown cause"}` } });
         if (!picked.path) return json({ ok: true, data: { added: false, cancelled: true, detail: "cancelled" } });
         const refused = refuseGrantPath(picked.path, homedir());
         if (refused) return json({ ok: true, data: { added: false, detail: refused } });
@@ -2762,6 +2767,7 @@ return Bun.serve({
         const r = await pickFolderNative({
           title: typeof b.title === "string" ? b.title : undefined,
           buttonLabel: typeof b.buttonLabel === "string" ? b.buttonLabel : undefined,
+          helperFallback: process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : undefined, // P-SANDBOX.13b
         });
         return json({ ok: true, data: r });
       }
@@ -5054,8 +5060,9 @@ function sandboxControlNow(): SandboxControlView {
     platform: process.platform,
     helperBundled,
     mode: loadSettings().sandboxWindowsMode,
-    policyRequiresIsolation: managedRequireIsolation(managedConfig().config),
+    policyRequiresIsolation: managedSandboxLocksOn(managedConfig().config), // P-SANDBOX.14: either policy knob
     registered: helperBundled && loopbackExempted(),
+    foldersLocked: managedSandboxFoldersLocked(managedConfig().config),
   });
 }
 
@@ -5066,5 +5073,5 @@ function sandboxRuntimeFoldersNow(): RuntimeFolderView[] {
   let shellPath: string | null = null;
   try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config */ }
   const g = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: process.env.LUCID_OMP_BIN, shellPath });
-  return runtimeFolderView({ workspace: currentWorkspace(), grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir });
+  return runtimeFolderView({ workspace: currentWorkspace(), grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir, policy: managedPolicyFolderPlan(false) });
 }
