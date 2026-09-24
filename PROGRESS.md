@@ -5038,3 +5038,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** `build-desktop.yml` `beta_release` input: on master it builds the committed prerelease version and creates tag v<version> plus a GitHub prerelease via the API (never latest, no cask move); guards refuse a non-prerelease version, a non-master ref, or publish_latest. Needed because the agent session cannot push tags, which left v2.3.0-beta.8 merged but unreleased.
 - **stubbed:** first exercised by the v2.3.0-beta.8 dispatch itself.
 - **next:** confirm the beta.8 prerelease lists its installers; then P-SIGN.1 (code signing).
+
+## 2026-09-24 session wrap: v2.3.0-beta.8 released, lessons recorded
+- **shipped:** v2.3.0-beta.8 published as a GitHub prerelease (run 36042942159, first `beta_release` dispatch: macOS, Windows, Linux x64 and arm64 all green, installers attached, cask and rolling latest skipped), carrying P-SANDBOX.9 to .14 + .13b, P-NORESP.2, P-MODEL.5 and P-REL.1. HANDOFF refreshed (current state, bun >= 1.4.2, the beta_release path, next increment, a Lessons learned section); README test badge updated. Measured with bun 1.4.2: harness 1,725 (1,721 pass / 0 fail / 4 skip), desktop 3,756 pass / 0 fail, sidecar 57 pass; demos P-SANDBOX.9/.10/.12/.13/.14 pass.
+- **stubbed:** beta.8 not yet installed on the Windows Smart App Control host (Add folder dialog, managed-folder note under a test GPO); ADMX/ADML for the four P-SANDBOX.14 values; the omp child still shares the engine's loopback token.
+- **next:** P-SANDBOX.15, scope the omp child's loopback token to agent routes only; then P-SIGN.1 once the owner picks Azure Artifact Signing or a traditional certificate.
