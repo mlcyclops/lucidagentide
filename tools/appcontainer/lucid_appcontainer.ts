@@ -175,7 +175,69 @@ const APPCONTAINER_NAME = "LucidAgentIDE.Sandbox.v1";
 
 // ── Win32 constants ───────────────────────────────────────────────────────────────────────────────────
 const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009;
+const PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
 const EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+const CREATE_NO_WINDOW = 0x08000000;
+const STARTF_USESTDHANDLES = 0x00000100;
+const HANDLE_FLAG_INHERIT = 0x00000001;
+const STD_INPUT_HANDLE = -10;
+const STD_OUTPUT_HANDLE = -11;
+const STD_ERROR_HANDLE = -12;
+const INVALID_HANDLE = 0xffffffffffffffffn; // INVALID_HANDLE_VALUE as a pointer-sized unsigned
+
+// ── stdio into the container (P-SANDBOX.9, ADR-0384) ───────────────────────────────────────────────────
+// The wrapped omp speaks ACP over stdin/stdout, so the child MUST own the helper's std handles. Before
+// this, CreateProcessW ran with bInheritHandles=FALSE and no STARTF_USESTDHANDLES: the parent's handles
+// are pipes (not console handles), so the child got none. omp saw EOF on stdin, exited 1, and its stderr
+// went nowhere, leaving our own last "acl grant" line as the only "last stderr" the engine could show.
+// Fix: mark exactly the three std handles inheritable, pass them in STARTUPINFO, and restrict
+// inheritance to THEM with PROC_THREAD_ATTRIBUTE_HANDLE_LIST, so no other handle this helper holds
+// leaks into the container.
+
+export interface StdHandles { stdin: bigint; stdout: bigint; stderr: bigint }
+
+/** PURE: the distinct, real handles to inherit. NULL / INVALID_HANDLE_VALUE are dropped (an absent
+ *  stream stays absent), and duplicates are removed because PROC_THREAD_ATTRIBUTE_HANDLE_LIST rejects a
+ *  repeated handle (stdout and stderr are often the same pipe). */
+export function inheritableHandleList(h: StdHandles): bigint[] {
+  const out: bigint[] = [];
+  for (const v of [h.stdin, h.stdout, h.stderr]) {
+    if (v === 0n || v === INVALID_HANDLE || out.includes(v)) continue;
+    out.push(v);
+  }
+  return out;
+}
+
+/** PURE: a real std handle, or 0 (never INVALID_HANDLE_VALUE) for the STARTUPINFO slot. */
+function slot(v: bigint): bigint {
+  return v === INVALID_HANDLE ? 0n : v;
+}
+
+/**
+ * PURE: STARTUPINFOEXW, x64 layout (112 bytes). STARTUPINFOW is 104 bytes:
+ *   +0 cb u32 · +8 lpReserved · +16 lpDesktop · +24 lpTitle · +32..+56 dwX..dwFillAttribute (7 × u32)
+ *   +60 dwFlags u32 · +64 wShowWindow u16 · +66 cbReserved2 u16 · +72 lpReserved2
+ *   +80 hStdInput · +88 hStdOutput · +96 hStdError
+ * then +104 lpAttributeList. Byte-layout-critical, so unit-tested.
+ */
+export function buildStartupInfoExW(attrList: bigint, h: StdHandles): Uint8Array {
+  const siex = new Uint8Array(112);
+  const dv = new DataView(siex.buffer);
+  dv.setUint32(0, 112, true); // cb = sizeof(STARTUPINFOEXW)
+  dv.setUint32(60, STARTF_USESTDHANDLES, true);
+  dv.setBigUint64(80, slot(h.stdin), true);
+  dv.setBigUint64(88, slot(h.stdout), true);
+  dv.setBigUint64(96, slot(h.stderr), true);
+  dv.setBigUint64(104, attrList, true);
+  return siex;
+}
+
+/** PURE: CreateProcessW creation flags. Launched from the GUI engine the helper has no console, and a
+ *  console child would otherwise get a NEW visible console window; with a console (a terminal run) the
+ *  child shares it as before. */
+export function creationFlags(hasConsole: boolean): number {
+  return (EXTENDED_STARTUPINFO_PRESENT | (hasConsole ? 0 : CREATE_NO_WINDOW)) >>> 0;
+}
 const INFINITE = 0xffffffff;
 const ERROR_ALREADY_EXISTS_HR = 0x800700b7; // HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)
 
@@ -268,6 +330,9 @@ export function runInAppContainer(plan: HelperPlan): number {
     GetExitCodeProcess: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
     CloseHandle: { args: [FFIType.u64], returns: FFIType.i32 },
     GetLastError: { args: [], returns: FFIType.u32 },
+    GetStdHandle: { args: [FFIType.i32], returns: FFIType.u64 },
+    SetHandleInformation: { args: [FFIType.u64, FFIType.u32, FFIType.u32], returns: FFIType.i32 },
+    GetConsoleWindow: { args: [], returns: FFIType.u64 },
   });
 
   // 1) AppContainer SID for our moniker (create the profile, or derive if it already exists).
@@ -294,28 +359,42 @@ export function runInAppContainer(plan: HelperPlan): number {
   const secCaps = new Uint8Array(24);
   new DataView(secCaps.buffer).setBigUint64(0, sid, true); // AppContainerSid; Capabilities/Count/Reserved stay 0 ⇒ NO network capability
 
-  // 3) attribute list: size probe → alloc → init → update(SECURITY_CAPABILITIES)
+  // 2b) the std handles the child must own (P-SANDBOX.9): inheritable, and the ONLY inheritable ones.
+  const std: StdHandles = {
+    stdin: k32.symbols.GetStdHandle(STD_INPUT_HANDLE),
+    stdout: k32.symbols.GetStdHandle(STD_OUTPUT_HANDLE),
+    stderr: k32.symbols.GetStdHandle(STD_ERROR_HANDLE),
+  };
+  const inherit = inheritableHandleList(std);
+  for (const h of inherit) {
+    if (!k32.symbols.SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+      throw new Error(`SetHandleInformation(std handle) failed (err=${k32.symbols.GetLastError()})`);
+  }
+  const handleList = new BigUint64Array(inherit); // must outlive CreateProcessW
+
+  // 3) attribute list: size probe → alloc → init → update(SECURITY_CAPABILITIES [, HANDLE_LIST])
+  const attrCount = inherit.length ? 2 : 1;
   const sizeOut = new BigUint64Array(1);
-  k32.symbols.InitializeProcThreadAttributeList(null, 1, 0, ptr(sizeOut));
+  k32.symbols.InitializeProcThreadAttributeList(null, attrCount, 0, ptr(sizeOut));
   const listLen = Number(sizeOut[0]!);
   if (!listLen) throw new Error("InitializeProcThreadAttributeList size probe returned 0");
   const attrList = new Uint8Array(listLen);
-  if (!k32.symbols.InitializeProcThreadAttributeList(ptr(attrList), 1, 0, ptr(sizeOut)))
+  if (!k32.symbols.InitializeProcThreadAttributeList(ptr(attrList), attrCount, 0, ptr(sizeOut)))
     throw new Error(`InitializeProcThreadAttributeList failed (err=${k32.symbols.GetLastError()})`);
   if (!k32.symbols.UpdateProcThreadAttribute(ptr(attrList), 0, BigInt(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES), ptr(secCaps), 24n, null, null))
     throw new Error(`UpdateProcThreadAttribute failed (err=${k32.symbols.GetLastError()})`);
+  if (inherit.length && !k32.symbols.UpdateProcThreadAttribute(ptr(attrList), 0, BigInt(PROC_THREAD_ATTRIBUTE_HANDLE_LIST), ptr(handleList), BigInt(inherit.length * 8), null, null))
+    throw new Error(`UpdateProcThreadAttribute(HANDLE_LIST) failed (err=${k32.symbols.GetLastError()})`);
 
-  // 4) STARTUPINFOEXW (x64: STARTUPINFOW is 104 bytes; lpAttributeList at +104 ⇒ total 112).
-  const siex = new Uint8Array(112);
-  const sdv = new DataView(siex.buffer);
-  sdv.setUint32(0, 112, true); // StartupInfo.cb = sizeof(STARTUPINFOEXW)
-  sdv.setBigUint64(104, BigInt(ptr(attrList)), true); // lpAttributeList
+  // 4) STARTUPINFOEXW carrying the std handles + the attribute list.
+  const siex = buildStartupInfoExW(BigInt(ptr(attrList)), std);
 
-  // 5) CreateProcessW — mutable command line buffer; EXTENDED_STARTUPINFO_PRESENT; child cwd = workspace.
+  // 5) CreateProcessW: mutable command line buffer; inherit ONLY the listed handles; child cwd = workspace.
   const cmdline = wide(buildCommandLine(resolvedCmd ?? plan.cmd, plan.cmdArgs));
   const cwd = wide(plan.workspace);
   const pi = new Uint8Array(24); // PROCESS_INFORMATION { hProcess, hThread, dwProcessId, dwThreadId }
-  const okCreate = k32.symbols.CreateProcessW(null, ptr(cmdline), null, null, 0, EXTENDED_STARTUPINFO_PRESENT, null, ptr(cwd), ptr(siex), ptr(pi));
+  const flags = creationFlags(k32.symbols.GetConsoleWindow() !== 0n);
+  const okCreate = k32.symbols.CreateProcessW(null, ptr(cmdline), null, null, inherit.length ? 1 : 0, flags, null, ptr(cwd), ptr(siex), ptr(pi));
   k32.symbols.DeleteProcThreadAttributeList(ptr(attrList));
   // (SID freed by process teardown; FreeSid omitted deliberately — short-lived helper)
   if (!okCreate) throw new Error(`CreateProcessW failed (err=${k32.symbols.GetLastError()})`);
@@ -346,6 +425,18 @@ function loopbackExemption(op: "add" | "delete"): number {
   if (process.platform !== "win32") {
     process.stderr.write("[lucid-appcontainer] loopback exemption is Windows-only\n");
     return 3;
+  }
+  if (op === "add") {
+    // P-SANDBOX.9 (ADR-0384): the PROFILE must exist before the exemption. Registered against a name
+    // with no profile yet, Windows stores a bare SID that lists as "AppContainer NOT FOUND", so the
+    // engine's by-name match never saw it and the session stayed the disclosed passthrough although
+    // register exited 0 (observed live). containerSid() creates the profile (or derives the existing one).
+    try {
+      containerSid();
+    } catch (e) {
+      process.stderr.write(`[lucid-appcontainer] loopback exemption add failed: cannot create the AppContainer profile: ${String((e as Error).message ?? e)}\n`);
+      return 3;
+    }
   }
   const args = checkNetIsolationArgs(op);
   const r = Bun.spawnSync(["CheckNetIsolation.exe", ...args], { stdout: "inherit", stderr: "inherit" });

@@ -26,7 +26,7 @@ console.log("== #ADR-0173 P-SANDBOX.7: the native Windows AppContainer helper (r
 // ── [1] the flag-contract parser (pure, cross-platform) ───────────────────────
 console.log("[1] the flag contract parses valid plans and fail-closes on anything malformed");
 ok(JSON.stringify(parseHelperArgs(["--workspace", "C:\\ws", "--deny-network", "--", "omp", "acp"])) ===
-  JSON.stringify({ workspace: "C:\\ws", home: undefined, net: "deny", cmd: "omp", cmdArgs: ["acp"] }), "a valid --deny-network plan parses");
+  JSON.stringify({ workspace: "C:\\ws", home: undefined, net: "deny", grantRx: [], grantRw: [], cmd: "omp", cmdArgs: ["acp"] }), "a valid --deny-network plan parses");
 ok("error" in parseHelperArgs(["--workspace", "C:\\ws", "--deny-network", "--"]), "no command after -- → error");
 ok("error" in parseHelperArgs(["--workspace", "C:\\ws", "--", "x"]), "no net posture → error (exactly one of deny/loopback required)");
 ok("error" in parseHelperArgs(["--deny-network", "--", "x"]), "missing --workspace → error");

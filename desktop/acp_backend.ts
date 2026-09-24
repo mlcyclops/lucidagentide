@@ -10,7 +10,7 @@
 // on the chat path here too. The wire format was captured from a live omp turn
 // (DECISIONS ADR-0006).
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_doc.ts"; // P-DESIGN.1/.2 (ADR-0154): honor DESIGN.md + detect writes
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -35,12 +35,12 @@ import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; 
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
-import { gatePath, gateRefusal, repoAsset } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
+import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
 import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentProvider, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
-import { loopbackExempted, resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { appContainerRuntimeGrants, loopbackExempted, resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -636,7 +636,14 @@ class Backend {
       if (ep) proxy = { host: ep.host, httpPort: ep.httpPort, httpProxyUrl: ep.httpProxyUrl, resolvConfPath: ep.dnsPort === 53 ? ep.resolvConfPath : undefined };
       else console.error("[sandbox] mediated egress proxy unavailable - this session runs network-off (fail-closed, ADR-0166).");
     }
-    const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy }, resolution: res });
+    // P-SANDBOX.9 (ADR-0384): an AppContainer child reads NOTHING it was not granted, so the contained
+    // omp also needs the repo tree, the bun runtime its shim execs, and rw on ~/.omp (+ a temp dir in it).
+    let acGrants: ReturnType<typeof appContainerRuntimeGrants> | undefined;
+    if (res.backend.name === "appcontainer") {
+      acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0] });
+      try { mkdirSync(acGrants.tmpDir, { recursive: true }); } catch { /* the helper's grant then fails closed, loudly */ }
+    }
+    const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy, ...acGrants }, resolution: res });
     if (d.action === "refuse") { // unreachable for trusted-local caps, but never assume: fail closed
       this.sandboxExecBlock = d.reason;
       setSandboxState({ backend: res.backend.name, isolated: res.backend.isolates, disclosed: res.disclosed, platform: process.platform, execBlocked: d.reason, proxied: false, at });

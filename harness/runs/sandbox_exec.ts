@@ -36,6 +36,7 @@
 // follow-ups. Pure + hermetic: `which` is injectable and `ctx.proxy` is a plain path/URL record.
 
 import { homedir, tmpdir } from "node:os";
+import { win32 as win32Path } from "node:path";
 import type { ProfileCaps } from "./profiles.ts";
 
 /** Presence probe for a binary on PATH. Injectable so tests never depend on the host. */
@@ -103,19 +104,28 @@ const seatbeltDefaultProbe: ProbeFn = (bin) => {
  *  DLL load, or a filesystem-ACL grant refused on this host. The helper is FAIL-CLOSED (a child
  *  it cannot contain never runs), so committing to it without a probe reproduces the exact
  *  bwrap-on-Ubuntu-24.04 failure: every wrapped spawn dies and the session never opens. Run the
- *  smallest real container once (`cmd /c exit 0` inside a throwaway workspace), cached per run. */
+ *  smallest real container once inside a throwaway workspace, cached per run.
+ *
+ *  P-SANDBOX.9 (ADR-0384): the probe is a STDIO ROUND TRIP, not `cmd /c exit 0`. The omp child speaks
+ *  ACP over stdin/stdout, and a helper that never wired its std handles into the container still exits
+ *  0 on `exit 0`: that is how beta.7 lit the green pill and then every turn died with "agent process
+ *  exited (code 1)" and no stderr. A contained child must ECHO a marker back through our pipe. A helper
+ *  that cannot (a stale build, a host that refuses the handle list) is not committed to. */
+export const APPCONTAINER_PROBE_MARKER = "lucid-appcontainer-stdio-ok";
+export function appContainerProbeArgv(bin: string, workspace: string): string[] {
+  return [bin, "--workspace", workspace, "--deny-network", "--", "cmd", "/c", `echo ${APPCONTAINER_PROBE_MARKER}`];
+}
+/** PURE: did the probe run AND carry the child's stdout back to us? */
+export function appContainerProbePassed(r: { exitCode: number | null; stdout: string }): boolean {
+  return r.exitCode === 0 && r.stdout.includes(APPCONTAINER_PROBE_MARKER);
+}
 const appContainerDefaultProbe: ProbeFn = (bin) => {
   const cached = probeCache.get(bin);
   if (cached !== undefined) return cached;
   let ok = false;
   try {
-    ok =
-      Bun.spawnSync({
-        cmd: [bin, "--workspace", tmpdir(), "--deny-network", "--", "cmd", "/c", "exit 0"],
-        stdout: "ignore",
-        stderr: "ignore",
-        stdin: "ignore",
-      }).exitCode === 0;
+    const r = Bun.spawnSync({ cmd: appContainerProbeArgv(bin, tmpdir()), stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    ok = appContainerProbePassed({ exitCode: r.exitCode, stdout: r.stdout.toString() });
   } catch {
     ok = false; // binary vanished between which() and here, or is not executable
   }
@@ -168,6 +178,15 @@ export interface SandboxCtx {
    *  no mediator ⇒ no network, never raw unmediated egress (fail-closed, invariant #3). Only meaningful
    *  on an isolating backend; the passthrough discloses and ignores it. */
   proxy?: SandboxProxy;
+  /** P-SANDBOX.9 (ADR-0384): extra dirs the contained child must READ+EXECUTE (the app's own repo tree,
+   *  the bun runtime the omp shim launches). Only the AppContainer backend consumes these: an
+   *  AppContainer can read NOTHING its SID was not granted, unlike bwrap/Seatbelt's read-only host view. */
+  grantRx?: string[];
+  /** P-SANDBOX.9: extra dirs the contained child must READ+WRITE (omp's own state dir, ~/.omp). */
+  grantRw?: string[];
+  /** P-SANDBOX.9: TEMP/TMP for the contained child. The user's %TEMP% is not granted to the container,
+   *  so bun and omp need a temp dir inside a granted rw tree. AppContainer only. */
+  tmpDir?: string;
 }
 
 /** The subset of the egress proxy's endpoint the sandbox needs to steer a child at it. Mirrors
@@ -182,6 +201,53 @@ export interface SandboxProxy {
    *  privileged :53 — DNS then stays with the host resolver and we mediate HTTP(S) only, with full
    *  in-namespace DNS steering completed in P-SANDBOX.4. When present, DNS is mediated too. */
   resolvConfPath?: string;
+}
+
+/** PURE: the env that steers a contained child's egress at the mediating proxy. P-SANDBOX.9 (ADR-0384):
+ *  HTTP(S)_PROXY alone is NOT enough for omp. omp 18 installs its process-wide proxied `fetch` (and the
+ *  per-provider inference transport) from PI_PROXY / PI_PROXY_<PROVIDER> only, and never consults
+ *  HTTP(S)_PROXY there. Under bwrap/Seatbelt that was invisible (a direct dial still had a route); under
+ *  a capability-less AppContainer a direct dial is kernel-dropped, so the chat died with a green pill.
+ *  ALL_PROXY covers the remaining clients that read only that. Loopback always bypasses the proxy. */
+export function proxyChildEnv(httpProxyUrl: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = httpProxyUrl;
+  env.PI_PROXY = env.ALL_PROXY = env.all_proxy = httpProxyUrl;
+  env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+  return env;
+}
+
+/** PURE: the dirs a contained omp needs beyond its workspace, for the AppContainer backend (P-SANDBOX.9,
+ *  ADR-0384). An AppContainer child can read NOTHING its SID was not granted, and the helper only granted
+ *  the workspace plus the directory of the exe it launches (`node_modules\.bin`). The omp shim there then
+ *  needs the bun runtime it execs, the `@oh-my-pi` package and our `-e` extensions (the repo tree), and
+ *  omp + our extensions keep ALL their state under ~/.omp (sessions, agent.db, auth, audit logs).
+ *    rx: the repo root; the bun runtime's dir; an omp installed OUTSIDE the repo (the managed
+ *        `bun add -g` tree or ~/.bun) by its install root, two levels above `bin\omp.exe`.
+ *    rw: ~/.omp. tmp: ~/.omp/lucid-sandbox-tmp (the user's %TEMP% is not granted).
+ *  Windows paths via path.win32, so the rule is testable on any host. Deduped case-insensitively. */
+export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; bunBin?: string | null; ompBin?: string | null }): {
+  grantRx: string[];
+  grantRw: string[];
+  tmpDir: string;
+} {
+  const w = win32Path;
+  const under = (child: string, parent: string) => {
+    const rel = w.relative(parent, child);
+    return !!rel && !rel.startsWith("..") && !w.isAbsolute(rel);
+  };
+  const rx = [i.repoRoot];
+  if (i.bunBin && w.isAbsolute(i.bunBin)) rx.push(w.dirname(i.bunBin));
+  if (i.ompBin && w.isAbsolute(i.ompBin) && !under(i.ompBin, i.repoRoot)) rx.push(w.dirname(w.dirname(i.ompBin)));
+  const seen = new Set<string>();
+  const grantRx = rx.filter((d) => {
+    const k = w.normalize(d).replace(/\\+$/, "").toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  const ompHome = w.join(i.home, ".omp");
+  return { grantRx, grantRw: [ompHome], tmpDir: w.join(ompHome, "lucid-sandbox-tmp") };
 }
 
 /** A concrete spawn plan: what to ACTUALLY exec. `env` entries are ADDED to the child env. */
@@ -240,9 +306,8 @@ export class BwrapBackend implements SandboxBackend {
     if (!caps.canNetwork) {
       args.push("--unshare-net");
     } else if (ctx.proxy) {
-      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
-      // Loopback + our own hosts must bypass the HTTP proxy so the proxy's own upstream isn't self-tunnelled.
-      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+      // Loopback + our own hosts bypass the HTTP proxy so the proxy's own upstream isn't self-tunnelled.
+      Object.assign(env, proxyChildEnv(ctx.proxy.httpProxyUrl));
       // Steer the stub resolver at us too WHEN we hold a privileged :53 (resolvConfPath present). The bind
       // is last-writer-wins over the /etc mount above (bwrap applies binds in order).
       if (ctx.proxy.resolvConfPath) args.push("--ro-bind", ctx.proxy.resolvConfPath, "/etc/resolv.conf");
@@ -296,8 +361,7 @@ export class SeatbeltBackend implements SandboxBackend {
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const env: Record<string, string> = {};
     if (caps.canNetwork && ctx.proxy) {
-      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
-      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+      Object.assign(env, proxyChildEnv(ctx.proxy.httpProxyUrl));
     }
     // `sandbox-exec -p <profile> <cmd> <args...>` — the wrapped argv is preserved verbatim as the tail.
     return { cmd: "sandbox-exec", args: ["-p", seatbeltProfile(caps, ctx), ...argv], env };
@@ -315,6 +379,9 @@ export class SeatbeltBackend implements SandboxBackend {
 export function appContainerArgs(caps: ProfileCaps, ctx: SandboxCtx): string[] {
   const args = ["--workspace", ctx.workspace]; // bound read-write inside the container (fs stays omp --isolate's job)
   if (ctx.home) args.push("--home", ctx.home);
+  for (const d of ctx.grantRx ?? []) args.push("--grant-rx", d);
+  for (const d of ctx.grantRw ?? []) args.push("--grant-rw", d);
+  if (ctx.tmpDir) args.push("--grant-rw", ctx.tmpDir);
   if (!caps.canNetwork) {
     args.push("--deny-network"); // total deny (WFP blocks all outbound for the container SID)
   } else if (ctx.proxy) {
@@ -348,9 +415,9 @@ export class AppContainerBackend implements SandboxBackend {
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const env: Record<string, string> = {};
     if (caps.canNetwork && ctx.proxy) {
-      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
-      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+      Object.assign(env, proxyChildEnv(ctx.proxy.httpProxyUrl));
     }
+    if (ctx.tmpDir) env.TEMP = env.TMP = ctx.tmpDir;
     // `lucid-appcontainer <flags> -- <cmd> <args...>` — the wrapped argv is preserved verbatim after `--`.
     return { cmd: this.helper, args: [...appContainerArgs(caps, ctx), "--", ...argv], env };
   }

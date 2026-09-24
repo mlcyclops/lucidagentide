@@ -39,13 +39,13 @@ console.log("== #ADR-0172 P-SANDBOX.6: the Windows AppContainer backend seam (co
 
 // ── [1] resolution per helper presence ───────────────────────────────────────
 console.log("[1] resolution — win32 gets AppContainer WHEN the lucid-appcontainer helper is present");
-const withHelper = resolveBackend({ platform: "win32", which: has("lucid-appcontainer") });
+const withHelper = resolveBackend({ platform: "win32", which: has("lucid-appcontainer"), probe: () => true }); // hermetic: the functional probe is P-SANDBOX.7/.9 territory
 ok(withHelper.ok && withHelper.backend.name === "appcontainer" && withHelper.backend.isolates && !withHelper.disclosed, "win32 + helper → the ISOLATING AppContainer backend");
 const noHelper = resolveBackend({ platform: "win32", which: none });
 ok(noHelper.ok && noHelper.backend.name === "noop" && noHelper.disclosed, "win32 WITHOUT the helper → disclosed passthrough (unchanged until P-SANDBOX.7 ships it)");
 const req = resolveBackend({ platform: "win32", requireIsolation: true, which: none });
 ok(!req.ok && /lucid-appcontainer/.test(req.ok ? "" : req.reason), "require-isolation without the helper → REFUSED (fail-closed, never a silent unisolated run)");
-ok(resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer") }).ok, "…and SATISFIED once the helper is installed");
+ok(resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer"), probe: () => true }).ok, "…and SATISFIED once the helper is installed");
 
 // ── [2] the flag contract — the same three network states ─────────────────────
 console.log("\n[2] the flag contract mirrors bwrap / Seatbelt (the helper enforces AppContainer + WFP)");
@@ -69,7 +69,7 @@ ok(d.action === "spawn" && d.plan.args.slice(d.plan.args.indexOf("--") + 1).join
 
 // ── [4] available() gating ────────────────────────────────────────────────────
 console.log("\n[4] available() is strictly gated on the helper");
-ok(new AppContainerBackend(has("lucid-appcontainer")).available(), "helper on PATH → available");
+ok(new AppContainerBackend(has("lucid-appcontainer"), "lucid-appcontainer", () => true).available(), "helper on PATH (and passing its probe) → available");
 ok(!new AppContainerBackend(none).available() && !new AppContainerBackend(has("bwrap")).available(), "helper absent (or a different tool) → NOT available ⇒ disclosed passthrough");
 
 console.log("\n✓ P-SANDBOX.6 demo passed — the Windows AppContainer seam + flag contract are in place: containment activates the moment the lucid-appcontainer helper ships (P-SANDBOX.7); until then Windows honestly discloses.");
