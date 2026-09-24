@@ -31,6 +31,23 @@ function acpLog(text: string): void {
   } catch { /* best-effort; never break the client over a log line */ }
 }
 
+/** A JSON-RPC error object from the agent, as a real Error whose message says what went wrong.
+ *  P-NORESP.2: rejecting with the raw `{code, message, data}` object reached the chat as
+ *  "[object Object]" (every `String(e)` downstream), hiding the provider's actual failure. The
+ *  message folds in `data` (where omp puts the provider detail), clamped; `code` and `data` stay on
+ *  the Error for any caller that branches on them. Pure. */
+export function rpcError(err: unknown): Error & { code?: number; data?: unknown } {
+  const o = (err && typeof err === "object" ? err : { message: String(err) }) as { code?: number; message?: unknown; data?: unknown };
+  const base = typeof o.message === "string" && o.message ? o.message : "agent returned an error";
+  const d = o.data;
+  const detail = d === undefined || d === null ? "" : typeof d === "string" ? d : (() => { try { return JSON.stringify(d); } catch { return String(d); } })();
+  const msg = detail && !base.includes(detail) ? `${base}: ${detail}` : base;
+  const e = new Error((o.code !== undefined ? `${msg} (code ${o.code})` : msg).slice(0, 500)) as Error & { code?: number; data?: unknown };
+  e.code = o.code;
+  e.data = d;
+  return e;
+}
+
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
 
 /** Per-request bounds. Without at least one of these a request waits forever (P-KG-INGEST.5, ADR-0264). */
@@ -127,7 +144,7 @@ export class ACPClient {
     // response to one of our requests
     if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
       const p = this.pending.get(msg.id);
-      if (p) { this.pending.delete(msg.id); p.cleanup(); msg.error ? p.reject(msg.error) : p.resolve(msg.result); }
+      if (p) { this.pending.delete(msg.id); p.cleanup(); msg.error ? p.reject(rpcError(msg.error)) : p.resolve(msg.result); }
       return;
     }
     // request FROM the agent (needs a response)
