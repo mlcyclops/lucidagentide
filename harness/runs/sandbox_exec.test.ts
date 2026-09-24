@@ -442,7 +442,7 @@ test("managedRequireIsolation is tighten-only: absent/false/unmanaged means no r
   expect(managedRequireIsolation({ security: { exec: { requireIsolation: true } } })).toBe(true);
 });
 
-// ── P-SANDBOX.9 (ADR-0384): contained chat actually works ─────────────────────
+// ── P-SANDBOX.9 (ADR-0386): contained chat actually works ─────────────────────
 
 test("proxyChildEnv steers omp too: PI_PROXY + ALL_PROXY ride with HTTP(S)_PROXY, loopback bypasses", () => {
   const env = proxyChildEnv("http://127.0.0.1:8888");

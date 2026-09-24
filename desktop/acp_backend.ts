@@ -636,7 +636,7 @@ class Backend {
       if (ep) proxy = { host: ep.host, httpPort: ep.httpPort, httpProxyUrl: ep.httpProxyUrl, resolvConfPath: ep.dnsPort === 53 ? ep.resolvConfPath : undefined };
       else console.error("[sandbox] mediated egress proxy unavailable - this session runs network-off (fail-closed, ADR-0166).");
     }
-    // P-SANDBOX.9 (ADR-0384): an AppContainer child reads NOTHING it was not granted, so the contained
+    // P-SANDBOX.9 (ADR-0386): an AppContainer child reads NOTHING it was not granted, so the contained
     // omp also needs the repo tree, the bun runtime its shim execs, and rw on ~/.omp (+ a temp dir in it).
     let acGrants: ReturnType<typeof appContainerRuntimeGrants> | undefined;
     if (res.backend.name === "appcontainer") {

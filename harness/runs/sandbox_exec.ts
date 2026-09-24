@@ -106,7 +106,7 @@ const seatbeltDefaultProbe: ProbeFn = (bin) => {
  *  bwrap-on-Ubuntu-24.04 failure: every wrapped spawn dies and the session never opens. Run the
  *  smallest real container once inside a throwaway workspace, cached per run.
  *
- *  P-SANDBOX.9 (ADR-0384): the probe is a STDIO ROUND TRIP, not `cmd /c exit 0`. The omp child speaks
+ *  P-SANDBOX.9 (ADR-0386): the probe is a STDIO ROUND TRIP, not `cmd /c exit 0`. The omp child speaks
  *  ACP over stdin/stdout, and a helper that never wired its std handles into the container still exits
  *  0 on `exit 0`: that is how beta.7 lit the green pill and then every turn died with "agent process
  *  exited (code 1)" and no stderr. A contained child must ECHO a marker back through our pipe. A helper
@@ -178,7 +178,7 @@ export interface SandboxCtx {
    *  no mediator ⇒ no network, never raw unmediated egress (fail-closed, invariant #3). Only meaningful
    *  on an isolating backend; the passthrough discloses and ignores it. */
   proxy?: SandboxProxy;
-  /** P-SANDBOX.9 (ADR-0384): extra dirs the contained child must READ+EXECUTE (the app's own repo tree,
+  /** P-SANDBOX.9 (ADR-0386): extra dirs the contained child must READ+EXECUTE (the app's own repo tree,
    *  the bun runtime the omp shim launches). Only the AppContainer backend consumes these: an
    *  AppContainer can read NOTHING its SID was not granted, unlike bwrap/Seatbelt's read-only host view. */
   grantRx?: string[];
@@ -203,7 +203,7 @@ export interface SandboxProxy {
   resolvConfPath?: string;
 }
 
-/** PURE: the env that steers a contained child's egress at the mediating proxy. P-SANDBOX.9 (ADR-0384):
+/** PURE: the env that steers a contained child's egress at the mediating proxy. P-SANDBOX.9 (ADR-0386):
  *  HTTP(S)_PROXY alone is NOT enough for omp. omp 18 installs its process-wide proxied `fetch` (and the
  *  per-provider inference transport) from PI_PROXY / PI_PROXY_<PROVIDER> only, and never consults
  *  HTTP(S)_PROXY there. Under bwrap/Seatbelt that was invisible (a direct dial still had a route); under
@@ -218,7 +218,7 @@ export function proxyChildEnv(httpProxyUrl: string): Record<string, string> {
 }
 
 /** PURE: the dirs a contained omp needs beyond its workspace, for the AppContainer backend (P-SANDBOX.9,
- *  ADR-0384). An AppContainer child can read NOTHING its SID was not granted, and the helper only granted
+ *  ADR-0386). An AppContainer child can read NOTHING its SID was not granted, and the helper only granted
  *  the workspace plus the directory of the exe it launches (`node_modules\.bin`). The omp shim there then
  *  needs the bun runtime it execs, the `@oh-my-pi` package and our `-e` extensions (the repo tree), and
  *  omp + our extensions keep ALL their state under ~/.omp (sessions, agent.db, auth, audit logs).

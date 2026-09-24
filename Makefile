@@ -694,7 +694,7 @@ demo-P-SANDBOX.7b: ## P-SANDBOX.7b (ADR-0174): mediated --loopback-only for the 
 	$(BUN) run harness/scripts/demo_p_sandbox_7b.ts
 
 .PHONY: demo-P-SANDBOX.9
-demo-P-SANDBOX.9: ## P-SANDBOX.9 (ADR-0384): a green AppContainer pill means a working chat - the helper hands its std handles to the contained omp (ACP rides stdio), the container is granted the repo + bun runtime (rx) and ~/.omp (rw, TEMP inside), PI_PROXY steers omp inference at the mediating proxy, --register-loopback creates the profile first, and the probe is a stdio round trip
+demo-P-SANDBOX.9: ## P-SANDBOX.9 (ADR-0386): a green AppContainer pill means a working chat - the helper hands its std handles to the contained omp (ACP rides stdio), the container is granted the repo + bun runtime (rx) and ~/.omp (rw, TEMP inside), PI_PROXY steers omp inference at the mediating proxy, --register-loopback creates the profile first, and the probe is a stdio round trip
 	$(BUN) run harness/scripts/demo_p_sandbox_9.ts
 
 .PHONY: build-appcontainer

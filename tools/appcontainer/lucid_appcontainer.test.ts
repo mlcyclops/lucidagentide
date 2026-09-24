@@ -186,7 +186,7 @@ test("icaclsListsSid survives console-width wrapping that splits an ACE mid-SID 
   expect(icaclsListsSid(wrappedInherited, "S-1-15-2-111-222555555")).toBe(false);
 });
 
-// ── P-SANDBOX.9 (ADR-0384): the child owns the helper's std handles (ACP rides stdio) ──
+// ── P-SANDBOX.9 (ADR-0386): the child owns the helper's std handles (ACP rides stdio) ──
 test("inheritableHandleList drops NULL / INVALID_HANDLE_VALUE and dedupes (HANDLE_LIST rejects repeats)", () => {
   const INVALID = 0xffffffffffffffffn;
   expect(inheritableHandleList({ stdin: 0x10n, stdout: 0x20n, stderr: 0x30n })).toEqual([0x10n, 0x20n, 0x30n]);

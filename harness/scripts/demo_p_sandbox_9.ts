@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_sandbox_9.ts
 //
-// P-SANDBOX.9 (ADR-0384): a green AppContainer pill must mean a WORKING chat. On beta.7, with the loopback
+// P-SANDBOX.9 (ADR-0386): a green AppContainer pill must mean a WORKING chat. On beta.7, with the loopback
 // exemption registered, the pill went green and every turn died with "acp: agent process exited (code 1)
 // - last stderr: [lucid-appcontainer] acl grant ...node_modules\.bin rx". Four stacked causes, one fix each:
 //   1. the helper never handed its std handles to the child, so omp (which speaks ACP over stdio) saw EOF
@@ -24,7 +24,7 @@ import { caps } from "../runs/profiles.ts";
 const fail = (m: string): never => { console.error(`FAIL: ${m}`); process.exit(1); };
 const ok = (cond: boolean, m: string) => { if (!cond) fail(m); console.log(`  ok  ${m}`); };
 
-console.log("== #ADR-0384 P-SANDBOX.9: a green AppContainer pill means a working chat ==\n");
+console.log("== #ADR-0386 P-SANDBOX.9: a green AppContainer pill means a working chat ==\n");
 
 console.log("[1] the contained child owns the helper's std handles (ACP rides stdio)");
 const si = new DataView(buildStartupInfoExW(0x1000n, { stdin: 0x10n, stdout: 0x20n, stderr: 0x20n }).buffer);

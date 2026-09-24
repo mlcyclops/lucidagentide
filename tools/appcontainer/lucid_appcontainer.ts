@@ -185,7 +185,7 @@ const STD_OUTPUT_HANDLE = -11;
 const STD_ERROR_HANDLE = -12;
 const INVALID_HANDLE = 0xffffffffffffffffn; // INVALID_HANDLE_VALUE as a pointer-sized unsigned
 
-// ── stdio into the container (P-SANDBOX.9, ADR-0384) ───────────────────────────────────────────────────
+// ── stdio into the container (P-SANDBOX.9, ADR-0386) ───────────────────────────────────────────────────
 // The wrapped omp speaks ACP over stdin/stdout, so the child MUST own the helper's std handles. Before
 // this, CreateProcessW ran with bInheritHandles=FALSE and no STARTF_USESTDHANDLES: the parent's handles
 // are pipes (not console handles), so the child got none. omp saw EOF on stdin, exited 1, and its stderr
@@ -427,7 +427,7 @@ function loopbackExemption(op: "add" | "delete"): number {
     return 3;
   }
   if (op === "add") {
-    // P-SANDBOX.9 (ADR-0384): the PROFILE must exist before the exemption. Registered against a name
+    // P-SANDBOX.9 (ADR-0386): the PROFILE must exist before the exemption. Registered against a name
     // with no profile yet, Windows stores a bare SID that lists as "AppContainer NOT FOUND", so the
     // engine's by-name match never saw it and the session stayed the disclosed passthrough although
     // register exited 0 (observed live). containerSid() creates the profile (or derives the existing one).
