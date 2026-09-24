@@ -16,7 +16,9 @@ import {
   appContainerProbePassed,
   appContainerRuntimeGrants,
   APPCONTAINER_PROBE_MARKER,
+  parseOmpShellPath,
   proxyChildEnv,
+  shellInstallRoot,
   runtimeProbeVerdict,
   BwrapBackend,
   listingExemptsMoniker,
@@ -516,4 +518,28 @@ test("runtimeProbeVerdict: only a clean exit WITH output commits the session to 
   expect(runtimeProbeVerdict({ exitCode: 0, stdout: "  ", stderr: "" }).ok).toBe(false); // no stdio carried
   expect(runtimeProbeVerdict({ exitCode: null, stdout: "", stderr: "", timedOut: true }).ok).toBe(false);
   expect(runtimeProbeVerdict({ exitCode: 3, stdout: "", stderr: "" }).ok).toBe(false); // helper fail-closed
+});
+
+// ── P-SANDBOX.11 (ADR-0389): a shellPath pinned in omp's config is reachable in the container ──
+test("parseOmpShellPath reads plain, single- and double-quoted scalars (unescaping YAML backslashes)", () => {
+  expect(parseOmpShellPath("theme: dark\nshellPath: C:\\Users\\User\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe\n")).toBe("C:\\Users\\User\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe");
+  expect(parseOmpShellPath('shellPath: "C:\\\\Tools\\\\Git\\\\bin\\\\bash.exe"')).toBe("C:\\Tools\\Git\\bin\\bash.exe");
+  expect(parseOmpShellPath("shellPath: 'D:\\git\\bin\\bash.exe'")).toBe("D:\\git\\bin\\bash.exe");
+  expect(parseOmpShellPath("shellPath: C:\\g\\bin\\bash.exe  # pinned")).toBe("C:\\g\\bin\\bash.exe");
+  expect(parseOmpShellPath("model: x\n  shellPath: nested-is-not-top-level\n")).toBeNull();
+  expect(parseOmpShellPath("theme: dark\n")).toBeNull();
+});
+
+test("shellInstallRoot climbs out of bin and usr\\bin so the sibling tools come with the shell", () => {
+  expect(shellInstallRoot("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe")).toBe("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit");
+  expect(shellInstallRoot("C:\\Users\\U\\scoop\\apps\\git\\current\\bin\\bash.exe")).toBe("C:\\Users\\U\\scoop\\apps\\git\\current");
+  expect(shellInstallRoot("C:\\tools\\busybox.exe")).toBe("C:\\tools");
+});
+
+test("appContainerRuntimeGrants adds the pinned shell's root, and never re-ACLs Program Files / Windows", () => {
+  const g = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", shellPath: "C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe" });
+  expect(g.grantRx).toEqual(["C:\\r", "C:\\Users\\U\\AppData\\Local\\Programs\\MinGit"]);
+  const pf = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", shellPath: "C:\\Program Files\\Git\\bin\\bash.exe", bunBin: "C:\\Windows\\bun.exe" });
+  expect(pf.grantRx).toEqual(["C:\\r"]); // already readable by every AppContainer; a standard user cannot write those DACLs
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\h", shellPath: "bash" }).grantRx).toEqual(["C:\\r"]); // a bare name is not a path
 });

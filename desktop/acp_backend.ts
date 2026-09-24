@@ -40,10 +40,11 @@ import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentPr
 import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
-import { appContainerRuntimeGrants, loopbackExempted, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { appContainerRuntimeGrants, loopbackExempted, parseOmpShellPath, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
+import { userTurnedSandboxOff } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { loadGrants, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
@@ -638,8 +639,12 @@ class Backend {
     const profileCaps = caps("trusted-local");
     const acHelper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
     const acBundled = !!acHelper && existsSync(acHelper);
-    const acUsable = acBundled && (!profileCaps.canNetwork || loopbackExempted());
-    if (acBundled && !acUsable) {
+    // P-SANDBOX.12 (ADR-0390): the user's Off switch (a LUCID setting, no admin needed). Managed
+    // require-isolation wins: a policy-required sandbox is never turned off from the panel.
+    const userOff = acBundled && userTurnedSandboxOff(loadSettings().sandboxWindowsMode, managedRequireIsolation(managedConfig().config));
+    if (userOff) console.error("[sandbox] the Windows AppContainer is turned OFF in the Security panel - this session runs as the disclosed passthrough (ADR-0390).");
+    const acUsable = acBundled && !userOff && (!profileCaps.canNetwork || loopbackExempted());
+    if (acBundled && !userOff && !acUsable) {
       console.error(
         `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered — this network-on session runs as the disclosed passthrough. ` +
           `Enable full Windows isolation once, from an elevated shell: "${acHelper}" --register-loopback  (then restart LUCID).`,
@@ -665,7 +670,10 @@ class Backend {
     // omp also needs the repo tree, the bun runtime its shim execs, and rw on ~/.omp (+ a temp dir in it).
     let acGrants: ReturnType<typeof appContainerRuntimeGrants> | undefined;
     if (res.backend.name === "appcontainer") {
-      acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0] });
+      // P-SANDBOX.11 (ADR-0389): a shellPath pinned in omp's config must be reachable inside the container.
+      let shellPath: string | null = null;
+      try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config: omp discovers a shell itself */ }
+      acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0], shellPath });
       try { mkdirSync(acGrants.tmpDir, { recursive: true }); } catch { /* the helper's grant then fails closed, loudly */ }
     }
     const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy, ...acGrants }, resolution: res });

@@ -146,6 +146,14 @@ function runHelperElevated(helper: string, args: string[]): boolean {
   return (r.exitCode ?? 1) === 0;
 }
 
+/** P-SANDBOX.12 (ADR-0390): (un)register the one-time loopback exemption from the Security panel. It needs
+ *  admin, so it always goes through the same UAC path as the ACL retries above. The exit code of an
+ *  elevated Start-Process is only "the prompt was accepted and the helper ran"; the caller re-checks the
+ *  real state (loopbackExempted, after resetLoopbackExemptCache) before reporting success. */
+export function setLoopbackRegistrationElevated(helper: string, register: boolean): boolean {
+  return runHelperElevated(helper, [register ? "--register-loopback" : "--unregister-loopback"]);
+}
+
 /** Does the container SID currently hold an ACE on `path`? (helper `--check-acl`: 0 yes, 1 no). */
 export function checkGrantAce(helper: string, path: string): boolean {
   return runHelper(helper, ["--check-acl", path]).code === 0;

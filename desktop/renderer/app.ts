@@ -14942,6 +14942,36 @@ function wire(): void {
     // P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal, audited
     // server-side). The row leaves the list only when the ACE really came off — a failed revoke keeps
     // it visible so a persistent host mutation can never silently outlive the panel.
+    // P-SANDBOX.12 (ADR-0390): the sandbox switch. The server decides (policy wins, UAC when needed),
+    // restarts the agent, and audits; the panel just reports what actually happened.
+    const sbxMode = (e.target as HTMLElement).closest("[data-sbx-mode]") as HTMLElement | null;
+    if (sbxMode) {
+      const mode = sbxMode.dataset.sbxMode as "off" | "auto" | "unregister";
+      (sbxMode as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.sandboxMode(mode);
+        await refresh();
+        showToast(r?.changed
+          ? { title: mode === "off" ? "Sandbox off" : mode === "auto" ? "Sandbox on" : "Registration removed", desc: r.detail, actions: [{ label: "OK" }], timeout: 5000 }
+          : { tone: "warn", title: "Sandbox unchanged", desc: r?.detail || "The change did not apply.", actions: [{ label: "OK" }], timeout: 6000 });
+      })();
+      return;
+    }
+    // P-SANDBOX.13 (ADR-0391): Add folder. The engine opens the Explorer picker and grants only the pick.
+    const sbxAdd = (e.target as HTMLElement).closest("[data-sbx-add]") as HTMLElement | null;
+    if (sbxAdd) {
+      const mode = sbxAdd.dataset.sbxAdd === "rw" ? "rw" : "rx";
+      (sbxAdd as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.sandboxGrantAdd(mode);
+        await refresh();
+        if (r?.cancelled) return; // a deliberate cancel needs no toast
+        showToast(r?.added
+          ? { title: "Folder added", desc: r.detail, actions: [{ label: "OK" }], timeout: 5000 }
+          : { tone: "warn", title: "Folder not added", desc: r?.detail || "The permission did not apply.", actions: [{ label: "OK" }], timeout: 6000 });
+      })();
+      return;
+    }
     const grantRevoke = (e.target as HTMLElement).closest("[data-grant-revoke]") as HTMLElement | null;
     if (grantRevoke) {
       const path = grantRevoke.dataset.grantRevoke!;

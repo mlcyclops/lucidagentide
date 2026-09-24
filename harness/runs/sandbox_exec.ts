@@ -153,6 +153,11 @@ let loopbackExemptCache: boolean | undefined;
 /** Is the exemption registered on THIS host? Cached per run (a WFP config change mid-run is not a
  *  supported flow — restart the app after `--register-loopback`). Never throws: an unreadable
  *  listing means "not exempt", which degrades to the disclosed passthrough, never to a dead child. */
+/** P-SANDBOX.12 (ADR-0390): forget the cached answer after LUCID itself (un)registers the exemption. */
+export function resetLoopbackExemptCache(): void {
+  loopbackExemptCache = undefined;
+}
+
 export function loopbackExempted(): boolean {
   if (loopbackExemptCache !== undefined) return loopbackExemptCache;
   let ok = false;
@@ -226,7 +231,39 @@ export function proxyChildEnv(httpProxyUrl: string): Record<string, string> {
  *        `bun add -g` tree or ~/.bun) by its install root, two levels above `bin\omp.exe`.
  *    rw: ~/.omp. tmp: ~/.omp/lucid-sandbox-tmp (the user's %TEMP% is not granted).
  *  Windows paths via path.win32, so the rule is testable on any host. Deduped case-insensitively. */
-export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; bunBin?: string | null; ompBin?: string | null }): {
+/** PURE: the `shellPath` the user pinned in omp's config.yml, or null. P-SANDBOX.11 (ADR-0389): omp
+ *  THROWS when an explicit shellPath does not exist ("Custom shell path not found"), and inside the
+ *  AppContainer an ungranted path does not exist, so the first contained turn died on the user's own
+ *  `...\AppData\Local\Programs\MinGit\usr\bin\sh.exe`. A top-level scalar only; quotes stripped. */
+export function parseOmpShellPath(yml: string): string | null {
+  const m = /^shellPath:[ \t]*(.+?)[ \t]*$/m.exec(yml);
+  if (!m) return null;
+  let v = m[1]!;
+  if (/^".*"$/.test(v)) v = v.slice(1, -1).replace(/\\\\/g, "\\"); // YAML double quotes escape backslashes
+  else if (/^'.*'$/.test(v)) v = v.slice(1, -1).replace(/''/g, "'");
+  else v = v.replace(/\s+#.*$/, ""); // a plain scalar may carry a trailing comment
+  v = v.trim();
+  return v && !v.startsWith("#") ? v : null;
+}
+
+/** PURE: the install root of a shell exe, so its sibling tools (MinGit's git.exe, coreutils) come with
+ *  it: strip a trailing `bin`, then a trailing `usr` (`<root>\usr\bin\sh.exe`, `<root>\bin\bash.exe`). */
+export function shellInstallRoot(shell: string): string {
+  const w = win32Path;
+  let d = w.dirname(shell);
+  if (w.basename(d).toLowerCase() === "bin") d = w.dirname(d);
+  if (w.basename(d).toLowerCase() === "usr") d = w.dirname(d);
+  return d;
+}
+
+/** PURE: already readable by every AppContainer ("ALL APPLICATION PACKAGES" on the OS dirs), and not
+ *  ours to re-ACL: a standard user cannot write their DACLs, so granting there would fail closed. */
+function osReadable(p: string): boolean {
+  const n = p.replace(/\//g, "\\").toLowerCase();
+  return /^[a-z]:\\windows(\\|$)/.test(n) || /^[a-z]:\\program files( \(x86\))?(\\|$)/.test(n);
+}
+
+export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; bunBin?: string | null; ompBin?: string | null; shellPath?: string | null }): {
   grantRx: string[];
   grantRw: string[];
   tmpDir: string;
@@ -239,8 +276,11 @@ export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; b
   const rx = [i.repoRoot];
   if (i.bunBin && w.isAbsolute(i.bunBin)) rx.push(w.dirname(i.bunBin));
   if (i.ompBin && w.isAbsolute(i.ompBin) && !under(i.ompBin, i.repoRoot)) rx.push(w.dirname(w.dirname(i.ompBin)));
+  // P-SANDBOX.11 (ADR-0389): the shell the user pinned in omp's config, by its install root.
+  if (i.shellPath && w.isAbsolute(i.shellPath)) rx.push(shellInstallRoot(i.shellPath));
   const seen = new Set<string>();
   const grantRx = rx.filter((d) => {
+    if (osReadable(d)) return false;
     const k = w.normalize(d).replace(/\\+$/, "").toLowerCase();
     if (seen.has(k)) return false;
     seen.add(k);

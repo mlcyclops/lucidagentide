@@ -5003,3 +5003,18 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** `ACPClient` rejects with `rpcError()` (message + data + code as a real Error) instead of the raw JSON-RPC object, so the no-response card stops saying "[object Object]" and names the provider's failure. Unit-tested.
 - **stubbed:** the contained turn that surfaced it (green pill, proxy carrying omp's traffic, turn fails in 1s) is not yet diagnosed; this change is what makes it diagnosable.
 - **next:** read the real error from the next build (or from the user's ~/.omp/logs omp log) and fix the contained provider path.
+
+## P-SANDBOX.11: a shellPath pinned in omp's config is reachable in the AppContainer (ADR-0389)
+- **shipped:** the readable error (P-NORESP.2) named the next wall: omp throws when the user's pinned `shellPath` (a per-user MinGit sh.exe) does not exist, and inside the container it does not. The engine now reads `shellPath` from `~/.omp/agent/config.yml` and grants rx on the shell's install root; grants under Windows / Program Files are skipped (already readable, and not writable by a standard user). Unit-tested.
+- **stubbed:** not covered by the Windows CI smoke, and the runtime probe does not exercise the shell, so this is proven by the next contained turn on the user's host.
+- **next:** install the build, send a turn with the pill green; then the security-panel sandbox controls (toggle, folder grants via the native picker, enterprise-managed) as their own increment.
+
+## P-SANDBOX.12: the Windows sandbox switch in the Security panel (ADR-0390)
+- **shipped:** Runtime sandbox gets Turn off (per-user LUCID setting, no admin, agent restarts as the disclosed passthrough), Turn on (registers the loopback exemption behind UAC only when missing, verified with CheckNetIsolation), and Remove from Windows (elevated --unregister-loopback, only while off). Managed require-isolation ignores the user's Off at spawn and shows a policy note instead of a button. Pure `sandbox_control.ts`, audited `sandbox_mode` events, `demo-P-SANDBOX.12`; renderer rebuilt and the served /app.js + /styles.css grepped for `data-sbx-mode` / `sbx-ctl-btns`.
+- **stubbed:** the UAC path is exercised only on a real Windows host (the elevated Start-Process cannot run in CI).
+- **next:** P-SANDBOX.13 (Add folder via the native picker, list, revoke) and P-SANDBOX.14 (enterprise policy keys: allow/deny the switch, pre-approved folders, lock user grants).
+
+## P-SANDBOX.13: add folders with the native picker, and see all of them (ADR-0391)
+- **shipped:** Security > Runtime sandbox gets Add folder (read-only / read-write). The engine opens the Explorer folder dialog itself and grants only the pick (the request carries no path, so the agent cannot grant itself folders); drive roots, the whole profile, Windows / Program Files and network paths are refused with a reason; every add is audited. The list now shows user folders (Revoke) plus LUCID's always-allowed runtime folders. `demo-P-SANDBOX.13`; renderer rebuilt and the served /app.js grepped for `data-sbx-add` / "Always allowed".
+- **stubbed:** the Explorer dialog and the ACL apply run only on a real Windows host. Pre-existing: the omp child's loopback token also opens header-only routes; flagged in ADR-0391 as its own follow-up.
+- **next:** P-SANDBOX.14, the enterprise policy keys (allow/deny the switch, pre-approved folders, lock user-added folders).
