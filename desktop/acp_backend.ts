@@ -40,7 +40,7 @@ import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentPr
 import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
-import { appContainerRuntimeGrants, loopbackExempted, resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { appContainerRuntimeGrants, loopbackExempted, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -235,6 +235,31 @@ function readDesignInvariants(workspace: string): string {
 // only because the OAuth broker picked a different omp than this file did), and the v2.0.0 EPERM
 // regression came from accepting a path on existence alone. See omp_bin.ts for the full reasoning.
 let ompBinCache: string | null = null;
+/** P-SANDBOX.10 (ADR-0387): run the wrapped `<omp> --version` once per distinct plan and judge it with
+ *  runtimeProbeVerdict. Cached per engine process: a runtime that could not boot is not re-probed on
+ *  every respawn, and one that did is not paid for twice. Never throws. */
+const runtimeProbeCache = new Map<string, Promise<ReturnType<typeof runtimeProbeVerdict>>>();
+function appContainerRuntimeProbe(plan: { cmd: string; args: string[]; env: Record<string, string> }): Promise<ReturnType<typeof runtimeProbeVerdict>> {
+  const key = JSON.stringify(plan);
+  let p = runtimeProbeCache.get(key);
+  if (!p) {
+    p = (async () => {
+      try {
+        const child = Bun.spawn([plan.cmd, ...plan.args], { env: { ...process.env, ...plan.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true });
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; child.kill(); }, 60_000);
+        const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        clearTimeout(timer);
+        return runtimeProbeVerdict({ exitCode, stdout, stderr, timedOut });
+      } catch (e) {
+        return { ok: false as const, reason: `the contained agent runtime could not be probed (${String((e as Error).message ?? e)})` };
+      }
+    })();
+    runtimeProbeCache.set(key, p);
+  }
+  return p;
+}
+
 function ompBin(): string {
   if (ompBinCache) return ompBinCache;
   // P-OMP-BOOT.2 (ADR-0358): a timeout is "slow machine", not "missing binary". See omp_bin.ts.
@@ -649,6 +674,21 @@ class Backend {
       setSandboxState({ backend: res.backend.name, isolated: res.backend.isolates, disclosed: res.disclosed, platform: process.platform, execBlocked: d.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${d.reason} - exec is BLOCKED for this session (ADR-0157).`);
       return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+    }
+    // P-SANDBOX.10 (ADR-0387): presence and a stdio round trip are not "chat works". Before committing
+    // to the AppContainer, prove the REAL runtime boots through the SAME wrap. A failure keeps chat up on
+    // the disclosed passthrough (or blocks exec under managed require-isolation), with the reason logged.
+    if (res.backend.name === "appcontainer") {
+      const ctx = { workspace: currentWorkspace(), proxy, ...acGrants };
+      const verdict = await appContainerRuntimeProbe(res.backend.wrap([argv[0]!, "--version"], profileCaps, ctx));
+      if (!verdict.ok) {
+        const requireIso = managedRequireIsolation(managedConfig().config);
+        console.error(`[sandbox] the AppContainer is available but ${verdict.reason} - ${requireIso ? "exec is BLOCKED (managed policy requires isolation)" : "this session runs as the disclosed passthrough"} (ADR-0387).`);
+        this.sandboxExecBlock = requireIso ? `managed policy requires runtime isolation, but ${verdict.reason}` : null;
+        setSandboxState({ backend: requireIso ? null : "noop", isolated: false, disclosed: !requireIso, platform: process.platform, execBlocked: this.sandboxExecBlock, proxied: false, at });
+        if (!requireIso) console.error(sandboxDisclosure());
+        return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+      }
     }
     this.sandboxExecBlock = null;
     setSandboxState({ backend: res.backend.name, isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
