@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/incident_store.ts - P-RECOVER.1 (ADR-0384): where incident reports live on disk.
+// desktop/incident_store.ts - P-RECOVER.1 (ADR-0385): where incident reports live on disk.
 //
 // One directory, ~/.omp/incidents, shared by the Electron main process (it records what it found and
 // stopped before the engine existed) and the engine (it records agent-child and session failures, and

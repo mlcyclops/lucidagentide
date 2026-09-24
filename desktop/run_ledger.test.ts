@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-RECOVER.1 (ADR-0384): the run ledger decides whether the previous run died and which engine it
+// P-RECOVER.1 (ADR-0385): the run ledger decides whether the previous run died and which engine it
 // owned. A false "unclean" nags the user with a bogus incident; a false claim about the engine could
 // point the reaper at the wrong process, so anything malformed must make no claim at all.
 

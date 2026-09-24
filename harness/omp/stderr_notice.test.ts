@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/omp/stderr_notice.test.ts - P-RECOVER.1 (ADR-0384): a process whose stderr reader has gone away
+// harness/omp/stderr_notice.test.ts - P-RECOVER.1 (ADR-0385): a process whose stderr reader has gone away
 // keeps running after writing gate notices. The field crash (omp log 2026-09-23 01:39:00) was an uncaught
 // `EPIPE: broken pipe, write` from process.stderr.write in the security gate, after the engine that held the
 // read end of omp's stderr had exited.

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/recovery_supervisor.ts - P-RECOVER.1 (ADR-0384): what the window does when a turn says
+// desktop/renderer/recovery_supervisor.ts - P-RECOVER.1 (ADR-0385): what the window does when a turn says
 // "reconnecting" and nothing happens, or a send is refused.
 //
 // The field report was a prompt stuck on "reconnecting" forever: the stream's own reattach loop kept

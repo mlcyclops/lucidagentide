@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-RECOVER.1 (ADR-0384): live proof of the startup leftover reaper on a REAL process table.
+// P-RECOVER.1 (ADR-0385): live proof of the startup leftover reaper on a REAL process table.
 //
 // Builds real process trees with bun, records one in a run ledger inside a temp userData exactly the way
 // main.ts does, then runs the shipping classifier (planLeftovers) and the shipping kill (stopProcesses):

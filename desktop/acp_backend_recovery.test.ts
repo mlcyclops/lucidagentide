@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/acp_backend_recovery.test.ts - P-RECOVER.1 (ADR-0384): the REAL Backend singleton driving a REAL
+// desktop/acp_backend_recovery.test.ts - P-RECOVER.1 (ADR-0385): the REAL Backend singleton driving a REAL
 // fake ACP agent subprocess (harness/mcp/testing/fake_acp_agent.ts), through the same ompBin() resolution,
 // spawn, handshake and session calls production uses.
 //

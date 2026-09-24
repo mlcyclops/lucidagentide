@@ -11,7 +11,7 @@
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
-// P-RECOVER.1 (ADR-0384): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
+// P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
 import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
@@ -1678,7 +1678,7 @@ function noteHealth(action: "probe" | "recover", reason: string): void {
 let turnViewEpoch = 0;
 let activeTurnView: { detach: () => void; stop: () => Promise<void>; reconnect: () => void } | null = null;
 let recoveryChecking: boolean = false;
-// P-RECOVER.1 (ADR-0384): "Checking connection" blocks Send, so it must always end. Every status check
+// P-RECOVER.1 (ADR-0385): "Checking connection" blocks Send, so it must always end. Every status check
 // clears it on its own paths; this cap clears it when a path forgot to, or when the engine never answered.
 const RECOVERY_CHECK_MAX_MS = 20_000;
 let recoveryCheckTimer = 0;
@@ -1700,7 +1700,7 @@ function leaveTurnView(): number {
   return turnViewEpoch;
 }
 function showTurnReconnect(message: string, reconnect: () => void): void {
-  // P-RECOVER.1 (ADR-0384): while the supervisor works on THIS view its notice is the one voice at the
+  // P-RECOVER.1 (ADR-0385): while the supervisor works on THIS view its notice is the one voice at the
   // thread tail. The manual banner is held and comes back if the supervisor cannot fix it.
   if (recoveryActive?.hooks.defers && recoveryActive.hooks.alive()) { recoveryActive.deferred = { message, reconnect }; return; }
   $("#turnReconnect")?.remove();
@@ -1728,7 +1728,7 @@ function hideQuietReconnect(): void {
   if (btn) { btn.hidden = true; btn.onclick = null; }
 }
 
-// ── P-RECOVER.1 (ADR-0384): the recovery supervisor's driver ────────────────────────────────────────
+// ── P-RECOVER.1 (ADR-0385): the recovery supervisor's driver ────────────────────────────────────────
 // recovery_supervisor.ts DECIDES (pure, tested); this performs what it decides and says so at the thread
 // tail. One run at a time, a capped number of automatic runs per window, the engine restart at most
 // once per page (it reloads the window), so a stuck "reconnecting" always ends in an answer.
@@ -1916,7 +1916,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   let turnId = opts.turnId;
   let terminal = false, stopped = false, settled = false, connecting = false;
   let adopted = !!opts.turnId;
-  // P-RECOVER.1 (ADR-0384): a real prompt always opens with a turn-snapshot, so a stream error BEFORE one
+  // P-RECOVER.1 (ADR-0385): a real prompt always opens with a turn-snapshot, so a stream error BEFORE one
   // means the engine refused the send ("A chat turn is already running") and no turn exists.
   let sawSnapshot = false, refused = false;
   state.streaming = true; state.streamStartedAt = Date.now(); setSendEnabled();
@@ -2067,7 +2067,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     if (!owns() || settled) return;
     if (e.type === "connection") {
       setPhase(e.message); paintHud();
-      // P-RECOVER.1 (ADR-0384): find out WHY instead of reconnecting blind (master turns; a lane owns its child).
+      // P-RECOVER.1 (ADR-0385): find out WHY instead of reconnecting blind (master turns; a lane owns its child).
       if (!opts.laneId) superviseRecovery({ kind: "connection", state: e.state }, true, turnHooks);
       return;
     }
@@ -2259,7 +2259,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       await run((sink) => bridge.attachChat(turnId, sink));
     } catch (error) { if (owns()) showTurnReconnect(`Unable to reconnect: ${error instanceof Error ? error.message : String(error)}`, () => void reconnect()); }
   };
-  // P-RECOVER.1 (ADR-0384): what the supervisor may do to THIS view.
+  // P-RECOVER.1 (ADR-0385): what the supervisor may do to THIS view.
   const turnHooks: RecoveryHooks = {
     alive: owns,
     defers: true,
@@ -9076,12 +9076,12 @@ async function recoverMasterTurn(): Promise<void> {
       return;
     }
     showTurnReconnect(`Connection unavailable: ${error instanceof Error ? error.message : String(error)}. Reconnect to check session status before sending.`, () => void recoverMasterTurn());
-    // P-RECOVER.1 (ADR-0384): a conversation is on screen and the engine did not answer: find out why.
+    // P-RECOVER.1 (ADR-0385): a conversation is on screen and the engine did not answer: find out why.
     superviseRecovery({ kind: "connection", state: "failed" }, false, masterRecoveryHooks(owner));
   }
 }
 
-/** P-RECOVER.1 (ADR-0384): settle what the previous run left behind. Main recorded an unclean exit (or
+/** P-RECOVER.1 (ADR-0385): settle what the previous run left behind. Main recorded an unclean exit (or
  *  the processes it stopped) before this engine started; the engine kept the previous master session id.
  *  Try that session once, VERIFIED, say plainly whether it worked, and offer the report either way.
  *  Other unseen incidents (e.g. an engine restart that reloaded this window) get the notice only. */
@@ -16725,7 +16725,7 @@ initZoom();
 initResize();
 seedThread();
 void recoverMasterTurn();
-void startupRecovery(); // P-RECOVER.1 (ADR-0384): resume the previous session after an unclean exit, report either way
+void startupRecovery(); // P-RECOVER.1 (ADR-0385): resume the previous session after an unclean exit, report either way
 // Sessions panel: remember your choice across launches; default OPEN so a past
 // conversation is one click away (it used to start collapsed → expand-then-click felt like
 // a double-click). Collapse it once and it stays collapsed.

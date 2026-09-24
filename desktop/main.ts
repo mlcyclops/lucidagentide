@@ -28,9 +28,9 @@ import { materializeLocalProviders, registerLocalProviderEgress } from "./local_
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
 import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
 import { classifyPortHolder, orphanDialog, reapSpec } from "./orphan_engine.ts"; // P-PORTGUARD.3 (ADR-0382): reap our own orphan, after a warning
-import { assessPreviousRun, freshLedger, markClean, readLedgerText, runLedgerPath, withEngine, writeLedger, type PreviousRun, type RunLedger } from "./run_ledger.ts"; // P-RECOVER.1 (ADR-0384)
-import { engineRecordFromProbe, listProcesses, planLeftovers, roleOf, stopProcesses, strictDescendants, type EngineVerdict, type ProcRow } from "./leftover_reaper.ts"; // P-RECOVER.1 (ADR-0384)
-import { recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0384)
+import { assessPreviousRun, freshLedger, markClean, readLedgerText, runLedgerPath, withEngine, writeLedger, type PreviousRun, type RunLedger } from "./run_ledger.ts"; // P-RECOVER.1 (ADR-0385)
+import { engineRecordFromProbe, listProcesses, planLeftovers, roleOf, stopProcesses, strictDescendants, type EngineVerdict, type ProcRow } from "./leftover_reaper.ts"; // P-RECOVER.1 (ADR-0385)
+import { recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_report.ts";
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
@@ -138,7 +138,7 @@ function openEngineLog(): ((d: unknown) => void) {
 }
 const appendEngineLog = (line: string): void => { try { appendFileSync(engineLogPath(), line); } catch { /* best-effort */ } };
 
-// ── P-RECOVER.1 (ADR-0384): run ledger, startup leftovers, engine restart ────────────────────────────
+// ── P-RECOVER.1 (ADR-0385): run ledger, startup leftovers, engine restart ────────────────────────────
 // run_ledger.ts decides whether the previous run died; leftover_reaper.ts decides what it provably left
 // running and stops exactly that. This is only the wiring. Every recovery writes ONE incident report
 // (incident_store.ts); the window offers it to the user, and submitting is always the user's choice.
@@ -450,7 +450,7 @@ function startDevServer(): void {
   dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
   // P-RECOVER.1: after an engine restart the OLD child's late exit must not mark the NEW engine as dead.
   dev.on("exit", (code) => { if (dev === child) engineExit = { code: code ?? null }; });
-  recordEngineInLedger(child, engineSpec.cmd); // P-RECOVER.1 (ADR-0384): the next launch's ownership proof
+  recordEngineInLedger(child, engineSpec.cmd); // P-RECOVER.1 (ADR-0385): the next launch's ownership proof
   // ADR-0246: a spawn failure (missing/blocked bun exe) used to vanish - no "error" listener, so
   // engine.log showed only the banner and the app just waited out the 30s health timeout. Tee it (and
   // feed the ADR-0259 tail + exit flag, so waitForServer bails at once and the dialog names the cause).
@@ -585,12 +585,12 @@ function createWindow(): void {
     if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
   });
   win.loadURL(`http://localhost:${PORT}`);
-  // P-RECOVER.1 (ADR-0384): a Windows log off or shutdown arrives as session-end; it is a deliberate
+  // P-RECOVER.1 (ADR-0385): a Windows log off or shutdown arrives as session-end; it is a deliberate
   // exit, so it must not surface as an unclean-shutdown incident on the next launch.
   win.on("session-end", () => markRunClean());
   win.on("closed", () => {
     win = null;
-    // P-RECOVER.1 (ADR-0384): closing the MAIN window ends the app on win32/linux, even with the agent
+    // P-RECOVER.1 (ADR-0385): closing the MAIN window ends the app on win32/linux, even with the agent
     // browser window open. Otherwise that window kept a process with no main window alive, it held the
     // single-instance lock, and every relaunch just focused nothing until the user killed LUCID by hand.
     if (process.platform === "darwin") return;
@@ -1149,7 +1149,7 @@ ipcMain.handle("lucid:openExternal", async (e, u: unknown) => {
   return openExternalHttp(u, (url) => shell.openExternal(url));
 });
 
-// P-RECOVER.1 (ADR-0384): the window lost the engine ("reconnecting" and nothing happens). Same sender
+// P-RECOVER.1 (ADR-0385): the window lost the engine ("reconnecting" and nothing happens). Same sender
 // check as openExternal: only the main window's main frame, never the agent browser or a preview frame.
 // restartEngine refuses while the engine answers the nonce health probe and runs at most once a minute.
 ipcMain.handle("lucid:engineRestart", async (e): Promise<EngineRestartResult> => {
@@ -1212,7 +1212,7 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
-  // P-RECOVER.1 (ADR-0384): read what the previous run left BEFORE this run overwrites it, then claim the
+  // P-RECOVER.1 (ADR-0385): read what the previous run left BEFORE this run overwrites it, then claim the
   // ledger for this run (clean:false until a deliberate exit marks it). A second instance never gets here,
   // so it can never touch the ledger of the run that owns the lock.
   const ledgerPath = runLedgerPath(app.getPath("userData"));
@@ -1273,7 +1273,7 @@ app.whenReady().then(async () => {
       }
     } catch (err) { console.error("[main] os_crypt canonical backfill failed:", err); }
   }
-  // P-RECOVER.1 (ADR-0384): the previous run died. Stop what the run ledger PROVES it left running, and
+  // P-RECOVER.1 (ADR-0385): the previous run died. Stop what the run ledger PROVES it left running, and
   // write the startup incident, before anything binds. What the ledger cannot prove still goes through
   // the P-PORTGUARD.3 dialog below. A clean previous run skips this entirely.
   if (previousRun.verdict === "unclean") await recoverFromUncleanExit(previousRun.ledger);

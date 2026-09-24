@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/engine_recovery.ts - P-RECOVER.1 (ADR-0384): the engine's side of self-recovery.
+// desktop/engine_recovery.ts - P-RECOVER.1 (ADR-0385): the engine's side of self-recovery.
 //
 // Three small jobs, kept out of acp_backend.ts and dev.ts so they are tested without an omp child:
 //   1. The last-session file. Whenever the master chat session id becomes non-null the engine writes

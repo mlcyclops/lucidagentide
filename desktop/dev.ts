@@ -100,9 +100,9 @@ import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; 
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
 import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from "./acp_backend.ts";
-import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0384)
-import { incidentDir, listIncidents, markIncidentSeen, readIncident, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0384)
-import { redact } from "./incident_report.ts"; // P-RECOVER.1 (ADR-0384): a window note is redacted before it is stored
+import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentDir, listIncidents, markIncidentSeen, readIncident, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import { redact } from "./incident_report.ts"; // P-RECOVER.1 (ADR-0385): a window note is redacted before it is stored
 import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
@@ -1181,7 +1181,7 @@ fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
 // the event loop is a worse bug than the stall it watches for.
 backend.startHealthWatch();
 setInterval(() => { void fleet.healthTick().catch(() => {}); }, 30_000).unref?.();
-// P-RECOVER.1 (ADR-0384): the master session the PREVIOUS engine process was talking to, read here, once,
+// P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
 // BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
 // process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
 const LAST_SESSION_FILE = lastSessionPath(PORT);
@@ -4632,7 +4632,7 @@ return Bun.serve({
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });
       }
-      // P-RECOVER.1 (ADR-0384): self-recovery the user can see. Behind the same token gate as every /api
+      // P-RECOVER.1 (ADR-0385): self-recovery the user can see. Behind the same token gate as every /api
       // route above. Every body field is type- and shape-checked before it reaches the backend or the
       // incident store (ids address files and ACP sessions, so a malformed one is a 400, never a lookup).
       // Nothing here submits anything: submission is the user opening the prefilled issue URL themselves.
@@ -4751,7 +4751,7 @@ return Bun.serve({
           }) : undefined;
           try { await execution; }
           catch (e) {
-            // P-RECOVER.1 (ADR-0384): the stream wrapper masks every error as "The chat stream failed.", which
+            // P-RECOVER.1 (ADR-0385): the stream wrapper masks every error as "The chat stream failed.", which
             // hid the one refusal the window can act on. Pass exactly that fixed text through; nothing else.
             if (!(e instanceof Error) || e.message !== TURN_ALREADY_RUNNING) throw e;
             emit({ type: "error", message: TURN_ALREADY_RUNNING });

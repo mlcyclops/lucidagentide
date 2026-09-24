@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/engine_recovery.test.ts - P-RECOVER.1 (ADR-0384): the last-session record, request validation for
+// desktop/engine_recovery.test.ts - P-RECOVER.1 (ADR-0385): the last-session record, request validation for
 // the recovery/incident routes, and the incident view the window receives.
 
 import { afterAll, describe, expect, test } from "bun:test";

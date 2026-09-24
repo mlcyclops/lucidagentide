@@ -21,7 +21,7 @@ import { isEditorSession, type EditorSession } from "./creator_editor.ts"; // CR
 import { isPipelineRunView, type PipelineRunView } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the render run view + its fail-closed shape gate
 import { isMixerTracksPayload, isRenderMixReport, type MixerTracksPayload, type RenderMixResult } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): mixer view types live there
 import type { TimelineDoc } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline document, edited in the renderer
-// P-RECOVER.1 (ADR-0384): the recovery/incident view shapes + their fail-closed gates live in the pure supervisor module.
+// P-RECOVER.1 (ADR-0385): the recovery/incident view shapes + their fail-closed gates live in the pure supervisor module.
 import {
   incidentList, isIncidentId, isIncidentView, probeFrom, recoveryStateFrom,
   type EngineProbe, type EngineRestartView, type IncidentOutcome, type IncidentView, type RecoveryRecoverView, type RecoveryResumeView, type RecoveryStateView,
@@ -1290,7 +1290,7 @@ export interface LucidBridge {
   interject(target: string, text: string): Promise<{ pending: number } | null>;
   // P-INTERJECT.1: everything running right now - master turn, live lanes, import job, agent browsers.
   processes(): Promise<ProcessView[] | null>;
-  // -- P-RECOVER.1 (ADR-0384): self-recovery + incident reports ---------------------------------------
+  // -- P-RECOVER.1 (ADR-0385): self-recovery + incident reports ---------------------------------------
   /** The previous engine's master session, the current one, and the UNSEEN incidents. Null = unreachable. */
   recoveryState(): Promise<RecoveryStateView | null>;
   /** VERIFIED resume of `sessionId` (session/load must succeed). Null = no answer. */
@@ -1345,7 +1345,7 @@ interface NativeShell {
   revealPath?(path: string): Promise<boolean>;
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
-  restartEngine?(): Promise<EngineRestartView>; // P-RECOVER.1 (ADR-0384): main restarts an unreachable engine
+  restartEngine?(): Promise<EngineRestartView>; // P-RECOVER.1 (ADR-0385): main restarts an unreachable engine
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -1381,7 +1381,7 @@ async function getData(path: string): Promise<any> {
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
 }
-// P-RECOVER.1 (ADR-0384): recovery calls run exactly when the engine may be wedged, so each one is bounded;
+// P-RECOVER.1 (ADR-0385): recovery calls run exactly when the engine may be wedged, so each one is bounded;
 // a hung request must end as "no answer", never as a supervisor that waits forever.
 async function postTimed(path: string, body: unknown, ms: number): Promise<unknown> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body), signal: AbortSignal.timeout(ms) })).json())?.data ?? null; } catch { return null; }
@@ -2080,7 +2080,7 @@ export const bridge: LucidBridge = {
   openExternal: (url) => (shell?.openExternal ? shell.openExternal(url) : Promise.resolve(false)),
   showInFolder: (path) => (shell?.showInFolder ? shell.showInFolder(path) : Promise.resolve(false)), // P-FSREVEAL.1 (ADR-0212)
   canShowInFolder: () => !!shell?.showInFolder,
-  // P-RECOVER.1 (ADR-0384): every answer is shape-checked here, so app.ts only ever sees the contract types.
+  // P-RECOVER.1 (ADR-0385): every answer is shape-checked here, so app.ts only ever sees the contract types.
   recoveryState: async () => recoveryStateFrom(await getTimed("/api/recovery/state", 10_000)),
   recoveryResume: async (sessionId) => {
     const d = await postTimed("/api/recovery/resume", { sessionId }, 60_000);

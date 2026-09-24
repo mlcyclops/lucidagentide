@@ -16,8 +16,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { LiveTurn, type TurnAttachment, type TurnSnapshot, type TurnStatus } from "./turn_recovery.ts";
-import { engineIncident, logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0384)
-import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0384)
+import { engineIncident, logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import type { IncidentEvent, IncidentKind, IncidentOutcome } from "./incident_report.ts";
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
@@ -326,7 +326,7 @@ const SESSION_MS = 30_000;   // session/new, session/set_config_option
 // Whole-completion ceiling for ONE utility extraction (spawn + handshake + session + prompt). The import
 // runs hundreds of these back-to-back behind utilLock, so one wedged call must never stall the queue.
 const COMPLETE_MS = 180_000;
-// P-RECOVER.1 (ADR-0384): a recovery's session/load is bounded. Unbounded, one hung load held the watchdog's
+// P-RECOVER.1 (ADR-0385): a recovery's session/load is bounded. Unbounded, one hung load held the watchdog's
 // healthBusy forever, so no later recovery could ever run. Generous: omp replays the whole history on load.
 const RESUME_MS = 120_000;
 /** The refusal a second concurrent chat turn gets. Exported so dev.ts can pass it through verbatim. */
@@ -435,7 +435,7 @@ function absWorkspacePath(p: string): string {
 
 class Backend {
   private acp: ACPClient | null = null;
-  // P-RECOVER.1 (ADR-0384): every write of the master session id goes through the setter, so the id is
+  // P-RECOVER.1 (ADR-0385): every write of the master session id goes through the setter, so the id is
   // persisted (dev.ts: ~/.omp/lucid-last-session-<PORT>.json) whichever of the many paths set it. That file
   // is what the NEXT engine offers to resume after an unclean exit.
   private liveSessionId: string | null = null;
@@ -749,7 +749,7 @@ class Backend {
   }
 
   private async start(): Promise<void> {
-    // P-RECOVER.1 (ADR-0384): a dead connection is ABSENT. Returning early on it (the old `if (this.acp)`)
+    // P-RECOVER.1 (ADR-0385): a dead connection is ABSENT. Returning early on it (the old `if (this.acp)`)
     // handed every caller a corpse that rejects each request with "agent process exited" until the 30s
     // watchdog noticed, and after the watchdog's budget it never did. The util connection already had
     // this rule (startUtil); the master now shares it, and resumes the session the dead child held.
@@ -1451,7 +1451,7 @@ class Backend {
   private clearTurnRecovery(): void {
     const turn = this.recoveryTurn;
     this.recoveryTurn = null;
-    // P-RECOVER.1 (ADR-0384): the session-switch wedge. Clearing only `recoveryTurn` left the cleared turn's
+    // P-RECOVER.1 (ADR-0385): the session-switch wedge. Clearing only `recoveryTurn` left the cleared turn's
     // listener armed and its session/prompt still running in omp, so every later prompt() threw "already
     // running" while /api/chat/status said idle, until the watchdog recovered ~7 minutes later. A cleared
     // turn now gives up both: omp is told to stop it (the pending request then settles as cancelled and its
@@ -2212,7 +2212,7 @@ class Backend {
     };
     const v = healthVerdict(input);
     if (v.action !== "probe" && v.action !== "recover") {
-      // P-RECOVER.1 (ADR-0384): the first frame of an episode where the ladder has given up writes ONE
+      // P-RECOVER.1 (ADR-0385): the first frame of an episode where the ladder has given up writes ONE
       // report. Before this the pin at "needs a manual restart" was silent: nothing on disk said so.
       if (this.ladderExhausted(v, input) && this.exhaustedEpisodeAt !== this.healthEpisode.startedAt) {
         this.exhaustedEpisodeAt = this.healthEpisode.startedAt;
@@ -2249,7 +2249,7 @@ class Backend {
       const pending = this.healthRecover();
       this.recovering = pending;
       const r = await pending;
-      // P-RECOVER.1 (ADR-0384): every automatic recovery leaves a report, whether or not it worked.
+      // P-RECOVER.1 (ADR-0385): every automatic recovery leaves a report, whether or not it worked.
       this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
         "The chat session stopped making progress (or its agent process exited), so LUCID's watchdog cancelled the turn, restarted the agent process, and tried to resume the same session.",
         [{ at: now, what: v.reason }, { at: Date.now(), what: !r.ok ? `The recovery did not complete (${r.error ?? "unknown error"}).` : hadSession ? "The agent process was restarted and the chat session was resumed." : "The agent process was restarted. No chat session was open." }]);
@@ -2278,7 +2278,7 @@ class Backend {
     return resumeId ? this.loadVerified(resumeId) : { ok: true };
   }
 
-  // -- P-RECOVER.1 (ADR-0384): self-recovery the user can see, and a report of every one ------------------
+  // -- P-RECOVER.1 (ADR-0385): self-recovery the user can see, and a report of every one ------------------
 
   /** `session/load` on the live master, VERIFIED: the one resume primitive the watchdog, the on-demand
    *  revival and the recovery API share. Success restores the id; failure leaves it null so the next prompt

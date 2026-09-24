@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/incident_report.ts - P-RECOVER.1 (ADR-0384): the self-recovery incident report.
+// desktop/incident_report.ts - P-RECOVER.1 (ADR-0385): the self-recovery incident report.
 //
 // When LUCID recovers itself (a previous run that did not exit cleanly, leftover processes from that
 // run, an agent child that died or wedged, an engine that stopped answering) it writes ONE incident

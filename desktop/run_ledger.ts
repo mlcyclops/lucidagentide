@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/run_ledger.ts - P-RECOVER.1 (ADR-0384): did the previous run exit cleanly, and what did it start?
+// desktop/run_ledger.ts - P-RECOVER.1 (ADR-0385): did the previous run exit cleanly, and what did it start?
 //
 // The Electron main process keeps ONE small file, <userData>/run-state.json, for the life of a run:
 //   - written with clean:false the moment this process wins the single-instance lock,

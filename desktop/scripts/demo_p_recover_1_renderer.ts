@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-RECOVER.1 (ADR-0384), renderer slice. Proves against the BUILT bundle (the bytes the engine
+// Increment P-RECOVER.1 (ADR-0385), renderer slice. Proves against the BUILT bundle (the bytes the engine
 // serves, ADR-0303) that:
 //   (1) build-renderer succeeds with the recovery supervisor, notice and Submit dialog wired in;
 //   (2) the served renderer calls every recovery/incident route of the contract and the restart IPC;

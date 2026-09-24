@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/incident_notice.ts - P-RECOVER.1 (ADR-0384): the recovery notice at the thread tail and
+// desktop/renderer/incident_notice.ts - P-RECOVER.1 (ADR-0385): the recovery notice at the thread tail and
 // the incident Submit dialog.
 //
 // Security first, in three ways:

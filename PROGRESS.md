@@ -4,7 +4,7 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
-## P-RECOVER.1: self-recovery at startup and mid-session, with incident reports (ADR-0384)
+## P-RECOVER.1: self-recovery at startup and mid-session, with incident reports (ADR-0385)
 - **shipped:** session-switch wedge fix (the logged "A chat turn is already running"), on-demand revival of a dead master omp with the same session, Windows tree-kill in ACPClient.stop(), EPIPE-proof gate notices; run ledger + ledger-proven leftover reaper at launch (live-proven on Windows: only the recorded tree died, a same-image stranger survived), verified resume of the previous session, second-instance always yields a window, closing the main window quits; bounded renderer supervisor (probe, reattach, recover agent, restart engine via guarded IPC, give up) and startup/incident notices with a summary-only public-issue submit dialog; incident store with redaction. Tests: incident 7, engine recovery 15, ledger+reaper 20, supervisor 26; wedge, tree-kill and EPIPE tests each fail on the pre-fix code. Full suite 5606/0, three typechecks clean. Smoke: an isolated source engine on 5391 resumed the seeded previous session, settled the startup incident, revived a killed agent in place, and the renderer showed the notice, the submit dialog, and a terminating give-up when the engine died.
 - **stubbed:** nothing. Not exercised in a real Electron run: second-instance reopen, close-with-agent-window quit, the engineRestart IPC end to end (unit-level and smoke coverage only).
 - **next:** decide the incident destination (public issues vs private channel); move agent_run.ts off Bun.spawnSync and tree-kill its timeout.

@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { ScannerClient } from "../security/scanner_client.ts";
 import { scanAndDecide, type GatePolicy } from "../security/gate.ts";
 import { buildNotification, summarizeNotification } from "../security/notification.ts";
-import { writeStderrNotice } from "./stderr_notice.ts"; // P-RECOVER.1 (ADR-0384): a closed stderr never crashes omp
+import { writeStderrNotice } from "./stderr_notice.ts"; // P-RECOVER.1 (ADR-0385): a closed stderr never crashes omp
 import type { Db } from "../memory/db.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -162,7 +162,7 @@ export default function securityExtension(pi: any): void {
       return;
     }
 
-    // P-RECOVER.1 (ADR-0384): everything between the decision and the return is advisory. A throw in the
+    // P-RECOVER.1 (ADR-0385): everything between the decision and the return is advisory. A throw in the
     // notice (a closed stderr raised EPIPE here and crashed omp) or in the bookkeeping must never skip
     // the block, so the return below is reached unconditionally.
     try {

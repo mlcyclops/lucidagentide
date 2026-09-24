@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/recovery_supervisor.test.ts - P-RECOVER.1 (ADR-0384). The supervisor exists because a
+// desktop/renderer/recovery_supervisor.test.ts - P-RECOVER.1 (ADR-0385). The supervisor exists because a
 // prompt sat on "reconnecting" forever. These defend the two things that matter: each remedy is chosen
 // for the right observation, and every path ENDS (a remedy used once is never asked for again).
 

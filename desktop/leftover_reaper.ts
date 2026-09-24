@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/leftover_reaper.ts - P-RECOVER.1 (ADR-0384): stop what the previous run PROVABLY left behind.
+// desktop/leftover_reaper.ts - P-RECOVER.1 (ADR-0385): stop what the previous run PROVABLY left behind.
 //
 // When the run ledger (run_ledger.ts) says the previous run did not exit cleanly, the processes that run
 // started may still be alive: its engine, the omp agent under it, whisper, headroom, the scanner. They hold

@@ -199,7 +199,7 @@ export class ACPClient {
 
   stop(): void {
     const proc = this.proc;
-    // P-RECOVER.1 (ADR-0384): on Windows `omp.exe` is a Bun shim and the real agent is a `bun.exe cli.js`
+    // P-RECOVER.1 (ADR-0385): on Windows `omp.exe` is a Bun shim and the real agent is a `bun.exe cli.js`
     // GRANDCHILD. kill() ends only the shim, so the agent outlived stop() until it noticed stdin EOF (or
     // never, when wedged). taskkill /T ends the whole tree. Ownership is proven: this is the pid WE
     // spawned and it has not exited (a reused pid is impossible while our handle is still live), and

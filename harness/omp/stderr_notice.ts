@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/omp/stderr_notice.ts - P-RECOVER.1 (ADR-0384): an advisory stderr line that can never crash omp.
+// harness/omp/stderr_notice.ts - P-RECOVER.1 (ADR-0385): an advisory stderr line that can never crash omp.
 //
 // The field crash: omp died with an uncaught `EPIPE: broken pipe, write` thrown from the security gate's
 // block notice (`process.stderr.write`) after the desktop side of the pipe had gone away. omp fails CLOSED

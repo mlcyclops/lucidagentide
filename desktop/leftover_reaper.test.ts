@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-RECOVER.1 (ADR-0384): the ownership proof that lets startup stop leftovers WITHOUT asking. A wrong
+// P-RECOVER.1 (ADR-0385): the ownership proof that lets startup stop leftovers WITHOUT asking. A wrong
 // "ours" force-kills a user's process; a wrong "not ours" strands the port and the omp session. Both
 // directions are pinned, including the Windows quirks (recycled pids, stale ParentProcessId).
 
