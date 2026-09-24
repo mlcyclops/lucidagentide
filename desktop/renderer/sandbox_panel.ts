@@ -1,11 +1,11 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/sandbox_panel.ts — P-SANDBOX.5 (ADR-0169): the "Runtime sandbox" Security-panel section.
+// desktop/renderer/sandbox_panel.ts - P-SANDBOX.5 (ADR-0169): the "Runtime sandbox" Security-panel section.
 //
 // PURE (the format.ts / model_favorites.ts builder convention): a SandboxStatus in → the accordion HTML
 // out. Surfaces what P-SANDBOX.1-.4 built but hid: is THIS session's exec runtime-isolated (bwrap /
-// Seatbelt), the disclosed passthrough, or fail-closed BLOCKED — plus whether subprocess egress is
+// Seatbelt), the disclosed passthrough, or fail-closed BLOCKED - plus whether subprocess egress is
 // mediated, and the recent reach-outs the proxy REFUSED (the DNS-TXT exfils it caught). Metadata only.
 
 import { accordion } from "./dom.ts";
@@ -26,7 +26,7 @@ const BACKEND_LABEL: Record<string, string> = {
 export function controlSection(c: SandboxControlView | undefined): string {
   if (!c?.available) return "";
   if (c.policyLocked) {
-    return `<div class="sbx-row muted"><span>The sandbox is <b>required by your organization's policy</b> and cannot be turned off here.</span></div>`;
+    return `<div class="sbx-row muted"><span>Your organization's policy keeps the sandbox <b>on</b>. It cannot be turned off here.</span></div>`;
   }
   if (c.userOff) {
     const remove = c.registered
@@ -47,22 +47,22 @@ function postureLine(s: SandboxStateView, c?: SandboxControlView): string {
   }
   if (s.execBlocked) {
     return `<div class="sbx-row bad"><span class="pill quarantined">exec blocked</span>
-      <span>Exec is <b>fail-closed BLOCKED</b> — managed policy requires runtime isolation and none is available. ${esc(s.execBlocked)}</span></div>`;
+      <span>Exec is <b>fail-closed BLOCKED</b> - managed policy requires runtime isolation and none is available. ${esc(s.execBlocked)}</span></div>`;
   }
   if (s.isolated) {
     return `<div class="sbx-row good"><span class="pill">${icon("shield", 12)} isolated</span>
-      <span>Exec runs runtime-isolated via <b>${esc(BACKEND_LABEL[s.backend ?? "noop"] ?? s.backend ?? "?")}</b> — declared network/exec caps enforced.</span></div>`;
+      <span>Exec runs runtime-isolated via <b>${esc(BACKEND_LABEL[s.backend ?? "noop"] ?? s.backend ?? "?")}</b> - declared network/exec caps enforced.</span></div>`;
   }
   return `<div class="sbx-row warn"><span class="pill dismissed">not isolated</span>
-    <span>Exec is <b>not runtime-isolated</b> on ${esc(s.platform)} (disclosed passthrough). The argv gate + in-process scanner still apply; no capable sandbox backend on this host — on Windows the bundled lucid-appcontainer helper is missing or failed its containment probe.</span></div>`;
+    <span>Exec is <b>not runtime-isolated</b> on ${esc(s.platform)} (disclosed passthrough). The argv gate + in-process scanner still apply; no capable sandbox backend on this host - on Windows the bundled lucid-appcontainer helper is missing or failed its containment probe.</span></div>`;
 }
 
 /** The mediated-egress line (only meaningful when isolated). Pure. */
 function egressLine(s: SandboxStateView): string {
   if (!s.isolated) return "";
   return s.proxied
-    ? `<div class="sbx-row good"><span class="pill">${icon("shield", 12)} mediated</span><span>Subprocess egress is routed through the loopback proxy — every DNS/CONNECT is decided by your egress policy.</span></div>`
-    : `<div class="sbx-row warn"><span class="pill dismissed">network-off</span><span>No egress proxy this session — subprocess network is denied (fail-closed).</span></div>`;
+    ? `<div class="sbx-row good"><span class="pill">${icon("shield", 12)} mediated</span><span>Subprocess egress is routed through the loopback proxy - every DNS/CONNECT is decided by your egress policy.</span></div>`
+    : `<div class="sbx-row warn"><span class="pill dismissed">network-off</span><span>No egress proxy this session - subprocess network is denied (fail-closed).</span></div>`;
 }
 
 const GRANT_MODE_LABEL: Record<string, string> = { rx: "read-only", rw: "read-write" };
@@ -71,6 +71,8 @@ const GRANT_MODE_LABEL: Record<string, string> = { rx: "read-only", rw: "read-wr
  *  itself; the panel never sends a path. Shown whenever the Windows sandbox can be used. Pure. */
 export function addFolderRow(c: SandboxControlView | undefined): string {
   if (!c?.available) return "";
+  // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list; a note, never a button.
+  if (c.foldersLocked) return `<div class="sbx-row muted"><span>Your organization manages which folders the sandbox can reach. Ask your administrator to add one.</span></div>`;
   return `<div class="sbx-ctl"><div class="sbx-ctl-txt">Give the sandbox access to another folder. Windows opens its folder picker; nothing is granted until you choose one.</div>
     <div class="sbx-ctl-btns"><button class="btn-mini ok" data-sbx-add="rx" data-tip="Add folder (read-only)|The agent can read this folder but not change it.">${icon("plus", 13)} Add folder (read-only)</button><button class="btn-mini" data-sbx-add="rw" data-tip="Add folder (read-write)|The agent can read, create and change files in this folder.">${icon("plus", 13)} Add folder (read-write)</button></div></div>`;
 }
@@ -82,7 +84,7 @@ function runtimeFoldersSection(folders: RuntimeFolderView[]): string {
     .map((f) => `<div class="sbx-grant"><div class="sbx-grant-head"><span class="pill${f.mode === "rw" ? " dismissed" : ""}">${GRANT_MODE_LABEL[f.mode] ?? f.mode}</span><b class="sbx-host" title="${esc(f.path)}">${esc(f.path)}</b></div>
       <div class="sbx-blk-reason">${esc(f.why)}</div></div>`)
     .join("");
-  return `<div class="sbx-blocks"><div class="sbx-blocks-hd">${icon("shield", 13)} Always allowed (LUCID's runtime)</div>${rows}</div>`;
+  return `<div class="sbx-blocks"><div class="sbx-blocks-hd">${icon("shield", 13)} Always allowed (LUCID's runtime and your organization's policy)</div>${rows}</div>`;
 }
 
 /** P-SANDBOX.8: the user-approved standing directory grants (AppContainer ACEs), each with Revoke.
@@ -102,7 +104,7 @@ function grantsSection(grants: SandboxGrantView[]): string {
 
 /**
  * Render the "Runtime sandbox" accordion. Empty string until the first omp spawn resolves a state
- * (nothing to show yet) — unless standing directory grants exist, which must stay visible/revocable
+ * (nothing to show yet) - unless standing directory grants exist, which must stay visible/revocable
  * even before a spawn. `open` controls the initial expanded state.
  */
 export function renderSandboxSection(status: SandboxStatusView | null | undefined, open = false): string {

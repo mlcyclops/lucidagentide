@@ -22,11 +22,15 @@ export interface SandboxControlView {
   userOff: boolean;
   policyLocked: boolean;
   registered: boolean;
+  /** P-SANDBOX.14 (ADR-0394): managed policy stops users adding folders; the panel shows a note instead. */
+  foldersLocked: boolean;
 }
 
-export function sandboxControlView(i: { platform: string; helperBundled: boolean; mode?: SandboxWindowsMode; policyRequiresIsolation: boolean; registered: boolean }): SandboxControlView {
+/** `policyRequiresIsolation` is "policy keeps the switch on" (managedSandboxLocksOn: exec.requireIsolation
+ *  OR sandbox.allowUserOff === false). */
+export function sandboxControlView(i: { platform: string; helperBundled: boolean; mode?: SandboxWindowsMode; policyRequiresIsolation: boolean; registered: boolean; foldersLocked?: boolean }): SandboxControlView {
   const available = i.platform === "win32" && i.helperBundled;
-  return { available, userOff: available && i.mode === "off" && !i.policyRequiresIsolation, policyLocked: i.policyRequiresIsolation, registered: available && i.registered };
+  return { available, userOff: available && i.mode === "off" && !i.policyRequiresIsolation, policyLocked: i.policyRequiresIsolation, registered: available && i.registered, foldersLocked: !!i.foldersLocked };
 }
 
 /** Does this spawn honor the user's Off? Only when policy does not require isolation (policy wins). */
@@ -73,6 +77,59 @@ export function refuseGrantPath(path: string, home: string): string | null {
   return null;
 }
 
+/** P-SANDBOX.14 (ADR-0394): may a user-initiated folder grant (panel or agent tool) proceed? Null when
+ *  allowed, else the sentence shown. Revoking is never refused: it only narrows access. */
+export function refuseUserFolderAdd(v: SandboxControlView): string | null {
+  if (!v.available) return "the Windows sandbox helper is not available on this host";
+  if (v.foldersLocked) return "your organization manages which folders the sandbox can reach; ask your administrator to add one";
+  return null;
+}
+
+/** PURE: expand a policy folder for this user. `%NAME%` reads `env` (case-insensitive, as Windows does) and
+ *  a leading `~` is `home`. An unknown variable yields null: never guess at a path an admin did not mean. */
+export function expandPolicyPath(raw: string, env: Record<string, string | undefined>, home: string): string | null {
+  const lookup = new Map(Object.entries(env).map(([k, v]) => [k.toLowerCase(), v]));
+  let missing = false;
+  let out = raw.trim().replace(/%([^%]+)%/g, (_m, name: string) => {
+    const v = lookup.get(name.toLowerCase());
+    if (!v) { missing = true; return ""; }
+    return v;
+  });
+  if (missing || !out) return null;
+  if (out === "~" || out.startsWith("~\\") || out.startsWith("~/")) out = home + out.slice(1);
+  return out.replace(/\//g, "\\").replace(/\\+$/, "");
+}
+
+export interface PolicyFolderPlan {
+  grantRx: string[];
+  grantRw: string[];
+  /** Each skipped entry and why, for the engine log (an admin typo must be visible, never silent). */
+  skipped: { entry: string; why: string }[];
+}
+
+/** PURE: turn the managed folder lists into the grants a contained spawn carries. Each entry is expanded,
+ *  bounded by refuseGrantPath (policy may widen access, but never to a drive root, the whole profile or
+ *  the OS dirs), and kept only when `isDir` says it exists (the helper fails the spawn on a missing path).
+ *  A folder in both lists is granted read-write once. */
+export function policyFolderPlan(i: { read: string[]; readWrite: string[]; env: Record<string, string | undefined>; home: string; isDir: (p: string) => boolean }): PolicyFolderPlan {
+  const plan: PolicyFolderPlan = { grantRx: [], grantRw: [], skipped: [] };
+  const seen = new Set<string>();
+  const take = (entry: string, into: string[]) => {
+    const path = expandPolicyPath(entry, i.env, i.home);
+    if (!path) { plan.skipped.push({ entry, why: "an environment variable in it is not set" }); return; }
+    const refused = refuseGrantPath(path, i.home);
+    if (refused) { plan.skipped.push({ entry, why: refused }); return; }
+    const key = path.toLowerCase();
+    if (seen.has(key)) return;
+    if (!i.isDir(path)) { plan.skipped.push({ entry, why: "no such folder on this machine" }); return; }
+    seen.add(key);
+    into.push(path);
+  };
+  for (const e of i.readWrite) take(e, plan.grantRw);
+  for (const e of i.read) take(e, plan.grantRx);
+  return plan;
+}
+
 export interface RuntimeFolderView {
   path: string;
   mode: "rx" | "rw";
@@ -81,8 +138,11 @@ export interface RuntimeFolderView {
 
 /** PURE: the folders LUCID itself gives the contained agent so it can run (see appContainerRuntimeGrants),
  *  labelled for the panel, so the list the user sees is the COMPLETE answer to "what can it reach". */
-export function runtimeFolderView(i: { workspace: string; grantRx: string[]; grantRw: string[]; tmpDir: string }): RuntimeFolderView[] {
+export function runtimeFolderView(i: { workspace: string; grantRx: string[]; grantRw: string[]; tmpDir: string; policy?: PolicyFolderPlan }): RuntimeFolderView[] {
   const out: RuntimeFolderView[] = [{ path: i.workspace, mode: "rw", why: "the current workspace" }];
+  // P-SANDBOX.14 (ADR-0394): the admin-approved folders come first after the workspace, labelled as policy.
+  for (const p of i.policy?.grantRw ?? []) out.push({ path: p, mode: "rw", why: "allowed by your organization's policy" });
+  for (const p of i.policy?.grantRx ?? []) out.push({ path: p, mode: "rx", why: "allowed by your organization's policy" });
   for (const p of i.grantRw) out.push({ path: p, mode: "rw", why: "the agent's own state (sessions, settings, audit)" });
   for (const p of i.grantRx) out.push({ path: p, mode: "rx", why: "LUCID's runtime (app files, bun, your shell)" });
   return out.filter((f) => f.path !== i.tmpDir);

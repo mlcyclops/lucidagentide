@@ -495,8 +495,8 @@ export class NoopBackend implements SandboxBackend {
  *  audit trail is greppable (mirrors the ext_parity discipline for the gate's block line). */
 export function sandboxDisclosure(platform: NodeJS.Platform = process.platform): string {
   return (
-    `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) — no sandbox backend available. ` +
-    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs a WORKING lucid-appcontainer helper — missing here, or it failed its containment probe).`
+    `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) - no sandbox backend available. ` +
+    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs a WORKING lucid-appcontainer helper - missing here, or it failed its containment probe).`
   );
 }
 
@@ -552,7 +552,7 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
       reason:
         platform === "linux"
           ? which("bwrap")
-            ? "managed policy requires runtime isolation, but bwrap cannot create a user namespace on this host — Ubuntu/Debian 24.04+ block unprivileged user namespaces via AppArmor (allow with `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or ship an AppArmor profile for bwrap)"
+            ? "managed policy requires runtime isolation, but bwrap cannot create a user namespace on this host - Ubuntu/Debian 24.04+ block unprivileged user namespaces via AppArmor (allow with `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or ship an AppArmor profile for bwrap)"
             : "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
           : platform === "darwin"
             ? which("sandbox-exec")
@@ -560,7 +560,7 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
               : "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
             : platform === "win32"
               ? which(opts.appContainerHelper ?? "lucid-appcontainer")
-                ? "managed policy requires runtime isolation, but the lucid-appcontainer helper failed its containment probe on this host — the smallest real AppContainer could not be established (profile creation or the workspace ACL grant refused); exec would be fail-closed blocked by the helper anyway"
+                ? "managed policy requires runtime isolation, but the lucid-appcontainer helper failed its containment probe on this host - the smallest real AppContainer could not be established (profile creation or the workspace ACL grant refused); exec would be fail-closed blocked by the helper anyway"
                 : "managed policy requires runtime isolation, but the lucid-appcontainer helper is not installed (Windows AppContainer; `<repo>/bin/lucid-appcontainer.exe`, built by `make build-appcontainer`)"
               : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet`,
     };
@@ -584,14 +584,14 @@ export function wrapForProfile(o: {
 }): SandboxDecision {
   if (!o.resolution.ok) return { action: "refuse", reason: o.resolution.reason };
   if (!o.caps.canExec) {
-    return { action: "refuse", reason: "profile forbids exec (canExec=false) — refusing to spawn an exec-capable agent process" };
+    return { action: "refuse", reason: "profile forbids exec (canExec=false) - refusing to spawn an exec-capable agent process" };
   }
   const { backend, disclosed } = o.resolution;
   if (!o.caps.canNetwork && !backend.isolates) {
     return {
       action: "refuse",
       reason:
-        "profile requires network isolation (canNetwork=false) but no isolating backend is available — " +
+        "profile requires network isolation (canNetwork=false) but no isolating backend is available - " +
         "refusing rather than running networked (fail-closed)",
     };
   }

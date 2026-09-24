@@ -145,3 +145,26 @@ test("the section lists user folders (with Revoke) and LUCID's always-allowed fo
   expect(h).toContain("the current workspace");
   expect((h.match(/data-grant-revoke/g) ?? []).length).toBe(1); // the runtime folders are not revocable
 });
+
+// ── P-SANDBOX.14 (ADR-0394): managed folders, and no em dashes anywhere in the section ──
+test("policy-managed folders: a note replaces the Add folder buttons, revoking stays available", () => {
+  const h = addFolderRow({ ...ctl(), foldersLocked: true });
+  expect(h).toContain("Your organization manages");
+  expect(h).not.toContain("data-sbx-add");
+  const full = renderSandboxSection({ state: null, egressBlocks: [], control: { ...ctl(), foldersLocked: true }, grants: [{ path: "D:\\x", mode: "rx", grantedAt: "2026-09-24T00:00:00.000Z", reason: "r" }] });
+  expect(full).toContain("data-grant-revoke");
+});
+
+test("the Runtime sandbox section never renders an em dash", () => {
+  const states: SandboxStateView[] = [
+    { backend: "appcontainer", isolated: true, disclosed: false, platform: "win32", execBlocked: null, proxied: true, at: "" },
+    { backend: "appcontainer", isolated: true, disclosed: false, platform: "win32", execBlocked: null, proxied: false, at: "" },
+    { backend: "noop", isolated: false, disclosed: true, platform: "win32", execBlocked: null, proxied: false, at: "" },
+    { backend: null, isolated: false, disclosed: false, platform: "win32", execBlocked: "x", proxied: false, at: "" },
+  ];
+  const controls = [ctl(), ctl({ userOff: true }), ctl({ policyLocked: true }), { ...ctl(), foldersLocked: true }];
+  for (const state of states) for (const control of controls) {
+    const h = renderSandboxSection({ state, egressBlocks: [{ channel: "http", host: "h", reason: "r", at: "" } as never], control, grants: [{ path: "D:\\x", mode: "rx", grantedAt: "2026-09-24T00:00:00.000Z", reason: "r" }], runtimeFolders: [{ path: "C:\\ws", mode: "rw", why: "w" }] }, true);
+    expect(h).not.toContain("\u2014");
+  }
+});

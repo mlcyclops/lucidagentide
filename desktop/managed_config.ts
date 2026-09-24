@@ -83,10 +83,27 @@ export interface ManagedLoopPolicy {
   lock?: boolean;
 }
 
+/** P-SANDBOX.14 (ADR-0394): governance for the Windows AppContainer sandbox the user controls from the
+ *  Security panel (ADR-0390 switch, ADR-0391 folders). `allowUserOff: false` locks the switch ON without
+ *  the fail-closed exec block that `exec.requireIsolation` adds; the folder lists are admin-approved grants
+ *  applied at every contained spawn (still bounded by refuseGrantPath); `lockUserFolders` stops users and
+ *  the agent from adding folders of their own (revoking stays allowed, it only narrows access). */
+export interface ManagedSandboxPolicy {
+  /** false: the user cannot turn the Windows sandbox off. Absent or true: the switch is the user's. */
+  allowUserOff?: boolean;
+  /** Folders the contained agent may read. `%VAR%` and a leading `~` expand per user. */
+  readFolders?: string[];
+  /** Folders the contained agent may read and write. */
+  readWriteFolders?: string[];
+  /** Users (and the agent's sandbox_grant_dir tool) may not add folders; only the policy lists apply. */
+  lockUserFolders?: boolean;
+}
+
 export interface ManagedSecurity {
   exec?: ManagedExecPolicy;
   egress?: ManagedEgressPolicy;
   loop?: ManagedLoopPolicy;
+  sandbox?: ManagedSandboxPolicy;
 }
 
 /** SIEM/audit sink configuration, consumed by ADR-0069 (P-ENT.2). Schema only here; the dispatcher +
@@ -324,7 +341,15 @@ export function parseRegistryPolicy(regOutput: string): ManagedConfig | null {
   const loopTier = str("LoopMaxAutoTier"); if (isRiskTier(loopTier)) loop.maxAutoTier = loopTier;
   const loopLock = bool("LoopLock"); if (loopLock !== undefined) loop.lock = loopLock;
 
+  // P-SANDBOX.14 (ADR-0394): the Windows sandbox switch and folders.
+  const sandbox: ManagedSandboxPolicy = { ...(cfg.security?.sandbox ?? {}) };
+  const sbOff = bool("SandboxAllowUserOff"); if (sbOff !== undefined) sandbox.allowUserOff = sbOff;
+  const sbRead = list("SandboxReadFolders"); if (sbRead) sandbox.readFolders = sbRead;
+  const sbRw = list("SandboxReadWriteFolders"); if (sbRw) sandbox.readWriteFolders = sbRw;
+  const sbLock = bool("SandboxLockFolders"); if (sbLock !== undefined) sandbox.lockUserFolders = sbLock;
+
   const security: ManagedSecurity = { ...(cfg.security ?? {}) };
+  if (Object.keys(sandbox).length) security.sandbox = sandbox;
   if (Object.keys(exec).length) security.exec = exec;
   if (Object.keys(egress).length) security.egress = egress;
   if (Object.keys(loop).length) security.loop = loop;
@@ -376,7 +401,7 @@ export function mergeManaged(base: ManagedConfig | null, over: ManagedConfig | n
   const merged: ManagedConfig = { ...base, ...over };
   if (base.security || over.security) {
     const sec: ManagedSecurity = { ...(base.security ?? {}), ...(over.security ?? {}) };
-    for (const k of ["exec", "egress", "loop"] as const) {
+    for (const k of ["exec", "egress", "loop", "sandbox"] as const) {
       const b = base.security?.[k]; const o = over.security?.[k];
       if (b || o) (sec as Record<string, unknown>)[k] = { ...(b ?? {}), ...(o ?? {}) };
     }
@@ -430,6 +455,25 @@ export function managedAsksageOnly(mc: ManagedConfig | null = managedConfig().co
  *  passthrough). Pure when given `mc`. */
 export function managedRequireIsolation(mc: ManagedConfig | null = managedConfig().config): boolean {
   return !!mc?.security?.exec?.requireIsolation;
+}
+
+/** P-SANDBOX.14 (ADR-0394): does policy keep the Windows sandbox switch ON? Either knob does:
+ *  exec.requireIsolation (which also blocks exec when isolation is unavailable) or sandbox.allowUserOff
+ *  === false (which only removes the user's Off). Pure when given `mc`. */
+export function managedSandboxLocksOn(mc: ManagedConfig | null = managedConfig().config): boolean {
+  return managedRequireIsolation(mc) || mc?.security?.sandbox?.allowUserOff === false;
+}
+
+/** P-SANDBOX.14: may users (and the agent) add sandbox folders of their own? Pure when given `mc`. */
+export function managedSandboxFoldersLocked(mc: ManagedConfig | null = managedConfig().config): boolean {
+  return !!mc?.security?.sandbox?.lockUserFolders;
+}
+
+/** P-SANDBOX.14: the admin-approved folder lists, unexpanded (sandbox_control.policyFolderPlan resolves
+ *  them). Non-string entries are dropped. Pure when given `mc`. */
+export function managedSandboxFolders(mc: ManagedConfig | null = managedConfig().config): { read: string[]; readWrite: string[] } {
+  const clean = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : []);
+  return { read: clean(mc?.security?.sandbox?.readFolders), readWrite: clean(mc?.security?.sandbox?.readWriteFolders) };
 }
 
 /** ADR-0103 (P-FS.1): the managed folder-browser/workspace root allowlist, or null when unmanaged

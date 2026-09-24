@@ -139,7 +139,7 @@ export interface SandboxBlockView { host: string; channel: string; type: string;
 // P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
 export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: string; reason: string }
 // P-SANDBOX.12 (ADR-0390): what the panel's sandbox switch may offer (see desktop/sandbox_control.ts).
-export interface SandboxControlView { available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean }
+export interface SandboxControlView { available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean }
 // P-SANDBOX.13 (ADR-0391): a folder LUCID itself grants the contained agent (listed read-only in the panel).
 export interface RuntimeFolderView { path: string; mode: "rx" | "rw"; why: string }
 export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[]; grants?: SandboxGrantView[]; control?: SandboxControlView; runtimeFolders?: RuntimeFolderView[] }
