@@ -37,6 +37,7 @@ import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrow
 import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
 import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
+import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
 
 // CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
 // Order: an explicit env var (launcher / dev run), then the packaged package.json's `lucidBuildFlavor`
@@ -570,6 +571,14 @@ ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
 // AUTH: this parent cannot read the child's token, so it MINTS the per-launch token itself and hands it
 // down via the spawn env (LUCID_MAIN_TOKEN, adopted by dev.ts as TOKEN); every call sends x-lucid-token.
 const MAIN_TOKEN = randomBytes(32).toString("hex");
+// P-SANDBOX.15 (ADR-0396): the renderer gets MAIN_TOKEN over this synchronous IPC (preload `lucid.token()`),
+// no longer from a <meta> tag in the served HTML, which any local process could fetch with no token at all.
+// Answered only for the app window's own engine document; anything else (the agent browser window, a page the
+// window was somehow navigated to) gets "" and its /api calls are refused (fail-closed).
+ipcMain.on("lucid:token", (e) => {
+  const ours = !!win && !win.isDestroyed() && e.sender === win.webContents && isEngineDocument(e.senderFrame?.url, PORT);
+  e.returnValue = ours ? MAIN_TOKEN : "";
+});
 // P-PORTGUARD.1 (ADR-0305): per-launch engine identity. Handed to the spawned engine via env; the engine
 // echoes it in /api/health, and waitForServer only trusts a health answer carrying THIS value. A squatter
 // that won the port bind race cannot know it, so the window never renders a stranger.

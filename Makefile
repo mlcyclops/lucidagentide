@@ -713,6 +713,10 @@ demo-P-SANDBOX.13: ## P-SANDBOX.13 (ADR-0391): Add folder (read-only / read-writ
 demo-P-SANDBOX.14: ## P-SANDBOX.14 (ADR-0394): enterprise policy for the Windows sandbox - SandboxAllowUserOff=0 keeps the switch on, SandboxReadFolders / SandboxReadWriteFolders apply admin folders at every contained spawn (bounded like a user pick, %VAR% expanded), SandboxLockFolders stops user and agent folder adds (revoke still works)
 	$(BUN) run harness/scripts/demo_p_sandbox_14.ts
 
+.PHONY: demo-P-SANDBOX.15
+demo-P-SANDBOX.15: ## P-SANDBOX.15 (ADR-0396): the omp child gets its own AGENT token (accepted only on the routes it calls, never on approve / the sandbox switch / Add folder), no longer inherits LUCID_MAIN_TOKEN, and under Electron the served HTML carries no token (the window gets it from main over IPC)
+	$(BUN) run harness/scripts/demo_p_sandbox_15.ts
+
 .PHONY: build-appcontainer
 build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into bin/ (ships via the `repo` extraResources; resolveBackend probes <repo>/bin first, PATH second)
 	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile bin/lucid-appcontainer.exe

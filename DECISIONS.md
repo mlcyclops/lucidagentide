@@ -24065,3 +24065,27 @@ Separately, `modelCtx` looked up only the AskSage/Anthropic-stripped id, so any 
 **Decision.** `build-desktop.yml` gains a `beta_release` dispatch input. On master, it builds the version committed in `desktop/package.json` verbatim, and the existing attach step runs with `tag_name: v<version>` and `target_commitish: <this commit>`, so `softprops/action-gh-release` creates the tag and the prerelease through the API. Fail-closed guards in the version step: the version must be a prerelease (`x.y.z-<pre>`), the run must be on master, and `publish_latest` must be off. The release is always a prerelease and never marked latest, and the Homebrew cask job stays tag-push-only, so stable users and `brew upgrade` never see a beta. Pushing a tag keeps working exactly as before.
 
 **Consequences.** A beta can be cut by anyone who can run the workflow, without local git access. The tag is created with `GITHUB_TOKEN`, which by design does not start another workflow run, so the release is built once (by the dispatch), not twice.
+
+## ADR-0396 -- P-SANDBOX.15: the agent gets its own, narrower loopback token (2026-09-24)
+
+**Context.** ADR-0024 protects the engine's `/api` surface with a per-launch token: the renderer sends it in `x-lucid-token`, and a few routes also accept it as `?t=` because the omp child (or an iframe) cannot set a header. Three paths gave that same UI token to the agent:
+1. Every `LUCID_*_URL` handed to the omp child and the fleet lanes carried `?t=<TOKEN>`. The engine accepts that token in a header on every route, so the agent could call human-only routes such as `/api/security/approve`, the sandbox switch, or Add folder.
+2. Under Electron the engine adopts the token from `LUCID_MAIN_TOKEN`, and the children inherit `process.env`, so they held that variable too.
+3. `GET /` needs no token, and the served HTML carried it in `<meta name="lucid-token">`. Any local process, including the agent's own `curl` from inside the AppContainer (whose loopback exemption reaches the engine), could read it.
+
+P-SANDBOX.13 designed around this (the Add folder route never accepts a path from the caller); this increment removes the exposure.
+
+**Decision.**
+- **A second token.** dev.ts mints `AGENT_TOKEN` per launch. Every child URL carries it, never the UI token. `apiAuthorized` (`desktop/origin_guard.ts`, pure) accepts it by header or `?t=` only on `AGENT_ROUTES`: the child-called routes, which are every `?t=` route except the renderer iframe's `/api/preview/serve`. The UI token keeps its old reach. Anything else, including an empty or unset token, is refused.
+- **No inherited main token.** dev.ts records whether a main launched it (`HAS_MAIN`), then deletes `LUCID_MAIN_TOKEN` from `process.env` before the server starts or any child spawns.
+- **No token in the HTML under Electron.**
+  - The engine skips the meta injection when `HAS_MAIN`.
+  - The preload exposes `lucid.token()`, a synchronous IPC to main.
+  - Main answers only when the caller is its app window's webContents and the frame is this engine's loopback document (`isEngineDocument`); anything else gets an empty string.
+  - `bridge.ts` reads `lucid.token()` first, then the parent window's (for the same-origin `trainer.html` iframe), and falls back to the meta tag. Only a standalone browser dev run (`bun run web`) still injects it.
+
+**Consequences.**
+- An agent holds a token that opens only its own tool routes. In the AppContainer that is a real boundary, because the container cannot read other processes' memory or the user's files.
+- Without the AppContainer (the disclosed passthrough) the agent runs as the user and could still reach the token by other means, such as reading the engine's memory. This increment narrows what is handed out; it does not claim isolation where there is none.
+- The opaque-origin, `connect-src 'none'` preview iframe still receives the UI token in its `/api/preview/serve` URL. It cannot send it anywhere, and the header-only routes cannot be reached by navigation, so it is left as is.
+- Local scripts that expected to copy the token off the page (the optional `--register` step of `tools/creator-backend/setup-backend.ts`) now work only against a standalone dev engine; a supported way to export a scoped token is future work if that step is needed against the packaged app.
