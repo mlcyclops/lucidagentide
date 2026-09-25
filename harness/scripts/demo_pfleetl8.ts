@@ -162,10 +162,12 @@ console.log("7) the badge names the target unambiguously and the notices are the
   ok("master shows no badge; a lane is identified by its id, so a rename never silently retargets");
 
   const caps = targetCaps(target);
-  if (caps.images || caps.modes || caps.goalLoop || caps.slashCommands) fail("a lane target must report what it cannot drive so the UI HIDES those controls");
+  // P-FLEET.L19: images are not a capability any more - every target sends them (the lane wire carries
+  // ACP image blocks), so only what a lane genuinely cannot drive is reported here.
+  if (caps.modes || caps.goalLoop || caps.slashCommands) fail("a lane target must report what it cannot drive so the UI HIDES those controls");
   if (!caps.why.trim()) fail("every removal must be explained, or the user just sees missing buttons");
   const mcaps = targetCaps(MASTER_TARGET);
-  if (!mcaps.images || !mcaps.modes || !mcaps.goalLoop || !mcaps.slashCommands) fail("the master target drives everything");
+  if (!mcaps.modes || !mcaps.goalLoop || !mcaps.slashCommands) fail("the master target drives everything");
   ok("lane caps are all false with an explanation; master caps are all true");
 
   const pn = promoteNotice(target, 12);
