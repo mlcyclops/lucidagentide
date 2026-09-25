@@ -28,16 +28,41 @@ const TERMINAL = new Set(["completed", "failed", "rejected", "cancelled", "cance
 
 const LABEL_CAP = 80;
 
-/** A short, human label for a tool_call update. A spawned subagent task (omp's `task` tool: rawInput
- *  carries { agent, tasks[] | assignment }) is labeled as a subagent so the user sees WHO the turn is
- *  waiting on, not a nameless "other" chip. */
+/** One subtask of an omp `task` call: its agent type, its optional caller-chosen name (which is also the
+ *  subtask's transcript stem, `<name>.jsonl`), and its assignment text. */
+export interface TaskCallItem { agent: string; name: string; task: string }
+
+/** PURE: omp's `task` tool input, or null for any other tool. omp sends no tool name on an ACP tool_call,
+ *  so the SHAPE identifies it. P-TASK.6 (ADR-0398): omp 18 moved `agent` into each item and renamed
+ *  `assignment`/`id` to `task`/`name`:
+ *    batch:  { context, tasks: [{ name?, agent = "task", task }] }
+ *    single: { name?, agent = "task", task }
+ *  The single form needs `agent` or the absence of `op`, because the todo tool also sends a `task`
+ *  string (always beside an `op`). */
+export function parseTaskCall(rawInput: unknown): TaskCallItem[] | null {
+  const ri = (rawInput ?? {}) as Record<string, unknown>;
+  const item = (t: Record<string, unknown>): TaskCallItem => ({
+    agent: typeof t.agent === "string" && t.agent.trim() ? t.agent.trim() : "task",
+    name: typeof t.name === "string" ? t.name.trim() : "",
+    task: typeof t.task === "string" ? t.task : "",
+  });
+  if (Array.isArray(ri.tasks)) {
+    const items = ri.tasks.filter((t): t is Record<string, unknown> => !!t && typeof t === "object" && typeof (t as Record<string, unknown>).task === "string").map(item);
+    return items.length ? items : null;
+  }
+  if (typeof ri.task === "string" && (typeof ri.agent === "string" || !("op" in ri))) return [item(ri)];
+  return null;
+}
+
+/** A short, human label for a tool_call update. A spawned subagent task (parseTaskCall) is labeled as a
+ *  subagent so the user sees WHO the turn is waiting on, not a nameless "other" chip. */
 export function pendingLabel(u: { title?: unknown; kind?: unknown; rawInput?: unknown }): string {
-  const ri = (u.rawInput ?? {}) as { agent?: unknown; tasks?: unknown; assignment?: unknown };
   const title = typeof u.title === "string" && u.title.trim() ? u.title.trim() : "";
+  const task = parseTaskCall(u.rawInput);
   let label: string;
-  if (ri.agent && (Array.isArray(ri.tasks) || ri.assignment)) {
-    const n = Array.isArray(ri.tasks) ? ri.tasks.length : 1;
-    label = `subagent ${String(ri.agent)}${n > 1 ? ` ×${n}` : ""}${title ? `: ${title}` : ""}`;
+  if (task) {
+    const agents = [...new Set(task.map((t) => t.agent))].join("+");
+    label = `subagent ${agents}${task.length > 1 ? ` ×${task.length}` : ""}${title ? `: ${title}` : ""}`;
   } else {
     const kind = typeof u.kind === "string" && u.kind ? u.kind : "tool";
     label = title && title.toLowerCase() !== kind.toLowerCase() ? `${kind}: ${title}` : kind;

@@ -48,8 +48,11 @@ cask "lucidagentide" do
   uninstall quit:    "com.lucidagentide.desktop",
             pkgutil: "com.lucidagentide.desktop"
 
+  # userData is named after desktop/package.json "name", not the product name; a
+  # non-default LUCID_PORT instance adds a -<port> suffix.
   zap trash: [
-    "~/Library/Application Support/LucidAgentIDE",
+    "~/Library/Application Support/lucidagentide-desktop",
+    "~/Library/Application Support/lucidagentide-desktop-*",
     "~/Library/Caches/com.lucidagentide.desktop",
     "~/Library/Caches/com.lucidagentide.desktop.ShipIt",
     "~/Library/Logs/LucidAgentIDE",
