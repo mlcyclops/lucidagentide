@@ -66,7 +66,7 @@ async function getDb(): Promise<Db | null> {
 
 // The Memory panel's lock-free mirror (obs_mirror.ts): this process is the DB's single writer, so the
 // desktop can NEVER read agent_obs.duckdb while a session is live (DuckDB refuses any cross-process
-// open of a read-write DB — the ADR-0211 bug class, this time for the "Memory layers" panel). After
+// open of a read-write DB - the ADR-0211 bug class, this time for the "Memory layers" panel). After
 // each DB write the gate refreshes a compact JSON summary beside the DB; the dashboard falls back to
 // it when its READ_ONLY open is refused. Throttled with a trailing write so a burst of promotions
 // still lands its final counts. Best-effort: a mirror failure never affects the gate.

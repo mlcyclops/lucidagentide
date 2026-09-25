@@ -101,8 +101,8 @@ async function main(): Promise<void> {
     }
   } else {
     console.log(`${C.green}${C.bold}▸ Lucid memory layers${C.reset}`);
-    console.log(`${C.dim}  No harness memory yet — agent_obs.duckdb fills in once the gate records activity in a live session.`);
-    console.log(`  (bun run demo-P4.3 exercises the gate in a throwaway database — its runs never appear here.)${C.reset}`);
+    console.log(`${C.dim}  No harness memory yet - agent_obs.duckdb fills in once the gate records activity in a live session.`);
+    console.log(`  (bun run demo-P4.3 exercises the gate in a throwaway database - its runs never appear here.)${C.reset}`);
   }
 
   console.log(`\n${C.dim}  refresh: re-run \`bun run memory:tui\`  ·  security view: \`bun run dashboard:tui\`  ·  web: \`bun run dashboard:web\`${C.reset}`);

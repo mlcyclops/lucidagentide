@@ -343,7 +343,7 @@ export type { HarnessMemory };
  *  import.meta.dir is a VIRTUAL bunfs path, so that resolved to `B:\~BUN\root\agent_obs.duckdb`,
  *  existsSync was false, and the Memory panel showed its empty state forever in installed builds
  *  (the ADR-0303 bug class). Derive the repo root by PROBING through the memory store's real
- *  migrations directory — dev runs, LUCID_RESOURCES, and the execPath fallback all covered. */
+ *  migrations directory - dev runs, LUCID_RESOURCES, and the execPath fallback all covered. */
 export const OBS_DB_PATH = join(
   resolveMigrationsDir("harness/memory", join(import.meta.dir, "..", "harness", "memory")),
   "..", "..", "..", "agent_obs.duckdb",
@@ -372,7 +372,7 @@ async function _harnessMemoryUncached(): Promise<HarnessMemory | null> {
       }
     } catch {
       // The gate's omp child holds the DB read-write; DuckDB refuses ANY cross-process open of it
-      // (even READ_ONLY — the ADR-0211 bug class). Fall through to the writer-maintained mirror.
+      // (even READ_ONLY - the ADR-0211 bug class). Fall through to the writer-maintained mirror.
     }
   }
   return readHarnessMirror(OBS_DB_PATH);

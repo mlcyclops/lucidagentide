@@ -4,7 +4,7 @@
 // harness/memory/obs_mirror.test.ts
 //
 // The lock-free harness-memory mirror (ADR-0211 pattern applied to the Memory panel). THE POINT:
-// while omp's gate child holds agent_obs.duckdb read-write, no other process can open it at all —
+// while omp's gate child holds agent_obs.duckdb read-write, no other process can open it at all -
 // so the dashboard summary must be readable WITHOUT touching DuckDB. These tests prove the
 // writer-side snapshot matches the DB, and that the read side works with the DB handle closed or
 // the file gone, and degrades to null (never throws) on a torn or foreign file.
@@ -43,6 +43,13 @@ test("snapshot reflects promoted facts and blocked-promotion telemetry", async (
   expect(snap.gate).toEqual({ promoted: 2, blocked: 1 });
   expect(snap.facts.map((f) => f.entity).sort()).toEqual(["api", "service"]);
   expect(snap.layers.map((l) => l.layer)).toEqual(["working", "archive", "semantic"]);
+});
+
+test("the snapshot lists the 8 NEWEST facts, newest first, with counts from the same statement", async () => {
+  for (let i = 1; i <= 10; i++) await promoteFact(db, { entityName: `e${i}`, statement: `fact ${i}`, trustLabel: "trusted" });
+  const snap = await snapshotHarnessMemory(db);
+  expect(snap.counts.facts).toBe(10);
+  expect(snap.facts.map((f) => f.statement)).toEqual(["fact 10", "fact 9", "fact 8", "fact 7", "fact 6", "fact 5", "fact 4", "fact 3"]);
 });
 
 test("THE POINT: the mirror is readable after the DB handle is gone (no DuckDB open needed)", async () => {
