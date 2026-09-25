@@ -3372,11 +3372,13 @@ function immersiveRailPeek(ev: MouseEvent): void {
   if (!inner) return;
   if (ev.clientX <= 20) { inner.classList.add("rail-peek"); return; }
   // Tuck 66px past whatever is out: the rail alone (54px, so the original 120px), or the rail plus
-  // the sessions sidebar once the hamburger opened it. Measuring the sidebar's real right edge keeps
-  // the drawer up while the pointer is over the chat list instead of tucking it at 120px.
+  // the sessions sidebar once the hamburger opened it, so the drawer stays up while the pointer is
+  // over the chat list. The edge comes from the sidebar's TARGET state, not its measured rect: during
+  // its 240ms width transition the rect is mid-animation, which tucked too early right after opening
+  // and too late right after closing.
   const sidebar = $("#sidebar");
-  const edge = Math.max(54, sidebar?.getBoundingClientRect().right ?? 54);
-  if (ev.clientX > edge + 66) inner.classList.remove("rail-peek");
+  const sidebarW = sidebar && !state.sidebarCollapsed ? parseFloat(getComputedStyle(sidebar).getPropertyValue("--sidebar-w")) || 236 : 0;
+  if (ev.clientX > 54 + sidebarW + 66) inner.classList.remove("rail-peek");
 }
 function immersiveEsc(ev: KeyboardEvent): void {
   if (ev.key !== "Escape" || ev.defaultPrevented) return; // an overlay already consumed this Esc
