@@ -148,9 +148,14 @@ test("incidents are kept only under a data root outside the agent-writable ~/.om
   const data = join(home, "AppData", "Roaming", "lucidagentide-desktop");
   expect(incidentDir(data, home)).toBe(join(data, "incidents"));
   expect(incidentDir(join(home, ".omp-other"), home)).toBe(join(home, ".omp-other", "incidents"));
-  for (const refused of [undefined, "", "relative/data", join(home, ".omp"), join(home, ".omp", "userdata")]) {
+  for (const refused of ["", "relative/data", join(home, ".omp"), join(home, ".omp", "userdata")]) {
     expect(incidentDir(refused, home)).toBeNull();
   }
+  // No argument means "the engine's LUCID_DATA_ROOT": unset, there is no trusted root. Cleared here so a
+  // LUCID running on the test host (which sets it for its own engine) cannot decide the result.
+  const saved = process.env.LUCID_DATA_ROOT;
+  delete process.env.LUCID_DATA_ROOT;
+  try { expect(incidentDir(undefined, home)).toBeNull(); } finally { if (saved !== undefined) process.env.LUCID_DATA_ROOT = saved; }
   expect(recordIncident(base(), null)).toBeNull();
   expect(listIncidents(null)).toEqual([]);
 });
