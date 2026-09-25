@@ -60,6 +60,14 @@ export function assignLane(g: LaneGroups, laneId: string, group: string | null):
   return { ...g, byLane };
 }
 
+/** Whether a lane's card is folded away: it sits in an EXISTING group the user collapsed (a dangling
+ *  assignment renders in the ungrouped tail, so it never hides). The grid derives the card's hidden
+ *  state from this on every repaint, so a status poll can never unfold a collapsed group. */
+export function laneCollapsed(g: LaneGroups, laneId: string): boolean {
+  const name = g.byLane[laneId];
+  return name !== undefined && g.collapsed[name] === true && g.groups.includes(name);
+}
+
 export function toggleCollapsed(g: LaneGroups, group: string): LaneGroups {
   const collapsed = { ...g.collapsed };
   if (collapsed[group]) delete collapsed[group]; else if (g.groups.includes(group)) collapsed[group] = true;

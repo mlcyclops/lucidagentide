@@ -155,7 +155,7 @@ export function switchEntries(
 }
 
 /** P-FLEET.L17: a HISTORICAL spoke - a lane the durable ledger remembers (P-FLEET.L5 timeline) that is
- *  not running right now. Recoverable until the user deletes it on purpose; nothing expires on its own. */
+ *  not running right now. Always recoverable; nothing expires on its own and no mark deletes anything. */
 export interface GhostSpoke {
   /** Logical identity: the user-given name + folder. Survives engine restarts, which mint new lane ids. */
   key: string;
@@ -164,24 +164,25 @@ export interface GhostSpoke {
   lastAt: number;
 }
 
-/** A user-chosen mark on a logical spoke (a deletion tombstone or an archive tuck-away). `at` matters:
- *  a mark placed TODAY must not suppress the ghost a brand-new run earns TOMORROW, so a mark only
- *  covers activity at or before its own time - a fresh run always resurfaces the spoke. */
+/** A user-chosen mark on a logical spoke (a hide or an archive tuck-away). Both are reversible view
+ *  state: neither touches the ledger or the Timeline. `at` matters: a mark placed TODAY must not
+ *  suppress the ghost a brand-new run earns TOMORROW, so a mark only covers activity at or before its
+ *  own time - a fresh run always resurfaces the spoke. */
 export interface GhostMark { key: string; at: number }
 
 export const ghostKey = (name: string, cwd: string): string => `${name}\u0000${cwd}`;
 
-export interface GhostLists { active: GhostSpoke[]; archived: GhostSpoke[] }
+export interface GhostLists { active: GhostSpoke[]; archived: GhostSpoke[]; hidden: GhostSpoke[] }
 
 /** Collapse the ledger into recoverable spokes: lane entries only, deduped to the LATEST run per
  *  logical spoke, minus everything alive in the fleet right now. Three fates, by the user's marks:
- *  DELETED (tombstone covers the latest run) is gone everywhere - the only true forget; ARCHIVED
- *  (archive mark covers it) is tucked into the archived list, retrievable any time; everything else
- *  is active. Delete beats archive. Newest first in both lists. */
+ *  HIDDEN (hide mark covers the latest run) leaves the recover list for the hidden list, where an
+ *  unhide brings it back; ARCHIVED (archive mark covers it) is tucked into the archived list, still
+ *  recoverable; everything else is active. Hide beats archive. Newest first in every list. */
 export function ghostSpokes(
   entries: readonly { kind: string; laneId?: string; laneName?: string; cwd: string; model: string; turns: number; updatedAt: number }[],
   live: readonly { name: string; cwd: string }[],
-  tombstones: readonly GhostMark[],
+  hides: readonly GhostMark[],
   archives: readonly GhostMark[] = [],
 ): GhostLists {
   const latestMark = (marks: readonly GhostMark[]): Map<string, number> => {
@@ -189,7 +190,7 @@ export function ghostSpokes(
     for (const t of marks) m.set(t.key, Math.max(t.at, m.get(t.key) ?? 0));
     return m;
   };
-  const buried = latestMark(tombstones);
+  const stowed = latestMark(hides);
   const tucked = latestMark(archives);
   const alive = new Set(live.map((l) => ghostKey(l.name, l.cwd)));
   const best = new Map<string, GhostSpoke>();
@@ -202,15 +203,31 @@ export function ghostSpokes(
       best.set(key, { key, name: e.laneName, cwd: e.cwd, model: e.model, turns: e.turns, lastAt: e.updatedAt });
     }
   }
-  const active: GhostSpoke[] = [], archived: GhostSpoke[] = [];
+  const active: GhostSpoke[] = [], archived: GhostSpoke[] = [], hidden: GhostSpoke[] = [];
   for (const g of best.values()) {
-    const dead = buried.get(g.key);
-    if (dead !== undefined && g.lastAt <= dead) continue;
+    const hid = stowed.get(g.key);
     const arch = tucked.get(g.key);
-    (arch !== undefined && g.lastAt <= arch ? archived : active).push(g);
+    (hid !== undefined && g.lastAt <= hid ? hidden : arch !== undefined && g.lastAt <= arch ? archived : active).push(g);
   }
   const newestFirst = (a: GhostSpoke, b: GhostSpoke): number => b.lastAt - a.lastAt;
-  return { active: active.sort(newestFirst), archived: archived.sort(newestFirst) };
+  return { active: active.sort(newestFirst), archived: archived.sort(newestFirst), hidden: hidden.sort(newestFirst) };
+}
+
+/** P-FLEET.L17: read EVERY page of a paged listing. The timeline caps a page at 500 rows, and a spoke
+ *  whose latest run sits past the first page must still be recoverable. Stops once `total` is covered
+ *  or on a short page (a ledger that shrank mid-read). Any failed page fails the whole read (null): a
+ *  partial ledger would silently drop ghosts, so the caller keeps what it had instead. IO is injected. */
+export async function readAllPages<T>(
+  fetchPage: (limit: number, offset: number) => Promise<{ entries: T[]; total: number } | null>,
+  pageSize = 500,
+): Promise<T[] | null> {
+  const out: T[] = [];
+  for (;;) {
+    const page = await fetchPage(pageSize, out.length);
+    if (!page) return null;
+    out.push(...page.entries);
+    if (page.entries.length < pageSize || out.length >= page.total) return out;
+  }
 }
 
 /** P-FLEET.L17: the Ctrl/Cmd+Alt+Arrow cycle order. Walks the fleet in fleet order, skipping lanes the

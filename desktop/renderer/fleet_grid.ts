@@ -27,7 +27,7 @@ import { popover } from "./ui.ts"; // P-FLEET.L18: the per-card group menu
 // shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
 // P-FLEET.L18: named lane groups - pure model; this file owns only chips, dividers and storage.
-import { assignLane, createGroup, groupSections, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed, type LaneGroups } from "./lane_groups.ts";
+import { assignLane, createGroup, groupSections, laneCollapsed, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed, type LaneGroups } from "./lane_groups.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
 import { isAutoPreviewPath } from "./preview_tabs.ts";
@@ -373,7 +373,7 @@ function applyOrder(grid: HTMLElement): void {
     for (const id of s.ids) {
       const card = runs.get(id)?.card;
       if (!card) continue;
-      card.classList.toggle("grp-hidden", closed);
+      card.classList.toggle("grp-hidden", laneCollapsed(groups, id)); // paintFrame derives it the same way
       grid.append(card);
     }
   }
@@ -768,8 +768,10 @@ function paintFrame(run: LaneRun): void {
   // P-FLEET.L8: `promoted` is the SERVER's answer to "which lane owns the main composer", so the class is
   // rewritten from the poll on every repaint and local click state never gets a vote. `dragging` is the one
   // class this paint must preserve: a poll landing mid-drag would otherwise drop the card back into the grid.
+  // P-FLEET.L18: `grp-hidden` is re-derived from the group model, never dropped - applyOrder skips an
+  // unchanged frame, so a class this write erased would unfold a collapsed group on the next poll.
   const dragging = card.classList.contains("dragging");
-  card.className = `fleet-card lane-${v.status}${v.promoted ? " promoted" : ""}${dragging ? " dragging" : ""}`;
+  card.className = `fleet-card lane-${v.status}${v.promoted ? " promoted" : ""}${dragging ? " dragging" : ""}${laneCollapsed(groups, v.id) ? " grp-hidden" : ""}`;
   // P-FLEET.L8: promote / pull back. Hidden entirely when app.ts did not thread the dep, because a button
   // that cannot act is worse than no button.
   const promote = $("[data-fleet-promote]", card) as HTMLButtonElement | null;

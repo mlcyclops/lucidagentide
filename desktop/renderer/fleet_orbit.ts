@@ -19,9 +19,9 @@ import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts"; // P
 import { ageStr, esc } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { popover } from "./ui.ts";
-import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge } from "./bridge.ts";
+import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
-import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SwitchEntry } from "./orbit_layout.ts";
+import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, readAllPages, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SwitchEntry } from "./orbit_layout.ts";
 
 export interface FleetOrbitDeps {
   fleetStatus: LucidBridge["fleetStatus"];
@@ -34,7 +34,7 @@ export interface FleetOrbitDeps {
   /** The P-FLEET.L8 attach/release pair, owned by app.ts (thread park/seed lives there). */
   promoteLane: (laneId: string) => void;
   demoteLane: () => void;
-  /** Open the classic grid dock (still the home of the FULL + Lane form: repo clone + vault PAT). */
+  /** Open the classic grid dock (the workbench: per-lane composers, queues and transcripts). */
   openGrid: () => void;
   /** The REAL OS folder dialog (fleet_grid's contract). Resolves null on cancel - never re-prompt. */
   pickFolder: (opts?: { title?: string; confirm?: string }) => Promise<string | null>;
@@ -138,7 +138,12 @@ function resolveMode(): OrbitMode {
 }
 
 let mode: OrbitMode = "motion";
-let fpsGuardRan = false;
+/** "done" only once a measurement COMPLETES. An interrupted one (orbit closed, or Lite chosen, mid-
+ *  window) re-arms, so the next open measures again instead of silently skipping the guard forever. */
+let fpsGuard: "armed" | "measuring" | "done" = "armed";
+/** Bumped when closeFleetOrbit abandons a measurement: its pending timer and rAF chain see a stale
+ *  generation and stop, so frames from before a close/reopen never mix into the next window. */
+let fpsGen = 0;
 
 function applyMode(next: OrbitMode): void {
   mode = next;
@@ -148,23 +153,31 @@ function applyMode(next: OrbitMode): void {
   if (btn) btn.innerHTML = next === "static" ? `${icon("spark", 13)} Lite` : `${icon("bolt", 13)} Motion`;
 }
 
-/** Measure ~2s of real frames once the entrance settles; a sustained miss of the floor flips this
- *  session to Lite and persists the verdict. Runs once per session and only in motion mode - Lite has
- *  nothing left to measure. */
+/** Measure ~2s of real frames once the entrance settles; a sustained miss of the floor persists the
+ *  verdict and re-resolves the mode (so an explicit user "Motion" still wins, per orbitMode's spec).
+ *  Completes once per session and only in motion mode - Lite has nothing left to measure. */
 function runFpsGuard(): void {
-  if (fpsGuardRan || mode !== "motion") return;
-  fpsGuardRan = true;
+  if (fpsGuard !== "armed" || mode !== "motion") return;
+  fpsGuard = "measuring";
+  const gen = fpsGen;
+  // Still ours and still meaningful? A close bumps fpsGen (and re-arms there); a switch to Lite re-arms here.
+  const live = (): boolean => {
+    if (gen !== fpsGen) return false;
+    if (!view || view.hidden || mode !== "motion") { fpsGuard = "armed"; return false; }
+    return true;
+  };
   window.setTimeout(() => {
-    if (!view || view.hidden || mode !== "motion") { fpsGuardRan = false; return; }
+    if (!live()) return;
     let frames = 0;
     const t0 = performance.now();
     const tick = (): void => {
-      if (!view || view.hidden) return; // closed mid-measure: abandon, next open re-arms via fpsGuardRan reset below
+      if (!live()) return;
       frames++;
       const dt = performance.now() - t0;
       if (dt < 2000) { requestAnimationFrame(tick); return; }
+      fpsGuard = "done";
       const fps = (frames / dt) * 1000;
-      if (fps < ORBIT_FPS_FLOOR) { writeModeStore({ measured: Math.round(fps) }); applyMode("static"); }
+      if (fps < ORBIT_FPS_FLOOR) { writeModeStore({ measured: Math.round(fps) }); applyMode(resolveMode()); }
     };
     requestAnimationFrame(tick);
   }, 900); // let the staggered entrance finish; measuring the fly-out would indict the spring, not the machine
@@ -175,15 +188,22 @@ function runFpsGuard(): void {
 // The durable lane-session ledger (P-FLEET.L5 timeline) remembers every lane that ever ran; the fleet
 // itself forgets on engine restart. Ghosts bridge the two: any logical spoke (name + folder) the ledger
 // knows and the live fleet does not is retrievable - respawned under its old name, folder and model -
-// FOREVER, unless the user marks it. Two marks, both timestamped so a fresh run always resurfaces the
-// spoke: ARCHIVE tucks it into a collapsed section (reversible, never a forget); DELETE is the one true
-// forget. The list is an IN-ORBIT PANEL, not a floating popover: it lives inside the view's own DOM and
-// stacking context, so nothing between overlay layers can swallow it.
+// FOREVER. Two marks, both timestamped so a fresh run always resurfaces the spoke, and both reversible
+// renderer-local view state: ARCHIVE tucks it into a collapsed section; HIDE takes it off the list into
+// the collapsed Hidden section, where Unhide brings it back. Neither deletes anything - the ledger and
+// the Timeline keep every run - so neither needs a confirmation. The list is an IN-ORBIT PANEL, not a
+// floating popover: it lives inside the view's own DOM and stacking context, so nothing between overlay
+// layers can swallow it.
 
-const TOMB_KEY = "lucid.orbitTombstones.v1";
+const HIDE_KEY = "lucid.orbitHidden.v1";
 const ARCH_KEY = "lucid.orbitArchive.v1";
-let ghostLists: GhostLists = { active: [], archived: [] };
+let ghostLists: GhostLists = { active: [], archived: [], hidden: [] };
 let archOpen = false;
+let hidOpen = false;
+/** The last complete ledger read. Reads can overlap (open, census change, a recover); only the newest
+ *  may land. */
+let ghostLedger: TimelineEntry[] = [];
+let ghostGen = 0;
 
 function readMarks(storageKey: string): GhostMark[] {
   try {
@@ -204,20 +224,40 @@ function writeMarks(storageKey: string, marks: GhostMark[]): void {
 function placeMark(storageKey: string, g: GhostSpoke): void {
   // The mark covers everything up to the CLICK, not up to the last ledger row this renderer had seen:
   // a lane still flushing rows (or one running under another engine on a shared ledger) would otherwise
-  // out-race its own archive/delete within seconds. Future runs still resurface the spoke.
+  // out-race its own archive/hide within seconds. Future runs still resurface the spoke.
   writeMarks(storageKey, [...readMarks(storageKey).filter((t) => t.key !== g.key), { key: g.key, at: Math.max(g.lastAt, Date.now()) }]);
+}
+function dropMark(storageKey: string, g: GhostSpoke): void {
+  writeMarks(storageKey, readMarks(storageKey).filter((m) => m.key !== g.key));
 }
 
 async function refreshGhosts(): Promise<void> {
   if (!deps || !view) return;
-  const page = await deps.timelineList(200, 0).catch(() => null);
+  const gen = ++ghostGen;
+  const d = deps;
+  // The WHOLE ledger, every page: a spoke whose latest run sits past page one is still recoverable.
+  const entries = await readAllPages((limit, offset) => d.timelineList(limit, offset).catch(() => null));
+  // A failed read keeps the ledger we had (a partial one would silently drop ghosts); a newer read wins.
+  if (!entries || gen !== ghostGen) return;
+  ghostLedger = entries;
+  paintGhosts();
+}
+
+/** Re-derive the lists from the cached ledger + the live fleet + the marks. A row action (archive,
+ *  hide, unhide) changes only the marks, so it repaints from here without re-reading the ledger. */
+function paintGhosts(): void {
   if (!view) return;
-  ghostLists = ghostSpokes(page?.entries ?? [], lastStatus?.lanes ?? [], readMarks(TOMB_KEY), readMarks(ARCH_KEY));
+  ghostLists = ghostSpokes(ghostLedger, lastStatus?.lanes ?? [], readMarks(HIDE_KEY), readMarks(ARCH_KEY));
   const n = ghostLists.active.length + ghostLists.archived.length;
+  // Hidden spokes are not counted, but they still keep the button reachable: Unhide lives in the panel.
+  const any = n + ghostLists.hidden.length > 0;
   for (const b of view.querySelectorAll("[data-orbit-recover]")) {
-    const badge = b.querySelector("[data-orbit-ghostn]");
-    if (badge && badge.textContent !== String(n)) badge.textContent = String(n);
-    (b as HTMLElement).hidden = n === 0;
+    const badge = b.querySelector("[data-orbit-ghostn]") as HTMLElement | null;
+    if (badge) {
+      if (badge.textContent !== String(n)) badge.textContent = String(n);
+      badge.hidden = n === 0;
+    }
+    (b as HTMLElement).hidden = !any;
   }
   paintGhostPanel();
 }
@@ -235,41 +275,55 @@ function togglePanel(which: OrbitPanel): void {
   if (!host) return;
   host.hidden = openedPanel === null;
   host.classList.toggle("show", openedPanel !== null);
+  // A closed panel keeps no DOM: the spawn form's password input must not hold a token while hidden.
+  if (openedPanel === null) { const body = $("[data-orbit-panel-body]", host); if (body) body.innerHTML = ""; }
   if (openedPanel === "ghosts") { paintGhostPanel(); void refreshGhosts(); }
   if (openedPanel === "spawn") paintSpawnPanel();
 }
 
+/** Which list a row belongs to: active, archived ("z"), or hidden. */
+type GhostList = "a" | "z" | "h";
+const HIDE_BTN = `<button class="orbit-ghost-x" data-ghost-hide data-tip="Hide|Takes this spoke off the Recover list. Nothing is deleted: its conversation stays in the Timeline, and the Hidden section below brings it back. A future run also resurfaces it.">${icon("minus", 12)}</button>`;
+
 /** A ghost row. Addressed by list + INDEX, never by key: the key embeds a NUL separator, and the HTML
  *  parser rewrites U+0000 in attribute values to U+FFFD, so a key round-tripped through the DOM would
  *  never match its own model again (found live: every row action silently no-opped). */
-function ghostRow(g: GhostSpoke, i: number, archived: boolean): string {
-  return `<div class="orbit-ghost${archived ? " archived" : ""}" data-ghost-i="${i}" data-ghost-list="${archived ? "z" : "a"}" title="${esc(g.cwd)}\n${esc(g.model)}">
-      <i class="orbit-ghost-dot"></i>
-      <span class="orbit-ghost-id"><b>${esc(g.name)}</b><small>${esc(folderTail(g.cwd))} \u00b7 ${g.turns} ${g.turns === 1 ? "turn" : "turns"} \u00b7 ${ageStr(g.lastAt)}</small><small class="orbit-ghost-err" data-ghost-err></small></span>
-      <button class="btn-mini orbit-btn" data-ghost-recover data-tip="Recover|Respawns this spoke with its old name, folder and model. New session; the old conversation stays reviewable in the Timeline.">${icon("restore", 12)} Recover</button>
-      ${archived
+function ghostRow(g: GhostSpoke, i: number, list: GhostList): string {
+  const actions = list === "h"
+    ? `<button class="btn-mini orbit-btn" data-ghost-unhide data-tip="Unhide|Back on the Recover list.">${icon("eye", 12)} Unhide</button>`
+    : `<button class="btn-mini orbit-btn" data-ghost-recover data-tip="Recover|Respawns this spoke with its old name, folder and model. New session; the old conversation stays reviewable in the Timeline.">${icon("restore", 12)} Recover</button>
+      ${list === "z"
         ? `<button class="orbit-ghost-x" data-ghost-unarchive data-tip="Unarchive|Back to the main list.">${icon("archive", 12)}</button>`
         : `<button class="orbit-ghost-x" data-ghost-archive data-tip="Archive|Tucks this spoke into the archived section. Reversible; a future run also resurfaces it.">${icon("archive", 12)}</button>`}
-      <button class="orbit-ghost-x orbit-ghost-del" data-ghost-bury data-tip="Delete history|The one purposeful forget. A future run of the same name and folder earns a fresh entry.">${icon("trash", 12)}</button>
+      ${HIDE_BTN}`;
+  return `<div class="orbit-ghost${list === "a" ? "" : " archived"}" data-ghost-i="${i}" data-ghost-list="${list}" title="${esc(g.cwd)}\n${esc(g.model)}">
+      <i class="orbit-ghost-dot"></i>
+      <span class="orbit-ghost-id"><b>${esc(g.name)}</b><small>${esc(folderTail(g.cwd))} \u00b7 ${g.turns} ${g.turns === 1 ? "turn" : "turns"} \u00b7 ${ageStr(g.lastAt)}</small><small class="orbit-ghost-err" data-ghost-err></small></span>
+      ${actions}
     </div>`;
+}
+
+/** A collapsed section (Archived, Hidden): its toggle, then its rows only while open. */
+function ghostSection(label: string, rows: GhostSpoke[], list: GhostList, open: boolean, toggleAttr: string): string {
+  if (rows.length === 0) return "";
+  return `<button class="orbit-arch-toggle${open ? " open" : ""}" ${toggleAttr}>${icon("chevron", 11)} ${label} <span>${rows.length}</span></button>`
+    + (open ? rows.map((g, i) => ghostRow(g, i, list)).join("") : "");
 }
 
 function paintGhostPanel(): void {
   if (openedPanel !== "ghosts" || !view) return;
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (!box) return;
-  const { active, archived } = ghostLists;
+  const { active, archived, hidden } = ghostLists;
   const head = `<div class="orbit-panel-h">${icon("restore", 14)}<b>Historical spokes</b><span>${active.length + archived.length}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
-  if (active.length === 0 && archived.length === 0) {
-    box.innerHTML = `${head}<div class="orbit-ghosts-empty">No historical spokes yet. Every lane that runs is remembered here until you delete it on purpose.</div>`;
+  if (active.length === 0 && archived.length === 0 && hidden.length === 0) {
+    box.innerHTML = `${head}<div class="orbit-ghosts-empty">No historical spokes yet. Every lane that runs is remembered here, and hiding one is always reversible.</div>`;
     return;
   }
   box.innerHTML = head
-    + active.map((g, i) => ghostRow(g, i, false)).join("")
-    + (archived.length > 0
-      ? `<button class="orbit-arch-toggle${archOpen ? " open" : ""}" data-ghost-archopen>${icon("chevron", 11)} Archived <span>${archived.length}</span></button>`
-        + (archOpen ? archived.map((g, i) => ghostRow(g, i, true)).join("") : "")
-      : "");
+    + active.map((g, i) => ghostRow(g, i, "a")).join("")
+    + ghostSection("Archived", archived, "z", archOpen, "data-ghost-archopen")
+    + ghostSection("Hidden", hidden, "h", hidOpen, "data-ghost-hidopen");
 }
 
 /** Respawn the spoke under its recorded identity. A fresh omp session (the old one died with its
@@ -295,21 +349,26 @@ async function recoverGhost(g: GhostSpoke, row: HTMLElement): Promise<void> {
 function onPanelClick(t: HTMLElement): boolean {
   if (t.closest("[data-orbit-panel-close]")) { togglePanel(openedPanel ?? "ghosts"); return true; }
   if (t.closest("[data-ghost-archopen]")) { archOpen = !archOpen; paintGhostPanel(); return true; }
+  if (t.closest("[data-ghost-hidopen]")) { hidOpen = !hidOpen; paintGhostPanel(); return true; }
   const row = t.closest("[data-ghost-i]") as HTMLElement | null;
   if (row) {
-    const list = row.dataset.ghostList === "z" ? ghostLists.archived : ghostLists.active;
+    const kind = row.dataset.ghostList;
+    const list = kind === "z" ? ghostLists.archived : kind === "h" ? ghostLists.hidden : ghostLists.active;
     const g = list[Number(row.dataset.ghostI)];
     if (!g) return true;
-    if (t.closest("[data-ghost-bury]")) {
-      placeMark(TOMB_KEY, g);
-      writeMarks(ARCH_KEY, readMarks(ARCH_KEY).filter((m) => m.key !== g.key)); // a deleted spoke leaves the archive too
-      void refreshGhosts();
+    if (t.closest("[data-ghost-hide]")) {
+      placeMark(HIDE_KEY, g);
+      dropMark(ARCH_KEY, g); // hide beats archive; an unhidden spoke comes back to the main list
+      paintGhosts();
+    } else if (t.closest("[data-ghost-unhide]")) {
+      dropMark(HIDE_KEY, g);
+      paintGhosts();
     } else if (t.closest("[data-ghost-archive]")) {
       placeMark(ARCH_KEY, g);
-      void refreshGhosts();
+      paintGhosts();
     } else if (t.closest("[data-ghost-unarchive]")) {
-      writeMarks(ARCH_KEY, readMarks(ARCH_KEY).filter((m) => m.key !== g.key));
-      void refreshGhosts();
+      dropMark(ARCH_KEY, g);
+      paintGhosts();
     } else if (t.closest("[data-ghost-recover]")) {
       void recoverGhost(g, row);
     }
@@ -390,7 +449,8 @@ async function submitSpawnPanel(): Promise<void> {
   const name = ($("[data-spawnp-name]", view) as HTMLInputElement | null)?.value.trim() ?? "";
   const model = ($("[data-spawnp-model]", view) as HTMLSelectElement | null)?.value ?? "";
   const repoRaw = ($("[data-spawnp-repo]", view) as HTMLInputElement | null)?.value.trim() ?? "";
-  const pat = ($("[data-spawnp-pat]", view) as HTMLInputElement | null)?.value ?? "";
+  const patInput = $("[data-spawnp-pat]", view) as HTMLInputElement | null;
+  const pat = patInput?.value ?? "";
   const remember = ($("[data-spawnp-save]", view) as HTMLInputElement | null)?.checked === true;
   const err = $("[data-spawnp-err]", view) as HTMLElement | null;
   // Same rules as the grid form: a repo makes the folder optional (it clones into the shared
@@ -410,12 +470,17 @@ async function submitSpawnPanel(): Promise<void> {
     if (!s.ok) warn = `Token not saved (${s.error ?? "vault unavailable"}) - used for this clone only. `;
   }
   const r = await deps.fleetSpawn({ cwd, ...(name ? { name } : {}), ...(model ? { model } : {}), ...(remote ? { repoUrl: repoRaw } : {}), ...(remote && pat ? { pat } : {}) }).catch(() => null);
+  // The request is done with the token either way: never leave the plaintext sitting in the DOM (a
+  // retry pastes it again; a remembered one is already in the vault).
+  if (patInput) patInput.value = "";
   if (!r?.ok) {
     if (err) err.textContent = warn + (r?.reason ?? "The engine did not confirm the spawn.");
     if (go) { go.disabled = false; go.innerHTML = `${icon("bolt", 13)} Create spoke`; }
     return;
   }
-  togglePanel("spawn"); // close; the newborn flies out of the hub on the refresh below
+  // Close; the newborn flies out of the hub on the refresh below. Only if the form is still the open
+  // panel: togglePanel would otherwise REOPEN it (the user closed it, or switched to Recover, mid-clone).
+  if (openedPanel === "spawn") togglePanel("spawn");
   await refresh(false);
   void refreshGhosts();
 }
@@ -486,6 +551,8 @@ export function openFleetOrbit(): void {
 
 export function closeFleetOrbit(): void {
   if (!view || view.hidden) return;
+  if (openedPanel) togglePanel(openedPanel); // a hidden map keeps no half-filled form (or typed token) behind
+  if (fpsGuard === "measuring") { fpsGuard = "armed"; fpsGen++; } // abandon a straddling measurement; the next open re-measures
   view.classList.remove("open");
   const v = view;
   window.setTimeout(() => { v.hidden = true; }, 220);
@@ -513,8 +580,8 @@ function buildView(): HTMLElement {
       <div class="orbit-census" data-orbit-census></div>
       <div class="orbit-hud" data-orbit-hud data-tip="Fleet pressure|CPU and memory right now. A metric sustained over the line refuses NEW spokes; running ones are never touched."></div>
       <span class="orbit-headgap"></span>
-      <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every lane that ever ran, remembered by the durable ledger until you delete it. Recover one and it rejoins the orbit under its old name, folder and model.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
-      <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model. Cloning a repo lives in the grid's full form, one click away.">${icon("plus", 13)} New spoke</button>
+      <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every lane that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
+      <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} New spoke</button>
       <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and spoke as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
       <button class="btn-mini orbit-btn" data-orbit-grid data-tip="Grid view|The classic fleet dashboard: streaming mini agent windows with per-lane composers, queues and transcripts.">${icon("layout", 13)} Grid</button>
       <button class="btn-mini orbit-btn orbit-pin" data-orbit-pin data-tip="Default view|Make ORBIT what the Fleet button opens. The grid header has the same pin for grid-first users."></button>
@@ -563,8 +630,8 @@ function onViewClick(ev: Event): void {
   }
   if (t.closest("[data-orbit-pin]")) { setFleetHome("orbit"); return; }
   if (t.closest("[data-orbit-recover]")) { togglePanel("ghosts"); return; }
-  // The FULL form (repo clone + vault PAT) still lives in the grid; the common local-folder spawn is
-  // the on-orbit panel, so creating a spoke no longer leaves the screen.
+  // The on-orbit panel spawns (folder or repo clone + vault PAT, P-FLEET.L18), so creating a spoke never
+  // leaves the screen; the grid stays one click away as the workbench.
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
   if (t.closest("[data-orbit-spawn]")) { togglePanel("spawn"); return; }
   if (t.closest("[data-orbit-panel]")) { onPanelClick(t); return; }
@@ -715,8 +782,12 @@ function buildNode(lane: LaneView): HTMLElement {
       </div>
     </div>
   </div>`);
+  // role=button semantics for the CARD itself: Enter and Space open it. Keys aimed at the nested native
+  // buttons (Allow, Deny, Respawn) bubble through here and must be left to activate those buttons.
   card.addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Enter") { e.preventDefault(); takeover(lane.id); }
+    if (e.target !== card || (e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    takeover(lane.id);
   });
   return card;
 }
@@ -804,8 +875,14 @@ let banner: HTMLElement | null = null;
 let menuPop: { close: () => void } | null = null;
 let vitalsPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
 let bannerTimer: number | null = null;
-/** The banner's freshest LaneView for the attached lane, from its own 2.5s poll. */
+/** The banner's freshest LaneView for the attached lane, from its own 2.5s poll. Only ever the lane
+ *  the banner NAMES (bannerLaneId): the vitals Allow/Deny answer this lane. */
 let bannerLane: LaneView | null = null;
+/** The lane the banner names, and a generation bumped whenever that changes or the banner goes away. A
+ *  poll captures the generation before its await and drops its answer if it moved: a poll started for
+ *  spoke A must never become bannerLane while the banner names spoke B. */
+let bannerLaneId: string | null = null;
+let bannerGen = 0;
 
 /** Called by app.ts renderComposerTarget on every attach/detach. Master target = no banner. */
 export function renderSpokeBanner(target: ComposerTarget): void {
@@ -813,7 +890,7 @@ export function renderSpokeBanner(target: ComposerTarget): void {
     menuPop?.close(); menuPop = null;
     vitalsPop?.close(); vitalsPop = null;
     if (bannerTimer != null) { window.clearInterval(bannerTimer); bannerTimer = null; }
-    bannerLane = null;
+    bannerGen++; bannerLaneId = null; bannerLane = null;
     paintAskDock(null, "", undefined); // the ask stays on the spoke's orbit/grid card; the composer left it
     if (banner) { banner.classList.remove("show"); const b = banner; banner = null; window.setTimeout(() => b.remove(), 260); }
     return;
@@ -835,27 +912,41 @@ export function renderSpokeBanner(target: ComposerTarget): void {
     document.body.appendChild(banner);
     requestAnimationFrame(() => banner?.classList.add("show"));
   }
+  const switched = target.laneId !== bannerLaneId;
+  if (switched) {
+    // A different spoke: nothing it reported yet is on screen. Every poll in flight belongs to the old
+    // one (the generation drops it), the old spoke's ask and menu leave with it, and the chips and the
+    // vitals read "not reported" until this spoke's own poll lands - immediately, below.
+    bannerGen++;
+    bannerLaneId = target.laneId;
+    bannerLane = null;
+    menuPop?.close(); menuPop = null;
+    if (askDock && askDock.dataset.laneId !== target.laneId) paintAskDock(null, "", undefined);
+    paintVitalChips();
+    if (vitalsPop) { paintVitals(vitalsPop.node); vitalsPop.reposition(); }
+  }
   const name = $(".spoke-name", banner) as HTMLElement;
   if (name.textContent !== target.name) name.textContent = target.name;
   banner.title = `${target.name}\n${target.cwd}\n${target.model}`;
   // The banner runs its OWN status poll (grid cadence) so the security chip reacts to an approval ask
   // even when neither the orbit nor the grid is open.
-  if (bannerTimer == null) {
-    bannerTimer = window.setInterval(() => void bannerRefresh(), POLL_MS);
-    void bannerRefresh();
-  }
+  if (bannerTimer == null) bannerTimer = window.setInterval(() => void bannerRefresh(), POLL_MS);
+  if (switched) void bannerRefresh();
 }
 
 async function bannerRefresh(): Promise<void> {
-  if (!deps || !banner) return;
-  const t = deps.getTarget();
-  if (!isLaneTarget(t)) return;
+  if (!deps || !banner || bannerLaneId === null) return;
+  const gen = bannerGen;
+  const laneId = bannerLaneId;
   const s = await deps.fleetStatus();
-  if (!banner) return;
-  bannerLane = s?.lanes.find((l) => l.id === t.laneId) ?? null;
+  // Stale: the banner moved to another spoke (or went away) while this poll was in flight. Its answer
+  // describes a lane the banner no longer names, so it may neither paint nor arm an Allow.
+  if (gen !== bannerGen || !banner) return;
+  const t = deps.getTarget();
+  if (!isLaneTarget(t) || t.laneId !== laneId) return;
+  bannerLane = s?.lanes.find((l) => l.id === laneId) ?? null;
   // A failed poll (null status) says nothing about the ask, so it never clears a docked prompt.
-  const now = deps.getTarget();
-  if (s && isLaneTarget(now) && now.laneId === t.laneId) paintAskDock(t.laneId, t.name, bannerLane?.pendingApproval);
+  if (s) paintAskDock(laneId, t.name, bannerLane?.pendingApproval);
   paintVitalChips();
   if (vitalsPop) { paintVitals(vitalsPop.node); vitalsPop.reposition(); } // an ask arriving grows the card
 }
@@ -927,6 +1018,7 @@ function paintAskDock(laneId: string | null, name: string, ask: { summary: strin
       </div>
     </div>
   </div>`);
+  node.dataset.laneId = laneId; // a spoke switch removes a dock that belongs to another lane
   ($(".spoke-ask-title", node) as HTMLElement).textContent = `${name} wants to run a gated action`;
   ($(".spoke-ask-sum", node) as HTMLElement).textContent = ask.summary;
   ($(".spoke-ask-kind", node) as HTMLElement).textContent = ask.kind;
@@ -959,9 +1051,12 @@ async function openVitals(): Promise<void> {
   p.reposition();
   p.node.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest("[data-vit-answer]") as HTMLElement | null;
-    if (!btn || !bannerLane) return;
+    // Fail closed: answer only the lane the banner names AND the composer drives right now.
+    const l = bannerLane;
+    const t = deps?.getTarget();
+    if (!btn || !l || l.id !== bannerLaneId || !t || !isLaneTarget(t) || t.laneId !== l.id) return;
     const v = btn.dataset.vitAnswer;
-    void answer(bannerLane.id, v !== "deny", v === "session" ? "session" : "once");
+    void answer(l.id, v !== "deny", v === "session" ? "session" : "once");
   });
 }
 

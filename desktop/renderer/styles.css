@@ -1037,14 +1037,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   transition:background var(--t)}
 .subagent-head:hover{background:var(--bg-2)}
 .subagent-spin{flex:none;display:inline-flex;color:var(--cyan)}
-/* the stick man with a looking glass - green neon. The .look group (head + arm + magnifier) bobs
-   slightly up and down while running, as if scanning. */
-.subagent-spin .looker{color:var(--green);overflow:visible;
+/* P-TASK.6 (ADR-0398): the clipboard of assignments - green neon. While the subagents run, its three
+   task lines write in and out from the left, staggered, like work being ticked through. */
+.subagent-spin .clipboard{color:var(--green);overflow:visible;
   filter:drop-shadow(0 0 2px var(--green)) drop-shadow(0 0 5px color-mix(in srgb,var(--green) 55%,transparent))}
-.subagent-spin .looker .look{transform-box:view-box;transform-origin:9px 8px}
-.subagent[data-streaming] .subagent-spin .looker .look{animation:peer 1.3s ease-in-out infinite}
-.subagent.done .subagent-spin .looker{filter:drop-shadow(0 0 2px var(--green))} /* settle the glow when done */
-@keyframes peer{0%,100%{transform:translateY(-0.7px)}50%{transform:translateY(0.9px)}}
+.subagent-spin .clipboard .cb-line{transform-box:fill-box;transform-origin:left center}
+.subagent[data-streaming] .subagent-spin .clipboard .cb-line{animation:cbWrite 1.8s ease-in-out infinite}
+.subagent[data-streaming] .subagent-spin .clipboard .cb-line:nth-of-type(2){animation-delay:.3s}
+.subagent[data-streaming] .subagent-spin .clipboard .cb-line:nth-of-type(3){animation-delay:.6s}
+.subagent.done .subagent-spin .clipboard{filter:drop-shadow(0 0 2px var(--green))} /* settle the glow when done */
+@keyframes cbWrite{0%,100%{transform:scaleX(1);opacity:1}50%{transform:scaleX(.45);opacity:.55}}
+@media (prefers-reduced-motion:reduce){.subagent-spin .clipboard .cb-line{animation:none}}
 .subagent-cur{flex:1;min-width:0;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .subagent-cur b{color:var(--cyan);font-weight:600}
 .subagent-chev{flex:none;display:inline-flex;color:var(--txt-4);transition:transform var(--t) var(--ease)}
@@ -2535,7 +2538,11 @@ body.lucid-capturing #toasts{visibility:hidden}
 /* Hover-peek (user call, 2026-08-01): the mouse near the left edge slides the rail back in as a push
    drawer (still a grid item - never out of flow, see the hazard note above); moving away tucks it. */
 #app-inner.immersive.rail-peek .rail{width:54px;min-width:54px;opacity:1;pointer-events:auto;padding:10px 0;border-right:1px solid var(--line-soft)}
-#app-inner.immersive .sidebar,#app-inner.immersive .inspector{width:0!important;min-width:0;opacity:0;border:0;box-shadow:none;pointer-events:none;overflow:hidden}
+/* The sessions sidebar rides the same peek: while the rail is out, the hamburger can open it and it
+   pushes in at its normal width (its own .collapsed rule still zeroes it when the user closed it).
+   Without this the width:0!important below held the chat list shut on the stage, so every session
+   looked missing (live-bug 2026-09-24). The inspector never peeks. */
+#app-inner.immersive:not(.rail-peek) .sidebar,#app-inner.immersive .inspector{width:0!important;min-width:0;opacity:0;border:0;box-shadow:none;pointer-events:none;overflow:hidden}
 /* --arcade-h is the live height of the open arcade (app.ts syncArcadeGap). The stage covers <main>,
    and the game mounts inside that same main BELOW the composer, so without this the big ninja is
    painted straight over the playfield. Lift the stage floor instead of moving the game. */
@@ -5680,7 +5687,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-panel-h span{font-family:var(--mono);font-size:10.5px;color:var(--txt-4)}
 .orbit-panel-h [data-orbit-panel-close]{margin-left:auto}
 .orbit-ghost.archived{opacity:.62}
-.orbit-ghost-del:hover{color:var(--red);background:rgb(var(--red-rgb) / .12)}
 .orbit-arch-toggle{display:flex;align-items:center;gap:6px;margin-top:6px;padding:6px 9px;border:0;
   border-radius:8px;background:none;color:var(--txt-3);cursor:pointer;font:inherit;font-size:11px;
   letter-spacing:.08em;text-transform:uppercase;text-align:left;transition:background var(--t-fast)}

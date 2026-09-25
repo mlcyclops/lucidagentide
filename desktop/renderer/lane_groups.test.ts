@@ -6,7 +6,7 @@
 // it, a disband taking the lanes with it, or a corrupt payload taking down the grid.
 
 import { describe, expect, test } from "bun:test";
-import { assignLane, createGroup, groupSections, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed } from "./lane_groups.ts";
+import { assignLane, createGroup, groupSections, laneCollapsed, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed } from "./lane_groups.ts";
 
 const seeded = () => {
   let g = loadGroups(null);
@@ -53,6 +53,16 @@ describe("lane groups", () => {
       { group: "docs", ids: ["d"] },
       { group: null, ids: ["b"] },
     ]);
+  });
+  test("a collapsed group hides exactly its own lanes, and only while collapsed", () => {
+    // The grid's every status repaint derives each card's hidden class from this; a wrong answer is a
+    // collapsed group unfolding on the next poll, or an ungrouped lane vanishing.
+    const g = toggleCollapsed(seeded(), "backend");
+    expect(["a", "b", "c", "d"].filter((id) => laneCollapsed(g, id))).toEqual(["a", "c"]);
+    expect(laneCollapsed(toggleCollapsed(g, "backend"), "a")).toBe(false);
+    expect(laneCollapsed(removeGroup(g, "backend"), "a")).toBe(false); // disbanded: back in the tail, visible
+    // A dangling assignment renders in the ungrouped tail (groupSections), so it must never hide.
+    expect(laneCollapsed({ groups: [], byLane: { a: "gone" }, collapsed: { gone: true } }, "a")).toBe(false);
   });
   test("collapse toggles and disband clears it", () => {
     let g = toggleCollapsed(seeded(), "backend");
