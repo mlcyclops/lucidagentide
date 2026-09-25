@@ -3,11 +3,12 @@
 
 // desktop/meetings_hub.ts - P-MEET.1: the server-side half of the Meetings panel.
 //
-// The IDE is a THIN READ-ONLY CLIENT of the Lucid Meeting Hub running on this machine
-// (127.0.0.1:5123). Every byte the panel shows is fetched live over the Hub's bearer-scoped
-// `/ext/*` surface; nothing about a meeting is ever persisted IDE-side (the Hub's encrypted vault
-// stays the single source of truth). The ONE write we make is marking an action item done, which
-// the Hub itself owns in its todo ledger.
+// The IDE is a THIN CLIENT of the Lucid Meeting Hub running on this machine (loopback only,
+// 127.0.0.1:5123 by default). Every byte the panel shows is fetched live over the Hub's
+// bearer-scoped `/ext/*` surface; nothing about a meeting is ever persisted IDE-side (the Hub's
+// encrypted vault stays the single source of truth). The ONE write we make is marking an action
+// item done, which the Hub itself owns in its todo ledger - so the bearer can read meetings AND
+// mark action items done, and the pairing copy says exactly that.
 //
 // Why the calls live HERE and not in the renderer: the pairing bearer belongs in the OS-encrypted
 // credential vault (cred_vault.ts), and a renderer that could read meeting content directly would
@@ -18,8 +19,13 @@
 // back ONCE so the renderer can push it into the OS vault via the credStore IPC (safeStorage is
 // main-process-only, so there is no path from this process into the vault). `setMeetingHubToken`
 // keeps it usable for the rest of THIS session without a relaunch; main.ts injects it as
-// LUCID_MEETING_HUB_TOKEN on subsequent engine spawns. The token is never logged and never written
-// to the settings file.
+// LUCID_MEETING_HUB_TOKEN on subsequent engine spawns, and this module takes it OUT of process.env
+// the moment it loads (below), so no omp, fleet, scanner or other child ever inherits it. The token
+// is never logged and never written to the settings file.
+//
+// LOOPBACK ONLY: the bearer opens private meeting notes, so it is presented to an explicit loopback
+// origin and nowhere else. LUCID_MEETING_HUB_URL may move the PORT; any other scheme or host is
+// refused (fail-closed), and no request, authenticated or not, leaves for it.
 //
 // DORMANT, NOT BROKEN: when the Hub is not installed/running, `probeHub` fails fast (300ms) and the
 // panel renders one honest info row. There is no retry loop here - a probe happens when the user
@@ -36,25 +42,50 @@ export const HUB_PROBE_TIMEOUT_MS = 300;
  *  beat, but the panel must never hang on a wedged Hub. */
 const HUB_REQUEST_TIMEOUT_MS = 4_000;
 
-/** LUCID_MEETING_HUB_URL is a test/instance seam (the Hub's port is user-configurable). Read per
- *  call so a test can point it at a fake without a module-cache dependency. */
-export function hubOrigin(): string {
-  return (process.env.LUCID_MEETING_HUB_URL || "http://127.0.0.1:5123").replace(/\/+$/, "");
+/** Where the Hub listens when LUCID_MEETING_HUB_URL is unset. */
+export const DEFAULT_HUB_ORIGIN = "http://127.0.0.1:5123";
+
+/** The only hosts the bearer may travel to. `URL.hostname` keeps IPv6 brackets and lower-cases names,
+ *  and the WHATWG parser folds IPv4 shorthands (127.1, 0x7f000001) to 127.0.0.1 before this check. */
+const LOOPBACK_HOSTS: Record<string, true> = { "127.0.0.1": true, localhost: true, "[::1]": true };
+
+/** Shown when LUCID_MEETING_HUB_URL names anything but plain http on a loopback host. */
+export const HUB_URL_REFUSED = "LUCID_MEETING_HUB_URL must be http:// on 127.0.0.1, localhost or [::1] (any port); the Meetings panel will not contact any other address.";
+
+/** The Hub's origin, or null when LUCID_MEETING_HUB_URL is set to anything the bearer must not reach.
+ *  The variable exists because the Hub's port is user-configurable (and so a test can aim at a fake);
+ *  it is read per call, so no module-cache dependency. Fail-closed: unparseable, non-http, a
+ *  non-loopback host, credentials, a path, a query or a fragment all yield null, never a fallback. */
+export function hubOrigin(): string | null {
+  const raw = (process.env.LUCID_MEETING_HUB_URL ?? "").trim();
+  if (!raw) return DEFAULT_HUB_ORIGIN;
+  let u: URL;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== "http:" || LOOPBACK_HOSTS[u.hostname] !== true) return null;
+  if (u.username || u.password || u.pathname !== "/" || u.search || u.hash) return null;
+  return u.origin;
 }
 
-let sessionToken = "";
+// P-SANDBOX.15 discipline (dev.ts does the same for LUCID_MAIN_TOKEN): the vault-injected bearer is
+// captured into module state and REMOVED from process.env at module load. dev.ts imports this module
+// statically, so this runs before any statement of the engine, and therefore before any omp child,
+// fleet lane or scanner is spawned - all of which inherit process.env.
+let sessionToken = process.env.LUCID_MEETING_HUB_TOKEN ?? "";
+delete process.env.LUCID_MEETING_HUB_TOKEN;
 /** Remember a freshly-claimed token for THIS engine session (pairing must not need a relaunch). */
 export function setMeetingHubToken(token: string): void { sessionToken = String(token || ""); }
 /** The bearer to present, or "" when the IDE has never been paired. */
-export function meetingHubToken(): string { return sessionToken || process.env.LUCID_MEETING_HUB_TOKEN || ""; }
+export function meetingHubToken(): string { return sessionToken; }
 export function meetingHubPaired(): boolean { return meetingHubToken().length > 0; }
 
 /** Is a Lucid Meeting Hub listening? ANY HTTP answer counts, including an error status: the Hub's
  *  BaseHTTPRequestHandler has no do_HEAD and replies 501, which still proves it is there. Only a
  *  connection failure or the timeout means "not installed". */
 export async function probeHub(timeoutMs = HUB_PROBE_TIMEOUT_MS): Promise<boolean> {
+  const origin = hubOrigin();
+  if (!origin) return false;
   try {
-    await fetch(`${hubOrigin()}/`, { method: "HEAD", signal: AbortSignal.timeout(timeoutMs) });
+    await fetch(`${origin}/`, { method: "HEAD", signal: AbortSignal.timeout(timeoutMs) });
     return true;
   } catch { return false; }
 }
@@ -64,16 +95,19 @@ interface HubResult<T> { ok: boolean; status: number; data: T | null; error: str
 /** One authenticated `/ext/*` call. Never throws: a dead Hub, a timeout, and a refusal all come back
  *  as a structured result so the panel can say WHICH it was. */
 async function hubJson<T>(path: string, init?: { method?: string; body?: unknown }): Promise<HubResult<T>> {
+  const origin = hubOrigin();
+  if (!origin) return { ok: false, status: 0, data: null, error: HUB_URL_REFUSED };
   const token = meetingHubToken();
   if (!token) return { ok: false, status: 401, data: null, error: "not paired" };
   try {
-    const res = await fetch(hubOrigin() + path, {
+    const res = await fetch(origin + path, {
       method: init?.method ?? "GET",
       headers: {
         authorization: `Bearer ${token}`,
         ...(init?.body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: init?.body === undefined ? undefined : JSON.stringify(init.body),
+      redirect: "error", // the /ext surface never redirects; following one could carry the bearer off loopback
       signal: AbortSignal.timeout(HUB_REQUEST_TIMEOUT_MS),
     });
     const body = await res.json().catch(() => null) as { error?: unknown } | null;
@@ -196,7 +230,10 @@ export function normalizeUpcoming(raw: unknown): UpcomingEvent | null {
 
 /** Everything one panel paint needs. `installed` false means the Hub is not running (dormant row);
  *  `paired` false means it is running but this IDE holds no bearer yet (pairing row); `locked` true
- *  means the rows are honest metadata, NOT "you have no meetings". */
+ *  means the rows are honest metadata, NOT "you have no meetings". `openTodos` null means the Hub's
+ *  open list could NOT be read, so whether any action item is done is unknown - never "all done".
+ *  `dashboardUrl` is the validated Hub origin the panel links to (null when the configured URL was
+ *  refused, so there is nothing safe to link). */
 export interface MeetingsView {
   installed: boolean;
   paired: boolean;
@@ -205,13 +242,14 @@ export interface MeetingsView {
   limit: number;
   offset: number;
   rows: MeetingRow[];
-  openTodos: TodoRow[];
+  openTodos: TodoRow[] | null;
   upcoming: UpcomingEvent | null;
   error: string | null;
+  dashboardUrl: string | null;
 }
 
-const DORMANT: Omit<MeetingsView, "installed" | "paired"> = {
-  locked: false, total: 0, limit: 0, offset: 0, rows: [], openTodos: [], upcoming: null, error: null,
+const DORMANT: Omit<MeetingsView, "installed" | "paired" | "dashboardUrl"> = {
+  locked: false, total: 0, limit: 0, offset: 0, rows: [], openTodos: null, upcoming: null, error: null,
 };
 
 export interface MeetingsQuery { limit?: number; offset?: number; q?: string }
@@ -219,8 +257,12 @@ export interface MeetingsQuery { limit?: number; offset?: number; q?: string }
 /** Build the panel's whole view in one round trip set. Probe first so an absent Hub costs 300ms and
  *  no 401 noise; then the listing, the open action items, and the upcoming event together. */
 export async function meetingsView(query: MeetingsQuery = {}): Promise<MeetingsView> {
-  if (!(await probeHub())) return { ...DORMANT, installed: false, paired: meetingHubPaired() };
-  if (!meetingHubPaired()) return { ...DORMANT, installed: true, paired: false };
+  const origin = hubOrigin();
+  // A refused LUCID_MEETING_HUB_URL is not "no Hub": nothing is contacted, and the panel says why.
+  if (!origin) return { ...DORMANT, installed: false, paired: meetingHubPaired(), error: HUB_URL_REFUSED, dashboardUrl: null };
+  const dashboardUrl = `${origin}/`;
+  if (!(await probeHub())) return { ...DORMANT, installed: false, paired: meetingHubPaired(), dashboardUrl };
+  if (!meetingHubPaired()) return { ...DORMANT, installed: true, paired: false, dashboardUrl };
 
   const params = new URLSearchParams();
   params.set("limit", String(Math.max(1, Math.min(200, Math.floor(query.limit ?? 50)))));
@@ -238,7 +280,7 @@ export async function meetingsView(query: MeetingsQuery = {}): Promise<MeetingsV
     // A 401 here means the stored bearer was revoked on the Hub side: report it as unpaired so the
     // panel offers a fresh code rather than showing a dead-end error.
     const revoked = listRes.status === 401;
-    return { ...DORMANT, installed: true, paired: !revoked, error: revoked ? null : listRes.error };
+    return { ...DORMANT, installed: true, paired: !revoked, error: revoked ? null : listRes.error, dashboardUrl };
   }
 
   const page = normalizeMeetingsPage(listRes.data);
@@ -250,9 +292,12 @@ export async function meetingsView(query: MeetingsQuery = {}): Promise<MeetingsV
     limit: page.limit,
     offset: page.offset,
     rows: page.rows,
-    openTodos: todoRes.ok ? normalizeTodos(todoRes.data).todos : [],
+    // A failed open-list read is UNKNOWN (null), not an empty list: the panel reads absence from this
+    // list as "done", so [] here would paint every action item checked during a partial Hub failure.
+    openTodos: todoRes.ok ? normalizeTodos(todoRes.data).todos : null,
     upcoming: nextRes.ok ? normalizeUpcoming(nextRes.data) : null,
     error: null,
+    dashboardUrl,
   };
 }
 
@@ -282,11 +327,14 @@ export async function markTodo(id: string, done: boolean): Promise<{ ok: boolean
 export async function claimPairing(code: string): Promise<{ ok: boolean; token: string; error: string | null }> {
   const digits = code.replace(/\D/g, "");
   if (digits.length !== 6) return { ok: false, token: "", error: "Enter the 6-digit code from the Hub dashboard." };
+  const origin = hubOrigin();
+  if (!origin) return { ok: false, token: "", error: HUB_URL_REFUSED };
   try {
-    const res = await fetch(`${hubOrigin()}/ext/pair/claim`, {
+    const res = await fetch(`${origin}/ext/pair/claim`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ code: digits }),
+      redirect: "error",
       signal: AbortSignal.timeout(HUB_REQUEST_TIMEOUT_MS),
     });
     const body = await res.json().catch(() => null) as { token?: unknown; error?: unknown } | null;

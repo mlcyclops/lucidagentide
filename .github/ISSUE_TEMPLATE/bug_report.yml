@@ -1,0 +1,124 @@
+name: Bug report
+description: Something in LUCID is broken or behaves unexpectedly. Include a screenshot and your logs.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing LUCID. Before you file, check the [open bugs](https://github.com/mlcyclops/lucidagentide/issues?q=is%3Aissue+is%3Aopen+label%3Abug); if yours is there, add your details as a comment instead.
+
+        **Issues are public.** Never paste an API key, token, password, or anything under CUI into this form, a screenshot, or a log.
+
+  - type: input
+    id: version
+    attributes:
+      label: LUCID version
+      description: Click the About button at the bottom of the left rail.
+      placeholder: 2.3.0-beta.8
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version
+      placeholder: Windows 11 24H2, macOS 15.4, Ubuntu 24.04
+
+  - type: input
+    id: model
+    attributes:
+      label: Model and provider in use
+      placeholder: Claude Opus 5.5 via Anthropic OAuth
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Chat or model responses
+        - Runtime sandbox or Security panel
+        - Jev or judgment trace
+        - Agent browser or browser_run
+        - Providers, accounts or sign-in
+        - Sessions or history
+        - Install, update or launch
+        - Fleet Mode
+        - Voice mode
+        - Other
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: |
+        Capture the whole window (Windows `Win+Shift+S`, macOS `Cmd+Shift+4` then `Space`, Linux `PrtSc`) and paste or drag the image here.
+        Sandbox problem: include the Security panel's Runtime sandbox section. Blocked or unexpected tool prompt: turn on Settings > Developer > Developer mode and include the Logs panel's Exec / egress gate decisions section.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Drag the zip or log files here.
+
+        **Windows:** in PowerShell run
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\LucidAgentIDE\resources\repo\tools\collect-support-logs.ps1"`
+        and attach the `lucid-support-<date>-<time>.zip` it writes to your Desktop. Open it first and remove anything you would not post publicly.
+
+        **macOS / Linux:** attach `~/Library/Application Support/lucidagentide-desktop/engine.log` (macOS) or `~/.config/lucidagentide-desktop/engine.log` (Linux), plus `~/.omp/lucid-acp.log` and the newest `~/.omp/logs/omp.*.log`. These are not redacted: search them for `sk-`, `Bearer`, `token` and `key` first.
+
+        Full instructions: [How to pull your logs](https://github.com/mlcyclops/lucidagentide#how-to-pull-your-logs).
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the open issues and this is not a duplicate.
+          required: true
+        - label: Nothing I attached contains an API key, token, password, or CUI. I did not attach `lucid-gui.json`, `agent.db`, `lucid-cred-vault`, or anything from `http-400-requests`.
+          required: true

@@ -16,7 +16,9 @@ import {
   appContainerProbePassed,
   appContainerRuntimeGrants,
   APPCONTAINER_PROBE_MARKER,
+  discoverGitRoot,
   parseOmpShellPath,
+  prependPathOverlay,
   proxyChildEnv,
   shellInstallRoot,
   runtimeProbeVerdict,
@@ -542,4 +544,44 @@ test("appContainerRuntimeGrants adds the pinned shell's root, and never re-ACLs 
   const pf = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", shellPath: "C:\\Program Files\\Git\\bin\\bash.exe", bunBin: "C:\\Windows\\bun.exe" });
   expect(pf.grantRx).toEqual(["C:\\r"]); // already readable by every AppContainer; a standard user cannot write those DACLs
   expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\h", shellPath: "bash" }).grantRx).toEqual(["C:\\r"]); // a bare name is not a path
+});
+
+// P-SANDBOX.16 (ADR-0397): git discovery. A fake filesystem keyed by lowercase path.
+const fakeFs = (files: string[], dirs: Record<string, string[]> = {}) => ({
+  exists: (p: string) => files.some((f) => f.toLowerCase() === p.toLowerCase()),
+  list: (d: string) => { const k = Object.keys(dirs).find((x) => x.toLowerCase() === d.toLowerCase()); if (!k) throw new Error("ENOENT"); return dirs[k]!; },
+});
+const WIN_ENV = { LOCALAPPDATA: "C:\\Users\\U\\AppData\\Local", USERPROFILE: "C:\\Users\\U", ProgramFiles: "C:\\Program Files", ProgramW6432: "C:\\Program Files" };
+
+test("discoverGitRoot finds a MinGit the host never put on PATH", () => {
+  const fs = fakeFs(["C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\cmd\\git.exe"]);
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "C:\\Windows\\system32" }, fs)).toBe("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit");
+});
+
+test("discoverGitRoot prefers the git on the host PATH over a vendor default, from cmd, bin or mingw64\\bin", () => {
+  const fs = fakeFs(["C:\\Program Files\\Git\\cmd\\git.exe", "D:\\tools\\git\\cmd\\git.exe"]);
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "C:\\Windows;D:\\tools\\git\\mingw64\\bin" }, fs)).toBe("D:\\tools\\git");
+  expect(discoverGitRoot({ ...WIN_ENV, Path: "D:\\tools\\git\\cmd\\" }, fs)).toBe("D:\\tools\\git");
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "" }, fs)).toBe("C:\\Program Files\\Git");
+});
+
+test("discoverGitRoot picks the NEWEST GitHub Desktop version dir, and skips a root with no cmd\\git.exe", () => {
+  const gd = "C:\\Users\\U\\AppData\\Local\\GitHubDesktop";
+  const fs = fakeFs(
+    [`${gd}\\app-3.9.2\\resources\\app\\git\\cmd\\git.exe`, `${gd}\\app-3.10.1\\resources\\app\\git\\cmd\\git.exe`, "C:\\Users\\U\\AppData\\Local\\Programs\\Git\\bin\\bash.exe"],
+    { [gd]: ["app-3.9.2", "app-3.10.1", "packages"] },
+  );
+  expect(discoverGitRoot(WIN_ENV, fs)).toBe(`${gd}\\app-3.10.1\\resources\\app\\git`);
+  expect(discoverGitRoot(WIN_ENV, fakeFs([]))).toBeNull();
+});
+
+test("prependPathOverlay puts a dir first under the env's own PATH spelling, once", () => {
+  expect(prependPathOverlay({ Path: "C:\\Windows" }, "C:\\g\\cmd")).toEqual({ Path: "C:\\g\\cmd;C:\\Windows" });
+  expect(prependPathOverlay({ PATH: "c:\\G\\CMD\\;C:\\Windows" }, "C:\\g\\cmd")).toEqual({});
+  expect(prependPathOverlay({ PATH: "C:\\Windows" }, null)).toEqual({});
+});
+
+test("appContainerRuntimeGrants grants a discovered git root outside Program Files", () => {
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", gitRoot: "C:\\Users\\U\\scoop\\apps\\git\\current" }).grantRx).toEqual(["C:\\r", "C:\\Users\\U\\scoop\\apps\\git\\current"]);
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", gitRoot: "C:\\Program Files\\Git" }).grantRx).toEqual(["C:\\r"]);
 });

@@ -128,7 +128,7 @@ import { injectPreviewBridge, injectPreviewShim, injectPreviewZoom } from "./pre
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
-import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: read-only Meeting Hub client
+import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
@@ -259,7 +259,9 @@ function whisperDeps(): WhisperRuntimeDeps {
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
 import { planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
-import { appContainerRuntimeGrants, loopbackExempted, parseOmpShellPath, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
+import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
+import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
@@ -1151,6 +1153,7 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/kb/retrieve",        // ADR-0220: the knowledge_search tool grounds on the local compiled KB
   "/api/fleet/status",       // P-FLEET.L1: the master's fleet_status tool
   "/api/sandbox/grant",      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool POSTs the approved grant claim
+  "/api/git/exec",           // P-SANDBOX.17 (ADR-0399): the contained agent's git shim asks the host to run git
   "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
@@ -1168,7 +1171,7 @@ const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter
 // the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
 // P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
 // interject_extension drains only the notes addressed to it (the master child gets target "master").
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => interjectChildEnv(laneId), interject: (laneId, text) => { addInterject(laneId, text); } });
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }), interject: (laneId, text) => { addInterject(laneId, text); } });
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
@@ -1744,6 +1747,18 @@ return Bun.serve({
         saveGrants(addGrant(loadGrants(), { path: dirPath, mode, grantedAt: new Date().toISOString(), reason }));
         console.log(`[sandbox-grant] granted ${mode} on ${dirPath}${reason ? ` (${reason})` : ""}`);
         return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} - standing until the user revokes it in the Security panel (${applied.detail})` } });
+      }
+      // P-SANDBOX.17 (ADR-0399): the contained agent's git. Git for Windows cannot start inside the
+      // AppContainer, so its shim asks the engine to run the real git as the user. git_broker.ts owns
+      // every check (subcommand + option allowlist, workspace-confined paths, validated and held repo
+      // config, forced overrides, network through the egress proxy); every call is audited.
+      if (p === "/api/git/exec" && req.method === "POST") {
+        const b = await readBody<{ args?: unknown; cwd?: unknown }>(req);
+        const args = Array.isArray(b.args) ? b.args.map(String) : [];
+        const cmdDir = gitCmdDir();
+        const r = await runBrokeredGit({ args, cwd: String(b.cwd ?? "") }, { workspace: currentWorkspace(), gitExe: cmdDir ? join(cmdDir, "git.exe") : null, proxyUrl: runningEgressProxyUrl() });
+        emitSecurityEvent({ category: "exec", type: "git_broker", decision: r.refused ? "block" : "allow", severity: r.refused ? "medium" : "info", tool: "git", reason: `${r.sub || "(none)"}${r.refused ? ` refused: ${r.refused}` : ` exit ${r.code}`}`.slice(0, 200) });
+        return json({ ok: true, data: { code: r.code, stdout: Buffer.from(r.stdout).toString("base64"), stderr: Buffer.from(r.stderr, "utf8").toString("base64") } });
       }
       // P-SANDBOX.12 (ADR-0390): the Security panel's sandbox switch. Off is a LUCID setting (no admin);
       // On registers the loopback exemption behind UAC when it is missing; "unregister" removes it. Every
@@ -3766,7 +3781,8 @@ return Bun.serve({
         }
         return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
       }
-      // P-MEET.1: the Meetings panel's read-only window onto the Lucid Meeting Hub. Everything here is a
+      // P-MEET.1: the Meetings panel's window onto the Lucid Meeting Hub (its one write: marking an action item
+      // done). UI token only - none of these is in AGENT_ROUTES, so an omp child cannot reach them. Everything here is a
       // pass-through to the Hub's bearer-scoped /ext/* surface, normalized for the renderer. Nothing about a
       // meeting is cached or written to disk on this side. The renderer never receives the bearer: it rides
       // from meetings_hub.ts straight to the Hub, and only the one-time pairing claim returns it (so the
@@ -5055,6 +5071,8 @@ process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
 process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
+// P-SANDBOX.17 (ADR-0399): tools/git-broker/git_shim.ts POSTs the contained agent's git calls here.
+process.env.LUCID_GIT_URL = `http://127.0.0.1:${server.port}/api/git/exec?t=${AGENT_TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the
 // real tool name exists ONLY inside omp's hook API - the ACP update carries a coarse `kind` and an
 // intent-shadowed title. Unset means the extension self-skips, and reports fall back to the coarse kind.
@@ -5113,6 +5131,6 @@ function sandboxRuntimeFoldersNow(): RuntimeFolderView[] {
   if (!sandboxControlNow().available) return [];
   let shellPath: string | null = null;
   try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config */ }
-  const g = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: process.env.LUCID_OMP_BIN, shellPath });
+  const g = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: process.env.LUCID_OMP_BIN, shellPath, gitRoot: discoverGitRoot(process.env) });
   return runtimeFolderView({ workspace: currentWorkspace(), grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir, policy: managedPolicyFolderPlan(false) });
 }

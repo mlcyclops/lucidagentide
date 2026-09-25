@@ -1,20 +1,22 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/meetings_hub.test.ts - P-MEET.1: the read-only Meeting Hub client, against a REAL fake Hub
-// (Bun.serve on an ephemeral port), not a mocked fetch. What is worth pinning here:
+// desktop/meetings_hub.test.ts - P-MEET.1: the Meeting Hub client, against a REAL fake Hub
+// (Bun.serve on an ephemeral port, so every test also runs on a NON-default port), not a mocked
+// fetch. What is worth pinning here:
 //
 //   - the three "no data" states are DISTINCT and each is honest: Hub absent, Hub present but not
 //     paired, and Hub paired but vault locked. Collapsing any of them would make the panel lie.
 //   - a revoked token reads as "pair again", never as a dead-end error.
+//   - a failed open-action-item read is UNKNOWN, never "everything is done".
 //   - the bearer is presented on every content route and NEVER on the pairing claim (which has no
-//     credential yet by design).
+//     credential yet by design), only ever to a loopback origin, and never to a spawned child.
 //   - a row the Hub sends without a filename is dropped: it could never be opened.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
 import {
-  claimPairing, hubOrigin, markTodo, meetingDetail, meetingsView, meetingHubPaired, probeHub,
+  claimPairing, hubOrigin, markTodo, meetingDetail, meetingsView, meetingHubPaired, probeHub, HUB_URL_REFUSED,
   normalizeMeetingDetail, normalizeMeetingsPage, normalizeTodos, normalizeUpcoming, setMeetingHubToken,
 } from "./meetings_hub.ts";
 
@@ -31,12 +33,15 @@ const TODO = {
 const hub = {
   locked: false,
   revoked: false,
+  todosFail: false,
+  hits: 0,
   seenAuth: [] as string[],
   claimAuth: null as string | null,
   marked: null as { id: string; done: boolean } | null,
 };
 
 let server: Server;
+let hubUrl = ""; // the fake Hub's origin: an ephemeral port, never the default 5123
 const priorUrl = process.env.LUCID_MEETING_HUB_URL;
 
 beforeAll(() => {
@@ -46,6 +51,7 @@ beforeAll(() => {
       const url = new URL(req.url);
       const p = url.pathname;
       const auth = req.headers.get("authorization");
+      hub.hits++;
       if (req.method === "HEAD" && p === "/") return new Response(null, { status: 501 }); // the real Hub has no do_HEAD
       if (p === "/ext/pair/claim") {
         hub.claimAuth = auth;
@@ -58,7 +64,10 @@ beforeAll(() => {
           ? { locked: true, total: 1, limit: 50, offset: 0, rows: [{ ...ROW, title: "Zoom Meeting", duration: null, todos: 0 }] }
           : { locked: false, total: 1, limit: 50, offset: 0, rows: [ROW] });
       }
-      if (p === "/ext/todos") return Response.json(hub.locked ? { locked: true, todos: [] } : { locked: false, todos: [TODO] });
+      if (p === "/ext/todos") {
+        if (hub.todosFail) return Response.json({ error: "todo ledger unavailable" }, { status: 500 });
+        return Response.json(hub.locked ? { locked: true, todos: [] } : { locked: false, todos: [TODO] });
+      }
       if (p === "/ext/premeeting") {
         return Response.json({ enabled: true, lead_minutes: 15, vault_unlocked: !hub.locked, brief: null,
           next_event: hub.locked ? null : { subject: "Board review", start: "2026-09-22T09:00:00" } });
@@ -79,7 +88,8 @@ beforeAll(() => {
       return Response.json({ error: "not found" }, { status: 404 });
     },
   });
-  process.env.LUCID_MEETING_HUB_URL = `http://127.0.0.1:${server.port}`;
+  hubUrl = `http://127.0.0.1:${server.port}`;
+  process.env.LUCID_MEETING_HUB_URL = hubUrl;
 });
 
 afterAll(() => {
@@ -90,8 +100,9 @@ afterAll(() => {
 
 afterEach(() => {
   setMeetingHubToken("");
-  delete process.env.LUCID_MEETING_HUB_TOKEN;
-  hub.locked = false; hub.revoked = false; hub.seenAuth = []; hub.claimAuth = null; hub.marked = null;
+  process.env.LUCID_MEETING_HUB_URL = hubUrl;
+  hub.locked = false; hub.revoked = false; hub.todosFail = false; hub.hits = 0;
+  hub.seenAuth = []; hub.claimAuth = null; hub.marked = null;
 });
 
 describe("normalizers - the Hub ships on its own cadence, so every field is re-typed", () => {
@@ -140,6 +151,45 @@ describe("probe - dormancy is a normal state, detected fast", () => {
   });
 });
 
+describe("origin - the bearer only ever travels to an explicit loopback host", () => {
+  test("unset means the default Hub; http on 127.0.0.1, localhost or [::1] is accepted on any port", () => {
+    delete process.env.LUCID_MEETING_HUB_URL;
+    expect(hubOrigin()).toBe("http://127.0.0.1:5123");
+    for (const [raw, origin] of [
+      ["http://127.0.0.1:6123", "http://127.0.0.1:6123"],
+      ["http://localhost:6123/", "http://localhost:6123"],
+      ["http://[::1]:6123", "http://[::1]:6123"],
+      ["http://127.0.0.1", "http://127.0.0.1"],
+    ] as const) {
+      process.env.LUCID_MEETING_HUB_URL = raw;
+      expect(hubOrigin()).toBe(origin);
+    }
+  });
+  test("any other scheme, host, credentials or path is refused outright, with no fallback", () => {
+    for (const raw of [
+      "https://127.0.0.1:5123", "http://meetings.example.com:5123", "http://127.0.0.2:5123",
+      "http://127.0.0.1.example.com:5123", "http://user:pw@127.0.0.1:5123", "http://127.0.0.1:5123/hub",
+      "file:///C:/hub", "not a url",
+    ]) {
+      process.env.LUCID_MEETING_HUB_URL = raw;
+      expect(hubOrigin()).toBeNull();
+    }
+  });
+  test("a refused origin is contacted by NOTHING: no probe, no read, no write, no pairing claim", async () => {
+    setMeetingHubToken("hub-bearer-token");
+    // Same live fake Hub, but addressed with a path, which the gate refuses: every call must stop
+    // before the network, so the Hub sees zero requests.
+    process.env.LUCID_MEETING_HUB_URL = `${hubUrl}/prefix`;
+    const v = await meetingsView();
+    expect(v).toMatchObject({ installed: false, rows: [], error: HUB_URL_REFUSED, dashboardUrl: null });
+    expect(await probeHub()).toBe(false);
+    expect(await markTodo(TODO.id, true)).toMatchObject({ ok: false, error: HUB_URL_REFUSED });
+    expect(await meetingDetail(ROW.filename)).toMatchObject({ ok: false, error: HUB_URL_REFUSED });
+    expect(await claimPairing("123456")).toMatchObject({ ok: false, error: HUB_URL_REFUSED });
+    expect(hub.hits).toBe(0);
+  });
+});
+
 describe("the three no-data states stay distinct", () => {
   test("no Hub: not installed, and no token is even consulted", async () => {
     const prior = process.env.LUCID_MEETING_HUB_URL;
@@ -154,6 +204,8 @@ describe("the three no-data states stay distinct", () => {
     const v = await meetingsView();
     expect(v).toMatchObject({ installed: true, paired: false, rows: [], error: null });
     expect(hub.seenAuth).toEqual([]);
+    // The pairing row's "Open the Hub" link follows the CONFIGURED port, not a hard-coded 5123.
+    expect(v.dashboardUrl).toBe(`${hubUrl}/`);
   });
   test("Hub up and paired but LOCKED: rows survive, locked is reported", async () => {
     setMeetingHubToken("hub-bearer-token");
@@ -173,8 +225,17 @@ describe("paired reads", () => {
     const v = await meetingsView({ q: "pricing", limit: 10, offset: 0 });
     expect(v).toMatchObject({ installed: true, paired: true, locked: false, total: 1 });
     expect(v.rows[0]!.filename).toBe(ROW.filename);
-    expect(v.openTodos[0]!.id).toBe(TODO.id);
+    expect(v.openTodos![0]!.id).toBe(TODO.id);
     expect(v.upcoming).toEqual({ subject: "Board review", start: "2026-09-22T09:00:00" });
+    expect(v.dashboardUrl).toBe(`${hubUrl}/`); // the brief link targets the Hub actually answering
+  });
+  test("a failed open-item read is UNKNOWN (null), never an empty list that would read as all done", async () => {
+    setMeetingHubToken("hub-bearer-token");
+    hub.todosFail = true;
+    const v = await meetingsView();
+    expect(v).toMatchObject({ installed: true, paired: true, locked: false, error: null });
+    expect(v.rows).toHaveLength(1); // the listing itself still succeeded
+    expect(v.openTodos).toBeNull();
   });
   test("every content route presents the bearer", async () => {
     setMeetingHubToken("hub-bearer-token");
@@ -191,12 +252,29 @@ describe("paired reads", () => {
     const v = await meetingsView();
     expect(v).toMatchObject({ installed: true, paired: false, error: null });
   });
-  test("the env token is used when no pairing happened this session", async () => {
-    process.env.LUCID_MEETING_HUB_TOKEN = "from-the-os-vault";
-    expect(meetingHubPaired()).toBe(true);
-    await meetingsView();
+  test("the vault-injected bearer authenticates the engine, but no child it spawns can see it", async () => {
+    // A FRESH engine-like process (the capture happens at module load, so only a fresh process can
+    // show it; hence the dynamic import inside the child script): main.ts injects
+    // LUCID_MEETING_HUB_TOKEN, the process loads this module (as dev.ts does), spawns a child the way
+    // ACPClient does ({ ...process.env }), then reads the Hub. The engine must still authenticate;
+    // the child must find no such variable.
+    const mod = new URL("./meetings_hub.ts", import.meta.url).href;
+    const script = `(async () => {
+      const hub = await import(${JSON.stringify(mod)});
+      const child = Bun.spawnSync([process.execPath, "-e", "process.stdout.write(String(process.env.LUCID_MEETING_HUB_TOKEN))"], { env: { ...process.env } });
+      const v = await hub.meetingsView();
+      process.stdout.write(JSON.stringify({ inEnv: "LUCID_MEETING_HUB_TOKEN" in process.env, child: child.stdout.toString(), paired: v.paired, rows: v.rows.length }));
+    })();`;
+    const proc = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, LUCID_MEETING_HUB_URL: hubUrl, LUCID_MEETING_HUB_TOKEN: "from-the-os-vault" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    const code = await proc.exited;
+    if (code !== 0) throw new Error(`engine-like child exited ${code}: ${err}`);
+    expect(JSON.parse(out)).toEqual({ inEnv: false, child: "undefined", paired: true, rows: 1 });
     expect(hub.seenAuth).toContain("/ext/meetings:Bearer from-the-os-vault");
-  });
+  }, 30_000);
   test("a detail fetch resolves notes and action items; the requested name becomes the id", async () => {
     setMeetingHubToken("hub-bearer-token");
     const r = await meetingDetail(ROW.filename);

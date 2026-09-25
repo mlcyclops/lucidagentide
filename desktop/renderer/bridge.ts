@@ -1091,8 +1091,8 @@ export interface LucidBridge {
   setEmbeddingsConfig(config: EmbeddingsConfigView | null): Promise<{ config: EmbeddingsConfigView | null; active: boolean; error?: string } | null>;
   embeddingsTest(input: { baseUrl: string; model: string; authKind: string; headerName?: string; secret?: string }): Promise<{ ok: boolean; dim?: number; error?: string } | null>;
   embeddingsReindex(): Promise<{ ok: boolean; kgs?: number; pages?: number; stored?: number; error?: string } | null>;
-  // P-MEET.1: the Meetings panel's read-only view of the Lucid Meeting Hub (127.0.0.1:5123). The engine
-  // holds the pairing bearer; the renderer only ever sees rows. `meetingsPair` is the one call that
+  // P-MEET.1: the Meetings panel's view of the loopback Lucid Meeting Hub (reads, plus marking an action item
+  // done). The engine holds the pairing bearer; the renderer only ever sees rows. `meetingsPair` is the one call that
   // returns a secret, and ONLY so the renderer can hand it to the OS vault (credStore is main-only).
   meetings(query?: { limit?: number; offset?: number; q?: string }): Promise<MeetingsView | null>;
   meetingDetail(file: string): Promise<{ ok: boolean; locked: boolean; meeting: MeetingDetailView | null; error: string | null } | null>;

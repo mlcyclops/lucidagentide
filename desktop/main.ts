@@ -498,8 +498,10 @@ function prepareEmbeddingsToken(): Record<string, string> {
   } catch { return {}; }
 }
 // P-MEET.1: read the Meeting Hub pairing bearer from the vault and expose it to the dev child as
-// LUCID_MEETING_HUB_TOKEN, so the Meetings panel's read calls to 127.0.0.1:5123 are authenticated
-// server-side. Same shape as the Figma PAT: the renderer only ever sees rendered meeting rows.
+// LUCID_MEETING_HUB_TOKEN, so the Meetings panel's calls to the loopback Hub are authenticated
+// server-side. Same shape as the Figma PAT: the renderer only ever sees rendered meeting rows. The
+// engine's meetings_hub.ts moves it into module state and deletes it from process.env on load, so
+// the engine's own omp/fleet/scanner children never inherit it.
 // Best-effort - a missing/unpairable token just leaves the panel in its "pair with the Hub" state.
 function prepareMeetingHubToken(): Record<string, string> {
   try {
