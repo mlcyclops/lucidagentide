@@ -130,6 +130,7 @@ import { injectPreviewBridge, injectPreviewShim, injectPreviewZoom } from "./pre
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
+import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
@@ -3787,6 +3788,32 @@ return Bun.serve({
           return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
         }
         return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
+      }
+      // P-MEET.1: the Meetings panel's window onto the Lucid Meeting Hub (its one write: marking an action item
+      // done). UI token only - none of these is in AGENT_ROUTES, so an omp child cannot reach them. Everything here is a
+      // pass-through to the Hub's bearer-scoped /ext/* surface, normalized for the renderer. Nothing about a
+      // meeting is cached or written to disk on this side. The renderer never receives the bearer: it rides
+      // from meetings_hub.ts straight to the Hub, and only the one-time pairing claim returns it (so the
+      // renderer can push it into the OS-encrypted vault, which is reachable only from the Electron main
+      // process - see meetings_hub.ts for why this transit exists).
+      if (p === "/api/meetings") {
+        const limit = Number(url.searchParams.get("limit") ?? 50);
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        return json({ ok: true, data: await meetingsView({ limit, offset, q: url.searchParams.get("q") ?? "" }) });
+      }
+      if (p === "/api/meetings/detail") {
+        const r = await meetingDetail(url.searchParams.get("file") ?? "");
+        return json({ ok: true, data: r });
+      }
+      if (p === "/api/meetings/todo" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; done?: unknown }>(req);
+        return json({ ok: true, data: await markTodo(String(b.id ?? ""), !!b.done) });
+      }
+      if (p === "/api/meetings/pair" && req.method === "POST") {
+        const b = await readBody<{ code?: unknown }>(req);
+        const r = await claimPairing(String(b.code ?? ""));
+        // `vaultRef` tells the renderer WHERE to store the token; the token itself is returned exactly once.
+        return json({ ok: true, data: { ok: r.ok, error: r.error, token: r.token, vaultRef: MEETING_HUB_CRED_REF } });
       }
       // ADR-0221: "Test endpoint" - a one-vector connectivity probe against the ENTERED values (incl. an inline
       // key, so it works before saving/relaunch), reporting the dimension the model returns so the UI auto-fills it.

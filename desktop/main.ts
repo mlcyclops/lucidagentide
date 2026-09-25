@@ -22,6 +22,7 @@ import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtim
 import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
 import { createSplash, setSplashStatus } from "./splash.ts";
 import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: the Meeting Hub pairing bearer's vault ref
 import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDirWritable, type WriteProbe } from "./engine_boot.ts";
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
@@ -429,6 +430,9 @@ function startDevServer(): void {
   // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
   const gitEnv = prepareGitToken();
   const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
+  // P-MEET.1: the Meetings panel's Hub pairing bearer (ref "meeting_hub_token"), same vault→env-into-dev-child
+  // path. A token claimed DURING this session is held in the engine's memory; this covers every later launch.
+  const meetingsEnv = prepareMeetingHubToken();
   // CREATOR-0 (ADR-0279): the engine child learns its own identity and its own data roots. The standard
   // build gets ONLY the descriptive vars (no path relocation), so its on-disk layout is untouched; the
   // Creator build additionally isolates GUI settings, Personal Knowledge, the creator data root, and the
@@ -462,7 +466,7 @@ function startDevServer(): void {
     // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
     // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
     // its agent-browser poll loop against the child's /api/browser routes.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid) },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...meetingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid) },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -754,6 +758,18 @@ function prepareEmbeddingsToken(): Record<string, string> {
     if (!cfg?.enabled || !cfg.vaultRef || (cfg.authKind !== "bearer" && cfg.authKind !== "apikey")) return {};
     const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), cfg.vaultRef);
     return tok ? { LUCID_EMBEDDINGS_KEY: tok } : {};
+  } catch { return {}; }
+}
+// P-MEET.1: read the Meeting Hub pairing bearer from the vault and expose it to the dev child as
+// LUCID_MEETING_HUB_TOKEN, so the Meetings panel's calls to the loopback Hub are authenticated
+// server-side. Same shape as the Figma PAT: the renderer only ever sees rendered meeting rows. The
+// engine's meetings_hub.ts moves it into module state and deletes it from process.env on load, so
+// the engine's own omp/fleet/scanner children never inherit it.
+// Best-effort - a missing/unpairable token just leaves the panel in its "pair with the Hub" state.
+function prepareMeetingHubToken(): Record<string, string> {
+  try {
+    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), MEETING_HUB_CRED_REF);
+    return tok ? { LUCID_MEETING_HUB_TOKEN: tok } : {};
   } catch { return {}; }
 }
 ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {

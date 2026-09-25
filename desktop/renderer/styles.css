@@ -2724,6 +2724,62 @@ body.lucid-capturing #toasts{visibility:hidden}
 #preview{width:var(--preview-w,min(760px,50vw));max-width:50vw}
 /* When the preview is open the chat column is narrower, so shrink its text a notch to keep it readable. */
 body.preview-open .thread{font-size:.9em}
+/* ============================================================================================
+   P-MEET.1: the Meetings fly-out. Reuses the .kg shell (and .set-note for every prose notice, so
+   invariant #11's "never flex a sentence" rule is inherited rather than re-derived) with its own
+   width var. Two stacked panes: the list, then the selected meeting's detail.
+   ============================================================================================ */
+#meetings{width:var(--meetings-w,min(520px,40vw))}
+#meetings .set-head{padding-top:6px;padding-bottom:6px}
+.meet-main{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.meet-body{padding:10px 12px;overflow:auto;flex:0 0 auto;max-height:52%}
+.meet-detail{border-top:1px solid var(--line-soft);padding:10px 12px;overflow:auto;flex:1;min-height:0}
+.meet-list{display:flex;flex-direction:column;gap:2px;margin-top:8px}
+/* The row is a GRID, not a flex line of prose: the title owns its own line and ellipsizes, so a long
+   meeting name can never shatter into stacked slivers (invariant #11). */
+.meet-row{display:grid;grid-template-columns:minmax(0,1fr);gap:3px;width:100%;text-align:left;
+  padding:7px 9px;border:1px solid transparent;border-radius:9px;background:none;color:var(--txt-2);
+  font:inherit;cursor:pointer;transition:background var(--t-fast),border-color var(--t-fast)}
+.meet-row:hover{background:var(--bg-2);border-color:var(--line-soft)}
+.meet-row.on{background:var(--bg-2);border-color:var(--accent)}
+.meet-row-title{min-width:0;color:var(--txt);font-size:12.5px;font-weight:500;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meet-row-meta{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.meet-chip{white-space:nowrap;font-size:10.5px;color:var(--txt-3);background:var(--bg-3);
+  border-radius:5px;padding:1px 5px}
+.meet-empty{font-size:12px;color:var(--txt-3);line-height:1.55;padding:10px 2px}
+.meet-more{font-size:11px;color:var(--txt-3);padding:8px 2px 2px}
+.meet-upcoming{margin-top:8px;padding:9px 11px;border:1px solid var(--line-soft);border-radius:9px;
+  background:var(--bg-2);display:grid;gap:5px;justify-items:start}
+.meet-upcoming-hd{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-3)}
+.meet-upcoming-title{min-width:0;max-width:100%;color:var(--txt);font-size:12.5px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meet-pair{display:flex;gap:6px;align-items:center;margin-top:9px;flex-wrap:wrap}
+.meet-pair-code{width:104px;padding:5px 8px;border:1px solid var(--line);border-radius:var(--r-sm);
+  background:var(--bg-2);color:var(--txt);font-family:var(--mono);font-size:14px;letter-spacing:.22em}
+.meet-detail-hd{display:grid;gap:5px;padding-bottom:9px;border-bottom:1px solid var(--line-soft)}
+.meet-detail-title{min-width:0;color:var(--txt);font-size:13.5px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meet-sec{margin-top:12px}
+.meet-sec-hd{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-3);margin-bottom:5px}
+/* Prose is a BLOCK paragraph - never a flex child (invariant #11). */
+.meet-prose{margin:0;font-size:12px;color:var(--txt-2);line-height:1.6;white-space:pre-wrap}
+.meet-ul{margin:0;padding-left:17px;font-size:12px;color:var(--txt-2);line-height:1.6}
+.meet-todo{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px;align-items:start;width:100%;
+  text-align:left;padding:5px 7px;margin-left:-7px;border:1px solid transparent;border-radius:7px;
+  background:none;color:var(--txt-2);font:inherit;font-size:12px;line-height:1.5;cursor:pointer}
+.meet-todo:hover{background:var(--bg-2);border-color:var(--line-soft)}
+.meet-todo.done{cursor:default;color:var(--txt-3)}
+.meet-todo.done:hover{background:none;border-color:transparent}
+.meet-todo.done .meet-todo-text{text-decoration:line-through}
+.meet-todo-mark{width:13px;height:13px;margin-top:2px;border:1px solid var(--line-strong);border-radius:4px;
+  display:inline-flex;align-items:center;justify-content:center;color:var(--green)}
+.meet-todo.done .meet-todo-mark{border-color:transparent}
+/* Status unknown (the Hub's open list failed to load): not struck through, not clickable. */
+.meet-todo.unknown{cursor:default;color:var(--txt-2)}
+.meet-todo.unknown:hover{background:none;border-color:transparent}
+.meet-todo.unknown .meet-todo-mark{border-style:dashed;color:var(--txt-3);font-size:10px;line-height:1}
+.meet-todo-text{min-width:0}
 /* P-KG-CODE.1: trim the Knowledge-graph header's vertical padding too (ID beats the shared .set-head rule). */
 #knowledge .set-head{padding-top:6px;padding-bottom:6px}
 /* P-KGUI.1 (ADR-0184): the consolidated views dropdown replaces the three-button vertical stack. */

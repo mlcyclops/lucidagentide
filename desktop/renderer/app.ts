@@ -73,6 +73,9 @@ import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView,
 // P-KGUI.3 (ADR-0336): the Personalization card's stat tiles, rebuilt for a user with MANY knowledge graphs.
 import type { PersonalStatus } from "./bridge.ts";
 import { personalStatTiles, personalStatsHtml } from "./personal_stats.ts";
+// P-MEET.1: the Meetings fly-out's pure builders + the Hub payload types the bridge re-exports.
+import { meetingsPanelHtml, meetingDetailHtml, meetingsSig, type MeetingsPanelView } from "./meetings_panel.ts";
+import type { MeetingTodoView } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
@@ -370,6 +373,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
+        <button class="rail-btn" data-rail="meetings" data-tip="Meetings|What was decided, and what you owe - read live from your Lucid Meeting Hub. Nothing is stored here" data-tip-icon="calendar">${icon("calendar", 20)}</button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}<span class="rail-live-dot prev-rail-dot" id="railPreviewDot" hidden></span></button>
         <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
@@ -529,6 +533,25 @@ function buildShell(): void {
           <button class="kg-center-btn" id="kgCenter" type="button" data-tip="Re-center the graph|Fit the whole graph back into view." data-tip-side="left" hidden>${icon("center", 17)}</button>
           <div class="resizer resizer-l kg-side-resizer" id="kgSideResizer" data-resize="kgside" data-tip="Drag to resize the panel" data-tip-side="left" hidden></div>
           <div class="kg-side" id="kgSide"></div>
+        </div>
+      </aside>
+
+      <!-- P-MEET.1: the Meetings fly-out - a THIN client of the Lucid Meeting Hub on loopback (its only
+           write is marking an action item done). Same right-edge surface as Knowledge/Preview and mutually exclusive with them.
+           No recording controls live here by design; the Hub window owns those. -->
+      <aside class="kg meetings-panel" id="meetings" hidden>
+        <div class="resizer resizer-l" data-resize="meetings" data-tip="Drag to resize|Widen the meetings list or collapse toward the chat" data-tip-side="left"></div>
+        <div class="set-head">
+          <div class="set-title" data-tip="Meetings|Notes, decisions and open action items from your Lucid Meeting Hub. Nothing is stored in the IDE: the Hub's encrypted vault stays the single source of truth, and marking an action item done updates the Hub itself.">${icon("calendar", 17)} Meetings <span class="set-sub" id="meetScopeLbl"></span></div>
+          <div class="kg-tools">
+            <input id="meetSearch" class="kg-search" type="search" placeholder="Search meetings…" spellcheck="false" autocomplete="off" data-tip="Search|Find a meeting by title, person or content. Needs the Hub vault unlocked." />
+            <button class="btn-mini btn-icon" id="meetRefresh" data-tip="Refresh|Re-read the Hub. The panel never polls on a timer.">${icon("refresh", 14)}</button>
+            <button class="set-close" id="meetClose" data-tip="Close">${icon("close", 16)}</button>
+          </div>
+        </div>
+        <div class="meet-main">
+          <div class="meet-body" id="meetBody"></div>
+          <div class="meet-detail" id="meetDetail"></div>
         </div>
       </aside>
 
@@ -5005,6 +5028,7 @@ function openSettings(): void {
   closeKnowledge();
   closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
   closeSkills(); // P-SKILL.4
+  closeMeetings(); // P-MEET.1
   state.settingsOpen = true;
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#settings")!.hidden = false;
@@ -6682,6 +6706,7 @@ function openKnowledge(): void {
   closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
   closePreview(); // P-PREVIEW.1
   closeSkills(); // P-SKILL.4
+  closeMeetings(); // P-MEET.1
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#knowledge")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -6705,6 +6730,135 @@ function closeKnowledge(): void {
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
 
+// ── P-MEET.1: the Meetings fly-out ───────────────────────────────────────────────────────────────
+// A thin client of the Lucid Meeting Hub on loopback (the engine validates the origin; 127.0.0.1:5123
+// by default). Everything painted here is fetched live through the engine (which holds the pairing
+// bearer); the IDE stores no meeting data, its only write is marking an action item done, it offers no
+// recording controls beyond a deep link to the Hub window, and it has no cloud path.
+// Deliberately NOT polled: a refresh happens when the panel opens, when the user searches, and when
+// they press Refresh. A dormant Hub costs one 300ms probe and one info row, never a retry storm.
+let meetOpen = false;
+let meetQuery = "";
+let meetSelected: string | null = null;
+let meetSig = "";
+let meetOpenTodos: MeetingTodoView[] | null = null; // null: the Hub's open list was not read, status unknown
+let meetListGeneration = 0;
+let meetDetailGeneration = 0;
+let meetSearchTimer: number | null = null;
+
+function openMeetings(): void {
+  meetOpen = true;
+  closeSettings();
+  closeIde();
+  closeKnowledge();
+  closePreview();
+  closeSkills();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#meetings")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "meetings"));
+  void renderMeetings();
+}
+function closeMeetings(): void {
+  if (!meetOpen) return;
+  meetOpen = false;
+  meetListGeneration++;
+  meetDetailGeneration++;
+  $("#meetings")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+
+async function renderMeetings(): Promise<void> {
+  const gen = ++meetListGeneration;
+  const snap = await bridge.meetings({ q: meetQuery, limit: 50 });
+  if (!meetOpen || gen !== meetListGeneration) return;
+  // A null answer means the ENGINE did not respond, which is a different failure from "no Hub" - but
+  // the user-visible truth is the same (no meetings can be shown), so it folds to the dormant row.
+  const view: MeetingsPanelView = {
+    installed: snap?.installed ?? false,
+    paired: snap?.paired ?? false,
+    locked: snap?.locked ?? false,
+    rows: snap?.rows ?? [],
+    total: snap?.total ?? 0,
+    openTodos: snap?.openTodos ?? null, // an unread open list stays UNKNOWN; [] would paint every item done
+    upcoming: snap?.upcoming ?? null,
+    error: snap?.error ?? null,
+    query: meetQuery,
+    selected: meetSelected,
+    dashboardUrl: snap?.dashboardUrl ?? null,
+  };
+  meetOpenTodos = view.openTodos;
+  const sig = meetingsSig(view);
+  if (sig !== meetSig) {
+    meetSig = sig;
+    $("#meetBody")!.innerHTML = meetingsPanelHtml(view);
+  }
+  $("#meetScopeLbl")!.textContent = !view.installed ? (view.error ? "Hub address refused" : "Hub not running")
+    : !view.paired ? "not paired"
+    : view.locked ? "locked - metadata only"
+    : `${view.total} meeting${view.total === 1 ? "" : "s"}`;
+  if (!view.paired || !view.rows.some((r) => r.filename === meetSelected)) {
+    meetSelected = null;
+    $("#meetDetail")!.innerHTML = meetingDetailHtml(null, []);
+  }
+}
+
+async function showMeetingDetail(file: string): Promise<void> {
+  meetSelected = file;
+  $$("[data-meet-open]").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset.meetOpen === file));
+  const gen = ++meetDetailGeneration;
+  const host = $("#meetDetail")!;
+  host.innerHTML = `<div class="meet-empty">Reading the meeting…</div>`;
+  const r = await bridge.meetingDetail(file);
+  if (!meetOpen || gen !== meetDetailGeneration) return;
+  host.innerHTML = meetingDetailHtml(r?.meeting ?? null, meetOpenTodos, {
+    locked: !!r?.locked,
+    error: r ? r.error : "The engine did not answer.",
+  });
+}
+
+/** The panel's ONE write: flip an open action item to done in the Hub's own ledger. The open list is
+ *  the only thing we can see, so this is done-only; un-doing an item stays a Hub-side action. */
+async function markMeetingTodo(id: string): Promise<void> {
+  const r = await bridge.meetingTodoMark(id, true);
+  if (!r?.ok) {
+    showToast({ tone: "danger", title: "Couldn't mark it done", desc: r?.error ?? "The Meeting Hub did not answer.", actions: [{ label: "OK" }], timeout: 5000 });
+    return;
+  }
+  meetSig = ""; // the row's action count changed - force the list to repaint
+  await renderMeetings();
+  if (meetSelected) await showMeetingDetail(meetSelected);
+}
+
+async function pairMeetingHub(): Promise<void> {
+  const input = $("#meetPairCode") as HTMLInputElement | null;
+  const code = (input?.value ?? "").replace(/\D/g, "");
+  if (code.length !== 6) { showToast({ tone: "warn", title: "Six digits", desc: "Mint a pairing code in the Hub dashboard and type all six digits.", timeout: 4000 }); return; }
+  const r = await bridge.meetingsPair(code);
+  if (input) input.value = ""; // never leave a credential-bearing code sitting in the DOM
+  if (!r?.ok) {
+    showToast({ tone: "danger", title: "Pairing failed", desc: r?.error ?? "The Meeting Hub did not answer.", actions: [{ label: "OK" }], timeout: 6000 });
+    return;
+  }
+  // The bearer travels through the renderer for exactly one hop because Electron's safeStorage is
+  // main-process-only: there is no path from the engine into the OS vault. Hand it straight over and
+  // keep no reference. If the vault refuses (no OS encryption), the pairing still works for THIS
+  // session - the engine holds it in memory - and we say so rather than silently writing plaintext.
+  const stored = bridge.isElectron && bridge.credStore
+    ? await bridge.credStore({ ref: r.vaultRef, kind: "apikey", secret: r.token, label: "Lucid Meeting Hub" })
+    : { error: "the encrypted vault needs the LUCID desktop app" };
+  if (stored && "error" in stored) {
+    showToast({ tone: "warn", title: "Paired for this session only", desc: `The token could not be stored: ${String(stored.error)}. You will need to pair again next launch.`, actions: [{ label: "OK" }], timeout: 7000 });
+  } else {
+    showToast({ tone: "ok", title: "Paired with the Meeting Hub", desc: "The token can read your meetings and mark their action items done. Stored encrypted by your OS; revoke it any time from the Hub.", timeout: 5000 });
+    state.creds = await bridge.credList().catch(() => state.creds);
+  }
+  meetSig = "";
+  await renderMeetings();
+}
+
 // P-PREVIEW.1 (ADR-0096): the in-app browser preview fly-out. A sandboxed <iframe> renders a local app the
 // agent built; a screenshot can be sent to chat. Mirrors the Knowledge-graph fly-out (resizable right aside,
 // mutually exclusive with the other right surfaces). The agent driving it (custom tools) is P-PREVIEW.2.
@@ -6719,6 +6873,7 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   closeKnowledge();
   closeAgentBuilder(); // P-AGENT.2b
   closeSkills(); // P-SKILL.4
+  closeMeetings(); // P-MEET.1
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#preview")!.hidden = false;
   document.body.classList.add("preview-open"); // shrinks the chat text while the (≤50vw) preview is open
@@ -14033,12 +14188,14 @@ function wire(): void {
     // Toggle: clicking the rail icon of a fly-out that's ALREADY open slides it back away (and the
     // close() restores the inspector + re-activates the chat rail). Second click = dismiss.
     if (r === "knowledge" && kgOpen) return closeKnowledge();
+    if (r === "meetings" && meetOpen) return closeMeetings(); // P-MEET.1
     if (r === "preview" && previewOpen) return closePreview();
     if (r === "agentBuilder" && abOpen) return closeAgentBuilder();
     if (r === "settings" && state.settingsOpen) return closeSettings();
     if (r === "skills" && skillsOpen) return closeSkills(); // P-SKILL.4
     if (r === "trainer" && trainerOpen) return closeTrainer(); // P-TRAINER.7
     if (r !== "knowledge") closeKnowledge();
+    if (r !== "meetings") closeMeetings(); // P-MEET.1
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
     if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b
     if (r !== "skills") closeSkills(); // P-SKILL.4
@@ -14048,12 +14205,43 @@ function wire(): void {
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
     else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
+    else if (r === "meetings") openMeetings(); // P-MEET.1
     else if (r === "preview") openPreview();
     else if (r === "agentBuilder") openAgentBuilder(); // P-AGENT.2b
     else if (r === "skills") openSkills(); // P-SKILL.4
     else if (r === "trainer") openTrainer(); // P-TRAINER.7
     else palette.show();
   }));
+  // P-MEET.1: the Meetings fly-out. Delegated, because meetingsPanelHtml replaces the body wholesale
+  // on every repaint - a listener bound to an inner node would be thrown away with it.
+  $("#meetClose")?.addEventListener("click", () => closeMeetings());
+  // Refresh re-reads the open detail too, so action items shown as "unknown" after a failed todo read
+  // resolve on the next successful one instead of lingering until the meeting is re-selected.
+  $("#meetRefresh")?.addEventListener("click", async () => {
+    meetSig = "";
+    await renderMeetings();
+    if (meetOpen && meetSelected) await showMeetingDetail(meetSelected);
+  });
+  $("#meetSearch")?.addEventListener("input", (e) => {
+    meetQuery = (e.target as HTMLInputElement).value;
+    // Debounced: each keystroke is a real round trip to the Hub's search.
+    if (meetSearchTimer !== null) window.clearTimeout(meetSearchTimer);
+    meetSearchTimer = window.setTimeout(() => { meetSearchTimer = null; void renderMeetings(); }, 220);
+  });
+  $("#meetBody")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("#meetPairGo")) { void pairMeetingHub(); return; }
+    const row = t.closest("[data-meet-open]") as HTMLElement | null;
+    if (row) void showMeetingDetail(row.dataset.meetOpen ?? "");
+  });
+  $("#meetBody")?.addEventListener("keydown", (e) => {
+    const ev = e as KeyboardEvent;
+    if (ev.key === "Enter" && (ev.target as HTMLElement).id === "meetPairCode") { ev.preventDefault(); void pairMeetingHub(); }
+  });
+  $("#meetDetail")?.addEventListener("click", (e) => {
+    const todo = (e.target as HTMLElement).closest("[data-meet-todo]") as HTMLElement | null;
+    if (todo) void markMeetingTodo(todo.dataset.meetTodo ?? "");
+  });
   // P-AGENT.2b: Agent Builder toolbar (add-node kinds · connect mode · validate · save).
   $$("[data-ab-add]").forEach((b) => b.addEventListener("click", () => addAbNode((b as HTMLElement).dataset.abAdd as NodeKind)));
   $("#abConnect")?.addEventListener("click", () => toggleAbConnect());
@@ -16725,6 +16913,7 @@ function initResize(): void {
     const kw = Number(localStorage.getItem("lucid.kg-w")); if (kw) setW("kg", kw);
     const pw = Number(localStorage.getItem("lucid.preview-w")); if (pw) setW("preview", Math.min(pw, Math.round(window.innerWidth * 0.5))); // P-PREVIEW.1: never restore wider than 50%
     const ksw = Number(localStorage.getItem("lucid.kgside-w")); if (ksw) setW("kgside", ksw); // P-KG-CODE.1b
+    const mw = Number(localStorage.getItem("lucid.meetings-w")); if (mw) setW("meetings", mw); // P-MEET.1
   } catch { /* ignore */ }
   // data-resize value → the panel element id ("kg" → #knowledge, "kgside" → the KG side flyout); all
   // right-side panels resize from their left edge, the sidebar (left panel) from its right edge.
