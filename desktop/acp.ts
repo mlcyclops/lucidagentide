@@ -197,9 +197,88 @@ export class ACPClient {
     this.proc?.stdin!.write(JSON.stringify(o) + "\n");
   }
 
-  stop(): void {
-    try { this.proc?.kill(); } catch { /* ignore */ }
-    // kill() is async on every platform; drain now so callers awaiting a reply fail fast.
+  /** The stop in progress or finished. stop() is idempotent: every call shares it, except that a FAILED
+   *  attempt is dropped while its root process still runs, so the next call tries again. */
+  private stopping: Promise<boolean> | null = null;
+
+  /**
+   * End the child and everything it started. Requests still waiting are rejected at once; the returned
+   * promise resolves true only once the end is CONFIRMED, and false when part of the tree may still be
+   * running, so a caller about to start a replacement can refuse instead of letting two agents act in one
+   * workspace. Never rejects. Callers that only need the connection gone may ignore the result.
+   */
+  stop(): Promise<boolean> {
+    if (!this.stopping) {
+      const attempt = this.endTree();
+      this.stopping = attempt;
+      // Once the root is gone nothing can walk its tree again, so only a failure with the root still
+      // running is worth a retry.
+      void attempt.then((ok) => { if (!ok && this.stopping === attempt && this.proc && running(this.proc)) this.stopping = null; });
+    }
+    // Ending the process is async on every platform; drain now so callers awaiting a reply fail fast.
     this.die("acp: agent connection stopped", null);
+    return this.stopping;
   }
+
+  private async endTree(): Promise<boolean> {
+    const proc = this.proc;
+    if (!proc || proc.pid === undefined || !running(proc)) return true; // never spawned, or already exited
+    if (process.platform === "win32") {
+      // P-RECOVER.1 (ADR-0385): on Windows `omp.exe` is a Bun shim and the real agent is a `bun.exe cli.js`
+      // GRANDCHILD, with the agent's own tool processes under it. kill() ends only the shim, so the agent
+      // outlived stop() until it noticed stdin EOF (or never, when wedged). taskkill /T ends the whole tree.
+      // Ownership is proven: this is the pid WE spawned and it has not exited (a reused pid is impossible
+      // while our handle is still live), and taskkill is named by its absolute System32 path so PATH cannot
+      // substitute another binary. Confirmed means taskkill reported every process ended (exit 0) and the
+      // child's own exit was observed. If taskkill fails, the direct child is still killed so the
+      // connection does not linger, but the result is false: the rest of the tree is unaccounted for.
+      const treeEnded = await taskkillTree(proc.pid);
+      if (!treeEnded) { try { proc.kill(); } catch { /* already gone */ } }
+      const childExited = await exited(proc, STOP_EXIT_MS);
+      return treeEnded && childExited;
+    }
+    // POSIX: `omp` is the agent process itself. SIGTERM, then SIGKILL if it has not exited in time.
+    try { proc.kill(); } catch { /* already gone */ }
+    if (await exited(proc, STOP_EXIT_MS)) return true;
+    try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+    return exited(proc, STOP_EXIT_MS);
+  }
+}
+
+/** Bounds for stop(): taskkill's own run, then the child's exit. */
+const TASKKILL_MS = 10_000;
+const STOP_EXIT_MS = 5_000;
+
+function running(proc: ChildProcess): boolean {
+  return proc.exitCode === null && proc.signalCode === null;
+}
+
+/** True once `proc` has exited, false if it is still running after `ms`. */
+function exited(proc: ChildProcess, ms: number): Promise<boolean> {
+  if (!running(proc)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onExit = (): void => { clearTimeout(timer); resolve(true); };
+    const timer = setTimeout(() => { proc.off("exit", onExit); resolve(false); }, ms);
+    timer.unref?.();
+    proc.once("exit", onExit);
+  });
+}
+
+/** `taskkill /PID <pid> /T /F`, awaited. True only when it exits 0, which it does when every process in
+ *  the tree was ended; any failure, a spawn error, or no answer in TASKKILL_MS is false. */
+function taskkillTree(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let tk: ChildProcess;
+    try {
+      tk = spawn(join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    } catch {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => { try { tk.kill(); } catch { /* already gone */ } resolve(false); }, TASKKILL_MS);
+    timer.unref?.();
+    tk.once("error", () => { clearTimeout(timer); resolve(false); });
+    tk.once("exit", (code) => { clearTimeout(timer); resolve(code === 0); });
+    tk.unref();
+  });
 }

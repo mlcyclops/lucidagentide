@@ -99,7 +99,9 @@ import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECA
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
-import { backend, fleetLaneArgv, interjectChildEnv } from "./acp_backend.ts";
+import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from "./acp_backend.ts";
+import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
@@ -1181,6 +1183,12 @@ fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
 // the event loop is a worse bug than the stall it watches for.
 backend.startHealthWatch();
 setInterval(() => { void fleet.healthTick().catch(() => {}); }, 30_000).unref?.();
+// P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
+// BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
+// process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
+const LAST_SESSION_FILE = lastSessionPath(PORT);
+const PREVIOUS_SESSION = readLastSession(LAST_SESSION_FILE);
+backend.configureRecovery({ persistSession: (sessionId) => { writeLastSession(LAST_SESSION_FILE, { sessionId, cwd: currentWorkspace(), at: Date.now() }); } });
 // P-PWA-FOCUS.1: the lane-to-guest tap. ONE persistent observer, registered here at module scope right
 // after the lane manager exists (this file is evaluated once per engine process, and this statement sits
 // outside every route handler and every poll tick) - so it is installed exactly once and covers all lanes
@@ -4638,6 +4646,44 @@ return Bun.serve({
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });
       }
+      // P-RECOVER.1 (ADR-0385): self-recovery the user can see. Behind the same token gate as every /api
+      // route above. Every body field is type- and shape-checked before it reaches the backend or the
+      // incident store (ids address files and ACP sessions, so a malformed one is a 400, never a lookup).
+      // Nothing here submits anything: submission is the user opening the prefilled issue URL themselves.
+      if (p === "/api/recovery/state" && req.method === "GET") {
+        return json({ ok: true, data: { previous: PREVIOUS_SESSION, currentSessionId: backend.currentSessionId(), incidents: listIncidents().filter((m) => !m.seen).map(incidentView) } });
+      }
+      if (p === "/api/recovery/resume" && req.method === "POST") {
+        const b = parseResumeBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        return json({ ok: true, data: await backend.resumeSession(b.value.sessionId) });
+      }
+      if (p === "/api/recovery/recover" && req.method === "POST") return json({ ok: true, data: await backend.recoverMaster() });
+      if (p === "/api/incidents" && req.method === "GET") {
+        return json({ ok: true, data: listIncidents().map(incidentView) });
+      }
+      if (p === "/api/incidents/report" && req.method === "GET") {
+        const q = parseIncidentIdBody({ id: url.searchParams.get("id") });
+        if (!q.ok) return Response.json({ ok: false, error: q.error }, { status: 400 });
+        // Rebuilt from the validated record (incident_store.ts), never a file's text: no path is read from
+        // the metadata, and the report is redacted again on the way out.
+        const markdown = incidentReport(q.value.id);
+        if (markdown === null) return Response.json({ ok: false, error: "no such incident" }, { status: 404 });
+        return json({ ok: true, data: { markdown } });
+      }
+      if (p === "/api/incidents/seen" && req.method === "POST") {
+        const b = parseIncidentIdBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        return json({ ok: true, data: { ok: markIncidentSeen(b.value.id) } });
+      }
+      if (p === "/api/incidents/update" && req.method === "POST") {
+        const b = parseIncidentUpdate(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { id, outcome, note } = b.value;
+        // The store redacts the note (home folder included) before it is written.
+        const meta = updateIncident(id, { outcome, events: note ? [{ at: Date.now(), what: note }] : [] });
+        return json({ ok: true, data: meta ? incidentView(meta) : null });
+      }
       // P-INTERJECT.1: mid-turn operator interjections. POST queues a note for "master" or a laneId
       // (store enforces trim/4000-char/8-note discipline; validation here mirrors it for a crisp error).
       // GET /pending returns AND clears atomically - the single consumer is the target's omp child
@@ -4713,7 +4759,15 @@ return Bun.serve({
           const shared = collabManager.active ? backend.attachTurn((event) => {
             try { collabManager.tapEvent(event as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ }
           }) : undefined;
-          try { await execution; } finally { shared?.detach(); }
+          try { await execution; }
+          catch (e) {
+            // P-RECOVER.1 (ADR-0385): the stream wrapper masks every error as "The chat stream failed.", which
+            // hid the one refusal the window can act on. Pass exactly that fixed text through; nothing else.
+            if (!(e instanceof Error) || e.message !== TURN_ALREADY_RUNNING) throw e;
+            emit({ type: "error", message: TURN_ALREADY_RUNNING });
+            emit({ type: "done" });
+          }
+          finally { shared?.detach(); }
         };
         const activeTurn = backend.turnStatus();
         if (activeTurn?.running) {

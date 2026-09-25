@@ -2979,6 +2979,19 @@ body.preview-open .thread{font-size:.9em}
 .kg-empty .ic{opacity:.55}
 /* P-PERF.4: truncation hint atop a tail-loaded resumed transcript */
 .thread-tail-note{text-align:center;color:var(--txt-4);font-size:11px;padding:6px 0 10px;letter-spacing:.02em}
+/* P-RECOVER.1 (ADR-0385): the recovery notice (progress + result) and the incident Submit dialog */
+.recovery-note{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 10px;color:var(--txt-3);font-size:11.5px;line-height:1.5}
+.recovery-note-txt{max-width:560px}
+.recovery-note-acts{display:inline-flex;gap:6px}
+.recovery-note-acts:empty{display:none}
+.modal.incident-modal{width:min(620px,94vw);max-width:620px;text-align:left}
+.incident-modal .modal-title,.incident-modal .modal-desc{text-align:left;max-width:none}
+.incident-modal .modal-icon{margin:0 0 12px}
+.incident-public{color:var(--txt-2)}
+.incident-preview-h{font-size:11.5px;font-weight:650;color:var(--txt-2);margin:4px 0 6px}
+.incident-preview{margin:0;max-height:240px;overflow:auto;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);
+  color:var(--txt-2);font:11.5px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.incident-actions{flex-wrap:wrap;justify-content:flex-end}
 /* P-PERF.2: minimal-tier pause card - readable copy width + a clear opt-in button */
 .kg-paused>div{color:var(--txt-3);max-width:380px;line-height:1.5}
 .kg-paused .btn-mini{margin-top:2px}
