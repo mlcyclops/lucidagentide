@@ -13,7 +13,10 @@
 //   - Every text that enters a report goes through redact(): bearer tokens, sk-/gh*/xox*/AIza keys,
 //     JWTs, key=value secrets, e-mail addresses, long hex tokens, and the user's home path.
 //   - Prompts, transcripts, settings files, and credential stores are never inputs. Callers pass only
-//     plain-language events, process facts, and log TAILS.
+//     plain-language events, process facts, and log TAILS. Those logs can still quote model output: with
+//     Developer Mode on, asksage_stream.ts writes `[ASKSAGE_DIAG]` records whose `raw` field holds up to
+//     600 bytes of a provider response, and the engine echoes them into engine.log. stripDiagnostics()
+//     removes them from every log before it is redacted or reported.
 //   - Submission is always the user's choice. The prefilled issue carries the SUMMARY only (no log text),
 //     because the upstream repository is public; the full redacted report stays on this machine for the
 //     user to review and attach.
@@ -37,6 +40,14 @@ export type IncidentKind =
   | "recovery-exhausted";
 
 export type IncidentOutcome = "recovered" | "not-recovered" | "pending";
+
+/** Type guards for values read back from disk or the wire. */
+export function isIncidentKind(v: unknown): v is IncidentKind {
+  return typeof v === "string" && Object.hasOwn(KIND_TITLE, v);
+}
+export function isIncidentOutcome(v: unknown): v is IncidentOutcome {
+  return typeof v === "string" && Object.hasOwn(OUTCOME_TEXT, v);
+}
 
 export interface IncidentEvent {
   /** Epoch ms. */
@@ -107,6 +118,14 @@ const RULES: Array<[RegExp, string]> = [
   [/([A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/))[^\\/\s"'`]+/gi, "$1<user>"],
   [/(\/(?:home|Users)\/)[^/\s"'`]+/g, "$1<user>"],
 ];
+
+/** Drop every developer diagnostic record from a log: each line carrying the `[ASKSAGE_DIAG]` marker, and
+ *  each line carrying a JSON `"raw":` field, which is what remains of a record whose line was split by
+ *  another child's interleaved stderr. Callers read tails from a line boundary (logTail), so a record cut
+ *  at the start of a tail does not survive as an unmarked fragment either. Idempotent. */
+export function stripDiagnostics(text: string): string {
+  return String(text ?? "").split("\n").filter((line) => !line.includes("[ASKSAGE_DIAG]") && !/"raw"\s*:/.test(line)).join("\n");
+}
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -187,7 +206,7 @@ export function buildIncident(i: IncidentInput, now: number = Date.now(), rand: 
 
   const md: string[] = [`# ${title}`, "", ...summary];
   for (const log of i.logs ?? []) {
-    const full = r(log.text ?? "");
+    const full = r(stripDiagnostics(log.text ?? ""));
     const tail = full.length > LOG_TAIL_CHARS
       ? `[... ${full.length - LOG_TAIL_CHARS} earlier characters omitted ...]\n${full.slice(-LOG_TAIL_CHARS)}`
       : full;

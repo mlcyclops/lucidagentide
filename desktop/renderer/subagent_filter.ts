@@ -25,6 +25,22 @@ export interface SubagentBatch {
  *  assignment compare as prefixes of each other regardless of wrapping. */
 const norm = (s: string): string => s.trim().replace(/\s+/g, " ").slice(0, 200);
 
+/** A run is quiet this long (transcript untouched, no final output) = it is not working any more
+ *  (cancelled, crashed, or its parent died). Generous: one long tool call writes nothing meanwhile. */
+export const RUN_IDLE_MS = 10 * 60_000;
+/** A delegation whose runs never appeared this long after the turn ended is not coming. */
+export const NO_RUNS_GRACE_MS = 15_000;
+
+/** PURE: may the delegation card stop animating? P-TASK.6 (ADR-0398): omp 18 runs subagents as
+ *  BACKGROUND jobs, so the parent turn usually ends first. The card must stay live until its own runs
+ *  are finished (`done` = their output exists) or have gone quiet, not until the turn ends. Never
+ *  settles while the turn is still running. */
+export function delegationSettled(runs: readonly { done: boolean; lastAt: number }[], turnEndedAt: number | null, now: number): boolean {
+  if (turnEndedAt === null) return false;
+  if (!runs.length) return now - turnEndedAt >= NO_RUNS_GRACE_MS;
+  return runs.every((r) => r.done || now - r.lastAt >= RUN_IDLE_MS);
+}
+
 /** Keep only the runs that belong to `batch`. Matched results are capped at the batch size
  *  (the header count); an empty match on the turn's only card falls back to showing all runs. */
 export function filterRunsForBatch<R extends BatchRun>(runs: readonly R[], batch: SubagentBatch): R[] {

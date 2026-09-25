@@ -94,6 +94,8 @@
           "!**/.git/**",
           "!node_modules/**/*.map",
           "!node_modules/**/*.d.ts",
+          "node_modules/@oh-my-pi/pi-coding-agent/src/tools/browser/declarations.d.ts",
+          "node_modules/@oh-my-pi/pi-coding-agent/src/tools/computer/declarations.d.ts",
           "!node_modules/.bin/**",
           "node_modules/.bin/omp*",
           "!node_modules/onnxruntime-node/**",

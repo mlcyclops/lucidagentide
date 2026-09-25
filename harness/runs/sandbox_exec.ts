@@ -35,6 +35,7 @@
 // `lucid-appcontainer` helper land here; the native helper itself + Linux slirp raw-socket forwarding are
 // follow-ups. Pure + hermetic: `which` is injectable and `ctx.proxy` is a plain path/URL record.
 
+import { existsSync, readdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { win32 as win32Path } from "node:path";
 import type { ProfileCaps } from "./profiles.ts";
@@ -256,6 +257,84 @@ export function shellInstallRoot(shell: string): string {
   return d;
 }
 
+/** PURE: the install ROOTS where git commonly lives on Windows, in lookup order. P-SANDBOX.16 (ADR-0397):
+ *  a git the host never put on PATH (MinGit, a per-user install, scoop, GitHub Desktop's embedded copy)
+ *  was invisible to the agent, and inside the AppContainer an ungranted one does not exist at all. The
+ *  host PATH comes first (the user's own choice wins), then the vendor defaults. Every root's launcher is
+ *  `<root>\cmd\git.exe`. A `*` segment is a version dir the caller expands, newest first. */
+export function gitRootCandidates(env: Record<string, string | undefined>): string[] {
+  const w = win32Path;
+  const out: string[] = [];
+  for (const dir of (env.PATH ?? env.Path ?? "").split(";")) {
+    if (!dir || !w.isAbsolute(dir)) continue;
+    // `<root>\cmd`, `<root>\bin`, `<root>\mingw64\bin` are the three dirs git's installers put on PATH.
+    let d = w.normalize(dir).replace(/\\+$/, "");
+    const leaf = w.basename(d).toLowerCase();
+    if (leaf !== "cmd" && leaf !== "bin") continue;
+    d = w.dirname(d);
+    if (w.basename(d).toLowerCase() === "mingw64") d = w.dirname(d);
+    out.push(d);
+  }
+  const pf = env.ProgramW6432 ?? env.ProgramFiles;
+  if (pf) out.push(w.join(pf, "Git"));
+  if (env["ProgramFiles(x86)"]) out.push(w.join(env["ProgramFiles(x86)"]!, "Git"));
+  const local = env.LOCALAPPDATA ?? (env.USERPROFILE ? w.join(env.USERPROFILE, "AppData", "Local") : "");
+  if (local) out.push(w.join(local, "Programs", "Git"), w.join(local, "Programs", "MinGit"));
+  const scoop = env.SCOOP ?? (env.USERPROFILE ? w.join(env.USERPROFILE, "scoop") : "");
+  if (scoop) out.push(w.join(scoop, "apps", "git", "current"), w.join(scoop, "apps", "mingit", "current"));
+  const choco = env.ChocolateyInstall ?? (env.ProgramData ? w.join(env.ProgramData, "chocolatey") : "");
+  if (choco) out.push(w.join(choco, "lib", "git.portable", "tools"), w.join(choco, "lib", "mingit", "tools"));
+  if (local) {
+    out.push(w.join(local, "Microsoft", "WinGet", "Packages", "Git.MinGit_*"));
+    out.push(w.join(local, "GitHubDesktop", "app-*", "resources", "app", "git"));
+  }
+  return out;
+}
+
+/** The first candidate root that really holds `cmd\git.exe`, or null. `io` is injectable (like `which`)
+ *  so the lookup order and wildcard expansion are testable on any host. */
+export function discoverGitRoot(
+  env: Record<string, string | undefined>,
+  io: { exists(p: string): boolean; list(dir: string): string[] } = { exists: existsSync, list: (d) => readdirSync(d) },
+): string | null {
+  const w = win32Path;
+  const newestFirst = (a: string, b: string) => b.localeCompare(a, undefined, { numeric: true });
+  for (const cand of gitRootCandidates(env)) {
+    let roots = [cand];
+    const star = cand.split("\\").findIndex((seg) => seg.includes("*"));
+    if (star >= 0) {
+      const segs = cand.split("\\");
+      const parent = segs.slice(0, star).join("\\");
+      const prefix = segs[star]!.slice(0, segs[star]!.indexOf("*"));
+      let names: string[] = [];
+      try { names = io.list(parent); } catch { /* vendor dir absent */ }
+      roots = names.filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase())).sort(newestFirst).map((n) => w.join(parent, n, ...segs.slice(star + 1)));
+    }
+    const hit = roots.find((r) => io.exists(w.join(r, "cmd", "git.exe")));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** The discovered git's launcher dir (`<root>\cmd`, holding git.exe), or null when no git is installed. */
+export function gitCmdDir(env: Record<string, string | undefined> = process.env): string | null {
+  const root = discoverGitRoot(env);
+  return root ? win32Path.join(root, "cmd") : null;
+}
+
+/** PURE: the PATH overlay that puts `dir` first (a discovered git's `cmd` dir, or the contained agent's git
+ *  broker shim, P-SANDBOX.17), keyed by the env's OWN spelling of PATH (Windows env names are
+ *  case-insensitive, so a second `PATH` beside `Path` is ambiguous at spawn). Empty when there is no dir or
+ *  it is already on PATH. */
+export function prependPathOverlay(env: Record<string, string | undefined>, dir: string | null): Record<string, string> {
+  if (!dir) return {};
+  const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  const cur = env[key] ?? "";
+  const norm = (p: string) => win32Path.normalize(p).replace(/\\+$/, "").toLowerCase();
+  if (cur.split(";").some((p) => p && norm(p) === norm(dir))) return {};
+  return { [key]: cur ? `${dir};${cur}` : dir };
+}
+
 /** PURE: already readable by every AppContainer ("ALL APPLICATION PACKAGES" on the OS dirs), and not
  *  ours to re-ACL: a standard user cannot write their DACLs, so granting there would fail closed. */
 function osReadable(p: string): boolean {
@@ -263,7 +342,7 @@ function osReadable(p: string): boolean {
   return /^[a-z]:\\windows(\\|$)/.test(n) || /^[a-z]:\\program files( \(x86\))?(\\|$)/.test(n);
 }
 
-export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; bunBin?: string | null; ompBin?: string | null; shellPath?: string | null }): {
+export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; bunBin?: string | null; ompBin?: string | null; shellPath?: string | null; gitRoot?: string | null }): {
   grantRx: string[];
   grantRw: string[];
   tmpDir: string;
@@ -278,6 +357,8 @@ export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; b
   if (i.ompBin && w.isAbsolute(i.ompBin) && !under(i.ompBin, i.repoRoot)) rx.push(w.dirname(w.dirname(i.ompBin)));
   // P-SANDBOX.11 (ADR-0389): the shell the user pinned in omp's config, by its install root.
   if (i.shellPath && w.isAbsolute(i.shellPath)) rx.push(shellInstallRoot(i.shellPath));
+  // P-SANDBOX.16 (ADR-0397): the discovered git install (discoverGitRoot), so the agent can exec it.
+  if (i.gitRoot && w.isAbsolute(i.gitRoot)) rx.push(i.gitRoot);
   const seen = new Set<string>();
   const grantRx = rx.filter((d) => {
     if (osReadable(d)) return false;

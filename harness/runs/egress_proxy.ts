@@ -462,6 +462,12 @@ export async function ensureEgressProxy(o: { host?: string; dnsPort?: number; ht
   }
 }
 
+/** The shared proxy's HTTP URL when it is running, else null. Never starts one: P-SANDBOX.17's git broker
+ *  sends the contained agent's network git through the proxy that session already uses, or refuses. */
+export function runningEgressProxyUrl(): string | null {
+  return shared?.running() ? shared.endpoint()?.httpProxyUrl ?? null : null;
+}
+
 /** Stop + clear the shared proxy (used by shutdown paths and tests). */
 export async function stopEgressProxy(): Promise<void> {
   if (shared) {

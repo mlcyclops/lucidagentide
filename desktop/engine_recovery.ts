@@ -18,7 +18,7 @@ import { mkdirSync, openSync, closeSync, readSync, fstatSync, readFileSync, rena
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { issueUrl, LOG_TAIL_CHARS, type IncidentEvent, type IncidentInput, type IncidentKind, type IncidentOutcome } from "./incident_report.ts";
-import { incidentDir, type IncidentMeta } from "./incident_store.ts";
+import type { IncidentMeta } from "./incident_store.ts";
 import { APP_VERSION } from "./version.ts";
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts";
 
@@ -119,18 +119,21 @@ export interface IncidentView {
   seen: boolean;
 }
 
-/** What the window sees. `reportPath` is rebuilt from the id and the directory, never trusted from the
- *  metadata file, so a tampered .json cannot point "Show report" at an arbitrary path. */
-export function incidentView(m: IncidentMeta, dir: string = incidentDir()): IncidentView {
+/** What the window sees. Every field comes from the store's validated, rebuilt metadata: the title and body
+ *  are rebuilt from the record's input and `reportPath` from the directory and id, never read back from the
+ *  file, so a tampered .json can neither change the public issue nor point "Show report" elsewhere. */
+export function incidentView(m: IncidentMeta): IncidentView {
   return {
     id: m.id, kind: m.kind, outcome: m.outcome, createdAt: m.createdAt,
     issueTitle: m.issueTitle, issueBody: m.issueBody, issueUrl: issueUrl(m),
-    reportPath: join(dir, `${m.id}.md`), seen: m.seen === true,
+    reportPath: m.reportPath, seen: m.seen === true,
   };
 }
 
-/** The newest `max` characters of a log file, read from the end so a large log costs one bounded read.
- *  "" when the file is missing. The store redacts it before it touches disk. */
+/** At most the newest `max` bytes of a log file, read from the end so a large log costs one bounded read.
+ *  "" when the file is missing. When the read starts inside the file, the partial first line is dropped, so
+ *  the tail begins on a line boundary: a line cut at its start would lose the marker that identifies it
+ *  (stripDiagnostics). The store strips diagnostics and redacts it before it touches disk. */
 export function logTail(path: string, max: number = LOG_TAIL_CHARS): string {
   let fd: number | null = null;
   try {
@@ -139,7 +142,10 @@ export function logTail(path: string, max: number = LOG_TAIL_CHARS): string {
     const len = Math.min(size, Math.max(0, max));
     const buf = Buffer.alloc(len);
     readSync(fd, buf, 0, len, size - len);
-    return buf.toString("utf8");
+    const text = buf.toString("utf8");
+    if (len === size) return text;
+    const nl = text.indexOf("\n");
+    return nl === -1 ? "" : text.slice(nl + 1);
   } catch {
     return "";
   } finally {

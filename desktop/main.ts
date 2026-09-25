@@ -13,7 +13,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, shell } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { appendFileSync, closeSync, createWriteStream, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -30,7 +30,8 @@ import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, pars
 import { classifyPortHolder, orphanDialog, reapSpec } from "./orphan_engine.ts"; // P-PORTGUARD.3 (ADR-0382): reap our own orphan, after a warning
 import { assessPreviousRun, freshLedger, markClean, readLedgerText, runLedgerPath, withEngine, writeLedger, type PreviousRun, type RunLedger } from "./run_ledger.ts"; // P-RECOVER.1 (ADR-0385)
 import { engineRecordFromProbe, listProcesses, planLeftovers, roleOf, stopProcesses, strictDescendants, type EngineVerdict, type ProcRow } from "./leftover_reaper.ts"; // P-RECOVER.1 (ADR-0385)
-import { recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import { logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385): one line-aligned tail reader
 import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_report.ts";
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
@@ -149,9 +150,27 @@ function saveRunLedger(next: RunLedger): void {
   writeLedger(runLedgerPath(app.getPath("userData")), next);
 }
 /** A deliberate exit (normal quit, a Quit chosen on a startup dialog, the GPU relaunch, OS shutdown) is
- *  not a crash, so the next launch must not treat it as one. */
+ *  not a crash, so the next launch must not treat it as one. Only once nothing this run started is left
+ *  running: exits that still own an engine go through endRun(). */
 function markRunClean(): void {
   if (runLedger && !runLedger.clean) saveRunLedger(markClean(runLedger));
+}
+/** Upper bound on stopping and verifying the engine tree at exit, so a quit never hangs on it. */
+const END_RUN_MS = 20_000;
+let runEnding: Promise<void> | null = null;
+/** End this run deliberately: stop the engine and everything under it (the omp agent tree included, which
+ *  killing the engine alone does not reach), and mark the run clean only when that is VERIFIED. Otherwise
+ *  the ledger stays unclean, so the next launch's reaper still looks for what this run left. Shared by
+ *  every exit path that still owns an engine. */
+function endRun(): Promise<void> {
+  runEnding ??= (async () => {
+    appendEngineLog(`\n--- ${new Date().toISOString()} P-RECOVER.1 exit: stopping the engine ---\n`);
+    const timedOut = sleep(END_RUN_MS).then(() => false);
+    const verified = await Promise.race([stopCurrentEngine([]).then((r) => r.verified, () => false), timedOut]);
+    if (verified) markRunClean();
+    else appendEngineLog("- The engine and its processes could not be verified stopped; the run stays unclean so the next launch checks for leftovers.\n");
+  })();
+  return runEnding;
 }
 /** Record the engine the moment it spawns (spawn time + spawned command), then refine with the OS's own
  *  creation time and image path: that is what the next launch's ownership proof compares against. */
@@ -164,19 +183,6 @@ function recordEngineInLedger(child: ChildProcess, cmd: string): void {
     const row = rows.find((r) => r.pid === pid);
     if (row && runLedger && dev === child) saveRunLedger(withEngine(runLedger, engineRecordFromProbe(process.platform, pid, row, cmd, spawnedAt)));
   }, () => { /* the provisional record stands */ });
-}
-/** The newest `max` characters of engine.log, read from the end (the file can be large). */
-function engineLogTail(max = 12_000): string {
-  try {
-    const fd = openSync(engineLogPath(), "r");
-    try {
-      const size = fstatSync(fd).size;
-      const len = Math.min(size, max);
-      const buf = Buffer.alloc(len);
-      readSync(fd, buf, 0, len, size - len);
-      return buf.toString("utf8");
-    } finally { closeSync(fd); }
-  } catch { return ""; }
 }
 function incidentIdentity(): Pick<IncidentInput, "product" | "version" | "platform" | "arch" | "home"> {
   return { product: BUILD.productName, version: app.getVersion(), platform: process.platform, arch: process.arch, home: homedir() };
@@ -241,6 +247,8 @@ async function recoverFromUncleanExit(prev: RunLedger): Promise<void> {
   const summary = stoppedAny
     ? `${BUILD.productName} did not shut down cleanly last time and left processes running. They were identified from the run ledger and stopped before the new engine started. The window will try to resume the previous chat session.`
     : `${BUILD.productName} did not shut down cleanly last time (a crash, a forced close, or a power loss). No leftover processes needed stopping. The window will try to resume the previous chat session.`;
+  // Incidents live in userData, which the engine gets as LUCID_DATA_ROOT: never in ~/.omp, which the
+  // contained agent may write (incident_store.ts).
   const meta = recordIncident({
     ...incidentIdentity(),
     kind: stoppedAny ? "leftover-processes" : "unclean-shutdown",
@@ -248,8 +256,8 @@ async function recoverFromUncleanExit(prev: RunLedger): Promise<void> {
     summary,
     events,
     processes,
-    logs: [{ name: "engine.log (tail)", text: engineLogTail() }],
-  });
+    logs: [{ name: "engine.log (tail)", text: logTail(engineLogPath()) }],
+  }, incidentDir(app.getPath("userData")));
   appendEngineLog(meta ? `- Incident ${meta.id} recorded.\n` : "- The incident report could not be written.\n");
 }
 
@@ -272,45 +280,63 @@ async function engineAnswersHealth(): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Stop the CURRENT engine and everything under it. The root is our own live child handle, so its pid
- *  cannot have been recycled; descendants are walked with the creation-order check, and every pid is
- *  killed by name (never taskkill /T). If the table cannot be read, only the child handle is killed; its
- *  omp child exits on stdin EOF. */
-async function stopCurrentEngine(events: IncidentEvent[]): Promise<IncidentProcess[]> {
+/** Stop the CURRENT engine and everything under it, and say whether that is VERIFIED. The root is our own
+ *  live child handle, so its pid cannot have been recycled; descendants are walked with the creation-order
+ *  check, and every pid is killed by name (never taskkill /T). An engine that already exited is checked for
+ *  what it left running (its orphans, by this run's ledger record and the same rules the next launch's
+ *  reaper uses), and those are stopped. Verified means the process table was read, the engine is gone, and
+ *  every process found was confirmed stopped. If the table cannot be read, only the child handle is killed
+ *  (its omp child exits on stdin EOF) and nothing is verified. */
+async function stopCurrentEngine(events: IncidentEvent[]): Promise<{ processes: IncidentProcess[]; verified: boolean }> {
   const child = dev;
-  const running = (): boolean => !!child && child.exitCode === null && child.signalCode === null;
-  if (!child?.pid || !running()) {
-    events.push({ at: Date.now(), what: "The engine process had already exited." });
-    return [];
-  }
+  if (!child?.pid) return { processes: [], verified: true }; // this run never started an engine
+  const running = (): boolean => child.exitCode === null && child.signalCode === null;
+  const wasRunning = running();
   const exited = Promise.withResolvers<void>();
   child.once("exit", () => exited.resolve());
-  let processes: IncidentProcess[] = [];
+  let targets: Array<ProcRow & { role: string }> = [];
+  let walked = false;
   try {
     const rows = await listProcesses(process.platform);
-    const root = rows.find((r) => r.pid === child.pid);
-    const tree: ProcRow[] = root ? [root, ...strictDescendants(rows, root, process.platform)] : [];
-    if (tree.length) {
-      const fate = await stopProcesses(tree);
-      processes = tree.map((t) => ({ pid: t.pid, name: t.name, role: t === root ? "engine" : roleOf(t.name), startedAt: isoOrUndefined(t.startedAt), action: fate.get(t.pid) ?? "stop-failed" }));
+    if (wasRunning) {
+      const root = rows.find((r) => r.pid === child.pid);
+      if (root) {
+        targets = [{ ...root, role: "engine" }, ...strictDescendants(rows, root, process.platform).map((d) => ({ ...d, role: roleOf(d.name) }))];
+        walked = true;
+      }
+    } else {
+      targets = runLedger?.engine ? planLeftovers(rows, runLedger.engine, { selfPid: process.pid, platform: process.platform }).targets : [];
+      walked = true;
     }
-  } catch { /* fall through to the handle kill */ }
+  } catch { /* fall through to the handle kill; nothing is verified */ }
+  let processes: IncidentProcess[] = [];
+  if (targets.length) {
+    const fate = await stopProcesses(targets);
+    processes = targets.map((t) => ({ pid: t.pid, name: t.name, role: t.role, startedAt: isoOrUndefined(t.startedAt), action: fate.get(t.pid) ?? "stop-failed" }));
+  }
   if (running()) { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
   if (running()) await Promise.race([exited.promise, sleep(5000)]);
   const stopped = processes.filter((p) => p.action === "stopped").length;
-  events.push({ at: Date.now(), what: running() ? "The engine process did not exit when stopped." : `Stopped the engine and ${Math.max(0, stopped - 1)} process(es) under it.` });
-  appendEngineLog(processes.map((p) => `- ${p.action}: pid ${p.pid} ${p.name} (${p.role})\n`).join("") || `- Stopped engine pid ${child.pid} by its process handle.\n`);
-  return processes;
+  events.push({
+    at: Date.now(),
+    what: !wasRunning
+      ? `The engine process had already exited.${processes.length ? ` Stopped ${stopped} of ${processes.length} process(es) it left running.` : ""}`
+      : running() ? "The engine process did not exit when stopped." : `Stopped the engine and ${Math.max(0, stopped - 1)} process(es) under it.`,
+  });
+  appendEngineLog(processes.map((p) => `- ${p.action}: pid ${p.pid} ${p.name} (${p.role})\n`).join("")
+    || (wasRunning ? `- Stopped engine pid ${child.pid} by its process handle.\n` : `- Engine pid ${child.pid} had already exited; nothing it started was found running.\n`));
+  return { processes, verified: walked && !running() && processes.every((p) => p.action === "stopped") };
 }
 
 async function restartEngineNow(trigger: string): Promise<EngineRestartResult> {
+  if (runEnding) return { ok: false, reason: "exiting" }; // the app is quitting: never spawn an engine it would orphan
   if (await engineAnswersHealth()) return { ok: false, reason: "engine-healthy" };
   const startedAt = Date.now();
   if (startedAt - lastEngineRestartAt < ENGINE_RESTART_MIN_INTERVAL_MS) return { ok: false, reason: "rate-limited" };
   lastEngineRestartAt = startedAt;
   appendEngineLog(`\n--- ${new Date(startedAt).toISOString()} P-RECOVER.1 engine restart (${trigger}) ---\n`);
   const events: IncidentEvent[] = [{ at: startedAt, what: `The engine stopped answering status checks and a restart was ${trigger}.` }];
-  const processes = await stopCurrentEngine(events);
+  const { processes } = await stopCurrentEngine(events);
   const free = await waitPortFree(6000);
   if (!free) events.push({ at: Date.now(), what: `Port ${PORT} was still in use after the engine stopped.` });
   startDevServer();
@@ -328,8 +354,8 @@ async function restartEngineNow(trigger: string): Promise<EngineRestartResult> {
       : `The window lost contact with ${BUILD.productName}'s engine. It was stopped and started again, but the new engine is not answering (${reason}).`,
     events,
     processes,
-    logs: [{ name: "engine.log (tail)", text: engineLogTail() }],
-  });
+    logs: [{ name: "engine.log (tail)", text: logTail(engineLogPath()) }],
+  }, incidentDir(app.getPath("userData")));
   if (meta) appendEngineLog(`- Incident ${meta.id} recorded.\n`);
   return { ok, reason, ...(meta ? { incidentId: meta.id } : {}) };
 }
@@ -367,18 +393,22 @@ try {
 } catch { /* unreadable flag: sandbox stays on; the watchdog below re-heals if it bricks */ }
 let gpuDeaths = 0;
 let firstWindowRendered = false; // set in createWindow's ready-to-show
+let gpuRelaunching = false;
 app.on("child-process-gone", (_e, details) => {
   const r = decideGpuAction(details, { deathsBefore: gpuDeaths, windowRendered: firstWindowRendered, sandboxOff: gpuSandboxOff });
   gpuDeaths = r.deaths;
   if (r.action === "ignore") return;
   appendEngineLog(gpuDeathLogLine(details, r.deaths, r.action, new Date().toISOString()));
-  if (r.action !== "relaunch") return;
+  if (r.action !== "relaunch" || gpuRelaunching) return;
+  gpuRelaunching = true;
   try { writeFileSync(gpuFlagPath(), `GPU sandbox disabled ${new Date().toISOString()} after ${r.deaths} GPU child deaths (zombie-SID mitigation, electron/electron#51761). Delete this file to re-enable the GPU sandbox.\n`); }
   catch { /* the relaunch argv still carries the switch for this recovery */ }
-  try { dev?.kill(); } catch { /* best-effort */ }
-  markRunClean(); // P-RECOVER.1: a deliberate relaunch, not a crash
-  app.relaunch({ args: relaunchArgs(process.argv.slice(1)) });
-  app.exit(0);
+  // P-RECOVER.1: a deliberate relaunch, not a crash. app.exit skips will-quit, so the run is ended here: the
+  // engine tree is stopped first, and the run is marked clean only if that is verified.
+  void endRun().then(() => {
+    app.relaunch({ args: relaunchArgs(process.argv.slice(1)) });
+    app.exit(0);
+  });
 });
 
 function startDevServer(): void {
@@ -1183,7 +1213,7 @@ ipcMain.handle("lucid:showInFolder", async (_e, p: unknown) => {
 // P-LOCAL.3 polish: restart the app so the freshly-spawned dev server + omp pick up the current Local
 // Providers (their secrets are injected into the dev child env at spawn — a restart is the clean apply).
 ipcMain.handle("lucid:relaunch", () => {
-  try { dev?.kill(); } catch { /* best-effort */ }
+  // The quit stops the engine tree (endRun in will-quit) before the relaunched app binds its port.
   app.relaunch();
   app.quit();
 });
@@ -1219,7 +1249,14 @@ if (!gotSingleInstanceLock) {
   previousRun = assessPreviousRun(readLedgerText(ledgerPath), process.pid);
   try { mkdirSync(app.getPath("userData"), { recursive: true }); } catch { /* writeLedger reports its own failure */ }
   saveRunLedger(freshLedger({ mainPid: process.pid, mainStartedAt: Date.now() - Math.round(process.uptime() * 1000), port: PORT, appVersion: app.getVersion() }));
-  app.on("will-quit", () => markRunClean());
+  // P-RECOVER.1: the run is marked clean only after the engine and its omp tree are verified stopped
+  // (endRun). The first will-quit defers the quit; quit() runs again once endRun settles, clean or not.
+  let runEnded = false;
+  app.on("will-quit", (e) => {
+    if (runEnded) return;
+    e.preventDefault();
+    void endRun().then(() => { runEnded = true; app.quit(); });
+  });
   app.on("second-instance", (_e, argv) => {
     // P-RECOVER.1: a relaunch must always end in a usable window. If the main window is gone, reopen it
     // (restarting the engine first when it no longer answers).
@@ -1311,8 +1348,9 @@ app.whenReady().then(async () => {
       defaultId: 0,
     });
     if (response === 0) clipboard.writeText(block);
-    try { dev?.kill(); } catch { /* best-effort: app.exit skips the "quit" handler that normally kills it */ }
-    markRunClean(); // P-RECOVER.1: the user quit on purpose; the next launch is not recovering a crash
+    // P-RECOVER.1: the user quit on purpose. app.exit skips will-quit (and the "quit" handler that normally
+    // kills the engine), so the run is ended here: engine tree stopped, clean only if that is verified.
+    await endRun();
     app.exit(1);
     return;
   }

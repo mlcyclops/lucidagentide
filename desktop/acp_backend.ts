@@ -43,7 +43,7 @@ import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentPr
 import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn } from "./managed_config.ts";
-import { appContainerRuntimeGrants, loopbackExempted, parseOmpShellPath, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -58,7 +58,7 @@ import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
-import { type PendingCall, type PendingView, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
+import { type PendingCall, type PendingView, parseTaskCall, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
 import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
 import { emitSecurityEvent } from "./audit_export.ts";
@@ -331,6 +331,8 @@ const COMPLETE_MS = 180_000;
 const RESUME_MS = 120_000;
 /** The refusal a second concurrent chat turn gets. Exported so dev.ts can pass it through verbatim. */
 export const TURN_ALREADY_RUNNING = "A chat turn is already running";
+/** P-RECOVER.1: why no replacement agent starts while the previous one's process tree may still be running. */
+const AGENT_NOT_STOPPED = "The previous agent process could not be confirmed stopped, so LUCID will not start another one beside it. Quit and reopen LUCID.";
 
 /** P-RECOVER.1: one bounded line for a recovery log/incident. ACP errors arrive as plain `{ code, message }`
  *  objects (ACPClient rejects with the JSON-RPC error as-is), not Error instances. */
@@ -392,7 +394,7 @@ export type ChatEvent =
   // images are validated + capped in extractToolImages before this event is emitted; the UI renders them
   // inline in the reply with a download + "send to preview" (for markup) affordance.
   | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string }
-  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task ids from rawInput.tasks[].id (absent when all auto-generated)
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task names from the task call (parseTaskCall; absent when all auto-generated)
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
@@ -459,6 +461,9 @@ class Backend {
   /** P-RECOVER.1: true while a session/load replays history. The replay is old conversation, and it must
    *  not stream into a live turn's pane (or its step sidecar) when a revival happens mid-prompt. */
   private replaying = false;
+  /** P-RECOVER.1: the master child restart() stopped, until its whole process tree is confirmed ended.
+   *  start() spawns nothing while this is set. */
+  private retired: ACPClient | null = null;
   private starting: Promise<void> | null = null;
   private sessioning: Promise<void> | null = null; // dedupe concurrent session/new (getConfig races it with a timeout)
   private listener: ((e: ChatEvent) => void) | null = null;
@@ -713,7 +718,7 @@ class Backend {
       // P-SANDBOX.11 (ADR-0389): a shellPath pinned in omp's config must be reachable inside the container.
       let shellPath: string | null = null;
       try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config: omp discovers a shell itself */ }
-      acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0], shellPath });
+      acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0], shellPath, gitRoot: discoverGitRoot(process.env) });
       // P-SANDBOX.14 (ADR-0394): the admin-approved folders ride every contained spawn (the runtime probe
       // below uses the same ctx, so a grant the helper cannot apply keeps the session off the container).
       const policy = managedPolicyFolderPlan();
@@ -745,7 +750,10 @@ class Backend {
     this.sandboxExecBlock = null;
     setSandboxState({ backend: res.backend.name, isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
     if (d.disclosed) console.error(sandboxDisclosure());
-    return { cmd: d.plan.cmd, args: d.plan.args, env: d.plan.env };
+    // P-SANDBOX.17 (ADR-0399): Git for Windows cannot start inside the AppContainer, so the contained agent's
+    // `git` is the broker shim (tools/git-broker/git.cmd), which asks the engine to run the real git.
+    const gitShim = res.backend.name === "appcontainer" ? prependPathOverlay(process.env, join(resolvedRepo().root, "tools", "git-broker")) : {};
+    return { cmd: d.plan.cmd, args: d.plan.args, env: { ...d.plan.env, ...gitShim } };
   }
 
   private async start(): Promise<void> {
@@ -757,6 +765,15 @@ class Backend {
     if (this.acp) return;
     if (!this.starting) {
       this.starting = (async () => {
+        // P-RECOVER.1 (ADR-0385): never spawn beside the child restart() retired. Its whole process tree must
+        // be confirmed ended first (ACPClient.stop), or the old agent and its tools could still be working in
+        // the workspace while the replacement resumes the same turn. If it cannot be confirmed, every start
+        // refuses; each attempt asks the old client again, which retries while its root is still running.
+        while (this.retired) {
+          const old = this.retired;
+          if (!(await old.stop())) throw new Error(AGENT_NOT_STOPPED);
+          if (this.retired === old) this.retired = null;
+        }
         // P-TASK.2 (ADR-0028): append the byte-stable proactive-delegation policy to omp's system
         // prompt. omp owns the system prompt on the ACP path, so --append-system-prompt is how our
         // cached, stable layer-3 policy reaches the chat model (no volatile bytes → cache stays hot).
@@ -800,7 +817,12 @@ class Backend {
         const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...interjectChildEnv("master") });
+        // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
+        // goes first on the agent's PATH - unless the plan already set PATH (the contained agent's git broker
+        // shim, P-SANDBOX.17).
+        const planSetsPath = Object.keys(spawnPlan.env).some((k) => k.toUpperCase() === "PATH");
+        const gitEnv = process.platform === "win32" && !planSetsPath ? prependPathOverlay(process.env, gitCmdDir()) : {};
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") });
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -814,26 +836,27 @@ class Backend {
             case "agent_thought_chunk": if (u.content?.type === "text") this.emit({ type: "thinking", text: u.content.text }); break;
             case "tool_call": {
               trackToolCall(this.openCalls, u, Date.now()); // P-STALL.2: this call is now awaited
-              // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other")
-              // whose rawInput carries { agent, context, tasks[] } (batch) or { agent, assignment } (flat).
-              // Detect it and emit a distinct `subagent` event so the UI shows a delegation card instead
-              // of a nameless "other" chip. (The rawInput strings are still scanned by the pre-hook gate.)
+              // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other").
+              // Detect it by shape (parseTaskCall, P-TASK.6 / ADR-0398: omp 18's per-item agent) and emit a
+              // distinct `subagent` event so the UI shows a delegation card instead of a nameless "other"
+              // chip. (The rawInput strings are still scanned by the pre-hook gate.)
               const ri = u.rawInput ?? {};
-              if (ri.agent && (Array.isArray(ri.tasks) || typeof ri.assignment === "string")) {
-                const items: any[] = Array.isArray(ri.tasks) ? ri.tasks : [{ assignment: ri.assignment, description: ri.description }];
-                // P-TASK.5a: per-task ids (rawInput.tasks[].id) scope each delegation card to ITS batch's
-                // runs - without them two batches in one turn render the union of all runs on every card.
-                // Only emitted when at least one task carried an explicit id (they may be auto-generated).
-                const names = items.map((t) => (typeof t?.id === "string" ? t.id.trim() : "")).filter(Boolean);
+              const taskItems = parseTaskCall(ri);
+              if (taskItems) {
+                const agent = [...new Set(taskItems.map((t) => t.agent))].join(" + ");
+                // P-TASK.5a: per-task names (also each run's transcript stem) scope each delegation card to
+                // ITS batch's runs - without them two batches in one turn render the union of all runs on
+                // every card. Only emitted when at least one task carried a name (omp may generate them).
+                const names = taskItems.map((t) => t.name).filter(Boolean);
                 this.emit({
-                  type: "subagent", id: String(u.toolCallId ?? u.title ?? ""), agent: String(ri.agent),
-                  title: String(u.title ?? `${ri.agent} subagent`),
-                  assignments: items.map((t) => String(t?.description ?? t?.assignment ?? "").slice(0, 200)).filter(Boolean),
+                  type: "subagent", id: String(u.toolCallId ?? u.title ?? ""), agent,
+                  title: String(u.title ?? `${agent} subagent`),
+                  assignments: taskItems.map((t) => t.task.replace(/^#+\s*/gm, "").replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean),
                   ...(names.length ? { names } : {}),
                 });
-              } else if (ri.poll || ri.cancel || ri.list || ri.wait) {
-                // job-coordination calls (poll/list/cancel/wait of background subagents) are internal
-                // bookkeeping while a task runs — don't surface them as separate tool chips.
+              } else if (ri.op === "wait" || ri.op === "jobs" || ri.op === "inbox" || (ri.op === "cancel" && Array.isArray(ri.ids))) {
+                // job-coordination calls on background subagents (omp 18 moved them from the task tool to
+                // the `hub` tool) are internal bookkeeping while a task runs - no separate tool chips.
               } else {
                 // P-CHAT.1 (ADR-0104): carry the tool's authored code for the chat's inline preview. A
                 // write's `content`, or an edit's `oldText`/`newText` (→ diff). Bounded so a huge file can't
@@ -1491,13 +1514,14 @@ class Backend {
   }
 
   /** Tear down the omp process so the next call respawns it (e.g. after an API
-   *  key changes - the new env is picked up on the fresh spawn). */
+   *  key changes - the new env is picked up on the fresh spawn). P-RECOVER.1: the next spawn waits until
+   *  the old child's whole process tree is confirmed ended (see `retired`). */
   restart(options?: { preserveTurn?: boolean }): void {
     if (!options?.preserveTurn) this.clearTurnRecovery();
     // Detach before stopping so the exit handler knows this death was deliberate (no "[recover]" line).
     const old = this.acp;
     this.acp = null;
-    try { old?.stop(); } catch { /* ignore */ }
+    if (old) { this.retired = old; try { void old.stop(); } catch { /* ignore */ } }
     try { this.utilAcp?.stop(); } catch { /* ignore */ } // P-KG-INGEST.4: respawn the util omp too (fresh env/keys)
     this.starting = null; this.sessionId = null; this.listener = null;
     this.reviveId = null; this.revivePending = false; // P-RECOVER.1: a deliberate restart supersedes an on-demand revival
@@ -2264,7 +2288,10 @@ class Backend {
    *  so the conversation survives. This is the whole point of the increment - restart() alone would mint
    *  a fresh session on the next prompt and silently throw the thread away, which is worse than the stall
    *  it was fixing. A resume that fails leaves sessionId null, so the next prompt starts clean rather
-   *  than talking to a half-dead child (fail-closed: no session is better than a phantom one). */
+   *  than talking to a half-dead child (fail-closed: no session is better than a phantom one).
+   *  P-RECOVER.1 (ADR-0385): the replacement is spawned only after the wedged child's whole process tree is
+   *  confirmed ended (start() waits on `retired`). If it cannot be confirmed, the recovery fails here with
+   *  nothing spawned and no session, so the interrupted turn is not re-sent beside the old agent. */
   private async healthRecover(): Promise<{ ok: boolean; error?: string }> {
     const resumeId = this.sessionId;
     this.cancel({ forRecover: true }); // keep the resume marker: this is the harness acting, not the user

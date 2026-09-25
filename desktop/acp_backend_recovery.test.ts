@@ -19,11 +19,12 @@
 // imported, and the incident directory / acp log are injected through configureRecovery.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resetSandboxStatus } from "./sandbox_status.ts";
+import { listIncidents } from "./incident_store.ts"; // no HOME-derived state at module load, so static is safe
 
 const REPO = join(import.meta.dir, "..");
 const FAKE_AGENT = join(REPO, "harness", "mcp", "testing", "fake_acp_agent.ts");
@@ -125,15 +126,14 @@ function trace(): Trace[] {
   if (!existsSync(TRACE)) return [];
   return readFileSync(TRACE, "utf8").trim().split("\n").filter(Boolean).map((l) => { const [pid, method, sessionId] = l.split(" "); return { pid: pid!, method: method!, sessionId: sessionId! }; });
 }
-function incidents(): { kind: string; outcome: string }[] {
-  if (!existsSync(INCIDENTS)) return [];
-  return readdirSync(INCIDENTS).filter((n) => n.endsWith(".json")).map((n) => JSON.parse(readFileSync(join(INCIDENTS, n), "utf8")));
-}
-
 // Dynamic on purpose: static imports are hoisted above the environment setup, and acp.ts / acp_backend.ts
 // read HOME-derived paths at module load, which must never resolve to this machine's real ones.
 const { backend } = await import("./acp_backend.ts");
 const { ACPClient } = await import("./acp.ts");
+
+function incidents(): { kind: string; outcome: string }[] {
+  return listIncidents(INCIDENTS).map((m) => ({ kind: m.kind, outcome: m.outcome }));
+}
 const persisted: string[] = [];
 
 beforeAll(() => {
@@ -257,6 +257,33 @@ describe("in-place recovery (POST /api/recovery/recover)", () => {
   }, 30_000);
 });
 
+describe("a recovery never starts a replacement beside an agent it could not stop", () => {
+  test("an unconfirmed stop fails the recovery, and every later start refuses until the stop is confirmed", async () => {
+    process.env.FAKE_ACP_MODE = "clean";
+    expect((await backend.resumeSession("live-session-5")).ok).toBe(true);
+    // The old tree really is stopped, but the client reports that it could not confirm it (as when
+    // taskkill fails on a tool process), which is the case where a replacement must not be spawned.
+    const realStop = ACPClient.prototype.stop;
+    ACPClient.prototype.stop = function (this: InstanceType<typeof ACPClient>) { void realStop.call(this); return Promise.resolve(false); };
+    try {
+      const first = await backend.recoverMaster();
+      expect(first.ok).toBe(false);
+      expect(first.reason).toContain("could not be confirmed stopped");
+      expect(backend.currentSessionId()).toBeNull();
+      // The window's supervisor asking again must not get a replacement either: the old client is still
+      // the one that has to be confirmed first.
+      const second = await backend.recoverMaster();
+      expect(second.ok).toBe(false);
+      expect(second.reason).toContain("could not be confirmed stopped");
+    } finally {
+      ACPClient.prototype.stop = realStop;
+    }
+    // Once the old tree's end is confirmed, the next start proceeds.
+    expect((await backend.recoverMaster()).ok).toBe(true);
+    expect(incidents().map((i) => i.outcome).sort()).toEqual(["not-recovered", "not-recovered", "recovered"]);
+  }, 30_000);
+});
+
 describe("ACPClient.stop() ends the whole child tree", () => {
   // The agent itself exits on stdin EOF once the shim is gone, so the case that needs the tree kill is a
   // process the AGENT started (a tool run) that does not read stdin: without it, that process outlives stop().
@@ -272,7 +299,8 @@ describe("ACPClient.stop() ends the whole child tree", () => {
       const toolPid = Number(/tool (\d+)/.exec(readFileSync(PIDS, "utf8"))![1]);
       const alive = () => { try { process.kill(toolPid, 0); return true; } catch { return false; } };
       expect(alive()).toBe(true);
-      c.stop();
+      // Awaitable: true means taskkill ended the whole tree and the child's exit was observed.
+      expect(await c.stop()).toBe(true);
       try { await until(() => !alive(), 5_000); } finally { if (alive()) process.kill(toolPid); }
     } finally {
       delete process.env.FAKE_TOOL_CHILD;

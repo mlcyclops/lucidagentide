@@ -67,7 +67,7 @@ import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable)
-import { filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
+import { delegationSettled, filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
 // P-KGUI.3 (ADR-0336): the Personalization card's stat tiles, rebuilt for a user with MANY knowledge graphs.
@@ -1423,22 +1423,15 @@ function egressDock(): HTMLElement {
 // ── Subagent delegation card - P-TASK.1 (ADR-0028) ──
 // When the agent hands work to an omp `task` subagent, show a distinct collapsible card (agent type +
 // the assignment[s]) instead of a nameless "other" tool chip - Claude-Code-style Task surfacing.
-// Spawns are background jobs; this card marks "running" and resolves when the turn ends (P-TASK.1
-// surfaces the delegation; live per-subagent progress is a later increment).
-// Animated "stick man peering through a looking glass", green neon - the live indicator on a
-// subagent card (it's exploring/searching). The .look group (head + raised arm + magnifier) bobs
-// slightly up and down while the subagent runs, as if scanning.
-const LOOKER_SVG = `<svg class="looker" viewBox="0 0 26 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-  <path d="M9 9 L9 15"/>
-  <path d="M9 15 L6 21"/>
-  <path d="M9 15 L12.2 21"/>
-  <g class="look">
-    <circle cx="9" cy="5.2" r="2.3"/>
-    <path d="M9 7.5 L9 9"/>
-    <path d="M9 10 L12.8 8.6"/>
-    <path d="M14.4 8.8 L12.8 8.6"/>
-    <circle cx="16.4" cy="6.8" r="2.8"/>
-  </g>
+// Spawns are background jobs; the card stays live until its own runs finish (P-TASK.6, delegationSettled).
+// P-TASK.6 (ADR-0398): a clipboard of assignments, green neon - the live indicator on a subagent card.
+// While the subagents work, its three task lines write themselves in and out, staggered (.cb-line).
+const CLIPBOARD_SVG = `<svg class="clipboard" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <rect x="5" y="4.2" width="14" height="17" rx="2.2"/>
+  <rect x="9" y="2.4" width="6" height="3.6" rx="1.1"/>
+  <path class="cb-line" d="M8.6 10.4 H15.4"/>
+  <path class="cb-line" d="M8.6 13.9 H15.4"/>
+  <path class="cb-line" d="M8.6 17.4 H13"/>
 </svg>`;
 // P-CHAT.A (ADR-0188): the pre-heading intro / a title-less block, rendered inline as markdown.
 function appendIntro(container: HTMLElement, md: string): void {
@@ -1560,7 +1553,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     `<div class="subagent-task">${icon("chevron", 11)}<span>${esc(a)}</span></div>`).join("");
   const win = el(`<div class="subagent open" data-streaming="1">
     <button class="subagent-head" type="button" aria-expanded="true">
-      <span class="subagent-spin">${LOOKER_SVG}</span>
+      <span class="subagent-spin">${CLIPBOARD_SVG}</span>
       <span class="subagent-cur">Delegated to <b>${esc(e.agent)}</b>${n > 1 ? ` · ${n} subtasks` : ""}</span>
       <span class="subagent-chev">${icon("chevron", 14)}</span>
     </button>
@@ -1579,7 +1572,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
   const runsBox = $(".subagent-runs", win) as HTMLElement;
   const openRuns = new Set<string>(); // user-expanded rows survive re-render
   const stepIcon = (k: string): string => (k === "thinking" ? icon("spark", 11) : k === "tool" ? icon("bolt", 11) : icon("info", 11));
-  const renderRuns = (runs: { name: string; done: boolean; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[]): void => {
+  const renderRuns = (runs: { name: string; done: boolean; lastAt: number; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[]): void => {
     if (!runs.length) return;
     win.querySelectorAll(".subagent-task").forEach((t) => t.remove()); // real runs supersede the static rows
     runsBox.innerHTML = runs.map((r) => {
@@ -1605,26 +1598,38 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
       if (row.classList.contains("open")) openRuns.add(name); else openRuns.delete(name);
     }));
   };
+  // P-TASK.6 (ADR-0398): omp 18 subagents are BACKGROUND jobs that usually outlive the parent turn, so the
+  // turn ending only arms the settle check; the card keeps polling and animating until its own runs are
+  // finished or quiet (delegationSettled), then settles once.
+  let turnEndedAt: number | null = null;
+  let settled = false;
+  let runsTimer = 0;
+  const settle = (): void => {
+    if (settled) return; settled = true;
+    window.clearInterval(runsTimer);
+    // P-CHAT.B.1: keep the delegation card EXPANDED on settle so each subagent's thinking/tools stay
+    // visible after the turn (P-TASK.5 collapsed it, which hid the detail); the user can still fold it.
+    win.removeAttribute("data-streaming"); win.classList.add("done");
+  };
   const refreshRuns = async (): Promise<void> => {
     const v = await bridge.subagents().catch(() => null);
     // P-TASK.5a: /api/subagents returns ALL runs in the parent session - scope this card to ITS batch
-    // (task ids when the delegation carried them, else assignment-prefix matching; the sole-card
+    // (task names when the delegation carried them, else assignment-prefix matching; the sole-card
     // fallback keeps single-batch turns rendering even when neither yields a match).
-    if (v?.runs) renderRuns(filterRunsForBatch(v.runs as Parameters<typeof renderRuns>[0], { names: e.names, assignments: e.assignments, soleCard: isSoleCard() }));
+    const mine = v?.runs ? filterRunsForBatch(v.runs as Parameters<typeof renderRuns>[0], { names: e.names, assignments: e.assignments, soleCard: isSoleCard() }) : [];
+    if (settled) return;
+    renderRuns(mine);
+    if (delegationSettled(mine, turnEndedAt, Date.now())) settle();
   };
   void refreshRuns();
-  const runsTimer = window.setInterval(() => { if (win.isConnected) void refreshRuns(); }, 2500);
+  runsTimer = window.setInterval(() => { if (win.isConnected) void refreshRuns(); else settle(); }, 2500);
 
-  let done = false;
   return {
     el: win,
     finish() {
-      if (done) return; done = true;
-      window.clearInterval(runsTimer);
-      void refreshRuns(); // one final tail so the card shows each run's ending state
-      // P-CHAT.B.1: keep the delegation card EXPANDED on settle so each subagent's thinking/tools stay
-      // visible after the turn (P-TASK.5 collapsed it, which hid the detail); the user can still fold it.
-      win.removeAttribute("data-streaming"); win.classList.add("done");
+      if (turnEndedAt !== null) return;
+      turnEndedAt = Date.now();
+      void refreshRuns();
     },
   };
 }
@@ -2101,6 +2106,9 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
         renderThread(prior);
         addMessage("user", snapshot.prompt);
         $("#thread")!.appendChild(node);
+        // renderThread jumped to the end of the PRIOR turns; the live prompt + reply were appended after
+        // that, so land on them too (otherwise the stick window misses and live tokens stop following).
+        jumpToEnd();
         text = snapshot.prompt; state.lastPrompt = snapshot.prompt;
         adopted = false;
       }
@@ -3547,8 +3555,15 @@ function composerMascotInputs(): MascotInputs {
 function immersiveRailPeek(ev: MouseEvent): void {
   const inner = $("#app-inner");
   if (!inner) return;
-  if (ev.clientX <= 20) inner.classList.add("rail-peek");
-  else if (ev.clientX > 120) inner.classList.remove("rail-peek");
+  if (ev.clientX <= 20) { inner.classList.add("rail-peek"); return; }
+  // Tuck 66px past whatever is out: the rail alone (54px, so the original 120px), or the rail plus
+  // the sessions sidebar once the hamburger opened it, so the drawer stays up while the pointer is
+  // over the chat list. The edge comes from the sidebar's TARGET state, not its measured rect: during
+  // its 240ms width transition the rect is mid-animation, which tucked too early right after opening
+  // and too late right after closing.
+  const sidebar = $("#sidebar");
+  const sidebarW = sidebar && !state.sidebarCollapsed ? parseFloat(getComputedStyle(sidebar).getPropertyValue("--sidebar-w")) || 236 : 0;
+  if (ev.clientX > 54 + sidebarW + 66) inner.classList.remove("rail-peek");
 }
 function immersiveEsc(ev: KeyboardEvent): void {
   if (ev.key !== "Escape" || ev.defaultPrevented) return; // an overlay already consumed this Esc
@@ -9036,6 +9051,34 @@ function renderThread(msgs: { role: string; text: string; turn?: number }[] | nu
     }
     for (const g of steps ?? []) if (g.turn > maxUserTurn && maxUserTurn > 0) attachRestoredSteps(g);
   } else seedThread();
+  // A replaced thread opens on its NEWEST message. The per-message scrollChat() calls above cannot do
+  // this: the first one (thread still empty, so "near bottom") queues the single follow-frame, the
+  // rest coalesce into it, and that frame re-checks nearBottom only AFTER the whole transcript is in
+  // the DOM. By then scrollTop is 0 (innerHTML="" collapsed it) over thousands of px of content, the
+  // check fails, and the session opened parked at its first message. jumpToEnd lands on the bottom
+  // and clears the previous session's lastWroteTop, so live output on this thread follows again.
+  jumpToEnd();
+  holdAtEnd();
+}
+/** After a thread is replaced, late layout (restored images decoding, fonts) keeps growing it after
+ *  jumpToEnd ran, and nothing else would scroll again. Stay pinned to the end while the thread
+ *  resizes, until the reader takes over (wheel, touch, key, pointer on the scroller) or it settles. */
+let endHold: (() => void) | null = null;
+function holdAtEnd(settleMs = 3000): void {
+  endHold?.();
+  const c = $("#chat"), t = $("#thread");
+  if (!c || !t || typeof ResizeObserver === "undefined") return;
+  const ro = new ResizeObserver(() => jumpToEnd());
+  const inputs = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+  const timer = window.setTimeout(() => release(), settleMs);
+  const release = (): void => {
+    ro.disconnect(); window.clearTimeout(timer);
+    for (const ev of inputs) c.removeEventListener(ev, release);
+    if (endHold === release) endHold = null;
+  };
+  for (const ev of inputs) c.addEventListener(ev, release, { passive: true });
+  ro.observe(t);
+  endHold = release;
 }
 // P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
 // payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
@@ -9621,7 +9664,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
       + (hm.facts.length ? table([{ key: "entity", label: "entity" }, { key: "statement", label: "statement" }, { key: "trust_label", label: "trust", pill: true }], hm.facts) : ""),
       OPEN.has("mem.layers"));
   } else {
-    h += `<div class="empty">No harness memory yet - appears once the gate runs, or run <code>bun run demo-P4.3</code>.</div>`;
+    h += `<div class="empty">No harness memory yet - the memory layers fill in once the security gate records activity in a session.</div>`;
   }
   return h;
 }

@@ -5,11 +5,11 @@
 // the recovery/incident routes, and the incident view the window receives.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { INCIDENT_NOTE_MAX, incidentView, logTail, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts";
-import { recordIncident } from "./incident_store.ts";
+import { listIncidents, recordIncident } from "./incident_store.ts";
 
 const DIR = mkdtempSync(join(tmpdir(), "lucid-engine-recovery-"));
 afterAll(() => rmSync(DIR, { recursive: true, force: true }));
@@ -61,18 +61,24 @@ describe("incident view", () => {
     const dir = join(DIR, "incidents");
     const meta = recordIncident({ kind: "agent-child-failed", outcome: "recovered", product: "LucidAgentIDE", version: "0.0.0", platform: "win32", arch: "x64", summary: "s", events: [] }, dir);
     expect(meta).not.toBeNull();
-    const view = incidentView({ ...meta!, reportPath: "C:/Windows/System32/config/SAM" }, dir);
+    const file = join(dir, `${meta!.id}.json`);
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), reportPath: "C:/Windows/System32/config/SAM" }));
+    const view = incidentView(listIncidents(dir)[0]!);
     expect(view.reportPath).toBe(join(dir, `${meta!.id}.md`));
     expect(view.issueUrl.startsWith("https://github.com/")).toBe(true);
     expect(view.seen).toBe(false);
   });
 });
 
-test("logTail keeps the newest text of a long log", () => {
+test("logTail keeps the newest text of a long log, starting on a line boundary", () => {
   const path = join(DIR, "acp.log");
   writeFileSync(path, `${"old line\n".repeat(5000)}the last line`);
   const tail = logTail(path, 100);
-  expect(tail.length).toBe(100);
+  expect(tail.length).toBeLessThanOrEqual(100);
   expect(tail.endsWith("the last line")).toBe(true);
+  // A read that starts mid-file drops the partial first line (it could be the unmarked half of a record).
+  expect(tail.split("\n")[0]).toBe("old line");
+  writeFileSync(path, "short log\nwhole");
+  expect(logTail(path, 100)).toBe("short log\nwhole");
   expect(logTail(join(DIR, "missing.log"))).toBe("");
 });

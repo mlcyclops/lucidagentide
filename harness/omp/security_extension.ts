@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { ScannerClient } from "../security/scanner_client.ts";
 import { scanAndDecide, type GatePolicy } from "../security/gate.ts";
 import { buildNotification, summarizeNotification } from "../security/notification.ts";
+import { writeHarnessMirror } from "../memory/obs_mirror.ts"; // fs-only (no DuckDB addon), safe to load statically
 import { writeStderrNotice } from "./stderr_notice.ts"; // P-RECOVER.1 (ADR-0385): a closed stderr never crashes omp
 import type { Db } from "../memory/db.ts";
 
@@ -54,6 +55,7 @@ async function getDb(): Promise<Db | null> {
         const db = await Db.open(DB_PATH);
         await startRun(db, { runId: LIVE_RUN, kind: "root", mode: "build", sandboxProfile: "trusted-local" }).catch(() => {});
         dbHandle = db;
+        touchMirror(); // fill the dashboard mirror as soon as this session owns the DB
         return db;
       } catch {
         return null;
@@ -61,6 +63,28 @@ async function getDb(): Promise<Db | null> {
     })();
   }
   return dbInit;
+}
+
+// The Memory panel's lock-free mirror (obs_mirror.ts): this process is the DB's single writer, so the
+// desktop can NEVER read agent_obs.duckdb while a session is live (DuckDB refuses any cross-process
+// open of a read-write DB - the ADR-0211 bug class, this time for the "Memory layers" panel). After
+// each DB write the gate refreshes a compact JSON summary beside the DB; the dashboard falls back to
+// it when its READ_ONLY open is refused. Throttled with a trailing write so a burst of promotions
+// still lands its final counts. Best-effort: a mirror failure never affects the gate.
+const MIRROR_MIN_MS = 10_000;
+let mirrorLast = 0;
+let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
+function touchMirror(): void {
+  const write = () => {
+    if (!dbHandle) return;
+    mirrorLast = Date.now();
+    void writeHarnessMirror(dbHandle, DB_PATH); // internally best-effort, never throws
+  };
+  const due = mirrorLast + MIRROR_MIN_MS - Date.now();
+  if (due <= 0) return write();
+  if (mirrorTimer) return;
+  mirrorTimer = setTimeout(() => { mirrorTimer = null; write(); }, due);
+  mirrorTimer.unref?.(); // a pending mirror write must never hold the omp child alive
 }
 
 function shutdown(): void {
@@ -105,6 +129,7 @@ async function rememberActivity(toolName: string, text: string): Promise<void> {
     if (!db) return;
     const { ingestArtifact } = await import("../memory/ingest.ts");
     await ingestArtifact(db, scanner, { runId: LIVE_RUN, sourceType: `omp:${toolName}`, rawContent: text }, {});
+    touchMirror();
   } catch {
     /* best-effort; the security decision already stands */
   }
@@ -120,6 +145,7 @@ async function recordTaskDispatch(decision: { block: boolean; trustLabel: any })
     if (!db) return;
     const { gateTaskDispatch } = await import("../runs/task_gate.ts");
     await gateTaskDispatch(db, LIVE_RUN, { block: decision.block, trustLabel: decision.trustLabel });
+    touchMirror();
   } catch {
     /* best-effort lineage; the security decision already stands */
   }
@@ -199,6 +225,7 @@ export default function securityExtension(pi: any): void {
       if (!db) return;
       const { gateSubagentResult } = await import("../runs/task_gate.ts");
       await gateSubagentResult(db, scanner, { runId: LIVE_RUN, agent, resultText: text });
+      touchMirror(); // a promoted/blocked subagent result changes the panel's gate counts
     } catch {
       /* best-effort memory gating; never affects the tool result */
     }

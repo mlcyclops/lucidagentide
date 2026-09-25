@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildIncident, issueUrl, redact, type IncidentInput } from "./incident_report.ts";
-import { INCIDENT_KEEP, listIncidents, markIncidentSeen, readIncident, recordIncident, updateIncident } from "./incident_store.ts";
+import { INCIDENT_KEEP, incidentDir, incidentReport, listIncidents, markIncidentSeen, readIncident, recordIncident, updateIncident } from "./incident_store.ts";
 
 const HOME = "C:\\Users\\alice";
 const base = (over: Partial<IncidentInput> = {}): IncidentInput => ({
@@ -86,6 +86,73 @@ test("an incident is written redacted, listed unseen, then settled under the sam
   expect(report).toContain(`Incident: ${meta.id}`);
   expect(report).toContain("Session resumed");
   expect(report).toContain("Recovered automatically");
+});
+
+test("the home folder is used for redaction and never written to disk", () => {
+  const dir = scratch();
+  const meta = recordIncident(base({ logs: [{ name: "engine.log", text: `opened ${HOME}\\.omp\\agent.db` }] }), dir)!;
+  for (const file of readdirSync(dir)) {
+    const text = readFileSync(join(dir, file), "utf8");
+    expect(text).not.toContain("alice");
+    expect(text).not.toContain(HOME);
+  }
+  expect(JSON.parse(readFileSync(join(dir, `${meta.id}.json`), "utf8")).input.home).toBeUndefined();
+});
+
+test("AskSage developer diagnostics never reach a report or the disk, whole or split", () => {
+  const log = [
+    "engine up",
+    `[ASKSAGE_DIAG] {"route":"anthropic","ok":true,"anomaly":"empty-response","raw":"{\\"content\\":\\"MODEL-SAID-THIS\\"}"}`,
+    // the tail of a record whose line another child's stderr interleaved into
+    `x","anomaly":"truncated","raw":"{\\"text\\":\\"SPLIT-MODEL-TEXT\\"}"}`,
+    "agent process exited (code 1)",
+  ].join("\n");
+  const inc = buildIncident(base({ logs: [{ name: "lucid-acp.log", text: log }] }));
+  expect(inc.markdown).toContain("engine up");
+  expect(inc.markdown).toContain("agent process exited (code 1)");
+  for (const leak of ["MODEL-SAID-THIS", "SPLIT-MODEL-TEXT", "ASKSAGE_DIAG"]) expect(inc.markdown).not.toContain(leak);
+  const dir = scratch();
+  recordIncident(base({ logs: [{ name: "lucid-acp.log", text: log }] }), dir);
+  for (const file of readdirSync(dir)) expect(readFileSync(join(dir, file), "utf8")).not.toContain("MODEL-SAID-THIS");
+});
+
+test("a record edited on disk cannot change the public issue, the report, or the report path", () => {
+  const dir = scratch();
+  const meta = recordIncident(base(), dir)!;
+  const file = join(dir, `${meta.id}.json`);
+  const rec = JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify({
+    ...rec,
+    issueTitle: "INJECTED-TITLE",
+    issueBody: "INJECTED-BODY",
+    reportPath: "C:/Windows/System32/config/SAM",
+    input: { ...rec.input, summary: "Bearer abcdefghijklmnopqrstuvwx and sk-ant-SECRETSECRETSECRET" },
+  }));
+  const [shown] = listIncidents(dir);
+  expect(shown!.id).toBe(meta.id);
+  expect(shown!.reportPath).toBe(join(dir, `${meta.id}.md`));
+  for (const text of [shown!.issueTitle, shown!.issueBody, issueUrl(shown!), incidentReport(meta.id, dir)!]) {
+    for (const leak of ["INJECTED", "abcdefghijklmnopqrstuvwx", "SECRETSECRETSECRET"]) expect(text).not.toContain(leak);
+  }
+  // A record that does not validate is not an incident at all.
+  for (const bad of [{ ...rec, input: { ...rec.input, kind: "made-up" } }, { ...rec, input: { ...rec.input, summary: "x".repeat(10_000) } }, { ...rec, v: 2 }, { ...rec, id: "20260101T000000Z-zzzz" }]) {
+    writeFileSync(file, JSON.stringify(bad));
+    expect(listIncidents(dir)).toEqual([]);
+    expect(readIncident(meta.id, dir)).toBeNull();
+    expect(incidentReport(meta.id, dir)).toBeNull();
+  }
+});
+
+test("incidents are kept only under a data root outside the agent-writable ~/.omp", () => {
+  const home = join(tmpdir(), "lucid-home");
+  const data = join(home, "AppData", "Roaming", "lucidagentide-desktop");
+  expect(incidentDir(data, home)).toBe(join(data, "incidents"));
+  expect(incidentDir(join(home, ".omp-other"), home)).toBe(join(home, ".omp-other", "incidents"));
+  for (const refused of [undefined, "", "relative/data", join(home, ".omp"), join(home, ".omp", "userdata")]) {
+    expect(incidentDir(refused, home)).toBeNull();
+  }
+  expect(recordIncident(base(), null)).toBeNull();
+  expect(listIncidents(null)).toEqual([]);
 });
 
 test("ids from the window cannot address files outside the incident folder", () => {
