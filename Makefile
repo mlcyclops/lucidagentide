@@ -717,6 +717,14 @@ demo-P-SANDBOX.14: ## P-SANDBOX.14 (ADR-0394): enterprise policy for the Windows
 demo-P-SANDBOX.15: ## P-SANDBOX.15 (ADR-0396): the omp child gets its own AGENT token (accepted only on the routes it calls, never on approve / the sandbox switch / Add folder), no longer inherits LUCID_MAIN_TOKEN, and under Electron the served HTML carries no token (the window gets it from main over IPC)
 	$(BUN) run harness/scripts/demo_p_sandbox_15.ts
 
+.PHONY: demo-P-SANDBOX.16
+demo-P-SANDBOX.16: ## P-SANDBOX.16 (ADR-0397): the agent finds git wherever it was installed (host PATH first, then Git for Windows, MinGit, scoop, Chocolatey, winget, GitHub Desktop) - the root is granted rx to the AppContainer, its cmd dir goes first on the agent's PATH, and the Security panel lists it
+	$(BUN) run harness/scripts/demo_p_sandbox_16.ts
+
+.PHONY: demo-P-SANDBOX.17
+demo-P-SANDBOX.17: ## P-SANDBOX.17 (ADR-0399): the contained agent's git runs on the host through a broker - subcommand/option allowlist, workspace-confined paths, allowlisted repo config held open (share modes) from check to use, forced no-hooks/https-only overrides, network via the egress proxy; git.cmd shim round trip
+	$(BUN) run harness/scripts/demo_p_sandbox_17.ts
+
 .PHONY: build-appcontainer
 build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into bin/ (ships via the `repo` extraResources; resolveBackend probes <repo>/bin first, PATH second)
 	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile bin/lucid-appcontainer.exe
@@ -842,6 +850,10 @@ demo-P-PREVIEW.7: ## P-PREVIEW.7 (ADR-0179): the silent-white preview explained 
 .PHONY: demo-P-TASK.5
 demo-P-TASK.5: ## P-TASK.5 (ADR-0180): live subagent activity - the delegation card opens each subtask (generated name, live now-line, thinking/tool/text steps tailed from omp's per-subtask transcripts); read-only + path-confined + corrupt-tolerant + bounded; never-delegated sessions fail-quiet
 	$(BUN) run harness/scripts/demo_ptask5.ts
+
+.PHONY: demo-P-TASK.6
+demo-P-TASK.6: ## P-TASK.6 (ADR-0398): the delegation card for omp 18's task tool (per-item agent, task/name) - detected again, scoped to its runs by name, live until its BACKGROUND runs finish, with a green-neon clipboard whose lines write in and out
+	$(BUN) run harness/scripts/demo_p_task_6.ts
 
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing

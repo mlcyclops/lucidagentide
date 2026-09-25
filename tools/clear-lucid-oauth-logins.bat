@@ -60,7 +60,7 @@ break> "%PYS%"
 REM --- find a Python: LUCID's own scanner interpreter first, then a system one ---
 set "PYEXE="
 for %%P in (
-  "%APPDATA%\LucidAgentIDE\runtimes\scanner-venv\Scripts\python.exe"
+  "%APPDATA%\lucidagentide-desktop\runtimes\scanner-venv\Scripts\python.exe"
   "%LOCALAPPDATA%\Programs\LucidAgentIDE\resources\runtimes\python-win32-x64\python.exe"
   "%PROGRAMFILES%\LucidAgentIDE\resources\runtimes\python-win32-x64\python.exe"
 ) do if not defined PYEXE if exist "%%~P" set "PYEXE=%%~P"

@@ -17,7 +17,8 @@ REM  Just double-click it. Output: lucid-diagnostics.zip on your Desktop.
 REM ---------------------------------------------------------------------------
 
 set "OUT=%TEMP%\lucid-diag-%RANDOM%%RANDOM%"
-set "UD=%APPDATA%\LucidAgentIDE"
+REM userData is named after desktop/package.json "name" (lucidagentide-desktop), not the product name.
+set "UD=%APPDATA%\lucidagentide-desktop"
 set "OMPHOME=%USERPROFILE%\.omp"
 set "INFO=%OUT%\info.txt"
 

@@ -144,6 +144,6 @@ export function runtimeFolderView(i: { workspace: string; grantRx: string[]; gra
   for (const p of i.policy?.grantRw ?? []) out.push({ path: p, mode: "rw", why: "allowed by your organization's policy" });
   for (const p of i.policy?.grantRx ?? []) out.push({ path: p, mode: "rx", why: "allowed by your organization's policy" });
   for (const p of i.grantRw) out.push({ path: p, mode: "rw", why: "the agent's own state (sessions, settings, audit)" });
-  for (const p of i.grantRx) out.push({ path: p, mode: "rx", why: "LUCID's runtime (app files, bun, your shell)" });
+  for (const p of i.grantRx) out.push({ path: p, mode: "rx", why: "LUCID's runtime (app files, bun, your shell, git)" });
   return out.filter((f) => f.path !== i.tmpDir);
 }

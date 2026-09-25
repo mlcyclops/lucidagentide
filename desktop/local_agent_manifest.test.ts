@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import creatorBuilder from "./build/electron-builder.creator.cjs";
 import { AGENT_FLAVOR } from "./build_flavor.ts";
 import { buildLocalAgentManifest, LOCAL_AGENT_MANIFEST_FILE, writeLocalAgentManifest, type ManifestInput } from "./local_agent_manifest.ts";
 
@@ -63,4 +64,21 @@ test("the writer round-trips the manifest and reports, rather than throws, when 
   writeFileSync(notADir, "x");
   const bad = writeLocalAgentManifest(notADir, m);
   expect(bad.ok).toBe(false);
+});
+
+// The manifest must not outlive the install, and cleaning it up must never cost the user their data:
+// userData also holds settings, logs and the Windows safeStorage key.
+test("the NSIS uninstaller removes exactly the manifest file, wired for both flavors", () => {
+  const nsh = readFileSync(join(import.meta.dir, "build", "installer.nsh"), "utf8");
+  const code = nsh.split(/\r?\n/).filter((l) => !l.trimStart().startsWith("#")).join("\n");
+  expect(code).toContain(`!define LUCID_AGENT_MANIFEST "${LOCAL_AGENT_MANIFEST_FILE}"`);
+  const deletes = code.match(/^\s*(Delete|RMDir)\b.*$/gm) ?? [];
+  expect(deletes.length).toBeGreaterThan(0);
+  for (const line of deletes) expect(line).toMatch(/^\s*Delete "[^"]*\\\$\{LUCID_AGENT_MANIFEST\}(\.\*\.tmp)?"$/);
+  expect(code).toMatch(/\$\{ifNot\} \$\{isUpdated\}/);
+
+  const pkg = JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf8"));
+  expect(pkg.build.nsis.include).toBe("build/installer.nsh");
+  const creatorNsis = creatorBuilder.nsis;
+  expect(creatorNsis && typeof creatorNsis === "object" && "include" in creatorNsis ? creatorNsis.include : null).toBe("build/installer.nsh");
 });

@@ -15,18 +15,29 @@ ADR-0384 (P-LEGIBLE.1, issue #302).
 
 ## The local-agent manifest
 
-Each launch, the app writes a metadata-only identity file to its user data directory:
+**What this file is, and is not.** Microsoft publishes no vendor-writable manifest format and no
+enrollment API for local agents, and nothing in Microsoft's documentation says Defender reads this
+file. It is an advisory file defined by LucidAgentIDE (schema `lucid.local-agent-manifest/1`) for
+admins to collect with their own tooling. Writing it does not make the app appear in Defender's
+local agent inventory.
+
+Each launch of the desktop app writes a metadata-only identity file to its Electron user data
+directory. The standard build never renames itself, so Electron names that directory after the
+package name, `lucidagentide-desktop` (the same folder that holds `engine.log`):
 
 | OS | Path |
 | --- | --- |
-| Windows | `%APPDATA%\LucidAgentIDE\local-agent-manifest.json` |
-| macOS | `~/Library/Application Support/LucidAgentIDE/local-agent-manifest.json` |
-| Linux | `~/.config/LucidAgentIDE/local-agent-manifest.json` |
+| Windows | `%APPDATA%\lucidagentide-desktop\local-agent-manifest.json` |
+| macOS | `~/Library/Application Support/lucidagentide-desktop/local-agent-manifest.json` |
+| Linux | `~/.config/lucidagentide-desktop/local-agent-manifest.json` |
 
-An instance started on a non-default port uses `LucidAgentIDE-<port>` instead. The Creator build uses
-`LucidCreator`.
+An instance started on a non-default port (a `LUCID_PORT` other than the build's default, 5319 for
+the standard build and 5320 for Creator) uses
+`lucidagentide-desktop-<port>` instead. The Creator build renames itself to its product name, so it
+uses `LucidCreator` (and `LucidCreator-<port>`) in the same locations.
 
-The fields follow the names Defender uses in `RawAgentInfo.localAgentMetadata`:
+The field names borrow the vocabulary of the profile Defender builds for the agents it supports
+(`RawAgentInfo.localAgentMetadata`). Only the names are shared; the format is ours:
 
 ```json
 {
@@ -57,16 +68,50 @@ their origin (`scheme://host:port`). Local MCP servers are reduced to the execut
 tool call still passes the in-process fail-closed security gate, and the exec and egress tier
 prompts still apply. Enterprise policy can cap those tiers (managed config, ADR-0068).
 
+### Lifecycle: a manifest alone does not prove an install
+
+The file is rewritten at every launch (`generatedAt`), so an MCP change shows up at the next start.
+User data survives an uninstall on purpose (settings, logs, keys), so the file needs its own cleanup:
+
+- **Windows installer (NSIS):** uninstalling deletes `local-agent-manifest.json` (and any leftover
+  `local-agent-manifest.json.<pid>.tmp`) from the user data directories above, including the
+  `-<port>` ones, and nothing else. An auto-update does not delete it. The uninstaller runs as one
+  user, so another Windows account's copy stays behind.
+- **Portable Windows build, macOS, Linux:** there is no uninstall hook, so the file stays after the
+  app is deleted.
+
+So a detection check must confirm the executable is still installed, not just that the file exists.
+
 ### Collecting it
 
-Intune remediation (detection script), run in the user context:
+Intune remediation (detection script), run in the user context with **Run script in 64-bit
+PowerShell** set to Yes. It reads the install location from the installer's own uninstall entry
+(`Uninstall LucidAgentIDE.exe`, which the uninstaller removes), confirms `LucidAgentIDE.exe` is there,
+and only then reports the manifest:
 
 ```powershell
-$m = Join-Path $env:APPDATA 'LucidAgentIDE\local-agent-manifest.json'
-if (Test-Path $m) { Get-Content $m -Raw; exit 0 } else { exit 1 }
+$manifest = Join-Path $env:APPDATA 'lucidagentide-desktop\local-agent-manifest.json'
+$uninstallKeys = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+$exe = Get-ItemProperty -Path $uninstallKeys -ErrorAction SilentlyContinue | ForEach-Object {
+  if ($_.UninstallString -match '^"(.+)\\Uninstall LucidAgentIDE\.exe"') { Join-Path $Matches[1] 'LucidAgentIDE.exe' }
+} | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ($exe -and (Test-Path -LiteralPath $manifest)) { Get-Content -LiteralPath $manifest -Raw; exit 0 }
+exit 1
 ```
 
-Defender live response: `getfile "C:\Users\<user>\AppData\Roaming\LucidAgentIDE\local-agent-manifest.json"`.
+Defender live response, checking the executable before trusting the file (the default per-user
+install location is shown; a per-machine install uses `C:\Program Files\LucidAgentIDE`, and the user
+can choose another folder):
+
+```text
+dir "C:\Users\<user>\AppData\Local\Programs\LucidAgentIDE\LucidAgentIDE.exe"
+getfile "C:\Users\<user>\AppData\Roaming\lucidagentide-desktop\local-agent-manifest.json"
+```
+
+On macOS, pair the file with `/Applications/LucidAgentIDE.app`; for the Linux deb and rpm packages,
+with `/opt/LucidAgentIDE`. An AppImage has no install location, so treat a manifest whose
+`generatedAt` is older than your inventory window as stale.
 
 ### Finding installs with advanced hunting
 

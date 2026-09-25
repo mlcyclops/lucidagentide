@@ -6,10 +6,14 @@
 // Microsoft Defender for Endpoint inventories local AI agents (Assets > AI agents > Local agents, the
 // `AgentsInfo` advanced-hunting table with `Platform == "LocalAgents"`). An agent it does not recognize
 // is invisible there, which in an Agent 365 shop reads as shadow AI. Defender's discovery list is
-// maintained by Microsoft, so no file we write enrolls us. What we CAN do is describe ourselves in the
-// exact vocabulary Defender profiles (vendor, version, relatedProcess, autoApprove, mcpServers,
-// localMcps), at a stable per-user path, so an endpoint admin can collect it (Intune remediation, live
-// response, file inventory) and a future Defender signature has one documented artifact to key on.
+// maintained by Microsoft, and Microsoft publishes no vendor-writable manifest format or enrollment API,
+// so no file we write enrolls us and nothing documents Defender reading this one. It is an ADVISORY,
+// LUCID-defined file (schema `lucid.local-agent-manifest/1`) whose field names borrow the vocabulary of the profile
+// Defender builds for supported agents (vendor, version, relatedProcess, autoApprove, mcpServers,
+// localMcps). It sits at a stable per-user path (<userData>, e.g. %APPDATA%\lucidagentide-desktop for
+// the standard build) so an endpoint admin can collect it (Intune remediation, live response, file
+// inventory). The Windows NSIS uninstaller deletes it (desktop/build/installer.nsh); other install types
+// have no uninstall hook, so collectors must pair it with a check that the executable is still installed.
 //
 // CONTENT RULE (issue #302 non-goal, the CUI egress concern): this file is METADATA ONLY. It never
 // carries a prompt, a tool argument or result, file content, a credential, an MCP header, MCP args or
