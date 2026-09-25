@@ -73,6 +73,27 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <br/>
 
+<!-- v2.3.0 BETA CALL - swap for a "v2.3.0 is out" banner when the stable tag ships -->
+<table align="center" width="100%">
+<tr>
+<td align="center">
+
+# 📣 v2.3.0 is almost here. Help us test the beta.
+
+<p align="center"><b>🛡️ a Windows sandbox that chat actually works inside</b> · <b>🧭 Jev typed judgment</b> · <b>🖱 a browser agent that reads before it clicks</b> · <b>🪐 Claude Opus 5.5, GPT-6 Sol / Luna and Grok 4.7</b> · <b>👥 several accounts per provider</b> · <b>🧹 fewer dead ends</b></p>
+
+<a href="https://github.com/mlcyclops/lucidagentide/releases"><img src="https://img.shields.io/github/v/release/mlcyclops/lucidagentide?include_prereleases&sort=semver&label=newest%20beta&style=for-the-badge&color=c64bd6&logo=github&logoColor=white" alt="Newest beta (prerelease) on the Releases page" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml"><img src="https://img.shields.io/badge/Found%20a%20bug%3F-Open%20an%20issue-d73a49?style=for-the-badge&logo=github&logoColor=white" alt="Found a bug? Open an issue" /></a>
+<a href="#how-to-pull-your-logs"><img src="https://img.shields.io/badge/How%20to-pull%20your%20logs-555555?style=for-the-badge" alt="How to pull your logs" /></a>
+
+<p align="center"><sub>Betas ship as GitHub <b>prereleases</b>: stable installs are never offered one, the download buttons above and Homebrew stay on 2.2.x, and a beta install updates itself to the next beta. <a href="#-v230-is-almost-here-test-the-beta"><b>What's in it, how to install it, and how to report a bug with screenshots and logs</b></a>.</sub></p>
+
+</td>
+</tr>
+</table>
+
+<br/>
+
 <!-- HEADLINE BANNER - the current live model line-up -->
 <table align="center" width="100%">
 <tr>
@@ -101,6 +122,79 @@ personalization internals are proprietary and intentionally undocumented here - 
 <p align="center"><b>“Allow all websites + local LAN” is pre-checked</b>, so a fresh agent can browse and search the web immediately - while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site).</p>
 
 </div>
+
+---
+
+## 🧪 v2.3.0 is almost here: test the beta
+
+> **v2.3.0 is the next stable release, and all of it is already out as a public beta.** Install it, use it on real work, and tell us what breaks before it reaches everyone. Betas are GitHub **prereleases**: stable installs are never offered one, the rolling download buttons and the Homebrew cask stay on 2.2.x until 2.3.0 ships, and a beta install updates itself to the next beta.
+
+### The headlines
+
+- **🛡️ A Windows sandbox that chat actually works inside.** The agent runtime runs inside a **Windows AppContainer**: filesystem access only to the folders it has been granted, no direct internet, and model traffic carried through LUCID's audited egress proxy. The green pill lights **only after the real runtime has booted inside the container**, so green means a working chat; otherwise the session stays on the disclosed passthrough and the reason is logged. **Security > Runtime sandbox** has the on/off switch, **Add folder** buttons that open a Windows folder picker, and the full list of folders the sandbox can reach. When the agent needs another folder it asks for a standing grant you approve. Administrators get Group Policy keys to lock the switch and pre-approve folders. Linux (bubblewrap) and macOS (Seatbelt) keep their containment. *(P-SANDBOX.7-.14)*
+- **🧭 Jev, typed judgment.** Classifications, yes/no checks and scores come back as typed answers with probabilities and a confidence, not a keyword parsed out of prose. Paste a TypeSafe key under **Settings > Judgment**; every judgment in a turn is drawn under the reply, and without a key the same calls fall back to your chat model. *(P-JEV.1-.3)*
+- **🖱 A browser agent that reads before it clicks.** `browser_run` takes one goal, reads the page's real controls, and has Jev pick each click, dropdown choice and field from what is actually on screen. No model ever writes the text it types: every typed string is a value you supplied. *(P-JEV.4)*
+- **🪐 The newest models.** **Claude Opus 5.5** is the new default, and **GPT-6 Astra, Sol and Luna** are in the picker with cost cards and their real 1M context windows, on omp 18.2.10. **Grok 4.7** joins them with its 500K window under a new **xAI Grok** family. *(P-MODEL.4, P-MODEL.5)*
+- **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
+- **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
+
+The per-beta details are in [What's new in v2.3.0-beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+
+### Get the beta
+
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.8](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.8)).
+2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
+3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
+
+### Upgrade notes and known issues
+
+- **Coming from beta.7?** Beta.8 fixes the Windows green-pill, dead-chat sandbox. If you held off on turning the sandbox on, switch it on from **Security > Runtime sandbox** now; it asks for administrator approval once if Windows needs it. If the panel stays on **disclosed** instead of **isolated**, the contained runtime failed its boot check and LUCID fell back safely. That is exactly the report we want: a screenshot of the Runtime sandbox section plus the support zip below.
+- Everything else we already know about is in the **[open bug list](https://github.com/mlcyclops/lucidagentide/issues?q=is%3Aissue+is%3Aopen+label%3Abug)**. Check it before filing, and add a comment with your details if your bug is already there.
+
+### Report a bug
+
+**[Open a new issue](https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml)** (the form asks for each of these) and include:
+
+1. **Version and machine:** the LUCID version from the **About** button at the bottom of the left rail, your OS and version, and the model and provider you were using.
+2. **What happened:** the steps, what you expected, and what you got instead.
+3. **Screenshots:** capture the whole window if you can (Windows `Win+Shift+S`, macOS `Cmd+Shift+4` then `Space` to pick a window, Linux `PrtSc`) and paste straight into the issue box. For a sandbox or security problem, include the **Security** panel's **Runtime sandbox** section. For a tool call that was blocked or prompted unexpectedly, turn on **Settings > Developer > Developer mode** and include the **Logs** panel's *Exec / egress gate decisions* section.
+4. **Logs:** a support bundle or log files, as described below.
+
+> **Issues are public.** Never paste an API key, token, password, or anything under CUI into an issue, a screenshot, or a log you attach.
+
+### How to pull your logs
+
+**Windows: one command, redacted zip.** Open **PowerShell** (Start, type *PowerShell*) and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\LucidAgentIDE\resources\repo\tools\collect-support-logs.ps1"
+```
+
+This writes `lucid-support-<date>-<time>.zip` to your Desktop. It collects the engine log, the agent runtime logs from the last 7 days (add `-Days 14` for more), metadata-only telemetry tails, a redacted settings summary, and a system report (OS, versions, and which process owns port 5319). Keys, tokens and passwords are redacted, and the credential vaults are never read. It **does** include your sign-in email, your folder paths, and the last four characters of each configured key, so open the zip and remove anything you would not post publicly. If the script is not at that path, download it and run it from there:
+
+```powershell
+irm https://raw.githubusercontent.com/mlcyclops/lucidagentide/master/tools/collect-support-logs.ps1 -OutFile "$env:TEMP\collect-support-logs.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\collect-support-logs.ps1"
+```
+
+**macOS and Linux: attach the log files.** No collector script yet, so zip these by hand:
+
+| Log | What it shows | macOS | Linux |
+| :-- | :-- | :-- | :-- |
+| Engine log | startup, crashes, port and sandbox errors | `~/Library/Application Support/lucidagentide-desktop/engine.log` | `~/.config/lucidagentide-desktop/engine.log` |
+| Runtime stderr | why an agent process exited | `~/.omp/lucid-acp.log` | `~/.omp/lucid-acp.log` |
+| Runtime daily logs | provider errors, HTTP status, model id | newest one or two `~/.omp/logs/omp.<date>.<pid>.log` | same |
+
+```bash
+# macOS
+cd ~ && zip -j ~/Desktop/lucid-logs.zip "Library/Application Support/lucidagentide-desktop/engine.log" .omp/lucid-acp.log $(ls -t .omp/logs/omp.*.log | head -2)
+# Linux
+cd ~ && tar czf ~/lucid-logs.tar.gz .config/lucidagentide-desktop/engine.log .omp/lucid-acp.log $(ls -t .omp/logs/omp.*.log | head -2)
+```
+
+These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `key` before you attach them. On Windows the same files live at `%APPDATA%\lucidagentide-desktop\engine.log` and `%USERPROFILE%\.omp\`, and an instance started on a non-default port writes to `lucidagentide-desktop-<port>` instead.
+
+**Never attach these:** `~/.omp/lucid-gui.json` (holds provider keys in plain text), `~/.omp/agent/agent.db` and `~/.omp/lucid-cred-vault/` (your credential vaults), or anything under `~/.omp/logs/http-400-requests/` (a full copy of the rejected request, including your prompt and file contents).
 
 ---
 
@@ -563,6 +657,7 @@ The preview shows at most **100 nodes and 200 links**, with full graph totals in
 
 ## Table of contents
 
+- [🧪 v2.3.0 beta: install it, report bugs, pull logs](#-v230-is-almost-here-test-the-beta)
 - [<img src=".github/assets/icons/overview.svg" width="16" alt=""> Overview](#-overview)
 - [<img src=".github/assets/icons/novelty.svg" width="16" alt=""> What makes it novel](#-what-makes-it-novel)
 - [<img src=".github/assets/icons/models.svg" width="16" alt=""> Any model, any provider](#-any-model-any-provider)
