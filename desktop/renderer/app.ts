@@ -3373,8 +3373,15 @@ function composerMascotInputs(): MascotInputs {
 function immersiveRailPeek(ev: MouseEvent): void {
   const inner = $("#app-inner");
   if (!inner) return;
-  if (ev.clientX <= 20) inner.classList.add("rail-peek");
-  else if (ev.clientX > 120) inner.classList.remove("rail-peek");
+  if (ev.clientX <= 20) { inner.classList.add("rail-peek"); return; }
+  // Tuck 66px past whatever is out: the rail alone (54px, so the original 120px), or the rail plus
+  // the sessions sidebar once the hamburger opened it, so the drawer stays up while the pointer is
+  // over the chat list. The edge comes from the sidebar's TARGET state, not its measured rect: during
+  // its 240ms width transition the rect is mid-animation, which tucked too early right after opening
+  // and too late right after closing.
+  const sidebar = $("#sidebar");
+  const sidebarW = sidebar && !state.sidebarCollapsed ? parseFloat(getComputedStyle(sidebar).getPropertyValue("--sidebar-w")) || 236 : 0;
+  if (ev.clientX > 54 + sidebarW + 66) inner.classList.remove("rail-peek");
 }
 function immersiveEsc(ev: KeyboardEvent): void {
   if (ev.key !== "Escape" || ev.defaultPrevented) return; // an overlay already consumed this Esc
