@@ -266,6 +266,8 @@ export interface LaneView {
   openCalls: number;
   /** P-HEALTH.1: the harness's last self-action on this lane, so the card can show it was handled. */
   lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
+  /** P-FLEET.L19: the lane's last MEASURED context fill, window and cost; absent until omp reports once. */
+  usage?: { used: number; size: number; cost: number };
 }
 // P-FLEET.L5 (ADR-0274): the reviewable timeline - one row per session on this machine, every workspace,
 // lanes labeled through the durable lane-session ledger.
