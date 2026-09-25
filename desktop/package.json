@@ -166,6 +166,7 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",
+      "include": "build/installer.nsh",
       "artifactName": "LucidAgent-Setup.${ext}"
     },
     "portable": {
