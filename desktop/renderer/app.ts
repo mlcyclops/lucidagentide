@@ -1939,6 +1939,9 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
         renderThread(prior);
         addMessage("user", snapshot.prompt);
         $("#thread")!.appendChild(node);
+        // renderThread jumped to the end of the PRIOR turns; the live prompt + reply were appended after
+        // that, so land on them too (otherwise the stick window misses and live tokens stop following).
+        jumpToEnd();
         text = snapshot.prompt; state.lastPrompt = snapshot.prompt;
         adopted = false;
       }
@@ -8859,6 +8862,34 @@ function renderThread(msgs: { role: string; text: string; turn?: number }[] | nu
     }
     for (const g of steps ?? []) if (g.turn > maxUserTurn && maxUserTurn > 0) attachRestoredSteps(g);
   } else seedThread();
+  // A replaced thread opens on its NEWEST message. The per-message scrollChat() calls above cannot do
+  // this: the first one (thread still empty, so "near bottom") queues the single follow-frame, the
+  // rest coalesce into it, and that frame re-checks nearBottom only AFTER the whole transcript is in
+  // the DOM. By then scrollTop is 0 (innerHTML="" collapsed it) over thousands of px of content, the
+  // check fails, and the session opened parked at its first message. jumpToEnd lands on the bottom
+  // and clears the previous session's lastWroteTop, so live output on this thread follows again.
+  jumpToEnd();
+  holdAtEnd();
+}
+/** After a thread is replaced, late layout (restored images decoding, fonts) keeps growing it after
+ *  jumpToEnd ran, and nothing else would scroll again. Stay pinned to the end while the thread
+ *  resizes, until the reader takes over (wheel, touch, key, pointer on the scroller) or it settles. */
+let endHold: (() => void) | null = null;
+function holdAtEnd(settleMs = 3000): void {
+  endHold?.();
+  const c = $("#chat"), t = $("#thread");
+  if (!c || !t || typeof ResizeObserver === "undefined") return;
+  const ro = new ResizeObserver(() => jumpToEnd());
+  const inputs = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+  const timer = window.setTimeout(() => release(), settleMs);
+  const release = (): void => {
+    ro.disconnect(); window.clearTimeout(timer);
+    for (const ev of inputs) c.removeEventListener(ev, release);
+    if (endHold === release) endHold = null;
+  };
+  for (const ev of inputs) c.addEventListener(ev, release, { passive: true });
+  ro.observe(t);
+  endHold = release;
 }
 // P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
 // payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
