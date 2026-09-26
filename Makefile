@@ -855,6 +855,10 @@ demo-P-TASK.5: ## P-TASK.5 (ADR-0180): live subagent activity - the delegation c
 demo-P-TASK.6: ## P-TASK.6 (ADR-0398): the delegation card for omp 18's task tool (per-item agent, task/name) - detected again, scoped to its runs by name, live until its BACKGROUND runs finish, with a green-neon clipboard whose lines write in and out
 	$(BUN) run harness/scripts/demo_p_task_6.ts
 
+.PHONY: demo-P-VOICE.8
+demo-P-VOICE.8: ## P-VOICE.8 (ADR-0400): the read-aloud checkboxes mean what the user clicked - one rule shared by the engine store and every control (auto-speak off clears conversation for good), clicks apply before the engine answers, older answers never overwrite newer clicks, and the LUCID Agent stage respects a user's own setting
+	$(BUN) run harness/scripts/demo_p_voice_8.ts
+
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
 	$(BUN) run desktop/scripts/demo_p_sysres_1.ts

@@ -348,6 +348,9 @@ export interface VoiceSettingsView {
   ttsAutoSpeak: boolean;
   /** P-VOICE.3: hands-free turn-taking - the reply ends, the mic opens, a silence sends. Needs ttsAutoSpeak. */
   ttsConversation: boolean;
+  /** P-VOICE.8 (ADR-0400): the user set these flags themselves; the LUCID Agent stage never turns them on.
+   *  Sent as true with every user click on a read-aloud control; the engine never clears it. */
+  ttsReadAloudChosen?: boolean;
 }
 // P-VOICE.2 (ADR-0247): what /api/voices returns for ONE engine — the list plus the picker's context.
 export interface VoiceListView {

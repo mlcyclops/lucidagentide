@@ -196,6 +196,9 @@ export interface GuiSettings {
   // itself; a longer silence ends your turn and sends it. Requires ttsAutoSpeak (it is the other half of the
   // loop) and is opt-in on top of it: it holds the microphone open between turns.
   ttsConversation?: boolean;
+  // P-VOICE.8 (ADR-0400): the user set read-aloud / conversation with their own click at least once, so the
+  // LUCID Agent stage never switches them on by itself again.
+  ttsReadAloudChosen?: boolean;
   // P-LOCAL.1 (ADR-0135): self-hosted / custom OpenAI-compatible LLM endpoints (Ollama, llama.cpp,
   // vLLM, a DGX box over a VPN tunnel, …). DECLARATIONS only — each carries an opaque `vaultRef`; the
   // API key/token lives ONLY in the OS-encrypted vault (cred_vault.ts), never in this file.
@@ -323,6 +326,7 @@ function wsToHttp(u: string): string { return u.replace(/^wss:/i, "https:").repl
 function originLabel(u: string): string { try { return new URL(u).host; } catch { return u; } }
 
 import type { VoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7 portable endpoints
+import { applyReadAloudPatch, effectiveReadAloud, touchesReadAloud } from "./voice_flags.ts"; // P-VOICE.8 (ADR-0400)
 
 // P-VOICE.1 (ADR-0115): voice (TTS/STT) config. Effective values with defaults, for the server + UI.
 export interface VoiceSettings {
@@ -337,6 +341,9 @@ export interface VoiceSettings {
   ttsConversation: boolean;
   /** P-VOICE.6: speak a short digest aloud instead of the verbatim reply (slow-engine mode). */
   ttsDigest: boolean;
+  /** P-VOICE.8 (ADR-0400): the user set read-aloud / conversation themselves, so LUCID (the LUCID Agent
+   *  stage) never turns them on by its own. Set by any user click on those controls; never cleared. */
+  ttsReadAloudChosen: boolean;
   /** P-VOICE.7: imported portable endpoint configs (labels + urls; environment data, never code). */
   voiceEndpoints: VoiceEndpointConfig[];
   activeVoiceEndpointId: string;
@@ -349,19 +356,22 @@ export function voiceSettings(): VoiceSettings {
   // P-VOICE.2: the voice is remembered PER ENGINE. `ttsVoice` (pre-P-VOICE.2, when only ElevenLabs had a
   // working picker) is read as the legacy ElevenLabs choice, so an existing install keeps its voice.
   const perProvider = s.ttsVoices?.[ttsProvider];
+  const readAloud = effectiveReadAloud(s);
   return {
     sttProvider: s.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper", // offline is the safe default
     sttUrl: s.sttUrl || process.env.LUCID_STT_URL || "http://localhost:9000",
     ttsProvider,
     ttsVoice: perProvider ?? (ttsProvider === "elevenlabs" ? s.ttsVoice ?? "" : ""),
     ttsVoiceFavorites: Array.isArray(s.ttsVoiceFavorites) ? s.ttsVoiceFavorites : [],
-    ttsAutoSpeak: s.ttsAutoSpeak === true, // opt-in only (cloud egress + per-character cost)
-    // Conversation mode is meaningless without the speaking half, so it reads false whenever auto-speak is
-    // off - the stored preference survives, but nothing opens the mic behind the user's back.
-    ttsConversation: s.ttsConversation === true && s.ttsAutoSpeak === true,
+    ttsAutoSpeak: readAloud.ttsAutoSpeak, // opt-in only (cloud egress + per-character cost)
+    // P-VOICE.8 (ADR-0400): conversation needs auto-speak; turning auto-speak off clears it (voice_flags.ts),
+    // and an older file that still stores it under auto-speak off reads false here.
+    ttsConversation: readAloud.ttsConversation,
     dotsTtsUrl: s.dotsTtsUrl || process.env.LUCID_DOTS_TTS_URL || "http://127.0.0.1:8084",
-    // Digest reads false without auto-speak for the same reason conversation does: it only shapes speech.
-    ttsDigest: s.ttsDigest === true && s.ttsAutoSpeak === true,
+    // Digest is a preference about HOW replies are spoken: it survives auto-speak off but only reads true
+    // (and only takes effect) while auto-speak is on.
+    ttsDigest: readAloud.ttsDigest && readAloud.ttsAutoSpeak,
+    ttsReadAloudChosen: s.ttsReadAloudChosen === true,
     voiceEndpoints: Array.isArray(s.voiceEndpoints) ? s.voiceEndpoints : [],
     activeVoiceEndpointId: s.activeVoiceEndpointId ?? "",
     dotsTtsModel: process.env.LUCID_DOTS_TTS_MODEL || s.dotsTtsModel || "rednote-hilab/dots.tts-soar",
@@ -421,12 +431,17 @@ export function setVoiceSettings(patch: Partial<VoiceSettings>): VoiceSettings {
     if (target === "elevenlabs") s.ttsVoice = undefined; // the per-engine map supersedes the legacy scalar
   }
   if (patch.ttsVoiceFavorites) s.ttsVoiceFavorites = patch.ttsVoiceFavorites.slice(0, 100);
-  // The UI sends checkbox state as a real boolean and select state as a string; accept both so a
-  // `data-voice-set` control can drive this the same way it drives the engine pickers.
-  if (patch.ttsAutoSpeak !== undefined) s.ttsAutoSpeak = patch.ttsAutoSpeak === true;
-  if (patch.ttsConversation !== undefined) s.ttsConversation = patch.ttsConversation === true;
+  // P-VOICE.8 (ADR-0400): the read-aloud flags change through the ONE shared rule (voice_flags.ts), applied
+  // to the EFFECTIVE flags, so auto-speak off clears conversation for good instead of masking a preference
+  // that comes back when auto-speak does. The UI sends checkbox state as a real boolean.
+  if (touchesReadAloud(patch)) {
+    const next = applyReadAloudPatch(effectiveReadAloud(s), patch);
+    s.ttsAutoSpeak = next.ttsAutoSpeak;
+    s.ttsConversation = next.ttsConversation;
+    s.ttsDigest = next.ttsDigest; // P-VOICE.6
+  }
+  if (patch.ttsReadAloudChosen === true) s.ttsReadAloudChosen = true;
   if (patch.dotsTtsUrl !== undefined) s.dotsTtsUrl = patch.dotsTtsUrl.trim() || undefined; // P-VOICE.6
-  if (patch.ttsDigest !== undefined) s.ttsDigest = patch.ttsDigest === true; // P-VOICE.6
   save(s); return voiceSettings();
 }
 
