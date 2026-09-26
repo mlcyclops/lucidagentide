@@ -134,7 +134,8 @@ import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setId
 // P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
 import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
-import { JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
+import { JUMP_SHOW_PX, anchorTop, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor } from "./scroll_jump.ts";
+import { setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -946,33 +947,69 @@ function addToolFailure(entry: ToolFailEntry): void {
   tfGroup.el.innerHTML = toolfailGroupHtml(tfGroup.entries, tfGroup.el.classList.contains("open"));
   scrollChat();
 }
-// Stick-to-bottom autoscroll, rAF-batched for buttery playback under rapid tokens.
-// Many scrollChat() calls within one frame coalesce into a SINGLE scrollTop write, so the
-// browser never thrashes layout mid-stream. We only follow output while the user is parked
-// near the bottom (STICK_PX); the moment they scroll UP to re-read, autoscroll releases and
-// stays released until they come back down - so re-reading mid-stream is never yanked.
-// Tight stick window: we only auto-FOLLOW while the user is essentially parked at the bottom.
-// Slow output advances < STICK_PX per frame, so it keeps pace; a fast burst grows the page by more
-// than STICK_PX between frames, which releases the follow - and the jump-down button (below) lets the
-// reader catch up a page at a time instead of being yanked. That's the behaviour the user asked for.
-const STICK_PX = 72;
-let scrollPending = false; // a follow-frame is already queued
-let lastWroteTop = -1;     // the scrollTop value WE last wrote - lets us spot a user scroll-up
-const nearBottom = (c: HTMLElement): boolean => c.scrollHeight - c.scrollTop - c.clientHeight < STICK_PX;
-const scrollChat = (): void => {
+// P-SCROLL.1 (ADR-0405): the chat FOLLOWS new output, and only the reader ends that. A scroll up that
+// the reader's own input drove releases the follow (re-reading mid-stream is never yanked); reaching
+// the bottom again, the jump-to-newest button, or sending a prompt re-engages it. The old rule
+// re-measured the distance to the bottom AFTER new content had landed, so one fast burst taller than
+// the stick window released the follow by itself and the chat stopped scrolling while nobody had
+// touched it (reported 2026-09-26). The decision is scroll_jump.ts nextFollow. Pinning is rAF-batched
+// (many scrollChat() calls in one frame coalesce into ONE scrollTop write), and a ResizeObserver pins
+// growth no event announces: images decoding, a settled answer re-rendering into sections, a
+// replaced thread's late layout, the composer growing.
+let following = true;
+let scrollPending = false;  // a pin-frame is already queued
+let lastTop = 0;            // scrollTop at the previous scroll event, so up can be told from down
+let userScrollAt = 0;       // when the reader last drove the scroller (wheel, touch, scroll keys)
+let scrollbarHeld = false;  // a scrollbar drag or touch hold is in progress
+const USER_SCROLL_MS = 700; // a smooth wheel or key scroll keeps emitting scroll events this long
+function pinToEnd(): void {
   const c = $("#chat");
   if (!c) return;
-  // A user scroll-up since our last programmatic write releases the stick until they return.
-  if (lastWroteTop >= 0 && c.scrollTop < lastWroteTop - 2 && !nearBottom(c)) { updateJump(); return; }
-  if (scrollPending || !nearBottom(c)) { updateJump(); return; }
+  c.scrollTop = c.scrollHeight;
+  lastTop = c.scrollTop;
+}
+const scrollChat = (): void => {
+  if (!following) { updateJump(); return; }
+  if (scrollPending) return;
   scrollPending = true;
   requestAnimationFrame(() => {
     scrollPending = false;
-    const cc = $("#chat");
-    if (cc && nearBottom(cc)) { cc.scrollTop = cc.scrollHeight; lastWroteTop = cc.scrollTop; }
+    if (following) pinToEnd(); // re-checked: the reader may have scrolled up since this was queued
     updateJump();
   });
 };
+/** Wire the follow once, at boot. Release is immediate on an upward wheel or key so a pin frame queued
+ *  between the input and its scroll event cannot cancel the reader's (smooth) scroll. */
+function initChatFollow(): void {
+  const c = $("#chat");
+  if (!c) return;
+  const overflows = (): boolean => c.scrollHeight > c.clientHeight + 1;
+  const mark = (): void => { userScrollAt = performance.now(); };
+  c.addEventListener("wheel", (e) => { mark(); if (e.deltaY < 0 && overflows()) following = false; }, { passive: true });
+  c.addEventListener("touchstart", () => { mark(); scrollbarHeld = true; }, { passive: true });
+  c.addEventListener("touchmove", mark, { passive: true });
+  c.addEventListener("touchend", () => { scrollbarHeld = false; }, { passive: true });
+  // Only a press on the scroller ITSELF (its scrollbar) is a drag; a click on a chevron inside the thread
+  // that collapses content (and clamps scrollTop up) is not the reader scrolling away.
+  c.addEventListener("pointerdown", (e) => { if (e.target === c) { mark(); scrollbarHeld = true; } });
+  window.addEventListener("pointerup", () => { scrollbarHeld = false; });
+  c.addEventListener("keydown", (e) => {
+    if (!["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
+    mark();
+    if ((e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home") && overflows()) following = false;
+  });
+  c.addEventListener("scroll", () => {
+    following = nextFollow(following, lastTop, c, scrollbarHeld || performance.now() - userScrollAt < USER_SCROLL_MS);
+    lastTop = c.scrollTop;
+    scheduleJump();
+  }, { passive: true });
+  if (typeof ResizeObserver !== "undefined") {
+    const ro = new ResizeObserver(() => scrollChat());
+    ro.observe(c);
+    const t = $("#thread");
+    if (t) ro.observe(t);
+  }
+}
 
 // ── Jump-to-latest (catch up on fast output) ──
 // A double-down-arrow in the LucidAgent accent appears, tucked just inside the scrollbar, whenever
@@ -1023,14 +1060,11 @@ function jumpDownOnePage(): void {
 }
 /** Run straight to the newest message. Deliberately INSTANT, not smooth: on a long restored session
  *  the distance is tens of thousands of pixels, and a smooth glide over that is a slow, janky ride to
- *  somewhere the reader already asked to be. Clearing lastWroteTop drops the "user scrolled up" memory
- *  (that baseline described a scroll position we just abandoned), so once we land at the bottom the
- *  normal stick-to-bottom behaviour re-engages and live tokens keep following. */
+ *  somewhere the reader already asked to be. It also re-engages the follow (P-SCROLL.1), so live
+ *  output keeps the newest line in view from here on. */
 function jumpToEnd(): void {
-  const c = $("#chat");
-  if (!c) return;
-  c.scrollTo({ top: c.scrollHeight, behavior: "auto" });
-  lastWroteTop = -1;
+  following = true;
+  pinToEnd();
   updateJump();
 }
 
@@ -1928,14 +1962,21 @@ async function send(): Promise<void> {
   ta.value = ""; autosize(ta);
   state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
   addMessage("user", text, atts);
+  jumpToEnd(); // P-SCROLL.1: a prompt you just sent is always in view, and its reply follows
   const turnFrom = nextTurnFrom; nextTurnFrom = null;
   p2pTeeUserTurn(sendText, turnFrom ?? undefined);
   const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
   const lane = isLaneTarget(state.composerTarget) ? state.composerTarget : null;
-  await renderChatTurn(text, (onEvent) => lane
+  // P-SCROLL.1: the watch must not re-render this turn's tail after the prompt stream settles it. The
+  // grace timer only matters if the watch never delivers the turn's done (its stream dropped, or the
+  // engine refused the prompt so no turn ran).
+  const ownedGen = lane ? ++laneOwnedGen : 0;
+  if (lane) laneOwnedTail = true;
+  try { await renderChatTurn(text, (onEvent) => lane
     // P-FLEET.L19: pasted images ride the lane prompt as ACP image blocks (the lane's P-FLEET.L3 wire).
     ? bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void, images.map((b) => ({ data: b.data, mimeType: b.mimeType })))
-    : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId });
+    : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId }); }
+  finally { if (lane) window.setTimeout(() => { if (ownedGen === laneOwnedGen) laneOwnedTail = false; }, 5000); }
 }
 
 // New prompts and read-only attachments share every HUD, voice, activity, and approval handler.
@@ -2477,8 +2518,54 @@ let laneWatch: { done: Promise<void>; stop: () => void } | null = null;
  *  rather than the DOM is what lets renderThread rebuild it with its copy / save-as-.md payloads intact. */
 let parkedMasterThread: { role: string; text: string }[] | null = null;
 /** The assistant node the WATCH is filling in, when the lane is streaming a turn this composer did not ask
- *  for. Null whenever we own the turn - `send()` renders that one. */
-let laneWatchNode: { node: HTMLElement; stream: HTMLElement; buf: string } | null = null;
+ *  for. Null whenever we own the turn - `send()` renders that one. P-SCROLL.1: the bubble is a run of
+ *  SEGMENTS in arrival order (reasoning, text, a tool chip, more text), so text that follows a tool call
+ *  renders below that call's chip instead of growing a bubble that sits above it. `seg` is the open text
+ *  segment, `buf` the whole answer (copy / save as .md). */
+interface LaneWatchBubble { node: HTMLElement; body: HTMLElement; stream: HTMLElement; seg: string; buf: string; reasoning: ReasoningWin | null; t0: number }
+let laneWatchNode: LaneWatchBubble | null = null;
+/** P-SCROLL.1: our own lane turn's events reach the WATCH as well, on a second stream that can lag the
+ *  prompt stream by a few ms. Until the watch has delivered that turn's own done/error, its content
+ *  belongs to the bubble send() rendered. Without this, a lagging tail arrived after the prompt stream
+ *  had settled and opened a second bubble under the finished answer, replaying its last words out of
+ *  order. Cleared by the watch's done/error, a fresh watch, or a grace timer after our turn ends. */
+let laneOwnedTail = false;
+let laneOwnedGen = 0;
+
+/** P-SCROLL.1: where the reader was on each composer target, for the "return to where I left off"
+ *  preference. Keyed "master" or by lane id; in memory only (a reload lands on the newest anyway). */
+const readingSpots = new Map<string, { atEnd: boolean; anchor: ScrollAnchor | null }>();
+const spotKey = (t: ComposerTarget): string => (isLaneTarget(t) ? `lane:${t.laneId}` : "master");
+function msgBoxes(): MsgBox[] {
+  const c = $("#chat");
+  if (!c) return [];
+  // offsetTop, not getBoundingClientRect: #chat is the messages' offsetParent, so offsetTop is already in
+  // scrollTop's own coordinates. Rects are in ZOOMED px (applyZoom sets CSS zoom on #app), and mixing
+  // the two put a restored reader hundreds of px above their spot.
+  return ($$("#thread .msg") as HTMLElement[]).map((n) => ({
+    key: `${n.classList.contains("user") ? "u" : "a"}:${(n as MsgNode)._md ?? ""}`,
+    top: n.offsetParent === c ? n.offsetTop : n.offsetTop - c.offsetTop,
+    height: n.offsetHeight,
+  }));
+}
+function saveReadingSpot(t: ComposerTarget): void {
+  const c = $("#chat");
+  if (c) readingSpots.set(spotKey(t), { atEnd: following, anchor: following ? null : readingAnchor(msgBoxes(), c.scrollTop) });
+}
+/** Called after the target's thread has been rendered (which landed it on the newest message). Only the
+ *  "resume" preference moves it, and only back onto a message that is still rendered. */
+function restoreReadingSpot(t: ComposerTarget): void {
+  if (spokeSwitchScroll() !== "resume") return;
+  const spot = readingSpots.get(spotKey(t));
+  const c = $("#chat");
+  if (!c || !spot || spot.atEnd || !spot.anchor) return;
+  const top = anchorTop(msgBoxes(), spot.anchor);
+  if (top === null) return;
+  following = false;
+  c.scrollTop = top;
+  lastTop = c.scrollTop;
+  updateJump();
+}
 
 function snapshotThread(): { role: string; text: string }[] {
   return $$("#thread .msg").map((n) => ({
@@ -2510,6 +2597,7 @@ async function promoteLane(laneId: string): Promise<void> {
   const lane: LaneView = r.lane;
   setRecoveryChecking(false);
   const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
+  saveReadingSpot(state.composerTarget); // P-SCROLL.1: before the thread is swapped out
   parkedMasterThread = snapshotThread();
   state.composerTarget = target;
   // P-FLEET.L17: the ring, the rail and the spoke banner now speak for the LANE - the master's last
@@ -2528,7 +2616,11 @@ async function promoteLane(laneId: string): Promise<void> {
   void bridge.interject(laneId, promoteAgentNote(target)).catch(() => { /* the attach still stands */ });
   renderComposerTarget();
   renderStatus(); renderMetricsRail(); // P-FLEET.L19: the ring switches to the spoke now, not at the next poll
+  // P-SCROLL.1: the newest message unless the user prefers where they left off. After the composer chrome
+  // (target bar, status) has painted, so the chat is measured at the size the reader will see.
+  restoreReadingSpot(target);
   // The FOLLOW: it owns no turn, which is precisely what lets it join one already in flight.
+  laneOwnedTail = false;
   laneWatch = bridge.fleetWatch(laneId, onLaneWatchEvent);
   laneWatch.done.catch(() => { /* the stream ending (or being aborted on demote) is not an error here */ });
 }
@@ -2541,9 +2633,11 @@ function demoteLane(): void {
   leaveTurnView();
   laneWatch?.stop();
   laneWatch = null;
+  laneOwnedTail = false;
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
   // no further event will ever settle.
   settleLaneWatchNode();
+  saveReadingSpot(was); // P-SCROLL.1: before the master thread replaces it
   // TELL THE AGENT it is back on its fleet card, BEFORE the release call, so the note lands while the
   // lane target is still known. This is the other half of the confusion fix: on release the model was
   // left believing nothing had changed, so it could not answer questions about "the main composer" and
@@ -2562,6 +2656,7 @@ function demoteLane(): void {
   addNoteChip(demoteNotice(was));
   renderComposerTarget();
   renderStatus(); renderMetricsRail(); // P-FLEET.L19: back to the master's own figures immediately
+  restoreReadingSpot(MASTER_TARGET); // P-SCROLL.1: after the chrome has painted, as in promoteLane
   void recoverMasterTurn();
 }
 
@@ -2582,22 +2677,53 @@ function onLaneWatchEvent(e: LaneEvent): void {
     if (isLaneTarget(state.composerTarget)) noteSpokeAsk(state.composerTarget.laneId, { summary: e.summary, kind: e.kind });
     return;
   }
-  if (state.streaming) return; // our own turn is rendering these already
-  if (e.type === "token" || e.type === "thinking") {
+  // Our own turn is rendering these already, and so is its lagging tail (P-SCROLL.1): the watch's own
+  // done/error for that turn is the last event it owes us.
+  if (state.streaming || laneOwnedTail) {
+    if (e.type === "done" || e.type === "error") laneOwnedTail = false;
+    return;
+  }
+  if (e.type === "thinking") {
+    // P-SCROLL.1: reasoning is not the answer. It used to be appended into the answer text, which read as
+    // the reply's sentences arriving jumbled; it now gets the master turn's collapsible reasoning block.
     const live = laneWatchNode ?? openLaneWatchNode();
+    if (!live.reasoning) {
+      cutLaneWatchSegment(live);
+      live.reasoning = createReasoning();
+      live.stream.before(live.reasoning.el);
+    }
+    live.reasoning.push(e.text);
+    scrollChat();
+    return;
+  }
+  if (e.type === "token") {
+    const live = laneWatchNode ?? openLaneWatchNode();
+    if (live.reasoning) { live.reasoning.finish(Date.now() - live.t0); live.reasoning = null; }
+    live.seg += e.text;
     live.buf += e.text;
-    live.stream.innerHTML = renderMarkdown(live.buf) + `<span class="cursor"></span>`;
+    live.stream.innerHTML = renderMarkdown(live.seg) + `<span class="cursor"></span>`;
     (live.node as MsgNode)._md = live.buf;
     scrollChat();
     return;
   }
   if (e.type === "tool") {
-    addNoteChip(e.detail ? `${e.name}: ${e.detail}` : e.name);
     // P-FLEET.L17: mid-turn watches carry the lane's writes too - same preview routing as the prompt
     // stream, so WHEN you attached never decides whether the preview pane fills.
     if (e.code?.path && isAutoPreviewPath(e.code.path) && isLaneTarget(state.composerTarget)) {
       previewShowLaneFile(state.composerTarget.laneId, state.composerTarget.name, e.code.path);
     }
+    // P-SCROLL.1: the chip goes INTO the bubble at this point of the turn, and later text opens a new
+    // segment below it, so the transcript reads in the order things happened. It used to be appended
+    // to the thread under a bubble that kept growing, so the text after a tool call read above it.
+    const live = laneWatchNode ?? openLaneWatchNode();
+    if (live.reasoning) { live.reasoning.finish(Date.now() - live.t0); live.reasoning = null; }
+    cutLaneWatchSegment(live);
+    const chip = el(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
+    const label = e.detail ? `${e.name}: ${e.detail}` : e.name;
+    const txt = $(".note-chip-txt", chip) as HTMLElement;
+    txt.textContent = label; txt.title = label;
+    live.stream.before(chip);
+    scrollChat();
     return;
   }
   if (e.type === "usage") {
@@ -2619,20 +2745,34 @@ function onLaneWatchEvent(e: LaneEvent): void {
   }
 }
 
-/** Freeze the watched bubble: drop the cursor and section the answer, exactly as a settled master turn. */
+/** Freeze the watched bubble: drop the cursor and section the open segment, exactly as a settled master
+ *  turn; an empty trailing segment (the turn ended on a tool call) leaves no blank block behind. */
 function settleLaneWatchNode(): void {
   const live = laneWatchNode;
   laneWatchNode = null;
-  if (live) renderAnswerBody(live.stream, live.buf); // P-CHAT.A sections
+  if (!live) return;
+  live.reasoning?.finish(Date.now() - live.t0);
+  if (live.seg) renderAnswerBody(live.stream, live.seg); // P-CHAT.A sections
+  else live.stream.remove();
 }
 
-function openLaneWatchNode(): { node: HTMLElement; stream: HTMLElement; buf: string } {
+/** P-SCROLL.1: close the open text segment (frozen as a settled answer) and open a fresh one at the end of
+ *  the bubble, so whatever arrives next (a tool chip, a reasoning block, more text) lands below it. */
+function cutLaneWatchSegment(live: LaneWatchBubble): void {
+  if (!live.seg) return;
+  renderAnswerBody(live.stream, live.seg);
+  live.stream = el(`<div class="stream"></div>`);
+  live.body.appendChild(live.stream);
+  live.seg = "";
+}
+
+function openLaneWatchNode(): LaneWatchBubble {
   const node = addMessage("assistant", "");
-  const textEl = $(".text", node) as HTMLElement;
-  textEl.innerHTML = "";
+  const body = $(".text", node) as HTMLElement;
+  body.innerHTML = "";
   const stream = el(`<div class="stream"></div>`);
-  textEl.appendChild(stream);
-  laneWatchNode = { node, stream, buf: "" };
+  body.appendChild(stream);
+  laneWatchNode = { node, body, stream, seg: "", buf: "", reasoning: null, t0: Date.now() };
   return laneWatchNode;
 }
 
@@ -4514,6 +4654,17 @@ function secAppearance(): string {
     <div class="set-note">${icon("info", 12)} <b>Ambient</b> shows your image faintly (25%) behind the whole chat. <b>Flashlight</b> keeps the background black and reveals the image only under your cursor - like a flashlight sweeping a dark room.</div>`;
   return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
 }
+/** P-SCROLL.1 (ADR-0405): where switching between Main and a spoke (or spoke to spoke) lands the chat.
+ *  Rendered from localStorage, so it paints with no fetch. */
+function secChatScroll(): string {
+  const v = spokeSwitchScroll();
+  const opt = (val: string, label: string) => `<option value="${val}"${v === val ? " selected" : ""}>${label}</option>`;
+  const inner = `
+    <div class="goal-row"><label class="goal-lbl" for="spokeSwitchScroll">Switching spokes</label>
+      <select id="spokeSwitchScroll" class="prov-key">${opt("latest", "Jump to the newest message")}${opt("resume", "Return to where I left off")}</select></div>
+    <div class="set-note">${icon("info", 12)} The chat always follows new output while you are at the bottom. Scrolling up to re-read pauses it until you scroll back down or press the jump-to-newest arrow. This choice decides where you land when you switch between Main and a spoke, or from one spoke to another.</div>`;
+  return setCard("chatScroll", "Chat scrolling", "follow · spoke switching", inner, true);
+}
 
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
 // A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
@@ -4724,6 +4875,7 @@ function settingsShell(): string {
     setSkel("judgment", "Judgment", "Jev · TypeSafe System One", true), // P-JEV.1 (ADR-0374)
     secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
+    secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
@@ -9247,34 +9399,10 @@ function renderThread(msgs: { role: string; text: string; turn?: number }[] | nu
     }
     for (const g of steps ?? []) if (g.turn > maxUserTurn && maxUserTurn > 0) attachRestoredSteps(g);
   } else seedThread();
-  // A replaced thread opens on its NEWEST message. The per-message scrollChat() calls above cannot do
-  // this: the first one (thread still empty, so "near bottom") queues the single follow-frame, the
-  // rest coalesce into it, and that frame re-checks nearBottom only AFTER the whole transcript is in
-  // the DOM. By then scrollTop is 0 (innerHTML="" collapsed it) over thousands of px of content, the
-  // check fails, and the session opened parked at its first message. jumpToEnd lands on the bottom
-  // and clears the previous session's lastWroteTop, so live output on this thread follows again.
+  // A replaced thread opens on its NEWEST message and follows from there, even if the reader had
+  // scrolled up in the thread it replaced. Late layout (restored images decoding, fonts) is pinned by
+  // the follow's ResizeObserver until the reader scrolls up (P-SCROLL.1).
   jumpToEnd();
-  holdAtEnd();
-}
-/** After a thread is replaced, late layout (restored images decoding, fonts) keeps growing it after
- *  jumpToEnd ran, and nothing else would scroll again. Stay pinned to the end while the thread
- *  resizes, until the reader takes over (wheel, touch, key, pointer on the scroller) or it settles. */
-let endHold: (() => void) | null = null;
-function holdAtEnd(settleMs = 3000): void {
-  endHold?.();
-  const c = $("#chat"), t = $("#thread");
-  if (!c || !t || typeof ResizeObserver === "undefined") return;
-  const ro = new ResizeObserver(() => jumpToEnd());
-  const inputs = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
-  const timer = window.setTimeout(() => release(), settleMs);
-  const release = (): void => {
-    ro.disconnect(); window.clearTimeout(timer);
-    for (const ev of inputs) c.removeEventListener(ev, release);
-    if (endHold === release) endHold = null;
-  };
-  for (const ev of inputs) c.addEventListener(ev, release, { passive: true });
-  ro.observe(t);
-  endHold = release;
 }
 // P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
 // payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
@@ -15061,6 +15189,7 @@ function wire(): void {
     const t0 = e.target as HTMLElement;
     // P-APPEAR.1: chat-background mode + image upload
     if (t0.id === "bgMode") { void updateChatBg({ mode: (t0 as HTMLSelectElement).value as "off" | "ambient" | "flashlight" }); return; }
+    if (t0.id === "spokeSwitchScroll") { setSpokeSwitchScroll((t0 as HTMLSelectElement).value === "resume" ? "resume" : "latest"); return; } // P-SCROLL.1
     if (t0.id === "bgFile") {
       const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
       if (f.size > 9 * 1024 * 1024) { showToast({ tone: "warn", title: "Image too large", desc: "Pick an image under ~9 MB (or compress it first).", timeout: 3400 }); return; }
@@ -15858,8 +15987,8 @@ function wire(): void {
   // P-FLEET.L8: paint the (absent) badge once at boot, so the capability mask is applied from the start.
   renderComposerTarget();
 
-  // Jump-to-latest: show the catch-up arrow on user scroll / resize; click pages down one screen.
-  $("#chat")?.addEventListener("scroll", scheduleJump, { passive: true });
+  // P-SCROLL.1: the follow (its scroll listener also repaints the catch-up arrows), and the arrows on resize.
+  initChatFollow();
   window.addEventListener("resize", scheduleJump, { passive: true });
   const arcadeHost = $("#agentArcadeHost");
   if (arcadeHost) new ResizeObserver(syncArcadeGap).observe(arcadeHost);

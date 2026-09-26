@@ -63,3 +63,52 @@ export function pageDownTarget(m: ScrollMetrics, lineHeight: number, minStep = 8
   const top = num(m?.scrollTop, 0);
   return Math.min(top + pageStep(num(m?.clientHeight, 0), lineHeight, minStep), Math.max(0, h));
 }
+
+// ---------------------------------------------------------------- P-SCROLL.1 (ADR-0405): follow + anchor
+
+/** Within this many px of the bottom the reader counts as "on the newest message". */
+export const STICK_PX = 72;
+
+/** P-SCROLL.1: is the chat following new output after this scroll event? Following is the default and
+ *  only the READER ends it: a scroll UP that their own input drove (wheel, touch, keys, scrollbar drag)
+ *  releases it, and reaching the bottom by any means re-engages it. Content growth, reflow and our own
+ *  programmatic writes never release it. The old rule measured the distance to the bottom AFTER new
+ *  content had landed, so one fast burst taller than the stick window released the follow on its own
+ *  and the chat stopped scrolling while the reader had not touched it. */
+export function nextFollow(following: boolean, prevTop: number, m: ScrollMetrics, userDriven: boolean, stickPx: number = STICK_PX): boolean {
+  const top = num(m?.scrollTop, 0);
+  if (userDriven && top < num(prevTop, top) - 1) return false;
+  if (belowFold(m) < Math.max(0, num(stickPx, STICK_PX))) return true;
+  return following;
+}
+
+/** One rendered message: `key` identifies it across re-renders (role plus its markdown), `top` and
+ *  `height` are px in the scroller's content coordinates. */
+export interface MsgBox { key: string; top: number; height: number }
+
+/** Where the reader was: the message at the top of the viewport and how far into it they had read. */
+export interface ScrollAnchor { key: string; index: number; offset: number }
+
+/** The reading anchor for `scrollTop`: the first message whose bottom edge is still below the viewport
+ *  top. Null for an empty thread. */
+export function readingAnchor(boxes: readonly MsgBox[], scrollTop: number): ScrollAnchor | null {
+  const top = num(scrollTop, 0);
+  for (let i = 0; i < boxes.length; i++) {
+    const b = boxes[i]!;
+    // Negative when the viewport top sits in the gap (or the thread padding) above this message.
+    if (num(b.top, 0) + num(b.height, 0) > top) return { key: b.key, index: i, offset: top - num(b.top, 0) };
+  }
+  return null;
+}
+
+/** The scrollTop that puts the reader back on their anchor, or null when that message is no longer
+ *  rendered (a bounded transcript dropped it). A re-render may add or drop messages around it, so the
+ *  match is by key, and among equal keys (two "ok" prompts) the one nearest the old index wins. */
+export function anchorTop(boxes: readonly MsgBox[], a: ScrollAnchor): number | null {
+  let best = -1;
+  for (let i = 0; i < boxes.length; i++) {
+    if (boxes[i]!.key !== a.key) continue;
+    if (best < 0 || Math.abs(i - a.index) < Math.abs(best - a.index)) best = i;
+  }
+  return best < 0 ? null : Math.max(0, num(boxes[best]!.top, 0) + num(a.offset, 0));
+}

@@ -863,6 +863,10 @@ demo-P-VOICE.8: ## P-VOICE.8 (ADR-0400): the read-aloud checkboxes mean what the
 demo-P-FLEET.L20: ## P-FLEET.L20 (ADR-0402): close a spoke from where it is shown - an X on the orbit node (beside click-to-open) and on the takeover banner (beside Switch), the grid's two-step (a live spoke stops, a stopped one dismisses), one pure function deciding the step, label and tip
 	$(BUN) run desktop/scripts/demo_p_fleet_l20.ts
 
+.PHONY: demo-P-SCROLL.1
+demo-P-SCROLL.1: ## P-SCROLL.1 (ADR-0405): the chat follows new output until the reader scrolls up (a fast burst no longer releases it); a spoke switch lands on the newest message or, by preference, where the reader left off; the attached spoke's live turn renders in arrival order; a new spoke opens on the last spoke's model
+	$(BUN) run harness/scripts/demo_p_scroll_1.ts
+
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
 	$(BUN) run desktop/scripts/demo_p_sysres_1.ts

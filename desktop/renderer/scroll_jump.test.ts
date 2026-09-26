@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  JUMP_SHOW_PX, LANE_JUMP_SHOW_PX, belowFold, pageDownTarget, pageStep, shouldShowJump,
+  JUMP_SHOW_PX, LANE_JUMP_SHOW_PX, anchorTop, belowFold, nextFollow, pageDownTarget, pageStep, readingAnchor, shouldShowJump,
 } from "./scroll_jump.ts";
 
 const m = (scrollHeight: number, scrollTop: number, clientHeight: number) => ({ scrollHeight, scrollTop, clientHeight });
@@ -81,5 +81,61 @@ describe("pageDownTarget", () => {
     for (const t of [pageDownTarget(m(Number.NaN, Number.NaN, Number.NaN), Number.NaN), pageDownTarget(m(0, 0, 0), 0)]) {
       expect(Number.isNaN(t)).toBe(false);
     }
+  });
+});
+
+// P-SCROLL.1 (ADR-0405): the chat follows new output until the READER scrolls up.
+describe("nextFollow", () => {
+  test("a burst taller than the stick window does not release the follow (the reported bug)", () => {
+    // Parked at the bottom of 1000px, then 900px of new content lands in one frame: 900px below the fold.
+    expect(nextFollow(true, 600, m(1900, 600, 400), false)).toBe(true);
+  });
+
+  test("the reader's own scroll up releases it, even a small one inside the stick window", () => {
+    expect(nextFollow(true, 600, m(1000, 560, 400), true)).toBe(false);
+  });
+
+  test("a programmatic or reflow move up (content shrank, scrollTop clamped) keeps following", () => {
+    expect(nextFollow(true, 600, m(900, 300, 400), false)).toBe(true);
+  });
+
+  test("reaching the bottom by any means re-engages it", () => {
+    expect(nextFollow(false, 300, m(1000, 580, 400), true)).toBe(true);
+    expect(nextFollow(false, 300, m(1000, 600, 400), false)).toBe(true);
+  });
+
+  test("scrolling down short of the bottom leaves a released follow released", () => {
+    expect(nextFollow(false, 100, m(2000, 400, 400), true)).toBe(false);
+  });
+});
+
+describe("readingAnchor / anchorTop", () => {
+  const boxes = [
+    { key: "u:hi", top: 0, height: 100 },
+    { key: "a:hello", top: 100, height: 300 },
+    { key: "u:ok", top: 400, height: 50 },
+    { key: "a:done", top: 450, height: 200 },
+    { key: "u:ok", top: 650, height: 50 },
+  ];
+
+  test("the anchor is the message at the viewport top and how far into it the reader was", () => {
+    expect(readingAnchor(boxes, 250)).toEqual({ key: "a:hello", index: 1, offset: 150 });
+    expect(readingAnchor([], 0)).toBeNull();
+  });
+
+  test("a re-render that dropped older messages still finds the anchor by key", () => {
+    const a = readingAnchor(boxes, 250)!;
+    const shifted = boxes.slice(1).map((b) => ({ ...b, top: b.top - 100 }));
+    expect(anchorTop(shifted, a)).toBe(150);
+  });
+
+  test("among equal keys the one nearest the old index wins", () => {
+    const a = readingAnchor(boxes, 660)!; // the second "ok"
+    expect(a.index).toBe(4);
+    expect(anchorTop(boxes, a)).toBe(660);
+  });
+
+  test("a message that fell off the transcript yields null, so the caller lands on the newest", () => {
+    expect(anchorTop(boxes.slice(2), { key: "a:hello", index: 1, offset: 10 })).toBeNull();
   });
 });
