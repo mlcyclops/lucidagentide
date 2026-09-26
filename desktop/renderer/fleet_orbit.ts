@@ -18,15 +18,18 @@ import { $, el } from "./dom.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts"; // P-FLEET.L18: the on-orbit form clones too
 import { ageStr, esc } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
-import { popover } from "./ui.ts";
+import { popover, showToast } from "./ui.ts";
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
-import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, readAllPages, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SwitchEntry } from "./orbit_layout.ts";
+import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
 
 export interface FleetOrbitDeps {
   fleetStatus: LucidBridge["fleetStatus"];
   fleetAnswer: LucidBridge["fleetAnswer"];
   fleetRespawn: LucidBridge["fleetRespawn"];
+  /** P-FLEET.L20: the spoke's close gesture (stop, then dismiss) from the orbit node and the banner. */
+  fleetStop: LucidBridge["fleetStop"];
+  fleetRemove: LucidBridge["fleetRemove"];
   /** P-FLEET.L17 recovery: respawn a historical spoke under its old name/folder/model. */
   fleetSpawn: LucidBridge["fleetSpawn"];
   /** P-FLEET.L17 recovery: the durable lane-session ledger (P-FLEET.L5) - the memory ghosts rise from. */
@@ -644,8 +647,34 @@ function onViewClick(ev: Event): void {
   if (deny) { void answer(deny.dataset.orbitDeny!, false); return; }
   const respawn = t.closest("[data-orbit-respawn]") as HTMLElement | null;
   if (respawn) { void deps?.fleetRespawn(respawn.dataset.orbitRespawn!); window.setTimeout(() => void refresh(false), 400); return; }
+  // P-FLEET.L20: the node's own close. Checked BEFORE the card, or the X would also be a takeover click.
+  const close = t.closest("[data-orbit-stop]") as HTMLElement | null;
+  if (close) { void closeSpoke(close.dataset.orbitStop!, close.dataset.act === "dismiss" ? "dismiss" : "stop"); return; }
   const card = t.closest(".orbit-node") as HTMLElement | null;
   if (card?.dataset.laneId) { takeover(card.dataset.laneId); return; }
+}
+
+/** P-FLEET.L20: close a spoke from wherever it is shown (its orbit node, the takeover banner). The step is
+ *  spokeClose's two-step: STOP a live spoke, DISMISS a stopped one. Dismissing a spoke the composer drives
+ *  detaches the composer FIRST (fleet_grid's dismissLane lesson: the engine demotes server-side, but the
+ *  composer's target lives in app.ts and would keep pointing at a lane id that no longer resolves). A
+ *  refusal (a turn started between the click and the call) is returned so the caller can show it. */
+async function closeSpoke(laneId: string, act: SpokeClose["act"]): Promise<{ ok: boolean; reason?: string }> {
+  if (!deps) return { ok: false, reason: "The fleet is not ready." };
+  const target = deps.getTarget();
+  const driving = isLaneTarget(target) && target.laneId === laneId;
+  let out: { ok: boolean; reason?: string };
+  if (act === "dismiss") {
+    if (driving) deps.demoteLane();
+    out = (await deps.fleetRemove(laneId).catch(() => null)) ?? { ok: false, reason: "The engine did not answer." };
+  } else {
+    out = (await deps.fleetStop(laneId).catch(() => null)) ?? { ok: false, reason: "The engine did not answer." };
+  }
+  // A refusal lands on the node's glance line (the next poll repaints it); the banner's caller shows its own.
+  if (!out.ok) { const card = nodes.get(laneId)?.card; if (card) setText(card, ".orbit-glance", out.reason ?? "could not close this spoke"); }
+  void refresh(false); // the authority: a dismissed node falls back into the hub, a refused one stays
+  void bannerRefresh();
+  return out;
 }
 
 /** Hub click: come home. Attached to a spoke -> release the composer; already on Main -> just land. */
@@ -766,7 +795,7 @@ function buildNode(lane: LaneView): HTMLElement {
   const card = el(`<div class="orbit-node" data-lane-id="${esc(lane.id)}" role="button" tabindex="0" style="--fd:${(Math.abs(hash(lane.id)) % 40) / 10}s;--fdur:${5 + (Math.abs(hash(lane.id)) % 3)}s">
     <div class="orbit-node-float">
       <div class="orbit-node-card">
-        <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-incomposer" hidden>${icon("arrowRight", 11)} composer</span></div>
+        <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-incomposer" hidden>${icon("arrowRight", 11)} composer</span><button class="orbit-node-x" data-orbit-stop="${esc(lane.id)}">${icon("close", 11)}</button></div>
         <div class="orbit-glance"></div>
         <div class="orbit-meta"><span class="orbit-model"></span></div>
         <div class="orbit-approve" hidden>
@@ -807,6 +836,11 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   ap.hidden = !lane.pendingApproval;
   if (lane.pendingApproval) setText(card, ".orbit-approve-sum", lane.pendingApproval.summary);
   (card.querySelector(".orbit-revive") as HTMLElement).hidden = !(lane.status === "error" || lane.status === "stopped");
+  // P-FLEET.L20: the X RELABELS with the state (stop, then dismiss), so the same glyph never does two
+  // different things silently. The act rides on the button, so the click needs no status lookup.
+  const x = card.querySelector("[data-orbit-stop]") as HTMLElement;
+  const step = spokeClose(lane.status);
+  if (x.dataset.act !== step.act) { x.dataset.act = step.act; x.setAttribute("aria-label", step.label); x.dataset.tip = step.tip; }
 }
 
 function setText(root: HTMLElement, sel: string, text: string): void {
@@ -905,8 +939,10 @@ export function renderSpokeBanner(target: ComposerTarget): void {
         <button class="spoke-chip spoke-chip-sec" data-tip="Spoke security|Approval mode, pending asks and session-allowed tools for THIS lane. Click for the full vitals.">${icon("shield", 12)}<b class="spoke-sec">\u2026</b></button>
       </span>
       <button class="spoke-menu-btn" data-tip="Switch|Back to Main, the whole fleet in orbit, or any other spoke by name. Keyboard: Ctrl+Alt+Left/Right cycles spokes, Ctrl+Alt+Up returns to Main, Ctrl+Alt+Down opens the orbit.">${icon("share", 13)} Switch ${icon("chevronDown", 11)}</button>
+      <button class="spoke-close-btn" data-spoke-close aria-label="Close this spoke" data-tip="Close spoke|Stop this spoke and return the composer to Main. Its card stays in the orbit and the grid, readable, with Respawn; a second close there dismisses it. Just leaving? Switch, or Ctrl+Alt+Up.">${icon("close", 13)}</button>
     </div>`);
     ($(".spoke-menu-btn", banner) as HTMLElement).addEventListener("click", () => void openSwitchMenu());
+    ($(".spoke-close-btn", banner) as HTMLElement).addEventListener("click", () => void closeFromBanner());
     for (const chip of banner.querySelectorAll(".spoke-chip")) chip.addEventListener("click", () => void openVitals());
     banner.classList.toggle("static", resolveMode() === "static"); // Lite reaches the banner's ornaments too
     document.body.appendChild(banner);
@@ -932,6 +968,20 @@ export function renderSpokeBanner(target: ComposerTarget): void {
   // even when neither the orbit nor the grid is open.
   if (bannerTimer == null) bannerTimer = window.setInterval(() => void bannerRefresh(), POLL_MS);
   if (switched) void bannerRefresh();
+}
+
+/** P-FLEET.L20: the banner's X. Closing the spoke you are driving means you are done with it here: the
+ *  spoke takes spokeClose's step (stop; dismiss if it was already stopped) and the composer returns to Main.
+ *  A refusal keeps the composer where it is and says why, so a click never fails silently. */
+async function closeFromBanner(): Promise<void> {
+  if (!deps || bannerLaneId === null) return;
+  const laneId = bannerLaneId;
+  const before = deps.getTarget();
+  const name = isLaneTarget(before) ? before.name : "this spoke";
+  const r = await closeSpoke(laneId, spokeClose(bannerLane?.status ?? "working").act);
+  if (!r.ok) { showToast({ tone: "warn", title: `Couldn't close ${name}`, desc: r.reason ?? "The engine refused.", actions: [{ label: "OK" }], timeout: 9000 }); return; }
+  const after = deps.getTarget();
+  if (isLaneTarget(after) && after.laneId === laneId) deps.demoteLane(); // a dismiss already detached
 }
 
 async function bannerRefresh(): Promise<void> {
