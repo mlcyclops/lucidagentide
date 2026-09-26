@@ -123,6 +123,7 @@ import { TTS_PROVIDERS } from "../../harness/voice/catalog.ts"; // P-VOICE.2 (AD
 import { takeSpeechChunks } from "../../harness/voice/speech_stream.ts"; // P-VOICE.2: sentence-at-a-time live read-aloud
 import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues.ts"; // P-VOICE.6/.7 (ADR-0249/0257): spoken "still working" cues, active-listening openers, thinking snapshots
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
+import { applyReadAloudPatch, touchesReadAloud } from "../voice_flags.ts"; // P-VOICE.8 (ADR-0400): one rule for the read-aloud flags, shared with the engine
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
 import type { AuthStatus, ElevenVoiceView, JudgmentView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
@@ -3716,6 +3717,8 @@ let vaultAsked = false; // the KG offer fires at most once per app session (neve
 // it; explicit Voice settings and runtime error notices stay available without reopening the nudge.
 const deferredAgentGaps = new Set<ReadyItem["id"]>();
 let conversationArmed = false;
+/** P-VOICE.8: the Agent stage itself switched hands-free on this session (so leaving the role unwinds it). */
+let voiceArmedByFlow = false;
 let lastSpokenGap = "";
 const modelOptions = (): { value: string; name?: string }[] => {
   const opt = state.config.find((c) => c.id === "model");
@@ -3756,8 +3759,10 @@ async function exitAgentFlow(): Promise<void> {
     finally { agentTierApplying = false; setSendEnabled(); }
   }
   if (prior.uiMode !== state.uiMode) void applyConfig("mode", prior.uiMode);
-  // Only unwind what the flow turned ON - a user who had auto-speak before keeps it.
-  if (!prior.conversation && state.voice?.ttsConversation) void applyVoicePatch({ ttsAutoSpeak: prior.autoSpeak, ttsConversation: false });
+  // Only unwind what the flow turned ON, and only if the user has not set it themselves since (P-VOICE.8):
+  // a user who had auto-speak before keeps it, and a user who chose conversation keeps that too.
+  if (voiceArmedByFlow && !state.voice?.ttsReadAloudChosen && state.voice?.ttsConversation) void applyVoicePatch({ ttsAutoSpeak: prior.autoSpeak, ttsConversation: false });
+  voiceArmedByFlow = false;
 }
 /** One readiness pass: gather live signals, surface the FIRST gap (or the one-time KG offer), and arm
  *  conversation mode the moment the required set is green. Cheap + idempotent; runs every 4s while in. */
@@ -3790,8 +3795,9 @@ async function agentFlowStep(): Promise<void> {
   if (gap) {
     if (gap.id === "vault") vaultAsked = true;
     renderAgentGap(gap);
-    // Speak a NEW gap once when the voice already works (the tts gap itself stays visual-only).
-    if (gap.id !== lastSpokenGap && gap.id !== "tts" && items.find((i) => i.id === "tts")?.ok) {
+    // Speak a NEW gap once when the voice already works (the tts gap itself stays visual-only), and only
+    // while read-aloud is on: with auto-speak off the card is the whole message (P-VOICE.8).
+    if (state.voice?.ttsAutoSpeak && gap.id !== lastSpokenGap && gap.id !== "tts" && items.find((i) => i.id === "tts")?.ok) {
       lastSpokenGap = gap.id;
       void speakText(`${gap.title}. ${gap.hint}`);
     }
@@ -3801,9 +3807,14 @@ async function agentFlowStep(): Promise<void> {
   }
   if (!conversationArmed) {
     conversationArmed = true;
-    if (!state.voice?.ttsConversation) {
+    // P-VOICE.8 (ADR-0400): hands-free switches itself on only for a user who never set read-aloud or
+    // conversation themselves. Once they have, their setting stands on every launch; Ctrl+G still starts it.
+    if (!state.voice?.ttsConversation && !state.voice?.ttsReadAloudChosen) {
+      voiceArmedByFlow = true;
       await applyVoicePatch({ ttsAutoSpeak: true, ttsConversation: true });
       showToast({ tone: "ok", title: "You're in", desc: `Hands-free with ${modelLabel(state.model)}. Just start talking - Esc parks the stage.`, timeout: 4500 });
+    } else if (!state.voice?.ttsConversation) {
+      showToast({ title: "Hands-free is off", desc: `Your voice setting stands. ${modCombo("G")} turns conversation mode on.`, timeout: 4500 });
     }
   }
 }
@@ -10998,8 +11009,8 @@ const speech = new SpeechQueue({
  *  aloud, which is the state most people want back. */
 async function toggleConversationMode(): Promise<void> {
   const on = !state.voice?.ttsConversation;
-  await applyVoicePatch(on ? { ttsAutoSpeak: true, ttsConversation: true } : { ttsConversation: false });
-  if (!on) { if (dictation) void endDictation(); stopThinkingCues(); }
+  // P-VOICE.8 (ADR-0400): a user click like any other: the mic and the cues stop inside applyVoicePatch.
+  await applyVoicePatch(on ? { ttsAutoSpeak: true, ttsConversation: true } : { ttsConversation: false }, { user: true });
   showToast({
     tone: on ? "ok" : "info",
     title: on ? "Conversation mode on" : "Conversation mode off",
@@ -11314,12 +11325,65 @@ function voicePopHtml(data: VoiceListView | null, provider: string, autoSpeak: b
   </div>`;
 }
 
-/** Persist a voice-settings change, refresh the cached copy, and repaint everything that reflects it. */
-async function applyVoicePatch(patch: Partial<VoiceSettingsView>): Promise<void> {
-  const next = await bridge.setVoiceSettings(patch).catch(() => null);
-  if (next) state.voice = next;
+/** P-VOICE.8 (ADR-0400): the newest voice-settings write. An answer to an older write never overwrites a
+ *  newer click (a slow engine-switch reply must not turn auto-speak back on after the user turned it off). */
+let voiceSeq = 0;
+/** Repaints the composer's voice popover from state.voice while it is open; null while it is closed. */
+let voicePopRepaint: (() => void) | null = null;
+
+/** Stop whatever the flags no longer allow, on the transition only (so an unrelated settings answer never
+ *  ends a manual dictation): auto-speak off silences speech now, conversation off closes its mic. */
+function enforceReadAloud(before: { auto: boolean; conv: boolean }): void {
+  if (before.auto && !state.voice?.ttsAutoSpeak) {
+    speech.stop(); stopThinkingCues();
+    // The one-clip player (message read-aloud, the Agent stage's spoken hints) goes quiet too; its own
+    // ended handler restores the button and frees the clip.
+    if (ttsAudio) { ttsAudio.pause(); ttsAudio.dispatchEvent(new Event("ended")); }
+  }
+  if (before.conv && !state.voice?.ttsConversation) { stopThinkingCues(); if (dictation) void endDictation(); }
+}
+
+/** Every read-aloud surface shows state.voice: the chip, the popover, and the Settings card's checkboxes. */
+function repaintVoiceControls(): void {
   updateVoiceChip();
-  if ($("#voiceTts")) void renderSettings(); // the Settings "Voice" card is open — keep the two views in step
+  voicePopRepaint?.();
+  const v = state.voice;
+  const sync = (sel: string, checked: boolean, disabled: boolean): void => {
+    const box = $(sel) as HTMLInputElement | null; // the Settings Voice card, when it is open
+    if (box) { box.checked = checked; box.disabled = disabled; }
+  };
+  sync("#voiceAutoSpeak", !!v?.ttsAutoSpeak, false);
+  sync("#voiceConversation", !!v?.ttsConversation, !v?.ttsAutoSpeak);
+  sync("#voiceDigest", !!v?.ttsDigest, !v?.ttsAutoSpeak);
+}
+
+/** Persist a voice-settings change and repaint everything that reflects it. P-VOICE.8 (ADR-0400): the ONE
+ *  write path for every voice control. Read-aloud flags apply locally BEFORE the engine answers, through the
+ *  same rule the engine uses (voice_flags.ts): a streaming reply keeps feeding speech while the save is in
+ *  flight, and it must already see "off". `user` marks a person's click, which the LUCID Agent stage then
+ *  respects; `fromSettings` means the Settings card itself made the change (no full re-render under it). */
+async function applyVoicePatch(patch: Partial<VoiceSettingsView>, o: { user?: boolean; fromSettings?: boolean } = {}): Promise<void> {
+  const seq = ++voiceSeq;
+  const flags = touchesReadAloud(patch);
+  const before = { auto: !!state.voice?.ttsAutoSpeak, conv: !!state.voice?.ttsConversation };
+  if (flags && state.voice) {
+    const f = applyReadAloudPatch({ ttsAutoSpeak: state.voice.ttsAutoSpeak, ttsConversation: state.voice.ttsConversation, ttsDigest: !!state.voice.ttsDigest }, patch);
+    state.voice = { ...state.voice, ...f, ttsDigest: f.ttsDigest && f.ttsAutoSpeak, ...(o.user ? { ttsReadAloudChosen: true } : {}) };
+    enforceReadAloud(before);
+    repaintVoiceControls();
+  }
+  const next = await bridge.setVoiceSettings(o.user && flags ? { ...patch, ttsReadAloudChosen: true } : patch).catch(() => null);
+  if (seq !== voiceSeq) return; // a newer change owns state.voice now
+  if (!next) {
+    if (flags) showToast({ tone: "warn", title: "Couldn't save the voice setting", desc: "It applies now, but the engine didn't answer, so it may not survive a restart.", timeout: 4500 });
+    return;
+  }
+  const settled = { auto: !!state.voice?.ttsAutoSpeak, conv: !!state.voice?.ttsConversation };
+  state.voice = next;
+  enforceReadAloud(settled);
+  repaintVoiceControls();
+  // An engine or voice picked in the popover: the open Settings card redraws its pickers to match.
+  if (!flags && !o.fromSettings && $("#voiceTts")) void renderSettings();
 }
 
 /** The composer's voice menu: auto-speak, engine, and the engine's voices — the whole read-aloud surface in
@@ -11327,15 +11391,18 @@ async function applyVoicePatch(patch: Partial<VoiceSettingsView>): Promise<void>
 async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
   cfgClose?.();
   let provider: VoiceSettingsView["ttsProvider"] = state.voice?.ttsProvider ?? "elevenlabs";
-  let autoSpeak = !!state.voice?.ttsAutoSpeak;
-  let conversation = !!state.voice?.ttsConversation;
   let data: VoiceListView | null = null;
-  const { node, close, reposition } = popover(anchor, voicePopHtml(null, provider, autoSpeak, conversation, true), () => { cfgClose = null; });
+  // P-VOICE.8 (ADR-0400): the checkboxes read state.voice on every paint (never a copy taken at open), and a
+  // change anywhere (Settings, Ctrl+G, the Agent stage) repaints this card through voicePopRepaint.
+  const flags = (): [boolean, boolean] => [!!state.voice?.ttsAutoSpeak, !!state.voice?.ttsConversation];
+  const { node, close, reposition } = popover(anchor, voicePopHtml(null, provider, ...flags(), true), () => { cfgClose = null; voicePopRepaint = null; });
   cfgClose = close;
   // The card is anchored to the composer at the BOTTOM of the window, so it opens upward - and it grows when
   // the fetched voice list replaces the skeleton. Every repaint re-runs placement, or the taller card would
   // extend past the bottom edge from a `top` computed for the shorter one.
-  const paint = (loading: boolean): void => { node.innerHTML = voicePopHtml(data, provider, autoSpeak, conversation, loading); reposition(); };
+  let loadingNow = true;
+  const paint = (loading: boolean): void => { loadingNow = loading; node.innerHTML = voicePopHtml(data, provider, ...flags(), loading); reposition(); };
+  voicePopRepaint = () => paint(loadingNow);
   const reload = async (): Promise<void> => {
     paint(true);
     data = await bridge.voices(provider).catch(() => null);
@@ -11343,18 +11410,11 @@ async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
   };
   node.addEventListener("change", (e) => {
     const t = e.target as HTMLElement;
-    if (t.id === "voiceAuto") {
-      autoSpeak = (t as HTMLInputElement).checked;
-      if (!autoSpeak) { speech.stop(); conversation = false; } // the loop can't run without the speaking half
-      void applyVoicePatch({ ttsAutoSpeak: autoSpeak });
-      paint(false);
-      return;
-    }
+    // P-VOICE.8 (ADR-0400): the click applies at once (speech stops, the mic closes) and repaints this card,
+    // the chip and the Settings card from the same state; the shared rule clears conversation with auto-speak.
+    if (t.id === "voiceAuto") { void applyVoicePatch({ ttsAutoSpeak: (t as HTMLInputElement).checked }, { user: true }); return; }
     if (t.id !== "voiceConv") return;
-    conversation = (t as HTMLInputElement).checked;
-    if (!conversation && dictation) void endDictation(); // turning it off closes an open mic immediately
-    void applyVoicePatch({ ttsConversation: conversation });
-    paint(false);
+    void applyVoicePatch({ ttsConversation: (t as HTMLInputElement).checked }, { user: true });
   });
   node.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
@@ -14945,9 +15005,9 @@ function wire(): void {
     const key = vs.dataset.voiceSet!;
     // P-VOICE.2: auto-speak is a checkbox, the engines are selects - read the right property for each.
     const value = vs instanceof HTMLInputElement && vs.type === "checkbox" ? vs.checked : vs.value;
-    const next = await bridge.setVoiceSettings({ [key]: value } as never).catch(() => null);
-    if (next) { state.voice = next; updateVoiceChip(); }
-    if (key === "ttsAutoSpeak" && value !== true) speech.stop();
+    // P-VOICE.8 (ADR-0400): the same write path as the popover, so the two surfaces never disagree and a
+    // read-aloud click stops speech before the engine even answers.
+    await applyVoicePatch({ [key]: value } as Partial<VoiceSettingsView>, { user: true, fromSettings: true });
     if (key === "sttProvider") { const row = $("#voiceSttUrlRow") as HTMLElement | null; if (row) row.hidden = vs.value !== "whisper"; }
     if (key === "ttsProvider") {
       // DOM casts: $() returns Element; `hidden` lives on HTMLElement (well-known nodes, named consts).
