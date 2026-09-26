@@ -42,6 +42,8 @@ export type ArtifactKind =
   | "rpm"
   | "win-nsis"
   | "win-portable"
+  | "win-msi"
+  | "win-appx"
   | "appimage"
   | "updater-feed"
   | "unknown";
@@ -125,8 +127,11 @@ export function classifyArtifact(fileName: string): ArtifactKind {
   // so widening the NAME shape does not weaken what the gate actually proves about the bytes.
   if (/^latest(-[a-z0-9]+)*\.ya?ml$/.test(lower)) return "updater-feed";
   if (lower.endsWith(".pkg")) return "mac-pkg";
-  // zip is a mac-only target here (desktop/package.json build.mac.target); win ships nsis + portable.
+  // zip is a mac-only target here (desktop/package.json build.mac.target); win ships nsis + portable,
+  // plus the enterprise msi (SCCM) + appx (Intune) packages (WINPKG, issue #345) for the Agent flavor only.
   if (lower.endsWith(".zip")) return "mac-zip";
+  if (lower.endsWith(".msi")) return "win-msi";
+  if (lower.endsWith(".appx")) return "win-appx";
   if (lower.endsWith(".deb")) return "deb";
   if (lower.endsWith(".rpm")) return "rpm";
   if (lower.endsWith(".appimage")) return "appimage";
@@ -152,9 +157,9 @@ export function classifyArtifact(fileName: string): ArtifactKind {
  *     must be named latest*.yml, everything else must start with the flavor's artifact stem.
  *  2. EMBEDDED IDENTITY - only mac-pkg, deb and rpm carry one. For those, a null field is a FAILURE
  *     (unreadable identity proves nothing). For the kinds that embed nothing reachable without
- *     unpacking (mac-zip, win-nsis, win-portable, appimage, updater-feed) all-null is the normal
- *     case and passes - but any field the caller DID manage to read is still verified, because
- *     evidence is never discarded.
+ *     unpacking (mac-zip, win-nsis, win-portable, win-msi, win-appx, appimage, updater-feed) all-null
+ *     is the normal case and passes - but any field the caller DID manage to read is still verified,
+ *     because evidence is never discarded.
  *
  * The filename layer runs first because it is universal, and the embedded layer second because it is
  * the one that catches the actual incident class: a Creator payload inside a correctly named Agent
@@ -316,12 +321,14 @@ function checkRpm(expected: FlavorExpectation, got: ArtifactIdentity): string | 
 }
 
 /**
- * mac-zip / win-nsis / win-portable / appimage / updater-feed embed nothing this gate can reach
- * without unpacking the artifact, so their filename check (already done) is the contract. All-null
- * is therefore NOT a mismatch. Anything the caller did read is still checked, and for the updater
- * feed that is the only real check available: both flavors emit a file named EXACTLY `latest.yml`
- * (see build/electron-builder.creator.cjs - a Creator resolving Agent's feed would replace itself
- * with Agent bytes on the next quit), so the feed's DECLARED artifact path is what separates them.
+ * mac-zip / win-nsis / win-portable / win-msi / win-appx / appimage / updater-feed embed nothing this
+ * gate reads without unpacking the artifact (an msi's identity sits in a compound-file property
+ * stream, an appx's in the AppxManifest.xml zip member; same standing as mac-zip's Info.plist), so
+ * their filename check (already done) is the contract. All-null is therefore NOT a mismatch. Anything
+ * the caller did read is still checked, and for the updater feed that is the only real check
+ * available: both flavors emit a file named EXACTLY `latest.yml` (see build/electron-builder.creator.cjs
+ * - a Creator resolving Agent's feed would replace itself with Agent bytes on the next quit), so the
+ * feed's DECLARED artifact path is what separates them.
  */
 function checkFilenameOnlyKind(expected: FlavorExpectation, got: ArtifactIdentity): string | null {
   if (got.appId !== null && got.appId !== expected.appId) {
