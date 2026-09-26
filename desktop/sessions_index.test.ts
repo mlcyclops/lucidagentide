@@ -51,6 +51,42 @@ test("a poll with no changes parses NOTHING (stat-only); a changed file re-parse
   }
 });
 
+// P-FLEET.L17 (found live): the index kept the BARE model id omp writes on assistant rows ("gpt-6-astra",
+// provider beside it) and stripped "anthropic/" on top, so the orbit's Recover handed omp an id it did not
+// know and every historical spoke came back crashed. The record is the `provider/model` id omp accepts.
+test("the session model is the provider/model id omp accepts, never the bare assistant-row id", () => {
+  const codex = [
+    ln({ type: "session", id: "x", cwd: CWD }),
+    ln({ type: "model_change", model: "openai-codex/gpt-6-astra" }),
+    ln({ type: "message", message: { role: "user", content: [{ type: "text", text: "fix it" }] } }),
+    ln({ type: "message", message: { role: "assistant", usage: { input: 1, output: 1 }, model: "gpt-6-astra", provider: "openai-codex", content: [{ type: "text", text: "on it" }] } }),
+  ].join("\n");
+  // No provider on the row and no model_change at all: the bare id is all there is, so it stays bare.
+  const bare = [
+    ln({ type: "session", id: "y", cwd: CWD }),
+    ln({ type: "message", message: { role: "user", content: [{ type: "text", text: "hi there" }] } }),
+    ln({ type: "message", message: { role: "assistant", usage: { input: 1, output: 1 }, model: "claude-opus-5-5", content: [{ type: "text", text: "hello" }] } }),
+  ].join("\n");
+  // A bare row after a prefixed model_change restates the same model: the prefix is kept.
+  const restated = [
+    ln({ type: "session", id: "z", cwd: CWD }),
+    ln({ type: "model_change", model: "anthropic/claude-opus-5-5" }),
+    ln({ type: "message", message: { role: "user", content: [{ type: "text", text: "hi there" }] } }),
+    ln({ type: "message", message: { role: "assistant", usage: { input: 1, output: 1 }, model: "claude-opus-5-5", content: [{ type: "text", text: "hello" }] } }),
+  ].join("\n");
+  const root = freshRoot({ "x.jsonl": codex, "y.jsonl": bare, "z.jsonl": restated, "a.jsonl": chat("a", ["one"]) });
+  try {
+    const byId: Record<string, string> = {};
+    for (const s of listSessions(CWD, root).sessions) byId[s.id] = s.model;
+    expect(byId.x).toBe("openai-codex/gpt-6-astra");
+    expect(byId.y).toBe("claude-opus-5-5");
+    expect(byId.z).toBe("anthropic/claude-opus-5-5");
+    expect(byId.a).toBe("anthropic/m"); // no more "anthropic/" stripping: display shortens, the record does not
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("deleted files are pruned from the index; other roots are untouched", () => {
   const rootA = freshRoot({ "a.jsonl": chat("a", ["one"]) });
   const rootB = freshRoot({ "b.jsonl": chat("b", ["two"]) });

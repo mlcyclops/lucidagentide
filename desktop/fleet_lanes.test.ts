@@ -70,6 +70,18 @@ test("a gate-less argv refuses the lane by NAME and creates nothing", async () =
   expect((await live.status()).lanes).toEqual([]); // no orphan lane in the map
 }, TIMEOUT);
 
+// P-FLEET.L17 (found live): Recover handed omp a model id it did not know, the handshake failed, and the
+// half-built lane stayed in the map as "error": a crashed spoke on the orbit whose Respawn could only
+// fail the same way. A spawn refused in the handshake reports WHY and creates nothing.
+test("a model omp refuses in the handshake is a named refusal and leaves no orphan lane", async () => {
+  live = manager({ mode: "badmodel" });
+  const r = await live.spawn({ cwd: import.meta.dir, model: "gpt-6-astra" });
+  expect(r.ok).toBe(false);
+  expect(r.reason).toContain("Unknown ACP model: gpt-6-astra");
+  expect(r.lane).toBeUndefined();
+  expect((await live.status()).lanes).toEqual([]);
+}, TIMEOUT);
+
 // P-FLEET.L16 (the frozen "Spawning\u2026" button): a filesystem that never answers the directory check
 // (a OneDrive dehydrated placeholder, a dead network drive) must become a NAMED refusal on the stat
 // clock - never a wedge. The old statSync blocked the whole event loop, so no timeout could even run.
@@ -210,6 +222,31 @@ test("a mid-turn CRASH lands error event-driven (no clock), and the next prompt 
   expect(st.lanes[0]!.id).toBe(id);                            // same logical lane, same id (invariant 9)
   expect(st.lanes[0]!.respawns).toBe(1);
   expect(st.lanes[0]!.status).toBe("done");
+}, TIMEOUT);
+
+// P-FLEET.L17 (found live): Recover on a historical spoke came back with "the whole history gone", because
+// it was a plain spawn under the old name. A spawn with `resume` is the spoke's OLD session: the seeded
+// transcript is what promote shows, the recorded turn count stands, and (with an agent that cannot load
+// sessions natively, like this fake) the memory rides the first prompt as the recovery preamble.
+test("spawn with resume brings the recorded conversation back: seeded transcript, kept turns, memory on the wire", async () => {
+  live = manager();
+  const r = await live.spawn({
+    cwd: import.meta.dir, name: "fix it", resume: {
+      sessionId: "01a0-recorded",
+      transcript: [{ role: "user", text: "the codeword is PELICAN" }, { role: "assistant", text: "noted" }],
+      turns: 434,
+    },
+  });
+  expect(r.ok).toBe(true);
+  expect(r.lane!.turns).toBe(434);
+  expect(r.lane!.name).toBe("fix it");
+  expect(live.promote(r.lane!.id).transcript?.map((t) => t.text)).toEqual(["the codeword is PELICAN", "noted"]);
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "what was the codeword?", (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("PELICAN");
+  expect(reply).toContain("TRANSCRIPT START");
+  expect((await live.status()).lanes[0]!.turns).toBe(435);
 }, TIMEOUT);
 
 test("retry re-sends the LAST prompt after a crash, without the user asking twice", async () => {
