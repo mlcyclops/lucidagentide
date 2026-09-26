@@ -859,6 +859,10 @@ demo-P-TASK.6: ## P-TASK.6 (ADR-0398): the delegation card for omp 18's task too
 demo-P-VOICE.8: ## P-VOICE.8 (ADR-0400): the read-aloud checkboxes mean what the user clicked - one rule shared by the engine store and every control (auto-speak off clears conversation for good), clicks apply before the engine answers, older answers never overwrite newer clicks, and the LUCID Agent stage respects a user's own setting
 	$(BUN) run harness/scripts/demo_p_voice_8.ts
 
+.PHONY: demo-P-REPO.1
+demo-P-REPO.1: ## P-REPO.1 (ADR-0404): every session names the repo it works on and where its commits go (git's own push rules, no token in the view), taken from the files the session edits when its folder holds several repos; a spoke is started by picking a repo (local checkouts or the user's GitHub repos) instead of typing a URL
+	$(BUN) run desktop/scripts/demo_p_repo_1.ts
+
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
 	$(BUN) run desktop/scripts/demo_p_sysres_1.ts

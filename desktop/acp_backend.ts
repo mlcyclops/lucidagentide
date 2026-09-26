@@ -47,6 +47,7 @@ import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
+import { observeToolCall } from "./repo_probe.ts"; // P-REPO.1 (ADR-0404): which repo a session works on
 import { userTurnedSandboxOff } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
@@ -836,6 +837,9 @@ class Backend {
             case "agent_thought_chunk": if (u.content?.type === "text") this.emit({ type: "thinking", text: u.content.text }); break;
             case "tool_call": {
               trackToolCall(this.openCalls, u, Date.now()); // P-STALL.2: this call is now awaited
+              // P-REPO.1 (ADR-0404): which repo this session works on. Keyed by the notification's own
+              // session id so a session/load replay (which streams before this.sessionId is set) counts too.
+              observeToolCall(typeof params?.sessionId === "string" ? params.sessionId : this.sessionId, u, currentWorkspace());
               // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other").
               // Detect it by shape (parseTaskCall, P-TASK.6 / ADR-0398: omp 18's per-item agent) and emit a
               // distinct `subagent` event so the UI shows a delegation card instead of a nameless "other"

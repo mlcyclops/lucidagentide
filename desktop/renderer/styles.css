@@ -5820,3 +5820,90 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   border-radius:8px;color:var(--txt);font:inherit;font-size:12px;padding:7px 9px}
 .orbit-spawn-auth input[type="password"]:focus{outline:none;border-color:var(--accent)}
 .orbit-spawn-save{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--txt-3);cursor:pointer}
+
+/* ───────── P-REPO.1 (ADR-0404): which repo a session works on, and where its commits go ─────────
+   One chip everywhere (titlebar, lane cards, spokes, hub, spoke banner). Each text run is its own
+   nowrap span and the chip ellipsizes as a whole (invariant 11). Green arrow = pushes to a remote;
+   amber "local only" = commits cannot leave this machine. */
+.repo-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;overflow:hidden;
+  white-space:nowrap;font-size:11.5px;color:var(--txt-2)}
+.repo-chip>.ic{flex:none;color:var(--accent-2)}
+.repo-chip>span{white-space:nowrap}
+.repo-chip .rc-name{flex:0 .2 auto;min-width:6ch;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--txt)}
+.repo-chip .rc-branch{flex:none;max-width:16ch;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:.92em;
+  color:var(--txt-2);background:var(--bg-1);border:1px solid var(--line-soft);border-radius:5px;padding:0 5px}
+.repo-chip .rc-slug{flex:0 1 auto;min-width:6ch;overflow:hidden;text-overflow:ellipsis;color:var(--green)}
+.repo-chip.rc-remote>.ic:nth-of-type(2){color:var(--green)}
+.repo-chip .rc-local{flex:none;color:var(--amber);font-weight:600}
+.repo-chip.rc-none>.ic{color:var(--txt-4)}
+.repo-chip.rc-none .rc-name{font-weight:400;color:var(--txt-3)}
+.titlebar .tb-chip.repo-chip{max-width:min(460px,34vw);gap:6px}
+.titlebar .tb-chip.repo-chip.rc-on-lane{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+/* sidebar workspace bar: the workspace on top, the repo + push target under it */
+.ws-bar{flex-direction:column;align-items:stretch;gap:3px}
+.ws-bar-top{display:flex;align-items:center;gap:8px;min-width:0}
+.ws-bar-repo{display:block;min-width:0;padding-left:22px;font-size:11px;color:var(--txt-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws-bar-repo .ic{vertical-align:-1px;color:var(--green)}
+.ws-bar-repo.local .ic{color:var(--amber)}
+/* grid lane card: a full-width strip under the header */
+.fleet-repo{display:flex;width:100%;border:0;border-bottom:1px solid var(--line-soft);background:color-mix(in srgb,var(--bg-1) 70%,transparent);
+  padding:3px 9px;font:inherit;font-size:10.5px;cursor:pointer;text-align:left}
+.fleet-repo:hover{background:var(--bg-2)}
+/* orbit spoke card, hub, spoke banner */
+.orbit-repo{display:flex;font-size:10px}
+.orbit-hub-repo{display:inline-flex;max-width:124px;font-size:9.5px}
+.spoke-repo{flex:0 1 auto;max-width:360px;border:1px solid var(--line);border-radius:999px;background:var(--bg-1);
+  padding:2px 9px;font:inherit;font-size:11px;cursor:pointer}
+.spoke-repo:hover{border-color:var(--accent-2)}
+/* the details card (inside .popover) */
+.rc-pop{display:flex;flex-direction:column;gap:7px;min-width:300px;max-width:440px;padding:4px 4px 2px}
+.rc-pop-h{display:flex;align-items:center;gap:7px;min-width:0}
+.rc-pop-h>b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;color:var(--txt)}
+.rc-pop-h>.ic{flex:none;color:var(--accent-2)}
+.rc-tag{flex:none;font-size:10px;color:var(--txt-3);border:1px solid var(--line);border-radius:999px;padding:0 7px;white-space:nowrap}
+.rc-pop-row{display:grid;grid-template-columns:86px minmax(0,1fr);gap:8px;align-items:baseline;font-size:12px;color:var(--txt-2)}
+.rc-pop-row>span:first-child{color:var(--txt-4);white-space:nowrap}
+.rc-pop-row code{font-family:var(--mono);font-size:11.5px;color:var(--txt);overflow-wrap:anywhere}
+.rc-pop-row b{color:var(--green);font-weight:600}
+.rc-pop-row b.rc-warn{color:var(--amber)}
+.rc-pop-note{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-3)}
+.rc-pop-acts{display:flex;gap:6px;flex-wrap:wrap}
+/* the spoke repo picker (grid New lane card + orbit New spoke panel) */
+.repo-pick{display:flex;flex-direction:column;gap:5px;min-width:0}
+.repo-pick-search{position:relative}
+.repo-pick-search>.ic{position:absolute;left:8px;top:50%;transform:translateY(-50%);color:var(--txt-4);pointer-events:none}
+.repo-pick-search input{width:100%;background:var(--bg-1);border:1px solid var(--line);border-radius:7px;color:var(--txt);
+  font:inherit;font-size:11.5px;padding:5px 7px 5px 26px;letter-spacing:normal;text-transform:none}
+.repo-pick-search input:focus{outline:none;border-color:var(--accent)}
+.repo-pick-list{display:flex;flex-direction:column;gap:1px;max-height:300px;overflow:auto;padding:2px;
+  border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-1)}
+.repo-pick-h{display:flex;align-items:center;gap:6px;padding:6px 7px 3px;font-size:9.5px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--txt-4);white-space:nowrap}
+.repo-pick-refresh{margin-left:auto;display:grid;place-items:center;width:20px;height:20px;border:0;border-radius:5px;
+  background:none;color:var(--txt-4);cursor:pointer}
+.repo-pick-refresh:hover{background:var(--bg-3);color:var(--txt-2)}
+.repo-pick-empty{display:block;padding:4px 8px 7px;font-size:11px;line-height:1.45;color:var(--txt-4)}
+.repo-pick-empty.bad{color:var(--amber)}
+.repo-pick-row{display:flex;align-items:center;gap:6px;width:100%;min-width:0;padding:5px 7px;border:1px solid transparent;
+  border-radius:6px;background:none;color:var(--txt-2);font:inherit;font-size:11.5px;text-align:left;cursor:pointer;
+  letter-spacing:normal;text-transform:none}
+.repo-pick-row:hover{background:var(--bg-2)}
+.repo-pick-row.on{background:color-mix(in srgb,var(--accent) 12%,transparent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.repo-pick-row>.ic{flex:none;color:var(--accent-2)}
+.repo-pick-row.gh>.ic{color:var(--txt-3)}
+.repo-pick-row{align-items:flex-start}
+.repo-pick-row>.ic{margin-top:2px}
+.repo-pick-row .rp-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.repo-pick-row .rp-top{display:flex;align-items:baseline;gap:8px;min-width:0}
+.repo-pick-row .rp-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--txt)}
+.repo-pick-row .rp-src{flex:none;white-space:nowrap;font-size:10px;color:var(--txt-4)}
+.repo-pick-row .rp-sub{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;color:var(--txt-3)}
+.repo-pick-row .rp-sub .ic{vertical-align:-1px;color:var(--green)}
+.repo-pick-row .rp-branch{font-family:var(--mono);color:var(--txt-2)}
+.repo-pick-row .rp-slug{color:var(--green)}
+.repo-pick-row .rp-local{color:var(--amber)}
+.fleet-spawn-more,.orbit-spawn-more{border:1px solid var(--line-soft);border-radius:8px;padding:4px 8px}
+.fleet-spawn-more>summary,.orbit-spawn-more>summary{cursor:pointer;font-size:11px;color:var(--txt-3);white-space:nowrap;padding:2px 0}
+.fleet-spawn-more[open]>summary,.orbit-spawn-more[open]>summary{margin-bottom:4px}
+.fleet-spawn-more{display:flex;flex-direction:column;gap:5px}

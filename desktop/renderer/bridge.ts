@@ -268,7 +268,13 @@ export interface LaneView {
   lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
   /** P-FLEET.L19: the lane's last MEASURED context fill, window and cost; absent until omp reports once. */
   usage?: { used: number; size: number; cost: number };
+  /** P-REPO.1 (ADR-0404): the repo this lane works on and where its commits go; absent until probed. */
+  repo?: RepoContext;
 }
+// P-REPO.1 (ADR-0404): repo identity + the spoke picker's lists. Shapes owned by the engine modules.
+import type { RepoContext, RepoView } from "../repo_identity.ts";
+import type { GithubRepoList, LocalRepoChoice, RemoteRepoChoice } from "../repo_probe.ts";
+export type { GithubRepoList, LocalRepoChoice, RemoteRepoChoice, RepoContext, RepoView };
 // P-FLEET.L5 (ADR-0274): the reviewable timeline - one row per session on this machine, every workspace,
 // lanes labeled through the durable lane-session ledger.
 export type TimelineKind = "chat" | "lane" | "ingest";
@@ -961,6 +967,12 @@ export interface LucidBridge {
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   // P-FLEET.L1/L2: local lanes - concurrent headless LUCID agents in the fleet grid dashboard.
   fleetStatus(): Promise<FleetStatusView | null>;
+  /** P-REPO.1 (ADR-0404): the repo Main works on and where its commits go. */
+  repoContext(): Promise<RepoContext | null>;
+  /** P-REPO.1: local folders a spoke can start in (workspace, lanes, recents, checkouts beside them). */
+  repoChoices(): Promise<LocalRepoChoice[] | null>;
+  /** P-REPO.1: the user's GitHub repos (gh sign-in or a saved GitHub token), cached 5 minutes. */
+  repoGithub(refresh?: boolean): Promise<GithubRepoList | null>;
   /** `repoUrl` (P-FLEET.L2) clones a GitHub/GitLab/Azure DevOps remote into `cwd` (or the shared
    *  workspaces root when cwd is blank) and runs the lane there; an existing clone is reused. `pat` is a
    *  freshly-typed token used ONLY to spawn that git process - it is redacted from errors and never
@@ -1657,6 +1669,9 @@ export const bridge: LucidBridge = {
   cancelGoal: () => post("/api/goal/cancel", {}),
   // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
   fleetStatus: () => getData("/api/fleet/status"),
+  repoContext: () => getData("/api/repo/context"), // P-REPO.1 (ADR-0404)
+  repoChoices: () => getData("/api/repo/choices"),
+  repoGithub: (refresh) => getData(`/api/repo/github${refresh ? "?refresh=1" : ""}`),
   fleetSpawn: (opts) => post("/api/fleet/spawn", opts),
   timelineList: (limit = 100, offset = 0, includeSelfTest = false) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}`), // P-FLEET.L5
   timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5

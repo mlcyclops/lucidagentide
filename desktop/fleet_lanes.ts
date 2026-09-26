@@ -36,6 +36,7 @@ import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSa
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
 import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
+import type { RepoContext } from "./repo_identity.ts";
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -86,6 +87,9 @@ export interface LaneView {
    *  manager so a composer attaching to an idle lane shows its real fill at once instead of "ctx --"
    *  until the lane's next turn. Absent until omp reports once; never estimated. */
   usage?: { used: number; size: number; cost: number };
+  /** P-REPO.1 (ADR-0404): the repo this lane works on and where its commits go. Absent until the first
+   *  background probe lands (the status poll never waits on git). */
+  repo?: RepoContext;
 }
 
 /** P-FLEET.L3: a pasted image riding a lane prompt - the P-VISION.1 shape the master chat uses. */
@@ -214,6 +218,15 @@ export interface FleetLaneDeps {
    *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
    *  manager built without it simply never probes; it still escalates to recover. */
   interject?: (laneId: string, text: string) => void;
+  /** P-REPO.1 (ADR-0404): the repo tracker (repo_probe.ts). `observe` sees every tool_call, `peek` is a
+   *  synchronous cached read for the status view. Optional: without it a lane simply reports no repo. */
+  repo?: RepoTracker;
+}
+
+/** P-REPO.1: what the lane manager needs from the repo tracker. */
+export interface RepoTracker {
+  observe: (sessionId: string | null, update: unknown, cwd: string) => void;
+  peek: (sessionId: string | null, cwd: string) => RepoContext | undefined;
 }
 
 /** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time.
@@ -289,7 +302,7 @@ export class FleetLaneManager {
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
   readonly #observers = new Set<LaneObserver>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string>; interject?: (laneId: string, text: string) => void };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string>; interject?: (laneId: string, text: string) => void; repo?: RepoTracker };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -301,7 +314,7 @@ export class FleetLaneManager {
   #autoDefault = false;
 
   constructor(deps: FleetLaneDeps) {
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.repo ? { repo: deps.repo } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select. */
@@ -974,6 +987,7 @@ export class FleetLaneManager {
           if (u.sessionUpdate === "tool_call") {
             if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
             trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
+            this.#deps.repo?.observe(typeof params?.sessionId === "string" ? params.sessionId : lane.sessionId, u, lane.cwd); // P-REPO.1
           } else {
             settleToolCall(lane.openCalls, u); // a terminal status closes it and frees the health ladder
           }
@@ -1135,7 +1149,9 @@ export class FleetLaneManager {
   }
 
   #view(lane: Lane): LaneView {
+    const repo = this.#deps.repo?.peek(lane.sessionId, lane.cwd);
     return {
+      ...(repo ? { repo } : {}),
       id: lane.id,
       name: lane.name,
       cwd: lane.cwd,
