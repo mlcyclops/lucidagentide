@@ -977,7 +977,7 @@ export interface LucidBridge {
    *  workspaces root when cwd is blank) and runs the lane there; an existing clone is reused. `pat` is a
    *  freshly-typed token used ONLY to spawn that git process - it is redacted from errors and never
    *  persisted by the server (the encrypted copy is written separately through the OS vault). */
-  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
+  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
   /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat. */
   fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[]): Promise<void>;
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
@@ -1079,10 +1079,16 @@ export interface LucidBridge {
   // P-RESUME.1 (ADR-0171): user messages carry their `turn` ordinal; `steps` is the restored agent
   // activity (thinking/tool/failure groups) recorded in the lucid-steps sidecar, keyed by that ordinal.
   sessionMessages(id: string, limit?: number): Promise<{ messages: { role: string; text: string; turn?: number }[]; total: number; userTotal?: number; steps?: RestoredTurn[] } | null>;
-  resumeSession(id: string): Promise<void>;
+  /** P-SWITCH.1 (ADR-0403): what would stop if Main switched sessions now (null = nothing), and the
+   *  session Main holds. Null when the engine did not answer. */
+  sessionBusy(): Promise<{ busy: string | null; sessionId: string | null } | null>;
+  /** Load `id` into Main. While Main is busy the engine refuses (`busy` carries its reason) unless `force`,
+   *  the user's explicit "stop it and switch". */
+  resumeSession(id: string, opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
-  newSession(): Promise<void>;
+  /** Same refusal rule as resumeSession. */
+  newSession(opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   setZoom(factor: number): void;
   // settings + provider auth
   getSettings(): Promise<ProfileSettings | null>;
@@ -1410,6 +1416,19 @@ async function getData(path: string): Promise<any> {
 }
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
+}
+/** P-SWITCH.1 (ADR-0403): the outcome of asking Main to open or start a session. `busy` is set only by the
+ *  engine's 409 refusal; any other failure is `ok: false` without it (the caller's old best-effort path). */
+export interface SessionSwitchResult { ok: boolean; busy?: string }
+async function postSessionSwitch(path: string, body: unknown): Promise<SessionSwitchResult> {
+  try {
+    const r = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
+    if (r.status === 409) {
+      const j = await r.json().catch(() => null);
+      return { ok: false, busy: typeof j?.busy === "string" && j.busy ? j.busy : "Main is busy" };
+    }
+    return { ok: r.ok };
+  } catch { return { ok: false }; }
 }
 // P-RECOVER.1 (ADR-0385): recovery calls run exactly when the engine may be wedged, so each one is bounded;
 // a hung request must end as "no answer", never as a supervisor that waits forever.
@@ -1775,10 +1794,11 @@ export const bridge: LucidBridge = {
     // Tolerate an older server that returned the bare array (pre-P-PERF.4): wrap it as a full page.
     return Array.isArray(data) ? { messages: data, total: data.length } : data;
   },
-  resumeSession: async (id) => { await post("/api/session/load", { id }); },
+  sessionBusy: () => getData("/api/session/busy"),
+  resumeSession: (id, opts) => postSessionSwitch("/api/session/load", { id, force: opts?.force === true }),
   deleteSession: async (id) => (await post("/api/session/delete", { id })) ?? { ok: false, error: "no response" },
   clearIngestSessions: () => post("/api/sessions/ingest/clear", {}),
-  newSession: async () => { await post("/api/newSession", {}); },
+  newSession: (opts) => postSessionSwitch("/api/newSession", { force: opts?.force === true }),
   // P-COLLAB.3 (ADR-0192): live session sharing.
   collabStatus: () => getData("/api/collab/status"),
   collabStart: async (opts) => {

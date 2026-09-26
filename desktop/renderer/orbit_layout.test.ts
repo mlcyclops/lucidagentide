@@ -7,7 +7,7 @@
 // the glance wording names the USER's next move in the two states that block on a human.
 
 import { describe, expect, test } from "bun:test";
-import { ORBIT_NODE_W, orbitSlots, spokeGlance, switchEntries } from "./orbit_layout.ts";
+import { ORBIT_NODE_W, orbitSlots, spokeClose, spokeGlance, switchEntries } from "./orbit_layout.ts";
 
 const W = 1600, H = 900;
 
@@ -67,6 +67,18 @@ describe("spokeGlance", () => {
   });
   test("error tells the user the way back", () => {
     expect(spokeGlance(lane("error"))).toContain("respawn");
+  });
+});
+
+describe("spokeClose", () => {
+  test("only an already-stopped spoke dismisses; every live state stops first", () => {
+    expect(spokeClose("stopped").act).toBe("dismiss");
+    for (const s of ["starting", "working", "needs-approval", "awaiting-input", "done", "error"] as const) {
+      expect(spokeClose(s).act).toBe("stop");
+    }
+  });
+  test("the stop tip announces the second step, so dismissal is never a surprise", () => {
+    expect(spokeClose("working").tip).toContain("Click again once stopped to dismiss");
   });
 });
 

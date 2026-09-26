@@ -859,6 +859,10 @@ demo-P-TASK.6: ## P-TASK.6 (ADR-0398): the delegation card for omp 18's task too
 demo-P-VOICE.8: ## P-VOICE.8 (ADR-0400): the read-aloud checkboxes mean what the user clicked - one rule shared by the engine store and every control (auto-speak off clears conversation for good), clicks apply before the engine answers, older answers never overwrite newer clicks, and the LUCID Agent stage respects a user's own setting
 	$(BUN) run harness/scripts/demo_p_voice_8.ts
 
+.PHONY: demo-P-FLEET.L20
+demo-P-FLEET.L20: ## P-FLEET.L20 (ADR-0402): close a spoke from where it is shown - an X on the orbit node (beside click-to-open) and on the takeover banner (beside Switch), the grid's two-step (a live spoke stops, a stopped one dismisses), one pure function deciding the step, label and tip
+	$(BUN) run desktop/scripts/demo_p_fleet_l20.ts
+
 .PHONY: demo-P-REPO.1
 demo-P-REPO.1: ## P-REPO.1 (ADR-0404): every session names the repo it works on and where its commits go (git's own push rules, no token in the view), taken from the files the session edits when its folder holds several repos; a spoke is started by picking a repo (local checkouts or the user's GitHub repos) instead of typing a URL
 	$(BUN) run desktop/scripts/demo_p_repo_1.ts
@@ -1162,3 +1166,7 @@ demo-P-MODEL.4: ## P-MODEL.4 (ADR-0383): GPT-6 Sol and Luna. omp 18.2.7 -> 18.2.
 .PHONY: demo-P-LEGIBLE.1
 demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / Agent 365 without a content path. Each launch writes a metadata-only local-agent manifest (Defender's vendor / relatedProcess / autoApprove / mcpServers / localMcps vocabulary) to userData; MCP entries keep only name, type, URL origin or command basename, so no header, arg, env, path or query can leak. No hook seam, no listener, gate untouched.
 	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-SWITCH.1
+demo-P-SWITCH.1: ## P-SWITCH.1 (ADR-0403, issue #390): opening a session never stops the running one unless you choose to. /api/session/load and /api/newSession answer 409 while Main is busy (turn, goal loop, automation) unless force; the sidebar and New session ask first and offer Open as a spoke (session resumed in a lane, composer attached) or Stop it and switch. A session a live spoke holds attaches to that spoke instead of loading a second copy. Proves the busy predicate on the real backend over the fake agent, the switch plan, and the sheet wording.
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/session_switch.test.ts desktop/acp_backend_recovery.test.ts desktop/renderer/composer_target.test.ts harness/adr_numbering.test.ts

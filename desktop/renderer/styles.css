@@ -977,6 +977,13 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 #spokeAskDock .perm-egress{border-left-color:var(--red)}
 #spokeAskDock .perm-eg-head .ic{color:var(--red)}
 #spokeAskDock .perm-url{white-space:pre-wrap;word-break:break-word}
+/* P-SWITCH.1 (ADR-0403): "Main is still working" docks in the same slot. Prose is plain blocks (invariant 11):
+   the body is one block paragraph and each button holds block children, never a flex row of text runs. */
+#switchSheet{max-width:min(1080px,94vw);margin:0 auto 10px;display:flex;flex-direction:column;animation:rise var(--t) var(--ease-out)}
+#switchSheet .switch-body{margin:0 12px 9px;font-size:12px;color:var(--txt-3);line-height:1.45}
+#switchSheet .switch-label{display:block;font-weight:600}
+#switchSheet .switch-hint{display:block;margin-top:2px;font-size:11.5px;font-weight:400;color:var(--txt-3);line-height:1.4}
+#switchSheet .switch-err{margin:0 12px 11px;font-size:11.5px;color:var(--red);line-height:1.45}
 .perm-egress{margin:0;border:1px solid var(--line);border-left:2px solid color-mix(in srgb,var(--amber) 55%,var(--line));
   border-radius:11px;background:var(--bg-1)}
 .perm-eg-head{display:flex;align-items:center;gap:7px;padding:9px 12px 5px;color:var(--txt-2);font-weight:600;font-size:13px}
@@ -5554,6 +5561,14 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-name{flex:1;min-width:0;font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .orbit-incomposer{flex:none;display:inline-flex;align-items:center;gap:3px;font-size:9px;
   letter-spacing:.06em;text-transform:uppercase;color:var(--accent-2)}
+/* P-FLEET.L20: the spoke's own close (stop, then dismiss). Quiet until the card is hovered or focused, so
+   the map stays a map; red on hover because it is the one control on the node that ends something. */
+.orbit-node-x{flex:none;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;
+  border:0;border-radius:5px;background:transparent;color:var(--txt-3);cursor:pointer;opacity:0;
+  transition:color var(--t-fast),background var(--t-fast),opacity var(--t-fast)}
+.orbit-node:hover .orbit-node-x,.orbit-node:focus-within .orbit-node-x,.orbit-node.lane-stopped .orbit-node-x{opacity:1}
+.orbit-node.lane-stopped .orbit-node-x{color:var(--txt-2)}
+.orbit-node-x:hover{color:var(--red);background:rgb(var(--red-rgb) / .12)}
 .orbit-glance{font-size:10.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .orbit-meta{display:flex;align-items:center;gap:6px;min-width:0}
 .orbit-model{font-family:var(--mono);font-size:9px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -5620,6 +5635,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   border:1px solid var(--line);border-radius:999px;background:var(--bg-1);color:var(--txt-2);
   font-size:11px;padding:3px 10px;cursor:pointer;transition:color var(--t),border-color var(--t)}
 .spoke-menu-btn:hover{color:var(--txt);border-color:var(--accent-2)}
+/* P-FLEET.L20: close the spoke you are driving, right from the banner that names it. */
+.spoke-close-btn{flex:none;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid var(--line);border-radius:999px;background:var(--bg-1);color:var(--txt-2);cursor:pointer;
+  transition:color var(--t),border-color var(--t),background var(--t)}
+.spoke-close-btn:hover{color:var(--red);border-color:var(--red);background:rgb(var(--red-rgb) / .12)}
 /* The switch menu (rendered inside .popover). */
 .spoke-switch{display:flex;flex-direction:column;gap:1px;padding:2px;min-width:238px}
 .spoke-sw-row{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:0;border-radius:8px;
@@ -5711,6 +5731,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-view.static .orbit-svg{will-change:auto;transform:none}
 .orbit-view.static .orbit-hub-core{transition:none}
 .orbit-view.static .orbit-cta{transition:none}
+.orbit-view.static .orbit-node-x{transition:none}
 .spoke-banner.static{backdrop-filter:none;-webkit-backdrop-filter:none}
 .spoke-banner.static .spoke-beacon::after{display:none}
 .spoke-banner.static .spoke-chip.hot::after{animation:none;opacity:.6}

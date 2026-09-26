@@ -1455,6 +1455,18 @@ class Backend {
    *  Used by the delete route to close the session before removing its file (#53). */
   currentSessionId(): string | null { return this.sessionId; }
 
+  /** P-SWITCH.1 (ADR-0403): why loading another session into Main, or starting a new one, would stop
+   *  work right now, or null when nothing would be lost. loadSession/newSession run clearTurnRecovery,
+   *  which cancels a live turn (ADR-0385, and correctly so), so the HTTP routes ask this first and refuse
+   *  unless the caller explicitly chose to stop. A loop or automation outranks the turn it is running
+   *  because it is the bigger thing the user would lose. */
+  switchBlocker(): string | null {
+    if (this.goalActive) return "a goal loop is running";
+    if (this.autoRunning) return "an automation is running";
+    if (this.askActive || this.recoveryTurn?.running) return "a turn is running";
+    return null;
+  }
+
   /** P-INTERJECT.1: whether a chat turn is streaming right now (listener armed), and when it started.
    *  Feeds the /api/processes "Master chat turn" entry; a util completion riding the chat connection
    *  counts as busy too (it occupies the session either way). */

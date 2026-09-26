@@ -97,6 +97,18 @@ export function spokeGlance(l: { status: LaneStatus; turns: number; queued: read
   }
 }
 
+/** P-FLEET.L20: the spoke's close gesture, the grid's own P-FLEET.L10 two-step so one glyph never does two
+ *  things silently: a live spoke is STOPPED (its card stays readable and Respawn revives it in place); a
+ *  spoke that is already stopped is DISMISSED (the fleet forgets it; its session log and ledger line stay
+ *  reviewable in the Timeline and on the Recover list). The label and tip name the step, so the second
+ *  click is never a guess. */
+export type SpokeClose = { act: "stop" | "dismiss"; label: string; tip: string };
+export function spokeClose(status: LaneStatus): SpokeClose {
+  return status === "stopped"
+    ? { act: "dismiss", label: "Dismiss this spoke", tip: "Dismiss|Take this stopped spoke off the orbit and the grid. Its conversation stays in the Timeline and on the Recover list." }
+    : { act: "stop", label: "Stop this spoke", tip: "Stop|Stop this spoke. Its card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it." };
+}
+
 /** P-FLEET.L17: motion vs Lite. The orbit is decorative physics on top of plain data; a machine that
  *  cannot composite it cheaply gets the SAME hub-and-spoke as a still page (Lite), not a broken slideshow.
  *  The SPEC, in precedence order:
@@ -160,6 +172,8 @@ export interface GhostSpoke {
   /** Logical identity: the user-given name + folder. Survives engine restarts, which mint new lane ids. */
   key: string;
   name: string; cwd: string; model: string; turns: number;
+  /** The omp session behind the latest run: Recover loads it, so the spoke comes back with its memory. */
+  sessionId: string;
   /** Latest activity across every recorded run of this logical spoke. */
   lastAt: number;
 }
@@ -180,7 +194,7 @@ export interface GhostLists { active: GhostSpoke[]; archived: GhostSpoke[]; hidd
  *  unhide brings it back; ARCHIVED (archive mark covers it) is tucked into the archived list, still
  *  recoverable; everything else is active. Hide beats archive. Newest first in every list. */
 export function ghostSpokes(
-  entries: readonly { kind: string; laneId?: string; laneName?: string; cwd: string; model: string; turns: number; updatedAt: number }[],
+  entries: readonly { sessionId: string; kind: string; laneId?: string; laneName?: string; cwd: string; model: string; turns: number; updatedAt: number }[],
   live: readonly { name: string; cwd: string }[],
   hides: readonly GhostMark[],
   archives: readonly GhostMark[] = [],
@@ -200,7 +214,7 @@ export function ghostSpokes(
     if (alive.has(key)) continue;
     const prior = best.get(key);
     if (!prior || e.updatedAt > prior.lastAt) {
-      best.set(key, { key, name: e.laneName, cwd: e.cwd, model: e.model, turns: e.turns, lastAt: e.updatedAt });
+      best.set(key, { key, name: e.laneName, cwd: e.cwd, model: e.model, turns: e.turns, sessionId: e.sessionId, lastAt: e.updatedAt });
     }
   }
   const active: GhostSpoke[] = [], archived: GhostSpoke[] = [], hidden: GhostSpoke[] = [];

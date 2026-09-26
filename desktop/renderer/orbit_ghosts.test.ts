@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { ghostKey, ghostSpokes, readAllPages } from "./orbit_layout.ts";
 
 const lane = (laneName: string, cwd: string, updatedAt: number, over?: object) =>
-  ({ kind: "lane", laneId: `id-${laneName}-${updatedAt}`, laneName, cwd, model: "m", turns: 3, updatedAt, ...over });
+  ({ sessionId: `s-${laneName}-${updatedAt}`, kind: "lane", laneId: `id-${laneName}-${updatedAt}`, laneName, cwd, model: "m", turns: 3, updatedAt, ...over });
 
 describe("ghostSpokes", () => {
   test("only lane entries ghost; chats and ingests never do", () => {
@@ -20,6 +20,7 @@ describe("ghostSpokes", () => {
   test("many runs of one logical spoke collapse to the LATEST, newest ghost first", () => {
     const out = ghostSpokes([lane("a", "/a", 1), lane("a", "/a", 9), lane("b", "/b", 5)], [], []);
     expect(out.active.map((g) => [g.name, g.lastAt])).toEqual([["a", 9], ["b", 5]]);
+    expect(out.active[0]!.sessionId).toBe("s-a-9"); // Recover loads the LATEST run's session, not the first
   });
   test("a spoke alive in the fleet right now is not a ghost", () => {
     expect(ghostSpokes([lane("a", "/a", 5)], [{ name: "a", cwd: "/a" }], []).active).toEqual([]);
