@@ -863,6 +863,10 @@ demo-P-VOICE.8: ## P-VOICE.8 (ADR-0400): the read-aloud checkboxes mean what the
 demo-P-FLEET.L20: ## P-FLEET.L20 (ADR-0402): close a spoke from where it is shown - an X on the orbit node (beside click-to-open) and on the takeover banner (beside Switch), the grid's two-step (a live spoke stops, a stopped one dismisses), one pure function deciding the step, label and tip
 	$(BUN) run desktop/scripts/demo_p_fleet_l20.ts
 
+.PHONY: demo-P-PROGRESS.1
+demo-P-PROGRESS.1: ## P-PROGRESS.1 (ADR-0404): workers say what they are doing (every tool step opens on its doing line, arguments and outcome), how far along they probably are (a history estimate that never finishes a running turn), and whether they are alive (evidence-ranked liveness with an in-place restart); turns on one folder take turns in order, visibly, with expected start times
+	$(BUN) run harness/scripts/demo_p_progress_1.ts
+
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
 	$(BUN) run desktop/scripts/demo_p_sysres_1.ts

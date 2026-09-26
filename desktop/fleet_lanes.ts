@@ -36,6 +36,9 @@ import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSa
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
 import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
+import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { WorkspaceGate, type FolderQueue, type WaitView } from "./workspace_gate.ts"; // P-PROGRESS.1
+import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -86,6 +89,11 @@ export interface LaneView {
    *  manager so a composer attaching to an idle lane shows its real fill at once instead of "ctx --"
    *  until the lane's next turn. Absent until omp reports once; never estimated. */
   usage?: { used: number; size: number; cost: number };
+  /** P-PROGRESS.1: the lane's live progress view (elapsed, last signal, open steps, liveness, estimate).
+   *  Present while a turn runs or the child is dead; absent when idle. Computed at status time. */
+  progress?: ProgressView;
+  /** P-PROGRESS.1: the lane's turn is queued behind another worker's turn in the same folder. */
+  waiting?: WaitView;
 }
 
 /** P-FLEET.L3: a pasted image riding a lane prompt - the P-VISION.1 shape the master chat uses. */
@@ -102,7 +110,14 @@ export type LaneEvent =
    *  bash/read/search/fetch call authors no code, so before L7 its chevron had nothing to reveal and the
    *  card could only show the title. This carries the arguments so a lane chip drills down like a master
    *  composer chip does. Code fields are stripped because `code` already carries them. */
-  | { type: "tool"; name: string; detail: string; code?: LaneToolCode; input?: string }
+  /** P-PROGRESS.1: `id` is omp's toolCallId and `status` the ACP status, so a tool_call_update settles the
+   *  step the tool_call opened (done / failed, with `elapsedMs`) instead of painting a second row; `intent`
+   *  is the agent's own `i` phrase, the plain-words "what it is doing" line. */
+  | { type: "tool"; id?: string; name: string; detail: string; code?: LaneToolCode; input?: string; intent?: string; status?: "open" | "done" | "failed"; elapsedMs?: number }
+  /** P-PROGRESS.1: the lane's progress view, every PROGRESS_TICK_MS while its turn runs. Never activity. */
+  | { type: "progress"; progress: ProgressView }
+  /** P-PROGRESS.1: this turn waits for another worker's turn in the same folder (workspace_gate.ts). */
+  | { type: "waiting"; wait: WaitView }
   | { type: "permission"; summary: string; kind: string }
   /** P-FLEET.L6: an ask was granted WITHOUT a human - full auto-mode or a standing session allow. */
   | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
@@ -132,6 +147,9 @@ export interface FleetStatusData {
     memHotMs: number;
   };
   masterModel: string;
+  /** P-PROGRESS.1: every folder with two or more workers on it right now (the master counts as one), in
+   *  run order with expected start times. Empty when nobody shares a folder. */
+  queues: FolderQueue[];
 }
 
 // P-FLEET.L4 (ADR-0274): there is NO lane turn clock. ADR-0186's ten-minute deadline killed exactly the
@@ -214,6 +232,11 @@ export interface FleetLaneDeps {
    *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
    *  manager built without it simply never probes; it still escalates to recover. */
   interject?: (laneId: string, text: string) => void;
+  /** P-PROGRESS.1: the folder lease shared with the master session, so a lane and the master (or two
+   *  lanes) never run turns in one folder at once. Absent means a gate of this manager's own. */
+  gate?: WorkspaceGate;
+  /** P-PROGRESS.1: turn and tool lengths shared with the master, for the estimate. */
+  history?: DurationHistory;
 }
 
 /** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time.
@@ -281,10 +304,21 @@ interface Lane {
   respawns: number;
   /** P-FLEET.L3: staged prompts, drained FIFO when the lane goes idle. One turn at a time stands. */
   queue: { text: string; images: LaneImage[] }[];
+  // -- P-PROGRESS.1 progress state ------------------------------------------------------------------
+  /** Epoch ms the current turn started (the lease request, before any wait); null when idle. */
+  turnStartedAt: number | null;
+  /** Tool calls settled in the current turn. */
+  stepsDone: number;
+  /** Set while the turn waits for the folder lease; cancel() aborts it. */
+  waitAbort: AbortController | null;
+  /** What the lane waits on, while it does. */
+  waiting: WaitView | null;
 }
 
 export class FleetLaneManager {
   readonly #lanes = new Map<string, Lane>();
+  readonly #gate: WorkspaceGate;
+  readonly #durations: DurationHistory;
   /** P-PWA-FOCUS.1: persistent cross-lane observers, present AND future lanes. Held here rather than in
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
@@ -301,6 +335,8 @@ export class FleetLaneManager {
   #autoDefault = false;
 
   constructor(deps: FleetLaneDeps) {
+    this.#gate = deps.gate ?? new WorkspaceGate({ now: deps.now ?? Date.now });
+    this.#durations = deps.history ?? new DurationHistory();
     this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
   }
 
@@ -369,6 +405,10 @@ export class FleetLaneManager {
       liveTools: [],
       lastPrompt: null,
       lastImages: [],
+      turnStartedAt: null,
+      stepsDone: 0,
+      waitAbort: null,
+      waiting: null,
       canLoadSession: false,
       resumeContext: null,
       respawns: 0,
@@ -432,9 +472,35 @@ export class FleetLaneManager {
     // forever, silently disabling the self-watch for the rest of the lane's life.
     lane.openCalls.clear();
     lane.health = onActivity(lane.health, this.#deps.now());
+    lane.turnStartedAt = this.#deps.now();
+    lane.stepsDone = 0;
     this.#record(lane, { role: "user", text: images.length ? `${text}\n[attached ${images.length} image${images.length === 1 ? "" : "s"}]` : text });
     this.#setStatus(lane, "working");
+    // P-PROGRESS.1: the folder lease. A lane whose folder overlaps another worker's running turn WAITS its
+    // turn here, told what it waits on; cancel() aborts the wait. The lease is held until the turn settles.
+    let release: (() => void) | null = null;
+    let progressTimer: ReturnType<typeof setInterval> | null = null;
     try {
+      lane.waitAbort = new AbortController();
+      try {
+        release = await this.#gate.acquire(
+          { id: lane.id, name: lane.name, cwd: lane.cwd, etaMs: () => this.#progress(lane).estimate.etaMs },
+          { signal: lane.waitAbort.signal, onWait: (w) => { lane.waiting = w; this.#emit(lane, { type: "waiting", wait: w }); } },
+        );
+      } catch (e) {
+        // Cancelled while waiting: nothing ran, so this is the ordinary cancelled outcome, not an error.
+        lane.waiting = null;
+        this.#foldLiveTurn(lane, e instanceof Error ? e.message : String(e));
+        this.#setStatus(lane, "awaiting-input");
+        this.#emit(lane, { type: "done" });
+        return;
+      } finally {
+        lane.waitAbort = null;
+      }
+      lane.waiting = null;
+      // Unref'd: a ticker must never be the reason the engine refuses to exit.
+      progressTimer = setInterval(() => this.#emit(lane, { type: "progress", progress: this.#progress(lane) }), PROGRESS_TICK_MS);
+      progressTimer.unref?.();
       // The wire text carries the one-shot recovery preamble when a fallback resume is pending; the
       // transcript recorded only `text` - the user never "said" the preamble.
       const wireText = lane.resumeContext ? `${lane.resumeContext}${text}` : text;
@@ -448,6 +514,7 @@ export class FleetLaneManager {
         this.#setStatus(lane, "awaiting-input");
       } else {
         lane.turns++;
+        if (lane.turnStartedAt !== null) this.#durations.addTurn(lane.model, this.#deps.now() - lane.turnStartedAt); // P-PROGRESS.1: a finished turn is history
         this.#setStatus(lane, "done");
       }
       this.#emit(lane, { type: "done" });
@@ -458,10 +525,23 @@ export class FleetLaneManager {
       if (/cancel/i.test(why)) { this.#setStatus(lane, "awaiting-input"); this.#emit(lane, { type: "done" }); }
       else { this.#setStatus(lane, "error"); this.#emit(lane, { type: "error", message: why }); }
     } finally {
+      if (progressTimer) clearInterval(progressTimer);
+      release?.();
       lane.busy = false;
+      lane.turnStartedAt = null;
       lane.openCalls.clear();
       lane.sinks.delete(sink);
     }
+  }
+
+  /** P-PROGRESS.1: the lane's progress view right now (elapsed, last signal, steps, liveness, estimate). */
+  #progress(lane: Lane): ProgressView {
+    const now = this.#deps.now();
+    return progressView({
+      busy: lane.busy, dead: lane.client.isDead, startedAt: lane.turnStartedAt, lastActivityAt: lane.lastActivityAt,
+      stepsDone: lane.stepsDone, stepsOpen: pendingSnapshot(lane.openCalls, now), lastHealth: lane.lastHealth,
+      model: lane.model, history: this.#durations, now,
+    });
   }
 
   /** Re-send the lane's last prompt + its images (recovering first if the lane is in error). No recorded
@@ -569,6 +649,9 @@ export class FleetLaneManager {
   cancel(laneId: string): { ok: boolean } {
     const lane = this.#lanes.get(laneId);
     if (!lane?.sessionId) return { ok: false };
+    // P-PROGRESS.1: a turn still waiting for its folder has nothing in omp to cancel; leaving the line IS
+    // the cancel.
+    if (lane.waitAbort) { lane.waitAbort.abort(); return { ok: true }; }
     lane.client.notify("session/cancel", { sessionId: lane.sessionId });
     return { ok: true };
   }
@@ -657,6 +740,7 @@ export class FleetLaneManager {
         memHotMs: a.memHotMs,
       },
       masterModel: this.#deps.masterModel(),
+      queues: this.#gate.queues(), // P-PROGRESS.1
     };
   }
 
@@ -987,21 +1071,37 @@ export class FleetLaneManager {
         case "tool_call":
         case "tool_call_update": {
           const title = String(u.title ?? "");
-          if (u.sessionUpdate === "tool_call") {
-            if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
-            trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
-          } else {
+          const name = String(u.kind ?? u.title ?? "tool");
+          const id = typeof u.toolCallId === "string" && u.toolCallId ? u.toolCallId : undefined;
+          if (u.sessionUpdate !== "tool_call") {
+            // P-PROGRESS.1: a TERMINAL update settles the step the call opened (one row per call, marked
+            // done or failed with its length); a progress update paints nothing. Read the open call before
+            // settleToolCall drops it: its startedAt is the only clock the step has.
+            const open = id ? lane.openCalls.get(id) : undefined;
             settleToolCall(lane.openCalls, u); // a terminal status closes it and frees the health ladder
+            if (!id || !open || lane.openCalls.has(id)) break;
+            const elapsedMs = Math.max(0, lane.lastActivityAt - open.startedAt);
+            lane.stepsDone++;
+            this.#durations.addTool(name, elapsedMs);
+            this.#emit(lane, { type: "tool", id, name, detail: title, status: u.status === "completed" ? "done" : "failed", elapsedMs });
+            break;
           }
+          if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
+          trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
           // P-FLEET.L3 (mirrors P-CHAT.1): the authored code rides the CALL's rawInput - a write's
           // `content`, an edit's `edits[{old_text,new_text}]` joined into one before/after pair, or omp's
           // hashline patch in a single `input` string. Relative paths resolve against the LANE's cwd.
-          const code = u.sessionUpdate === "tool_call" ? this.#toolCode(lane, u) : undefined;
-          // P-FLEET.L7: and the ARGUMENTS ride it too. Emitted only on the CALL (an update repeats the
-          // title with no rawInput), and only when there is no authored code, since `code` is the richer
-          // view of the same bytes and showing both would just duplicate a diff under its own patch.
-          const input = u.sessionUpdate === "tool_call" && !code ? this.#toolInput(u) : undefined;
-          this.#emit(lane, { type: "tool", name: String(u.kind ?? u.title ?? "tool"), detail: title, ...(code ? { code } : {}), ...(input ? { input } : {}) });
+          const code = this.#toolCode(lane, u);
+          // P-FLEET.L7: and the ARGUMENTS ride it too, only when there is no authored code, since `code` is
+          // the richer view of the same bytes and showing both would just duplicate a diff under its own
+          // patch. P-PROGRESS.1: plus the agent's own intent line, the plain-words "what it is doing".
+          const input = !code ? toolInput(u, INPUT_CAP) : undefined;
+          const intent = toolIntent(u);
+          // A call that arrives already terminal (some agents report the result in one update) is settled
+          // at once: a row that spins forever is worse than no row.
+          const status = !id ? undefined : lane.openCalls.has(id) ? "open" as const : u.status === "completed" ? "done" as const : "failed" as const;
+          if (status && status !== "open") lane.stepsDone++;
+          this.#emit(lane, { type: "tool", ...(id ? { id, status } : {}), name, detail: title, ...(code ? { code } : {}), ...(input ? { input } : {}), ...(intent ? { intent } : {}) });
           break;
         }
         // P-FLEET.L7: omp reports CONTEXT fill, the window, and cost. It does NOT report per-turn output
@@ -1078,43 +1178,6 @@ export class FleetLaneManager {
     return undefined;
   }
 
-  /** P-FLEET.L7: "the command used" for a call that authored no code. A bash call's whole value is its
-   *  `command`, a read's is its `path`, a search's is its `pattern` plus `paths`: before L7 the card threw
-   *  all of it away and showed only omp's one-line title, so the lane chevron had nothing to open while
-   *  the master composer showed the real arguments.
-   *
-   *  The single-string fast paths come first so the common case reads as itself (a shell line, not a JSON
-   *  object wrapping a shell line). Everything else serializes, with the code-bearing keys STRIPPED: they
-   *  are already carried by #toolCode, and a 16KB file body pasted under a chevron labelled "command" is
-   *  noise. Serialization is defensive - a rawInput holding a cycle or a BigInt must never take down the
-   *  notify handler, which is the lane's only channel. */
-  #toolInput(u: { rawInput?: unknown; input?: unknown }): string | undefined {
-    const riRaw = u.rawInput ?? u.input;
-    if (typeof riRaw === "string") return riRaw.trim().slice(0, INPUT_CAP) || undefined;
-    if (!riRaw || typeof riRaw !== "object") return undefined;
-    const ri = riRaw as Record<string, unknown>;
-    for (const k of ["command", "cmd", "query", "pattern", "url", "expression"]) {
-      const v = ri[k];
-      if (typeof v === "string" && v.trim()) {
-        // A search carries its scope in a sibling key; the pattern alone is not the command.
-        const scope = Array.isArray(ri.paths) ? ri.paths.filter((p) => typeof p === "string").join(", ") : typeof ri.path === "string" ? ri.path : "";
-        return `${v.trim()}${scope ? `\n  in: ${scope}` : ""}`.slice(0, INPUT_CAP);
-      }
-    }
-    const stripped: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(ri)) {
-      if (k === "content" || k === "edits" || k === "old_text" || k === "new_text" || k === "oldText" || k === "newText") continue;
-      if (v === undefined || v === null || v === "") continue;
-      stripped[k] = v;
-    }
-    if (!Object.keys(stripped).length) return undefined;
-    try {
-      return JSON.stringify(stripped, (_k, v) => (typeof v === "bigint" ? String(v) : v), 2).slice(0, INPUT_CAP);
-    } catch {
-      return undefined; // an unserializable rawInput is simply not shown; it never breaks the stream
-    }
-  }
-
   #askUser(lane: Lane, summary: string, kind: string): Promise<boolean> {
     lane.pending?.resolve(false); // never two open asks - the older one dies as a deny
     const gate = Promise.withResolvers<boolean>();
@@ -1171,6 +1234,9 @@ export class FleetLaneManager {
       ...(lane.lastHealth ? { lastHealth: { ...lane.lastHealth } } : {}),
       ...(lane.lastUsage ? { usage: { ...lane.lastUsage } } : {}),
       ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary, kind: lane.pending.kind } } : {}),
+      // P-PROGRESS.1: live progress while a turn runs or the child is dead; the wait while the folder is taken.
+      ...(lane.busy || lane.client.isDead ? { progress: this.#progress(lane) } : {}),
+      ...(lane.waiting ? { waiting: lane.waiting } : {}),
     };
   }
 }

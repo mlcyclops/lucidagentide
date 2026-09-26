@@ -567,3 +567,84 @@ test("laneTranscript hands out a COPY of the lane's memory, and [] for an unknow
   expect(again.length).toBeGreaterThanOrEqual(2);
   expect(again[0]).toEqual({ role: "user", text: "remember: OTTER" });
 }, TIMEOUT);
+
+// ── P-PROGRESS.1: same-folder lanes take turns, and a busy lane reports progress ────────────────────
+
+/** The event the waiter receives, resolved as soon as it arrives (no guessed sleep). */
+function firstWaiting(events: LaneEvent[]): Promise<Extract<LaneEvent, { type: "waiting" }>> {
+  return new Promise((res) => {
+    const seen = () => events.find((e): e is Extract<LaneEvent, { type: "waiting" }> => e.type === "waiting");
+    const tick = () => { const w = seen(); if (w) res(w); else setTimeout(tick, 10); };
+    tick();
+  });
+}
+
+test("two lanes on ONE folder run in serial: the second is told what it waits on, and runs after the first", async () => {
+  live = manager({ mode: "hang" });
+  const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
+  const b = await live.spawn({ cwd: join(import.meta.dir, "renderer"), name: "beta" }); // a folder INSIDE alpha's
+  const aEvents: LaneEvent[] = [];
+  const bEvents: LaneEvent[] = [];
+  const aTurn = live.prompt(a.lane!.id, "first", (e) => aEvents.push(e)); // hangs until cancel
+  const bTurn = live.prompt(b.lane!.id, "second", (e) => bEvents.push(e));
+  const w = await firstWaiting(bEvents);
+  expect(w.wait.on).toEqual({ id: a.lane!.id, name: "alpha" });
+  expect(w.wait.position).toBe(1);
+  expect(w.wait.sequence.map((e) => [e.name, e.state])).toEqual([["alpha", "running"], ["beta", "waiting"]]);
+  const st = await live.status();
+  const va = st.lanes.find((l) => l.id === a.lane!.id)!;
+  const vb = st.lanes.find((l) => l.id === b.lane!.id)!;
+  expect(va.progress?.liveness.state).toBeDefined(); // a busy lane carries its progress view
+  expect(va.progress?.estimate.basis).toBe("none"); // no history yet: no number, honestly
+  expect(vb.waiting?.on.name).toBe("alpha");
+  expect(st.queues).toHaveLength(1);
+  expect(st.queues[0]!.entries.map((e) => e.name)).toEqual(["alpha", "beta"]);
+  live.cancel(a.lane!.id); // alpha's turn ends: beta is admitted and its prompt reaches the child
+  await aTurn;
+  expect(aEvents.some((e) => e.type === "done")).toBe(true);
+  // Beta's turn now hangs in omp (not in line): cancel goes to the child and settles it.
+  await Bun.sleep(150); // real clock: the child must receive the prompt before session/cancel (see above)
+  live.cancel(b.lane!.id);
+  await bTurn;
+  expect(bEvents.some((e) => e.type === "done")).toBe(true);
+  expect((await live.status()).queues).toEqual([]);
+}, TIMEOUT);
+
+test("lanes on DISJOINT folders never wait; cancel while in line settles quietly and frees the line", async () => {
+  live = manager({ mode: "hang" });
+  const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
+  const c = await live.spawn({ cwd: join(import.meta.dir, "..", "harness"), name: "gamma" });
+  const b = await live.spawn({ cwd: import.meta.dir, name: "beta" });
+  const aEvents: LaneEvent[] = [];
+  const cEvents: LaneEvent[] = [];
+  const bEvents: LaneEvent[] = [];
+  const aTurn = live.prompt(a.lane!.id, "first", (e) => aEvents.push(e));
+  const cTurn = live.prompt(c.lane!.id, "elsewhere", (e) => cEvents.push(e));
+  const bTurn = live.prompt(b.lane!.id, "second", (e) => bEvents.push(e));
+  await firstWaiting(bEvents);
+  expect(cEvents.some((e) => e.type === "waiting")).toBe(false);
+  expect((await live.status()).lanes.find((l) => l.id === c.lane!.id)!.waiting).toBeUndefined();
+  live.cancel(b.lane!.id); // still in line: leaving it IS the cancel
+  await bTurn;
+  expect(bEvents.some((e) => e.type === "done")).toBe(true);
+  expect(bEvents.some((e) => e.type === "error")).toBe(false);
+  expect((await live.status()).lanes.find((l) => l.id === b.lane!.id)!.status).toBe("awaiting-input");
+  expect((await live.status()).queues).toEqual([]);
+  await Bun.sleep(150);
+  live.cancel(a.lane!.id); live.cancel(c.lane!.id);
+  await Promise.all([aTurn, cTurn]);
+}, TIMEOUT);
+
+test("a code-less tool call carries the command, its intent, and settles its own step", async () => {
+  live = manager({ mode: "lanefidelity" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "go", (e) => events.push(e));
+  const tools = events.filter((e): e is Extract<LaneEvent, { type: "tool" }> => e.type === "tool");
+  expect(tools).toHaveLength(2); // the edit-shaped call (no id) and the bash call
+  expect(tools[0]!.id).toBeUndefined();
+  expect(tools[0]!.status).toBeUndefined(); // no id: nothing to settle against
+  expect(tools[1]!.id).toBe("call-bash-1");
+  expect(tools[1]!.input).toContain("bun test desktop/health_watch.test.ts");
+  expect(tools[1]!.status).toBe("done"); // the fake reports the call already completed: settled at once
+}, TIMEOUT);

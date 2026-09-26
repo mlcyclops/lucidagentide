@@ -1175,7 +1175,13 @@ const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter
 // the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
 // P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
 // interject_extension drains only the notes addressed to it (the master child gets target "master").
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }), interject: (laneId, text) => { addInterject(laneId, text); } });
+// P-PROGRESS.1: the estimate's history starts from the latency ledger's tail (every past chat turn's
+// length, per model), then grows live from master and lane turns alike. Fail-quiet: an unreadable ledger
+// means the estimate starts empty, which shows nothing rather than a wrong number.
+try {
+  if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
+} catch { /* no history yet */ }
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, gate: backend.workspaceGate, history: backend.durations, env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }), interject: (laneId, text) => { addInterject(laneId, text); } });
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
@@ -4719,7 +4725,7 @@ return Bun.serve({
       // foreign process squatting the engine port has to be detectable before anything is authenticated.
       // Reusing it would have both shadowed this route (the guard is registered first and wins) and hung
       // session telemetry off an unauthenticated path.
-      if (p === "/api/session-health") return json({ ok: true, data: { master: backend.healthStatus(), lanes: fleet.healthReport() } });
+      if (p === "/api/session-health") return json({ ok: true, data: { master: backend.healthStatus(), lanes: fleet.healthReport(), progress: backend.progressView() } }); // P-PROGRESS.1: progress rides along
       if (p === "/api/session-health/tick" && req.method === "POST") {
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });

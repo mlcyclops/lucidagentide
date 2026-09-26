@@ -61,6 +61,9 @@ import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
 import { type PendingCall, type PendingView, parseTaskCall, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
 import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
+import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { WorkspaceGate, type WaitView } from "./workspace_gate.ts"; // P-PROGRESS.1: the folder lease shared with the fleet
+import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
@@ -382,10 +385,16 @@ export type ChatEvent =
   // ACP update itself cannot carry (`name` here is only the coarse ACP `kind`: "other" for every custom
   // and MCP tool). The renderer keeps it on the chip so a later `tool-meta` event can relabel it, and
   // sends it with the engineering report so the server can resolve real names.
-  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } }
+  // P-PROGRESS.1: `input` (bounded, code-stripped arguments) and `intent` (the agent's `i` phrase).
+  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string }; input?: string; intent?: string }
   // P-EVAL.4 (ADR-0318): the tool_meta extension reported the real name (and later the pass/fail) for a
   // call already streamed as `tool`. Display + report metadata only, never a gate.
-  | { type: "tool-meta"; id: string; name: string; ok?: boolean }
+  // P-PROGRESS.1: the engine's own settle report adds `elapsedMs`.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
+  // P-PROGRESS.1: the turn's progress view (every PROGRESS_TICK_MS and on each settled call) and the
+  // same-folder wait. Both go through onEvent directly, never the activity sink, like `slow`.
+  | { type: "progress"; progress: ProgressView }
+  | { type: "waiting"; wait: WaitView }
   // P-JEV.2 (ADR-0377): one typed judgment the omp child answered during this turn (question, answers with
   // probabilities, which backend answered, latency, error). Self-reported by the judgment extension, which
   // awaits the desktop's acknowledgement before omp acts on the answer, so this always precedes `done`.
@@ -531,6 +540,36 @@ class Backend {
   // long-quiet turn is still waiting on. Cleared at turn boundaries + restart.
   private openCalls = new Map<string, PendingCall>();
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
+  // -- P-PROGRESS.1: progress, estimate, and the folder lease ------------------------------------------
+  /** Turn and tool lengths behind the estimate. dev.ts hands in the instance shared with the fleet lanes
+   *  (seeded from the latency ledger); a backend built without one keeps its own. */
+  durations = new DurationHistory();
+  /** The folder lease shared with the fleet lanes: a master turn waits behind a lane's running turn in the
+   *  same folder, and lanes wait behind the master's. */
+  workspaceGate = new WorkspaceGate();
+  /** Tool calls settled in the current turn. */
+  private stepsDone = 0;
+  /** Per-turn: the real tool name behind a toolCallId, once the tool_meta extension reported it. */
+  private toolNames = new Map<string, string>();
+  /** The live turn's progress emitter (set for the turn's life), so a settled call can push a fresh view. */
+  private progressTick: (() => void) | null = null;
+  /** The turn is in line for its folder (workspace_gate). Nothing is running in omp, so the watchdog must
+   *  not read the silence as a stall, and the progress view says "waiting" instead. */
+  private waitingFolder = false;
+  /** Aborted by cancel() while the turn is in line, since there is nothing in omp to cancel yet. */
+  private folderWaitAbort: AbortController | null = null;
+
+  /** P-PROGRESS.1: where the master turn stands right now: elapsed, last sign of life, steps, the liveness
+   *  verdict and the history-based estimate. Read-only; also served on GET /api/session-health. */
+  progressView(now = Date.now()): ProgressView {
+    return progressView({
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
+      startedAt: this.turnStartedAtMs, lastActivityAt: this.healthActivityAt,
+      stepsDone: this.stepsDone, stepsOpen: pendingSnapshot(this.openCalls, now), lastHealth: this.lastHealth,
+      model: this.activeModel(), history: this.durations, now,
+      toolNameOf: (label) => { for (const [id, c] of this.openCalls) if (c.label === label) return this.toolNames.get(id); return undefined; },
+    });
+  }
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
   setPersona(wrapped: string | null): void { this.persona = wrapped; }
@@ -594,6 +633,7 @@ class Backend {
   noteToolMeta(report: { id: string; name: string; ok?: boolean }): boolean {
     const id = (report.id ?? "").trim(), name = (report.name ?? "").trim();
     if (!id || !name) return false;
+    this.toolNames.set(id, name); // P-PROGRESS.1: the settle report and the estimate key on the real name
     this.emit({ type: "tool-meta", id, name, ...(report.ok === undefined ? {} : { ok: report.ok }) });
     return true;
   }
@@ -885,7 +925,14 @@ class Backend {
                 // P-EVAL.4 (ADR-0318): carry omp's toolCallId so the real tool name (self-reported by the
                 // tool_meta extension, which is the only place it exists) can be joined onto this call.
                 const callId = typeof u.toolCallId === "string" ? u.toolCallId : "";
-                this.emit({ type: "tool", ...(callId ? { id: callId } : {}), name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}) });
+                // P-PROGRESS.1: the arguments (only when no authored code rides along) and the agent's own
+                // intent line, so the live step can say what the call is doing and open on it.
+                const input = code ? undefined : toolInput(u);
+                const intent = toolIntent(u);
+                this.emit({ type: "tool", ...(callId ? { id: callId } : {}), name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}), ...(input ? { input } : {}), ...(intent ? { intent } : {}) });
+                // P-PROGRESS.1: a call that arrives already terminal never gets a tool_call_update; settle its
+                // step now so the live row does not spin forever.
+                if (callId && !this.openCalls.has(callId)) { this.stepsDone++; this.emit({ type: "tool-meta", id: callId, name: String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs: 0 }); }
                 // P-LOC.4 (ADR-0211): mirror this authored write/edit into the GUI-owned AI-LOC ledger the
                 // dashboard reads. The gate ALSO records it into agent_obs.duckdb (the BI system-of-record),
                 // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
@@ -946,7 +993,18 @@ class Backend {
             // P-TOOLFAIL.2 (ADR-0163): also carry the COMMAND the call attempted + the full error
             // text, so the renderer's collapsed toolbox badge can expand into an honest per-action view.
             case "tool_call_update": {
+              // P-PROGRESS.1: read the open call before it settles; its startedAt is the step's only clock.
+              const settleId = typeof u.toolCallId === "string" ? u.toolCallId : "";
+              const wasOpen = settleId ? this.openCalls.get(settleId) : undefined;
               settleToolCall(this.openCalls, u); // P-STALL.2: a terminal status closes the awaited call
+              if (wasOpen && !this.openCalls.has(settleId)) {
+                const elapsedMs = Math.max(0, Date.now() - wasOpen.startedAt);
+                const realName = this.toolNames.get(settleId);
+                this.stepsDone++;
+                this.durations.addTool(realName ?? String(u.kind ?? "tool"), elapsedMs);
+                this.emit({ type: "tool-meta", id: settleId, name: realName ?? String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs });
+                this.progressTick?.();
+              }
               if (u.status === "failed" || u.status === "rejected") { this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break; }
               // P-IMG.1 (ADR-0208): surface image output from a tool result (a generated image, a rendered
               // chart, etc.). extractToolImages validates every block through the strict image-data-URL gate
@@ -1571,6 +1629,13 @@ class Backend {
     const onEvent = (e: ChatEvent) => turn.emit(e);
     let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
     let slow: Timer | undefined;
+    // P-PROGRESS.1: the progress view goes to the window every PROGRESS_TICK_MS and on every settled tool
+    // call, through onEvent DIRECTLY (never the sink): telling the user never counts as activity.
+    let progressTimer: Timer | undefined;
+    let releaseFolder: (() => void) | null = null;
+    this.stepsDone = 0;
+    this.toolNames.clear();
+    this.progressTick = () => { try { onEvent({ type: "progress", progress: this.progressView() }); } catch { /* stream gone */ } };
     try {
     let silentSince = Date.now();
     // While a permission is awaiting the user (Ask mode), pause the slow-notice clock \u2014 a human
@@ -1658,6 +1723,26 @@ class Backend {
       const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
       let content: { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] =
         [{ type: "text" as const, text: body }, ...imageBlocks];
+      // P-PROGRESS.1: the folder lease. When a fleet lane is mid-turn in this workspace (or a folder
+      // inside or above it), this turn waits behind it, told what it waits on; Stop leaves the line.
+      this.folderWaitAbort = new AbortController();
+      try {
+        releaseFolder = await this.workspaceGate.acquire(
+          { id: "master", name: "Main", cwd: currentWorkspace(), etaMs: () => this.progressView().estimate.etaMs },
+          { signal: this.folderWaitAbort.signal, onWait: (w) => { this.waitingFolder = true; try { onEvent({ type: "waiting", wait: w }); } catch { /* stream gone */ } } },
+        );
+      } catch (e) {
+        // Stop while in line: nothing ran, so the turn settles quietly through the outer finally (done
+        // fires, no "agent unavailable" and no no-response notice), exactly like a cancelled turn.
+        onEvent({ type: "token", text: `[stopped: ${e instanceof Error ? e.message : String(e)}]` });
+        return;
+      } finally {
+        this.waitingFolder = false;
+        this.folderWaitAbort = null;
+      }
+      if (this.recoveryTurn !== turn) return;
+      progressTimer = setInterval(this.progressTick, PROGRESS_TICK_MS);
+      progressTimer.unref?.();
       arm(); // start the slow-notice clock now (covers silence BEFORE the first token)
       tSent = Date.now(); // P-EVAL.2: t_sent \u2014 the prompt is handed to the model
       // P-STALL.2 (ADR-0263): no Promise.race against a clock - the request runs until the work ends,
@@ -1714,6 +1799,9 @@ class Backend {
       else if (sawOutput) onEvent({ type: "token", text: `\n[agent unavailable: ${failMsg}]` });
     } finally {
       clearTimeout(slow);
+      clearInterval(progressTimer);
+      releaseFolder?.();
+      this.progressTick = null;
       if (this.recoveryTurn === turn) {
       this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
       this.askActive = false;
@@ -1761,6 +1849,7 @@ class Backend {
     // this case self-evident in one line (no first token, 21.7k in, NOT ok), and stopReason still
     // reaches the user through the no-response event above. Adding columns is its own increment.
     const produced = sawOutput && !errored;
+    if (tSent > 0 && produced) this.durations.addTurn(this.activeModel(), Date.now() - tSent); // P-PROGRESS.1
     if (tSent > 0) recordLatency({
       model: this.activeModel(), sessionId: this.sessionId ?? undefined,
       tSent, tFirstToken, tEnd: Date.now(), ok: produced,
@@ -2206,6 +2295,7 @@ class Backend {
     // P-HEALTH.2: a USER Stop is never auto-resumed - stopping means stop. Only the recovery path keeps the
     // marker, and it passes `forRecover` because it cancels the wedged turn through this same method.
     if (!opts?.forRecover) this.recoverMark.clear();
+    if (this.folderWaitAbort) { this.folderWaitAbort.abort(); return; } // P-PROGRESS.1: leaving the line is the cancel
     try { if (this.acp && this.sessionId) this.acp.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* best-effort */ }
   }
 
@@ -2243,7 +2333,7 @@ class Backend {
   healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null; exhausted: boolean; dead: boolean } {
     const now = Date.now();
     const input: HealthInput = {
-      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
+      busy: this.listener !== null && !this.waitingFolder, dead: this.acp?.isDead ?? false, // P-PROGRESS.1: a folder wait is not a stall
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
     };
     const v = healthVerdict(input);
@@ -2257,7 +2347,7 @@ class Backend {
     if (this.healthBusy) return null;
     const now = Date.now();
     const input: HealthInput = {
-      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
+      busy: this.listener !== null && !this.waitingFolder, dead: this.acp?.isDead ?? false, // P-PROGRESS.1: a folder wait is not a stall
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
     };
     const v = healthVerdict(input);
