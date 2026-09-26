@@ -189,6 +189,21 @@ describe("session-switch wedge: a cleared turn releases the session", () => {
   }
 });
 
+// P-SWITCH.1 (ADR-0402): /api/session/load and /api/newSession refuse on this predicate. A blocker that
+// missed a live turn lets a click cancel work again; one that outlived the turn locks switching for good.
+describe("switch guard", () => {
+  test("switchBlocker names a live turn and clears once the turn ends", async () => {
+    process.env.FAKE_ACP_MODE = "hang";
+    expect(backend.switchBlocker()).toBeNull();
+    const turn = backend.prompt("still working", () => {});
+    await until(() => trace().some((t) => t.method === "session/prompt"));
+    expect(backend.switchBlocker()).toBe("a turn is running");
+    backend.cancel();
+    await turn;
+    expect(backend.switchBlocker()).toBeNull();
+  }, 30_000);
+});
+
 describe("master child revival", () => {
   test("a dead master child is revived by the next prompt, resuming the same session", async () => {
     process.env.FAKE_ACP_MODE = "crash";
