@@ -1,0 +1,364 @@
+{
+  "aead": {
+    "aad": "canonical_json(header)  # header = envelope minus body and sig",
+    "alg": "c20p-hkdf-v1",
+    "cipher": "ChaCha20-Poly1305 (RFC 8439)",
+    "content_key": "HKDF-SHA256(ikm=epoch_key, salt=utf8(item_id), info=utf8('lucid/ki/body/v1'), len=32)",
+    "nonce_hex": "000000000000000000000000"
+  },
+  "canonicalization": [
+    {
+      "canonical_utf8_b64": "eyJhIjoyLCJiIjoxLCJjXzAiOjN9",
+      "input": {
+        "a": 2,
+        "b": 1,
+        "c_0": 3
+      },
+      "name": "key_order",
+      "sha256": "336237d51fd852168054d1bbdf08df1f16a089d841ab63dc3ce4f3d6223cacca"
+    },
+    {
+      "canonical_utf8_b64": "eyJvdXRlciI6eyJhIjpbMSwyLHsibSI6dHJ1ZX1dLCJ6IjpudWxsfX0=",
+      "input": {
+        "outer": {
+          "a": [
+            1,
+            2,
+            {
+              "m": true
+            }
+          ],
+          "z": null
+        }
+      },
+      "name": "nested",
+      "sha256": "91453813735828f2183257a92dadc3c5e5ac0c927d81f751a326257a5ac8ff8d"
+    },
+    {
+      "canonical_utf8_b64": "eyJlbW9qaSI6IvCflJIiLCJuYW1lIjoiSm9zw6kifQ==",
+      "input": {
+        "emoji": "🔒",
+        "name": "José"
+      },
+      "name": "unicode_nfc",
+      "sha256": "0823d4ab1c941bf29cc292c589d4e9c0f43dbcce31217e5aa9e0a85f3b485163"
+    },
+    {
+      "canonical_utf8_b64": "eyJ0ZXh0IjoibGluZVxuYnJlYWtcdHRhYiBcInF1b3RlZFwiIGJhY2tcXHNsYXNoIn0=",
+      "input": {
+        "text": "line\nbreak\ttab \"quoted\" back\\slash"
+      },
+      "name": "escapes",
+      "sha256": "7606221377cecf321a11d896f943f499bae3c0678d3d9b9aba1fdfb5a3bc39e7"
+    },
+    {
+      "canonical_utf8_b64": "e30=",
+      "input": {},
+      "name": "empty",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "canonical_utf8_b64": "eyJhIjpudWxsLCJiIjpmYWxzZSwiYyI6dHJ1ZX0=",
+      "input": {
+        "a": null,
+        "b": false,
+        "c": true
+      },
+      "name": "null_and_bool",
+      "sha256": "af49ac354972dd0ae0ff9bee0f7202af84988a395ae72d14873ad5dfa2e27b29"
+    },
+    {
+      "canonical_utf8_b64": "eyJoaSI6OTAwNzE5OTI1NDc0MDk5MSwibG8iOi05MDA3MTk5MjU0NzQwOTkxfQ==",
+      "input": {
+        "hi": 9007199254740991,
+        "lo": -9007199254740991
+      },
+      "name": "safe_int_bounds",
+      "sha256": "9de90938b1329f1749f32422c9e7ff27b012a0103749ec3c3e817204e64d2d5d"
+    },
+    {
+      "input": {
+        "x": 1.5
+      },
+      "must_reject": true,
+      "name": "float_rejected"
+    },
+    {
+      "input": {
+        "Key": 1
+      },
+      "must_reject": true,
+      "name": "uppercase_key_rejected"
+    },
+    {
+      "input": {
+        "a-b": 1
+      },
+      "must_reject": true,
+      "name": "dashed_key_rejected"
+    },
+    {
+      "input": {
+        "x": 9007199254740992
+      },
+      "must_reject": true,
+      "name": "oversize_int_rejected"
+    }
+  ],
+  "envelope_v": 1,
+  "envelopes": [
+    {
+      "body": {
+        "collab_approved": false,
+        "email_sha256": "97da48a4fdf35f97f2ea66ea9e815f927975711a635414ded8fe20bedc2baba4",
+        "lucid_user": true,
+        "name": "Nick",
+        "notes": "met at the Hub review",
+        "pubkey": null,
+        "updated": "2026-09-22T00:00:00Z"
+      },
+      "content_key_sha256": "4c040d3dcf9e3c40733030e15082a16d6f1cc34a370f64b19c594fd3950ab7bd",
+      "envelope": {
+        "body": "LFmlHMgKFA6CYtuEsjgiHff3VCrf5B0dhtgmYIx+9hB5iS6JgqCT9D73jTP3OaLxsjuLHUwNdY+fESJ3OJxtLYICkP9Lp87+K//60iHpYR9YWZfjCe26LeCbbtYx1ktFHo0rqdc4aVwplr1cVei6UdoflCRDWjyeWiCbhXnAwjqXQILiAdWDMxfWVDRHIZCtgVOlwTzcufl1RyFPYwuehCwOdqn7raOxuFAnNjIOJNR9QDSoBVQ9x3ZfQ1YXH3HiJJgRh34mNMA/MBeJJrYayxAlFswdh2JeaJlgJ5rUxQYAuNDGtoNAHK5w",
+        "body_v": 1,
+        "clock": {
+          "hlc": "2026-09-20T10:26:40.302Z-0000-d_4c40086956d0dddd"
+        },
+        "consent": {
+          "scope": "self"
+        },
+        "created": "2026-09-22T00:00:00Z",
+        "device": "d_4c40086956d0dddd",
+        "enc": {
+          "alg": "c20p-hkdf-v1",
+          "key": "ek_2026q3"
+        },
+        "id": "ki_01a0be5a-8c2e-7001-8203-040506070809",
+        "key": "04e6e113ef2d6d54488fed9c544dc73b",
+        "origin": {
+          "kind": "manual",
+          "ref": null,
+          "shared_by": null
+        },
+        "sig": "+0hpFPDqeD8PbzP9ZD4lDxlNlhaLG0AkvKWeUNWgqY9y285pxxRRKfyMI1gP0Lpotj/rhuXbpXgIvWltrBMpAw==",
+        "source_app": "meeting-hub",
+        "supersedes": null,
+        "tombstone": false,
+        "type": "contact.mark",
+        "user": "u_5e66747fd84a464d",
+        "v": 1
+      },
+      "header_sha256": "ec9c5fe9276f17585505e3dbf4b4799b8a703805a98c94f1ad09f000eea7ed49",
+      "name": "contact_mark",
+      "natural_key": "Nick"
+    },
+    {
+      "body": {
+        "app": "Teams",
+        "decisions": [
+          "Envelope v1 is co-owned"
+        ],
+        "end": "2026-09-22T15:42:00Z",
+        "participants": [
+          "Nick",
+          "Enrique"
+        ],
+        "start": "2026-09-22T15:00:00Z",
+        "summary": "Phase 0 signed off.",
+        "title": "Knowledge Sync review",
+        "todos": [
+          "Freeze memory.fact after #356"
+        ]
+      },
+      "content_key_sha256": "ae0a29df854a4e899962b80181f26823e7053398d39f509a8e09a1cbe4a549d9",
+      "envelope": {
+        "body": "pqAhsiFH6k7qpsNszlsPYslV+CZeEjWTEqYQW7Qb7BNXA56WYDurYIVPgnINx31I+v/7G8v+7GO0vcBLDWNa3lVs5SMzZ/G/fnC908ZhLuYA7Ibb2GKsrVyYPBWBrl2gRl6m6eFoazN7ZdanVu2Ilueq1o+lsvaU2y0gLfyT9cbE3puWKNz5zPwmrFT948UQmDX3GqHmIgVZCXXDWTQXHnS6PBWKWX/Lm5YaurILidrFPWLQ0f5PVkFXNXvY6uzg+0NivIizAm/2GQQv2GVjp9yMhFObeuzDd4tvDR/90F7QUEyhjL77jH9Ai2Za6GpVRKUwp2ugAE2Dp+ZJT2b1cHO1YDZGYIgNlx1S+D0ahA==",
+        "body_v": 1,
+        "clock": {
+          "hlc": "2026-09-20T10:26:40.302Z-0000-d_4c40086956d0dddd"
+        },
+        "consent": {
+          "scope": "self"
+        },
+        "created": "2026-09-22T00:00:00Z",
+        "device": "d_4c40086956d0dddd",
+        "enc": {
+          "alg": "c20p-hkdf-v1",
+          "key": "ek_2026q3"
+        },
+        "id": "ki_01a0be5a-8c2f-7001-8203-040506070809",
+        "key": "f3086f82bb60f52b601d16dccbd29eac",
+        "origin": {
+          "kind": "manual",
+          "ref": null,
+          "shared_by": null
+        },
+        "sig": "cs7fA+SsbwIm87TZsWsWRnar5Ftir31KWOHxEv1W5UsfSvSvAMvdw0vWm+Wtd/ZWxznnD1BLC2uOFwFo0cTTBw==",
+        "source_app": "meeting-hub",
+        "supersedes": null,
+        "tombstone": false,
+        "type": "meeting.index",
+        "user": "u_5e66747fd84a464d",
+        "v": 1
+      },
+      "header_sha256": "48241b77739f95b7e8af5204936d1cd2506c5d468af3b2caa11c092a4bc6b066",
+      "name": "meeting_index",
+      "natural_key": "2026-09-22_knowledge-sync-review"
+    },
+    {
+      "body": {},
+      "content_key_sha256": "0997282859d6153c9519f1ee879647628c3349e4f9a91fd51a3d044f596332c7",
+      "envelope": {
+        "body": "BxsEArpSuakj8G3E7IVBdTYA",
+        "body_v": 1,
+        "clock": {
+          "hlc": "2026-09-20T10:26:40.302Z-0000-d_4c40086956d0dddd"
+        },
+        "consent": {
+          "scope": "self"
+        },
+        "created": "2026-09-22T00:00:00Z",
+        "device": "d_4c40086956d0dddd",
+        "enc": {
+          "alg": "c20p-hkdf-v1",
+          "key": "ek_2026q3"
+        },
+        "id": "ki_01a0be5a-8c30-7001-8203-040506070809",
+        "key": "405faa78564052c3d4306b692e0af0cd",
+        "origin": {
+          "kind": "manual",
+          "ref": null,
+          "shared_by": null
+        },
+        "sig": "v+NG7pidkBq4lGQW7MbILMwo70IEpdpjum1rVDQy4fFU4jZ+H7whLDn7TiPkVIFsQDDwD2SldnrGbC8AniPUAQ==",
+        "source_app": "meeting-hub",
+        "supersedes": null,
+        "tombstone": true,
+        "type": "contact.mark",
+        "user": "u_5e66747fd84a464d",
+        "v": 1
+      },
+      "header_sha256": "7da13b40a9ce41b9dacbb77e0fd2a3cde5fbe4061313e158c0773e5eb4c610f1",
+      "name": "tombstone",
+      "natural_key": "Retracted Person"
+    }
+  ],
+  "forbidden_types": [
+    "brief",
+    "oauth_token",
+    "provider_key",
+    "vault_passphrase",
+    "voiceprint"
+  ],
+  "generator": "tools/gen_sync_vectors.py",
+  "hlc": [
+    {
+      "device": "d_4c40086956d0dddd",
+      "name": "monotonic_under_clock_rollback",
+      "sorted_stamps": [
+        "2026-09-20T10:26:40.302Z-0000-d_4c40086956d0dddd",
+        "2026-09-20T10:26:40.302Z-0001-d_4c40086956d0dddd",
+        "2026-09-20T10:26:40.302Z-0002-d_4c40086956d0dddd",
+        "2026-09-20T10:26:40.303Z-0000-d_4c40086956d0dddd"
+      ],
+      "stamps": [
+        "2026-09-20T10:26:40.302Z-0000-d_4c40086956d0dddd",
+        "2026-09-20T10:26:40.302Z-0001-d_4c40086956d0dddd",
+        "2026-09-20T10:26:40.302Z-0002-d_4c40086956d0dddd",
+        "2026-09-20T10:26:40.303Z-0000-d_4c40086956d0dddd"
+      ],
+      "wall_ms_sequence": [
+        1789900000302,
+        1789900000302,
+        1789899995302,
+        1789900000303
+      ]
+    }
+  ],
+  "item_classes": {
+    "contact.mark": {
+      "body_v": 1,
+      "consent_fields": [
+        "collab_approved"
+      ],
+      "merge": "lww_field",
+      "sync_default": true
+    },
+    "knowledge.chunk": {
+      "body_v": 1,
+      "consent_fields": [],
+      "merge": "append_only",
+      "sync_default": true
+    },
+    "meeting.index": {
+      "body_v": 1,
+      "consent_fields": [],
+      "merge": "lww_item",
+      "sync_default": true
+    },
+    "meeting.record": {
+      "body_v": 1,
+      "consent_fields": [],
+      "merge": "append_only",
+      "sync_default": false
+    },
+    "memory.fact": {
+      "body_v": null,
+      "consent_fields": [],
+      "merge": "lww_item",
+      "sync_default": true
+    },
+    "person.profile": {
+      "body_v": 1,
+      "consent_fields": [],
+      "merge": "lww_field",
+      "sync_default": true
+    }
+  },
+  "keys": {
+    "device_ed25519_seed_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "device_public_material_b64": "bHVjaWQtdGVzdC1kZXZpY2UtcHVibGljLWtleQ==",
+    "epoch_key_b64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+    "fingerprint_rule": "prefix + '_' + sha256(public_material).hex()[:16]",
+    "user_public_material_b64": "bHVjaWQtdGVzdC11c2VyLXB1YmxpYy1rZXk="
+  },
+  "logical_key": [
+    {
+      "key": "04e6e113ef2d6d54488fed9c544dc73b",
+      "natural_key": "Nick",
+      "type": "contact.mark"
+    },
+    {
+      "key": "04e6e113ef2d6d54488fed9c544dc73b",
+      "natural_key": "  nick  ",
+      "type": "contact.mark"
+    },
+    {
+      "key": "04e6e113ef2d6d54488fed9c544dc73b",
+      "natural_key": "NICK",
+      "type": "contact.mark"
+    },
+    {
+      "key": "1fb14fc176f43ce2cf160b1a7050a7ba",
+      "natural_key": "Nick",
+      "type": "person.profile"
+    },
+    {
+      "key": "f3086f82bb60f52b601d16dccbd29eac",
+      "natural_key": "2026-09-22_knowledge-sync-review",
+      "type": "meeting.index"
+    }
+  ],
+  "note": "Fixed inputs, no clock, no randomness. An implementation is conformant when it reproduces every value below from the same inputs.",
+  "signature": {
+    "alg": "Ed25519",
+    "message": "sha256(canonical_json(header)) || sha256(body_ciphertext)"
+  },
+  "spec": "knowledge-envelope",
+  "uuid7": {
+    "id": "ki_01a0be5a-8c2e-7001-8203-040506070809",
+    "name": "deterministic_from_ms_and_random",
+    "random_bytes_b64": "AAECAwQFBgcICQ==",
+    "wall_ms": 1789900000302
+  }
+}
