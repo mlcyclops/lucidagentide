@@ -87,7 +87,7 @@ export interface LaneView {
    *  manager so a composer attaching to an idle lane shows its real fill at once instead of "ctx --"
    *  until the lane's next turn. Absent until omp reports once; never estimated. */
   usage?: { used: number; size: number; cost: number };
-  /** P-REPO.1 (ADR-0404): the repo this lane works on and where its commits go. Absent until the first
+  /** P-REPO.1 (ADR-0406): the repo this lane works on and where its commits go. Absent until the first
    *  background probe lands (the status poll never waits on git). */
   repo?: RepoContext;
 }
@@ -218,7 +218,7 @@ export interface FleetLaneDeps {
    *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
    *  manager built without it simply never probes; it still escalates to recover. */
   interject?: (laneId: string, text: string) => void;
-  /** P-REPO.1 (ADR-0404): the repo tracker (repo_probe.ts). `observe` sees every tool_call, `peek` is a
+  /** P-REPO.1 (ADR-0406): the repo tracker (repo_probe.ts). `observe` sees every tool_call, `peek` is a
    *  synchronous cached read for the status view. Optional: without it a lane simply reports no repo. */
   repo?: RepoTracker;
 }

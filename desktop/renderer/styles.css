@@ -5842,7 +5842,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-spawn-auth input[type="password"]:focus{outline:none;border-color:var(--accent)}
 .orbit-spawn-save{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--txt-3);cursor:pointer}
 
-/* ───────── P-REPO.1 (ADR-0404): which repo a session works on, and where its commits go ─────────
+/* ───────── P-REPO.1 (ADR-0406): which repo a session works on, and where its commits go ─────────
    One chip everywhere (titlebar, lane cards, spokes, hub, spoke banner). Each text run is its own
    nowrap span and the chip ellipsizes as a whole (invariant 11). Green arrow = pushes to a remote;
    amber "local only" = commits cannot leave this machine. */

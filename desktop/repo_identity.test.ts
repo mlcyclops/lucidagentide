@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/repo_identity.test.ts - P-REPO.1 (ADR-0404): where `git push` goes, and which paths a tool call
+// desktop/repo_identity.test.ts - P-REPO.1 (ADR-0406): where `git push` goes, and which paths a tool call
 // touches. These are the two answers the chip shows; a wrong one sends the user's commits somewhere they
 // did not expect, or names the wrong repo for a session.
 

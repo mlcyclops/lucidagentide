@@ -3,7 +3,7 @@
 
 // desktop/repo_identity.ts
 //
-// P-REPO.1 (ADR-0404): which repository a session works on, and where its commits go. PURE: no node
+// P-REPO.1 (ADR-0406): which repository a session works on, and where its commits go. PURE: no node
 // builtins, no fs, no spawn, so the renderer bundles it for its labels and the unit tests need no git.
 // The engine half (git probes, cache, per-session tracker) is desktop/repo_probe.ts.
 //

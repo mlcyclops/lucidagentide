@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/repo_picker.ts - P-REPO.1 (ADR-0404): pick the repo a new spoke works on instead of
+// desktop/renderer/repo_picker.ts - P-REPO.1 (ADR-0406): pick the repo a new spoke works on instead of
 // typing a folder path or a clone URL.
 //
 // Two lists, one search box. "On this machine" is every folder LUCID already knows (the workspace, live

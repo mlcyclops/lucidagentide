@@ -104,7 +104,7 @@ import { fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleet
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
-import { initTitlebarRepo, refreshTitlebarRepo } from "./repo_chip.ts"; // P-REPO.1 (ADR-0404): which repo, where commits go
+import { initTitlebarRepo, refreshTitlebarRepo } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): which repo, where commits go
 import { pushLabel, repoChip } from "../repo_identity.ts";
 import type { RepoContext } from "./bridge.ts";
 import { formatImportLine } from "./import_progress.ts";
@@ -336,7 +336,7 @@ let autoCollapsedSessions = false; // collapse the sessions panel once, on the f
 // ADR-0216: a freshly-entered git PAT kept in renderer session memory ONLY (never persisted here) so a private
 // clone works THIS session without waiting for the next-launch vault→env injection. Cleared on app restart.
 let sessionGitPat = "";
-/** P-REPO.1 (ADR-0404): Main's last repo context; the titlebar chip's refresh keeps it current. */
+/** P-REPO.1 (ADR-0406): Main's last repo context; the titlebar chip's refresh keeps it current. */
 let mainRepo: RepoContext | null = null;
 
 // ───────────────────────── shell ─────────────────────────
@@ -348,7 +348,7 @@ function buildShell(): void {
       <button class="model-badge" id="modelBadge" data-tip="Model · mode · thinking|Click to choose" data-tip-icon="spark">
         <span class="dot"></span><span id="modelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 13)}
       </button>
-      <!-- P-REPO.1 (ADR-0404): the repo the composer's session works on, and where its commits go. -->
+      <!-- P-REPO.1 (ADR-0406): the repo the composer's session works on, and where its commits go. -->
       <button class="tb-chip repo-chip" id="tbRepo" type="button" hidden aria-label="Repository and push target"></button>
       <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
       <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
@@ -9207,7 +9207,7 @@ function renderWorkspaceBar(): void {
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
-  // P-REPO.1 (ADR-0404): under the workspace name, the repo Main actually works in (it can be a checkout
+  // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
   // inside the workspace folder) and where its commits go, so "which repo is this?" never needs a guess.
   const r = mainRepo?.repo;
   const same = (a: string, b: string): boolean => a.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase() === b.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
@@ -14968,7 +14968,7 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
-    repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0404): the New lane form picks a repo instead of typing
+    repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New lane form picks a repo instead of typing
     repoGithub: bridge.repoGithub,
     openUrl: (url) => void openAuthUrl(url),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
@@ -15008,7 +15008,7 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove,
     fleetSpawn: bridge.fleetSpawn, // P-FLEET.L17 recovery: respawn a historical spoke by its old identity
     timelineList: bridge.timelineList, // P-FLEET.L17 recovery: the P-FLEET.L5 durable ledger feeds the ghosts
-    repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0404): the New spoke panel picks a repo instead of typing
+    repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New spoke panel picks a repo instead of typing
     repoGithub: bridge.repoGithub,
     repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo
     openUrl: (url) => void openAuthUrl(url),
@@ -15041,7 +15041,7 @@ function wire(): void {
       return { used: lu.used, size: modelCtx(t.model) ?? lu.size, cost: lu.cost };
     },
   });
-  // P-REPO.1 (ADR-0404): the titlebar names the repo the composer's session works on and where it pushes.
+  // P-REPO.1 (ADR-0406): the titlebar names the repo the composer's session works on and where it pushes.
   initTitlebarRepo({
     bridge,
     getLaneTarget: () => { const t = state.composerTarget; return isLaneTarget(t) ? { laneId: t.laneId, name: t.name } : null; },

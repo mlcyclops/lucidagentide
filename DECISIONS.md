@@ -24181,7 +24181,9 @@ P-SANDBOX.13 designed around this (the Add folder route never accepts a path fro
 - The P-VOICE.2 demo's "the stored preference survives" assertion is replaced, not re-pinned.
 - The click-through was not driven in a live window from the authoring session (no browser could launch inside its sandbox). The rule, the store sequence and the served bundle are covered by `voice_flags.test.ts` and `make demo-P-VOICE.8`.
 
-## ADR-0404 -- P-REPO.1: every session names its repo and where its commits go; spokes start from a repo picker (2026-09-26)
+## ADR-0406 -- P-REPO.1: every session names its repo and where its commits go; spokes start from a repo picker (2026-09-26)
+
+(Numbered 0406: 0404 is P-PROGRESS.1 and 0405 is P-SCROLL.1, PR #394.)
 
 **Context.** The owner could not tell which repository a session was working on. The workspace bar named only the folder, and a common workspace (a home folder holding several clones, such as `\\FastNas\Data\Lucid Home Directory` with `lucidagentide`, `JanelleSEO` and worktrees) is not itself a repository, so the folder name answered nothing. Nothing showed where commits would be pushed. Spokes had the same gap: a lane card showed the base name of its folder, and starting a spoke meant typing a folder path or pasting a clone URL (P-FLEET.L2 and L18 forms).
 

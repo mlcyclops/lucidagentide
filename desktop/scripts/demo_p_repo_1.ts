@@ -3,7 +3,7 @@
 
 // desktop/scripts/demo_p_repo_1.ts
 //
-// Increment P-REPO.1 (ADR-0404): every session names the repo it works on and where its commits go, and a
+// Increment P-REPO.1 (ADR-0406): every session names the repo it works on and where its commits go, and a
 // spoke is started by picking a repo instead of typing a URL. Against REAL git in throwaway repos (no
 // network), this proves:
 //   (1) a folder's push target follows git's own rules (upstream remote, remote.pushDefault) and the

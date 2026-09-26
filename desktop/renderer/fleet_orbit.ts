@@ -19,7 +19,7 @@ import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts"; // P
 import { ageStr, esc } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { popover, showToast } from "./ui.ts";
-import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0404): repo + push target per spoke
+import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): repo + push target per spoke
 import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
@@ -36,7 +36,7 @@ export interface FleetOrbitDeps {
   fleetSpawn: LucidBridge["fleetSpawn"];
   /** P-FLEET.L17 recovery: the durable lane-session ledger (P-FLEET.L5) - the memory ghosts rise from. */
   timelineList: LucidBridge["timelineList"];
-  /** P-REPO.1 (ADR-0404): the New spoke picker's lists, Main's repo for the hub, and the details card's
+  /** P-REPO.1 (ADR-0406): the New spoke picker's lists, Main's repo for the hub, and the details card's
    *  "Open on GitHub" (the OS browser in the desktop app). */
   repoChoices: LucidBridge["repoChoices"];
   repoGithub: LucidBridge["repoGithub"];
@@ -418,7 +418,7 @@ function paintSpawnPanel(): void {
     <label class="orbit-spawn-l">model<select data-spawnp-model>${models.map((m) => `<option value="${esc(m.value)}"${m.value === master ? " selected" : ""}>${esc(m.label)}</option>`).join("") || `<option value="">master's model</option>`}</select></label>
     <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-spawnp-go>${icon("bolt", 13)} Create spoke</button></div>
     <small class="orbit-ghost-err" data-spawnp-err></small>`;
-  // P-REPO.1 (ADR-0404): the pick fills the same folder / URL fields the panel always submitted.
+  // P-REPO.1 (ADR-0406): the pick fills the same folder / URL fields the panel always submitted.
   const cwdIn = $("[data-spawnp-cwd]", box) as HTMLInputElement | null;
   const repoIn = $("[data-spawnp-repo]", box) as HTMLInputElement | null;
   const nameIn = $("[data-spawnp-name]", box) as HTMLInputElement | null;
@@ -782,7 +782,7 @@ function paintHub(): void {
   const t = onLane ? "click to return" : "you are here";
   if (here.textContent !== t) here.textContent = t;
   $("[data-orbit-hub]", view!)?.classList.toggle("here", !onLane);
-  // P-REPO.1 (ADR-0404): the hub names Main's repo like every spoke names its own. Re-read at most every
+  // P-REPO.1 (ADR-0406): the hub names Main's repo like every spoke names its own. Re-read at most every
   // 10 s (the engine caches git for 15 s anyway); the orbit polls every 2.5 s.
   // A freshly built view has an empty (hidden) node, so it asks at once.
   const hubRepo = $("[data-orbit-hub-repo]", view!) as HTMLElement;
@@ -873,7 +873,7 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   card.title = `${lane.name}\n${lane.cwd}\n${lane.model}`;
   setText(card, ".orbit-glance", spokeGlance(lane));
   setText(card, ".orbit-model", lane.model);
-  // P-REPO.1 (ADR-0404): which repo this spoke works in and where it pushes; hidden until probed.
+  // P-REPO.1 (ADR-0406): which repo this spoke works in and where it pushes; hidden until probed.
   const repo = card.querySelector(".orbit-repo") as HTMLElement;
   // The card title is the spoke name (usually the folder), so the row leads with where commits go; a
   // spoke whose repo differs from its name gets the repo named too.

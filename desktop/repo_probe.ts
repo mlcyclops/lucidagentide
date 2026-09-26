@@ -3,7 +3,7 @@
 
 // desktop/repo_probe.ts
 //
-// P-REPO.1 (ADR-0404): the engine half of "which repo, and where do commits go". Three jobs:
+// P-REPO.1 (ADR-0406): the engine half of "which repo, and where do commits go". Three jobs:
 //   1. probe a folder with git (top-level, branch, HEAD, push target), cached, non-blocking;
 //   2. track, per ACP session id, the repos that session's tool calls touched (Main and every lane feed
 //      the same tracker from their session/update stream, replayed history included);

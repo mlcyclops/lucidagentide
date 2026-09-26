@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/repo_chip.ts - P-REPO.1 (ADR-0404): the "which repo, and where do commits go" chip.
+// desktop/renderer/repo_chip.ts - P-REPO.1 (ADR-0406): the "which repo, and where do commits go" chip.
 //
 // One look everywhere a session is named: the titlebar (whatever the composer drives, Main or an attached
 // spoke), the sidebar workspace bar, every lane card on the grid, every spoke on the orbit, the hub, and

@@ -115,7 +115,7 @@ import { clearIngestSessions, deleteSession, listSessions, sessionMessages } fro
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
 import { cloneRepo, CLONE_ROOT, hostTokenForUrl, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
-import { ghToken, githubRepoChoices, localRepoChoices, observeToolCall, peekRepoContext, repoContext, type RepoChoiceSource } from "./repo_probe.ts"; // P-REPO.1 (ADR-0404)
+import { ghToken, githubRepoChoices, localRepoChoices, observeToolCall, peekRepoContext, repoContext, type RepoChoiceSource } from "./repo_probe.ts"; // P-REPO.1 (ADR-0406)
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
 import { probePreviewFile, readPreviewFile, toFsPath } from "./preview_file.ts";
@@ -3705,7 +3705,7 @@ return Bun.serve({
         if (req.method === "POST") { const b = await readBody<{ path?: unknown }>(req); setWorkspace(String(b.path ?? "")); backend.restart(); if (collabManager.active) collabManager.refreshOptions(); /* P-COLLAB.14: mirror the folder switch to edit guests */ }
         return json({ ok: true, data: workspaceInfo() });
       }
-      // P-REPO.1 (ADR-0404): which repo Main works on (from its own tool calls, else the workspace folder)
+      // P-REPO.1 (ADR-0406): which repo Main works on (from its own tool calls, else the workspace folder)
       // and where its commits go. Lanes carry the same shape on /api/fleet/status (LaneView.repo).
       if (p === "/api/repo/context") return json({ ok: true, data: await repoContext(backend.currentSessionId(), currentWorkspace()) });
       // P-REPO.1: the repos a spoke can start on without typing a path. Local only (fast); GitHub is its own
@@ -4593,7 +4593,7 @@ return Bun.serve({
         let cwd = String(b.cwd ?? "");
         if (repoUrl) {
           let pat = typeof b.pat === "string" && b.pat ? b.pat : undefined;
-          // P-REPO.1 (ADR-0404): a private repo the picker listed through the GitHub CLI sign-in clones with
+          // P-REPO.1 (ADR-0406): a private repo the picker listed through the GitHub CLI sign-in clones with
           // that same sign-in when no token was typed or saved for github.com.
           if (!pat && /^https:\/\/github\.com\//i.test(repoUrl) && !hostTokenForUrl(repoUrl) && await ghAvailable()) pat = (await ghToken()) || undefined;
           const c = await cloneRepo(repoUrl, pat, cwd || undefined);

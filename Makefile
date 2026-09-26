@@ -864,7 +864,7 @@ demo-P-FLEET.L20: ## P-FLEET.L20 (ADR-0402): close a spoke from where it is show
 	$(BUN) run desktop/scripts/demo_p_fleet_l20.ts
 
 .PHONY: demo-P-REPO.1
-demo-P-REPO.1: ## P-REPO.1 (ADR-0404): every session names the repo it works on and where its commits go (git's own push rules, no token in the view), taken from the files the session edits when its folder holds several repos; a spoke is started by picking a repo (local checkouts or the user's GitHub repos) instead of typing a URL
+demo-P-REPO.1: ## P-REPO.1 (ADR-0406): every session names the repo it works on and where its commits go (git's own push rules, no token in the view), taken from the files the session edits when its folder holds several repos; a spoke is started by picking a repo (local checkouts or the user's GitHub repos) instead of typing a URL
 	$(BUN) run desktop/scripts/demo_p_repo_1.ts
 
 .PHONY: demo-P-SYSRES.1

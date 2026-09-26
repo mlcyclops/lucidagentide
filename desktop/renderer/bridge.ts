@@ -268,10 +268,10 @@ export interface LaneView {
   lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
   /** P-FLEET.L19: the lane's last MEASURED context fill, window and cost; absent until omp reports once. */
   usage?: { used: number; size: number; cost: number };
-  /** P-REPO.1 (ADR-0404): the repo this lane works on and where its commits go; absent until probed. */
+  /** P-REPO.1 (ADR-0406): the repo this lane works on and where its commits go; absent until probed. */
   repo?: RepoContext;
 }
-// P-REPO.1 (ADR-0404): repo identity + the spoke picker's lists. Shapes owned by the engine modules.
+// P-REPO.1 (ADR-0406): repo identity + the spoke picker's lists. Shapes owned by the engine modules.
 import type { RepoContext, RepoView } from "../repo_identity.ts";
 import type { GithubRepoList, LocalRepoChoice, RemoteRepoChoice } from "../repo_probe.ts";
 export type { GithubRepoList, LocalRepoChoice, RemoteRepoChoice, RepoContext, RepoView };
@@ -967,7 +967,7 @@ export interface LucidBridge {
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   // P-FLEET.L1/L2: local lanes - concurrent headless LUCID agents in the fleet grid dashboard.
   fleetStatus(): Promise<FleetStatusView | null>;
-  /** P-REPO.1 (ADR-0404): the repo Main works on and where its commits go. */
+  /** P-REPO.1 (ADR-0406): the repo Main works on and where its commits go. */
   repoContext(): Promise<RepoContext | null>;
   /** P-REPO.1: local folders a spoke can start in (workspace, lanes, recents, checkouts beside them). */
   repoChoices(): Promise<LocalRepoChoice[] | null>;
@@ -1688,7 +1688,7 @@ export const bridge: LucidBridge = {
   cancelGoal: () => post("/api/goal/cancel", {}),
   // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
   fleetStatus: () => getData("/api/fleet/status"),
-  repoContext: () => getData("/api/repo/context"), // P-REPO.1 (ADR-0404)
+  repoContext: () => getData("/api/repo/context"), // P-REPO.1 (ADR-0406)
   repoChoices: () => getData("/api/repo/choices"),
   repoGithub: (refresh) => getData(`/api/repo/github${refresh ? "?refresh=1" : ""}`),
   fleetSpawn: (opts) => post("/api/fleet/spawn", opts),

@@ -35,7 +35,7 @@ import { isAutoPreviewPath } from "./preview_tabs.ts";
 import { LANE_JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
-import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0404): the lane's repo + push target
+import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
 import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
@@ -78,7 +78,7 @@ export interface FleetGridDeps extends FleetFns {
    *  actually holds the composer, so it is free to ignore it. */
   promoteLane?: (laneId: string) => void;
   demoteLane?: (laneId: string) => void;
-  /** P-REPO.1 (ADR-0404): open a repo's web page from its details card (OS browser in the desktop app). */
+  /** P-REPO.1 (ADR-0406): open a repo's web page from its details card (OS browser in the desktop app). */
   openUrl?: (url: string) => void;
 }
 
@@ -817,7 +817,7 @@ function paintFrame(run: LaneRun): void {
   }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
   if (cwd) { cwd.textContent = baseName(v.cwd); cwd.title = v.cwd; }
-  // P-REPO.1 (ADR-0404): the repo this lane works in and where its commits go. Hidden until probed.
+  // P-REPO.1 (ADR-0406): the repo this lane works in and where its commits go. Hidden until probed.
   const repo = $("[data-fleet-repo]", card) as HTMLElement | null;
   if (repo) { if (v.repo) paintRepoChip(repo, v.repo); else repo.hidden = true; }
   // P-FLEET.L18: the group chip - the assigned name, or a bare glyph inviting one.
@@ -1487,7 +1487,7 @@ function toggleSpawnForm(): void {
   grid.prepend(form);
   paintEmpty();
   paintRepoHint(form);
-  // P-REPO.1 (ADR-0404): pick a repo instead of typing. The pick fills the same folder / URL fields the
+  // P-REPO.1 (ADR-0406): pick a repo instead of typing. The pick fills the same folder / URL fields the
   // form always submitted, so the spawn path and its clone rules are unchanged.
   const cwdIn = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
   const repoIn = $("[data-spawn-repo]", form) as HTMLInputElement | null;
