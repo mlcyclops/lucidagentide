@@ -97,6 +97,18 @@ export function spokeGlance(l: { status: LaneStatus; turns: number; queued: read
   }
 }
 
+/** P-FLEET.L20: the spoke's close gesture, the grid's own P-FLEET.L10 two-step so one glyph never does two
+ *  things silently: a live spoke is STOPPED (its card stays readable and Respawn revives it in place); a
+ *  spoke that is already stopped is DISMISSED (the fleet forgets it; its session log and ledger line stay
+ *  reviewable in the Timeline and on the Recover list). The label and tip name the step, so the second
+ *  click is never a guess. */
+export type SpokeClose = { act: "stop" | "dismiss"; label: string; tip: string };
+export function spokeClose(status: LaneStatus): SpokeClose {
+  return status === "stopped"
+    ? { act: "dismiss", label: "Dismiss this spoke", tip: "Dismiss|Take this stopped spoke off the orbit and the grid. Its conversation stays in the Timeline and on the Recover list." }
+    : { act: "stop", label: "Stop this spoke", tip: "Stop|Stop this spoke. Its card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it." };
+}
+
 /** P-FLEET.L17: motion vs Lite. The orbit is decorative physics on top of plain data; a machine that
  *  cannot composite it cheaply gets the SAME hub-and-spoke as a still page (Lite), not a broken slideshow.
  *  The SPEC, in precedence order:
