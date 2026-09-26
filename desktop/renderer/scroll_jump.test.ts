@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  JUMP_SHOW_PX, LANE_JUMP_SHOW_PX, anchorTop, belowFold, nextFollow, pageDownTarget, pageStep, readingAnchor, shouldShowJump,
+  JUMP_SHOW_PX, LANE_JUMP_SHOW_PX, anchorTop, belowFold, chatTakesUpScroll, nextFollow, pageDownTarget, pageStep, readingAnchor, shouldShowJump,
 } from "./scroll_jump.ts";
 
 const m = (scrollHeight: number, scrollTop: number, clientHeight: number) => ({ scrollHeight, scrollTop, clientHeight });
@@ -106,6 +106,25 @@ describe("nextFollow", () => {
 
   test("scrolling down short of the bottom leaves a released follow released", () => {
     expect(nextFollow(false, 100, m(2000, 400, 400), true)).toBe(false);
+  });
+});
+
+describe("chatTakesUpScroll", () => {
+  const box = (scrollTop: number, overflowY = "auto") => ({ scrollTop, scrollHeight: 600, clientHeight: 120, overflowY });
+
+  test("a nested scroller that can still scroll up absorbs the wheel, so the follow is not released", () => {
+    // A wheel over an open reasoning block while the chat sits at the bottom: the chat never scrolls.
+    expect(chatTakesUpScroll(5000, [box(200)])).toBe(false);
+  });
+
+  test("with no absorbing scroller between, an upward scroll moves the chat", () => {
+    expect(chatTakesUpScroll(5000, [])).toBe(true);
+    expect(chatTakesUpScroll(5000, [box(200, "visible")])).toBe(true); // clipped content, not a scroller
+    expect(chatTakesUpScroll(5000, [{ scrollTop: 10, scrollHeight: 120, clientHeight: 120, overflowY: "auto" }])).toBe(true); // nothing left to scroll
+  });
+
+  test("a chat already at its top cannot move up", () => {
+    expect(chatTakesUpScroll(0, [])).toBe(false);
   });
 });
 

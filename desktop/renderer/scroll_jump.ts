@@ -82,6 +82,18 @@ export function nextFollow(following: boolean, prevTop: number, m: ScrollMetrics
   return following;
 }
 
+/** A scrollable element between an input's target and the chat. `overflowY` is its computed style. */
+export interface ScrollBox { scrollTop: number; scrollHeight: number; clientHeight: number; overflowY: string }
+
+/** P-SCROLL.1: does an upward wheel or key that starts inside `chain` (the elements between the target and
+ *  the chat, innermost first) move the CHAT? Not when the chat is already at its top, and not when a nested
+ *  scroller (an open reasoning block, a tall code block) can still scroll up and absorbs it. Releasing the
+ *  follow for an input the chat never saw left it released at the bottom, because no scroll event came. */
+export function chatTakesUpScroll(chatTop: number, chain: readonly ScrollBox[]): boolean {
+  if (!(num(chatTop, 0) > 0)) return false;
+  return !chain.some((n) => num(n.scrollTop, 0) > 0 && num(n.scrollHeight, 0) > num(n.clientHeight, 0) + 1 && /auto|scroll/.test(n.overflowY));
+}
+
 /** One rendered message: `key` identifies it across re-renders (role plus its markdown), `top` and
  *  `height` are px in the scroller's content coordinates. */
 export interface MsgBox { key: string; top: number; height: number }

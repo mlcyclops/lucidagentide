@@ -134,7 +134,7 @@ import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setId
 // P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
 import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
-import { JUMP_SHOW_PX, anchorTop, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor } from "./scroll_jump.ts";
+import { JUMP_SHOW_PX, anchorTop, chatTakesUpScroll, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor, type ScrollBox } from "./scroll_jump.ts";
 import { setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
@@ -979,24 +979,42 @@ const scrollChat = (): void => {
   });
 };
 /** Wire the follow once, at boot. Release is immediate on an upward wheel or key so a pin frame queued
- *  between the input and its scroll event cannot cancel the reader's (smooth) scroll. */
+ *  between the input and its scroll event cannot cancel the reader's (smooth) scroll, but only when the
+ *  CHAT is the scroller that moves: a wheel over an open reasoning block or a tall code block scrolls that
+ *  block, #chat emits no scroll event, and releasing there left the follow off at the bottom for good. */
 function initChatFollow(): void {
   const c = $("#chat");
   if (!c) return;
-  const overflows = (): boolean => c.scrollHeight > c.clientHeight + 1;
   const mark = (): void => { userScrollAt = performance.now(); };
-  c.addEventListener("wheel", (e) => { mark(); if (e.deltaY < 0 && overflows()) following = false; }, { passive: true });
+  /** Will an upward scroll starting at `from` move #chat itself? (scroll_jump.ts chatTakesUpScroll). Only
+   *  ancestors already scrolled down can absorb it, so only those pay for a computed style. */
+  const chatScrollsUp = (from: EventTarget | null): boolean => {
+    const chain: ScrollBox[] = [];
+    for (let n = from instanceof Element ? from : null; n && n !== c; n = n.parentElement) {
+      if (n.scrollTop > 0) chain.push({ scrollTop: n.scrollTop, scrollHeight: n.scrollHeight, clientHeight: n.clientHeight, overflowY: getComputedStyle(n).overflowY });
+    }
+    return chatTakesUpScroll(c.scrollTop, chain);
+  };
+  c.addEventListener("wheel", (e) => { mark(); if (e.deltaY < 0 && chatScrollsUp(e.target)) following = false; }, { passive: true });
   c.addEventListener("touchstart", () => { mark(); scrollbarHeld = true; }, { passive: true });
   c.addEventListener("touchmove", mark, { passive: true });
-  c.addEventListener("touchend", () => { scrollbarHeld = false; }, { passive: true });
+  const touchUp = (): void => { scrollbarHeld = false; };
+  c.addEventListener("touchend", touchUp, { passive: true });
+  c.addEventListener("touchcancel", touchUp, { passive: true });
   // Only a press on the scroller ITSELF (its scrollbar) is a drag; a click on a chevron inside the thread
   // that collapses content (and clamps scrollTop up) is not the reader scrolling away.
   c.addEventListener("pointerdown", (e) => { if (e.target === c) { mark(); scrollbarHeld = true; } });
   window.addEventListener("pointerup", () => { scrollbarHeld = false; });
-  c.addEventListener("keydown", (e) => {
-    if (!["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
+  // Window-level: with focus on the page body, Chromium scrolls the chat by keyboard although #chat never
+  // receives the keydown. Keys typed into a field scroll that field, never the chat.
+  window.addEventListener("keydown", (e) => {
+    if (!["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End", " "].includes(e.key)) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
     mark();
-    if ((e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home") && overflows()) following = false;
+    // Release early only when focus is inside the chat, where the key certainly scrolls it; from the body the
+    // scroll event (now marked as the reader's) decides, so a key that moved nothing cannot release.
+    if ((e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home") && t && c.contains(t) && chatScrollsUp(t)) following = false;
   });
   c.addEventListener("scroll", () => {
     following = nextFollow(following, lastTop, c, scrollbarHeld || performance.now() - userScrollAt < USER_SCROLL_MS);
@@ -1972,11 +1990,18 @@ async function send(): Promise<void> {
   // engine refused the prompt so no turn ran).
   const ownedGen = lane ? ++laneOwnedGen : 0;
   if (lane) laneOwnedTail = true;
+  // A refusal (the lane is busy with a card or queue turn) arrives on the prompt stream as a lone error and
+  // never on the watch, so a turn that produced nothing else releases the watch at once instead of hiding
+  // the running turn's output for the grace period.
+  let laneRan = false;
   try { await renderChatTurn(text, (onEvent) => lane
     // P-FLEET.L19: pasted images ride the lane prompt as ACP image blocks (the lane's P-FLEET.L3 wire).
-    ? bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void, images.map((b) => ({ data: b.data, mimeType: b.mimeType })))
+    ? bridge.fleetPrompt(lane.laneId, sendText, (e: LaneEvent) => { if (e.type !== "error") laneRan = true; (onEvent as (e: LaneEvent) => void)(e); }, images.map((b) => ({ data: b.data, mimeType: b.mimeType })))
     : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId }); }
-  finally { if (lane) window.setTimeout(() => { if (ownedGen === laneOwnedGen) laneOwnedTail = false; }, 5000); }
+  finally {
+    const release = (): void => { if (ownedGen === laneOwnedGen) laneOwnedTail = false; };
+    if (lane) { if (laneRan) window.setTimeout(release, 5000); else release(); }
+  }
 }
 
 // New prompts and read-only attachments share every HUD, voice, activity, and approval handler.
