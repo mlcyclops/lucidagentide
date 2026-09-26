@@ -224,6 +224,31 @@ test("a mid-turn CRASH lands error event-driven (no clock), and the next prompt 
   expect(st.lanes[0]!.status).toBe("done");
 }, TIMEOUT);
 
+// P-FLEET.L17 (found live): Recover on a historical spoke came back with "the whole history gone", because
+// it was a plain spawn under the old name. A spawn with `resume` is the spoke's OLD session: the seeded
+// transcript is what promote shows, the recorded turn count stands, and (with an agent that cannot load
+// sessions natively, like this fake) the memory rides the first prompt as the recovery preamble.
+test("spawn with resume brings the recorded conversation back: seeded transcript, kept turns, memory on the wire", async () => {
+  live = manager();
+  const r = await live.spawn({
+    cwd: import.meta.dir, name: "fix it", resume: {
+      sessionId: "01a0-recorded",
+      transcript: [{ role: "user", text: "the codeword is PELICAN" }, { role: "assistant", text: "noted" }],
+      turns: 434,
+    },
+  });
+  expect(r.ok).toBe(true);
+  expect(r.lane!.turns).toBe(434);
+  expect(r.lane!.name).toBe("fix it");
+  expect(live.promote(r.lane!.id).transcript?.map((t) => t.text)).toEqual(["the codeword is PELICAN", "noted"]);
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "what was the codeword?", (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("PELICAN");
+  expect(reply).toContain("TRANSCRIPT START");
+  expect((await live.status()).lanes[0]!.turns).toBe(435);
+}, TIMEOUT);
+
 test("retry re-sends the LAST prompt after a crash, without the user asking twice", async () => {
   live = manager({ mode: "crash" });
   const r = await live.spawn({ cwd: import.meta.dir });

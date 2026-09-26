@@ -965,7 +965,7 @@ export interface LucidBridge {
    *  workspaces root when cwd is blank) and runs the lane there; an existing clone is reused. `pat` is a
    *  freshly-typed token used ONLY to spawn that git process - it is redacted from errors and never
    *  persisted by the server (the encrypted copy is written separately through the OS vault). */
-  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
+  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
   /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat. */
   fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[]): Promise<void>;
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */

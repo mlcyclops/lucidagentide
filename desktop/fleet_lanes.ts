@@ -149,7 +149,7 @@ const HANDSHAKE_MS = 30_000;
 const STAT_DIR_MS = 10_000;
 /** The transcript kept for recovery replay, per lane: enough memory to resume mid-task, bounded so a
  *  chatty lane cannot grow without limit. Oldest turns fall off first; the byte cap trims per turn. */
-const TRANSCRIPT_MAX_TURNS = 40;
+export const TRANSCRIPT_MAX_TURNS = 40;
 const TRANSCRIPT_MAX_TURN_CHARS = 8_000;
 /** P-FLEET.L3: staged prompts per lane. Mirrors P-FLEET.1's job-queue cap - past it, refuse loudly. */
 const QUEUE_MAX = 8;
@@ -304,8 +304,14 @@ export class FleetLaneManager {
     this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
   }
 
-  /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select. */
-  async spawn(opts: { cwd: string; model?: string; name?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
+  /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select.
+   *
+   *  P-FLEET.L17 `resume`: bring a RECORDED session back as this lane's own, memory included. The omp
+   *  child loads it natively (`session/load`, which replays the history and restores the session's
+   *  model) when it advertises loadSession; otherwise the caller's transcript (read from the on-disk
+   *  session) rides the next prompt as the fallback preamble, exactly like an in-place respawn. Either
+   *  way the transcript seeds what the composer shows on promote, and `turns` keeps the count honest. */
+  async spawn(opts: { cwd: string; model?: string; name?: string; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
     if (!cwd) return { ok: false, reason: `not a directory: ""` };
     // P-FLEET.L16 (the frozen "Spawning\u2026" button): this used to be a bare statSync. On a cloud-backed
@@ -345,9 +351,9 @@ export class FleetLaneManager {
       status: "starting",
       createdAt: t,
       lastActivityAt: t,
-      turns: 0,
+      turns: opts.resume ? Math.max(0, Math.floor(opts.resume.turns)) : 0,
       client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id) ?? {}),
-      sessionId: null,
+      sessionId: opts.resume?.sessionId ?? null,
       sinks: new Set(),
       pending: null,
       autoApprove: this.#autoDefault,
@@ -368,13 +374,15 @@ export class FleetLaneManager {
       respawns: 0,
       queue: [],
     };
+    // The recorded conversation, clamped like anything #record keeps: oldest turns fall off first.
+    if (opts.resume) for (const turn of opts.resume.transcript.slice(-TRANSCRIPT_MAX_TURNS)) this.#record(lane, turn);
     this.#lanes.set(id, lane);
     // P-PWA-FOCUS.1: BEFORE the handshake, so an observer registered earlier sees this lane's whole life
     // (including anything #wire's handlers emit while the child is still coming up).
     for (const obs of this.#observers) this.#attachObserver(obs, lane);
     this.#wire(lane);
     try {
-      await this.#handshake(lane);
+      await this.#handshake(lane, !!opts.resume);
       this.#setStatus(lane, "awaiting-input");
       return { ok: true, lane: this.#view(lane) };
     } catch (e) {
