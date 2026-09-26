@@ -28,6 +28,15 @@ on:
         description: 'Publish to the rolling "latest" release (pushes to EXISTING users via auto-update). Leave OFF for test builds.'
         type: boolean
         default: false
+      # ADR-0395 (P-REL.1): cut a beta without a local tag push. Builds the version COMMITTED in
+      # desktop/package.json (must be a prerelease like 2.3.0-beta.8) and the attach step creates the
+      # tag v<version> on this commit plus a GitHub PRERELEASE through the API. Never marks latest, never
+      # moves the cask. Run it on master. The tag it creates is made with GITHUB_TOKEN, which does not
+      # start another workflow run, so the release is built exactly once.
+      beta_release:
+        description: 'Cut a beta PRERELEASE: tag v<desktop/package.json version> on this commit and attach the installers (version must contain a dash, e.g. 2.3.0-beta.8). Never marks latest.'
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
@@ -103,6 +112,7 @@ jobs:
       # code is in the installer, but auto-update refuses to fetch it). Stamp a MONOTONIC version per
       # build: the git tag for tagged releases, else 0.1.<run number>. Build-time only (not committed).
       - name: Set build version (so auto-update sees a newer release)
+        id: stamp
         shell: bash
         working-directory: desktop
         env:
@@ -120,6 +130,20 @@ jobs:
               echo "::warning::tag '${GITHUB_REF#refs/tags/}' is not a clean semver — using package.json version"
               V="$(node -p "require('./package.json').version")"
             fi
+          elif [ "${{ inputs.beta_release }}" = "true" ]; then
+            # BETA RELEASE dispatch (ADR-0395): the committed version IS the release version. Fail-closed on
+            # anything that is not a prerelease, or on a run that also asks to publish the rolling latest.
+            V="$(node -p "require('./package.json').version")"
+            if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
+              echo "::error::beta_release needs a prerelease version (x.y.z-beta.N) in desktop/package.json, found '$V'"; exit 1
+            fi
+            if [ "${{ inputs.publish_latest }}" = "true" ]; then
+              echo "::error::beta_release and publish_latest are exclusive: a beta never touches the rolling latest"; exit 1
+            fi
+            if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
+              echo "::error::beta_release runs on master only (got ${GITHUB_REF})"; exit 1
+            fi
+            echo "beta release stamp: committed prerelease version -> $V (tag v$V)"
           elif [ "${{ inputs.publish_latest }}" = "true" ]; then
             # PUBLISHING dispatch: this is a RELEASE, not a test. It refreshes the rolling `latest`
             # release, whose artifacts the website's version-pinned .deb/.rpm links resolve through
@@ -150,6 +174,7 @@ jobs:
           fi
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "build version = $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
 
       # electron-builder's deb/rpm targets shell out to fpm; building an .rpm on the Ubuntu runner needs
       # the `rpm` toolchain (rpmbuild), which isn't installed by default. (.deb needs only fpm + dpkg,
@@ -275,12 +300,16 @@ jobs:
       # /releases/latest (the rolling "latest" release, which only the publish_latest dispatch touches),
       # and electron-updater skips prerelease versions unless the installed version is itself a prerelease.
       # So a beta build updates itself to the next beta, and a stable install never sees one.
-      - name: Attach installers to the Release (tag builds only)
-        if: startsWith(github.ref, 'refs/tags/')
+      # ADR-0395: a beta_release dispatch attaches here too, naming the tag itself (v<committed version>)
+      # and pinning it to this commit; softprops creates the tag and the prerelease through the API.
+      - name: Attach installers to the Release (tag builds and beta_release dispatches)
+        if: startsWith(github.ref, 'refs/tags/') || inputs.beta_release
         uses: softprops/action-gh-release@v3
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.stamp.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ (inputs.beta_release || contains(github.ref_name, '-')) && 'true' || 'false' }}
+          make_latest: ${{ (inputs.beta_release || contains(github.ref_name, '-')) && 'false' || 'true' }}
           # Installers + the electron-updater feed (latest*.yml + .blockmap) so
           # in-app auto-update can find new versions.
           files: |

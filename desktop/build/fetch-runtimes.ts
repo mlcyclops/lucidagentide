@@ -36,7 +36,12 @@ function findMember(root: string, member: string): string | null {
 }
 
 // Pinned upstream versions — bump deliberately, then REFRESH the hashes below.
-const BUN_VERSION = "1.3.14"; // github.com/oven-sh/bun -> release tag bun-v<ver>
+// P-SANDBOX.10 (ADR-0387): 1.3.14 -> 1.4.2. Under the Windows AppContainer, bun 1.3.14 cannot run a
+// script at all ("CouldntReadCurrentDirectory" while walking the cwd's ancestors, oven-sh/bun#28220),
+// and no ACL on the ancestors fixed it; 1.4.2 boots the contained omp with no extra grants (measured
+// on a windows-latest runner by .github/workflows/sandbox-lab.yml). All five hashes below were
+// downloaded AND cross-checked against …/bun-v1.4.2/SHASUMS256.txt.
+const BUN_VERSION = "1.4.2"; // github.com/oven-sh/bun -> release tag bun-v<ver>
 const UV_VERSION = "0.11.23"; // github.com/astral-sh/uv -> release tag <ver>
 // python-build-standalone (astral-sh): a RELOCATABLE CPython we bundle so the scanner
 // interpreter is provisioned OFFLINE (air-gap, ADR-0225 / add-on ADR-A009). Without it,
@@ -75,7 +80,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("darwin-aarch64"),
-		sha256: "d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620",
+		sha256: "90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f",
 	},
 	{
 		platform: "darwin",
@@ -83,7 +88,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("darwin-x64"),
-		sha256: "4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633",
+		sha256: "80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012",
 	},
 	{
 		platform: "darwin",
@@ -108,7 +113,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun.exe",
 		url: bunUrl("windows-x64"),
-		sha256: "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922",
+		sha256: "ce4c17497b2f29712a99d3d53f028de28cd42e3bacb8589599e7f000e49b6405",
 	},
 	{
 		platform: "win32",
@@ -125,7 +130,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("linux-x64"),
-		sha256: "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f",
+		sha256: "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913",
 	},
 	{
 		platform: "linux",
@@ -137,7 +142,7 @@ const SPECS: readonly RuntimeSpec[] = [
 	},
 	// Linux arm64 (P-ARM64.B). Every hash below was downloaded and then CROSS-CHECKED against the
 	// vendor's own published manifest, never just self-hashed: bun against
-	// …/bun-v1.3.14/SHASUMS256.txt, uv against its per-asset …tar.gz.sha256 sidecar, and CPython
+	// …/bun-v1.4.2/SHASUMS256.txt, uv against its per-asset …tar.gz.sha256 sidecar, and CPython
 	// against …/releases/download/20260623/SHA256SUMS. The method was validated by reproducing the
 	// ALREADY-COMMITTED python-linux-x64 hash below (9fa869d6…) from that same SHA256SUMS file.
 	{
@@ -146,7 +151,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("linux-aarch64"),
-		sha256: "a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b",
+		sha256: "54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7",
 	},
 	{
 		platform: "linux",

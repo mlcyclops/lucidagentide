@@ -10,12 +10,15 @@
 // on the chat path here too. The wire format was captured from a live omp turn
 // (DECISIONS ADR-0006).
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_doc.ts"; // P-DESIGN.1/.2 (ADR-0154): honor DESIGN.md + detect writes
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
 import { LiveTurn, type TurnAttachment, type TurnSnapshot, type TurnStatus } from "./turn_recovery.ts";
+import { engineIncident, logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import type { IncidentEvent, IncidentKind, IncidentOutcome } from "./incident_report.ts";
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
@@ -35,15 +38,17 @@ import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; 
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
-import { gatePath, gateRefusal, repoAsset } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
+import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
 import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentProvider, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
-import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
-import { resolveBackend, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn } from "./managed_config.ts";
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
+import { userTurnedSandboxOff } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
@@ -53,8 +58,8 @@ import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
-import { type PendingCall, type PendingView, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
-import { HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
+import { type PendingCall, type PendingView, parseTaskCall, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
+import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
@@ -113,6 +118,13 @@ const EGRESS_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
   { optionId: "egress:danger", name: "Always allow every site", kind: "danger" },
   { optionId: "egress:deny", name: "Block", kind: "reject" },
 ];
+// P-SANDBOX.8: the directory-grant dialog's choices. A grant is standing (an ACE persists on the host
+// until revoked in the Security panel), so the allow label says exactly that — no "once" variant: a
+// one-shot ACE is a lie (the DACL change would outlive the call anyway).
+const SANDBOX_GRANT_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
+  { optionId: "grant:allow", name: "Grant until revoked", kind: "allow" },
+  { optionId: "grant:deny", name: "Deny", kind: "reject" },
+];
 // P-EGRESS.2 (ADR-0094): opening a LOCAL file in a browser has no "site" to remember, so it offers only
 // open-once / block (a host-pin would persist a junk key for a file path). Still a PROMPT — never auto-allow.
 const EGRESS_LOCAL_OPTIONS: { optionId: string; name: string; kind?: string }[] = [
@@ -151,6 +163,10 @@ const SLASH_CMD_EXT = repoAsset("harness", "omp", "slash_command_extension.ts");
 // P-FLEET.L1: registers the read-tier `fleet_status` tool so the master agent's model can see the local
 // lane fleet (metadata only). Only added when the file exists - a missing extension never blocks omp launch.
 const FLEET_EXT = repoAsset("harness", "omp", "fleet_extension.ts");
+// P-SANDBOX.8: registers the `sandbox_grant_dir` tool so the agent can REQUEST standing access to a
+// user-named directory outside the AppContainer's grants. acp_config.yml forces the PROMPT; the dialog
+// below (askSandboxGrant) is the only path that parks an approval the loopback endpoint will honor.
+const SANDBOX_GRANT_EXT = repoAsset("harness", "omp", "sandbox_grant_extension.ts");
 // P-KG-SYM.1: registers the read-only `codegraph_query` tool. Added ONLY when the user opted in
 // (settings.codeGraphAgent) AND the file exists — so a bad/absent extension never blocks omp launch.
 const CODEGRAPH_EXT = repoAsset("harness", "omp", "codegraph_extension.ts");
@@ -223,6 +239,31 @@ function readDesignInvariants(workspace: string): string {
 // only because the OAuth broker picked a different omp than this file did), and the v2.0.0 EPERM
 // regression came from accepting a path on existence alone. See omp_bin.ts for the full reasoning.
 let ompBinCache: string | null = null;
+/** P-SANDBOX.10 (ADR-0387): run the wrapped `<omp> --version` once per distinct plan and judge it with
+ *  runtimeProbeVerdict. Cached per engine process: a runtime that could not boot is not re-probed on
+ *  every respawn, and one that did is not paid for twice. Never throws. */
+const runtimeProbeCache = new Map<string, Promise<ReturnType<typeof runtimeProbeVerdict>>>();
+function appContainerRuntimeProbe(plan: { cmd: string; args: string[]; env: Record<string, string> }): Promise<ReturnType<typeof runtimeProbeVerdict>> {
+  const key = JSON.stringify(plan);
+  let p = runtimeProbeCache.get(key);
+  if (!p) {
+    p = (async () => {
+      try {
+        const child = Bun.spawn([plan.cmd, ...plan.args], { env: { ...process.env, ...plan.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true });
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; child.kill(); }, 60_000);
+        const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        clearTimeout(timer);
+        return runtimeProbeVerdict({ exitCode, stdout, stderr, timedOut });
+      } catch (e) {
+        return { ok: false as const, reason: `the contained agent runtime could not be probed (${String((e as Error).message ?? e)})` };
+      }
+    })();
+    runtimeProbeCache.set(key, p);
+  }
+  return p;
+}
+
 function ompBin(): string {
   if (ompBinCache) return ompBinCache;
   // P-OMP-BOOT.2 (ADR-0358): a timeout is "slow machine", not "missing binary". See omp_bin.ts.
@@ -285,6 +326,21 @@ const SESSION_MS = 30_000;   // session/new, session/set_config_option
 // Whole-completion ceiling for ONE utility extraction (spawn + handshake + session + prompt). The import
 // runs hundreds of these back-to-back behind utilLock, so one wedged call must never stall the queue.
 const COMPLETE_MS = 180_000;
+// P-RECOVER.1 (ADR-0385): a recovery's session/load is bounded. Unbounded, one hung load held the watchdog's
+// healthBusy forever, so no later recovery could ever run. Generous: omp replays the whole history on load.
+const RESUME_MS = 120_000;
+/** The refusal a second concurrent chat turn gets. Exported so dev.ts can pass it through verbatim. */
+export const TURN_ALREADY_RUNNING = "A chat turn is already running";
+/** P-RECOVER.1: why no replacement agent starts while the previous one's process tree may still be running. */
+const AGENT_NOT_STOPPED = "The previous agent process could not be confirmed stopped, so LUCID will not start another one beside it. Quit and reopen LUCID.";
+
+/** P-RECOVER.1: one bounded line for a recovery log/incident. ACP errors arrive as plain `{ code, message }`
+ *  objects (ACPClient rejects with the JSON-RPC error as-is), not Error instances. */
+function errText(e: unknown): string {
+  if (e instanceof Error) return e.message.slice(0, 200);
+  if (e && typeof e === "object" && "message" in e && typeof e.message === "string") return e.message.slice(0, 200);
+  return String(e).slice(0, 200);
+}
 
 /** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
 export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal };
@@ -338,7 +394,7 @@ export type ChatEvent =
   // images are validated + capped in extractToolImages before this event is emitted; the UI renders them
   // inline in the reply with a download + "send to preview" (for markup) affordance.
   | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string }
-  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task ids from rawInput.tasks[].id (absent when all auto-generated)
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task names from the task call (parseTaskCall; absent when all auto-generated)
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
@@ -381,7 +437,33 @@ function absWorkspacePath(p: string): string {
 
 class Backend {
   private acp: ACPClient | null = null;
-  private sessionId: string | null = null;
+  // P-RECOVER.1 (ADR-0385): every write of the master session id goes through the setter, so the id is
+  // persisted (dev.ts: ~/.omp/lucid-last-session-<PORT>.json) whichever of the many paths set it. That file
+  // is what the NEXT engine offers to resume after an unclean exit.
+  private liveSessionId: string | null = null;
+  private get sessionId(): string | null { return this.liveSessionId; }
+  private set sessionId(v: string | null) {
+    const changed = v !== this.liveSessionId;
+    this.liveSessionId = v;
+    if (v && changed) { try { this.persistSession?.(v); } catch { /* bookkeeping never breaks a chat */ } }
+  }
+  private persistSession: ((id: string) => void) | null = null;
+  private incidentsDir = incidentDir();
+  private acpLogPath = join(homedir(), ".omp", "lucid-acp.log");
+  /** P-RECOVER.1: the session a DEAD master was holding. start() resumes it on the replacement child, and
+   *  keeps it across a failed spawn so the next attempt still resumes rather than starting fresh. */
+  private reviveId: string | null = null;
+  /** P-RECOVER.1: an on-demand revival is under way and has not yet written its incident. */
+  private revivePending = false;
+  /** P-RECOVER.1: the event sink of the current chat turn. clearTurnRecovery releases the listener only
+   *  when it is still THIS sink, so a util completeShared() listener is never clobbered. */
+  private turnSink: ((e: ChatEvent) => void) | null = null;
+  /** P-RECOVER.1: true while a session/load replays history. The replay is old conversation, and it must
+   *  not stream into a live turn's pane (or its step sidecar) when a revival happens mid-prompt. */
+  private replaying = false;
+  /** P-RECOVER.1: the master child restart() stopped, until its whole process tree is confirmed ended.
+   *  start() spawns nothing while this is set. */
+  private retired: ACPClient | null = null;
   private starting: Promise<void> | null = null;
   private sessioning: Promise<void> | null = null; // dedupe concurrent session/new (getConfig races it with a timeout)
   private listener: ((e: ChatEvent) => void) | null = null;
@@ -465,7 +547,7 @@ class Backend {
   // P-RESUME.1 (ADR-0171): every event funnels through here, so this is the ONE tee that records
   // thinking/tool/failure steps into the per-session sidecar (survives session switches). Cheap for
   // hot token chunks (noteStepEvent returns immediately on any other type) and never throws.
-  private emit(e: ChatEvent): void { noteStepEvent(this.sessionId, e); this.listener?.(e); }
+  private emit(e: ChatEvent): void { if (this.replaying) return; noteStepEvent(this.sessionId, e); this.listener?.(e); }
 
   /** P-PREVIEW.11 (ADR-0308): open the Preview panel on `path`, driven by the `preview_open` tool's OWN
    *  HTTP call (dev.ts /api/preview/open) instead of pattern-matching omp's ACP call title.
@@ -589,37 +671,109 @@ class Backend {
    *  can't start, `wrap` falls back to network-off (fail-closed). Async because starting the proxy is. */
   private async resolveSandboxPlan(argv: string[]): Promise<{ cmd: string; args: string[]; env: Record<string, string> }> {
     const at = new Date().toISOString(); // P-SANDBOX.5 (ADR-0169): surface the posture in the Security panel
-    const res = resolveBackend({ requireIsolation: managedRequireIsolation(managedConfig().config) });
+    // P-SANDBOX.7 (ADR-0173): the packaged Windows helper ships at <repo>/bin/lucid-appcontainer.exe
+    // (bin/** rides the `repo` extraResources), resolved through repo_root — NEVER import.meta.dir
+    // (ADR-0356) — and passed ONLY when it exists on disk; bare-name PATH lookup stays the dev loop.
+    // P-SANDBOX.7b (ADR-0174): a mediated (network-on) profile inside an AppContainer reaches the
+    // loopback egress proxy ONLY when the one-time elevated loopback exemption is registered.
+    // Without it, committing to isolation cuts EVERY byte of the child's traffic — provider APIs
+    // included, i.e. a dead chat session — so network-on profiles stay the DISCLOSED passthrough
+    // until `lucid-appcontainer --register-loopback` has run; network-off profiles isolate
+    // regardless (they need no loopback and no exemption).
+    const profileCaps = caps("trusted-local");
+    const acHelper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
+    const acBundled = !!acHelper && existsSync(acHelper);
+    // P-SANDBOX.12 (ADR-0390): the user's Off switch (a LUCID setting, no admin needed). Managed
+    // require-isolation wins: a policy-required sandbox is never turned off from the panel. P-SANDBOX.14
+    // (ADR-0394): so does a managed sandbox.allowUserOff === false.
+    const userOff = acBundled && userTurnedSandboxOff(loadSettings().sandboxWindowsMode, managedSandboxLocksOn(managedConfig().config));
+    if (userOff) console.error("[sandbox] the Windows AppContainer is turned OFF in the Security panel - this session runs as the disclosed passthrough (ADR-0390).");
+    const acUsable = acBundled && !userOff && (!profileCaps.canNetwork || loopbackExempted());
+    if (acBundled && !userOff && !acUsable) {
+      console.error(
+        `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered - this network-on session runs as the disclosed passthrough. ` +
+          `Enable full Windows isolation once, from an elevated shell: "${acHelper}" --register-loopback  (then restart LUCID).`,
+      );
+    }
+    const res = resolveBackend({
+      requireIsolation: managedRequireIsolation(managedConfig().config),
+      appContainerHelper: acUsable ? acHelper! : undefined,
+    });
     if (!res.ok) {
       this.sandboxExecBlock = res.reason;
       setSandboxState({ backend: null, isolated: false, disclosed: false, platform: process.platform, execBlocked: res.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${res.reason} - exec is BLOCKED for this session (ADR-0157).`);
       return { cmd: argv[0]!, args: argv.slice(1), env: {} };
     }
-    const profileCaps = caps("trusted-local");
     let proxy: SandboxProxy | undefined;
     if (res.backend.isolates && profileCaps.canNetwork) {
       const ep = await ensureEgressProxy({ dnsPort: 53, onEvent: this.egressAudit });
       if (ep) proxy = { host: ep.host, httpPort: ep.httpPort, httpProxyUrl: ep.httpProxyUrl, resolvConfPath: ep.dnsPort === 53 ? ep.resolvConfPath : undefined };
       else console.error("[sandbox] mediated egress proxy unavailable - this session runs network-off (fail-closed, ADR-0166).");
     }
-    const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy }, resolution: res });
+    // P-SANDBOX.9 (ADR-0386): an AppContainer child reads NOTHING it was not granted, so the contained
+    // omp also needs the repo tree, the bun runtime its shim execs, and rw on ~/.omp (+ a temp dir in it).
+    let acGrants: ReturnType<typeof appContainerRuntimeGrants> | undefined;
+    if (res.backend.name === "appcontainer") {
+      // P-SANDBOX.11 (ADR-0389): a shellPath pinned in omp's config must be reachable inside the container.
+      let shellPath: string | null = null;
+      try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config: omp discovers a shell itself */ }
+      acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0], shellPath, gitRoot: discoverGitRoot(process.env) });
+      // P-SANDBOX.14 (ADR-0394): the admin-approved folders ride every contained spawn (the runtime probe
+      // below uses the same ctx, so a grant the helper cannot apply keeps the session off the container).
+      const policy = managedPolicyFolderPlan();
+      acGrants = { ...acGrants, grantRx: [...acGrants.grantRx, ...policy.grantRx], grantRw: [...acGrants.grantRw, ...policy.grantRw] };
+      try { mkdirSync(acGrants.tmpDir, { recursive: true }); } catch { /* the helper's grant then fails closed, loudly */ }
+    }
+    const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy, ...acGrants }, resolution: res });
     if (d.action === "refuse") { // unreachable for trusted-local caps, but never assume: fail closed
       this.sandboxExecBlock = d.reason;
       setSandboxState({ backend: res.backend.name, isolated: res.backend.isolates, disclosed: res.disclosed, platform: process.platform, execBlocked: d.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${d.reason} - exec is BLOCKED for this session (ADR-0157).`);
       return { cmd: argv[0]!, args: argv.slice(1), env: {} };
     }
+    // P-SANDBOX.10 (ADR-0387): presence and a stdio round trip are not "chat works". Before committing
+    // to the AppContainer, prove the REAL runtime boots through the SAME wrap. A failure keeps chat up on
+    // the disclosed passthrough (or blocks exec under managed require-isolation), with the reason logged.
+    if (res.backend.name === "appcontainer") {
+      const ctx = { workspace: currentWorkspace(), proxy, ...acGrants };
+      const verdict = await appContainerRuntimeProbe(res.backend.wrap([argv[0]!, "--version"], profileCaps, ctx));
+      if (!verdict.ok) {
+        const requireIso = managedRequireIsolation(managedConfig().config);
+        console.error(`[sandbox] the AppContainer is available but ${verdict.reason} - ${requireIso ? "exec is BLOCKED (managed policy requires isolation)" : "this session runs as the disclosed passthrough"} (ADR-0387).`);
+        this.sandboxExecBlock = requireIso ? `managed policy requires runtime isolation, but ${verdict.reason}` : null;
+        setSandboxState({ backend: requireIso ? null : "noop", isolated: false, disclosed: !requireIso, platform: process.platform, execBlocked: this.sandboxExecBlock, proxied: false, at });
+        if (!requireIso) console.error(sandboxDisclosure());
+        return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+      }
+    }
     this.sandboxExecBlock = null;
     setSandboxState({ backend: res.backend.name, isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
     if (d.disclosed) console.error(sandboxDisclosure());
-    return { cmd: d.plan.cmd, args: d.plan.args, env: d.plan.env };
+    // P-SANDBOX.17 (ADR-0399): Git for Windows cannot start inside the AppContainer, so the contained agent's
+    // `git` is the broker shim (tools/git-broker/git.cmd), which asks the engine to run the real git.
+    const gitShim = res.backend.name === "appcontainer" ? prependPathOverlay(process.env, join(resolvedRepo().root, "tools", "git-broker")) : {};
+    return { cmd: d.plan.cmd, args: d.plan.args, env: { ...d.plan.env, ...gitShim } };
   }
 
   private async start(): Promise<void> {
+    // P-RECOVER.1 (ADR-0385): a dead connection is ABSENT. Returning early on it (the old `if (this.acp)`)
+    // handed every caller a corpse that rejects each request with "agent process exited" until the 30s
+    // watchdog noticed, and after the watchdog's budget it never did. The util connection already had
+    // this rule (startUtil); the master now shares it, and resumes the session the dead child held.
+    if (this.acp?.isDead) this.dropDeadMaster();
     if (this.acp) return;
     if (!this.starting) {
       this.starting = (async () => {
+        // P-RECOVER.1 (ADR-0385): never spawn beside the child restart() retired. Its whole process tree must
+        // be confirmed ended first (ACPClient.stop), or the old agent and its tools could still be working in
+        // the workspace while the replacement resumes the same turn. If it cannot be confirmed, every start
+        // refuses; each attempt asks the old client again, which retries while its root is still running.
+        while (this.retired) {
+          const old = this.retired;
+          if (!(await old.stop())) throw new Error(AGENT_NOT_STOPPED);
+          if (this.retired === old) this.retired = null;
+        }
         // P-TASK.2 (ADR-0028): append the byte-stable proactive-delegation policy to omp's system
         // prompt. omp owns the system prompt on the ACP path, so --append-system-prompt is how our
         // cached, stable layer-3 policy reaches the chat model (no volatile bytes → cache stays hot).
@@ -640,6 +794,7 @@ class Backend {
         const agentBuilderArgs = existsSync(AGENT_BUILDER_EXT) ? ["-e", AGENT_BUILDER_EXT] : []; // P-AGENT.8.2: agent_builder_open
         const slashCmdArgs = existsSync(SLASH_CMD_EXT) ? ["-e", SLASH_CMD_EXT] : []; // P-CMD.1: slash_command_create
         const fleetArgs = existsSync(FLEET_EXT) ? ["-e", FLEET_EXT] : []; // P-FLEET.L1: fleet_status
+        const sandboxGrantArgs = existsSync(SANDBOX_GRANT_EXT) ? ["-e", SANDBOX_GRANT_EXT] : []; // P-SANDBOX.8: sandbox_grant_dir
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
@@ -659,10 +814,15 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...interjectChildEnv("master") });
+        // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
+        // goes first on the agent's PATH - unless the plan already set PATH (the contained agent's git broker
+        // shim, P-SANDBOX.17).
+        const planSetsPath = Object.keys(spawnPlan.env).some((k) => k.toUpperCase() === "PATH");
+        const gitEnv = process.platform === "win32" && !planSetsPath ? prependPathOverlay(process.env, gitCmdDir()) : {};
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") });
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -676,26 +836,27 @@ class Backend {
             case "agent_thought_chunk": if (u.content?.type === "text") this.emit({ type: "thinking", text: u.content.text }); break;
             case "tool_call": {
               trackToolCall(this.openCalls, u, Date.now()); // P-STALL.2: this call is now awaited
-              // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other")
-              // whose rawInput carries { agent, context, tasks[] } (batch) or { agent, assignment } (flat).
-              // Detect it and emit a distinct `subagent` event so the UI shows a delegation card instead
-              // of a nameless "other" chip. (The rawInput strings are still scanned by the pre-hook gate.)
+              // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other").
+              // Detect it by shape (parseTaskCall, P-TASK.6 / ADR-0398: omp 18's per-item agent) and emit a
+              // distinct `subagent` event so the UI shows a delegation card instead of a nameless "other"
+              // chip. (The rawInput strings are still scanned by the pre-hook gate.)
               const ri = u.rawInput ?? {};
-              if (ri.agent && (Array.isArray(ri.tasks) || typeof ri.assignment === "string")) {
-                const items: any[] = Array.isArray(ri.tasks) ? ri.tasks : [{ assignment: ri.assignment, description: ri.description }];
-                // P-TASK.5a: per-task ids (rawInput.tasks[].id) scope each delegation card to ITS batch's
-                // runs - without them two batches in one turn render the union of all runs on every card.
-                // Only emitted when at least one task carried an explicit id (they may be auto-generated).
-                const names = items.map((t) => (typeof t?.id === "string" ? t.id.trim() : "")).filter(Boolean);
+              const taskItems = parseTaskCall(ri);
+              if (taskItems) {
+                const agent = [...new Set(taskItems.map((t) => t.agent))].join(" + ");
+                // P-TASK.5a: per-task names (also each run's transcript stem) scope each delegation card to
+                // ITS batch's runs - without them two batches in one turn render the union of all runs on
+                // every card. Only emitted when at least one task carried a name (omp may generate them).
+                const names = taskItems.map((t) => t.name).filter(Boolean);
                 this.emit({
-                  type: "subagent", id: String(u.toolCallId ?? u.title ?? ""), agent: String(ri.agent),
-                  title: String(u.title ?? `${ri.agent} subagent`),
-                  assignments: items.map((t) => String(t?.description ?? t?.assignment ?? "").slice(0, 200)).filter(Boolean),
+                  type: "subagent", id: String(u.toolCallId ?? u.title ?? ""), agent,
+                  title: String(u.title ?? `${agent} subagent`),
+                  assignments: taskItems.map((t) => t.task.replace(/^#+\s*/gm, "").replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean),
                   ...(names.length ? { names } : {}),
                 });
-              } else if (ri.poll || ri.cancel || ri.list || ri.wait) {
-                // job-coordination calls (poll/list/cancel/wait of background subagents) are internal
-                // bookkeeping while a task runs — don't surface them as separate tool chips.
+              } else if (ri.op === "wait" || ri.op === "jobs" || ri.op === "inbox" || (ri.op === "cancel" && Array.isArray(ri.ids))) {
+                // job-coordination calls on background subagents (omp 18 moved them from the task tool to
+                // the `hub` tool) are internal bookkeeping while a task runs - no separate tool chips.
               } else {
                 // P-CHAT.1 (ADR-0104): carry the tool's authored code for the chat's inline preview. A
                 // write's `content`, or an edit's `oldText`/`newText` (→ diff). Bounded so a huge file can't
@@ -815,6 +976,10 @@ class Backend {
             const tc = params?.toolCall ?? params?.tool_call ?? {};
             const toolName = [tc.kind, tc.title, tc.name, tc.toolName, params?.tool, params?.toolName].filter(Boolean).join(" ").toLowerCase();
             const target = egressTarget(tc);
+            // P-SANDBOX.8: the agent asks for standing access to a user-named directory. Handled FIRST
+            // (before the exec/egress classifiers can mis-bucket it): always the grant dialog, never an
+            // auto-approve — a persistent host DACL change requires an explicit human yes.
+            if (toolName.includes("sandbox_grant_dir")) return this.askSandboxGrant(params, opts);
             // P-EXEC.1 (ADR-0066): an exec tool (bash/eval). Classify the command BEFORE the Agent
             // auto-approve — read-only auto-approves, risky gates, a catastrophic set always prompts. A
             // shell command is handled here (not egress), so `curl … | sh` is caught as catastrophic exec.
@@ -958,11 +1123,19 @@ class Backend {
           try { acp.stop(); } catch { /* ignore */ }
           throw e;
         }
+        // P-RECOVER.1: log the death the moment it happens (main tees stderr into engine.log). The revival
+        // itself is on demand, in start(), so a child that dies while idle costs nothing until it is needed.
+        acp.onExit = (code) => { if (this.acp === acp) console.error(`[recover] master agent process exited (code ${code ?? "null"})`); };
+        // A revival resumes the dead child's session BEFORE the connection is published: until then every
+        // other caller awaits `starting`, so none can see a session-less child and mint a fresh session
+        // that the resume would then silently replace.
+        if (this.revivePending || this.reviveId) await this.finishRevival(acp);
         this.acp = acp;
       })().catch((e) => {
         // A failed handshake must not poison every later call: drop the memoized promise so the NEXT
         // start() respawns. Without this, one timed-out initialize disables chat until app restart.
         this.starting = null;
+        if (this.revivePending) this.failRevival(e);
         throw e;
       });
     }
@@ -1147,6 +1320,79 @@ class Backend {
       });
     });
   }
+  /** P-SANDBOX.8: forward a `sandbox_grant_dir` request as the directory-grant dialog. On the user's
+   *  "Grant until revoked", park the approved {path,mode} in the grants store's ONE-SHOT pending slot
+   *  BEFORE replying allow — the loopback endpoint consumes it and refuses any POST no fresh approval
+   *  matches (defense in depth). Fail-closed: non-Windows, a missing helper, a malformed call, no live
+   *  UI, or a timeout ⇒ deny (cancelled), logged/audited. */
+  private askSandboxGrant(params: unknown, opts: { optionId?: string; kind?: string }[]): Promise<unknown> | { outcome: { outcome: string } } {
+    const cancelled = { outcome: { outcome: "cancelled" } };
+    const tc: unknown = params && typeof params === "object"
+      ? ("toolCall" in params ? params.toolCall : "tool_call" in params ? params.tool_call : undefined)
+      : undefined;
+    const ri: unknown = tc && typeof tc === "object"
+      ? ("rawInput" in tc ? tc.rawInput : "input" in tc ? tc.input : undefined)
+      : undefined;
+    const riPath = ri && typeof ri === "object" && "path" in ri ? ri.path : undefined;
+    const dirPath = typeof riPath === "string" ? riPath.trim() : "";
+    const riMode = ri && typeof ri === "object" && "mode" in ri ? ri.mode : undefined;
+    const modeWord = riMode === "read-write" ? "read-write" : "read";
+    const mode: GrantMode = riMode === "read-write" ? "rw" : "rx";
+    const riReason = ri && typeof ri === "object" && "reason" in ri ? ri.reason : undefined;
+    const reason = typeof riReason === "string" ? riReason.trim().slice(0, 200) : "";
+    // Preconditions the DIALOG depends on (can't grant what the helper can't apply): not Windows, or the
+    // bundled helper is missing ⇒ reply cancelled without asking, and say why in the engine log.
+    const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
+    if (!helper || !existsSync(helper)) {
+      console.error(`[sandbox-grant] cancelled without asking: ${process.platform === "win32" ? "the bundled lucid-appcontainer helper is missing" : `directory grants need Windows AppContainer ACEs (platform ${process.platform})`} · ${dirPath || "(no path)"}`);
+      return cancelled;
+    }
+    if (!dirPath) {
+      console.error("[sandbox-grant] cancelled without asking: the tool call named no directory");
+      return cancelled;
+    }
+    // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list; never ask the user for a grant the
+    // endpoint would refuse anyway.
+    if (managedSandboxFoldersLocked(managedConfig().config)) {
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `blocked (folders managed by policy) · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      console.error(`[sandbox-grant] cancelled without asking: your organization manages the sandbox's folders · ${dirPath}`);
+      return cancelled;
+    }
+    if (!(this.askActive && this.listener)) {
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `blocked (no UI to ask) · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      return cancelled;
+    }
+    const id = `perm_${++this.permSeq}`;
+    this.pendingPerms++;
+    this.emit({ type: "permission", id, tool: "sandbox_grant_dir", detail: `${modeWord} access to ${dirPath}${reason ? ` - ${reason}` : ""}`, egress: false, options: SANDBOX_GRANT_OPTIONS });
+    const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
+    const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
+    const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : cancelled;
+    const block = () => denyOpt ? { outcome: { outcome: "selected", optionId: denyOpt.optionId } } : cancelled;
+    const { promise, resolve } = Promise.withResolvers<unknown>();
+    const settle = (o: unknown) => { clearTimeout(t); this.permPending.delete(id); this.recoveryTurn?.resolvePermission(id); this.pendingPerms = Math.max(0, this.pendingPerms - 1); resolve(o); };
+    // Fail-closed TIMEOUT is a real deny — audited like the egress/exec dialogs (P-ENT.4).
+    const t = setTimeout(() => {
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${gateDenyReason(null, true)} · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      settle(block());
+    }, Backend.PERM_MS);
+    this.permPending.set(id, (optionId) => {
+      const granted = optionId === "grant:allow";
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: granted ? "allow" : "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${granted ? "grant until revoked" : gateDenyReason(optionId)} · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      if (!granted) { settle(block()); return; }
+      // Park the approval BEFORE replying allow, so the extension's POST finds it on file. A failed
+      // write denies the call (fail-closed) — an allow the endpoint would refuse anyway helps nobody.
+      try {
+        saveGrants(setPending(loadGrants(), { path: dirPath, mode, reason, at: new Date().toISOString() }));
+      } catch (e) {
+        console.error("[sandbox-grant] could not record the approval - denying:", e);
+        settle(block());
+        return;
+      }
+      settle(approve());
+    });
+    return promise;
+  }
   /** P-EXEC.1 (ADR-0066): forward a risky exec request as the per-command approval dialog (command +
    *  program key + why). The user's choice folds into the exec store (allow-program / danger) or the
    *  in-memory turn scope (allow-turn); allow-once / deny persist nothing. Fail-closed: timeout ⇒ block. */
@@ -1228,6 +1474,18 @@ class Backend {
   private clearTurnRecovery(): void {
     const turn = this.recoveryTurn;
     this.recoveryTurn = null;
+    // P-RECOVER.1 (ADR-0385): the session-switch wedge. Clearing only `recoveryTurn` left the cleared turn's
+    // listener armed and its session/prompt still running in omp, so every later prompt() threw "already
+    // running" while /api/chat/status said idle, until the watchdog recovered ~7 minutes later. A cleared
+    // turn now gives up both: omp is told to stop it (the pending request then settles as cancelled and its
+    // prompt() unwinds without touching the new turn), and its sink stops being the listener. Only ITS sink:
+    // a util completeShared() listener is never clobbered. A session switch is the user acting, so a
+    // pending watchdog resume must not revive the cleared run either.
+    this.recoverMark.clear();
+    const cancelId = turn?.running ? (turn.sessionId ?? this.sessionId) : null;
+    if (cancelId && this.acp && !this.acp.isDead) { try { this.acp.notify("session/cancel", { sessionId: cancelId }); } catch { /* best-effort */ } }
+    if (this.turnSink && this.listener === this.turnSink) { this.listener = null; this.turnStartedAtMs = null; }
+    this.turnSink = null;
     this.askActive = false;
     this.openCalls.clear();
     this.chatGate.end();
@@ -1256,12 +1514,17 @@ class Backend {
   }
 
   /** Tear down the omp process so the next call respawns it (e.g. after an API
-   *  key changes - the new env is picked up on the fresh spawn). */
+   *  key changes - the new env is picked up on the fresh spawn). P-RECOVER.1: the next spawn waits until
+   *  the old child's whole process tree is confirmed ended (see `retired`). */
   restart(options?: { preserveTurn?: boolean }): void {
     if (!options?.preserveTurn) this.clearTurnRecovery();
-    try { this.acp?.stop(); } catch { /* ignore */ }
+    // Detach before stopping so the exit handler knows this death was deliberate (no "[recover]" line).
+    const old = this.acp;
+    this.acp = null;
+    if (old) { this.retired = old; try { void old.stop(); } catch { /* ignore */ } }
     try { this.utilAcp?.stop(); } catch { /* ignore */ } // P-KG-INGEST.4: respawn the util omp too (fresh env/keys)
-    this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
+    this.starting = null; this.sessionId = null; this.listener = null;
+    this.reviveId = null; this.revivePending = false; // P-RECOVER.1: a deliberate restart supersedes an on-demand revival
     this.utilAcp = null; this.utilStarting = null; this.utilSink = null;
     this.memoryRecallDelivered = false; // persona/skill/profile are re-delivered every turn anyway (#54)
     this.availableModes = []; this.currentModeId = "default"; // re-captured from the fresh session
@@ -1287,7 +1550,7 @@ class Backend {
    *  P-STALL.2 (ADR-0263): the turn waits as long as the work takes - no time cutoff. Stop ends it, and
    *  a dead omp child rejects the in-flight request (ACPClient drains pending on exit). */
   async prompt(text: string, onEventRaw: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], options?: { signal?: AbortSignal; prompt?: string; requestId?: string }): Promise<void> {
-    if (this.recoveryTurn?.running || this.listener) throw new Error("A chat turn is already running");
+    if (this.recoveryTurn?.running || this.listener) throw new Error(TURN_ALREADY_RUNNING);
     const turn = new LiveTurn<ChatEvent>(options?.prompt ?? text, this.sessionId, () => pendingSnapshot(this.openCalls, Date.now()), options?.requestId);
     this.recoveryTurn = turn;
     this.openCalls.clear();
@@ -1339,6 +1602,7 @@ class Backend {
       try { onEvent(e); } catch { enqueueErr++; }
     };
     this.listener = sink;
+    this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
     this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.recoverMark.clear(); // P-HEALTH.2: a new run never inherits a previous run's recovery marker
@@ -1410,6 +1674,7 @@ class Backend {
           // would stream into nothing and its permission requests would never reach the UI - which is the
           // "listener clobber" failure mode this increment exists to close, not to reintroduce.
           this.listener = sink;
+          this.turnSink = sink;
           this.askActive = true;
           content = [{ type: "text" as const, text: buildResumeNote({
             request: text, progress: turn.text, pending: rec.pending,
@@ -1445,6 +1710,7 @@ class Backend {
       endStepTurn(this.sessionId); // P-RESUME.1: persist the buffered thinking for this turn
       }
       if (this.listener === sink) { this.listener = null; this.turnStartedAtMs = null; }
+      if (this.turnSink === sink) this.turnSink = null;
     }
     if (this.recoveryTurn !== turn) return;
     // P-NORESP.1: the turn produced NO content at all (no token/thinking/tool) — either a silent empty
@@ -1941,17 +2207,21 @@ class Backend {
   private recoverMark = new RecoverMarker();
   /** The in-flight recovery. A rejected request awaits this, so the resume happens only after the respawn
    *  and `session/load` have finished and `sessionId` is either restored or definitively null. */
-  private recovering: Promise<void> | null = null;
+  private recovering: Promise<unknown> | null = null;
+  /** P-RECOVER.1: the stall episode (by its start stamp) that already wrote its recovery-exhausted incident. */
+  private exhaustedEpisodeAt: number | null = null;
 
-
-  /** Where the master session stands right now. Read-only: takes no action, mutates nothing. */
-  healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null } {
+  /** Where the master session stands right now. Read-only: takes no action, mutates nothing.
+   *  P-RECOVER.1: `exhausted` = the ladder stopped retrying (the window offers Recover); `dead` = the
+   *  child is gone (the next use revives it). */
+  healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null; exhausted: boolean; dead: boolean } {
     const now = Date.now();
-    const v = healthVerdict({
+    const input: HealthInput = {
       busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
-    });
-    return { action: v.action, silentMs: v.silentMs, reason: v.reason, pending: pendingSnapshot(this.openCalls, now), last: this.lastHealth };
+    };
+    const v = healthVerdict(input);
+    return { action: v.action, silentMs: v.silentMs, reason: v.reason, pending: pendingSnapshot(this.openCalls, now), last: this.lastHealth, exhausted: this.ladderExhausted(v, input), dead: input.dead };
   }
 
   /** Run the ladder once and act on it. Returns what it did, or null when nothing was warranted.
@@ -1960,11 +2230,23 @@ class Backend {
   async healthTick(): Promise<{ action: "probe" | "recover"; reason: string } | null> {
     if (this.healthBusy) return null;
     const now = Date.now();
-    const v = healthVerdict({
+    const input: HealthInput = {
       busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
-    });
-    if (v.action !== "probe" && v.action !== "recover") return null;
+    };
+    const v = healthVerdict(input);
+    if (v.action !== "probe" && v.action !== "recover") {
+      // P-RECOVER.1 (ADR-0385): the first frame of an episode where the ladder has given up writes ONE
+      // report. Before this the pin at "needs a manual restart" was silent: nothing on disk said so.
+      if (this.ladderExhausted(v, input) && this.exhaustedEpisodeAt !== this.healthEpisode.startedAt) {
+        this.exhaustedEpisodeAt = this.healthEpisode.startedAt;
+        console.error(`[recover] automatic recovery stopped retrying after ${this.healthEpisode.recovers} attempts`);
+        this.recordRecovery("recovery-exhausted", "not-recovered",
+          `LUCID's automatic recovery restarted the chat agent process ${this.healthEpisode.recovers} times without the chat making progress, and stopped retrying so it would not loop. The chat needs a manual recovery.`,
+          [{ at: this.healthEpisode.startedAt, what: "The chat stopped making progress." }, { at: now, what: v.reason }]);
+      }
+      return null;
+    }
     this.healthBusy = true;
     try {
       this.lastHealth = { action: v.action, reason: v.reason, at: now };
@@ -1986,8 +2268,15 @@ class Backend {
         reason: v.reason, at: now, silentMs: v.silentMs,
         pending: pendingSnapshot(this.openCalls, now).map((p) => p.label),
       });
-      this.recovering = this.healthRecover();
-      await this.recovering;
+      console.error(`[recover] watchdog: ${v.reason}`);
+      const hadSession = this.sessionId !== null;
+      const pending = this.healthRecover();
+      this.recovering = pending;
+      const r = await pending;
+      // P-RECOVER.1 (ADR-0385): every automatic recovery leaves a report, whether or not it worked.
+      this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+        "The chat session stopped making progress (or its agent process exited), so LUCID's watchdog cancelled the turn, restarted the agent process, and tried to resume the same session.",
+        [{ at: now, what: v.reason }, { at: Date.now(), what: !r.ok ? `The recovery did not complete (${r.error ?? "unknown error"}).` : hadSession ? "The agent process was restarted and the chat session was resumed." : "The agent process was restarted. No chat session was open." }]);
       return { action: "recover", reason: v.reason };
     } finally {
       this.healthBusy = false;
@@ -1999,18 +2288,175 @@ class Backend {
    *  so the conversation survives. This is the whole point of the increment - restart() alone would mint
    *  a fresh session on the next prompt and silently throw the thread away, which is worse than the stall
    *  it was fixing. A resume that fails leaves sessionId null, so the next prompt starts clean rather
-   *  than talking to a half-dead child (fail-closed: no session is better than a phantom one). */
-  private async healthRecover(): Promise<void> {
+   *  than talking to a half-dead child (fail-closed: no session is better than a phantom one).
+   *  P-RECOVER.1 (ADR-0385): the replacement is spawned only after the wedged child's whole process tree is
+   *  confirmed ended (start() waits on `retired`). If it cannot be confirmed, the recovery fails here with
+   *  nothing spawned and no session, so the interrupted turn is not re-sent beside the old agent. */
+  private async healthRecover(): Promise<{ ok: boolean; error?: string }> {
     const resumeId = this.sessionId;
     this.cancel({ forRecover: true }); // keep the resume marker: this is the harness acting, not the user
     this.restart({ preserveTurn: true });
-    if (!resumeId) return;
     try {
       await this.start();
-      await this.acp!.request("session/load", { sessionId: resumeId, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
-      this.sessionId = resumeId;
-    } catch {
+    } catch (e) {
+      console.error(`[recover] the replacement agent process could not be started: ${errText(e)}`);
+      return { ok: false, error: errText(e) };
+    }
+    return resumeId ? this.loadVerified(resumeId) : { ok: true };
+  }
+
+  // -- P-RECOVER.1 (ADR-0385): self-recovery the user can see, and a report of every one ------------------
+
+  /** `session/load` on the live master, VERIFIED: the one resume primitive the watchdog, the on-demand
+   *  revival and the recovery API share. Success restores the id; failure leaves it null so the next prompt
+   *  starts clean (fail-closed, as P-HEALTH.2). omp replays the whole history as session/update during a
+   *  load; that is old conversation, so it is muted rather than streamed into a live turn's pane. */
+  private async loadVerified(id: string, acp: ACPClient | null = this.acp): Promise<{ ok: boolean; error?: string }> {
+    this.replaying = true;
+    try {
+      if (!acp) throw new Error("no agent process");
+      await acp.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: RESUME_MS });
+      this.sessionId = id;
+      console.error("[recover] chat session resumed on the agent process");
+      return { ok: true };
+    } catch (e) {
       this.sessionId = null;
+      console.error(`[recover] chat session could not be resumed: ${errText(e)}`);
+      return { ok: false, error: errText(e) };
+    } finally {
+      this.replaying = false;
+    }
+  }
+
+  /** Write one incident. Best-effort (the store returns null rather than throw). The log tail is the omp
+   *  children's shared stderr log, redacted by the store before it touches disk and never part of the
+   *  public issue body. `summary`/`events` are harness-authored: never prompts, transcripts or model text. */
+  private recordRecovery(kind: IncidentKind, outcome: IncidentOutcome, summary: string, events: IncidentEvent[]): string | undefined {
+    const tail = logTail(this.acpLogPath);
+    const meta = recordIncident(engineIncident(kind, outcome, summary, events, tail ? [{ name: "lucid-acp.log", text: tail }] : undefined), this.incidentsDir);
+    if (meta) console.error(`[recover] incident ${meta.id} recorded (${kind}, ${outcome})`);
+    return meta?.id;
+  }
+
+  /** A dead master is forgotten and start() replaces it, resuming the session it held. Everything that
+   *  belonged to the dead child goes with it: parked permissions are denied (fail-closed) and open calls
+   *  can never settle. No kill here: the child is already gone, and a pid it no longer owns is never
+   *  signalled. */
+  private dropDeadMaster(): void {
+    this.acp = null;
+    this.starting = null;
+    if (this.sessionId) this.reviveId = this.sessionId;
+    this.sessionId = null;
+    this.revivePending = true;
+    for (const fn of this.permPending.values()) fn(null);
+    this.permPending.clear(); this.pendingPerms = 0;
+    this.openCalls.clear();
+    console.error(`[recover] master agent process is gone; starting a replacement${this.reviveId ? " and resuming the same chat session" : ""}`);
+  }
+
+  /** The replacement child is up: resume the dead child's session and write the incident. */
+  private async finishRevival(acp: ACPClient): Promise<void> {
+    const at = Date.now();
+    const id = this.reviveId;
+    this.reviveId = null;
+    this.revivePending = false;
+    const r: { ok: boolean; error?: string } = id ? await this.loadVerified(id, acp) : { ok: true };
+    const after = !id ? "No chat session was open, so there was nothing to resume."
+      : r.ok ? "The same chat session was resumed on the new agent process."
+      : `The chat session could not be resumed (${r.error ?? "unknown error"}). The next message starts a new chat session.`;
+    this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+      "The agent process behind the chat had exited. LUCID started a replacement the next time the chat needed it and tried to resume the same session.",
+      [{ at, what: "The chat agent process was found exited; a replacement was started." }, { at: Date.now(), what: after }]);
+  }
+
+  /** The replacement could not be spawned. One incident per revival; `reviveId` stays so the next start()
+   *  still resumes the session instead of silently starting fresh. */
+  private failRevival(e: unknown): void {
+    this.revivePending = false;
+    this.recordRecovery("agent-child-failed", "not-recovered",
+      "The agent process behind the chat had exited, and LUCID could not start a replacement. It will try again with the next message.",
+      [{ at: Date.now(), what: `Starting a replacement agent process failed (${errText(e)}).` }]);
+  }
+
+  /** Has the ladder spent its recovery budget and pinned at `quiet`? Mirrors health_watch's recoverOrStop:
+   *  a quiet verdict with the budget spent, on a frame where the ladder WOULD otherwise recover (a dead
+   *  child, or a turn silent past recoverMs with no tool call open). */
+  private ladderExhausted(v: HealthVerdict, i: HealthInput): boolean {
+    if (v.action !== "quiet" || i.episode.recovers < HEALTH_DEFAULTS.maxRecovers) return false;
+    return i.dead || (i.busy && i.openCalls === 0 && v.silentMs >= HEALTH_DEFAULTS.recoverMs);
+  }
+
+  /** Configure where recovery bookkeeping goes. dev.ts wires the last-session persister (it owns PORT);
+   *  tests point the incident directory and log at a temp dir. */
+  configureRecovery(opts: { persistSession?: (id: string) => void; incidentDir?: string; acpLog?: string }): void {
+    if (opts.persistSession) this.persistSession = opts.persistSession;
+    if (opts.incidentDir) this.incidentsDir = opts.incidentDir;
+    if (opts.acpLog) this.acpLogPath = opts.acpLog;
+  }
+
+  /** POST /api/recovery/resume: a VERIFIED resume of `id` as the master session. Unlike loadSession (the
+   *  sidebar, which swallows a failed load), ok is true only when omp accepted the session/load. A failure
+   *  records a session-unrecoverable incident and leaves no session, so the next prompt starts fresh.
+   *  Serialized with the watchdog. `id` is shape-validated by the route. */
+  async resumeSession(id: string): Promise<{ ok: boolean; sessionId?: string; error?: string; incidentId?: string }> {
+    if (this.healthBusy) return { ok: false, error: "A recovery is already in progress. Try again in a moment." };
+    this.healthBusy = true;
+    const at = Date.now();
+    try {
+      this.clearTurnRecovery();
+      if (this.sessionId === id && this.acp && !this.acp.isDead) return { ok: true, sessionId: id };
+      let r: { ok: boolean; error?: string };
+      try {
+        await this.start();
+        r = await this.loadVerified(id);
+      } catch (e) {
+        this.sessionId = null;
+        r = { ok: false, error: errText(e) };
+      }
+      if (r.ok) return { ok: true, sessionId: id };
+      this.memoryRecallDelivered = false; // a fresh session gets the one-time recall again
+      const incidentId = this.recordRecovery("session-unrecoverable", "not-recovered",
+        "LUCID tried to reopen the previous chat session and the agent could not load it. A new chat session starts with the next message.",
+        [{ at, what: "Resuming the previous chat session was requested." }, { at: Date.now(), what: `The agent could not load it (${r.error ?? "unknown error"}).` }]);
+      return { ok: false, error: "The previous chat session could not be loaded. A new session will start with your next message.", ...(incidentId ? { incidentId } : {}) };
+    } finally {
+      this.healthBusy = false;
+      this.healthActivityAt = Date.now();
+    }
+  }
+
+  /** POST /api/recovery/recover: the window asks for the same in-place recovery the watchdog performs
+   *  (cancel, drop the child tree, respawn, session/load the same id), on demand. Serialized with the
+   *  watchdog through `healthBusy`. A live turn is marked exactly as the watchdog marks it, so its run
+   *  resumes in place (bounded by RESUME_MAX_PER_RUN). The user acting restores the watchdog's budget. */
+  async recoverMaster(): Promise<{ ok: boolean; sessionId: string | null; reason: string; incidentId?: string }> {
+    if (this.healthBusy) return { ok: false, sessionId: this.sessionId, reason: "A recovery is already in progress. Try again in a moment." };
+    this.healthBusy = true;
+    const now = Date.now();
+    const hadSession = this.sessionId !== null;
+    const wasDead = this.acp?.isDead ?? false;
+    try {
+      console.error("[recover] recovery of the master agent process requested from the window");
+      const reason = "Recovery was requested from the window, so the harness is cancelling and respawning the agent process in place.";
+      this.lastHealth = { action: "recover", reason, at: now };
+      try { this.listener?.({ type: "health", action: "recover", reason }); } catch { /* stream gone */ }
+      if (this.recoveryTurn?.running) {
+        this.recoverMark.set({ reason, at: now, silentMs: Math.max(0, now - this.healthActivityAt), pending: pendingSnapshot(this.openCalls, now).map((p) => p.label) });
+      }
+      const pending = this.healthRecover();
+      this.recovering = pending;
+      const r = await pending;
+      this.healthEpisode = newEpisode(Date.now());
+      const result = !r.ok ? `The agent process could not be recovered (${r.error ?? "unknown error"}).${hadSession ? " The next message starts a new chat session." : ""}`
+        : hadSession ? "The agent process was restarted and the chat session was resumed."
+        : "The agent process was restarted. No chat session was open.";
+      const incidentId = this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+        "The chat stopped making progress and recovery was requested from the window. LUCID cancelled the turn, restarted the agent process, and tried to resume the same session.",
+        [{ at: now, what: `Recovery was requested from the window (agent process ${wasDead ? "had exited" : "was still running"}).` }, { at: Date.now(), what: result }]);
+      return { ok: r.ok, sessionId: this.sessionId, reason: result, ...(incidentId ? { incidentId } : {}) };
+    } finally {
+      this.healthBusy = false;
+      this.healthActivityAt = Date.now();
     }
   }
 
@@ -2185,7 +2631,9 @@ class Backend {
       // Only restore if WE are still the active listener (a chat turn may have taken over a long overlap).
       const clobber = myListener !== null && this.listener !== myListener;
       this.turnDiag(`complete.shared clobberAvoided=${clobber} chars=${text.length}`);
-      if (!clobber) this.listener = prev;
+      // P-RECOVER.1: restore the previous listener only if it is still the live turn's sink. A turn cleared
+      // meanwhile (session switch) released its sink, and restoring it would re-create the wedge.
+      if (!clobber) this.listener = prev !== null && prev !== this.turnSink ? null : prev;
       if (sid) this.acp?.request("session/close", { sessionId: sid }, { timeoutMs: SESSION_MS }).catch(() => {});
     }
   }

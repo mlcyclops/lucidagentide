@@ -5,7 +5,7 @@
 // own batch - by task id, by assignment prefix, or the sole-card fallback.
 
 import { describe, expect, test } from "bun:test";
-import { filterRunsForBatch, type BatchRun } from "./subagent_filter.ts";
+import { delegationSettled, filterRunsForBatch, NO_RUNS_GRACE_MS, RUN_IDLE_MS, type BatchRun } from "./subagent_filter.ts";
 
 const run = (name: string, assignment: string): BatchRun => ({ name, assignment });
 
@@ -80,5 +80,22 @@ describe("filterRunsForBatch", () => {
 
   test("empty runs stay empty", () => {
     expect(filterRunsForBatch([], { assignments: ["x"], soleCard: true })).toEqual([]);
+  });
+});
+
+// P-TASK.6 (ADR-0398): omp 18 subagents are background jobs that outlive the parent turn.
+describe("delegationSettled", () => {
+  const T = 1_000_000;
+  test("stays live while the turn runs, and after it ends while any run is still working", () => {
+    expect(delegationSettled([{ done: true, lastAt: T }], null, T + RUN_IDLE_MS * 2)).toBe(false);
+    expect(delegationSettled([{ done: true, lastAt: T }, { done: false, lastAt: T + 50_000 }], T, T + 60_000)).toBe(false);
+  });
+  test("settles once every run finished or went quiet", () => {
+    expect(delegationSettled([{ done: true, lastAt: T }, { done: true, lastAt: T }], T, T + 1)).toBe(true);
+    expect(delegationSettled([{ done: true, lastAt: T }, { done: false, lastAt: T }], T, T + RUN_IDLE_MS)).toBe(true);
+  });
+  test("a delegation whose runs never appear settles after the grace, not before", () => {
+    expect(delegationSettled([], T, T + NO_RUNS_GRACE_MS - 1)).toBe(false);
+    expect(delegationSettled([], T, T + NO_RUNS_GRACE_MS)).toBe(true);
   });
 });

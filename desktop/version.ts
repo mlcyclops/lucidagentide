@@ -473,4 +473,50 @@
 //            AGENT MODE: the Regular/Max tier select (and the drag region that ate its clicks), the
 //            preview-link whiteout fixed by one navigation policy (ADR-0376), the game cabinet, omp
 //            18.2.6 (ADR-0373).
-export const APP_VERSION = "2.3.0-beta.1";
+// v2.3.0-beta.6 = beta.1 plus omp 18.2.7: the harness bump lands via the #357 rebase-merge, and the
+//            browser_run judge seam is adapted to 18.2.7's judgment API so the Jev browser policy keeps
+//            answering typed judgments instead of falling back to the chat model. Also in the window:
+//            the engine_launch test fixtures build their paths with the host path module (green on
+//            Windows), and the README banner picks up Gemini 3.8 Flash with the Jev / TypeSafe call-out.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.3 = beta.2 plus the Windows AppContainer runtime sandbox (P-SANDBOX.7): the engine runs
+//            inside an AppContainer with filesystem ACLs granted to its SID (ADR-0173), the backend is
+//            wired end-to-end with the packaged lucid-appcontainer helper, a functional probe, and a
+//            compile-appcontainer step in dist:win, and network-on isolation is gated on the loopback
+//            exemption so a fresh install never cuts chat traffic between the UI and the engine.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.4 = beta.3 plus user-approved standing directory grants for the AppContainer sandbox
+//            (P-SANDBOX.8): the agent can request access to a directory outside the granted set via
+//            sandbox_grant_dir, nothing mutates the host without an explicit user yes in the grant
+//            dialog, approvals ride a one-shot pending slot so the endpoint honors only a fresh
+//            matching approval, ACLs are applied/revoked through the bundled helper's --apply-acl /
+//            --revoke-acl, and every grant is listed and revocable in the Security panel.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.5 = beta.4 plus Claude Opus 5.5 (claude-opus-5-5, 2026-09-22) as the curated default:
+//            top of DEFAULT_MODEL_PREFERENCE above Opus 5, $4/$20 per Mtok pricing (cache read $0.20 /
+//            write $5), 1M context and 128K max output wired through MODEL_CTX / session_metrics,
+//            intelligence card and README flagship banner updated; the id arrives dynamically via the
+//            signed-in Anthropic plan until omp catalogs it. Ships the AppContainer sandbox package
+//            unchanged (helper binary + sandbox_grant_extension).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.6 = beta.5 plus the session-load fix. omp 18 prepends a fixed-width title slot as line one of
+//            every session file; the transcript reader trusted line one for the session id, so the sidebar
+//            listed every session and the chat could load none of them (P-SESS.3, ADR-0380).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.7 = beta.6 plus the orphan reaper and GPT-6 Sol / Luna. PORT: PR #367 (P-PORTGUARD.2,
+//            ADR-0381) keeps the engine from outliving the app from now on; beta.7 reaps the orphan that
+//            upgraders ALREADY have, after a warning that names it, and only when the owner probe says it is
+//            a LUCID engine (P-PORTGUARD.3, ADR-0382). MODELS: omp pinned 18.2.7 -> 18.2.10, whose catalog
+//            carries gpt-6-sol and gpt-6-luna natively; LUCID adds the cost cards, the 1M windows, the
+//            Astra > Sol > Luna default order and the Regular/Max walk (P-MODEL.4, ADR-0383).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.8 = beta.7 plus a Windows AppContainer sandbox that chat actually works inside. The contained
+//            omp owns its stdio, reads its runtime and writes its state, proxies inference via PI_PROXY, and
+//            the pill lights only after the real runtime boots through the same wrap (bundled bun 1.3.14 ->
+//            1.4.2) (P-SANDBOX.9/.10/.11, ADR-0386/0387/0389). The Security panel gains the sandbox switch,
+//            Add folder with the native picker (a helper dialog under Smart App Control) and the full list of
+//            what the sandbox can reach (P-SANDBOX.12/.13/.13b, ADR-0390/0391/0393), plus enterprise policy
+//            for the switch and folders (P-SANDBOX.14, ADR-0394). Agent errors reach the chat as words
+//            (P-NORESP.2, ADR-0388); Grok 4.7 and an xAI Grok picker family (P-MODEL.5, ADR-0392).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.8";

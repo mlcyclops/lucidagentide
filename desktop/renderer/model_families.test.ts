@@ -344,6 +344,10 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
     const got = preferredDefaultModel(mk("anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-5"));
     expect(got?.value).toBe("anthropic/claude-opus-5");
   });
+  it("Opus 5.5 outranks Opus 5 when both are offered: its entry precedes, and the Opus 5 entry is end-anchored", () => {
+    expect(preferredDefaultModel(mk("anthropic/claude-opus-5", "anthropic/claude-opus-5-5"))?.value).toBe("anthropic/claude-opus-5-5");
+    expect(preferredDefaultModel(mk("anthropic/claude-opus-5"))?.value).toBe("anthropic/claude-opus-5"); // no 5.5 offered -> Opus 5 still hits its own entry
+  });
   it("a bigger version digit does not win across families: Opus 5 beats gpt-6-astra by LIST ORDER", () => {
     expect(preferredDefaultModel(mk("openai-codex/gpt-6-astra", "anthropic/claude-opus-5"))?.value).toBe("anthropic/claude-opus-5");
     expect(preferredDefaultModel(mk("anthropic/claude-opus-5", "openai-codex/gpt-6-astra"))?.value).toBe("anthropic/claude-opus-5"); // input order is irrelevant
@@ -351,6 +355,12 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
   it("returns gpt-6-astra when no Claude is offered", () => {
     const got = preferredDefaultModel(mk("openai-codex/gpt-6-astra", "openai-codex/gpt-5.5", "google-antigravity/gemini-3.1-pro"));
     expect(got?.value).toBe("openai-codex/gpt-6-astra");
+  });
+  it("GPT-6 tiers rank Astra, then Sol, then Luna: a provider without Astra defaults to Sol, never the fast tier", () => {
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6-astra"))?.value).toBe("openai/gpt-6-astra");
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai/gpt-6-sol"))?.value).toBe("openai/gpt-6-sol");
+    expect(preferredDefaultModel(mk("openai/gpt-6-sol", "openai/gpt-6-luna"))?.value).toBe("openai/gpt-6-sol"); // input order is irrelevant
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai-codex/gpt-5.5"))?.value).toBe("openai/gpt-6-luna"); // Luna still beats the prior generation
   });
   it("respects the accept predicate (an unconfigured provider is invisible)", () => {
     const got = preferredDefaultModel(mk("anthropic/claude-opus-5", "openai-codex/gpt-6-astra"), (v) => v.startsWith("openai-codex/"));
@@ -375,7 +385,7 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
   });
   it("no curated entry can ever select a small/fast model", () => {
     for (const pat of DEFAULT_MODEL_PREFERENCE) {
-      for (const small of ["claude-opus-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite"]) {
+      for (const small of ["claude-opus-5-mini", "claude-opus-5-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite"]) {
         expect(pat.test(small)).toBe(false);
       }
     }
@@ -429,5 +439,19 @@ describe("local provider picker helpers", () => {
     // from a Beijing cloud, so provider zone (a configured Local Provider) is the deciding signal.
     expect(isChinaModel("dgx-spark/glm-5.3-flash")).toBe(true);
     expect(isChinaModel("zai/glm-5")).toBe(true);
+  });
+});
+
+// ── P-MODEL.5 (ADR-0392): xAI Grok is its own family ──
+describe("Grok family", () => {
+  it("groups Grok 4.7 (any provider prefix) under xAI Grok, not Other", () => {
+    for (const v of ["xai-oauth/grok-4.7", "xai/grok-4.7", "github-copilot/grok-4.7", "xai/grok-4.20-0309-non-reasoning"]) expect(familyOf(v).id).toBe("grok");
+    const g = groupByFamily([{ value: "xai/grok-4.7", name: "Grok 4.7" }, { value: "dgx/glm-5", name: "GLM" }]);
+    expect(g.map((x) => x.fam.id)).toEqual(["grok", "other"]);
+  });
+  it("a failing Grok falls back to another Grok, and a failing Claude never to a Grok as 'same family'", () => {
+    const opts = [{ value: "xai/grok-4.7", name: "Grok 4.7" }, { value: "xai/grok-4.20-0309-non-reasoning", name: "Grok 4.20" }, { value: "anthropic/claude-opus-5-5", name: "Opus 5.5" }];
+    expect(recommendFallbacks("xai/grok-4.7", opts).sameFamily?.value).toBe("xai/grok-4.20-0309-non-reasoning");
+    expect(recommendFallbacks("anthropic/claude-opus-5-5", opts).sameFamily).toBeNull();
   });
 });

@@ -10,22 +10,30 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, shell } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtime.ts";
 import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
 import { createSplash, setSplashStatus } from "./splash.ts";
 import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: the Meeting Hub pairing bearer's vault ref
 import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDirWritable, type WriteProbe } from "./engine_boot.ts";
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
-import { formatPortIncident, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
+import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
+import { classifyPortHolder, orphanDialog, reapSpec } from "./orphan_engine.ts"; // P-PORTGUARD.3 (ADR-0382): reap our own orphan, after a warning
+import { assessPreviousRun, freshLedger, markClean, readLedgerText, runLedgerPath, withEngine, writeLedger, type PreviousRun, type RunLedger } from "./run_ledger.ts"; // P-RECOVER.1 (ADR-0385)
+import { engineRecordFromProbe, listProcesses, planLeftovers, roleOf, stopProcesses, strictDescendants, type EngineVerdict, type ProcRow } from "./leftover_reaper.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import { logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385): one line-aligned tail reader
+import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_report.ts";
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
@@ -35,6 +43,7 @@ import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrow
 import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
 import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
+import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
 
 // CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
 // Order: an explicit env var (launcher / dev run), then the packaged package.json's `lucidBuildFlavor`
@@ -131,6 +140,245 @@ function openEngineLog(): ((d: unknown) => void) {
 }
 const appendEngineLog = (line: string): void => { try { appendFileSync(engineLogPath(), line); } catch { /* best-effort */ } };
 
+// ── P-RECOVER.1 (ADR-0385): run ledger, startup leftovers, engine restart ────────────────────────────
+// run_ledger.ts decides whether the previous run died; leftover_reaper.ts decides what it provably left
+// running and stops exactly that. This is only the wiring. Every recovery writes ONE incident report
+// (incident_store.ts); the window offers it to the user, and submitting is always the user's choice.
+let runLedger: RunLedger | null = null; // null until this process owns the single-instance lock
+let previousRun: PreviousRun = { verdict: "none" };
+function saveRunLedger(next: RunLedger): void {
+  runLedger = next;
+  writeLedger(runLedgerPath(app.getPath("userData")), next);
+}
+/** A deliberate exit (normal quit, a Quit chosen on a startup dialog, the GPU relaunch, OS shutdown) is
+ *  not a crash, so the next launch must not treat it as one. Only once nothing this run started is left
+ *  running: exits that still own an engine go through endRun(). */
+function markRunClean(): void {
+  if (runLedger && !runLedger.clean) saveRunLedger(markClean(runLedger));
+}
+/** Upper bound on stopping and verifying the engine tree at exit, so a quit never hangs on it. */
+const END_RUN_MS = 20_000;
+let runEnding: Promise<void> | null = null;
+/** End this run deliberately: stop the engine and everything under it (the omp agent tree included, which
+ *  killing the engine alone does not reach), and mark the run clean only when that is VERIFIED. Otherwise
+ *  the ledger stays unclean, so the next launch's reaper still looks for what this run left. Shared by
+ *  every exit path that still owns an engine. */
+function endRun(): Promise<void> {
+  runEnding ??= (async () => {
+    appendEngineLog(`\n--- ${new Date().toISOString()} P-RECOVER.1 exit: stopping the engine ---\n`);
+    const timedOut = sleep(END_RUN_MS).then(() => false);
+    const verified = await Promise.race([stopCurrentEngine([]).then((r) => r.verified, () => false), timedOut]);
+    if (verified) markRunClean();
+    else appendEngineLog("- The engine and its processes could not be verified stopped; the run stays unclean so the next launch checks for leftovers.\n");
+  })();
+  return runEnding;
+}
+/** Record the engine the moment it spawns (spawn time + spawned command), then refine with the OS's own
+ *  creation time and image path: that is what the next launch's ownership proof compares against. */
+function recordEngineInLedger(child: ChildProcess, cmd: string): void {
+  const pid = child.pid;
+  if (!runLedger || !pid) return;
+  const spawnedAt = Date.now();
+  saveRunLedger(withEngine(runLedger, engineRecordFromProbe(process.platform, pid, null, cmd, spawnedAt)));
+  listProcesses(process.platform, pid).then((rows) => {
+    const row = rows.find((r) => r.pid === pid);
+    if (row && runLedger && dev === child) saveRunLedger(withEngine(runLedger, engineRecordFromProbe(process.platform, pid, row, cmd, spawnedAt)));
+  }, () => { /* the provisional record stands */ });
+}
+function incidentIdentity(): Pick<IncidentInput, "product" | "version" | "platform" | "arch" | "home"> {
+  return { product: BUILD.productName, version: app.getVersion(), platform: process.platform, arch: process.arch, home: homedir() };
+}
+const isoOrUndefined = (ms: number | null): string | undefined => (ms ? new Date(ms).toISOString() : undefined);
+const ENGINE_VERDICT_TEXT: Record<EngineVerdict, string> = {
+  "no-record": "The previous run recorded no engine process",
+  "alive-ours": "The previous run's engine was still running (its pid, image path and start time match the run ledger)",
+  gone: "The previous run's engine had already exited",
+  "pid-reused": "The previous run's engine had exited and its process id now belongs to an unrelated program, which was left alone",
+};
+
+/** Wait (up to `ms`) for nothing to be listening on the engine port. True when it is free. */
+async function waitPortFree(ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline && (await portAccepting())) await sleep(200);
+  return !(await portAccepting());
+}
+
+/**
+ * The previous run did not record a clean exit. Stop what it provably left running (the ownership rules
+ * live in leftover_reaper.ts: recorded engine by pid + image + start time, its descendants, and orphans
+ * still naming its pid; never this process or its children, never anything else), log it, and write ONE
+ * incident with outcome "pending". The window settles it after it tries to resume the previous session.
+ * Runs before the engine spawns and before P-PORTGUARD.3, whose dialog still covers what this cannot prove.
+ */
+async function recoverFromUncleanExit(prev: RunLedger): Promise<void> {
+  const events: IncidentEvent[] = [{
+    at: prev.mainStartedAt,
+    what: `The previous run (version ${prev.appVersion || "unknown"}, main process ${prev.mainPid}) started and never recorded a clean exit.`,
+  }];
+  const lines = [
+    `- Previous run: main pid ${prev.mainPid}, started ${new Date(prev.mainStartedAt).toISOString()}, version ${prev.appVersion || "unknown"}`,
+    `- Recorded engine: ${prev.engine ? `pid ${prev.engine.pid}, started ${new Date(prev.engine.startedAt).toISOString()}, ${prev.engine.exe}` : "none"}`,
+  ];
+  let processes: IncidentProcess[] = [];
+  if (prev.engine) {
+    try {
+      const plan = planLeftovers(await listProcesses(process.platform), prev.engine, { selfPid: process.pid, platform: process.platform });
+      events.push({ at: Date.now(), what: `${ENGINE_VERDICT_TEXT[plan.engineVerdict]}. ${plan.targets.length} leftover process(es) were proven to belong to it.` });
+      lines.push(`- Engine: ${plan.engineVerdict}`);
+      if (plan.targets.length) {
+        const fate = await stopProcesses(plan.targets);
+        processes = plan.targets.map((t) => ({ pid: t.pid, name: t.name, role: t.role, startedAt: isoOrUndefined(t.startedAt), action: fate.get(t.pid) ?? "stop-failed" }));
+        for (const t of plan.targets) lines.push(`- ${fate.get(t.pid) ?? "stop-failed"}: pid ${t.pid} ${t.name} (${t.role}), ${t.why}`);
+        const stopped = processes.filter((p) => p.action === "stopped").length;
+        events.push({ at: Date.now(), what: `Stopped ${stopped} of ${processes.length} leftover process(es).` });
+        const free = await waitPortFree(6000);
+        lines.push(`- Port ${PORT}: ${free ? "free" : "still in use"}`);
+        events.push({ at: Date.now(), what: free ? `Port ${PORT} is free.` : `Port ${PORT} is still in use; startup continues and reports it if the engine cannot bind.` });
+      }
+    } catch (e) {
+      lines.push(`- The process list could not be read (${e instanceof Error ? e.message : String(e)}); nothing was stopped.`);
+      events.push({ at: Date.now(), what: "The process list could not be read, so nothing was stopped." });
+    }
+  } else {
+    events.push({ at: Date.now(), what: "The previous run recorded no engine process, so there was nothing to stop." });
+  }
+  if (!processes.length) lines.push("- Nothing was stopped.");
+  appendEngineLog(`\n--- ${new Date().toISOString()} P-RECOVER.1 startup recovery ---\n${lines.join("\n")}\n`);
+  const stoppedAny = processes.some((p) => p.action === "stopped");
+  const summary = stoppedAny
+    ? `${BUILD.productName} did not shut down cleanly last time and left processes running. They were identified from the run ledger and stopped before the new engine started. The window will try to resume the previous chat session.`
+    : `${BUILD.productName} did not shut down cleanly last time (a crash, a forced close, or a power loss). No leftover processes needed stopping. The window will try to resume the previous chat session.`;
+  // Incidents live in userData, which the engine gets as LUCID_DATA_ROOT: never in ~/.omp, which the
+  // contained agent may write (incident_store.ts).
+  const meta = recordIncident({
+    ...incidentIdentity(),
+    kind: stoppedAny ? "leftover-processes" : "unclean-shutdown",
+    outcome: "pending",
+    summary,
+    events,
+    processes,
+    logs: [{ name: "engine.log (tail)", text: logTail(engineLogPath()) }],
+  }, incidentDir(app.getPath("userData")));
+  appendEngineLog(meta ? `- Incident ${meta.id} recorded.\n` : "- The incident report could not be written.\n");
+}
+
+// Engine restart (window-requested via lucid:engineRestart, or a relaunch that finds no window and no
+// engine). Refused while the engine answers health with this launch's nonce, and at most once a minute,
+// so neither a buggy renderer nor repeated relaunches can turn into a kill loop.
+type EngineRestartResult = { ok: boolean; reason: string; incidentId?: string };
+const ENGINE_RESTART_MIN_INTERVAL_MS = 60_000;
+let lastEngineRestartAt = 0;
+let engineRestartInFlight: Promise<EngineRestartResult> | null = null;
+
+/** One nonce-checked health probe: true only when OUR engine answers (a squatter never counts). */
+async function engineAnswersHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(`http://localhost:${PORT}/api/health`, { signal: AbortSignal.timeout(3000) });
+    const text = await res.text();
+    let body: unknown = text;
+    try { body = JSON.parse(text); } catch { /* healthVerdict fails closed on the raw text */ }
+    return healthVerdict(ENGINE_NONCE, res.ok, body) === "ours";
+  } catch { return false; }
+}
+
+/** Stop the CURRENT engine and everything under it, and say whether that is VERIFIED. The root is our own
+ *  live child handle, so its pid cannot have been recycled; descendants are walked with the creation-order
+ *  check, and every pid is killed by name (never taskkill /T). An engine that already exited is checked for
+ *  what it left running (its orphans, by this run's ledger record and the same rules the next launch's
+ *  reaper uses), and those are stopped. Verified means the process table was read, the engine is gone, and
+ *  every process found was confirmed stopped. If the table cannot be read, only the child handle is killed
+ *  (its omp child exits on stdin EOF) and nothing is verified. */
+async function stopCurrentEngine(events: IncidentEvent[]): Promise<{ processes: IncidentProcess[]; verified: boolean }> {
+  const child = dev;
+  if (!child?.pid) return { processes: [], verified: true }; // this run never started an engine
+  const running = (): boolean => child.exitCode === null && child.signalCode === null;
+  const wasRunning = running();
+  const exited = Promise.withResolvers<void>();
+  child.once("exit", () => exited.resolve());
+  let targets: Array<ProcRow & { role: string }> = [];
+  let walked = false;
+  try {
+    const rows = await listProcesses(process.platform);
+    if (wasRunning) {
+      const root = rows.find((r) => r.pid === child.pid);
+      if (root) {
+        targets = [{ ...root, role: "engine" }, ...strictDescendants(rows, root, process.platform).map((d) => ({ ...d, role: roleOf(d.name) }))];
+        walked = true;
+      }
+    } else {
+      targets = runLedger?.engine ? planLeftovers(rows, runLedger.engine, { selfPid: process.pid, platform: process.platform }).targets : [];
+      walked = true;
+    }
+  } catch { /* fall through to the handle kill; nothing is verified */ }
+  let processes: IncidentProcess[] = [];
+  if (targets.length) {
+    const fate = await stopProcesses(targets);
+    processes = targets.map((t) => ({ pid: t.pid, name: t.name, role: t.role, startedAt: isoOrUndefined(t.startedAt), action: fate.get(t.pid) ?? "stop-failed" }));
+  }
+  if (running()) { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
+  if (running()) await Promise.race([exited.promise, sleep(5000)]);
+  const stopped = processes.filter((p) => p.action === "stopped").length;
+  events.push({
+    at: Date.now(),
+    what: !wasRunning
+      ? `The engine process had already exited.${processes.length ? ` Stopped ${stopped} of ${processes.length} process(es) it left running.` : ""}`
+      : running() ? "The engine process did not exit when stopped." : `Stopped the engine and ${Math.max(0, stopped - 1)} process(es) under it.`,
+  });
+  appendEngineLog(processes.map((p) => `- ${p.action}: pid ${p.pid} ${p.name} (${p.role})\n`).join("")
+    || (wasRunning ? `- Stopped engine pid ${child.pid} by its process handle.\n` : `- Engine pid ${child.pid} had already exited; nothing it started was found running.\n`));
+  return { processes, verified: walked && !running() && processes.every((p) => p.action === "stopped") };
+}
+
+async function restartEngineNow(trigger: string): Promise<EngineRestartResult> {
+  if (runEnding) return { ok: false, reason: "exiting" }; // the app is quitting: never spawn an engine it would orphan
+  if (await engineAnswersHealth()) return { ok: false, reason: "engine-healthy" };
+  const startedAt = Date.now();
+  if (startedAt - lastEngineRestartAt < ENGINE_RESTART_MIN_INTERVAL_MS) return { ok: false, reason: "rate-limited" };
+  lastEngineRestartAt = startedAt;
+  appendEngineLog(`\n--- ${new Date(startedAt).toISOString()} P-RECOVER.1 engine restart (${trigger}) ---\n`);
+  const events: IncidentEvent[] = [{ at: startedAt, what: `The engine stopped answering status checks and a restart was ${trigger}.` }];
+  const { processes } = await stopCurrentEngine(events);
+  const free = await waitPortFree(6000);
+  if (!free) events.push({ at: Date.now(), what: `Port ${PORT} was still in use after the engine stopped.` });
+  startDevServer();
+  const up = await waitForServer();
+  const ok = up.status === "ready";
+  const reason = ok ? "restarted" : up.status === "foreign" ? "port-foreign" : "engine-down";
+  events.push({ at: Date.now(), what: ok ? "The new engine answered its health check." : up.status === "foreign" ? `Another program answered on port ${PORT}; it is not ${BUILD.productName}'s engine and was not shown.` : "The new engine did not answer its health check in time." });
+  appendEngineLog(`- Restart ${ok ? "succeeded" : `failed (${reason})`}.\n`);
+  const meta = recordIncident({
+    ...incidentIdentity(),
+    kind: "engine-unreachable",
+    outcome: ok ? "recovered" : "not-recovered",
+    summary: ok
+      ? `The window lost contact with ${BUILD.productName}'s engine, so the engine was stopped and started again. The new engine is answering.`
+      : `The window lost contact with ${BUILD.productName}'s engine. It was stopped and started again, but the new engine is not answering (${reason}).`,
+    events,
+    processes,
+    logs: [{ name: "engine.log (tail)", text: logTail(engineLogPath()) }],
+  }, incidentDir(app.getPath("userData")));
+  if (meta) appendEngineLog(`- Incident ${meta.id} recorded.\n`);
+  return { ok, reason, ...(meta ? { incidentId: meta.id } : {}) };
+}
+
+/** Concurrent callers share one restart (and its result) instead of racing two kills. */
+function restartEngine(trigger: string): Promise<EngineRestartResult> {
+  engineRestartInFlight ??= restartEngineNow(trigger).finally(() => { engineRestartInFlight = null; });
+  return engineRestartInFlight;
+}
+
+// Relaunching LUCID while it still runs must give the user a working window, never a silent no-op.
+let bootComplete = false; // the whenReady path has created the first window (or decided not to)
+let reopeningWindow = false;
+async function reopenMainWindow(): Promise<void> {
+  if (!bootComplete || reopeningWindow) return; // still booting: the boot path creates the window
+  reopeningWindow = true;
+  try {
+    if (!(await engineAnswersHealth())) await restartEngine("triggered by relaunching the app while its window was gone");
+    if (!win || win.isDestroyed()) createWindow();
+  } finally { reopeningWindow = false; }
+}
+
 // ADR-0246 (P-GPUFIX.1): zombie-SID GPU-sandbox self-heal (electron/electron#51761). On machines
 // where an unresolvable AppContainer SID in the install dir's DACL kills every sandboxed GPU child
 // with 0xC0000022, the app used to die (FATAL after 9 retries) before the window showed. The
@@ -146,17 +394,22 @@ try {
 } catch { /* unreadable flag: sandbox stays on; the watchdog below re-heals if it bricks */ }
 let gpuDeaths = 0;
 let firstWindowRendered = false; // set in createWindow's ready-to-show
+let gpuRelaunching = false;
 app.on("child-process-gone", (_e, details) => {
   const r = decideGpuAction(details, { deathsBefore: gpuDeaths, windowRendered: firstWindowRendered, sandboxOff: gpuSandboxOff });
   gpuDeaths = r.deaths;
   if (r.action === "ignore") return;
   appendEngineLog(gpuDeathLogLine(details, r.deaths, r.action, new Date().toISOString()));
-  if (r.action !== "relaunch") return;
+  if (r.action !== "relaunch" || gpuRelaunching) return;
+  gpuRelaunching = true;
   try { writeFileSync(gpuFlagPath(), `GPU sandbox disabled ${new Date().toISOString()} after ${r.deaths} GPU child deaths (zombie-SID mitigation, electron/electron#51761). Delete this file to re-enable the GPU sandbox.\n`); }
   catch { /* the relaunch argv still carries the switch for this recovery */ }
-  try { dev?.kill(); } catch { /* best-effort */ }
-  app.relaunch({ args: relaunchArgs(process.argv.slice(1)) });
-  app.exit(0);
+  // P-RECOVER.1: a deliberate relaunch, not a crash. app.exit skips will-quit, so the run is ended here: the
+  // engine tree is stopped first, and the run is marked clean only if that is verified.
+  void endRun().then(() => {
+    app.relaunch({ args: relaunchArgs(process.argv.slice(1)) });
+    app.exit(0);
+  });
 });
 
 function startDevServer(): void {
@@ -177,6 +430,9 @@ function startDevServer(): void {
   // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
   const gitEnv = prepareGitToken();
   const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
+  // P-MEET.1: the Meetings panel's Hub pairing bearer (ref "meeting_hub_token"), same vault→env-into-dev-child
+  // path. A token claimed DURING this session is held in the engine's memory; this covers every later launch.
+  const meetingsEnv = prepareMeetingHubToken();
   // CREATOR-0 (ADR-0279): the engine child learns its own identity and its own data roots. The standard
   // build gets ONLY the descriptive vars (no path relocation), so its on-disk layout is untouched; the
   // Creator build additionally isolates GUI settings, Personal Knowledge, the creator data root, and the
@@ -210,7 +466,7 @@ function startDevServer(): void {
     // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
     // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
     // its agent-browser poll loop against the child's /api/browser routes.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...meetingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid), LUCID_HOST_EXE: basename(process.execPath) /* P-LEGIBLE.1: the manifest's relatedProcess */ },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -223,9 +479,12 @@ function startDevServer(): void {
   // P-WINBOOT.1 (ADR-0259): keep a bounded tail of engine output + watch for an early exit, so a boot
   // failure (e.g. Bun's EPERM loading dev.ts from a Program Files install) is diagnosed the instant it
   // dies rather than after the full 30s health timeout.
+  const child = dev;
   dev.stdout?.on("data", (d) => { process.stdout.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
   dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
-  dev.on("exit", (code) => { engineExit = { code: code ?? null }; });
+  // P-RECOVER.1: after an engine restart the OLD child's late exit must not mark the NEW engine as dead.
+  dev.on("exit", (code) => { if (dev === child) engineExit = { code: code ?? null }; });
+  recordEngineInLedger(child, engineSpec.cmd); // P-RECOVER.1 (ADR-0385): the next launch's ownership proof
   // ADR-0246: a spawn failure (missing/blocked bun exe) used to vanish - no "error" listener, so
   // engine.log showed only the banner and the app just waited out the 30s health timeout. Tee it (and
   // feed the ADR-0259 tail + exit flag, so waitForServer bails at once and the dialog names the cause).
@@ -279,6 +538,50 @@ async function probePortOwner(): Promise<SquatterInfo | null> {
   } catch { return null; }
 }
 
+// P-PORTGUARD.3 (ADR-0382): is anything accepting connections on the engine port right now? A TCP
+// connect, not an HTTP fetch: it answers in milliseconds, and a non-HTTP listener still counts as busy.
+function portAccepting(): Promise<boolean> {
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  const sock = connect({ host: "127.0.0.1", port: PORT });
+  const done = (v: boolean): void => { resolve(v); sock.destroy(); };
+  sock.once("connect", () => done(true));
+  sock.once("error", () => done(false));
+  sock.setTimeout(500, () => done(false));
+  return promise;
+}
+
+/** Reap OUR OWN orphaned engine before spawning a new one, after the user agrees (P-PORTGUARD.3).
+ *  Upgraders from a build without ADR-0381's parent watch arrive with the previous session's engine (and
+ *  its omp child) still holding the port; the parent watch cannot help them because the orphan predates
+ *  it. Only a listener the owner probe attributes to a LUCID engine is offered for reaping (see
+ *  orphan_engine.classifyPortHolder); anything else is left to the ADR-0305 / ADR-0381 dialogs. Returns
+ *  false when the user chose Quit. */
+async function reapOrphanedEngine(): Promise<boolean> {
+  if (!(await portAccepting())) return true;
+  const observed = await probePortOwner();
+  const holder = classifyPortHolder(observed, process.pid);
+  if (holder.kind !== "ours" || !observed) return true;
+  const d = orphanDialog({ port: PORT, productName: BUILD.productName, observed, evidence: holder.evidence });
+  appendEngineLog(`\n--- ${new Date().toISOString()} orphaned engine on port ${PORT} (P-PORTGUARD.3) ---\n${d.detail}\n`);
+  const { response } = await dialog.showMessageBox({ type: "warning", title: d.title, message: d.message, detail: d.detail, buttons: [...d.buttons], defaultId: d.defaultId, cancelId: d.cancelId });
+  if (response !== 0) { appendEngineLog(`- User chose Quit; the orphan (pid ${holder.pid}) was left running.\n`); return false; }
+  const spec = reapSpec(process.platform, holder.pid);
+  try {
+    if (spec) { const done = Promise.withResolvers<void>(); execFile(spec.cmd, spec.args, { timeout: 5000 }, () => done.resolve()); await done.promise; }
+    else process.kill(holder.pid, "SIGTERM");
+  } catch (e) { appendEngineLog(`- Reap failed: ${e instanceof Error ? e.message : String(e)}\n`); }
+  // Wait for the socket to close; a POSIX orphan that ignored SIGTERM gets SIGKILL after 3s.
+  const deadline = Date.now() + 6000;
+  let escalated = false;
+  while (Date.now() < deadline && (await portAccepting())) {
+    if (!spec && !escalated && Date.now() > deadline - 3000) { escalated = true; try { process.kill(holder.pid, "SIGKILL"); } catch { /* already gone */ } }
+    const tick = Promise.withResolvers<void>(); setTimeout(tick.resolve, 200); await tick.promise;
+  }
+  const freed = !(await portAccepting());
+  appendEngineLog(`- User chose Stop; pid ${holder.pid} ${freed ? "ended and the port is free" : "did not release the port in time (the bind will report it)"}.\n`);
+  return true;
+}
+
 function createWindow(): void {
   // Runtime window icon (taskbar/dev). Packaged Win/mac use the exe/app icon
   // baked in by electron-builder; this covers the dev run and Linux.
@@ -316,7 +619,18 @@ function createWindow(): void {
     if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
   });
   win.loadURL(`http://localhost:${PORT}`);
-  win.on("closed", () => (win = null));
+  // P-RECOVER.1 (ADR-0385): a Windows log off or shutdown arrives as session-end; it is a deliberate
+  // exit, so it must not surface as an unclean-shutdown incident on the next launch.
+  win.on("session-end", () => markRunClean());
+  win.on("closed", () => {
+    win = null;
+    // P-RECOVER.1 (ADR-0385): closing the MAIN window ends the app on win32/linux, even with the agent
+    // browser window open. Otherwise that window kept a process with no main window alive, it held the
+    // single-instance lock, and every relaunch just focused nothing until the user killed LUCID by hand.
+    if (process.platform === "darwin") return;
+    if (agentWin && !agentWin.isDestroyed()) { agentCloseByCommand = true; agentWin.destroy(); }
+    app.quit();
+  });
 }
 
 ipcMain.handle("lucid:pickFolder", async (e, opts: unknown) => {
@@ -446,6 +760,18 @@ function prepareEmbeddingsToken(): Record<string, string> {
     return tok ? { LUCID_EMBEDDINGS_KEY: tok } : {};
   } catch { return {}; }
 }
+// P-MEET.1: read the Meeting Hub pairing bearer from the vault and expose it to the dev child as
+// LUCID_MEETING_HUB_TOKEN, so the Meetings panel's calls to the loopback Hub are authenticated
+// server-side. Same shape as the Figma PAT: the renderer only ever sees rendered meeting rows. The
+// engine's meetings_hub.ts moves it into module state and deletes it from process.env on load, so
+// the engine's own omp/fleet/scanner children never inherit it.
+// Best-effort - a missing/unpairable token just leaves the panel in its "pair with the Hub" state.
+function prepareMeetingHubToken(): Record<string, string> {
+  try {
+    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), MEETING_HUB_CRED_REF);
+    return tok ? { LUCID_MEETING_HUB_TOKEN: tok } : {};
+  } catch { return {}; }
+}
 ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
   try { return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, createdAt: Date.now() }); }
   catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
@@ -524,6 +850,14 @@ ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
 // AUTH: this parent cannot read the child's token, so it MINTS the per-launch token itself and hands it
 // down via the spawn env (LUCID_MAIN_TOKEN, adopted by dev.ts as TOKEN); every call sends x-lucid-token.
 const MAIN_TOKEN = randomBytes(32).toString("hex");
+// P-SANDBOX.15 (ADR-0396): the renderer gets MAIN_TOKEN over this synchronous IPC (preload `lucid.token()`),
+// no longer from a <meta> tag in the served HTML, which any local process could fetch with no token at all.
+// Answered only for the app window's own engine document; anything else (the agent browser window, a page the
+// window was somehow navigated to) gets "" and its /api calls are refused (fail-closed).
+ipcMain.on("lucid:token", (e) => {
+  const ours = !!win && !win.isDestroyed() && e.sender === win.webContents && isEngineDocument(e.senderFrame?.url, PORT);
+  e.returnValue = ours ? MAIN_TOKEN : "";
+});
 // P-PORTGUARD.1 (ADR-0305): per-launch engine identity. Handed to the spawned engine via env; the engine
 // echoes it in /api/health, and waitForServer only trusts a health answer carrying THIS value. A squatter
 // that won the port bind race cannot know it, so the window never renders a stranger.
@@ -861,6 +1195,18 @@ ipcMain.handle("lucid:openExternal", async (e, u: unknown) => {
   return openExternalHttp(u, (url) => shell.openExternal(url));
 });
 
+// P-RECOVER.1 (ADR-0385): the window lost the engine ("reconnecting" and nothing happens). Same sender
+// check as openExternal: only the main window's main frame, never the agent browser or a preview frame.
+// restartEngine refuses while the engine answers the nonce health probe and runs at most once a minute.
+ipcMain.handle("lucid:engineRestart", async (e): Promise<EngineRestartResult> => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents || e.senderFrame !== win.webContents.mainFrame) return { ok: false, reason: "forbidden" };
+  try { return await restartEngine("requested by the window"); }
+  catch (err) {
+    appendEngineLog(`- Engine restart failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    return { ok: false, reason: "error" };
+  }
+});
+
 // Reveal an export location in the OS file manager (#115). Only opens a path that actually exists, so a
 // stray/forged request can't probe the filesystem. shell.openPath returns "" on success, else an error.
 ipcMain.handle("lucid:revealPath", async (_e, p: unknown) => {
@@ -883,7 +1229,7 @@ ipcMain.handle("lucid:showInFolder", async (_e, p: unknown) => {
 // P-LOCAL.3 polish: restart the app so the freshly-spawned dev server + omp pick up the current Local
 // Providers (their secrets are injected into the dev child env at spawn — a restart is the clean apply).
 ipcMain.handle("lucid:relaunch", () => {
-  try { dev?.kill(); } catch { /* best-effort */ }
+  // The quit stops the engine tree (endRun in will-quit) before the relaunched app binds its port.
   app.relaunch();
   app.quit();
 });
@@ -912,8 +1258,26 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
+  // P-RECOVER.1 (ADR-0385): read what the previous run left BEFORE this run overwrites it, then claim the
+  // ledger for this run (clean:false until a deliberate exit marks it). A second instance never gets here,
+  // so it can never touch the ledger of the run that owns the lock.
+  const ledgerPath = runLedgerPath(app.getPath("userData"));
+  previousRun = assessPreviousRun(readLedgerText(ledgerPath), process.pid);
+  try { mkdirSync(app.getPath("userData"), { recursive: true }); } catch { /* writeLedger reports its own failure */ }
+  saveRunLedger(freshLedger({ mainPid: process.pid, mainStartedAt: Date.now() - Math.round(process.uptime() * 1000), port: PORT, appVersion: app.getVersion() }));
+  // P-RECOVER.1: the run is marked clean only after the engine and its omp tree are verified stopped
+  // (endRun). The first will-quit defers the quit; quit() runs again once endRun settles, clean or not.
+  let runEnded = false;
+  app.on("will-quit", (e) => {
+    if (runEnded) return;
+    e.preventDefault();
+    void endRun().then(() => { runEnded = true; app.quit(); });
+  });
   app.on("second-instance", (_e, argv) => {
-    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    // P-RECOVER.1: a relaunch must always end in a usable window. If the main window is gone, reopen it
+    // (restarting the engine first when it no longer answers).
+    if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.focus(); }
+    else void reopenMainWindow();
     forwardAuthUrl(firstAuthUrl(argv));
   });
   app.on("open-url", (_e, url) => forwardAuthUrl(url)); // macOS delivers the deep link here
@@ -962,6 +1326,15 @@ app.whenReady().then(async () => {
       }
     } catch (err) { console.error("[main] os_crypt canonical backfill failed:", err); }
   }
+  // P-RECOVER.1 (ADR-0385): the previous run died. Stop what the run ledger PROVES it left running, and
+  // write the startup incident, before anything binds. What the ledger cannot prove still goes through
+  // the P-PORTGUARD.3 dialog below. A clean previous run skips this entirely.
+  if (previousRun.verdict === "unclean") await recoverFromUncleanExit(previousRun.ledger);
+  // Linux/macOS shutdown: a deliberate exit, like will-quit (Windows uses the window's session-end).
+  powerMonitor.on("shutdown", () => markRunClean());
+  // P-PORTGUARD.3 (ADR-0382): an engine WE left behind (a build before the parent watch, or a crash it
+  // could not observe) is offered for reaping before the bind is even attempted. Quit = leave it alone.
+  if (!(await reapOrphanedEngine())) { splash?.close(); markRunClean(); app.exit(0); return; }
   startDevServer();
   const serverUp = await waitForServer();
   // P-PORTGUARD.1 (ADR-0305): a FOREIGN process answered the engine port. Never render it - the window
@@ -991,11 +1364,14 @@ app.whenReady().then(async () => {
       defaultId: 0,
     });
     if (response === 0) clipboard.writeText(block);
-    try { dev?.kill(); } catch { /* best-effort: app.exit skips the "quit" handler that normally kills it */ }
+    // P-RECOVER.1: the user quit on purpose. app.exit skips will-quit (and the "quit" handler that normally
+    // kills the engine), so the run is ended here: engine tree stopped, clean only if that is verified.
+    await endRun();
     app.exit(1);
     return;
   }
   createWindow();
+  bootComplete = true; // P-RECOVER.1: from here a relaunch with no window reopens one (reopenMainWindow)
   // P-BROWSER.1 (wave 2): start the agent-browser command poll once the server answered /api/health.
   // Started even on a timeout - the loop is fail-quiet and a late-starting server self-heals into it.
   startAgentBrowserLoop();
@@ -1020,7 +1396,17 @@ app.whenReady().then(async () => {
       logPath: engineLogPath(),
       platform: process.platform,
     });
-    dialog.showErrorBox(report.title, report.detail);
+    // P-PORTGUARD.2: when the engine lost the BIND there is no health verdict to classify (nothing of
+    // ours ever listened), but the user still needs to know WHICH process to end - "port 5319 is busy"
+    // without a pid is the same dead end the ADR-0305 incident block exists to prevent. Attribute it
+    // with the same probe and the same renderer, and put it in engine.log too.
+    let detail = report.detail;
+    if (report.kind === "port-busy") {
+      const owner = formatSquatter(await probePortOwner()).join("\n");
+      detail = `${detail}\n\nWhat is holding port ${PORT}:\n${owner}`;
+      appendEngineLog(`\n--- ${new Date().toISOString()} port-busy incident (P-PORTGUARD.2) ---\n- Port: ${PORT}\n${owner}\n`);
+    }
+    dialog.showErrorBox(report.title, detail);
   }
   initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

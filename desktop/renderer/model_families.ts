@@ -18,6 +18,9 @@ export const MODEL_FAMILIES: ModelFamily[] = [
   { id: "gpt-o", label: "OpenAI o-series", icon: "brain", match: /gpt-o\d/i },
   { id: "gpt", label: "OpenAI GPT", icon: "command", match: /gpt/i },
   { id: "gemini", label: "Google Gemini", icon: "graph", match: /gemini/i },
+  // P-MODEL.5 (ADR-0392): xAI Grok gets its own group. Unmatched, every Grok (4.7 included) sank into
+  // "Other models" at the bottom of the picker, and "same family" fallbacks paired it with unrelated models.
+  { id: "grok", label: "xAI Grok", icon: "eye", match: /grok/i },
   { id: "rag", label: "AskSage RAG", icon: "search", match: /(^|[/-])rag$/i },
 ];
 // Catch-all for anything unmatched (e.g. a newly-added open-source provider). `/.^/` never matches,
@@ -196,8 +199,15 @@ export function topModel<T extends { value: string }>(models: readonly T[], acce
  *  `claude-opus-5` can never also match `claude-opus-5-mini` at the wrong rank, and each optional
  *  tier-codename group excludes the small-model tokens so no entry can select a tier-0 model. */
 export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
-  /claude-opus-5(?![\w.-])/,                                            // Opus 5: 1M ctx Anthropic flagship, the house default
-  /gpt-6(?:\.\d+)?(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/,  // GPT-6 + tier codenames (gpt-6-astra)
+  /claude-opus-5[-.]5(?![\w.-])/,                                       // Opus 5.5 (2026-09-22): Fable-5.1-level on most work, 40% cheaper to run than Opus 5
+  /claude-opus-5(?![\w.-])/,                                            // Opus 5: 1M ctx Anthropic flagship, the prior house default
+  // GPT-6 tier codenames (omp 18.2.10, 2026-09-23): Astra is the flagship, Sol the mid tier, Luna the fast
+  // tier. Three entries, not one, so a provider carrying Sol and Luna but not Astra defaults to Sol: a
+  // single catch-all put Luna and Sol on one rank and left the pick to survivor order.
+  /gpt-6(?:\.\d+)?-astra(?![\w.-])/,
+  /gpt-6(?:\.\d+)?-sol(?![\w.-])/,
+  /gpt-6(?:\.\d+)?(?:-(?!mini|nano|lite|flash|oss|luna)[a-z]+)?(?![\w.-])/, // any other GPT-6 tier, and bare gpt-6
+  /gpt-6(?:\.\d+)?-luna(?![\w.-])/,
   /claude-fable-5[-.]1(?![\w.-])/,                                      // Fable 5.1 (API-credit billed, see isApiOnlyModel)
   /claude-mythos-5[-.]1(?![\w.-])/,                                     // Mythos 5.1, shipped alongside Fable 5.1
   /claude-fable-5(?![\w.-])/,
@@ -288,7 +298,7 @@ export function groupByFamily(models: ModelOption[], order?: string[]): { fam: M
 
 /** Family order when the AskSage gov gateway is configured: GPT + o-series + Gemini ABOVE Claude
  *  (the gov gateway's OpenAI/Google models are the user's primary surface in that mode). */
-export const ASKSAGE_FAMILY_ORDER = ["gpt-o", "gpt", "gemini", "claude", "rag", "other"];
+export const ASKSAGE_FAMILY_ORDER = ["gpt-o", "gpt", "gemini", "claude", "grok", "rag", "other"];
 
 // ── P-NORESP.1: fallback recommendation when a model returns nothing (overloaded) ────────────
 /** A human label for the PROVIDER behind a model id — for a "no response from X" message. */

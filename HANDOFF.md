@@ -13,27 +13,39 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-09-05, v2.2.0)
+## Current state (2026-09-24, v2.3.0-beta.8 prerelease)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, one per session, each with its own ADR. Newest:
-**ADR-0339 / P-PREVIEW.19** - the Preview panel no longer follows the user into
-the next conversation (an unresolvable target was remembered exactly like a
-success and outlived the session boundary), shipped alongside the fleet-lane
-approval fix (**ADR-0337 / ADR-0338**: a lane answered omp's per-tool gate
-without ever advertising it could, so omp never asked and every `bash` and
-`eval` in a lane was denied) in the **v2.2.0** cut.
+now product increments, each with its own ADR. The newest stretch is the
+**Windows AppContainer sandbox arc** (ADR-0386 to ADR-0395), released as the
+**v2.3.0-beta.8** GitHub prerelease on 2026-09-24 (never marked latest, cask
+untouched):
 
-Measured, not estimated (2026-09-05, both suites with `desktop/release/**`
-excluded per ADR-0303):
+- **P-SANDBOX.9 to .11** (ADR-0386/0387/0389): chat actually works inside the
+  AppContainer. The helper hands its std handles to omp, the container can
+  read its runtime and write `~/.omp`, inference goes through `PI_PROXY`, the
+  bundled bun is 1.4.2 (1.3.14 cannot start a script in the container), and
+  the pill lights only after the real runtime boots through the same wrap.
+- **P-SANDBOX.12 / .13 / .13b** (ADR-0390/0391/0393): the Security panel's
+  sandbox switch, Add folder via a dialog the ENGINE opens (never a caller
+  path), the full reach list, and a helper Browse For Folder fallback when
+  Smart App Control puts PowerShell in Constrained Language Mode.
+- **P-SANDBOX.14** (ADR-0394): enterprise policy `security.sandbox`
+  (`SandboxAllowUserOff`, `SandboxReadFolders`, `SandboxReadWriteFolders`,
+  `SandboxLockFolders`). ADMX/ADML templates for them are still owed in the
+  private add-on repo.
+- **P-NORESP.2** (ADR-0388): agent errors reach the chat as words.
+  **P-MODEL.5** (ADR-0392): Grok 4.7 and an xAI Grok picker family.
+- **P-REL.1** (ADR-0395): `build-desktop.yml` can cut a beta prerelease from a
+  `beta_release` dispatch (agent sessions cannot push tags).
 
-- **1,615 harness tests** across 139 files (1,609 pass / 2 fail, both the
-  standing Windows POSIX-path assumptions below).
-- **3,322 desktop tests** across 239 files (3,317 pass / 5 fail, all
-  `fs_browse` resolving a Windows HOME against a POSIX fixture).
-- **57 sidecar tests** (pytest). **207 `demo-*` targets** in the `Makefile`.
+Measured 2026-09-24 with **bun 1.4.2** (`desktop/release/**` excluded per
+ADR-0303):
+
+- **1,725 harness tests** across 147 files (1,721 pass / 0 fail / 4 skip).
+- **3,756 desktop tests** across 258 files (3,756 pass / 0 fail).
+- **57 sidecar tests** (pytest, all pass). **259 `demo-*` targets** in the `Makefile`.
 - `tsc --noEmit` clean at the root and in `desktop/`; BUSL-1.1 headers complete.
-- 11 numbered DuckDB migration files (`harness/memory/migrations/`).
 
 Both correctness keystones are in and over-tested: the **Unicode scanner**
 (`scanner-sidecar/`) and the **semantic-promotion gate**
@@ -42,13 +54,16 @@ text -> scanned -> trust-labeled -> sanitized -> persisted -> blocked at the
 tool / promotion / dispatch boundaries -> human-reviewed -> exits only as safe,
 audited evidence.
 
-**Known local reds on Windows (pre-existing, green on the Linux CI runner) -
-do not chase them:** `harness/launcher/lucid_acp.test.ts` (2, asserts POSIX
-asset paths), `desktop/fs_browse.test.ts` (5, resolves a Windows HOME against a
-POSIX fixture). `desktop/symbol_graph.test.ts` (4, needed the TS compiler) no
-longer fails here. Note that a bare `bun test harness` also picks up the
-generated `desktop/release/win-unpacked/.../harness` copy and roughly doubles
-every count: always pass `--path-ignore-patterns='desktop/release/**'`.
+**Bun version matters.** Under bun 1.3.x, 6 harness tests that start a real omp
+session (including the fail-closed dead-scanner test in
+`harness/hooks/quarantine_hook.test.ts`) die before their bodies run, because
+omp 18.2.10's browser prelude will not link ("Missing 'default' export in
+.../tools/browser/prelude.js"). They pass under bun 1.4.2 and in CI (which uses
+`bun-version: latest`). Use bun >= 1.4.2 locally; if the machine's bun is older,
+`npm i bun@1.4.2` into a scratch dir and run its binary. A bare `bun test
+harness` also picks up the generated `desktop/release/win-unpacked/.../harness`
+copy and roughly doubles every count: always pass
+`--path-ignore-patterns='desktop/release/**'`.
 
 ## How to run
 
@@ -100,7 +115,12 @@ locally.
    version into the history chain, add a `vX.Y.Z batch` row to *Recent updates*,
    and refresh the test badge + status counts only with measured numbers.
 3. `PROGRESS.md`: a `## Release cut: vX.Y.Z` entry at the top.
-4. Commit, push `master`, then push the `vX.Y.Z` tag. The tag build
+4. Commit, push `master`, then push the `vX.Y.Z` tag. **Betas without a tag
+   push** (e.g. from an agent session, which cannot push tags): dispatch
+   `build-desktop.yml` on `master` with `beta_release` ON. It builds the
+   committed prerelease version and creates tag `v<version>` plus the GitHub
+   prerelease through the API (ADR-0395); it refuses a non-prerelease version,
+   a non-master ref, or `publish_latest` alongside it. The tag build
    (`.github/workflows/build-desktop.yml`) packages all three OSes, re-runs the
    air-gap gate and the strict Program Files boot gate on the release bytes,
    attaches the installers + the electron-updater feed to that tag's Release,
@@ -113,10 +133,43 @@ locally.
 
 ## Next increment
 
-**P-FLEET.P1** (ADR-0272): the Fleet Profile store + `LUCID_INSTANCE_ID` +
-`/api/instance`, promoting the `LUCID_GUI_SETTINGS_FILE` / `LUCID_PERSONAL_DIR`
-test seams into a real contract, so project-bound full-GUI instances stop
-sharing `lucid-gui.json`.
+**P-SIGN.1** (code signing): needs the owner's choice of Azure Artifact
+Signing or a traditional certificate. Signing also lifts the Smart App Control
+block on install.
+
+Queued alongside it:
+- ADMX/ADML templates for the four P-SANDBOX.14 values (private add-on repo).
+- Verify P-SANDBOX.15 (ADR-0396) in a packaged build: the window must still
+  authenticate (preload `lucid.token()` over IPC) with no token in the HTML.
+
+## Lessons learned (2026-09-24, the AppContainer arc)
+
+- **Prove what the feature depends on, not a proxy for it.** A helper that
+  exited 0 lit a green pill while every chat turn died. The probe now
+  round-trips stdio and boots the REAL runtime through the SAME wrap before
+  committing (ADR-0386/0387). Apply this to any "available" indicator.
+- **Windows hosts with Smart App Control or WDAC run PowerShell in Constrained
+  Language Mode.** `Add-Type` is refused, so any PowerShell-built UI silently
+  fails. Keep a non-script fallback (the helper's FFI dialog, ADR-0393) and
+  make failures say why.
+- **A test must never open real UI on a CI runner.** A test that expected the
+  off-Windows refusal opened a real modal dialog on `windows-latest` and hung
+  the Full test gate (no `timeout-minutes`) until it was cancelled. Gate
+  platform-specific calls on `process.platform`, and when a job hangs, read the
+  last test line of its log before re-running anything.
+- **A green check suite on an OLD head is not a pass.** Each push cancelled the
+  previous CI run, so the Windows gate had never completed on the PR until the
+  merge head. Before merging, confirm every check completed on the exact head
+  SHA being merged.
+- **Agent sessions can push only their own branch** (tags get HTTP 403 from the
+  git proxy). Cut betas with the `beta_release` dispatch (ADR-0395) instead of
+  asking for a local tag push.
+- **The loopback token is shared with the agent.** Any route that widens access
+  must not accept a caller-supplied target: the engine opens the picker itself
+  (ADR-0391). P-SANDBOX.15 (ADR-0396) gave the agent its own narrower token and took the
+  UI token out of the served HTML under Electron.
+- **JSON-RPC errors are objects.** Wrap them with `rpcError` before they reach
+  a string context, or the chat shows `[object Object]` (ADR-0388).
 
 ## Map
 

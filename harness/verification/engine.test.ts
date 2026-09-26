@@ -10,8 +10,13 @@ import { join } from "node:path";
 import { Db } from "../memory/db.ts";
 import { runChecks, securityPrecondition, verifyTask } from "./engine.ts";
 
-const PASS = { name: "pass", command: ["node", "-e", "process.exit(0)"] };
-const FAILC = { name: "fail", command: ["node", "-e", "process.exit(3)"] };
+// The checks re-run the binary already executing this suite. A PATH-resolved
+// `node` can take seconds to cold-start on Windows CI runners; it overran the
+// 5s default, bun killed it, and the kill read as a failed PASS check.
+const PASS = { name: "pass", command: [process.execPath, "-e", "process.exit(0)"] };
+const FAILC = { name: "fail", command: [process.execPath, "-e", "process.exit(3)"] };
+// Real child processes: allow for a loaded runner instead of the 5s default.
+const SPAWN_TIMEOUT_MS = 30_000;
 
 let dir: string;
 let db: Db;
@@ -53,11 +58,11 @@ test("runChecks reports per-check pass/fail and aggregate", async () => {
   expect(r.checks[1]!.passed).toBe(false);
   expect(r.checks[1]!.exitCode).toBe(3);
   expect(r.allPassed).toBe(false);
-});
+}, SPAWN_TIMEOUT_MS);
 
 test("runChecks allPassed true when every check exits 0", async () => {
   expect((await runChecks([PASS, PASS])).allPassed).toBe(true);
-});
+}, SPAWN_TIMEOUT_MS);
 
 // ── securityPrecondition ──────────────────────────────────────────────────────
 test("a quarantined artifact blocks; an approval clears it", async () => {
@@ -91,21 +96,21 @@ test("security blocks completion even with all checks green", async () => {
   const v = await verifyTask(db, "run-5", [PASS]);
   expect(v.completionAllowed).toBe(false);
   expect(v.report.allPassed).toBe(true); // checks were fine; security blocked
-});
+}, SPAWN_TIMEOUT_MS);
 
 test("acceptPartial does NOT waive the security precondition", async () => {
   await addArtifact("run-6", "a6", "quarantined");
   const v = await verifyTask(db, "run-6", [PASS], { acceptPartial: true });
   expect(v.completionAllowed).toBe(false);
-});
+}, SPAWN_TIMEOUT_MS);
 
 test("acceptPartial waives failed checks when security is clear", async () => {
   await addArtifact("run-7", "a7", "untrusted");
   expect((await verifyTask(db, "run-7", [PASS, FAILC])).completionAllowed).toBe(false);
   expect((await verifyTask(db, "run-7", [PASS, FAILC], { acceptPartial: true })).completionAllowed).toBe(true);
-});
+}, SPAWN_TIMEOUT_MS);
 
 test("all checks pass + security clear => completion allowed", async () => {
   const v = await verifyTask(db, "run-empty", [PASS]); // no artifacts at all
   expect(v.completionAllowed).toBe(true);
-});
+}, SPAWN_TIMEOUT_MS);

@@ -557,7 +557,9 @@ let xp=0, streak=0, qi=0, drillsUnlocked=false;
 // ---------- live data: the REAL harness core via the token-gated /api/trainer routes ----------
 // When embedded in LUCID (same-origin iframe) these hydrate the stage/HUD/games from trainer.duckdb.
 // Standalone (file://, no server), every call throws and we fall back to the seeded content below.
-const LTOKEN=document.querySelector('meta[name="lucid-token"]')?.content||"";
+// P-SANDBOX.15 (ADR-0396): under Electron the token comes from the parent window's preload (main, over IPC);
+// the meta tag is only injected on a standalone browser dev run.
+const LTOKEN=(()=>{try{const t=window.parent!==window&&window.parent.lucid&&window.parent.lucid.token&&window.parent.lucid.token();if(t)return t;}catch(e){}try{const t=window.lucid&&window.lucid.token&&window.lucid.token();if(t)return t;}catch(e){}return document.querySelector('meta[name="lucid-token"]')?.content||"";})();
 // P-THEME.1 theme-exempt: CATEGORICAL data-viz colours. Each one paints its own ring arc /
 // gradient chip, so it is read against itself, not against an app surface; re-tinting per
 // theme would destroy the one thing a categorical scale must keep, which is being telling

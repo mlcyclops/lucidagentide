@@ -112,6 +112,9 @@ export interface GuiSettings {
   // P10.3: opt-in live rate-limit probe for API-KEY providers (Anthropic/OpenAI). OFF by default —
   // it makes a tiny request per provider to read the rate-limit headers, which costs a token or two.
   rateLimitProbe?: boolean;
+  /** P-SANDBOX.12 (ADR-0390): the user's Windows AppContainer switch. "off" = the disclosed passthrough by
+   *  choice (no admin needed); absent/"auto" = isolate when the host can. Managed require-isolation wins. */
+  sandboxWindowsMode?: "auto" | "off";
   // ADR-0009 Phase D: developer-mode logging view (telemetry + lineage + audit trails, read-only).
   // OFF by default; flips on the "Logs" rail tab. Gated server-side too.
   developerMode?: boolean;
@@ -264,6 +267,9 @@ export function setPersonalAiExtract(enabled: boolean): GuiSettings {
 }
 export function setRateLimitProbe(enabled: boolean): GuiSettings {
   const s = load(); s.rateLimitProbe = enabled; save(s); return s;
+}
+export function setSandboxWindowsMode(mode: "auto" | "off"): GuiSettings {
+  const s = load(); s.sandboxWindowsMode = mode; save(s); return s;
 }
 export function setDeveloperMode(enabled: boolean): GuiSettings {
   const s = load(); s.developerMode = enabled; save(s); return s;

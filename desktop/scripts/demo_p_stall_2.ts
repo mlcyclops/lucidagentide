@@ -44,7 +44,7 @@ assert(err.includes("exited") && err.includes("7"), `a dead omp child REJECTS th
 
 console.log("\n[3] pending-work tracking: the turn can SAY what it is waiting on");
 const open = new Map<string, PendingCall>();
-trackToolCall(open, { toolCallId: "t1", rawInput: { agent: "explore", tasks: [{}, {}] }, title: "Map the fleet code" }, 0);
+trackToolCall(open, { toolCallId: "t1", rawInput: { context: "c", tasks: [{ agent: "explore", task: "a" }, { agent: "explore", task: "b" }] }, title: "Map the fleet code" }, 0);
 trackToolCall(open, { toolCallId: "t2", kind: "execute", title: "cargo build" }, 5 * 60_000);
 assert(open.size === 2, "a subagent task and a tool call are both tracked as open");
 settleToolCall(open, { toolCallId: "t2", status: "completed" });

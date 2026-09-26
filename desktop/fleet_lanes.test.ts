@@ -310,6 +310,19 @@ test("images ride the prompt as ACP blocks; the transcript remembers the COUNT, 
   expect(reply2).not.toContain("aGVsbG8="); // the bytes, never
 }, TIMEOUT);
 
+// P-FLEET.L19: a composer attaching to an IDLE lane seeds its ctx counter from status, so the manager must
+// keep the last measured usage after the turn that reported it ends - and never invent one before that.
+test("status carries the lane's last measured usage after the turn ends, and none before omp reports", async () => {
+  live = manager({ mode: "lanefidelity" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  expect(r.lane!.usage).toBeUndefined();
+  await live.prompt(r.lane!.id, "measure me", () => {});
+  const lane = (await live.status()).lanes[0]!;
+  expect(lane.status).toBe("done");
+  expect(lane.usage).toEqual({ used: 4200, size: 200_000, cost: 0.0731 });
+  expect(live.promote(r.lane!.id).lane?.usage).toEqual({ used: 4200, size: 200_000, cost: 0.0731 });
+}, TIMEOUT);
+
 test("staged prompts run FIFO when the lane goes idle; reorder and remove work; the cap refuses loudly", async () => {
   live = manager();
   const r = await live.spawn({ cwd: import.meta.dir });

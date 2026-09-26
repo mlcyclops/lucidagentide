@@ -21,6 +21,12 @@ import { isEditorSession, type EditorSession } from "./creator_editor.ts"; // CR
 import { isPipelineRunView, type PipelineRunView } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the render run view + its fail-closed shape gate
 import { isMixerTracksPayload, isRenderMixReport, type MixerTracksPayload, type RenderMixResult } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): mixer view types live there
 import type { TimelineDoc } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline document, edited in the renderer
+// P-RECOVER.1 (ADR-0385): the recovery/incident view shapes + their fail-closed gates live in the pure supervisor module.
+import {
+  incidentList, isIncidentId, isIncidentView, probeFrom, recoveryStateFrom,
+  type EngineProbe, type EngineRestartView, type IncidentOutcome, type IncidentView, type RecoveryRecoverView, type RecoveryResumeView, type RecoveryStateView,
+} from "./recovery_supervisor.ts";
+export type { EngineProbe, EngineRestartView, IncidentOutcome, IncidentView, RecoveryRecoverView, RecoveryResumeView, RecoveryStateView };
 import type { MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix graph, edited in the renderer
 
 /** CREATOR-0 (ADR-0279): what `GET /api/build-info` returns. `creatorBuild` is the ONLY thing that may
@@ -136,7 +142,13 @@ export interface SandboxStateView {
   execBlocked: string | null; proxied: boolean; at: string;
 }
 export interface SandboxBlockView { host: string; channel: string; type: string; reason: string; at: string }
-export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[] }
+// P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
+export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: string; reason: string }
+// P-SANDBOX.12 (ADR-0390): what the panel's sandbox switch may offer (see desktop/sandbox_control.ts).
+export interface SandboxControlView { available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean }
+// P-SANDBOX.13 (ADR-0391): a folder LUCID itself grants the contained agent (listed read-only in the panel).
+export interface RuntimeFolderView { path: string; mode: "rx" | "rw"; why: string }
+export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[]; grants?: SandboxGrantView[]; control?: SandboxControlView; runtimeFolders?: RuntimeFolderView[] }
 export interface MemorySnapshot {
   session: null | {
     path: string; model: string; turns: number; window: number;
@@ -254,6 +266,8 @@ export interface LaneView {
   openCalls: number;
   /** P-HEALTH.1: the harness's last self-action on this lane, so the card can show it was handled. */
   lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
+  /** P-FLEET.L19: the lane's last MEASURED context fill, window and cost; absent until omp reports once. */
+  usage?: { used: number; size: number; cost: number };
 }
 // P-FLEET.L5 (ADR-0274): the reviewable timeline - one row per session on this machine, every workspace,
 // lanes labeled through the durable lane-session ledger.
@@ -432,6 +446,12 @@ export interface SkillRemoveView { ok: boolean; name: string; removed?: boolean;
 // P-SKILL.5 (ADR-0101): Skill Studio — a model-drafted skill candidate + the analyze result.
 export interface SkillCandidateView { name: string; description: string; body: string; rationale?: string }
 export interface SkillStudioAnalyzeView { window: "today" | "week"; model: string; candidates: SkillCandidateView[] }
+
+// P-MEET.1: the Meetings panel's payloads. The engine module is the single definition (it does the
+// normalization), so these are aliases rather than a second, drifting copy of the same shapes.
+export type { MeetingRow, MeetingsView, UpcomingEvent } from "../meetings_hub.ts";
+export type { MeetingDetail as MeetingDetailView, TodoRow as MeetingTodoView } from "../meetings_hub.ts";
+import type { MeetingsView, MeetingDetail as MeetingDetailView, TodoRow as MeetingTodoView } from "../meetings_hub.ts";
 
 // P-KB.2b (ADR-0099/0100): the compiled knowledge base + the page-graph view.
 export interface KbBlockedView { stage: "source" | "page"; slug?: string; reason: string; trustLabel: string; findings: number }
@@ -695,6 +715,10 @@ export interface LucidBridge {
   security(): Promise<SecuritySnapshot | null>;
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
+  /** P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal). */
+  sandboxGrantRevoke(path: string): Promise<{ revoked: boolean; detail: string } | null>;
+  sandboxMode(mode: "off" | "auto" | "unregister"): Promise<{ changed: boolean; detail: string; control?: SandboxControlView } | null>;
+  sandboxGrantAdd(mode: "rx" | "rw"): Promise<{ added: boolean; cancelled?: boolean; path?: string; detail: string } | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
   /** Bulk-acknowledge every active gate block. Releases NOTHING: each call stays blocked, audit kept. */
   securityDismissAll(): Promise<{ dismissed: number } | null>;
@@ -1075,6 +1099,13 @@ export interface LucidBridge {
   setEmbeddingsConfig(config: EmbeddingsConfigView | null): Promise<{ config: EmbeddingsConfigView | null; active: boolean; error?: string } | null>;
   embeddingsTest(input: { baseUrl: string; model: string; authKind: string; headerName?: string; secret?: string }): Promise<{ ok: boolean; dim?: number; error?: string } | null>;
   embeddingsReindex(): Promise<{ ok: boolean; kgs?: number; pages?: number; stored?: number; error?: string } | null>;
+  // P-MEET.1: the Meetings panel's view of the loopback Lucid Meeting Hub (reads, plus marking an action item
+  // done). The engine holds the pairing bearer; the renderer only ever sees rows. `meetingsPair` is the one call that
+  // returns a secret, and ONLY so the renderer can hand it to the OS vault (credStore is main-only).
+  meetings(query?: { limit?: number; offset?: number; q?: string }): Promise<MeetingsView | null>;
+  meetingDetail(file: string): Promise<{ ok: boolean; locked: boolean; meeting: MeetingDetailView | null; error: string | null } | null>;
+  meetingTodoMark(id: string, done: boolean): Promise<{ ok: boolean; todo: MeetingTodoView | null; error: string | null } | null>;
+  meetingsPair(code: string): Promise<{ ok: boolean; error: string | null; token: string; vaultRef: string } | null>;
   auth(): Promise<AuthStatus | null>;
   /** P-GUIDE.1/.2: guide id (provider id or "choosing") -> absolute path of the bundled advisor guide
    *  (served into the Preview panel by path). Missing files are omitted server-side. */
@@ -1274,6 +1305,24 @@ export interface LucidBridge {
   interject(target: string, text: string): Promise<{ pending: number } | null>;
   // P-INTERJECT.1: everything running right now - master turn, live lanes, import job, agent browsers.
   processes(): Promise<ProcessView[] | null>;
+  // -- P-RECOVER.1 (ADR-0385): self-recovery + incident reports ---------------------------------------
+  /** The previous engine's master session, the current one, and the UNSEEN incidents. Null = unreachable. */
+  recoveryState(): Promise<RecoveryStateView | null>;
+  /** VERIFIED resume of `sessionId` (session/load must succeed). Null = no answer. */
+  recoveryResume(sessionId: string): Promise<RecoveryResumeView | null>;
+  /** In-place recovery of the master agent child (cancel, drop, respawn, reload the same session). */
+  recoveryRecover(): Promise<RecoveryRecoverView | null>;
+  /** One look at the engine for the recovery supervisor: never throws, bounded by a timeout. */
+  engineProbe(): Promise<EngineProbe>;
+  /** Every incident, newest first (malformed rows dropped). */
+  incidents(): Promise<IncidentView[]>;
+  /** The full redacted report markdown, or null. */
+  incidentReport(id: string): Promise<string | null>;
+  incidentSeen(id: string): Promise<boolean>;
+  /** Settle an incident; `note` (<=300 chars) becomes one timeline event, redacted by the store. */
+  incidentUpdate(id: string, outcome: IncidentOutcome, note?: string): Promise<IncidentView | null>;
+  /** Electron main restarts the engine (refused while it answers, rate-limited). Null outside Electron. */
+  restartEngine(): Promise<EngineRestartView | null>;
 }
 
 /** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
@@ -1302,6 +1351,8 @@ export interface WhitelistEntryView {
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
 interface NativeShell {
   isElectron?: boolean;
+  /** P-SANDBOX.15 (ADR-0396): the per-launch UI token from main over IPC ("" when refused). */
+  token?(): string;
   setZoom?(factor: number): void;
   pickFolder?(opts?: PickFolderOpts): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
@@ -1309,6 +1360,7 @@ interface NativeShell {
   revealPath?(path: string): Promise<boolean>;
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
+  restartEngine?(): Promise<EngineRestartView>; // P-RECOVER.1 (ADR-0385): main restarts an unreachable engine
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -1323,12 +1375,18 @@ interface NativeShell {
 declare global { interface Window { lucid?: NativeShell } }
 const shell: NativeShell | undefined = typeof window !== "undefined" ? window.lucid : undefined;
 
-// ADR-0024: the per-launch capability token, injected into the served HTML by dev.ts. We echo it
-// on every /api call so the server can tell the real renderer from a forged request. Read once at
-// load; absent in a stray non-injected page (then calls are simply rejected, fail-closed).
-const TOKEN = typeof document !== "undefined"
-  ? (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? ""
-  : "";
+// ADR-0024: the per-launch capability token. We echo it on every /api call so the server can tell the real
+// renderer from a forged request. Read once at load; absent in a stray page (then calls are rejected,
+// fail-closed). P-SANDBOX.15 (ADR-0396): under Electron it comes from the preload (main, over IPC), and a
+// same-origin child frame (trainer.html) reads its parent's; only a standalone browser dev run still finds
+// it in a <meta> tag the engine injects.
+function readToken(): string {
+  if (typeof document === "undefined") return "";
+  try { const t = window.lucid?.token?.(); if (t) return t; } catch { /* no preload */ }
+  try { if (window.parent !== window) { const t = (window.parent as Window).lucid?.token?.(); if (t) return t; } } catch { /* cross-origin parent */ }
+  return (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? "";
+}
+const TOKEN = readToken();
 const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
   ({ ...(TOKEN ? { "x-lucid-token": TOKEN } : {}), ...extra });
 
@@ -1337,6 +1395,23 @@ async function getData(path: string): Promise<any> {
 }
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
+}
+// P-RECOVER.1 (ADR-0385): recovery calls run exactly when the engine may be wedged, so each one is bounded;
+// a hung request must end as "no answer", never as a supervisor that waits forever.
+async function postTimed(path: string, body: unknown, ms: number): Promise<unknown> {
+  try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body), signal: AbortSignal.timeout(ms) })).json())?.data ?? null; } catch { return null; }
+}
+async function getTimed(path: string, ms: number): Promise<unknown> {
+  try { return (await (await fetch(path, { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(ms) })).json())?.data ?? null; } catch { return null; }
+}
+const PROBE_TIMEOUT_MS = 5_000;
+/** One recovery probe read: `reached` = the engine answered at all (any HTTP status). */
+async function probeRead(path: string): Promise<{ reached: boolean; ok: boolean; data: unknown }> {
+  try {
+    const r = await fetch(path, { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    if (!r.ok) return { reached: true, ok: false, data: null };
+    return { reached: true, ok: true, data: (await r.json())?.data ?? null };
+  } catch { return { reached: false, ok: false, data: null }; }
 }
 
 // Mock config only as a last resort if the backend can't be reached (no omp).
@@ -1349,8 +1424,8 @@ async function post(path: string, body: unknown): Promise<any> {
 // for the offline case, and a long speculative catalog here would show models the user may not have.
 // Keep the head in sync with model_families.DEFAULT_MODEL_PREFERENCE when a new flagship ships.
 const FALLBACK_CONFIG: ConfigOption[] = [
-  { id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-opus-5", options: [
-    { value: "anthropic/claude-opus-5", name: "Claude Opus 5" }, { value: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, { value: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
+  { id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-opus-5-5", options: [
+    { value: "anthropic/claude-opus-5-5", name: "Claude Opus 5.5" }, { value: "anthropic/claude-opus-5", name: "Claude Opus 5" }, { value: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, { value: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
   ] },
   { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }] },
   { id: "thinking", name: "Thinking", category: "thought_level", type: "select", currentValue: "high", options: [
@@ -1433,6 +1508,9 @@ export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
+  sandboxGrantRevoke: (path) => post("/api/security/sandbox-grant/revoke", { path }),
+  sandboxMode: (mode) => post("/api/security/sandbox/mode", { mode }),
+  sandboxGrantAdd: (mode) => post("/api/security/sandbox-grant/add", { mode }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
   securityDismissAll: () => post("/api/security/dismiss-all", {}),
   securityAck: (input) => post("/api/security/ack", input),
@@ -1761,6 +1839,18 @@ export const bridge: LucidBridge = {
   setEmbeddingsConfig: (config) => post("/api/embeddings-config", { config }),
   embeddingsTest: (input) => post("/api/embeddings/test", input),
   embeddingsReindex: () => post("/api/embeddings/reindex", {}),
+  // P-MEET.1
+  meetings: (query) => {
+    const p = new URLSearchParams();
+    if (query?.limit !== undefined) p.set("limit", String(query.limit));
+    if (query?.offset !== undefined) p.set("offset", String(query.offset));
+    if (query?.q) p.set("q", query.q);
+    const qs = p.toString();
+    return getData(qs ? `/api/meetings?${qs}` : "/api/meetings");
+  },
+  meetingDetail: (file) => getData(`/api/meetings/detail?file=${encodeURIComponent(file)}`),
+  meetingTodoMark: (id, done) => post("/api/meetings/todo", { id, done }),
+  meetingsPair: (code) => post("/api/meetings/pair", { code }),
   auth: () => getData("/api/auth"),
   guides: () => getData("/api/guides"), // P-GUIDE.1: absolute paths of bundled advisor guides
 
@@ -2017,6 +2107,57 @@ export const bridge: LucidBridge = {
   openExternal: (url) => (shell?.openExternal ? shell.openExternal(url) : Promise.resolve(false)),
   showInFolder: (path) => (shell?.showInFolder ? shell.showInFolder(path) : Promise.resolve(false)), // P-FSREVEAL.1 (ADR-0212)
   canShowInFolder: () => !!shell?.showInFolder,
+  // P-RECOVER.1 (ADR-0385): every answer is shape-checked here, so app.ts only ever sees the contract types.
+  recoveryState: async () => recoveryStateFrom(await getTimed("/api/recovery/state", 10_000)),
+  recoveryResume: async (sessionId) => {
+    const d = await postTimed("/api/recovery/resume", { sessionId }, 60_000);
+    if (!d || typeof d !== "object" || !("ok" in d) || typeof d.ok !== "boolean") return null;
+    const sid = "sessionId" in d && typeof d.sessionId === "string" ? d.sessionId : undefined;
+    const error = "error" in d && typeof d.error === "string" ? d.error : undefined;
+    const incidentId = "incidentId" in d && isIncidentId(d.incidentId) ? d.incidentId : undefined;
+    return { ok: d.ok, ...(sid ? { sessionId: sid } : {}), ...(error ? { error } : {}), ...(incidentId ? { incidentId } : {}) };
+  },
+  recoveryRecover: async () => {
+    const d = await postTimed("/api/recovery/recover", {}, 90_000);
+    if (!d || typeof d !== "object" || !("ok" in d) || typeof d.ok !== "boolean") return null;
+    const incidentId = "incidentId" in d && isIncidentId(d.incidentId) ? d.incidentId : undefined;
+    return {
+      ok: d.ok,
+      sessionId: "sessionId" in d && typeof d.sessionId === "string" ? d.sessionId : null,
+      reason: "reason" in d && typeof d.reason === "string" ? d.reason : "",
+      ...(incidentId ? { incidentId } : {}),
+    };
+  },
+  engineProbe: async () => {
+    const [health, status] = await Promise.all([probeRead("/api/session-health"), probeRead("/api/chat/status")]);
+    return probeFrom(health, status);
+  },
+  incidents: async () => incidentList(await getTimed("/api/incidents", 10_000)),
+  incidentReport: async (id) => {
+    if (!isIncidentId(id)) return null;
+    const d = await getTimed(`/api/incidents/report?id=${encodeURIComponent(id)}`, 10_000);
+    return d && typeof d === "object" && "markdown" in d && typeof d.markdown === "string" ? d.markdown : null;
+  },
+  incidentSeen: async (id) => {
+    if (!isIncidentId(id)) return false;
+    const d = await postTimed("/api/incidents/seen", { id }, 10_000);
+    return !!d && typeof d === "object" && "ok" in d && d.ok === true;
+  },
+  incidentUpdate: async (id, outcome, note) => {
+    if (!isIncidentId(id)) return null;
+    const d = await postTimed("/api/incidents/update", { id, outcome, ...(note ? { note: note.slice(0, 300) } : {}) }, 10_000);
+    return isIncidentView(d) ? d : null;
+  },
+  restartEngine: async () => {
+    if (!shell?.restartEngine) return null;
+    // Main waits for the new engine's nonce health; bound the wait so a stuck restart still ends.
+    const expired = Promise.withResolvers<null>();
+    const timer = setTimeout(() => expired.resolve(null), 120_000);
+    const answer = await Promise.race([shell.restartEngine().catch(() => null), expired.promise]);
+    clearTimeout(timer);
+    if (!answer || typeof answer.ok !== "boolean") return null;
+    return { ok: answer.ok, reason: typeof answer.reason === "string" ? answer.reason : "", ...(isIncidentId(answer.incidentId) ? { incidentId: answer.incidentId } : {}) };
+  },
   setZoom: (f) => {
     if (shell?.setZoom) { shell.setZoom(f); return; } // Electron: crisp native zoom
     // Browser: zoom #app and counter-scale its height so it still fills the viewport

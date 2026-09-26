@@ -22,6 +22,9 @@ describe("resolveAgentTierModel - accessible provider-isolated tiers", () => {
     expect(resolveAgentTierModel(anthropic, anthropic[0]!.value, "regular")).toBe("anthropic/claude-opus-5");
     const codex = models("openai-codex/gpt-6-astra", "openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-terra");
     expect(resolveAgentTierModel(codex, codex[0]!.value, "regular")).toBe("openai-codex/gpt-5.6-luna");
+    // Opus 5.5 (2026-09-22): the hyphenated-minor spelling parses as [5,5] and outranks Opus 5's [5].
+    const opus55 = models("anthropic/claude-opus-5", "anthropic/claude-opus-5-5", "anthropic/claude-fable-5.1");
+    expect(resolveAgentTierModel(opus55, opus55[2]!.value, "regular")).toBe("anthropic/claude-opus-5-5");
   });
 
   it("Max prefers accessible Fable 5+ and Astra 6+", () => {
@@ -33,6 +36,13 @@ describe("resolveAgentTierModel - accessible provider-isolated tiers", () => {
     expect(resolveAgentTierModel(models("openai/gpt-5-astra", "openai/gpt-6"), "openai/gpt-5-astra", "max")).toBe("openai/gpt-6");
   });
 
+  it("GPT-6 tiers: Regular lands on Luna 6 over Luna 5.6, Sol steps down to Luna, and Max climbs Sol or Luna to Astra", () => {
+    const six = models("openai-codex/gpt-6-astra", "openai-codex/gpt-6-sol", "openai-codex/gpt-6-luna", "openai-codex/gpt-5.6-luna");
+    expect(resolveAgentTierModel(six, "openai-codex/gpt-6-astra", "regular")).toBe("openai-codex/gpt-6-luna");
+    expect(resolveAgentTierModel(six, "openai-codex/gpt-6-sol", "regular")).toBe("openai-codex/gpt-6-luna");
+    expect(resolveAgentTierModel(six, "openai-codex/gpt-6-luna", "max")).toBe("openai-codex/gpt-6-astra");
+    expect(resolveAgentTierModel(six, "openai-codex/gpt-6-sol", "max")).toBe("openai-codex/gpt-6-astra");
+  });
   it("never crosses API, OAuth or accredited gateway routes", () => {
     const options = models("openai-codex/gpt-5.6-luna", "openai/gpt-6-astra", "asksage-openai/gpt-6-astra", "anthropic/claude-fable-5");
     expect(resolveAgentTierModel(options, options[0]!.value, "max")).toBeNull();

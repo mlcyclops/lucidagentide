@@ -693,9 +693,41 @@ demo-P-SANDBOX.7: ## P-SANDBOX.7 (ADR-0173): the native Windows AppContainer hel
 demo-P-SANDBOX.7b: ## P-SANDBOX.7b (ADR-0174): mediated --loopback-only for the AppContainer helper - the empty-caps container has NO direct internet (verified live: curl → http_code=000) and a one-time ADMIN loopback exemption (--register-loopback via CheckNetIsolation) lets it reach ONLY the loopback proxy; the no-internet guarantee holds with or without the exemption; off-Windows every mode fail-closes
 	$(BUN) run harness/scripts/demo_p_sandbox_7b.ts
 
+.PHONY: demo-P-SANDBOX.9
+demo-P-SANDBOX.9: ## P-SANDBOX.9 (ADR-0386): a green AppContainer pill means a working chat - the helper hands its std handles to the contained omp (ACP rides stdio), the container is granted the repo + bun runtime (rx) and ~/.omp (rw, TEMP inside), PI_PROXY steers omp inference at the mediating proxy, --register-loopback creates the profile first, and the probe is a stdio round trip
+	$(BUN) run harness/scripts/demo_p_sandbox_9.ts
+
+.PHONY: demo-P-SANDBOX.10
+demo-P-SANDBOX.10: ## P-SANDBOX.10 (ADR-0387): the AppContainer pill needs the REAL runtime to boot - bundled bun 1.3.14 -> 1.4.2 (1.3.14 cannot start a script in the container, no ACL fixes it), the engine probes the contained omp --version through the same wrap before committing (passthrough with the reason otherwise), and a Windows CI smoke runs the real contained omp on the bundled bun
+	$(BUN) run harness/scripts/demo_p_sandbox_10.ts
+
+.PHONY: demo-P-SANDBOX.12
+demo-P-SANDBOX.12: ## P-SANDBOX.12 (ADR-0390): the Security panel's Windows sandbox switch - Off is a per-user LUCID setting (no admin, honored at the next spawn), On registers the loopback exemption behind UAC only when missing, Remove from Windows unregisters it, managed require-isolation locks the switch (note, no button)
+	$(BUN) run harness/scripts/demo_p_sandbox_12.ts
+
+.PHONY: demo-P-SANDBOX.13
+demo-P-SANDBOX.13: ## P-SANDBOX.13 (ADR-0391): Add folder (read-only / read-write) from the Security panel - the ENGINE opens the native Explorer picker and grants only the pick (no caller can name a path), too-broad picks refused, audited, and the panel lists user folders (revocable) plus LUCID's always-allowed runtime folders
+	$(BUN) run harness/scripts/demo_p_sandbox_13.ts
+
+.PHONY: demo-P-SANDBOX.14
+demo-P-SANDBOX.14: ## P-SANDBOX.14 (ADR-0394): enterprise policy for the Windows sandbox - SandboxAllowUserOff=0 keeps the switch on, SandboxReadFolders / SandboxReadWriteFolders apply admin folders at every contained spawn (bounded like a user pick, %VAR% expanded), SandboxLockFolders stops user and agent folder adds (revoke still works)
+	$(BUN) run harness/scripts/demo_p_sandbox_14.ts
+
+.PHONY: demo-P-SANDBOX.15
+demo-P-SANDBOX.15: ## P-SANDBOX.15 (ADR-0396): the omp child gets its own AGENT token (accepted only on the routes it calls, never on approve / the sandbox switch / Add folder), no longer inherits LUCID_MAIN_TOKEN, and under Electron the served HTML carries no token (the window gets it from main over IPC)
+	$(BUN) run harness/scripts/demo_p_sandbox_15.ts
+
+.PHONY: demo-P-SANDBOX.16
+demo-P-SANDBOX.16: ## P-SANDBOX.16 (ADR-0397): the agent finds git wherever it was installed (host PATH first, then Git for Windows, MinGit, scoop, Chocolatey, winget, GitHub Desktop) - the root is granted rx to the AppContainer, its cmd dir goes first on the agent's PATH, and the Security panel lists it
+	$(BUN) run harness/scripts/demo_p_sandbox_16.ts
+
+.PHONY: demo-P-SANDBOX.17
+demo-P-SANDBOX.17: ## P-SANDBOX.17 (ADR-0399): the contained agent's git runs on the host through a broker - subcommand/option allowlist, workspace-confined paths, allowlisted repo config held open (share modes) from check to use, forced no-hooks/https-only overrides, network via the egress proxy; git.cmd shim round trip
+	$(BUN) run harness/scripts/demo_p_sandbox_17.ts
+
 .PHONY: build-appcontainer
-build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into dist/
-	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile dist/lucid-appcontainer.exe
+build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into bin/ (ships via the `repo` extraResources; resolveBackend probes <repo>/bin first, PATH second)
+	$(BUN) build tools/appcontainer/lucid_appcontainer.ts --compile --target=bun-windows-x64 --outfile bin/lucid-appcontainer.exe
 
 .PHONY: demo-P-REPORT.9
 demo-P-REPORT.9: ## P-REPORT.9 (ADR-0162): multi-repo remote fetch + PR aggregation for the Engineering Report — remote-URL parse (GitHub vs not), commits aggregated across branches (deduped) + line totals, the Cross-repo activity annex, fail-soft on a failed fetch (local refs still shown), PRs skipped with a reason on non-GitHub/unauthed remotes, and untrusted commit/PR text neutralized (no HTML/fence breakout)
@@ -819,6 +851,10 @@ demo-P-PREVIEW.7: ## P-PREVIEW.7 (ADR-0179): the silent-white preview explained 
 demo-P-TASK.5: ## P-TASK.5 (ADR-0180): live subagent activity - the delegation card opens each subtask (generated name, live now-line, thinking/tool/text steps tailed from omp's per-subtask transcripts); read-only + path-confined + corrupt-tolerant + bounded; never-delegated sessions fail-quiet
 	$(BUN) run harness/scripts/demo_ptask5.ts
 
+.PHONY: demo-P-TASK.6
+demo-P-TASK.6: ## P-TASK.6 (ADR-0398): the delegation card for omp 18's task tool (per-item agent, task/name) - detected again, scoped to its runs by name, live until its BACKGROUND runs finish, with a green-neon clipboard whose lines write in and out
+	$(BUN) run harness/scripts/demo_p_task_6.ts
+
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
 	$(BUN) run desktop/scripts/demo_p_sysres_1.ts
@@ -912,6 +948,9 @@ demo-P-WINBOOT.2C: ## P-WINBOOT.2C (ADR-0261): the Program Files boot GATE - sta
 .PHONY: demo-portguard
 demo-portguard: ## P-PORTGUARD.1 (ADR-0305): the engine port handshake - main only renders a health answer carrying its per-launch nonce, so a foreign process squatting the engine port fails LOUDLY with a copy/paste incident report (process name, pid, start date/time, command line), never a silent roll onto a stranger's UI
 	$(BUN) run desktop/scripts/demo_portguard.ts
+.PHONY: demo-portguard-2
+demo-portguard-2: ## P-PORTGUARD.2 (ADR-0381): the engine cannot outlive its window - main hands it LUCID_MAIN_PID, it polls that pid and exits when the Electron main dies any way the quit handler cannot see (crash, Task Manager, app.exit, an updater), so an orphan can never keep port 5319 from the next launch; and a lost bind is a DIAGNOSIS (exit 48 + one plain line + the process holding the port) instead of an uncaught "Failed to start server" stack, ranked above the protected-location heuristic so a busy port is never blamed on the install folder. Proven LIVE: a real bind race and a real orphaning
+	$(BUN) run desktop/scripts/demo_p_portguard_2.ts
 .PHONY: demo-preview-open
 demo-preview-open: ## P-PREVIEW.11 (ADR-0308): the agent's `preview_open` opens the panel again - omp's intent tracing rewrites a custom tool's ACP call title to the model's intent prose (and the update carries no tool-name field at all), so the old title match silently swallowed every preview; the tool now REPORTS ITSELF over its own token'd channel like preview_screenshot/inspect/act, best-effort so an unreachable or older desktop degrades instead of failing, and fail-closed so a refused target is never reported
 	$(BUN) run desktop/scripts/demo_preview_open.ts
@@ -1099,3 +1138,19 @@ demo-P-JEV.3: ## P-JEV.3 (ADR-0378): name Jev for the agent. "Use JEV" produced 
 demo-P-JEV.4: demo-P-JEV.3 ## P-JEV.4 (ADR-0379): the Jev browser action policy, a TypeScript port of browser-use/jev-ultrafast. One new tool, browser_run, drives the already-open visible agent window toward a goal: an isolated-world DOM snapshot becomes an indexed element table, ONE typed judgment picks the operation plus a speculative target per operation, only the matching head executes through the existing sendInputEvent path, freshness guards refuse a stale decision, and every typed string is a value the calling agent supplied by name (no text-generating model, page content never becomes text). Proves the action space, the question heads, the fail-closed validation, the scripted loop through the real tool, the dev routes and main executor in the bytes, and the skill's discoverability.
 	$(BUN) test $(TEST_IGNORES) harness/browser_policy.test.ts harness/omp/browser_extension.test.ts desktop/browser_snapshot.test.ts desktop/browser_control.test.ts
 	$(BUN) run desktop/scripts/demo_p_jev_4.ts
+
+.PHONY: demo-P-SESS.3
+demo-P-SESS.3: ## P-SESS.3 (ADR-0380): past sessions load again on omp 18. The title slot omp 18 writes as line one of every session file hid the session record from a reader that trusted line one; one scanning sessionRecord() now resolves every transcript's id, proven by a fixture carrying the real omp 18 header.
+	$(BUN) test $(TEST_IGNORES) desktop/sessions_index.test.ts desktop/sessions.test.ts
+
+.PHONY: demo-P-PORTGUARD.3
+demo-P-PORTGUARD.3: demo-portguard-2 ## P-PORTGUARD.3 (ADR-0382): reap our OWN orphaned engine after a warning. ADR-0381 refused to kill an arbitrary listener; this draws the line on the owner probe's evidence (process name lucid-engine, its image path, or the bun run desktop/dev.ts fallback), names the process in a dialog, and ends its tree only on the user's Stop. Both directions pinned: a stranger's bun server.ts and a name that merely contains lucid-engine are never reaped.
+	$(BUN) test $(TEST_IGNORES) desktop/orphan_engine.test.ts desktop/port_guard.test.ts desktop/engine_boot.test.ts
+
+.PHONY: demo-P-MODEL.4
+demo-P-MODEL.4: ## P-MODEL.4 (ADR-0383): GPT-6 Sol and Luna. omp 18.2.7 -> 18.2.10 carries both ids natively; LUCID adds the cataloged prices (Astra 10/50, Sol 2/10, Luna 0.10/0.50), the 1M windows and cards, an Astra > Sol > Luna fresh-install order, and pins the Regular/Max walk across the three tiers.
+	$(BUN) test $(TEST_IGNORES) desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts harness/prompt/prefix_compaction.test.ts
+
+.PHONY: demo-P-LEGIBLE.1
+demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / Agent 365 without a content path. Each launch writes a metadata-only local-agent manifest (Defender's vendor / relatedProcess / autoApprove / mcpServers / localMcps vocabulary) to userData; MCP entries keep only name, type, URL origin or command basename, so no header, arg, env, path or query can leak. No hook seam, no listener, gate untouched.
+	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts

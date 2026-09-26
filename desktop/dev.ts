@@ -14,6 +14,8 @@
 import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
+import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
+import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { renderTurnEvalReport, evalMetricsForTurn, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
@@ -34,7 +36,9 @@ import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
 import { assessSystem, sampleSystem, topProcesses, type ProcGroup, type ProfileIo, type SystemSnapshot, type SystemVerdict } from "./system_profile.ts"; // P-SYSRES.1: resource guard
-import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { buildLocalAgentManifest, writeLocalAgentManifest } from "./local_agent_manifest.ts"; // P-LEGIBLE.1 (ADR-0384)
+import { mcpServersForAcp } from "./settings_store.ts"; // P-LEGIBLE.1: the configured MCP servers the manifest declares
 import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
 import {
   CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
@@ -86,6 +90,8 @@ import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
+import { addGrant, applyGrantAce, consumePending, loadGrants, managedPolicyFolderPlan, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
+import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
@@ -95,7 +101,9 @@ import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECA
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
-import { backend, fleetLaneArgv, interjectChildEnv } from "./acp_backend.ts";
+import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from "./acp_backend.ts";
+import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
@@ -124,12 +132,13 @@ import { injectPreviewBridge, injectPreviewShim, injectPreviewZoom } from "./pre
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
+import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 // CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
 // route reports (both flavors resolve it through the same seam).
 import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreatorEndpoint, removeCreatorTarget, upsertCreatorEndpoint, upsertCreatorTarget, type CreatorRemoteTargetDef } from "./settings_store.ts";
@@ -252,7 +261,11 @@ function whisperDeps(): WhisperRuntimeDeps {
     },
   };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
+import { planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
+import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
+import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
@@ -381,7 +394,7 @@ import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): rea
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
-import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
+import { apiAuthorized, isAllowedRequest, reqShape } from "./origin_guard.ts";
 
 /** Sanitize an untrusted /api/goal `dial` payload into a LoopDial — only known command types + valid
  *  risk tiers survive; everything else is dropped (the backend clamps it by the managed ceiling anyway). */
@@ -453,6 +466,23 @@ process.on("exit", () => { try { collabRelay?.stop(); } catch { /* already gone 
 process.on("exit", () => { void stopWhisper(); });
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => { void stopWhisper(); process.exit(0); });
+}
+// P-PORTGUARD.2: never OUTLIVE the Electron main that spawned this engine. main.ts kills this child
+// from app.on("quit"), but that handler never runs when the main process dies any other way (crash,
+// Task Manager, app.exit(), an updater swapping the binary), and Windows does not reap a spawned child
+// with its parent. The orphan kept port 5319 - and its whisper/headroom children - forever, so the NEXT
+// launch could not bind and died with "Failed to start server. Is port 5319 in use?" (2026-09-23).
+// Exiting through process.exit(0) runs the "exit" handlers above, so the managed children go down too.
+// Standalone runs (bun run desktop/dev.ts) set no LUCID_MAIN_PID and are never watched.
+const parentWatch = parentWatchConfig(process.env, process.pid);
+if (parentWatch) {
+  const watchdog = setInterval(() => {
+    if (parentAlive(parentWatch.pid, (pid) => process.kill(pid, 0))) return;
+    clearInterval(watchdog);
+    console.error(`[engine] parent process ${parentWatch.pid} is gone - exiting so port ${PORT} and the managed children are released`);
+    process.exit(0);
+  }, parentWatch.intervalMs);
+  watchdog.unref?.(); // diagnostic, never a reason to keep the loop alive
 }
 // P-STT.6 + P-STT.7: autostart the managed offline Whisper so dictation works out of the box - in the
 // INSTALLED app (bundled binary) AND in a dev run that has a resolvable binary (the runtime-staged
@@ -1109,6 +1139,15 @@ const CREATOR_DIR = process.env.LUCID_CREATOR_DIR || join(process.env.LUCID_DATA
 // no other channel from this child back up to its parent). Still one random value per launch; a
 // standalone `bun run desktop/dev.ts` has no main and mints its own exactly as before.
 const TOKEN = process.env.LUCID_MAIN_TOKEN || randomBytes(32).toString("hex");
+// P-SANDBOX.15 (ADR-0396): whether an Electron main launched us (it delivers TOKEN to its window over IPC,
+// so the served HTML must not carry it). Captured, then the variable is REMOVED from process.env so no omp
+// child or fleet lane (they inherit process.env) ever holds the UI token.
+const HAS_MAIN = !!process.env.LUCID_MAIN_TOKEN;
+delete process.env.LUCID_MAIN_TOKEN;
+// P-SANDBOX.15 (ADR-0396): the omp children's OWN token. Every LUCID_*_URL handed to a child carries this,
+// never TOKEN, and the engine accepts it only on AGENT_ROUTES (below), so the agent cannot reach human-only
+// routes such as /api/security/approve or the sandbox switch.
+const AGENT_TOKEN = randomBytes(32).toString("hex");
 // Routes the OMP CHILD (or the Electron main) calls directly. They cannot set an `x-lucid-token` header,
 // so each inherits a ready URL with `?t=<TOKEN>` and these paths additionally accept the query token.
 // Everything else stays header-only. Hoisted to module scope (was a 17-clause `||` chain rebuilt on every
@@ -1117,6 +1156,8 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/preview/serve", "/api/preview/shot", "/api/preview/open", "/api/preview/inspect", "/api/preview/act",
   "/api/kb/retrieve",        // ADR-0220: the knowledge_search tool grounds on the local compiled KB
   "/api/fleet/status",       // P-FLEET.L1: the master's fleet_status tool
+  "/api/sandbox/grant",      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool POSTs the approved grant claim
+  "/api/git/exec",           // P-SANDBOX.17 (ADR-0399): the contained agent's git shim asks the host to run git
   "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
@@ -1125,16 +1166,39 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
   "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
 ]);
+// P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. Only
+// /api/preview/serve is left out: the renderer's iframe loads it with the UI token, and no child calls it.
+const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve"));
 // P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
 // sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
 // another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
 // the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
 // P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
 // interject_extension drains only the notes addressed to it (the master child gets target "master").
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => interjectChildEnv(laneId), interject: (laneId, text) => { addInterject(laneId, text); } });
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }), interject: (laneId, text) => { addInterject(laneId, text); } });
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-LEGIBLE.1 (ADR-0384): publish the metadata-only local-agent manifest into this install's userData, so
+// endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
+// when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
+// launch, so MCP changes surface at the next start. Advisory: a failed write is logged, never fatal.
+if (process.env.LUCID_DATA_ROOT) {
+  const manifest = buildLocalAgentManifest({
+    build: BUILD,
+    version: APP_VERSION,
+    port: PORT,
+    hostExecutable: process.env.LUCID_HOST_EXE || null,
+    engineExecutable: basename(process.execPath),
+    // Agent mode answers omp's per-tool asks itself (the in-process gate and the exec/egress tier prompts
+    // still apply), and fleet full-auto removes the human ask for lanes.
+    autoApprove: uiModePosture("agent").permissionMode === "auto" || !!loadSettings().fleetAutoApprove,
+    mcpServers: mcpServersForAcp(),
+    now: new Date(),
+  });
+  const written = writeLocalAgentManifest(process.env.LUCID_DATA_ROOT, manifest);
+  if (!written.ok) console.error(`[legibility] local-agent manifest not written: ${written.error}`);
+}
 // P-HEALTH.1: the harness watches its OWN sessions so a stalled long run never needs an app restart. The
 // master session and every lane climb the same ladder (quiet, then the canned status probe, then a
 // cancel-and-resume in place). The ticker is coarse on purpose: the thresholds are minutes, and a tick
@@ -1142,6 +1206,12 @@ fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
 // the event loop is a worse bug than the stall it watches for.
 backend.startHealthWatch();
 setInterval(() => { void fleet.healthTick().catch(() => {}); }, 30_000).unref?.();
+// P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
+// BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
+// process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
+const LAST_SESSION_FILE = lastSessionPath(PORT);
+const PREVIOUS_SESSION = readLastSession(LAST_SESSION_FILE);
+backend.configureRecovery({ persistSession: (sessionId) => { writeLastSession(LAST_SESSION_FILE, { sessionId, cwd: currentWorkspace(), at: Date.now() }); } });
 // P-PWA-FOCUS.1: the lane-to-guest tap. ONE persistent observer, registered here at module scope right
 // after the lane manager exists (this file is evaluated once per engine process, and this statement sits
 // outside every route handler and every poll tick) - so it is installed exactly once and covers all lanes
@@ -1569,7 +1639,16 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
 }
 
 
-const server = Bun.serve({
+// P-PORTGUARD.2: the bind is the engine's first load-bearing act, and it CAN fail - something else may
+// already hold the port (in the field: this app's own orphaned engine). Unguarded, Bun's throw escaped
+// module evaluation and engine.log got a bare "[Uncaught Exception] ... Is port 5319 in use?" stack while
+// the window sat behind a dialog blaming the install. Catch it, say what happened in one line a human can
+// act on, and exit with ENGINE_EXIT_PORT_BUSY so main names the owning process instead of guessing.
+// The body stays at its original indentation on purpose: the wrapper is 4 lines, not a 3300-line reflow.
+const server = startEngineServer();
+function startEngineServer() {
+try {
+return Bun.serve({
   port: PORT,
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
   // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
@@ -1601,9 +1680,9 @@ const server = Bun.serve({
       // browser_* tools (via the token'd LUCID_BROWSER_URL it inherits), same ?t= convention. The two
       // main-process endpoints (/commands, /result) and the status push stay header-only: main MINTED the
       // token (LUCID_MAIN_TOKEN) and sends it as x-lucid-token on every poll.
-      const queryTokenOk = QUERY_TOKEN_ROUTES.has(p);
-      const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
-      if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
+      // P-SANDBOX.15 (ADR-0396): the agent's token (AGENT_TOKEN) opens AGENT_ROUTES only; TOKEN opens all.
+      const authorized = apiAuthorized({ path: p, headerToken: req.headers.get("x-lucid-token"), queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES });
+      if (!authorized) return new Response("forbidden", { status: 403 });
     }
     try {
       if (p === "/app.js") {
@@ -1663,7 +1742,127 @@ const server = Bun.serve({
       // in even when the DuckDB snapshot is null, so a fresh machine still shows quarantines.
       if (p === "/api/security") {
         const snap = await securitySnapshotMemo(); // memoized + single-flight (P-PERF.3); live/sandbox/acks stay fresh (in-memory, cheap)
-        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: sandboxStatus(), acks: ackView() } });
+        // P-SANDBOX.8: the standing directory grants ride the sandbox slice so the panel lists them with Revoke.
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView(), control: sandboxControlNow(), runtimeFolders: sandboxRuntimeFoldersNow() }, acks: ackView() } });
+      }
+      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool claims a user-approved directory grant.
+      // Defense in depth over the dialog: win32 + bundled helper + an EXISTING directory + a FRESH
+      // one-shot approval acp_backend parked for exactly this {path,mode} — anything else applies
+      // nothing (fail-closed). On success the helper stamps the ACE and the grant is recorded for the
+      // Security panel (listed, revocable). Every outcome is a legible verdict for the agent.
+      if (p === "/api/sandbox/grant" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown; mode?: unknown; reason?: unknown }>(req);
+        const dirPath = String(b.path ?? "").trim();
+        const mode: GrantMode = b.mode === "read-write" ? "rw" : "rx";
+        const reason = String(b.reason ?? "").slice(0, 200);
+        const deny = (why: string) => {
+          console.error(`[sandbox-grant] refused: ${why} · ${mode} ${dirPath || "(no path)"}`);
+          return json({ ok: true, data: { granted: false, detail: why } });
+        };
+        if (process.platform !== "win32") return deny("directory grants are Windows-only (AppContainer ACEs)");
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        if (!existsSync(helper)) return deny("the bundled lucid-appcontainer helper is missing");
+        let isDir = false;
+        try { isDir = statSync(dirPath).isDirectory(); } catch { /* missing → not a dir */ }
+        if (!dirPath || !isDir) return deny(`not an existing directory: ${dirPath || "(no path)"}`);
+        // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list (checked before the one-shot claim).
+        if (managedSandboxFoldersLocked(managedConfig().config)) return deny("your organization manages which folders the sandbox can reach");
+        // ONE-SHOT claim: any attempt consumes the parked approval; only a fresh exact match proceeds.
+        const claim = consumePending(loadGrants(), dirPath, mode, Date.now());
+        saveGrants(claim.store);
+        if (!claim.ok) return deny(`no matching user approval (${claim.reason ?? "unknown"}) - ask again so the user sees the dialog`);
+        const applied = applyGrantAce(helper, mode, dirPath);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: applied.ok ? "allow" : "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${applied.ok ? "acl granted" : `acl grant failed: ${applied.detail}`} · ${mode} ${dirPath}`.slice(0, 200) });
+        if (!applied.ok) return deny(`the ACL grant did not apply: ${applied.detail}`);
+        saveGrants(addGrant(loadGrants(), { path: dirPath, mode, grantedAt: new Date().toISOString(), reason }));
+        console.log(`[sandbox-grant] granted ${mode} on ${dirPath}${reason ? ` (${reason})` : ""}`);
+        return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} - standing until the user revokes it in the Security panel (${applied.detail})` } });
+      }
+      // P-SANDBOX.17 (ADR-0399): the contained agent's git. Git for Windows cannot start inside the
+      // AppContainer, so its shim asks the engine to run the real git as the user. git_broker.ts owns
+      // every check (subcommand + option allowlist, workspace-confined paths, validated and held repo
+      // config, forced overrides, network through the egress proxy); every call is audited.
+      if (p === "/api/git/exec" && req.method === "POST") {
+        const b = await readBody<{ args?: unknown; cwd?: unknown }>(req);
+        const args = Array.isArray(b.args) ? b.args.map(String) : [];
+        const cmdDir = gitCmdDir();
+        const r = await runBrokeredGit({ args, cwd: String(b.cwd ?? "") }, { workspace: currentWorkspace(), gitExe: cmdDir ? join(cmdDir, "git.exe") : null, proxyUrl: runningEgressProxyUrl() });
+        emitSecurityEvent({ category: "exec", type: "git_broker", decision: r.refused ? "block" : "allow", severity: r.refused ? "medium" : "info", tool: "git", reason: `${r.sub || "(none)"}${r.refused ? ` refused: ${r.refused}` : ` exit ${r.code}`}`.slice(0, 200) });
+        return json({ ok: true, data: { code: r.code, stdout: Buffer.from(r.stdout).toString("base64"), stderr: Buffer.from(r.stderr, "utf8").toString("base64") } });
+      }
+      // P-SANDBOX.12 (ADR-0390): the Security panel's sandbox switch. Off is a LUCID setting (no admin);
+      // On registers the loopback exemption behind UAC when it is missing; "unregister" removes it. Every
+      // change is audited, and the agent is restarted so the next spawn takes the new posture.
+      if (p === "/api/security/sandbox/mode" && req.method === "POST") {
+        const b = await readBody<{ mode?: unknown }>(req);
+        const mode = String(b.mode ?? "");
+        if (mode !== "off" && mode !== "auto" && mode !== "unregister") return json({ ok: true, data: { changed: false, detail: "unknown mode" } });
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        const plan = planModeChange({ mode } as ModeRequest, sandboxControlNow());
+        let changed = false;
+        let detail = "";
+        if (plan.action === "refuse") detail = plan.reason;
+        else if (plan.action === "set-off") { setSandboxWindowsMode("off"); changed = true; detail = "the sandbox is off - the agent restarts as the disclosed passthrough"; }
+        else if (plan.action === "unregister") {
+          const launched = setLoopbackRegistrationElevated(helper, false);
+          resetLoopbackExemptCache();
+          changed = launched && !loopbackExempted();
+          detail = changed ? "the sandbox's Windows loopback registration was removed" : launched ? "the helper ran but the registration is still present" : "the administrator prompt was declined";
+        } else {
+          if (plan.registerFirst) {
+            const launched = setLoopbackRegistrationElevated(helper, true);
+            resetLoopbackExemptCache();
+            if (!launched || !loopbackExempted()) detail = launched ? "the helper ran but Windows still lists no loopback exemption" : "the administrator prompt was declined - the sandbox stays off";
+          }
+          if (!detail) { setSandboxWindowsMode("auto"); changed = true; detail = "the sandbox is on - the agent restarts inside the AppContainer if its runtime boots there"; }
+        }
+        emitSecurityEvent({ category: "approval", type: "sandbox_mode", decision: changed ? "allow" : "block", severity: "medium", tool: "sandbox_mode", reason: `${mode}: ${detail}`.slice(0, 200) });
+        console.log(`[sandbox] panel request ${mode}: ${detail}`);
+        if (changed && mode !== "unregister") backend.restart();
+        return json({ ok: true, data: { changed, detail, control: sandboxControlNow() } });
+      }
+      // P-SANDBOX.13 (ADR-0391): the user adds a folder from the Security panel. The PATH NEVER COMES FROM
+      // THE CALLER: the engine opens the native Explorer dialog itself and grants only what a person picks
+      // there, so nothing holding the loopback token (the agent included) can name a folder to grant.
+      if (p === "/api/security/sandbox-grant/add" && req.method === "POST") {
+        const b = await readBody<{ mode?: unknown }>(req);
+        const mode: GrantMode = b.mode === "rw" ? "rw" : "rx";
+        // P-SANDBOX.14 (ADR-0394): refused before any dialog opens when policy owns the folder list.
+        const refusedAdd = refuseUserFolderAdd(sandboxControlNow());
+        if (refusedAdd) return json({ ok: true, data: { added: false, detail: refusedAdd } });
+        // P-SANDBOX.13b (ADR-0393): helperFallback opens the shell's folder dialog through the bundled helper
+        // when PowerShell's Constrained Language Mode (Smart App Control / WDAC) refuses the scripted picker.
+        const picked = await pickFolderNative({ title: `Give the LUCID sandbox ${mode === "rw" ? "read-write" : "read-only"} access to a folder`, buttonLabel: mode === "rw" ? "Allow read-write" : "Allow read-only", helperFallback: repoAsset("bin", "lucid-appcontainer.exe") });
+        if (!picked.supported) return json({ ok: true, data: { added: false, detail: `no folder dialog could open: ${picked.reason ?? "unknown cause"}` } });
+        if (!picked.path) return json({ ok: true, data: { added: false, cancelled: true, detail: "cancelled" } });
+        const refused = refuseGrantPath(picked.path, homedir());
+        if (refused) return json({ ok: true, data: { added: false, detail: refused } });
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        const applied = applyGrantAce(helper, mode, picked.path);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: applied.ok ? "allow" : "block", severity: "medium", tool: "sandbox_panel", reason: `${applied.ok ? "acl granted by the user" : `acl grant failed: ${applied.detail}`} · ${mode} ${picked.path}`.slice(0, 200) });
+        if (!applied.ok) return json({ ok: true, data: { added: false, detail: `the permission did not apply: ${applied.detail}` } });
+        saveGrants(addGrant(loadGrants(), { path: picked.path, mode, grantedAt: new Date().toISOString(), reason: "added by you in the Security panel" }));
+        console.log(`[sandbox-grant] user added ${mode} on ${picked.path}`);
+        return json({ ok: true, data: { added: true, path: picked.path, detail: `the sandbox can now ${mode === "rw" ? "read and write" : "read"} ${picked.path}` } });
+      }
+      // P-SANDBOX.8: revoke one standing directory grant from the Security panel. The record leaves the
+      // list ONLY when the helper's `--revoke-acl` succeeded — a failed revoke keeps the row visible
+      // (an ACE that persists while the panel forgets it would be invisible standing access).
+      if (p === "/api/security/sandbox-grant/revoke" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        const dirPath = String(b.path ?? "").trim();
+        if (!dirPath) return json({ ok: true, data: { revoked: false, detail: "no path" } });
+        const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
+        if (!helper || !existsSync(helper)) return json({ ok: true, data: { revoked: false, detail: "the bundled lucid-appcontainer helper is missing - cannot remove the ACE" } });
+        const r = revokeGrantAce(helper, dirPath);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant_revoke", decision: r.ok ? "allow" : "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${r.ok ? "acl revoked" : `revoke failed: ${r.detail}`} · ${dirPath}`.slice(0, 200) });
+        if (r.ok) {
+          saveGrants(removeGrant(loadGrants(), dirPath));
+          console.log(`[sandbox-grant] revoked ${dirPath}`);
+        } else {
+          console.error(`[sandbox-grant] revoke failed for ${dirPath}: ${r.detail}`);
+        }
+        return json({ ok: true, data: { revoked: r.ok, detail: r.detail } });
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
@@ -2626,6 +2825,7 @@ const server = Bun.serve({
         const r = await pickFolderNative({
           title: typeof b.title === "string" ? b.title : undefined,
           buttonLabel: typeof b.buttonLabel === "string" ? b.buttonLabel : undefined,
+          helperFallback: process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : undefined, // P-SANDBOX.13b
         });
         return json({ ok: true, data: r });
       }
@@ -3611,6 +3811,32 @@ const server = Bun.serve({
         }
         return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
       }
+      // P-MEET.1: the Meetings panel's window onto the Lucid Meeting Hub (its one write: marking an action item
+      // done). UI token only - none of these is in AGENT_ROUTES, so an omp child cannot reach them. Everything here is a
+      // pass-through to the Hub's bearer-scoped /ext/* surface, normalized for the renderer. Nothing about a
+      // meeting is cached or written to disk on this side. The renderer never receives the bearer: it rides
+      // from meetings_hub.ts straight to the Hub, and only the one-time pairing claim returns it (so the
+      // renderer can push it into the OS-encrypted vault, which is reachable only from the Electron main
+      // process - see meetings_hub.ts for why this transit exists).
+      if (p === "/api/meetings") {
+        const limit = Number(url.searchParams.get("limit") ?? 50);
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        return json({ ok: true, data: await meetingsView({ limit, offset, q: url.searchParams.get("q") ?? "" }) });
+      }
+      if (p === "/api/meetings/detail") {
+        const r = await meetingDetail(url.searchParams.get("file") ?? "");
+        return json({ ok: true, data: r });
+      }
+      if (p === "/api/meetings/todo" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; done?: unknown }>(req);
+        return json({ ok: true, data: await markTodo(String(b.id ?? ""), !!b.done) });
+      }
+      if (p === "/api/meetings/pair" && req.method === "POST") {
+        const b = await readBody<{ code?: unknown }>(req);
+        const r = await claimPairing(String(b.code ?? ""));
+        // `vaultRef` tells the renderer WHERE to store the token; the token itself is returned exactly once.
+        return json({ ok: true, data: { ok: r.ok, error: r.error, token: r.token, vaultRef: MEETING_HUB_CRED_REF } });
+      }
       // ADR-0221: "Test endpoint" - a one-vector connectivity probe against the ENTERED values (incl. an inline
       // key, so it works before saving/relaunch), reporting the dimension the model returns so the UI auto-fills it.
       if (p === "/api/embeddings/test" && req.method === "POST") {
@@ -4469,6 +4695,44 @@ const server = Bun.serve({
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });
       }
+      // P-RECOVER.1 (ADR-0385): self-recovery the user can see. Behind the same token gate as every /api
+      // route above. Every body field is type- and shape-checked before it reaches the backend or the
+      // incident store (ids address files and ACP sessions, so a malformed one is a 400, never a lookup).
+      // Nothing here submits anything: submission is the user opening the prefilled issue URL themselves.
+      if (p === "/api/recovery/state" && req.method === "GET") {
+        return json({ ok: true, data: { previous: PREVIOUS_SESSION, currentSessionId: backend.currentSessionId(), incidents: listIncidents().filter((m) => !m.seen).map(incidentView) } });
+      }
+      if (p === "/api/recovery/resume" && req.method === "POST") {
+        const b = parseResumeBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        return json({ ok: true, data: await backend.resumeSession(b.value.sessionId) });
+      }
+      if (p === "/api/recovery/recover" && req.method === "POST") return json({ ok: true, data: await backend.recoverMaster() });
+      if (p === "/api/incidents" && req.method === "GET") {
+        return json({ ok: true, data: listIncidents().map(incidentView) });
+      }
+      if (p === "/api/incidents/report" && req.method === "GET") {
+        const q = parseIncidentIdBody({ id: url.searchParams.get("id") });
+        if (!q.ok) return Response.json({ ok: false, error: q.error }, { status: 400 });
+        // Rebuilt from the validated record (incident_store.ts), never a file's text: no path is read from
+        // the metadata, and the report is redacted again on the way out.
+        const markdown = incidentReport(q.value.id);
+        if (markdown === null) return Response.json({ ok: false, error: "no such incident" }, { status: 404 });
+        return json({ ok: true, data: { markdown } });
+      }
+      if (p === "/api/incidents/seen" && req.method === "POST") {
+        const b = parseIncidentIdBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        return json({ ok: true, data: { ok: markIncidentSeen(b.value.id) } });
+      }
+      if (p === "/api/incidents/update" && req.method === "POST") {
+        const b = parseIncidentUpdate(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { id, outcome, note } = b.value;
+        // The store redacts the note (home folder included) before it is written.
+        const meta = updateIncident(id, { outcome, events: note ? [{ at: Date.now(), what: note }] : [] });
+        return json({ ok: true, data: meta ? incidentView(meta) : null });
+      }
       // P-INTERJECT.1: mid-turn operator interjections. POST queues a note for "master" or a laneId
       // (store enforces trim/4000-char/8-note discipline; validation here mirrors it for a crisp error).
       // GET /pending returns AND clears atomically - the single consumer is the target's omp child
@@ -4544,7 +4808,15 @@ const server = Bun.serve({
           const shared = collabManager.active ? backend.attachTurn((event) => {
             try { collabManager.tapEvent(event as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ }
           }) : undefined;
-          try { await execution; } finally { shared?.detach(); }
+          try { await execution; }
+          catch (e) {
+            // P-RECOVER.1 (ADR-0385): the stream wrapper masks every error as "The chat stream failed.", which
+            // hid the one refusal the window can act on. Pass exactly that fixed text through; nothing else.
+            if (!(e instanceof Error) || e.message !== TURN_ALREADY_RUNNING) throw e;
+            emit({ type: "error", message: TURN_ALREADY_RUNNING });
+            emit({ type: "done" });
+          }
+          finally { shared?.detach(); }
         };
         const activeTurn = backend.turnStatus();
         if (activeTurn?.running) {
@@ -4804,9 +5076,12 @@ const server = Bun.serve({
       // to the real renderer; no-store so it's never cached across launches.
       // P-TRAINER.7: trainer.html is a same-origin iframe that calls the token-gated /api/trainer routes, so
       // it needs the per-launch token meta injected exactly like index.html.
+      // P-SANDBOX.15 (ADR-0396): NOT when an Electron main launched us. `GET /` needs no token, so any local
+      // process (the agent's own curl included) could read the meta tag; under Electron the preload fetches
+      // the token from main over IPC instead. Only a standalone browser dev run (`bun run web`) still injects.
       if (rel === "index.html" || rel === "trainer.html") {
         const html = (await Bun.file(join(ROOT, rel)).text())
-          .replace("</head>", `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
+          .replace("</head>", HAS_MAIN ? "</head>" : `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       }
       const file = Bun.file(join(ROOT, rel));
@@ -4837,52 +5112,69 @@ const server = Bun.serve({
     return new Response("not found", { status: 404 });
   },
 });
+} catch (err) {
+  const e = err as NodeJS.ErrnoException;
+  if (e?.code !== "EADDRINUSE" && !/is port \d+ in use/i.test(e?.message ?? "")) throw err; // not ours to explain
+  console.error(
+    `[engine] FATAL: cannot start - port ${PORT} is already in use (EADDRINUSE). Another process is ` +
+    `listening on 127.0.0.1:${PORT}; most often that is a leftover ${basename(process.execPath)} from a ` +
+    `previous session. End it and relaunch, or set LUCID_PORT to a free port for a separate instance.`,
+  );
+  process.exit(ENGINE_EXIT_PORT_BUSY);
+}
+}
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
 // THIS process) and inherits process.env, so setting it here — after the server binds — is enough; no
 // ACPClient env plumbing needed. 127.0.0.1 (not localhost) matches the loopback bind.
-process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${AGENT_TOKEN}`;
 // P-PREVIEW.6b (ADR-0153): the agent's preview_inspect tool GETs this (with ?selector=&what=) to read the DOM.
-process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${AGENT_TOKEN}`;
 // P-PREVIEW.6c (ADR-0153): preview_click / preview_type GET this (with ?action=&selector=&value=) to act.
-process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${AGENT_TOKEN}`;
 // P-PREVIEW.11 (ADR-0308): preview_open POSTs {path} here so the panel opens from the TOOL's own call.
 // The old path (acp_backend matching "preview_open: <path>" in the ACP title) is dead under intent
 // tracing, which rewrites that title to the model's intent prose; it stays only as a fallback.
-process.env.LUCID_PREVIEW_OPEN_URL = `http://127.0.0.1:${server.port}/api/preview/open?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_OPEN_URL = `http://127.0.0.1:${server.port}/api/preview/open?t=${AGENT_TOKEN}`;
 // ADR-0220: the `knowledge_search` tool (omp subprocess) POSTs the user's query here to ground on the local
 // compiled knowledge base. Token'd URL, same pattern as the preview tools; retrieval returns delimited untrusted DATA.
-process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${TOKEN}`;
+process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${AGENT_TOKEN}`;
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
-process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${TOKEN}`;
+process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
+// P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
+// claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
+// fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
+process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
+// P-SANDBOX.17 (ADR-0399): tools/git-broker/git_shim.ts POSTs the contained agent's git calls here.
+process.env.LUCID_GIT_URL = `http://127.0.0.1:${server.port}/api/git/exec?t=${AGENT_TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the
 // real tool name exists ONLY inside omp's hook API - the ACP update carries a coarse `kind` and an
 // intent-shadowed title. Unset means the extension self-skips, and reports fall back to the coarse kind.
-process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${TOKEN}`;
+process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${AGENT_TOKEN}`;
 // P-JEV.2 (ADR-0377): the judgment extension POSTs every typed judgment (question, answers, backend,
 // latency, error) here, because omp records none of them and has no hook for them. Unset means the
 // extension self-skips and the chat draws no judgment row.
-process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${TOKEN}`;
+process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${AGENT_TOKEN}`;
 // P-KG.3: the agent's memory_recall / memory_retain tools reach the UNLOCKED personal knowledge graph
 // through these. Both fail closed when the vault is locked: recall returns no hits and retain refuses,
 // so a locked vault can never be mistaken for an empty one (which would teach the model it has no memory)
 // nor silently swallow a write (which would teach it that it does).
-process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${TOKEN}`;
-process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${TOKEN}`;
+process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${AGENT_TOKEN}`;
+process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${AGENT_TOKEN}`;
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
 // token'd drain endpoint (same pattern as LUCID_FLEET_STATUS_URL - /api requires the per-launch token,
 // which a child can only carry as ?t=). Per-child LUCID_INTERJECT_TARGET rides the spawn env overlay
 // (interjectChildEnv in acp_backend.ts for the master, the fleet env dep above for lanes).
 process.env.LUCID_DEV_URL = `http://127.0.0.1:${server.port}`;
-process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${TOKEN}`;
+process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${AGENT_TOKEN}`;
 // P-BROWSER.1 (wave 2): the omp child's browser_* tools reach the agent-browser routes through this
 // token'd BASE (the extension appends /open, /capture, /scroll, /close, /shot and keeps the ?t=).
 // Gated on LUCID_MAIN_TOKEN: without the Electron main there is no window executor, so the env stays
 // unset and browser_extension.ts skips registration entirely (bun-only / plain-browser dev runs).
-if (process.env.LUCID_MAIN_TOKEN) process.env.LUCID_BROWSER_URL = `http://127.0.0.1:${server.port}/api/browser?t=${TOKEN}`;
+if (HAS_MAIN) process.env.LUCID_BROWSER_URL = `http://127.0.0.1:${server.port}/api/browser?t=${AGENT_TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp
@@ -4894,3 +5186,27 @@ await refreshRecall();
 backend.startAutomationScheduler();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
+
+/** P-SANDBOX.12 (ADR-0390): the facts the panel's sandbox switch is drawn from (see sandbox_control.ts). */
+function sandboxControlNow(): SandboxControlView {
+  const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
+  const helperBundled = !!helper && existsSync(helper);
+  return sandboxControlView({
+    platform: process.platform,
+    helperBundled,
+    mode: loadSettings().sandboxWindowsMode,
+    policyRequiresIsolation: managedSandboxLocksOn(managedConfig().config), // P-SANDBOX.14: either policy knob
+    registered: helperBundled && loopbackExempted(),
+    foldersLocked: managedSandboxFoldersLocked(managedConfig().config),
+  });
+}
+
+/** P-SANDBOX.13 (ADR-0391): the folders LUCID itself grants the contained agent, for the panel's list. The
+ *  same inputs acp_backend passes to appContainerRuntimeGrants, so the list matches the real grants. */
+function sandboxRuntimeFoldersNow(): RuntimeFolderView[] {
+  if (!sandboxControlNow().available) return [];
+  let shellPath: string | null = null;
+  try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config */ }
+  const g = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: process.env.LUCID_OMP_BIN, shellPath, gitRoot: discoverGitRoot(process.env) });
+  return runtimeFolderView({ workspace: currentWorkspace(), grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir, policy: managedPolicyFolderPlan(false) });
+}

@@ -90,3 +90,42 @@ export function tokenValid(provided: string | null, expected: string): boolean {
   for (let i = 0; i < expected.length; i++) diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
   return diff === 0;
 }
+
+// ── P-SANDBOX.15 (ADR-0396): the agent gets its own, narrower token ─────────────
+// Until now the omp child reached the engine with the SAME per-launch token the renderer uses, and the
+// engine accepts that token in a header on every /api route. So anything running as the agent (a prompt-
+// injected tool call, a script it wrote, a process inside the AppContainer) could call human-only routes
+// such as /api/security/approve. The engine now mints a SECOND token for its children and accepts it only on
+// the routes the children actually call (`agentRoutes`); the UI token keeps its old reach.
+
+export interface ApiAuthInput {
+  path: string;
+  headerToken: string | null;
+  queryToken: string | null;
+  uiToken: string;
+  agentToken: string;
+  /** Routes that may carry a token as `?t=` (a child or an iframe cannot set a header). */
+  queryRoutes: ReadonlySet<string>;
+  /** Routes the agent's token opens. Every other route refuses it. */
+  agentRoutes: ReadonlySet<string>;
+}
+
+/** PURE: may this /api request proceed? The UI token works in the header everywhere and as `?t=` on the query
+ *  routes (unchanged from ADR-0024). The agent token works (header or `?t=`) ONLY on agentRoutes. Anything
+ *  else, including an empty or unset token, is refused (fail-closed). */
+export function apiAuthorized(i: ApiAuthInput): boolean {
+  const query = i.queryRoutes.has(i.path) ? i.queryToken : null;
+  if (tokenValid(i.headerToken, i.uiToken) || tokenValid(query, i.uiToken)) return true;
+  if (!i.agentRoutes.has(i.path)) return false;
+  return tokenValid(i.headerToken, i.agentToken) || tokenValid(i.queryToken, i.agentToken);
+}
+
+/** PURE (P-SANDBOX.15): is `url` a page served by THIS engine? The Electron main hands the UI token over IPC
+ *  only to a window document on the engine's own loopback origin, never to a page the window navigated to. */
+export function isEngineDocument(url: string | undefined | null, port: number): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1") && u.port === String(port);
+  } catch { return false; }
+}

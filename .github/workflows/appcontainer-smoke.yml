@@ -1,0 +1,41 @@
+# P-SANDBOX.10 (ADR-0387): the Windows AppContainer smoke. A green sandbox pill must mean the contained
+# agent actually boots. Three field failures in a row (no stdio, no grants, bun 1.3.14's cwd walk) all
+# passed every unit test and every Linux check, because none of them ran a real AppContainer. This job
+# does: it builds the helper, then runs the REAL omp inside the container on the SAME bun version the
+# installer bundles (read from desktop/build/fetch-runtimes.ts), and fails unless it answers.
+name: Windows AppContainer smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tools/appcontainer/**"
+      - "harness/runs/sandbox_exec.ts"
+      - "desktop/acp_backend.ts"
+      - "desktop/build/fetch-runtimes.ts"
+      - "harness/scripts/appcontainer_smoke.ps1"
+      - ".github/workflows/appcontainer-smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the bundled bun version
+        id: bun
+        shell: pwsh
+        run: |
+          $v = [regex]::Match((Get-Content desktop/build/fetch-runtimes.ts -Raw), 'const BUN_VERSION = "([0-9.]+)"').Groups[1].Value
+          if (-not $v) { throw "BUN_VERSION not found in fetch-runtimes.ts" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.bun.outputs.version }}
+      - name: Build the helper
+        run: |
+          bun install
+          bun build tools/appcontainer/lucid_appcontainer.ts --compile --outfile bin/lucid-appcontainer.exe
+      - name: Contained omp must boot
+        shell: pwsh
+        run: ./harness/scripts/appcontainer_smoke.ps1
