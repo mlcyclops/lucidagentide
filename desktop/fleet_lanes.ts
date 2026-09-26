@@ -36,6 +36,7 @@ import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSa
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
 import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
+import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -193,6 +194,9 @@ export interface FleetLaneDeps {
   argv: () => { cmd: string; args: string[] };
   /** The master session's current model - the lane default. */
   masterModel: () => string;
+  /** P-SWITCH.2 (ADR-0404): the omp session Main holds right now, so a lane never loads it too. Optional:
+   *  a manager built without it (tests, tools) only enforces the lane-vs-lane half of the rule. */
+  masterSessionId?: () => string | null;
   /** Machine sample for admission + the dashboard headroom bar. */
   sample?: () => Promise<SystemSnapshot>;
   /** P-FLEET.L16: is `path` a directory? Async + BOUNDED by the caller. Injectable so tests can model
@@ -289,7 +293,7 @@ export class FleetLaneManager {
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
   readonly #observers = new Set<LaneObserver>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string>; interject?: (laneId: string, text: string) => void };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { masterSessionId?: () => string | null; sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string>; interject?: (laneId: string, text: string) => void };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -301,7 +305,7 @@ export class FleetLaneManager {
   #autoDefault = false;
 
   constructor(deps: FleetLaneDeps) {
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select.
@@ -314,6 +318,8 @@ export class FleetLaneManager {
   async spawn(opts: { cwd: string; model?: string; name?: string; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
     if (!cwd) return { ok: false, reason: `not a directory: ""` };
+    const claim = this.#claimRefusal(opts.resume?.sessionId ?? null);
+    if (claim) return { ok: false, reason: claim };
     // P-FLEET.L16 (the frozen "Spawning\u2026" button): this used to be a bare statSync. On a cloud-backed
     // folder (OneDrive files-on-demand) a dehydrated placeholder can BLOCK that call for however long
     // hydration takes - and because it blocked Bun's ONE event loop, it wedged every route in the app,
@@ -662,7 +668,22 @@ export class FleetLaneManager {
 
   /** How many lanes are actually carrying work right now (metadata; nothing gates on it). */
   liveLanes(): number {
-    return [...this.#lanes.values()].filter((l) => l.status !== "stopped" && l.status !== "error").length;
+    return [...this.#lanes.values()].filter((l) => laneHoldsSession(l.status)).length;
+  }
+
+  /** P-SWITCH.2 (ADR-0404): every lane as the ownership rule reads it, synchronously (status() also
+   *  samples the machine, which a route deciding who owns a session must not wait on). */
+  owners(): OwnerLane[] {
+    return [...this.#lanes.values()].map((l) => ({ id: l.id, name: l.name, sessionId: l.sessionId, status: l.status }));
+  }
+
+  /** Why `sessionId` may not be loaded into a lane now: Main holds it, or a live lane other than `except`
+   *  does. Null when it is free (or there is no session to load). */
+  #claimRefusal(sessionId: string | null, except?: string): string | null {
+    if (!sessionId) return null;
+    if (this.#deps.masterSessionId?.() === sessionId) return "its session is open in the main composer. Open it there, or switch Main to another session first.";
+    const holder = [...this.#lanes.values()].find((l) => l.id !== except && l.sessionId === sessionId && laneHoldsSession(l.status));
+    return holder ? `its session is already running in spoke "${holder.name}".` : null;
   }
 
   // ── P-PWA-FOCUS.1: watching a lane's CONVERSATION, not just its status ────────────────────────────
@@ -912,6 +933,10 @@ export class FleetLaneManager {
    *  cwd/model/name, memory carried. The old ask (if any) died as a DENY on exit; nothing gated is ever
    *  auto-replayed - a re-attempted action re-asks the human through the normal permission path. */
   async #recover(lane: Lane): Promise<{ ok: boolean; reason?: string }> {
+    // P-SWITCH.2: a stopped or crashed lane let go of its session, so Main (or a Recover) may have opened
+    // it since. Reviving it here would load it a second time.
+    const claim = this.#claimRefusal(lane.sessionId, lane.id);
+    if (claim) return { ok: false, reason: `this lane cannot come back: ${claim}` };
     lane.pending?.resolve(false);
     try { lane.client.stop(); } catch { /* already dead */ }
     // P-GATE-PATH.1 (ADR-0356): a revive is a fresh spawn, so it re-asks for the gated argv and refuses

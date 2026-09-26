@@ -11,6 +11,22 @@
 // module decides what the renderer offers, and app.ts paints it.
 
 import { promoteRefusal } from "./composer_target.ts";
+import { laneHoldsSession, type SessionLive } from "../session_owner.ts"; // P-SWITCH.2 (ADR-0404): the engine's own rule
+
+/** P-SWITCH.2: the sidebar line for a session that is live somewhere, in the orbit's state colors.
+ *  Null for an idle Main session: the row's active highlight already says it is open there. */
+export function liveBadge(live: SessionLive | undefined): { text: string; tone: "work" | "ask" | "ready" | "done" | "dim" } | null {
+  if (!live) return null;
+  if (live.where === "main") return live.busy ? { text: "working in Main", tone: "work" } : null;
+  const spoke = `spoke "${clip(live.name)}"`;
+  switch (live.status) {
+    case "working": return { text: `${spoke} \u00b7 working`, tone: "work" };
+    case "needs-approval": return { text: `${spoke} \u00b7 needs your approval`, tone: "ask" };
+    case "awaiting-input": return { text: `${spoke} \u00b7 ready`, tone: "ready" };
+    case "done": return { text: `${spoke} \u00b7 done`, tone: "done" };
+    default: return { text: `${spoke} \u00b7 ${live.status}`, tone: "dim" };
+  }
+}
 
 /** A live lane as the fleet reports it: enough to know which session it holds and whether it can attach. */
 export interface SwitchLane { id: string; sessionId: string | null; status: string }
@@ -39,12 +55,9 @@ export type SwitchPlan =
   /** Main is working: the user chooses between a spoke and stopping it. */
   | { kind: "ask"; reason: string };
 
-/** A lane whose child process is gone no longer holds its session file; any other status does. */
-const LANE_GONE: Record<string, true> = { stopped: true, error: true };
-
 /** Decide what opening `targetId` does. */
 export function planSessionSwitch(s: SwitchState): SwitchPlan {
-  const owner = s.lanes.find((l) => l.sessionId === s.targetId && !LANE_GONE[l.status]);
+  const owner = s.lanes.find((l) => l.sessionId === s.targetId && laneHoldsSession(l.status));
   if (owner) {
     const refusal = promoteRefusal(owner.status);
     return refusal ? { kind: "refuse", reason: refusal } : { kind: "promote", laneId: owner.id };

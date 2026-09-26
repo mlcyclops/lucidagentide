@@ -249,6 +249,36 @@ test("spawn with resume brings the recorded conversation back: seeded transcript
   expect((await live.status()).lanes[0]!.turns).toBe(435);
 }, TIMEOUT);
 
+// P-SWITCH.2 (ADR-0404): one session, one owner. A lane never loads a session Main or another live lane
+// holds; a spawn that would is refused by name and creates nothing, and a stopped lane cannot come back
+// on a session someone else opened meanwhile.
+test("spawn refuses a session Main or a live lane holds, and creates nothing", async () => {
+  let mainSession: string | null = "main-held";
+  delete process.env.FAKE_ACP_MODE;
+  live = new FleetLaneManager({ argv: () => ({ cmd: "bun", args: [FAKE] }), masterModel: () => "m", masterSessionId: () => mainSession, sample: async () => healthy });
+  const resume = (sessionId: string) => ({ cwd: import.meta.dir, resume: { sessionId, transcript: [], turns: 0 } });
+
+  const onMain = await live.spawn(resume("main-held"));
+  expect(onMain.ok).toBe(false);
+  expect(onMain.reason).toContain("main composer");
+
+  const first = await live.spawn({ cwd: import.meta.dir, name: "first" });
+  const held = first.lane!.sessionId!;
+  const twice = await live.spawn(resume(held));
+  expect(twice.ok).toBe(false);
+  expect(twice.reason).toContain(`spoke "first"`);
+  expect((await live.status()).lanes).toHaveLength(1);
+
+  // Stopped, the lane lets go; Main opens that session; the lane may not come back onto it.
+  live.stop(first.lane!.id);
+  mainSession = held;
+  const back = await live.respawn(first.lane!.id);
+  expect(back.ok).toBe(false);
+  expect(back.reason).toContain("main composer");
+  mainSession = null;
+  expect((await live.respawn(first.lane!.id)).ok).toBe(true);
+}, TIMEOUT);
+
 test("retry re-sends the LAST prompt after a crash, without the user asking twice", async () => {
   live = manager({ mode: "crash" });
   const r = await live.spawn({ cwd: import.meta.dir });

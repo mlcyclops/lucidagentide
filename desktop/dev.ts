@@ -105,6 +105,7 @@ import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from 
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
@@ -1175,10 +1176,16 @@ const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter
 // the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
 // P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
 // interject_extension drains only the notes addressed to it (the master child gets target "master").
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }), interject: (laneId, text) => { addInterject(laneId, text); } });
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), masterSessionId: () => backend.currentSessionId(), recordLaneSession: appendLaneLedger, env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }), interject: (laneId, text) => { addInterject(laneId, text); } });
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+/** P-SWITCH.2 (ADR-0404): the live spoke holding session `id`, if any (Main's own claim is checked by the
+ *  lane manager itself, through masterSessionId above). */
+function spokeHolding(id: string): SessionLiveSpoke | null {
+  const live = sessionLive(id, { sessionId: null, busy: false }, fleet.owners());
+  return live?.where === "spoke" ? live : null;
+}
 // P-LEGIBLE.1 (ADR-0384): publish the metadata-only local-agent manifest into this install's userData, so
 // endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
 // when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
@@ -1361,6 +1368,10 @@ const json = (data: unknown) =>
  *  request is fine and the state is not; `busy` is the engine's reason, shown to the user verbatim. */
 const switchRefused = (busy: string, sessionId: string | null) =>
   Response.json({ ok: false, busy, sessionId, error: `Main is busy (${busy}). Send force: true to stop it and switch.` }, { status: 409, headers: { "cache-control": "no-store" } });
+/** P-SWITCH.2 (ADR-0404): the 409 for a session a live spoke holds. `heldBy` lets a client attach to that
+ *  spoke instead; no flag overrides it, because two processes on one session corrupt its history. */
+const sessionHeld = (lane: SessionLiveSpoke) =>
+  Response.json({ ok: false, heldBy: { laneId: lane.laneId, name: lane.name, status: lane.status }, error: `This session is running in spoke "${lane.name}". Attach to that spoke instead.` }, { status: 409, headers: { "cache-control": "no-store" } });
 
 // P-SEC.1 (ADR-0209): a caught exception's message/stack must never flow into a client response
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
@@ -3667,7 +3678,14 @@ return Bun.serve({
         return json(r);
       }
       // real omp ACP backend (genuine model replies + live session config)
-      if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
+      if (p === "/api/sessions") {
+        // P-SWITCH.2 (ADR-0404): each row says where it is live (Main, working or not, or a spoke and its
+        // state), so the sidebar shows what is running before anyone clicks.
+        const list = listSessions();
+        const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
+        const lanes = fleet.owners();
+        return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest } });
+      }
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
       if (p === "/api/session" && url.searchParams.get("id")) { // P-PERF.4: tail-first page (limit=0 = all)
         const lim = Math.max(0, Math.trunc(Number(url.searchParams.get("limit")) || 0));
@@ -3683,6 +3701,10 @@ return Bun.serve({
       if (p === "/api/session/busy") return json({ ok: true, data: { busy: backend.switchBlocker(), sessionId: backend.currentSessionId() } });
       if (p === "/api/session/load" && req.method === "POST") {
         const { id, force } = await readBody<{ id?: unknown; force?: unknown }>(req);
+        // P-SWITCH.2 (ADR-0404): a session a live spoke holds is never loaded into Main as well; `force`
+        // stops Main's own work, it does not take a session away from a spoke.
+        const held = spokeHolding(String(id));
+        if (held) return sessionHeld(held);
         const busy = force === true ? null : backend.switchBlocker();
         if (busy) return switchRefused(busy, backend.currentSessionId());
         await backend.loadSession(String(id));
@@ -3691,6 +3713,9 @@ return Bun.serve({
       if (p === "/api/session/delete" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
         const sid = String(id);
+        // P-SWITCH.2: deleting the file under a running spoke would leave it appending to nothing.
+        const held = spokeHolding(sid);
+        if (held) return json({ ok: true, data: { ok: false, error: `This session is running in spoke "${held.name}". Stop that spoke first, then delete it.` } });
         // If it's the live session, close it first so omp releases the file handle (Windows
         // locks open files), then start fresh. newSession() does session/close + ensureSession.
         if (backend.currentSessionId() === sid) await backend.newSession().catch(() => {});
@@ -4734,6 +4759,8 @@ return Bun.serve({
       if (p === "/api/recovery/resume" && req.method === "POST") {
         const b = parseResumeBody(await readBody<unknown>(req).catch(() => null));
         if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const held = spokeHolding(b.value.sessionId); // P-SWITCH.2 (ADR-0404)
+        if (held) return json({ ok: true, data: { ok: false, error: `That session is running in spoke "${held.name}", so it was not reopened in Main.` } });
         return json({ ok: true, data: await backend.resumeSession(b.value.sessionId) });
       }
       if (p === "/api/recovery/recover" && req.method === "POST") return json({ ok: true, data: await backend.recoverMaster() });

@@ -5,7 +5,7 @@
 // one session in two omp processes.
 
 import { describe, expect, test } from "bun:test";
-import { planSessionSwitch, switchSheetCopy, type SwitchLane } from "./session_switch.ts";
+import { liveBadge, planSessionSwitch, switchSheetCopy, type SwitchLane } from "./session_switch.ts";
 
 const lane = (id: string, sessionId: string | null, status: string): SwitchLane => ({ id, sessionId, status });
 
@@ -39,6 +39,20 @@ describe("planSessionSwitch", () => {
       expect(planSessionSwitch({ busy: null, mainSessionId: "A", targetId: "B", lanes: [lane("L2", "B", status)] })).toEqual({ kind: "load" });
       expect(planSessionSwitch({ busy: "a turn is running", mainSessionId: "A", targetId: "B", lanes: [lane("L2", "B", status)] }).kind).toBe("ask");
     }
+  });
+});
+
+describe("liveBadge", () => {
+  test("names the spoke and its state; an approval wait reads as the ask tone", () => {
+    expect(liveBadge({ where: "spoke", laneId: "L", name: "Refactor tests", status: "needs-approval" }))
+      .toEqual({ text: `spoke "Refactor tests" \u00b7 needs your approval`, tone: "ask" });
+    expect(liveBadge({ where: "spoke", laneId: "L", name: "x", status: "working" })?.tone).toBe("work");
+  });
+
+  test("Main shows only while it works; on disk shows nothing", () => {
+    expect(liveBadge({ where: "main", busy: true })).toEqual({ text: "working in Main", tone: "work" });
+    expect(liveBadge({ where: "main", busy: false })).toBeNull();
+    expect(liveBadge(undefined)).toBeNull();
   });
 });
 
