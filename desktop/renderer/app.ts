@@ -42,6 +42,9 @@ import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aw
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
+import { describeTool } from "./tool_describe.ts"; // P-PROGRESS.1: what a tool call is doing, in plain words
+import { humanMs, progressLine, QUIET_MS, STREAMING_MS, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) progress view helpers
+import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (type only: the module itself is engine-side)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
@@ -133,7 +136,8 @@ import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setId
 // P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
 import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
-import { JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
+import { JUMP_SHOW_PX, anchorTop, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor } from "./scroll_jump.ts";
+import { setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -945,33 +949,87 @@ function addToolFailure(entry: ToolFailEntry): void {
   tfGroup.el.innerHTML = toolfailGroupHtml(tfGroup.entries, tfGroup.el.classList.contains("open"));
   scrollChat();
 }
-// Stick-to-bottom autoscroll, rAF-batched for buttery playback under rapid tokens.
-// Many scrollChat() calls within one frame coalesce into a SINGLE scrollTop write, so the
-// browser never thrashes layout mid-stream. We only follow output while the user is parked
-// near the bottom (STICK_PX); the moment they scroll UP to re-read, autoscroll releases and
-// stays released until they come back down - so re-reading mid-stream is never yanked.
-// Tight stick window: we only auto-FOLLOW while the user is essentially parked at the bottom.
-// Slow output advances < STICK_PX per frame, so it keeps pace; a fast burst grows the page by more
-// than STICK_PX between frames, which releases the follow - and the jump-down button (below) lets the
-// reader catch up a page at a time instead of being yanked. That's the behaviour the user asked for.
-const STICK_PX = 72;
-let scrollPending = false; // a follow-frame is already queued
-let lastWroteTop = -1;     // the scrollTop value WE last wrote - lets us spot a user scroll-up
-const nearBottom = (c: HTMLElement): boolean => c.scrollHeight - c.scrollTop - c.clientHeight < STICK_PX;
-const scrollChat = (): void => {
+// P-SCROLL.1 (ADR-0405): the chat FOLLOWS new output, and only the reader ends that. A scroll up that
+// the reader's own input drove releases the follow (re-reading mid-stream is never yanked); reaching
+// the bottom again, the jump-to-newest button, or sending a prompt re-engages it. The old rule
+// re-measured the distance to the bottom AFTER new content had landed, so one fast burst taller than
+// the stick window released the follow by itself and the chat stopped scrolling while nobody had
+// touched it (reported 2026-09-26). The decision is scroll_jump.ts nextFollow. Pinning is rAF-batched
+// (many scrollChat() calls in one frame coalesce into ONE scrollTop write), and a ResizeObserver pins
+// growth no event announces: images decoding, a settled answer re-rendering into sections, a
+// replaced thread's late layout, the composer growing.
+let following = true;
+let scrollPending = false;  // a pin-frame is already queued
+let lastTop = 0;            // scrollTop at the previous scroll event, so up can be told from down
+let userScrollAt = 0;       // when the reader last drove the scroller (wheel, touch, scroll keys)
+let scrollbarHeld = false;  // a scrollbar drag or touch hold is in progress
+const USER_SCROLL_MS = 700; // a smooth wheel or key scroll keeps emitting scroll events this long
+function pinToEnd(): void {
   const c = $("#chat");
   if (!c) return;
-  // A user scroll-up since our last programmatic write releases the stick until they return.
-  if (lastWroteTop >= 0 && c.scrollTop < lastWroteTop - 2 && !nearBottom(c)) { updateJump(); return; }
-  if (scrollPending || !nearBottom(c)) { updateJump(); return; }
+  c.scrollTop = c.scrollHeight;
+  lastTop = c.scrollTop;
+}
+const scrollChat = (): void => {
+  if (!following) { updateJump(); return; }
+  if (scrollPending) return;
   scrollPending = true;
   requestAnimationFrame(() => {
     scrollPending = false;
-    const cc = $("#chat");
-    if (cc && nearBottom(cc)) { cc.scrollTop = cc.scrollHeight; lastWroteTop = cc.scrollTop; }
+    if (following) pinToEnd(); // re-checked: the reader may have scrolled up since this was queued
     updateJump();
   });
 };
+/** Wire the follow once, at boot. Release is immediate on an upward wheel or key so a pin frame queued
+ *  between the input and its scroll event cannot cancel the reader's (smooth) scroll, but only when the
+ *  CHAT is the scroller that moves: a wheel over an open reasoning block or a tall code block scrolls that
+ *  block, #chat emits no scroll event, and releasing there left the follow off at the bottom for good. */
+function initChatFollow(): void {
+  const c = $("#chat");
+  if (!c) return;
+  const mark = (): void => { userScrollAt = performance.now(); };
+  /** Will an upward scroll starting at `from` move #chat itself? No when #chat is already at its top, or a
+   *  scrollable element between `from` and #chat can still scroll up and absorbs it. */
+  const chatScrollsUp = (from: EventTarget | null): boolean => {
+    if (c.scrollTop <= 0) return false;
+    for (let n = from instanceof Element ? from : null; n && n !== c; n = n.parentElement) {
+      if (n.scrollTop > 0 && n.scrollHeight > n.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(n).overflowY)) return false;
+    }
+    return true;
+  };
+  c.addEventListener("wheel", (e) => { mark(); if (e.deltaY < 0 && chatScrollsUp(e.target)) following = false; }, { passive: true });
+  c.addEventListener("touchstart", () => { mark(); scrollbarHeld = true; }, { passive: true });
+  c.addEventListener("touchmove", mark, { passive: true });
+  const touchUp = (): void => { scrollbarHeld = false; };
+  c.addEventListener("touchend", touchUp, { passive: true });
+  c.addEventListener("touchcancel", touchUp, { passive: true });
+  // Only a press on the scroller ITSELF (its scrollbar) is a drag; a click on a chevron inside the thread
+  // that collapses content (and clamps scrollTop up) is not the reader scrolling away.
+  c.addEventListener("pointerdown", (e) => { if (e.target === c) { mark(); scrollbarHeld = true; } });
+  window.addEventListener("pointerup", () => { scrollbarHeld = false; });
+  // Window-level: with focus on the page body, Chromium scrolls the chat by keyboard although #chat never
+  // receives the keydown. Keys typed into a field scroll that field, never the chat.
+  window.addEventListener("keydown", (e) => {
+    if (!["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End", " "].includes(e.key)) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    mark();
+    // Release early only when focus is inside the chat, where the key certainly scrolls it; from the body the
+    // scroll event (now marked as the reader's) decides, so a key that moved nothing cannot release.
+    if ((e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home") && t && c.contains(t) && chatScrollsUp(t)) following = false;
+  });
+  c.addEventListener("scroll", () => {
+    following = nextFollow(following, lastTop, c, scrollbarHeld || performance.now() - userScrollAt < USER_SCROLL_MS);
+    lastTop = c.scrollTop;
+    scheduleJump();
+  }, { passive: true });
+  if (typeof ResizeObserver !== "undefined") {
+    const ro = new ResizeObserver(() => scrollChat());
+    ro.observe(c);
+    const t = $("#thread");
+    if (t) ro.observe(t);
+  }
+}
 
 // ── Jump-to-latest (catch up on fast output) ──
 // A double-down-arrow in the LucidAgent accent appears, tucked just inside the scrollbar, whenever
@@ -1022,14 +1080,11 @@ function jumpDownOnePage(): void {
 }
 /** Run straight to the newest message. Deliberately INSTANT, not smooth: on a long restored session
  *  the distance is tens of thousands of pixels, and a smooth glide over that is a slow, janky ride to
- *  somewhere the reader already asked to be. Clearing lastWroteTop drops the "user scrolled up" memory
- *  (that baseline described a scroll position we just abandoned), so once we land at the bottom the
- *  normal stick-to-bottom behaviour re-engages and live tokens keep following. */
+ *  somewhere the reader already asked to be. It also re-engages the follow (P-SCROLL.1), so live
+ *  output keeps the newest line in view from here on. */
 function jumpToEnd(): void {
-  const c = $("#chat");
-  if (!c) return;
-  c.scrollTo({ top: c.scrollHeight, behavior: "auto" });
-  lastWroteTop = -1;
+  following = true;
+  pinToEnd();
   updateJump();
 }
 
@@ -1105,7 +1160,8 @@ type ToolCode = { path: string; content?: string; oldText?: string; newText?: st
 // the tool_meta self-report channel, because the ACP update structurally cannot carry it) can be joined
 // onto this call for the chip label and the engineering report. `kind` preserves the coarse ACP class even
 // after the label upgrades, so the report can group by real name and still report the class.
-interface ChipData { code?: ToolCode; detail: string; id?: string; kind?: string; }
+// P-PROGRESS.1: `input`/`intent` fill the drilldown of a code-less call; `elapsedMs` arrives with the settle.
+interface ChipData { code?: ToolCode; detail: string; id?: string; kind?: string; input?: string; intent?: string; elapsedMs?: number; }
 
 /** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
  *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
@@ -1181,11 +1237,18 @@ async function renderToolCode(panel: HTMLElement, code: ToolCode): Promise<void>
 // here - onBlock keeps emitting its own loud .evt.block chip alongside this window.
 interface ThoughtsWin {
   el: HTMLElement;
-  /** Record a tool/activity step. `code` (P-CHAT.1) makes the step expandable to an inline code/diff preview. */
-  step(name: string, detail: string, code?: ToolCode): void;
+  /** Record a tool/activity step. P-PROGRESS.1: EVERY step expands (the doing line, the real tool name,
+   *  the arguments, and the code/diff when there is one); `id` lets a later report relabel and settle it. */
+  step(s: { id?: string; name: string; detail: string; code?: ToolCode; input?: string; intent?: string }): void;
+  /** P-PROGRESS.1: the real tool name arrived for a step (never a downgrade to a coarse ACP kind). */
+  relabel(id: string, name: string): void;
+  /** P-PROGRESS.1: the step's call ended: mark it done or failed, with how long it took. */
+  settle(id: string, ok: boolean, elapsedMs?: number): void;
   /** Collapse into the final one-line summary (auto-collapse on done). */
   finish(ms: number): void;
 }
+/** omp's coarse ACP kinds: a label that is one of these never replaces a real tool name (ADR-0318). */
+const COARSE_KINDS: Record<string, true> = { edit: true, execute: true, read: true, search: true, fetch: true, think: true, other: true, tool: true, run: true, delete: true, move: true };
 function createThoughts(): ThoughtsWin {
   const win = el(`<div class="thoughts open" data-streaming="1">
     <button class="thoughts-head" type="button" aria-expanded="true">
@@ -1200,8 +1263,10 @@ function createThoughts(): ThoughtsWin {
   const curEl = $(".thoughts-cur", win) as HTMLElement;
   const countEl = $(".thoughts-count", win) as HTMLElement;
   const body = $(".thoughts-body", win) as HTMLElement;
-  let steps = 0;
+  let steps = 0, failed = 0;
   const files = new Set<string>();
+  // P-PROGRESS.1: rows by toolCallId, so the real name and the outcome land on the row they belong to.
+  const rows = new Map<string, { row: HTMLElement; kEl: HTMLElement; dEl: HTMLElement; stateEl: HTMLElement; doingEl: HTMLElement; nameEl: HTMLElement; s: { name: string; detail: string; intent?: string; input?: string; code?: ToolCode } }>();
   const toggle = (open: boolean) => {
     win.classList.toggle("open", open);
     headBtn.setAttribute("aria-expanded", String(open));
@@ -1209,52 +1274,89 @@ function createThoughts(): ThoughtsWin {
   headBtn.addEventListener("click", () => toggle(!win.classList.contains("open")));
   return {
     el: win,
-    step(name: string, detail: string, code?: ToolCode) {
+    step(s) {
       steps++;
-      const label = phaseForTool(name, detail);
-      curEl.textContent = label;
+      const { name, detail, code } = s;
+      const doing = describeTool({ name, kind: name, title: detail, intent: s.intent, input: s.input, path: code?.path }).doing;
+      curEl.textContent = doing;
       countEl.hidden = false;
       countEl.textContent = String(steps);
       if (/edit|write|notebook|patch|apply|create/i.test(name) && detail) files.add(detail.trim());
       const hasCode = !!code && (code.content !== undefined || code.patch !== undefined || code.oldText !== undefined || code.newText !== undefined);
-      if (!hasCode) {
-        body.appendChild(el(`<div class="thoughts-step">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span></div>`));
-      } else {
-        // P-CHAT.1: an expandable step — click the row to reveal the written code / the edit diff inline.
-        let badge = "";
-        if (code!.content === undefined) {
-          const { add, del } = code!.patch !== undefined ? patchStat(code!.patch) : diffStat(lineDiff(code!.oldText ?? "", code!.newText ?? ""));
-          badge = `<span class="ts-diffstat"><span class="ts-add">+${add}</span> <span class="ts-del">−${del}</span></span>`;
-        }
-        const row = el(`<div class="thoughts-step has-code">
-          <button class="ts-row" type="button" aria-expanded="false">${icon(phaseIcon(name), 13)}<span class="ts-k">${esc(name)}</span><span class="ts-d">${esc(detail)}</span>${badge}<span class="ts-chev">${icon("chevron", 13)}</span></button>
-          <div class="ts-code" hidden></div>
-        </div>`);
-        const btn = $(".ts-row", row) as HTMLButtonElement;
-        const codeEl = $(".ts-code", row) as HTMLElement;
-        btn.addEventListener("click", () => {
-          const opening = codeEl.hasAttribute("hidden");
-          if (opening) { void renderToolCode(codeEl, code!); codeEl.removeAttribute("hidden"); }
-          else codeEl.setAttribute("hidden", "");
-          btn.setAttribute("aria-expanded", String(opening));
-          row.classList.toggle("open", opening);
-        });
-        body.appendChild(row);
+      let badge = "";
+      if (hasCode && code!.content === undefined) {
+        const { add, del } = code!.patch !== undefined ? patchStat(code!.patch) : diffStat(lineDiff(code!.oldText ?? "", code!.newText ?? ""));
+        badge = `<span class="ts-diffstat"><span class="ts-add">+${add}</span> <span class="ts-del">−${del}</span></span>`;
       }
+      // P-PROGRESS.1: every step is a row you can open. The head line says what the call is DOING (the
+      // agent's own intent when it gave one); the body names the tool, shows the arguments, and the
+      // code/diff when the call authored any. The state mark spins until the call's report settles it.
+      const row = el(`<div class="thoughts-step has-code">
+        <button class="ts-row" type="button" aria-expanded="false">${icon(phaseIcon(name), 13)}<span class="ts-k"></span><span class="ts-d"></span>${badge}<span class="ts-state" data-state="${s.id ? "open" : "unknown"}"></span><span class="ts-chev">${icon("chevron", 13)}</span></button>
+        <div class="ts-code" hidden><div class="ts-doing"></div><div class="ts-name"></div><pre class="ts-args" hidden></pre><div class="ts-codebody"></div></div>
+      </div>`);
+      const btn = $(".ts-row", row) as HTMLButtonElement;
+      const codeEl = $(".ts-code", row) as HTMLElement;
+      const kEl = $(".ts-k", row) as HTMLElement;
+      const dEl = $(".ts-d", row) as HTMLElement;
+      const stateEl = $(".ts-state", row) as HTMLElement;
+      const doingEl = $(".ts-doing", row) as HTMLElement;
+      const nameEl = $(".ts-name", row) as HTMLElement;
+      const argsEl = $(".ts-args", row) as HTMLElement;
+      const codeBody = $(".ts-codebody", row) as HTMLElement;
+      kEl.textContent = name;
+      dEl.textContent = doing;
+      doingEl.textContent = doing;
+      nameEl.textContent = `Tool: ${name}`;
+      stateEl.title = s.id ? "running" : "";
+      if (s.input) { argsEl.textContent = s.input; argsEl.removeAttribute("hidden"); }
+      btn.addEventListener("click", () => {
+        const opening = codeEl.hasAttribute("hidden");
+        if (opening) { if (hasCode) void renderToolCode(codeBody, code!); codeEl.removeAttribute("hidden"); }
+        else codeEl.setAttribute("hidden", "");
+        btn.setAttribute("aria-expanded", String(opening));
+        row.classList.toggle("open", opening);
+      });
+      body.appendChild(row);
+      if (s.id) rows.set(s.id, { row, kEl, dEl, stateEl, doingEl, nameEl, s: { name, detail, intent: s.intent, input: s.input, code } });
       // Keep the newest step in view while expanded, without stealing the page scroll.
       if (win.classList.contains("open")) body.scrollTop = body.scrollHeight;
+    },
+    relabel(id, name) {
+      const r = rows.get(id);
+      if (!r || !name || COARSE_KINDS[name.toLowerCase()]) return;
+      const wasCurrent = curEl.textContent === r.dEl.textContent;
+      r.s.name = name;
+      r.kEl.textContent = name;
+      r.nameEl.textContent = `Tool: ${name}`;
+      const doing = describeTool({ name, title: r.s.detail, intent: r.s.intent, input: r.s.input, path: r.s.code?.path }).doing;
+      r.dEl.textContent = doing; r.doingEl.textContent = doing;
+      if (wasCurrent) curEl.textContent = doing;
+    },
+    settle(id, ok, elapsedMs) {
+      const r = rows.get(id);
+      if (!r || r.stateEl.dataset.state === "done" || r.stateEl.dataset.state === "failed") return;
+      if (!ok) failed++;
+      r.stateEl.dataset.state = ok ? "done" : "failed";
+      const took = elapsedMs !== undefined && elapsedMs >= 0 ? humanMs(elapsedMs) : "";
+      r.stateEl.textContent = took;
+      r.stateEl.title = ok ? (took ? `done in ${took}` : "done") : (took ? `failed after ${took}` : "failed");
+      r.row.classList.toggle("failed", !ok);
     },
     finish(ms: number) {
       win.removeAttribute("data-streaming");
       win.classList.add("done");
       toggle(false); // auto-collapse to the tidy summary
       const fileBit = files.size ? ` · ${files.size} file${files.size === 1 ? "" : "s"}` : "";
+      const failBit = failed ? ` · ${failed} failed` : "";
       const secs = ms / 1000;
       const timeBit = secs >= 0.05 ? ` · ${secs < 10 ? secs.toFixed(1) : Math.round(secs)}s` : "";
       curEl.textContent = steps
-        ? `${steps} step${steps === 1 ? "" : "s"}${fileBit}${timeBit}`
+        ? `${steps} step${steps === 1 ? "" : "s"}${fileBit}${failBit}${timeBit}`
         : "No tools used";
       countEl.hidden = true;
+      // A step still open when the turn ends never got its report: say so instead of spinning forever.
+      for (const r of rows.values()) if (r.stateEl.dataset.state === "open") { r.stateEl.dataset.state = "unknown"; r.stateEl.title = "no result report"; }
     },
   };
 }
@@ -1504,8 +1606,14 @@ function createChipRow(chip: ToolChip, data: ChipData): HTMLElement {
   btn.addEventListener("click", () => {
     const opening = !panel.classList.contains("open");
     if (opening && !panel.dataset.filled) {
+      // P-PROGRESS.1: the doing line, the tool and how long it took come first; then the arguments (a
+      // code-less call) or the code/diff. Never interpolated: every string lands through textContent.
+      const head = el(`<div class="tinline-head"><div class="tinline-doing"></div><div class="tinline-tool"></div></div>`);
+      ($(".tinline-doing", head) as HTMLElement).textContent = describeTool({ name: chip.k, kind: data.kind, title: data.detail, intent: data.intent, input: data.input, path: data.code?.path }).doing;
+      ($(".tinline-tool", head) as HTMLElement).textContent = `Tool: ${chip.k}${data.elapsedMs !== undefined ? ` · ${chip.failed ? "failed after" : "took"} ${humanMs(data.elapsedMs)}` : ""}`;
+      panel.appendChild(head);
       if (hasCode && data.code) void renderToolCode(panel, data.code);
-      else { panel.dataset.filled = "1"; const pre = el(`<pre class="tinline-detail"></pre>`); pre.textContent = data.detail || "(no details)"; panel.appendChild(pre); }
+      else { panel.dataset.filled = "1"; const pre = el(`<pre class="tinline-detail"></pre>`); pre.textContent = data.input || data.detail || "(no details)"; panel.appendChild(pre); }
     }
     panel.classList.toggle("open", opening);
     btn.setAttribute("aria-expanded", String(opening));
@@ -1601,6 +1709,11 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     runsBox.innerHTML = runs.map((r) => {
       const last = r.steps[r.steps.length - 1];
       const now = last ? `${last.kind === "tool" ? `${esc(last.tool ?? "tool")} · ` : ""}${esc(last.label)}` : "starting…";
+      // P-PROGRESS.1: is this worker alive? The transcript's last line is the evidence: its age says
+      // "working" (fresh), "quiet" (past the quiet line, still not done), or "done".
+      const ageMs = r.lastAt > 0 ? Math.max(0, Date.now() - r.lastAt) : -1;
+      const alive = r.done ? "done" : ageMs < 0 ? "no activity yet" : ageMs < QUIET_MS ? `working, last step ${humanMs(ageMs)} ago` : `quiet for ${humanMs(ageMs)}`;
+      const aliveState = r.done ? "done" : ageMs >= 0 && ageMs < QUIET_MS ? "working" : "quiet";
       const steps = r.steps.map((s) =>
         `<div class="sa-step sa-${esc(s.kind)}">${stepIcon(s.kind)}<span class="sa-step-tool">${s.kind === "tool" ? esc(s.tool ?? "") : ""}</span><span class="sa-step-label">${esc(s.label)}</span></div>`).join("");
       return `<div class="sa-run${openRuns.has(r.name) ? " open" : ""}${r.done ? " done" : ""}" data-run="${esc(r.name)}">
@@ -1608,6 +1721,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
           <span class="sa-dot${r.done ? " done" : ""}"></span>
           <span class="sa-name">${esc(r.name)}</span>
           <span class="sa-now">${now}</span>
+          <span class="sa-alive" data-state="${aliveState}">${esc(alive)}</span>
           <span class="sa-meta">${r.tools} tool${r.tools === 1 ? "" : "s"}</span>
           <span class="subagent-chev">${icon("chevron", 12)}</span>
         </button>
@@ -1927,14 +2041,28 @@ async function send(): Promise<void> {
   ta.value = ""; autosize(ta);
   state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
   addMessage("user", text, atts);
+  jumpToEnd(); // P-SCROLL.1: a prompt you just sent is always in view, and its reply follows
   const turnFrom = nextTurnFrom; nextTurnFrom = null;
   p2pTeeUserTurn(sendText, turnFrom ?? undefined);
   const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
   const lane = isLaneTarget(state.composerTarget) ? state.composerTarget : null;
-  await renderChatTurn(text, (onEvent) => lane
+  // P-SCROLL.1: the watch must not re-render this turn's tail after the prompt stream settles it. The
+  // grace timer only matters if the watch never delivers the turn's done (its stream dropped, or the
+  // engine refused the prompt so no turn ran).
+  const ownedGen = lane ? ++laneOwnedGen : 0;
+  if (lane) laneOwnedTail = true;
+  // A refusal (the lane is busy with a card or queue turn) arrives on the prompt stream as a lone error and
+  // never on the watch, so a turn that produced nothing else releases the watch at once instead of hiding
+  // the running turn's output for the grace period.
+  let laneRan = false;
+  try { await renderChatTurn(text, (onEvent) => lane
     // P-FLEET.L19: pasted images ride the lane prompt as ACP image blocks (the lane's P-FLEET.L3 wire).
-    ? bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void, images.map((b) => ({ data: b.data, mimeType: b.mimeType })))
-    : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId });
+    ? bridge.fleetPrompt(lane.laneId, sendText, (e: LaneEvent) => { if (e.type !== "error") laneRan = true; (onEvent as (e: LaneEvent) => void)(e); }, images.map((b) => ({ data: b.data, mimeType: b.mimeType })))
+    : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId }); }
+  finally {
+    const release = (): void => { if (ownedGen === laneOwnedGen) laneOwnedTail = false; };
+    if (lane) { if (laneRan) window.setTimeout(release, 5000); else release(); }
+  }
 }
 
 // New prompts and read-only attachments share every HUD, voice, activity, and approval handler.
@@ -1956,8 +2084,65 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
   const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button></div>`);
   const streamEl = el(`<div class="stream"></div>`);
-  textEl.append(streamEl, hud); // status sits BELOW the line that's filling in
+  // P-PROGRESS.1: the progress strip under the HUD: a bar (the history estimate, 95% at most while the
+  // turn runs), the progress line, the liveness pill (with the restart action when the agent process is
+  // gone), and the folder queue while this turn waits its turn. Every text run is its own block.
+  const prog = el(`<div class="hud-progress" hidden>
+    <div class="hud-bar"><div class="hud-fill"></div></div>
+    <div class="hud-progress-line"><span class="hud-est"></span></div>
+    <div class="hud-alive-row"><span class="hud-alive" data-state="idle"></span><span class="hud-signal"></span><button class="btn-mini hud-restart" type="button" hidden>Restart agent</button></div>
+    <div class="hud-queue" hidden></div>
+  </div>`);
+  textEl.append(streamEl, hud, prog); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
+  let progress: ProgressView | null = null, progressAt = 0; // the engine's last view + when it arrived (aged locally)
+  const progEst = $(".hud-est", prog) as HTMLElement, progFill = $(".hud-fill", prog) as HTMLElement, progBar = $(".hud-bar", prog) as HTMLElement;
+  const progAlive = $(".hud-alive", prog) as HTMLElement, progSignal = $(".hud-signal", prog) as HTMLElement, progRestart = $(".hud-restart", prog) as HTMLButtonElement;
+  const progQueue = $(".hud-queue", prog) as HTMLElement;
+  const paintProgress = () => {
+    if (!progress) return;
+    prog.hidden = false;
+    const age = Math.max(0, Date.now() - progressAt);
+    const p = progress;
+    const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
+    const aged: ProgressView = running ? { ...p, elapsedMs: p.elapsedMs + age, lastSignalMs: p.lastSignalMs + age, estimate: p.estimate.etaMs === null ? p.estimate : { ...p.estimate, etaMs: Math.max(0, p.estimate.etaMs - age), overrun: p.estimate.overrun || p.estimate.etaMs - age <= 0 } } : p;
+    progEst.textContent = progressLine(aged);
+    const pct = aged.estimate.percent;
+    progBar.classList.toggle("indeterminate", pct === null && running);
+    progFill.style.width = pct === null ? "0%" : `${Math.min(95, pct)}%`;
+    progAlive.dataset.state = p.liveness.state;
+    progAlive.textContent = p.liveness.label;
+    progAlive.setAttribute("data-tip", p.liveness.detail);
+    liveTurn.alive = p.liveness.label; // P-INTERJECT.3: the Check-in card reads the same verdict
+    // The age words move between engine samples; a fresh signal within the streaming window says so.
+    progSignal.textContent = running ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago${aged.lastSignalMs >= QUIET_MS && !aged.stepsOpen.length ? " (quiet)" : ""}`) : "";
+    progRestart.hidden = p.liveness.state !== "dead";
+  };
+  progRestart.addEventListener("click", () => {
+    // P-PROGRESS.1: the in-place recovery the watchdog performs, on demand: restart the agent process,
+    // reload the same session. The whole app never needs to restart for this.
+    progRestart.disabled = true; progRestart.textContent = "Restarting\u2026";
+    void bridge.recoveryRecover().then((r) => {
+      progRestart.disabled = false; progRestart.textContent = "Restart agent";
+      if (!r || !r.ok) { showToast({ tone: "warn", title: "The agent did not restart", desc: r?.reason ?? "The engine did not answer.", timeout: 9000 }); return; }
+      showToast({ tone: "ok", title: "Agent restarted", desc: r.reason, timeout: 6000 });
+      void recoverMasterTurn();
+    });
+  });
+  const clearQueue = () => { if (!progQueue.hidden) { progQueue.hidden = true; progQueue.innerHTML = ""; } };
+  const paintQueue = (w: WaitView) => {
+    prog.hidden = false;
+    progQueue.hidden = false;
+    progQueue.innerHTML = `<div class="hud-queue-head"></div>` + w.sequence.map((_, i) => `<div class="hud-queue-row" data-q="${i}"></div>`).join("");
+    ($(".hud-queue-head", progQueue) as HTMLElement).textContent = `Turns in this folder (${w.folder}), in order:`;
+    w.sequence.forEach((e, i) => {
+      const row = $(`[data-q="${i}"]`, progQueue) as HTMLElement | null;
+      if (!row) return;
+      const when = e.state === "running" ? `running since ${humanMs(Math.max(0, Date.now() - e.sinceAt))} ago${e.etaMs !== null ? `, about ${humanMs(e.etaMs)} left (est.)` : ""}` : e.expectedStartAt !== null ? `waits, starts in about ${humanMs(Math.max(0, e.expectedStartAt - Date.now()))} (est.)` : "waits, start time unknown";
+      row.textContent = `${e.position + 1}. ${e.name}: ${when}`;
+      row.classList.toggle("me", e.id === "master");
+    });
+  };
   // The consolidating activity window lives between the answer and the HUD; created lazily
   // on the first tool event so a pure-text turn shows nothing extra.
   let thoughts: ThoughtsWin | null = null;
@@ -2016,10 +2201,11 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // labelled "context" so it's never mistaken for the per-turn output above. Cost
     // is shown to the cent ($0.00) - the sub-cent precision read as noise.
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
+    paintProgress(); // P-PROGRESS.1: the ages move every second between engine samples
   };
   phaseEl.textContent = phase;
   // P-INTERJECT.3: reset the live-turn mirror for this turn and arm the HUD's Check-in button.
-  liveTurn.phase = phase; liveTurn.pending = []; liveTurn.pendingAt = 0;
+  liveTurn.phase = phase; liveTurn.pending = []; liveTurn.pendingAt = 0; liveTurn.alive = "";
   ($(".hud-checkin", hud) as HTMLElement | null)?.addEventListener("click", openCheckinCard);
   paintHud();
   const timer = window.setInterval(paintHud, 1000);
@@ -2032,6 +2218,14 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     const ic = $(".hud-ic", hud); if (ic) ic.innerHTML = icon("check", 12);
     hud.classList.remove("streaming"); hud.classList.add("done");
     setPhase("Done"); paintHud();
+    // P-PROGRESS.1: the strip settles with the turn: a full bar, the time it took, no more ages.
+    if (progress) {
+      progress = null; clearQueue();
+      progBar.classList.remove("indeterminate"); progFill.style.width = "100%";
+      progEst.textContent = `done in ${humanMs(Date.now() - t0)}`;
+      progAlive.dataset.state = "idle"; progAlive.textContent = "done"; progAlive.removeAttribute("data-tip");
+      progSignal.textContent = ""; progRestart.hidden = true;
+    }
     reasoning?.finish(Date.now() - t0);
     thoughts?.finish(Date.now() - t0);
     judgments?.finish(); // P-JEV.2
@@ -2149,7 +2343,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       return;
     }
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
-    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
+    if (e.type === "token") { clearQueue(); reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
     else if (e.type === "thinking") {
       // First reasoning chunk: spin up the live thinking block above the answer.
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
@@ -2159,14 +2353,23 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       reasoning.push(e.text); paintHud(); scrollChat();
     }
     else if (e.type === "tool") {
-      sawTool = true; setPhase(phaseForTool(e.name, e.detail)); paintHud();
+      // P-PROGRESS.1: while the composer drives a LANE, its events arrive raw (bridge.fleetPrompt), and a
+      // lane settles a call by re-emitting it with `status` done/failed: that closes the step its call
+      // opened, it is never a second step.
+      const laneSettle = e as { id?: string; status?: string; elapsedMs?: number };
+      if (e.id && (laneSettle.status === "done" || laneSettle.status === "failed")) {
+        thoughts?.settle(e.id, laneSettle.status === "done", laneSettle.elapsedMs);
+        for (const m of marks) if (m.data.id === e.id) { if (laneSettle.status === "failed") m.chip.failed = true; if (laneSettle.elapsedMs !== undefined) m.data.elapsedMs = laneSettle.elapsedMs; }
+        return;
+      }
+      sawTool = true; clearQueue(); setPhase(phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
-      thoughts.step(e.name, e.detail, e.code);
+      thoughts.step({ id: e.id, name: e.name, detail: e.detail, code: e.code, input: e.input, intent: e.intent });
       // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it
       // can be threaded back into the settled answer as a chip where it fired (zero visual change to the live window).
       // P-EVAL.4 (ADR-0318): `e.name` here is only omp's coarse ACP `kind`. Keep it as `kind` and keep the
       // toolCallId, so a `tool-meta` report can upgrade the label to the real tool name.
-      marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail, id: e.id, kind: e.name } });
+      marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail, id: e.id, kind: e.name, input: e.input, intent: e.intent } });
       // P-FLEET.L17: a previewable write from an ATTACHED LANE opens/updates that lane's Preview tab,
       // exactly as the fleet card path (P-PREVIEW.10) does. Lanes never emit "preview-available" - the
       // write's own path is the signal - so without this the spoke takeover had no preview pane at all.
@@ -2180,14 +2383,27 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // streamed above. Relabel the mark in place so the settled answer's chip reads "knowledge_search"
     // rather than "other". Display only: a missing report leaves the coarse label and changes nothing else.
     else if (e.type === "tool-meta") {
+      // P-PROGRESS.1: the engine's own settle report names only the coarse kind when the extension has not
+      // reported yet; a coarse kind never replaces a real name already on the mark (the Contract rule).
       const prior = toolMeta.get(e.id);
-      toolMeta.set(e.id, { name: e.name, ...(e.ok === undefined ? (prior?.ok === undefined ? {} : { ok: prior.ok }) : { ok: e.ok }) });
+      const coarse = COARSE_KINDS[e.name.toLowerCase()] === true;
+      const name = coarse && prior?.name ? prior.name : e.name;
+      toolMeta.set(e.id, { name, ...(e.ok === undefined ? (prior?.ok === undefined ? {} : { ok: prior.ok }) : { ok: e.ok }) });
       for (const m of marks) {
         if (m.data.id !== e.id) continue;
-        m.chip.k = e.name;
+        if (!coarse || COARSE_KINDS[m.chip.k.toLowerCase()]) m.chip.k = name;
         if (e.ok === false) m.chip.failed = true;
+        if (e.elapsedMs !== undefined) m.data.elapsedMs = e.elapsedMs;
       }
+      thoughts?.relabel(e.id, e.name);
+      if (e.ok !== undefined) thoughts?.settle(e.id, e.ok, e.elapsedMs);
     }
+    // P-PROGRESS.1: the engine's progress view (every few seconds and on every settled call). Never activity;
+    // the strip under the HUD paints it and ages it locally until the next one.
+    else if (e.type === "progress") { progress = e.progress; progressAt = Date.now(); if (e.progress.liveness.state !== "idle") clearQueue(); paintProgress(); }
+    // P-PROGRESS.1: this turn is in line behind another worker's turn in the same folder. Nothing is running
+    // yet; say so, and show the order and the expected start times. The next real event clears it.
+    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish in this folder`); paintHud(); paintQueue(e.wait); scrollChat(); }
     // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
     // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
     else if (e.type === "judgment") {
@@ -2446,7 +2662,7 @@ const STATUS_ASK = "Please give a brief status update: what is finished, what yo
 
 /** P-INTERJECT.3: renderer mirror of the live turn for the Check-in card - the phase line the HUD
  *  shows, plus the last pending-call snapshot a { type:"slow" } event carried (aged via pendingAt). */
-const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0 };
+const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0, alive: "" /* P-PROGRESS.1: the liveness label */ };
 
 /** P-INTERJECT.2: interject a note into the RUNNING master turn + leave a transcript record chip. */
 async function pushMidTurn(text: string): Promise<void> {
@@ -2455,11 +2671,14 @@ async function pushMidTurn(text: string): Promise<void> {
   else showToast({ tone: "warn", title: "Push not delivered", desc: "The note was refused - the per-turn note cap may be full, or the backend is unreachable.", timeout: 6000 });
 }
 
-/** A quiet transcript note (the .evt chip family): one nowrap-ellipsis text span, full text in title. */
+/** A quiet transcript note (the .evt chip family): one nowrap-ellipsis text span, full text in title.
+ *  Dismissable: it is a record for the reader, not a message, so nothing else ever removes it (on an
+ *  empty thread it would otherwise sit under the "Ask the agent anything" hint until the next resume). */
 function addNoteChip(text: string): void {
-  const chip = addEvent(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
+  const chip = addEvent(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span><button class="note-chip-x" data-tip="Dismiss this note">${icon("close", 12)}</button></div>`);
   const t = $(".note-chip-txt", chip) as HTMLElement | null;
   if (t) { t.textContent = text; t.title = text; }
+  $(".note-chip-x", chip)?.addEventListener("click", () => chip.remove());
 }
 
 // ───────────────────────── P-FLEET.L8: promote a lane into the composer ─────────────────────────
@@ -2476,8 +2695,54 @@ let laneWatch: { done: Promise<void>; stop: () => void } | null = null;
  *  rather than the DOM is what lets renderThread rebuild it with its copy / save-as-.md payloads intact. */
 let parkedMasterThread: { role: string; text: string }[] | null = null;
 /** The assistant node the WATCH is filling in, when the lane is streaming a turn this composer did not ask
- *  for. Null whenever we own the turn - `send()` renders that one. */
-let laneWatchNode: { node: HTMLElement; stream: HTMLElement; buf: string } | null = null;
+ *  for. Null whenever we own the turn - `send()` renders that one. P-SCROLL.1: the bubble is a run of
+ *  SEGMENTS in arrival order (reasoning, text, a tool chip, more text), so text that follows a tool call
+ *  renders below that call's chip instead of growing a bubble that sits above it. `seg` is the open text
+ *  segment, `buf` the whole answer (copy / save as .md). */
+interface LaneWatchBubble { node: HTMLElement; body: HTMLElement; stream: HTMLElement; seg: string; buf: string; reasoning: ReasoningWin | null; t0: number }
+let laneWatchNode: LaneWatchBubble | null = null;
+/** P-SCROLL.1: our own lane turn's events reach the WATCH as well, on a second stream that can lag the
+ *  prompt stream by a few ms. Until the watch has delivered that turn's own done/error, its content
+ *  belongs to the bubble send() rendered. Without this, a lagging tail arrived after the prompt stream
+ *  had settled and opened a second bubble under the finished answer, replaying its last words out of
+ *  order. Cleared by the watch's done/error, a fresh watch, or a grace timer after our turn ends. */
+let laneOwnedTail = false;
+let laneOwnedGen = 0;
+
+/** P-SCROLL.1: where the reader was on each composer target, for the "return to where I left off"
+ *  preference. Keyed "master" or by lane id; in memory only (a reload lands on the newest anyway). */
+const readingSpots = new Map<string, { atEnd: boolean; anchor: ScrollAnchor | null }>();
+const spotKey = (t: ComposerTarget): string => (isLaneTarget(t) ? `lane:${t.laneId}` : "master");
+function msgBoxes(): MsgBox[] {
+  const c = $("#chat");
+  if (!c) return [];
+  // offsetTop, not getBoundingClientRect: #chat is the messages' offsetParent, so offsetTop is already in
+  // scrollTop's own coordinates. Rects are in ZOOMED px (applyZoom sets CSS zoom on #app), and mixing
+  // the two put a restored reader hundreds of px above their spot.
+  return ($$("#thread .msg") as HTMLElement[]).map((n) => ({
+    key: `${n.classList.contains("user") ? "u" : "a"}:${(n as MsgNode)._md ?? ""}`,
+    top: n.offsetParent === c ? n.offsetTop : n.offsetTop - c.offsetTop,
+    height: n.offsetHeight,
+  }));
+}
+function saveReadingSpot(t: ComposerTarget): void {
+  const c = $("#chat");
+  if (c) readingSpots.set(spotKey(t), { atEnd: following, anchor: following ? null : readingAnchor(msgBoxes(), c.scrollTop) });
+}
+/** Called after the target's thread has been rendered (which landed it on the newest message). Only the
+ *  "resume" preference moves it, and only back onto a message that is still rendered. */
+function restoreReadingSpot(t: ComposerTarget): void {
+  if (spokeSwitchScroll() !== "resume") return;
+  const spot = readingSpots.get(spotKey(t));
+  const c = $("#chat");
+  if (!c || !spot || spot.atEnd || !spot.anchor) return;
+  const top = anchorTop(msgBoxes(), spot.anchor);
+  if (top === null) return;
+  following = false;
+  c.scrollTop = top;
+  lastTop = c.scrollTop;
+  updateJump();
+}
 
 function snapshotThread(): { role: string; text: string }[] {
   return $$("#thread .msg").map((n) => ({
@@ -2509,6 +2774,7 @@ async function promoteLane(laneId: string): Promise<void> {
   const lane: LaneView = r.lane;
   setRecoveryChecking(false);
   const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
+  saveReadingSpot(state.composerTarget); // P-SCROLL.1: before the thread is swapped out
   parkedMasterThread = snapshotThread();
   state.composerTarget = target;
   // P-FLEET.L17: the ring, the rail and the spoke banner now speak for the LANE - the master's last
@@ -2527,7 +2793,11 @@ async function promoteLane(laneId: string): Promise<void> {
   void bridge.interject(laneId, promoteAgentNote(target)).catch(() => { /* the attach still stands */ });
   renderComposerTarget();
   renderStatus(); renderMetricsRail(); // P-FLEET.L19: the ring switches to the spoke now, not at the next poll
+  // P-SCROLL.1: the newest message unless the user prefers where they left off. After the composer chrome
+  // (target bar, status) has painted, so the chat is measured at the size the reader will see.
+  restoreReadingSpot(target);
   // The FOLLOW: it owns no turn, which is precisely what lets it join one already in flight.
+  laneOwnedTail = false;
   laneWatch = bridge.fleetWatch(laneId, onLaneWatchEvent);
   laneWatch.done.catch(() => { /* the stream ending (or being aborted on demote) is not an error here */ });
 }
@@ -2540,9 +2810,11 @@ function demoteLane(): void {
   leaveTurnView();
   laneWatch?.stop();
   laneWatch = null;
+  laneOwnedTail = false;
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
   // no further event will ever settle.
   settleLaneWatchNode();
+  saveReadingSpot(was); // P-SCROLL.1: before the master thread replaces it
   // TELL THE AGENT it is back on its fleet card, BEFORE the release call, so the note lands while the
   // lane target is still known. This is the other half of the confusion fix: on release the model was
   // left believing nothing had changed, so it could not answer questions about "the main composer" and
@@ -2561,6 +2833,7 @@ function demoteLane(): void {
   addNoteChip(demoteNotice(was));
   renderComposerTarget();
   renderStatus(); renderMetricsRail(); // P-FLEET.L19: back to the master's own figures immediately
+  restoreReadingSpot(MASTER_TARGET); // P-SCROLL.1: after the chrome has painted, as in promoteLane
   void recoverMasterTurn();
 }
 
@@ -2581,22 +2854,55 @@ function onLaneWatchEvent(e: LaneEvent): void {
     if (isLaneTarget(state.composerTarget)) noteSpokeAsk(state.composerTarget.laneId, { summary: e.summary, kind: e.kind });
     return;
   }
-  if (state.streaming) return; // our own turn is rendering these already
-  if (e.type === "token" || e.type === "thinking") {
+  // Our own turn is rendering these already, and so is its lagging tail (P-SCROLL.1): the watch's own
+  // done/error for that turn is the last event it owes us.
+  if (state.streaming || laneOwnedTail) {
+    if (e.type === "done" || e.type === "error") laneOwnedTail = false;
+    return;
+  }
+  if (e.type === "thinking") {
+    // P-SCROLL.1: reasoning is not the answer. It used to be appended into the answer text, which read as
+    // the reply's sentences arriving jumbled; it now gets the master turn's collapsible reasoning block.
     const live = laneWatchNode ?? openLaneWatchNode();
+    if (!live.reasoning) {
+      cutLaneWatchSegment(live);
+      live.reasoning = createReasoning();
+      live.stream.before(live.reasoning.el);
+    }
+    live.reasoning.push(e.text);
+    scrollChat();
+    return;
+  }
+  if (e.type === "token") {
+    const live = laneWatchNode ?? openLaneWatchNode();
+    if (live.reasoning) { live.reasoning.finish(Date.now() - live.t0); live.reasoning = null; }
+    live.seg += e.text;
     live.buf += e.text;
-    live.stream.innerHTML = renderMarkdown(live.buf) + `<span class="cursor"></span>`;
+    live.stream.innerHTML = renderMarkdown(live.seg) + `<span class="cursor"></span>`;
     (live.node as MsgNode)._md = live.buf;
     scrollChat();
     return;
   }
   if (e.type === "tool") {
-    addNoteChip(e.detail ? `${e.name}: ${e.detail}` : e.name);
     // P-FLEET.L17: mid-turn watches carry the lane's writes too - same preview routing as the prompt
     // stream, so WHEN you attached never decides whether the preview pane fills.
     if (e.code?.path && isAutoPreviewPath(e.code.path) && isLaneTarget(state.composerTarget)) {
       previewShowLaneFile(state.composerTarget.laneId, state.composerTarget.name, e.code.path);
     }
+    // P-PROGRESS.1 settle updates (done/failed for a call already shown) are not new steps: one chip per call.
+    if (e.status === "done" || e.status === "failed") return;
+    // P-SCROLL.1: the chip goes INTO the bubble at this point of the turn, and later text opens a new
+    // segment below it, so the transcript reads in the order things happened. It used to be appended
+    // to the thread under a bubble that kept growing, so the text after a tool call read above it.
+    const live = laneWatchNode ?? openLaneWatchNode();
+    if (live.reasoning) { live.reasoning.finish(Date.now() - live.t0); live.reasoning = null; }
+    cutLaneWatchSegment(live);
+    const chip = el(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
+    const label = e.detail ? `${e.name}: ${e.detail}` : e.name;
+    const txt = $(".note-chip-txt", chip) as HTMLElement;
+    txt.textContent = label; txt.title = label;
+    live.stream.before(chip);
+    scrollChat();
     return;
   }
   if (e.type === "usage") {
@@ -2618,20 +2924,34 @@ function onLaneWatchEvent(e: LaneEvent): void {
   }
 }
 
-/** Freeze the watched bubble: drop the cursor and section the answer, exactly as a settled master turn. */
+/** Freeze the watched bubble: drop the cursor and section the open segment, exactly as a settled master
+ *  turn; an empty trailing segment (the turn ended on a tool call) leaves no blank block behind. */
 function settleLaneWatchNode(): void {
   const live = laneWatchNode;
   laneWatchNode = null;
-  if (live) renderAnswerBody(live.stream, live.buf); // P-CHAT.A sections
+  if (!live) return;
+  live.reasoning?.finish(Date.now() - live.t0);
+  if (live.seg) renderAnswerBody(live.stream, live.seg); // P-CHAT.A sections
+  else live.stream.remove();
 }
 
-function openLaneWatchNode(): { node: HTMLElement; stream: HTMLElement; buf: string } {
+/** P-SCROLL.1: close the open text segment (frozen as a settled answer) and open a fresh one at the end of
+ *  the bubble, so whatever arrives next (a tool chip, a reasoning block, more text) lands below it. */
+function cutLaneWatchSegment(live: LaneWatchBubble): void {
+  if (!live.seg) return;
+  renderAnswerBody(live.stream, live.seg);
+  live.stream = el(`<div class="stream"></div>`);
+  live.body.appendChild(live.stream);
+  live.seg = "";
+}
+
+function openLaneWatchNode(): LaneWatchBubble {
   const node = addMessage("assistant", "");
-  const textEl = $(".text", node) as HTMLElement;
-  textEl.innerHTML = "";
+  const body = $(".text", node) as HTMLElement;
+  body.innerHTML = "";
   const stream = el(`<div class="stream"></div>`);
-  textEl.appendChild(stream);
-  laneWatchNode = { node, stream, buf: "" };
+  body.appendChild(stream);
+  laneWatchNode = { node, body, stream, seg: "", buf: "", reasoning: null, t0: Date.now() };
   return laneWatchNode;
 }
 
@@ -2732,7 +3052,7 @@ function openCheckinCard(): void {
     const elapsed = $("[data-ck-elapsed]", card) as HTMLElement | null;
     if (elapsed) elapsed.textContent = state.streaming ? `Elapsed: ${fmtClock(Date.now() - started)}` : "The turn has ended.";
     const ph = $("[data-ck-phase]", card) as HTMLElement | null;
-    if (ph) { ph.textContent = liveTurn.phase ? `Now: ${liveTurn.phase}` : "Now: warming up"; ph.title = liveTurn.phase; }
+    if (ph) { ph.textContent = `${liveTurn.phase ? `Now: ${liveTurn.phase}` : "Now: warming up"}${liveTurn.alive ? ` (${liveTurn.alive})` : ""}`; ph.title = liveTurn.phase; }
     const pend = $("[data-ck-pending]", card) as HTMLElement | null;
     if (pend) {
       if (!liveTurn.pending.length) pend.innerHTML = `<div class="ck-sub">No slow tool calls reported yet.</div>`;
@@ -4513,6 +4833,17 @@ function secAppearance(): string {
     <div class="set-note">${icon("info", 12)} <b>Ambient</b> shows your image faintly (25%) behind the whole chat. <b>Flashlight</b> keeps the background black and reveals the image only under your cursor - like a flashlight sweeping a dark room.</div>`;
   return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
 }
+/** P-SCROLL.1 (ADR-0405): where switching between Main and a spoke (or spoke to spoke) lands the chat.
+ *  Rendered from localStorage, so it paints with no fetch. */
+function secChatScroll(): string {
+  const v = spokeSwitchScroll();
+  const opt = (val: string, label: string) => `<option value="${val}"${v === val ? " selected" : ""}>${label}</option>`;
+  const inner = `
+    <div class="goal-row"><label class="goal-lbl" for="spokeSwitchScroll">Switching spokes</label>
+      <select id="spokeSwitchScroll" class="prov-key">${opt("latest", "Jump to the newest message")}${opt("resume", "Return to where I left off")}</select></div>
+    <div class="set-note">${icon("info", 12)} The chat always follows new output while you are at the bottom. Scrolling up to re-read pauses it until you scroll back down or press the jump-to-newest arrow. This choice decides where you land when you switch between Main and a spoke, or from one spoke to another.</div>`;
+  return setCard("chatScroll", "Chat scrolling", "follow · spoke switching", inner, true);
+}
 
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
 // A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
@@ -4723,6 +5054,7 @@ function settingsShell(): string {
     setSkel("judgment", "Judgment", "Jev · TypeSafe System One", true), // P-JEV.1 (ADR-0374)
     secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
+    secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
@@ -9246,34 +9578,10 @@ function renderThread(msgs: { role: string; text: string; turn?: number }[] | nu
     }
     for (const g of steps ?? []) if (g.turn > maxUserTurn && maxUserTurn > 0) attachRestoredSteps(g);
   } else seedThread();
-  // A replaced thread opens on its NEWEST message. The per-message scrollChat() calls above cannot do
-  // this: the first one (thread still empty, so "near bottom") queues the single follow-frame, the
-  // rest coalesce into it, and that frame re-checks nearBottom only AFTER the whole transcript is in
-  // the DOM. By then scrollTop is 0 (innerHTML="" collapsed it) over thousands of px of content, the
-  // check fails, and the session opened parked at its first message. jumpToEnd lands on the bottom
-  // and clears the previous session's lastWroteTop, so live output on this thread follows again.
+  // A replaced thread opens on its NEWEST message and follows from there, even if the reader had
+  // scrolled up in the thread it replaced. Late layout (restored images decoding, fonts) is pinned by
+  // the follow's ResizeObserver until the reader scrolls up (P-SCROLL.1).
   jumpToEnd();
-  holdAtEnd();
-}
-/** After a thread is replaced, late layout (restored images decoding, fonts) keeps growing it after
- *  jumpToEnd ran, and nothing else would scroll again. Stay pinned to the end while the thread
- *  resizes, until the reader takes over (wheel, touch, key, pointer on the scroller) or it settles. */
-let endHold: (() => void) | null = null;
-function holdAtEnd(settleMs = 3000): void {
-  endHold?.();
-  const c = $("#chat"), t = $("#thread");
-  if (!c || !t || typeof ResizeObserver === "undefined") return;
-  const ro = new ResizeObserver(() => jumpToEnd());
-  const inputs = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
-  const timer = window.setTimeout(() => release(), settleMs);
-  const release = (): void => {
-    ro.disconnect(); window.clearTimeout(timer);
-    for (const ev of inputs) c.removeEventListener(ev, release);
-    if (endHold === release) endHold = null;
-  };
-  for (const ev of inputs) c.addEventListener(ev, release, { passive: true });
-  ro.observe(t);
-  endHold = release;
 }
 // P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
 // payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
@@ -14946,6 +15254,7 @@ function wire(): void {
     const t0 = e.target as HTMLElement;
     // P-APPEAR.1: chat-background mode + image upload
     if (t0.id === "bgMode") { void updateChatBg({ mode: (t0 as HTMLSelectElement).value as "off" | "ambient" | "flashlight" }); return; }
+    if (t0.id === "spokeSwitchScroll") { setSpokeSwitchScroll((t0 as HTMLSelectElement).value === "resume" ? "resume" : "latest"); return; } // P-SCROLL.1
     if (t0.id === "bgFile") {
       const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
       if (f.size > 9 * 1024 * 1024) { showToast({ tone: "warn", title: "Image too large", desc: "Pick an image under ~9 MB (or compress it first).", timeout: 3400 }); return; }
@@ -15743,8 +16052,8 @@ function wire(): void {
   // P-FLEET.L8: paint the (absent) badge once at boot, so the capability mask is applied from the start.
   renderComposerTarget();
 
-  // Jump-to-latest: show the catch-up arrow on user scroll / resize; click pages down one screen.
-  $("#chat")?.addEventListener("scroll", scheduleJump, { passive: true });
+  // P-SCROLL.1: the follow (its scroll listener also repaints the catch-up arrows), and the arrows on resize.
+  initChatFollow();
   window.addEventListener("resize", scheduleJump, { passive: true });
   const arcadeHost = $("#agentArcadeHost");
   if (arcadeHost) new ResizeObserver(syncArcadeGap).observe(arcadeHost);
