@@ -29,7 +29,8 @@ const joinBlocks = (blocks: readonly string[]): string => blocks.join("\u0000");
 const SUPPORTED_OMP = "18.2.10";
 // pi-tui joined at 18.2.6: omp 18.2.5 moved the status-line context-usage helpers there, so it must
 // bump in lockstep with the other four (omp-compat.mjs enforces the same five-way agreement).
-const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-tui", "@oh-my-pi/pi-utils"] as const;
+// pi-catalog joined with R-07 (#347): harness/omp/provider_catalog.test.ts pins its provider universe.
+const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-catalog", "@oh-my-pi/pi-tui", "@oh-my-pi/pi-utils"] as const;
 
 const PkgDeps = (() => {
 	const raw: unknown = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
