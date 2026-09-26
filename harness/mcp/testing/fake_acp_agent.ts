@@ -22,6 +22,8 @@
 //   crash       → streams one chunk then EXITS mid-turn without answering session/prompt (P-FLEET.L4
 //                 recovery checks: the client must see the death event-driven, and a respawned lane must
 //                 carry the transcript forward).
+//   badmodel    → refuses session/set_config_option with omp's "Unknown ACP model" error (a spawn that
+//                 fails in the handshake must create no lane).
 //
 // stdout is reserved for ACP JSON-RPC; logs go to stderr.
 
@@ -100,6 +102,12 @@ async function handle(line: string): Promise<void> {
     const echoed = imgs ? `${replyText(MODE, promptText, outcome)} [images: ${imgs}]` : replyText(MODE, promptText, outcome);
     write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: echoed } } } });
     write({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+    return;
+  }
+  // omp's exact refusal of a model id it does not know (a bare "gpt-6-astra" instead of "openai-codex/gpt-6-astra").
+  if (method === "session/set_config_option" && MODE === "badmodel") {
+    const value = (params as { value?: unknown } | undefined)?.value;
+    write({ jsonrpc: "2.0", id, error: { code: -32603, message: `Internal error: {"details":"Unknown ACP model: ${String(value)}"}` } });
     return;
   }
   // A faithful agent answers session/cancel by finishing the outstanding prompt as "cancelled".

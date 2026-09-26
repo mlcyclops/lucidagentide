@@ -380,7 +380,15 @@ export class FleetLaneManager {
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       try { lane.client.stop(); } catch { /* already dead */ }
+      // A refused spawn creates nothing (same rule as the gate-less refusal above). Leaving it in the
+      // map as "error" painted a crashed spoke on the orbit whose Respawn could only fail the same way
+      // (found live: every Recover of a historical spoke with an id omp did not know, "Unknown ACP
+      // model"). The reason travels on the reply; the row or card that asked shows it.
       this.#setStatus(lane, "error");
+      this.#emit(lane, { type: "done" }); // watchers settle instead of waiting on a stream that ended
+      lane.sinks.clear();
+      for (const obs of this.#observers) obs.sinks.delete(id);
+      this.#lanes.delete(id);
       return { ok: false, reason: `lane failed to start: ${why}` };
     }
   }

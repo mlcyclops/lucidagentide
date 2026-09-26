@@ -70,6 +70,18 @@ test("a gate-less argv refuses the lane by NAME and creates nothing", async () =
   expect((await live.status()).lanes).toEqual([]); // no orphan lane in the map
 }, TIMEOUT);
 
+// P-FLEET.L17 (found live): Recover handed omp a model id it did not know, the handshake failed, and the
+// half-built lane stayed in the map as "error": a crashed spoke on the orbit whose Respawn could only
+// fail the same way. A spawn refused in the handshake reports WHY and creates nothing.
+test("a model omp refuses in the handshake is a named refusal and leaves no orphan lane", async () => {
+  live = manager({ mode: "badmodel" });
+  const r = await live.spawn({ cwd: import.meta.dir, model: "gpt-6-astra" });
+  expect(r.ok).toBe(false);
+  expect(r.reason).toContain("Unknown ACP model: gpt-6-astra");
+  expect(r.lane).toBeUndefined();
+  expect((await live.status()).lanes).toEqual([]);
+}, TIMEOUT);
+
 // P-FLEET.L16 (the frozen "Spawning\u2026" button): a filesystem that never answers the directory check
 // (a OneDrive dehydrated placeholder, a dead network drive) must become a NAMED refusal on the stat
 // clock - never a wedge. The old statSync blocked the whole event loop, so no timeout could even run.

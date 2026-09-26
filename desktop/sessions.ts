@@ -116,11 +116,28 @@ function parseSessionFile(p: string, f: string): { scwd: string; meta: Omit<Sess
         if (isIngestPrompt(raw)) { kind = "kg-ingest"; const t = ingestPreview(raw); if (t.trim()) title = t.trim().slice(0, 64); }
         else { const t = stripInjectedPreamble(raw); if (t.trim()) title = t.trim().slice(0, 64); }
       }
-      if (o.message.role === "assistant" && o.message.usage) { turns++; if (o.message.model) model = o.message.model; }
+      if (o.message.role === "assistant" && o.message.usage) {
+        turns++;
+        if (o.message.model) {
+          const next = canonicalModelId(o.message.model, o.message.provider);
+          // A bare id that merely restates the prefixed one (older rows carry no provider) keeps the prefix.
+          if (next.includes("/") || !model.endsWith(`/${next}`)) model = next;
+        }
+      }
     }
   }
   if (!title && turns === 0) return { scwd, meta: null }; // empty/probe session - remembered, skipped
-  return { scwd, meta: { id: id || f, title: title || "Untitled session", model: model.replace(/^anthropic\//, "") || "-", turns, kind } };
+  return { scwd, meta: { id: id || f, title: title || "Untitled session", model: model || "-", turns, kind } };
+}
+
+/** The model as omp's `session/set_config_option` accepts it: `provider/model`. A `model_change` row
+ *  already carries that form; an assistant message carries the bare id with `provider` beside it. The
+ *  index used to keep the bare id (and stripped `anthropic/` on top), which the orbit's Recover then
+ *  handed straight back to omp, and omp refused every one as "Unknown ACP model". Display code shortens
+ *  the id itself (modelLabel / prettyModel); the record stays the id that works. */
+export function canonicalModelId(model: string, provider?: unknown): string {
+  if (model.includes("/") || typeof provider !== "string" || !provider) return model;
+  return `${provider}/${model}`;
 }
 
 export function __sessionIndexStats(): { parses: number; entries: number } { return { parses: indexParses, entries: sessionIndex.size }; }
