@@ -10,6 +10,7 @@
 
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
+import { planSessionSwitch, spokeNameFor, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403)
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -9367,8 +9368,11 @@ async function settleStartupIncident(inc: IncidentView, previousId: string | nul
 
 /** Open session `id` in the thread. `loaded`: the engine already has it loaded (a verified P-RECOVER.1
  *  resume, or a resync of the current session), so only the transcript is fetched and rendered.
- *  Resolves true when the thread shows the session (or its live turn), false when it could not. */
-async function resumeSession(id: string, opts: { loaded?: boolean } = {}): Promise<boolean> {
+ *  Resolves true when the thread shows the session (or its live turn), false when it could not.
+ *  `force`: the user chose "Stop it and switch" (P-SWITCH.1), so a busy Main is stopped. Without it the
+ *  engine refuses while Main is working, and the switch sheet takes over. User clicks enter through
+ *  openSession, which asks first; this is the path after that decision. */
+async function resumeSession(id: string, opts: { loaded?: boolean; force?: boolean } = {}): Promise<boolean> {
   if (isLaneTarget(state.composerTarget)) demoteLane();
   const owner = leaveTurnView();
   // Status discovery is not a running turn. Keep Send blocked without offering Stop.
@@ -9404,12 +9408,121 @@ async function resumeSession(id: string, opts: { loaded?: boolean } = {}): Promi
   } else if (!shownSig) {
     renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
-  if (!opts.loaded) await bridge.resumeSession(id);
+  if (!opts.loaded) {
+    const r = await bridge.resumeSession(id, { force: opts.force });
+    if (r.busy) {
+      // Main started working between the check and the load (or the check never answered). Nothing was
+      // stopped: go back to Main's live turn, then let the user choose.
+      if (owner === turnViewEpoch) { void recoverMasterTurn(); showSwitchSheet(id, r.busy); }
+      return false;
+    }
+  }
   if (owner !== turnViewEpoch) return false;
   setRecoveryChecking(false); state.streaming = false; setSendEnabled();
   void loadSessionMode(); // ADR-0219: reflect THIS session's CUI/Search mode + banner
   $("#input")?.focus();
   return !!page || !!shownSig;
+}
+
+// ── P-SWITCH.1 (ADR-0403): opening a session never stops Main's work unless the user chooses to ──────
+// Main is one omp process holding one session, so "keep that one running while I work in this one" means
+// one of them runs in a spoke. The engine refuses a switch while Main is busy (409 without force); these
+// functions ask first and offer the spoke, so the refusal is the rare race and not the normal path.
+
+/** The sidebar's cached row for a session (title for the sheet, model for its spoke). */
+const cachedSessionInfo = (id: string | null): SessionInfo | undefined =>
+  id ? cachedSessions<SessionList>()?.sessions.find((s) => s.id === id) : undefined;
+
+/** Every user-initiated "open this session" (the sidebar row) comes through here. */
+async function openSession(id: string): Promise<void> {
+  const [main, fleet] = await Promise.all([bridge.sessionBusy().catch(() => null), bridge.fleetStatus().catch(() => null)]);
+  const plan = planSessionSwitch({ busy: main?.busy ?? null, mainSessionId: main?.sessionId ?? null, targetId: id, lanes: fleet?.lanes ?? [] });
+  if (plan.kind === "promote") { void promoteLane(plan.laneId); return; }
+  if (plan.kind === "refuse") { showToast({ tone: "warn", title: "This session is running in a spoke", desc: plan.reason, actions: [{ label: "OK" }], timeout: 8000 }); return; }
+  if (plan.kind === "ask") { showSwitchSheet(id, plan.reason, main?.sessionId ?? null); return; }
+  void resumeSession(id);
+}
+
+let switchSheet: HTMLElement | null = null;
+function closeSwitchSheet(): void {
+  switchSheet?.remove();
+  switchSheet = null;
+  document.removeEventListener("keydown", onSwitchSheetKey, true);
+}
+function onSwitchSheetKey(ev: KeyboardEvent): void {
+  if (ev.key !== "Escape" || !switchSheet) return;
+  ev.preventDefault(); ev.stopPropagation();
+  closeSwitchSheet();
+}
+
+/** Dock the choice above the composer, where the spoke ask and the exec/egress cards dock. Not a toast:
+ *  this choice can stop work, so it never times out and an outside click never answers it. Esc or Stay
+ *  here closes it with nothing changed. `targetId` null = New session. */
+function showSwitchSheet(targetId: string | null, reason: string, mainId: string | null = null): void {
+  closeSwitchSheet();
+  const wrap = $(".composer-wrap") as HTMLElement | null;
+  if (!wrap) return;
+  const target = cachedSessionInfo(targetId);
+  const copy = switchSheetCopy(cachedSessionInfo(mainId)?.title ?? null, targetId ? target?.title ?? "the selected session" : null, reason);
+  const node = el(`<div id="switchSheet" role="alertdialog" aria-label="The main session is still working">
+    <div class="perm perm-egress">
+      <div class="perm-eg-head">${icon("clock", 13)}<span class="switch-title"></span></div>
+      <div class="switch-body"></div>
+      <div class="perm-actions perm-actions-col">
+        <button class="perm-btn eg-allow" data-switch="spoke"><b class="switch-label"></b><span class="switch-hint"></span></button>
+        <button class="perm-btn eg-block" data-switch="stop"></button>
+        <button class="perm-btn" data-switch="stay"></button>
+      </div>
+      <div class="switch-err" hidden></div>
+    </div>
+  </div>`);
+  ($(".switch-title", node) as HTMLElement).textContent = copy.title;
+  ($(".switch-body", node) as HTMLElement).textContent = copy.body;
+  ($(".switch-label", node) as HTMLElement).textContent = copy.spoke;
+  ($(".switch-hint", node) as HTMLElement).textContent = copy.spokeHint;
+  ($('[data-switch="stop"]', node) as HTMLElement).textContent = copy.stop;
+  ($('[data-switch="stay"]', node) as HTMLElement).textContent = copy.stay;
+  node.addEventListener("click", (ev) => {
+    const choice = ((ev.target as HTMLElement).closest("[data-switch]") as HTMLElement | null)?.dataset.switch;
+    if (choice === "stay") { closeSwitchSheet(); return; }
+    if (choice === "stop") {
+      closeSwitchSheet();
+      if (targetId) void resumeSession(targetId, { force: true }); else newSession(true);
+      return;
+    }
+    if (choice === "spoke") void openInSpoke(node, targetId, target);
+  });
+  (wrap.querySelector(".composer-row") ?? wrap.firstElementChild)?.before(node);
+  switchSheet = node;
+  document.addEventListener("keydown", onSwitchSheetKey, true);
+  ($('[data-switch="spoke"]', node) as HTMLButtonElement).focus(); // Enter takes the safe choice
+}
+
+/** Open the session (or a fresh one) in a new spoke and drive it from the composer. Main is untouched:
+ *  its turn keeps running, and the spoke banner's "back to Main" returns to it. A refused spawn (folder
+ *  gone, pressure admission) is said on the sheet, which stays open with the other choices. */
+async function openInSpoke(node: HTMLElement, targetId: string | null, target: SessionInfo | undefined): Promise<void> {
+  const buttons = [...node.querySelectorAll("button")] as HTMLButtonElement[];
+  for (const b of buttons) b.disabled = true;
+  const err = $(".switch-err", node) as HTMLElement;
+  err.hidden = true;
+  const cwd = state.workspace?.current ?? "";
+  const model = target?.model || state.model || state.config.find((c) => c.id === "model")?.currentValue || "";
+  const r = await bridge.fleetSpawn({
+    cwd,
+    name: targetId ? spokeNameFor(target?.title) : "New session",
+    ...(model ? { model } : {}),
+    ...(targetId ? { sessionId: targetId } : {}),
+  }).catch(() => null);
+  if (switchSheet !== node) return; // closed (Esc) while the spoke was starting: the spoke still exists in the fleet
+  if (!r?.ok || !r.lane) {
+    for (const b of buttons) b.disabled = false;
+    err.textContent = `The spoke could not start: ${r?.reason ?? "the engine did not answer"}.`;
+    err.hidden = false;
+    return;
+  }
+  closeSwitchSheet();
+  await promoteLane(r.lane.id);
 }
 
 /** Delete a session from history (with confirm). Backend closes the live session first if it's
@@ -15792,7 +15905,7 @@ function wire(): void {
     const del = t.closest(".sess-del") as HTMLElement | null;
     if (del?.dataset.del) { e.stopPropagation(); confirmDeleteSession(del.dataset.del); return; }
     const s = t.closest(".sess") as HTMLElement | null;
-    if (s?.dataset.sid) void resumeSession(s.dataset.sid);
+    if (s?.dataset.sid) void openSession(s.dataset.sid); // P-SWITCH.1: asks first when Main is working
   });
   $(".brand")!.addEventListener("click", () => toggleSidebar());
 
@@ -15802,7 +15915,7 @@ function wire(): void {
     if (t.closest("[data-asksage-refresh]")) { void refreshAsksage(); return; }
     if (t.closest("[data-budget-refresh]")) void refreshBudget(true);
   });
-  $("#newSession")!.addEventListener("click", () => confirmNewSession());
+  $("#newSession")!.addEventListener("click", () => void confirmNewSession());
   $("#winMin")!.addEventListener("click", () => window.lucid?.win?.minimize());
   $("#winMax")!.addEventListener("click", () => window.lucid?.win?.toggleMaximize());
   $("#winClose")!.addEventListener("click", () => confirmWindowClose());
@@ -15829,7 +15942,11 @@ function confirmWindowClose(): void {
   });
 }
 
-function confirmNewSession(): void {
+async function confirmNewSession(): Promise<void> {
+  // P-SWITCH.1 (ADR-0403): a working Main is not "a conversation that stays in history": its turn would be
+  // cancelled. Offer the spoke instead of the history reassurance below, which is only true when idle.
+  const main = await bridge.sessionBusy().catch(() => null);
+  if (main?.busy) { showSwitchSheet(null, main.busy, main.sessionId); return; }
   const dirty = $$("#thread .msg").length > 0 || (($("#input") as HTMLTextAreaElement | null)?.value ?? "").trim();
   if (!dirty) { newSession(); return; }
   showToast({
@@ -15842,12 +15959,18 @@ function confirmNewSession(): void {
 }
 
 // ───────────────────────── palette actions ─────────────────────────
-function newSession(): void {
+/** `force`: the user chose "Stop it and start new" on the P-SWITCH.1 sheet. Without it a busy Main refuses
+ *  and the sheet opens; confirmNewSession normally asks before this runs. */
+function newSession(force = false): void {
   const owner = leaveTurnView();
   setRecoveryChecking(true); setSendEnabled();
   seedThread(); state.liveUsage = null;
   resetAgentPreviewLane(); // P-PREVIEW.19 (ADR-0339): the agent's preview belongs to the conversation that ended
-  void bridge.newSession().then(() => { if (owner !== turnViewEpoch) return; setRecoveryChecking(false); setSendEnabled(); void loadSessionMode(); });
+  void bridge.newSession({ force }).then((r) => {
+    if (owner !== turnViewEpoch) return;
+    if (r.busy) { void recoverMasterTurn(); showSwitchSheet(null, r.busy); return; } // nothing was stopped
+    setRecoveryChecking(false); setSendEnabled(); void loadSessionMode();
+  });
   renderStatus(); $("#input")?.focus();
 }
 
@@ -15898,7 +16021,7 @@ const palette = createPalette(() => {
     { id: "zin", title: "Zoom in", icon: "plus", hint: modSymbol("+"), run: () => nudgeZoom(0.1) },
     { id: "zout", title: "Zoom out", icon: "minus", hint: modSymbol("−"), run: () => nudgeZoom(-0.1) },
     { id: "zreset", title: "Reset text zoom to 100%", icon: "refresh", hint: modSymbol("0"), run: () => resetZoom() },
-    { id: "new", title: "New session", icon: "plus", run: () => newSession() },
+    { id: "new", title: "New session", icon: "plus", run: () => void confirmNewSession() },
     { id: "side", title: "Toggle sidebar", icon: "layout", run: () => toggleSidebar() },
     { id: "insp", title: "Collapse / expand inspector (metrics rail)", icon: "collapse", run: () => setInspectorRail(!state.inspectorRail) },
     { id: "refresh", title: "Refresh dashboards now", icon: "refresh", run: () => refresh() },

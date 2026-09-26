@@ -1357,6 +1357,11 @@ const json = (data: unknown) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 
+/** P-SWITCH.1 (ADR-0403): the one refusal both session routes send while Main is busy. 409 because the
+ *  request is fine and the state is not; `busy` is the engine's reason, shown to the user verbatim. */
+const switchRefused = (busy: string, sessionId: string | null) =>
+  Response.json({ ok: false, busy, sessionId, error: `Main is busy (${busy}). Send force: true to stop it and switch.` }, { status: 409, headers: { "cache-control": "no-store" } });
+
 // P-SEC.1 (ADR-0209): a caught exception's message/stack must never flow into a client response
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
 // real-world exposure is low, but we keep the boundary clean: log the FULL error server-side (dev console)
@@ -3673,7 +3678,16 @@ return Bun.serve({
         syncStepTurns(sid, page.userTotal);
         return json({ ok: true, data: { ...page, steps: readTurnSteps(sid) } });
       }
-      if (p === "/api/session/load" && req.method === "POST") { const { id } = await readBody<{ id?: unknown }>(req); await backend.loadSession(String(id)); return json({ ok: true }); }
+      // P-SWITCH.1 (ADR-0403): opening a session never stops Main's work unless the caller chose to. Every
+      // client (desktop, PWA, a script) gets the same refusal; `force: true` is the explicit "stop it".
+      if (p === "/api/session/busy") return json({ ok: true, data: { busy: backend.switchBlocker(), sessionId: backend.currentSessionId() } });
+      if (p === "/api/session/load" && req.method === "POST") {
+        const { id, force } = await readBody<{ id?: unknown; force?: unknown }>(req);
+        const busy = force === true ? null : backend.switchBlocker();
+        if (busy) return switchRefused(busy, backend.currentSessionId());
+        await backend.loadSession(String(id));
+        return json({ ok: true });
+      }
       if (p === "/api/session/delete" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
         const sid = String(id);
@@ -4520,7 +4534,12 @@ return Bun.serve({
         return json({ ok: true, data: { recorded: true } });
       }
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
-      if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
+      if (p === "/api/newSession" && req.method === "POST") {
+        const { force } = await readBody<{ force?: unknown }>(req).catch(() => ({ force: undefined }));
+        const busy = force === true ? null : backend.switchBlocker(); // P-SWITCH.1 (ADR-0403)
+        if (busy) return switchRefused(busy, backend.currentSessionId());
+        await backend.newSession(); await refreshRecall(); return json({ ok: true });
+      }
       // P-FLEET.L5 (ADR-0274): the reviewable timeline - every session on this machine (master chats,
       // lane sessions labeled through the durable ledger, ingest throwaways), across ALL workspaces,
       // newest first. Reading a point reuses the same transcript reader the sidebar resume uses; the
