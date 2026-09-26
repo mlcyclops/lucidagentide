@@ -14983,6 +14983,8 @@ function wire(): void {
     fleetStatus: bridge.fleetStatus,
     fleetAnswer: bridge.fleetAnswer,
     fleetRespawn: bridge.fleetRespawn,
+    fleetStop: bridge.fleetStop, // P-FLEET.L20: close a spoke from its node or the banner (stop, then dismiss)
+    fleetRemove: bridge.fleetRemove,
     fleetSpawn: bridge.fleetSpawn, // P-FLEET.L17 recovery: respawn a historical spoke by its old identity
     timelineList: bridge.timelineList, // P-FLEET.L17 recovery: the P-FLEET.L5 durable ledger feeds the ghosts
     promoteLane: (laneId) => void promoteLane(laneId),
