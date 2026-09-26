@@ -13,18 +13,44 @@
 // `preview-available` path. The renderer re-gates the path (resolvePreview → readPreviewFile) before
 // anything renders, so a bad path can never escape the sandbox.
 //
-// CONFIRMED against the installed omp's ExtensionAPI (dist/types/.../extensions/types.d.ts):
+// CONFIRMED against the installed omp's ExtensionAPI (dist/types/.../extensions/types.d.ts + rpc-mode):
 //   • `pi.registerTool(ToolDefinition)` IS exposed to `-e` extensions (same API as pi.registerProvider).
-//   • `parameters` must be a TSchema — authored here via the injected `pi.typebox` shim, NOT a raw
-//     JSON-schema object (the previous draft's placeholder would have been rejected).
+//   • `parameters` is typed `TParams extends TSchema` (TypeBox), but at runtime omp only requires "a JSON
+//     Schema object" (rpc-mode) and passes non-Zod schemas to the wire untouched - and TypeBox schemas ARE
+//     plain JSON-Schema objects at runtime. So we author via the injected `pi.typebox` shim when it is
+//     healthy, and fall back to structurally identical plain JSON-Schema literals when it is absent or
+//     malformed (a missing T.Optional used to throw mid-registration and silently drop ALL five tools).
 //   • `approval` defaults to `"exec"`; we set `"read"` so opening a preview never trips the exec gate.
 // Everything is still defensively wrapped: a registration failure NEVER breaks omp launch — worst case
 // `preview_open` is simply absent and the user keeps auto-on-write preview (P-PREVIEW.2) + the manual panel.
 
-/** Minimal, self-contained checks (no desktop import — this runs in omp's process). The renderer's
+/** Minimal, self-contained checks (no desktop import - this runs in omp's process). The renderer's
  *  resolvePreview/readPreviewFile is the authoritative gate before anything renders; this is belt-and-braces. */
 const LOCAL_PATH = /^(file:\/\/|[A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/;
-const PREVIEWABLE = /\.(html?|svg)$/i;
+
+// P-PREVIEW.12: every extension the Preview panel can render, MIRRORED from the single kind table in
+// desktop/preview_resolve.ts (PREVIEW_KIND_EXT). It is mirrored rather than imported ON PURPOSE: omp loads
+// this file as an `-e` extension inside its OWN subprocess, and importing desktop/preview_resolve.ts would
+// pull in egress_policy -> managed_config/network_whitelist, whose module scope touches disk. A TOP-LEVEL
+// import that throws is OUTSIDE the try/catch below, so it would take all five preview tools down with it and
+// break the "a registration failure never breaks omp launch" guarantee this whole file is built around.
+// preview_extension.test.ts pins this list against PREVIEW_KIND_EXT, so the mirror cannot silently drift.
+export const PREVIEWABLE_EXTS = [
+  "html", "htm",                                                        // pages
+  "svg",                                                                // vector
+  "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico",            // images / charts / screenshots
+  "md", "markdown",                                                     // reports
+  "txt", "json", "csv", "tsv", "log", "yml", "yaml", "xml", "toml", "ini", // data / logs / config
+  "pdf",                                                                // documents
+// `readonly string[]`, deliberately NOT `as const`: nothing needs the literal union, and a literal tuple
+// makes every ordinary string comparison against a member unassignable (a caller doing
+// `expect(ext).toBe(ext.toLowerCase())` fails to typecheck for no useful reason). Membership is enforced
+// by the test that pins this list against PREVIEW_KIND_EXT, not by the type.
+] satisfies readonly string[] as readonly string[];
+/** Built from PREVIEWABLE_EXTS (never hand-written), tolerant of a trailing query/hash and whitespace. */
+const PREVIEWABLE = new RegExp(String.raw`\.(${PREVIEWABLE_EXTS.join("|")})(?:[?#][\s\S]*)?\s*$`, "i");
+/** Named in the tool description + the refusal so a model learns what it CAN show, not just that it failed. */
+const PREVIEWABLE_KINDS = "html, svg, image (png/jpg/gif/webp), markdown, text (txt/json/csv/log/yaml/xml), or pdf";
 
 /** P-PREVIEW.3a-shot (ADR-0096): parse a `data:image/…;base64,…` URL into omp `ImageContent`
  *  (`{ type, data, mimeType }` — the shape the model actually sees), or null if it isn't a valid image
@@ -35,34 +61,116 @@ export function previewShotImage(dataUrl: string | null | undefined): { type: "i
   return mimeType && data ? { type: "image", data, mimeType } : null;
 }
 
+/** Agents sometimes hand preview_open a quoted or padded path ('"C:\\x\\app.html"', " 'x.html' "). Trim and
+ *  strip matching pairs of surrounding single/double quotes so a well-meant but wrapped path still previews
+ *  (the LOCAL_PATH gate already accepts either a bare path or a file:// prefix, matching the desktop
+ *  helpers). Pure + exported for tests. */
+export function normalizeToolPath(raw: unknown): string {
+  let p = String(raw ?? "").trim();
+  while (p.length >= 2 && ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'")))) {
+    p = p.slice(1, -1).trim();
+  }
+  return p;
+}
+
 export default function previewExtension(pi: any): void {
+  // Which schema-authoring mode registration used; hoisted so the catch below can name it in the log.
+  let schemaMode: "typebox" | "literal" = "literal";
   try {
     if (!pi || typeof pi.registerTool !== "function") return; // older omp / no custom-tool support → no-op
-    // Author the parameter schema with omp's injected TypeBox shim (a real TSchema). Fall back defensively
-    // if the shim is missing on some build — a registration that throws is swallowed below.
+    // Author the parameter schemas via omp's injected TypeBox shim when it is HEALTHY (Object/String/Optional
+    // all present); otherwise fall back to plain JSON-Schema object literals - the same shape TypeBox emits
+    // at runtime, so registerTool sees a structurally identical schema either way and registration succeeds
+    // in BOTH modes. (A shim with a missing T.Optional used to throw "T.Optional is not a function" mid-way
+    // and silently drop ALL five preview tools.)
     const T = pi.typebox?.Type;
-    if (!T) return;
+    const typeboxOk = !!T && typeof T.Object === "function" && typeof T.String === "function" && typeof T.Optional === "function";
+    schemaMode = typeboxOk ? "typebox" : "literal";
+    /** Declare a tool's params ONCE (name -> description, all strings) and build them for the active mode.
+     *  Props listed in `optional` are wrapped in T.Optional (typebox mode) or omitted from `required`
+     *  (literal mode); an empty `required` is dropped entirely, matching what TypeBox emits. */
+    const schema = (props: Record<string, string>, optional: string[] = []): any => {
+      if (typeboxOk) {
+        const shape: Record<string, any> = {};
+        for (const [k, d] of Object.entries(props)) {
+          const s = T.String({ description: d });
+          shape[k] = optional.includes(k) ? T.Optional(s) : s;
+        }
+        return T.Object(shape);
+      }
+      const properties: Record<string, any> = {};
+      for (const [k, d] of Object.entries(props)) properties[k] = { type: "string", description: d };
+      const required = Object.keys(props).filter((k) => !optional.includes(k));
+      return { type: "object", properties, ...(required.length ? { required } : {}) };
+    };
     pi.registerTool({
       name: "preview_open",
       label: "Open in Preview",
+      // P-PREVIEW.12: the description NAMES every previewable kind. It used to say ".html/.svg", so a model
+      // reading the schema had no way to know it could surface a markdown report, a JSON payload, a CSV
+      // table, a chart PNG or a PDF, and simply never tried.
+      //
+      // P-PREVIEW.18: and then it over-corrected. "a markdown report, a data file, a chart PNG all work"
+      // read as an INVITATION, so the panel started popping for routine .md and .json writes and the user
+      // reported it as "the preview panel is being called for everything now, it's really annoying". The
+      // capability is unchanged (every kind still renders on request, which is the point of the tool); the
+      // description now says WHEN to reach for it, because a schema that lists what is possible without
+      // saying what is wanted is how an agent ends up hijacking the screen with a config file. Paired with
+      // the auto-on-write trigger narrowing to html/svg/pdf in desktop/preview_resolve.ts.
       description:
-        "Open a LOCAL HTML/SVG file you have written in LUCID's in-app Preview panel so the user can see it " +
-        "render. Use this (or just write the .html/.svg file) instead of a browser/bash/eval to show your " +
-        "work — those are security-gated. Pass the absolute path; the panel re-validates before rendering.",
+        "Show the user a local file you just produced, rendered, in LUCID's in-app Preview panel. Reach for " +
+        "this when SEEING the result is the point: a page or app you built (.html/.svg), or a generated " +
+        "report (.pdf). The panel takes over part of the user's screen, so do NOT open it for a file the " +
+        "user did not ask to look at: notes, plans, configs, fixtures, .md/.json/.csv/.log working files, or " +
+        "anything you wrote as a side effect of a task. Those all still RENDER here if the user asks for " +
+        `them (previewable kinds: ${PREVIEWABLE_KINDS}), so open one on request, not by reflex. It also ` +
+        "brings the preview to the front so a following preview_screenshot can capture it. " +
+        "Pass the absolute path; the panel re-validates before rendering. " +
+        "The preview frame has NO network access, so a page that loads a script, stylesheet, font or image " +
+        "from a CDN renders blank: inline those into the file, or save the asset next to it and reference it " +
+        "with a relative path. Prefer this over a browser/bash/eval to show your work, those are security-gated.",
       // Read-only from omp's view: it only acknowledges; the desktop opens the (sandboxed) panel. Setting
       // "read" keeps preview_open out of the exec-approval flow so showing a preview is never blocked.
       approval: "read",
-      parameters: T.Object({
-        path: T.String({ description: "Absolute path to the local .html/.svg file to preview" }),
-      }),
+      parameters: schema({ path: `Absolute path to the local file to preview (${PREVIEWABLE_KINDS})` }),
       async execute(_toolCallId: string, params: any) {
-        const path = String(params?.path ?? "").trim();
+        // Normalize first: agents sometimes pass the path quoted or padded; a wrapped path still previews.
+        const path = normalizeToolPath(params?.path);
+        // Fail-closed, unchanged: a non-local or non-previewable path is an ERROR, never a silent success.
+        // The refusal now names the kinds, so the model can retry with something the panel can actually show.
         if (!path || !LOCAL_PATH.test(path) || !PREVIEWABLE.test(path)) {
-          return { content: [{ type: "text", text: `preview_open: "${path}" is not a local .html/.svg file — nothing to preview.` }], isError: true };
+          return { content: [{ type: "text", text: `preview_open: "${path}" is not a local previewable file. Previewable kinds: ${PREVIEWABLE_KINDS}.` }], isError: true };
         }
         const name = path.split(/[\\/]/).pop() || path;
-        // The desktop opens the panel from this tool_call (acp_backend → renderer). The tool just confirms.
-        return { content: [{ type: "text", text: `Opening ${name} in the Preview panel for the user.` }] };
+        // P-PREVIEW.11 (ADR-0308): REPORT OURSELVES to the desktop. The panel used to open purely as a
+        // side effect of acp_backend matching "preview_open: <path>" in omp's ACP call title - which
+        // intent tracing kills, because buildToolTitle returns the model's intent prose instead and the
+        // ACP update carries no tool-name field at all. So the tool now drives the panel the same way
+        // preview_screenshot / preview_inspect / preview_act already do: through the token'd URL the
+        // desktop published in our env. Best-effort by design - an older desktop simply has no
+        // LUCID_PREVIEW_OPEN_URL, and the title fallback still covers the intent-tracing-off case, so a
+        // miss here degrades to the previous behavior instead of failing the call.
+        // P-PREVIEW.12: the response also carries `blocked` - one sentence naming the remote refs the frame's
+        // CSP refused in the document we just opened (desktop side: findBlockedRefs + blockedRefsMessage in
+        // desktop/preview_inline.ts). That is the feedback loop this tool never had: without it a model whose
+        // page pulls Chart.js off a CDN sees a cheerful "Opening ..." while the user stares at a blank frame,
+        // and writes the exact same CDN <script> next turn. Best-effort: an older desktop returns no field.
+        const openUrl = process.env.LUCID_PREVIEW_OPEN_URL;
+        let blocked = "";
+        if (openUrl) {
+          try {
+            const r = await fetch(openUrl, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ path }),
+              signal: AbortSignal.timeout(4000),
+            });
+            const body: any = await r.json().catch(() => null);
+            const b = body?.data?.blocked ?? body?.blocked;
+            if (typeof b === "string" && b.trim()) blocked = ` ${b.trim().slice(0, 800)}`;
+          } catch { /* the panel just does not surface; never fail the tool over it */ }
+        }
+        return { content: [{ type: "text", text: `Opening ${name} in the Preview panel for the user.${blocked}` }] };
       },
     });
 
@@ -76,25 +184,33 @@ export default function previewExtension(pi: any): void {
       name: "preview_screenshot",
       label: "Screenshot the preview",
       description:
-        "Capture a screenshot of the CURRENT in-app preview so you can SEE how your app renders and self-correct. " +
-        "Returns an image of what the user sees. Open a preview first (write an .html/.svg, or call preview_open). " +
-        "Use this to verify graphics/layout instead of a browser or bash/eval, which are security-gated.",
+        "See how your UI actually renders and self-correct. Call this whenever you have written or changed an " +
+        ".html/.svg or any visible UI and want to check it looks right BEFORE telling the user it is done — a " +
+        "build/design/layout task is not finished until you have looked at the result. Returns an image of what " +
+        "the user sees. Open the file in the preview first (write it, or call preview_open). If no screenshot " +
+        "comes back (the preview isn't the front panel), call preview_inspect instead — it reads the rendered " +
+        "DOM and works even when the panel is not in front. Use this to verify graphics/layout rather than a " +
+        "browser or bash/eval, which are security-gated.",
       approval: "read",
-      parameters: T.Object({}),
+      parameters: schema({}),
       async execute() {
         const text = (t: string) => ({ content: [{ type: "text", text: t }] });
+        // A screenshot only exists for the AGENT preview lane while it is the front panel (screen capture sees
+        // on-screen pixels only). When it's missing, steer to the reliable recovery: preview_open re-surfaces
+        // the file, and preview_inspect reads the rendered DOM even when the panel isn't in front.
+        const unavailable = "No preview screenshot is available yet. Call preview_open on your .html/.svg file to bring it to the front, then retry — or call preview_inspect to read the rendered DOM (that works even when the preview panel is not in front).";
         const url = process.env.LUCID_PREVIEW_SHOT_URL;
         if (!url) return text("Preview screenshots aren't available in this environment (the desktop preview isn't running).");
         try {
           const r = await fetch(url);
-          if (!r.ok) return text("No preview is open to screenshot yet — write an .html/.svg or call preview_open first, then retry.");
+          if (!r.ok) return text(unavailable);
           const body: any = await r.json().catch(() => null);
           // The dev server wraps responses as { ok, data: { png } }; tolerate a top-level { png } too.
           const img = previewShotImage(body?.data?.png ?? body?.png);
-          if (!img) return text("No preview screenshot is available yet — open a preview first, then retry.");
+          if (!img) return text(unavailable);
           return { content: [img, { type: "text", text: "Screenshot of the current preview (what the user sees)." }] };
         } catch {
-          return text("Couldn't capture the preview screenshot.");
+          return text("Couldn't capture the preview screenshot. Call preview_inspect to read the rendered DOM instead.");
         }
       },
     });
@@ -109,18 +225,19 @@ export default function previewExtension(pi: any): void {
       name: "preview_inspect",
       label: "Inspect the preview DOM",
       description:
-        "Read the LIVE DOM of the current in-app preview to review your work: the page's text, headings, and " +
-        "controls (buttons/links/inputs), OR specific elements by CSS `selector`, OR captured console `errors`. " +
-        "Read-only — you cannot click/type/run JS here (yet). Open a preview first (write an .html/.svg or call " +
-        "preview_open). This is the way to check your rendered UI instead of a browser or bash/eval (gated). " +
+        "Read the LIVE rendered DOM of your preview to verify a UI you built or changed: the page's text, " +
+        "headings, and controls (buttons/links/inputs), OR specific elements by CSS `selector`, OR captured " +
+        "console `errors`. Works even when the preview panel is NOT the front tab (unlike preview_screenshot), " +
+        "so it is the reliable way to check your work. Read-only — no click/type/JS. Open the file first (write " +
+        "an .html/.svg or call preview_open). Prefer this over a browser or bash/eval (gated). " +
         "The result includes the current `viewport`: the user can review the preview at device sizes (phone " +
         "portrait/landscape, tablet landscape) via the phone icon in the preview toolbar — if you're building a " +
         "PWA or a mobile/responsive layout, note that and design/verify for those viewports.",
       approval: "read",
-      parameters: T.Object({
-        selector: T.Optional(T.String({ description: "Optional CSS selector — return details of matching elements (tag/text/id/role/rect)" })),
-        what: T.Optional(T.String({ description: "'summary' (default: text + headings + controls + errors), 'errors', or 'title'" })),
-      }),
+      parameters: schema({
+        selector: "Optional CSS selector - return details of matching elements (tag/text/id/role/rect)",
+        what: "'summary' (default: text + headings + controls + errors), 'errors', or 'title'",
+      }, ["selector", "what"]),
       async execute(_toolCallId: string, params: any) {
         const text = (t: string) => ({ content: [{ type: "text", text: t }] });
         const base = process.env.LUCID_PREVIEW_INSPECT_URL;
@@ -175,7 +292,7 @@ export default function previewExtension(pi: any): void {
         "Click an element in the LIVE preview by CSS `selector` (e.g. a button or link) to test your UI, then " +
         "screenshot or preview_inspect to see what happened. Open a preview first. Structured action — no JS.",
       approval: "read",
-      parameters: T.Object({ selector: T.String({ description: "CSS selector of the element to click" }) }),
+      parameters: schema({ selector: "CSS selector of the element to click" }),
       async execute(_toolCallId: string, params: any) { return act("click", String(params?.selector ?? "")); },
     });
     pi.registerTool({
@@ -185,15 +302,16 @@ export default function previewExtension(pi: any): void {
         "Type `text` into an input/textarea/contenteditable in the LIVE preview by CSS `selector` (fires input+change), " +
         "so you can fill a form and test behavior, then screenshot or preview_inspect. Open a preview first. No JS.",
       approval: "read",
-      parameters: T.Object({
-        selector: T.String({ description: "CSS selector of the input/textarea to type into" }),
-        text: T.String({ description: "The text to set as the field's value" }),
+      parameters: schema({
+        selector: "CSS selector of the input/textarea to type into",
+        text: "The text to set as the field's value",
       }),
       async execute(_toolCallId: string, params: any) { return act("type", String(params?.selector ?? ""), String(params?.text ?? "")); },
     });
   } catch (e) {
-    // Never break omp launch: skip the tool if registration throws (e.g. a schema-format mismatch on this
-    // omp version). The gate, chat, and auto-on-write preview all keep working.
-    try { process.stderr.write(`\n[LucidAgentIDE] preview_open tool not registered: ${String((e as { message?: unknown })?.message ?? e)}\n`); } catch { /* ignore */ }
+    // Never break omp launch: skip the tools if registration throws (e.g. a schema-format mismatch on this
+    // omp version). The gate, chat, and auto-on-write preview all keep working. Naming the schema mode makes
+    // a field report actionable ("literal" means the typebox shim was absent/malformed on that build).
+    try { process.stderr.write(`\n[LucidAgentIDE] preview tools not registered (schema mode: ${schemaMode}): ${String((e as { message?: unknown })?.message ?? e)}\n`); } catch { /* ignore */ }
   }
 }

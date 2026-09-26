@@ -73,6 +73,11 @@ export interface StartP2PHostOpts {
   options?: CollabOptions | null;
   onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
   onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
+  /** P-REMOTE.14: this host's CUI + lockdown stance, read FRESH per call and advertised to guests so a
+   *  phone can decide whether device-native dictation is allowed. Omitted = CollabHost assumes the
+   *  strictest posture, which costs a phone its dictate button; wire it so a relay share that upgrades
+   *  to P2P mid-session does not silently lose device STT. */
+  posture?: () => { cui: boolean; lockdown: boolean };
   /** Test-only: inject the relay socket (an in-memory loopback for the self-test). Defaults to the real WebSocket. */
   wsFactory?: WebSocketFactory;
 }
@@ -116,6 +121,7 @@ export async function startP2PHost(opts: StartP2PHostOpts): Promise<P2PHostStatu
       options: opts.options ?? null,
       onGuestSetModel: opts.onGuestSetModel,
       onGuestSetWorkspace: opts.onGuestSetWorkspace,
+      ...(opts.posture ? { posture: opts.posture } : {}),
     },
   });
 

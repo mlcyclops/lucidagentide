@@ -1,0 +1,462 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
+// harness/omp/browser_extension.test.ts - P-BROWSER.1: the agent-browser tool extension's LOGIC against
+// a mock `pi` (the real omp registerTool, and the model actually seeing the tools, is verified live).
+// Load-bearing properties: registration NEVER throws (it can never break omp launch), it succeeds in BOTH
+// schema modes (healthy typebox shim, or plain JSON-Schema literals when the shim is absent or missing a
+// constructor), the input tools validate their arguments BEFORE reaching the window, and only browser_open
+// carries the gated tier so an iterate loop never re-prompts.
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { BrowserAction, BrowserPage } from "../../desktop/browser_snapshot.ts";
+import { freshnessOf } from "../../desktop/browser_snapshot.ts";
+import browserExtension, { type BrowserRunIo, browserEndpoint, browserShotImage, type JudgeLike, runBrowserGoal } from "./browser_extension.ts";
+
+const BASE = "http://127.0.0.1:5319/api/browser?t=tok";
+const ALL_TOOLS = ["browser_click", "browser_close", "browser_drag", "browser_keys", "browser_open", "browser_run", "browser_screenshot", "browser_scroll", "browser_type"];
+
+// ── typed mock surfaces (no `any`: the shim is untyped at runtime, so it is modelled explicitly) ───────
+type SchemaNode = Record<string, unknown>;
+interface ToolResult { content: { type: string; text?: string; data?: string; mimeType?: string }[]; isError?: boolean }
+interface CapturedTool {
+  name: string;
+  approval?: string;
+  description?: string;
+  parameters?: unknown;
+  execute?: (toolCallId: string, params: unknown) => Promise<ToolResult>;
+}
+
+const OPTIONAL_MARK = "~optional";
+const isOptional = (v: unknown): boolean => !!v && typeof v === "object" && OPTIONAL_MARK in v;
+
+/** Mirrors what omp injects as `pi.typebox`: Object/String/Number/Boolean/Optional emitting standard
+ *  JSON schema, with Optional-wrapped props left out of `required` (real TypeBox omits an empty one). */
+const typebox = {
+  Type: {
+    Object: (properties: Record<string, SchemaNode>): SchemaNode => {
+      const required = Object.keys(properties).filter((k) => !isOptional(properties[k]));
+      return { type: "object", properties, ...(required.length ? { required } : {}) };
+    },
+    String: (opts: SchemaNode = {}): SchemaNode => ({ type: "string", ...opts }),
+    Number: (opts: SchemaNode = {}): SchemaNode => ({ type: "number", ...opts }),
+    Boolean: (opts: SchemaNode = {}): SchemaNode => ({ type: "boolean", ...opts }),
+    Optional: (schema: SchemaNode): SchemaNode => ({ ...schema, [OPTIONAL_MARK]: true }),
+  },
+};
+
+function capture(shim?: unknown): { pi: unknown; tools: CapturedTool[] } {
+  const tools: CapturedTool[] = [];
+  const pi = { registerTool: (t: CapturedTool) => tools.push(t), ...(shim === undefined ? { typebox } : shim === null ? {} : { typebox: shim }) };
+  return { pi, tools };
+}
+const byName = (tools: CapturedTool[], name: string): CapturedTool | undefined => tools.find((t) => t.name === name);
+
+/** Read `parameters` as a JSON-schema object without casting away the unknown. */
+function schemaOf(tool: CapturedTool | undefined): { properties: string[]; required: string[] } {
+  const p = tool?.parameters;
+  if (!p || typeof p !== "object") return { properties: [], required: [] };
+  const props = "properties" in p && p.properties && typeof p.properties === "object" ? Object.keys(p.properties) : [];
+  const req = "required" in p && Array.isArray(p.required) ? p.required.filter((x): x is string => typeof x === "string") : [];
+  return { properties: props.sort(), required: req.sort() };
+}
+
+const realFetch = globalThis.fetch;
+/** Stub fetch with one canned dev-server envelope; records the calls the tools actually made. */
+function stubFetch(envelope: unknown): { calls: { url: string; body: unknown }[] } {
+  const calls: { url: string; body: unknown }[] = [];
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    let body: unknown = null;
+    if (init?.body && typeof init.body === "string") { try { body = JSON.parse(init.body); } catch { body = init.body; } }
+    calls.push({ url, body });
+    return Promise.resolve(new Response(JSON.stringify(envelope), { headers: { "content-type": "application/json" } }));
+  }) as typeof globalThis.fetch;
+  return { calls };
+}
+
+beforeEach(() => { process.env.LUCID_BROWSER_URL = BASE; });
+afterEach(() => { globalThis.fetch = realFetch; delete process.env.LUCID_BROWSER_URL; });
+
+describe("registration", () => {
+  test("typebox mode registers all six tools; only browser_open carries the gated tier", () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    expect(tools.map((t) => t.name).sort()).toEqual(ALL_TOOLS);
+    expect(byName(tools, "browser_open")?.approval).toBe("exec");
+    // The iterate loop must never re-trip a gate: the window was already approved at open.
+    for (const name of ["browser_screenshot", "browser_scroll", "browser_click", "browser_type", "browser_run", "browser_close"]) {
+      expect(byName(tools, name)?.approval).toBe("read");
+    }
+  });
+
+  test("browser_run is read-tier (it cannot navigate) and requires only the goal", () => {
+    const { pi, tools } = capture(null);
+    browserExtension(pi);
+    const run = byName(tools, "browser_run");
+    expect(run?.approval).toBe("read");
+    expect(schemaOf(run)).toEqual({ properties: ["goal", "maxSteps", "values"], required: ["goal"] });
+  });
+
+  // A shim missing Boolean is the browser-tool analogue of the proven T.Optional bug: it must route to
+  // literal mode rather than throwing mid-registration and silently dropping every tool.
+  test("a typebox shim missing Boolean falls back to literal mode with all six still registered", () => {
+    const partial = { Type: { Object: typebox.Type.Object, String: typebox.Type.String, Number: typebox.Type.Number, Optional: typebox.Type.Optional } };
+    const { pi, tools } = capture(partial);
+    expect(() => browserExtension(pi)).not.toThrow();
+    expect(tools.map((t) => t.name).sort()).toEqual(ALL_TOOLS);
+  });
+
+  test("absent shim registers registrable JSON-Schema objects for every tool", () => {
+    const { pi, tools } = capture(null);
+    expect(() => browserExtension(pi)).not.toThrow();
+    expect(tools.map((t) => t.name).sort()).toEqual(ALL_TOOLS);
+    for (const t of tools) {
+      expect(typeof t.parameters).toBe("object");
+      expect(Array.isArray(t.parameters)).toBe(false);
+    }
+  });
+
+  test("every tool's schema requires exactly what it cannot work without", () => {
+    const { pi, tools } = capture(null);
+    browserExtension(pi);
+    expect(schemaOf(byName(tools, "browser_click"))).toEqual({ properties: ["button", "x", "y"], required: ["x", "y"] });
+    expect(schemaOf(byName(tools, "browser_type"))).toEqual({ properties: ["pressEnter", "text"], required: ["text"] });
+    expect(schemaOf(byName(tools, "browser_keys"))).toEqual({ properties: ["keys"], required: ["keys"] });
+    expect(schemaOf(byName(tools, "browser_scroll"))).toEqual({ properties: ["dy"], required: [] });
+  });
+
+  test("no LUCID_BROWSER_URL means no tools at all (a bun-only run has no window executor)", () => {
+    delete process.env.LUCID_BROWSER_URL;
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    expect(tools).toEqual([]);
+  });
+
+  test("registration never throws even when registerTool itself rejects the tool", () => {
+    expect(() => browserExtension({ registerTool: () => { throw new Error("schema rejected"); }, typebox })).not.toThrow();
+  });
+});
+
+describe("browser_click", () => {
+  test("rejects missing, non-numeric, and negative coordinates before any call goes out", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const click = byName(tools, "browser_click");
+    const { calls } = stubFetch({ ok: true, data: {} });
+    for (const bad of [{}, { x: 10 }, { x: "left", y: 4 }, { x: -1, y: 4 }, { x: 4, y: -8 }]) {
+      const r = await click?.execute?.("c", bad);
+      expect(r?.isError).toBe(true);
+    }
+    expect(calls).toEqual([]); // never bothered the window with a malformed point
+  });
+
+  test("posts the point to /click and tells the agent to screenshot next", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const { calls } = stubFetch({ ok: true, data: { title: "Profile" } });
+    const r = await byName(tools, "browser_click")?.execute?.("c", { x: 412.4, y: 96.6 });
+    expect(r?.isError).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("http://127.0.0.1:5319/api/browser/click?t=tok");
+    expect(calls[0]!.body).toEqual({ x: 412.4, y: 96.6, button: "left" });
+    expect(r?.content[0]?.text).toContain("browser_screenshot");
+  });
+
+  test("surfaces the server's refusal verbatim as an error result", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    stubFetch({ ok: false, error: "browser closed by user" });
+    const r = await byName(tools, "browser_click")?.execute?.("c", { x: 1, y: 1 });
+    expect(r?.isError).toBe(true);
+    expect(r?.content[0]?.text).toContain("browser closed by user");
+  });
+});
+
+describe("browser_type", () => {
+  test("refuses empty text and text past the 2000-character cap", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const type = byName(tools, "browser_type");
+    const { calls } = stubFetch({ ok: true, data: {} });
+    expect((await type?.execute?.("t", { text: "" }))?.isError).toBe(true);
+    expect((await type?.execute?.("t", {}))?.isError).toBe(true);
+    const over = await type?.execute?.("t", { text: "x".repeat(2001) });
+    expect(over?.isError).toBe(true);
+    expect(over?.content[0]?.text).toContain("2000");
+    expect(calls).toEqual([]);
+  });
+
+  test("passes text through and reports the Enter press when asked", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const { calls } = stubFetch({ ok: true, data: { typed: 5 } });
+    const r = await byName(tools, "browser_type")?.execute?.("t", { text: "hello", pressEnter: true });
+    expect(calls[0]!.url).toBe("http://127.0.0.1:5319/api/browser/type?t=tok");
+    expect(calls[0]!.body).toEqual({ text: "hello", pressEnter: true });
+    expect(r?.content[0]?.text).toContain("pressed Enter");
+  });
+
+  test("pressEnter defaults to false when omitted", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const { calls } = stubFetch({ ok: true, data: {} });
+    const r = await byName(tools, "browser_type")?.execute?.("t", { text: "hi" });
+    expect(calls[0]!.body).toEqual({ text: "hi", pressEnter: false });
+    expect(r?.content[0]?.text).not.toContain("pressed Enter");
+  });
+});
+
+describe("pure helpers", () => {
+  test("browserEndpoint keeps the query token and appends the route path", () => {
+    expect(browserEndpoint(BASE, "/click")).toBe("http://127.0.0.1:5319/api/browser/click?t=tok");
+    expect(browserEndpoint(undefined, "/click")).toBeNull();
+    expect(browserEndpoint("not a url", "/click")).toBeNull();
+  });
+
+  test("browserShotImage parses a png data URL and rejects anything else", () => {
+    expect(browserShotImage("data:image/png;base64,AA==")).toEqual({ type: "image", data: "AA==", mimeType: "image/png" });
+    expect(browserShotImage("data:text/html;base64,AA==")).toBeNull();
+    expect(browserShotImage(null)).toBeNull();
+  });
+});
+
+describe("browser_click button", () => {
+  test("defaults to left and normalizes a right-click request", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const click = byName(tools, "browser_click");
+    const { calls } = stubFetch({ ok: true, data: {} });
+    await click?.execute?.("c", { x: 5, y: 5 });
+    expect(calls[0]!.body).toEqual({ x: 5, y: 5, button: "left" });
+    const r = await click?.execute?.("c", { x: 5, y: 5, button: "RIGHT" });
+    expect(calls[1]!.body).toEqual({ x: 5, y: 5, button: "right" });
+    expect(r?.content[0]?.text).toContain("Right-clicked");
+  });
+
+  test("button is optional in the schema, x and y are not", () => {
+    const { pi, tools } = capture(null);
+    browserExtension(pi);
+    expect(schemaOf(byName(tools, "browser_click"))).toEqual({ properties: ["button", "x", "y"], required: ["x", "y"] });
+  });
+});
+
+describe("browser_drag", () => {
+  test("requires all four coordinates and never calls out when one is missing", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const drag = byName(tools, "browser_drag");
+    const { calls } = stubFetch({ ok: true, data: {} });
+    for (const bad of [{}, { x: 1, y: 2 }, { x: 1, y: 2, toX: 3 }, { x: 1, y: 2, toX: 3, toY: -1 }, { x: "a", y: 2, toX: 3, toY: 4 }]) {
+      expect((await drag?.execute?.("d", bad))?.isError).toBe(true);
+    }
+    expect(calls).toEqual([]);
+    expect(schemaOf(drag)).toEqual({ properties: ["toX", "toY", "x", "y"], required: ["toX", "toY", "x", "y"] });
+  });
+
+  test("posts both endpoints and reports them back", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const { calls } = stubFetch({ ok: true, data: {} });
+    const r = await byName(tools, "browser_drag")?.execute?.("d", { x: 10, y: 20, toX: 300, toY: 25 });
+    expect(calls[0]!.url).toBe("http://127.0.0.1:5319/api/browser/drag?t=tok");
+    expect(calls[0]!.body).toEqual({ x: 10, y: 20, toX: 300, toY: 25 });
+    expect(r?.content[0]?.text).toContain("(300, 25)");
+  });
+});
+
+describe("browser_keys", () => {
+  test("refuses an empty combo before calling out", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const { calls } = stubFetch({ ok: true, data: {} });
+    expect((await byName(tools, "browser_keys")?.execute?.("k", {}))?.isError).toBe(true);
+    expect((await byName(tools, "browser_keys")?.execute?.("k", { keys: "   " }))?.isError).toBe(true);
+    expect(calls).toEqual([]);
+  });
+
+  test("passes the trimmed combo through and echoes it back", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    const { calls } = stubFetch({ ok: true, data: {} });
+    const r = await byName(tools, "browser_keys")?.execute?.("k", { keys: "  Control+a  " });
+    expect(calls[0]!.url).toBe("http://127.0.0.1:5319/api/browser/keys?t=tok");
+    expect(calls[0]!.body).toEqual({ keys: "Control+a" });
+    expect(r?.content[0]?.text).toContain("Control+a");
+  });
+
+  test("the server's parse error reaches the agent verbatim", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi);
+    stubFetch({ ok: false, error: 'browser_keys: unknown key "pgdown" (supported: Backspace, ...)' });
+    const r = await byName(tools, "browser_keys")?.execute?.("k", { keys: "pgdown" });
+    expect(r?.isError).toBe(true);
+    expect(r?.content[0]?.text).toContain('unknown key "pgdown"');
+  });
+});
+
+// ── browser_run (P-JEV.4, ADR-0379): the loop against a scripted judge and a stubbed io pair ──────────
+const FILL: BrowserAction = { id: "fill_1", kind: "fill", label: "Where to?", node: 1, role: "textbox", value: "" };
+const CLICK_FIELD: BrowserAction = { id: "click_1", kind: "click", label: "Where to?", node: 1, role: "textbox" };
+const SEARCH: BrowserAction = { id: "click_2", kind: "click", label: "Search", node: 2, role: "button" };
+
+function pageWith(fingerprint: string, actions: BrowserAction[]): BrowserPage {
+  return {
+    url: "https://travel.example/", title: "Travel", w: 1280, h: 800, text: "Where to? Search",
+    scroll: { y: 0, height: 2000 }, actions, marker: { m: fingerprint }, page_key: "k",
+    guards: { "1": "g1", "2": "g2" }, omitted_actions: 0, fingerprint,
+  };
+}
+
+/** A judge that answers every offered question from a script of { questionId: choice } per call, with
+ *  well-formed probabilities (the chosen id at 0.8, the rest sharing 0.2). Unscripted questions take
+ *  their first criterion, the way a real judge still answers every question it is asked. */
+function scriptedJudge(script: Record<string, string>[]): JudgeLike & { calls: number } {
+  const judge = {
+    calls: 0,
+    async judge(request: { state: unknown; questions: Record<string, unknown> }): Promise<{ answers: Record<string, unknown> }> {
+      const picks = script[judge.calls] ?? {};
+      judge.calls += 1;
+      const answers: Record<string, unknown> = {};
+      for (const [id, q] of Object.entries(request.questions)) {
+        const criteria = q && typeof q === "object" && "criteria" in q && q.criteria && typeof q.criteria === "object" ? Object.keys(q.criteria) : [];
+        const choice = picks[id] ?? criteria[0] ?? "";
+        const probabilities: Record<string, number> = {};
+        for (const c of criteria) probabilities[c] = criteria.length === 1 ? 1 : c === choice ? 0.8 : 0.2 / (criteria.length - 1);
+        answers[id] = { type: "choice", choice, probabilities, confidence: 0.61 };
+      }
+      return { answers };
+    },
+  };
+  return judge;
+}
+
+/** An io pair that serves snapshots and act responses from queues and records every act body. */
+function stubIo(snapshots: BrowserPage[], acts: unknown[]): BrowserRunIo & { actCalls: unknown[]; snapshotCalls: number } {
+  const io = {
+    actCalls: [] as unknown[],
+    snapshotCalls: 0,
+    async snapshot(): Promise<unknown> {
+      const page = snapshots[Math.min(io.snapshotCalls, snapshots.length - 1)];
+      io.snapshotCalls += 1;
+      return { ok: true, data: { page } };
+    },
+    async act(body: unknown): Promise<unknown> {
+      io.actCalls.push(body);
+      return acts[io.actCalls.length - 1] ?? { ok: true, data: { title: "Travel", url: "https://travel.example/" } };
+    },
+  };
+  return io;
+}
+
+describe("browser_run", () => {
+  test("types a named value, clicks Search, stops at DONE, and never echoes the value", async () => {
+    const p1 = pageWith("a", [FILL, CLICK_FIELD, SEARCH]);
+    const p2 = pageWith("b", [{ ...FILL, value: "London" }, CLICK_FIELD, SEARCH]);
+    const p3 = pageWith("c", [SEARCH]);
+    const io = stubIo([p1, p2, p3], []);
+    const judge = scriptedJudge([
+      { operation: "TYPE_TEXT", type_text_target: "1", type_text_value: "destination" },
+      { operation: "CLICK", click_target: "2" },
+      { operation: "DONE" },
+    ]);
+    const r = await runBrowserGoal(io, judge, "Search for trips to London", { destination: "London" }, 5);
+    expect(io.actCalls).toEqual([
+      { action: FILL, fresh: freshnessOf(p1, FILL), text: "London" },
+      { action: SEARCH, fresh: freshnessOf(p2, SEARCH) },
+    ]);
+    expect(r.isError).toBeUndefined();
+    const out = r.content[0]?.text ?? "";
+    expect(out.startsWith('browser_run done after 2 action(s) on "Travel" https://travel.example/')).toBe(true);
+    expect(out).toContain("1. TYPE_TEXT [1] Where to? typed destination (p=1.00 c=0.61)");
+    expect(out).toContain("2. CLICK [2] Search (p=0.80 c=0.61)");
+    expect(out).not.toContain("London");
+    expect(out).toContain("browser_screenshot");
+  });
+
+  test("a judgment choosing an operation that was not offered executes nothing (fail-closed)", async () => {
+    const io = stubIo([pageWith("a", [FILL, CLICK_FIELD, SEARCH])], []);
+    const judge = scriptedJudge([{ operation: "SELECT" }]);
+    const r = await runBrowserGoal(io, judge, "Search", { destination: "London" }, 5);
+    expect(r.isError).toBe(true);
+    expect(r.content[0]?.text).toContain("browser_run failed (Invalid judgment; no action executed.) after 0 action(s)");
+    expect(io.actCalls).toEqual([]);
+  });
+
+  test("a stale act re-snapshots and re-decides without spending a step", async () => {
+    const p1 = pageWith("a", [FILL, CLICK_FIELD, SEARCH]);
+    const p2 = pageWith("b", [FILL, CLICK_FIELD, SEARCH]);
+    const p3 = pageWith("c", [SEARCH]);
+    const io = stubIo([p1, p2, p3], [{ ok: false, stale: true, error: "page changed since this decision" }]);
+    const judge = scriptedJudge([
+      { operation: "CLICK", click_target: "2" },
+      { operation: "CLICK", click_target: "2" },
+      { operation: "DONE" },
+    ]);
+    // maxSteps 2: had the stale attempt counted as a step, the run would stop at max_steps before DONE.
+    const r = await runBrowserGoal(io, judge, "Search", {}, 2);
+    expect(judge.calls).toBe(3);
+    expect(io.actCalls).toHaveLength(2);
+    expect(io.actCalls[1]).toEqual({ action: SEARCH, fresh: freshnessOf(p2, SEARCH) });
+    expect(r.isError).toBeUndefined();
+    expect(r.content[0]?.text).toContain("browser_run done after 1 action(s)");
+  });
+
+  test("TYPE_TEXT with no supplied values stops with needs_values naming the field", async () => {
+    const io = stubIo([pageWith("a", [FILL, CLICK_FIELD, SEARCH])], []);
+    const judge = scriptedJudge([{ operation: "TYPE_TEXT", type_text_target: "1" }]);
+    const r = await runBrowserGoal(io, judge, "Search for London", {}, 5);
+    expect(r.isError).toBeUndefined();
+    const out = r.content[0]?.text ?? "";
+    expect(out).toContain("browser_run needs_values after 0 action(s)");
+    expect(out).toContain('Supply values={"Where to?":"..."} and call browser_run again');
+    expect(io.actCalls).toEqual([]);
+  });
+
+  test("the tool reports an unavailable judge before touching the window", async () => {
+    const { pi, tools } = capture();
+    browserExtension(pi, { judge: async () => { throw new Error("no registry"); } });
+    const { calls } = stubFetch({ ok: true, data: {} });
+    const r = await byName(tools, "browser_run")?.execute?.("r", { goal: "Search" });
+    expect(r?.isError).toBe(true);
+    expect(r?.content[0]?.text).toContain("judgment backend unavailable");
+    expect(calls).toEqual([]);
+  });
+
+  test("the tool refuses malformed values before resolving a judge or calling out", async () => {
+    let resolved = 0;
+    const { pi, tools } = capture();
+    browserExtension(pi, { judge: async () => { resolved += 1; return scriptedJudge([]); } });
+    const { calls } = stubFetch({ ok: true, data: {} });
+    const run = byName(tools, "browser_run");
+    for (const bad of ["[1]", "{\"a\":1}", "{\"a\":\"\"}", "not json", 42]) {
+      expect((await run?.execute?.("r", { goal: "Search", values: bad }))?.isError).toBe(true);
+    }
+    expect((await run?.execute?.("r", { values: "{}" }))?.isError).toBe(true); // goal is required
+    expect(resolved).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  test("the tool posts /snapshot and /act with the decision, its freshness and the value", async () => {
+    const page = pageWith("a", [FILL, CLICK_FIELD, SEARCH]);
+    const { pi, tools } = capture();
+    browserExtension(pi, { judge: async () => scriptedJudge([{ operation: "CLICK", click_target: "2" }, { operation: "DONE" }]) });
+    const calls: { url: string; body: unknown }[] = [];
+    globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const body = init?.body && typeof init.body === "string" ? JSON.parse(init.body) : null;
+      calls.push({ url, body });
+      const envelope = url.includes("/act") ? { ok: true, data: { title: "Travel", url: page.url } } : { ok: true, data: { page } };
+      return Promise.resolve(new Response(JSON.stringify(envelope), { headers: { "content-type": "application/json" } }));
+    }) as typeof globalThis.fetch;
+    const r = await byName(tools, "browser_run")?.execute?.("r", { goal: "Search", maxSteps: 3 });
+    expect(r?.isError).toBeUndefined();
+    expect(calls.map((c) => c.url)).toEqual([
+      "http://127.0.0.1:5319/api/browser/snapshot?t=tok",
+      "http://127.0.0.1:5319/api/browser/act?t=tok",
+      "http://127.0.0.1:5319/api/browser/snapshot?t=tok",
+    ]);
+    expect(calls[1]!.body).toEqual({ action: SEARCH, fresh: freshnessOf(page, SEARCH) });
+    expect(r?.content[0]?.text).toContain("browser_run done after 1 action(s)");
+  });
+});

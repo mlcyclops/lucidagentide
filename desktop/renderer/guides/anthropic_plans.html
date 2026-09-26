@@ -1,0 +1,271 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC
+     SPDX-License-Identifier: BUSL-1.1 -->
+<!-- desktop/renderer/guides/anthropic_plans.html - the in-app Anthropic Claude plan advisor. Opened from the
+     Anthropic provider card in Settings into the Preview panel (Yours lane). Fully self-contained: the
+     preview frame is sandboxed with NO network and NO app stylesheet, so every byte lives inline.
+     House rules apply: lucid-dark palette, block-paragraph prose (never prose inside flex), one-line
+     ellipsizing labels, and no em dashes anywhere. Prices verified September 2026; the sources section
+     at the bottom names where each number came from. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Anthropic Claude plans: a LUCID field guide</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-elev:#12151f;
+    --line:#252a3a; --line-soft:#1a1e2a;
+    --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90;
+    --accent:#c64bd6; --accent-2:#e07bf0; --cyan:#46c8dc; --green:#46d27e; --amber:#e8b23c;
+    --red:#ef5f5f; --violet:#8b5cf6;
+    --green-txt:#8ee8ad; --amber-txt:#f3cf7a; --red-txt:#ffb0b0; --cyan-txt:#8fe0ee; --violet-txt:#e9ddff;
+    --r-lg:12px; --r-md:9px; --r-sm:6px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg-0);color:var(--txt);
+    font:14px/1.55 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 22px 64px}
+  header{padding:26px 0 18px;border-bottom:1px solid var(--line)}
+  .brand{font-size:11px;letter-spacing:.22em;color:var(--accent-2);text-transform:uppercase;font-weight:700}
+  h1{margin:8px 0 6px;font-size:26px;line-height:1.25;letter-spacing:-.01em}
+  .sub{color:var(--txt-2);margin:0;max-width:64ch}
+  .stamp{margin-top:10px;color:var(--txt-3);font-size:12px}
+  h2{font-size:18px;margin:40px 0 4px;letter-spacing:-.01em}
+  h2 .no{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  h3{font-size:14.5px;margin:20px 0 6px;color:var(--accent-2)}
+  p{margin:8px 0;color:var(--txt-2);max-width:72ch}
+  p b,li b{color:var(--txt)}
+  a{color:var(--cyan);text-decoration:none;word-break:break-all}
+  ul{margin:6px 0 10px;padding-left:20px;color:var(--txt-2)}
+  li{margin:4px 0}
+  code{background:var(--bg-2);border:1px solid var(--line-soft);border-radius:4px;
+    padding:1px 5px;font:12px ui-monospace,Consolas,monospace;color:var(--cyan-txt);white-space:nowrap}
+  /* callouts: block paragraphs with a colored spine, NEVER flex around prose */
+  .note{border-left:3px solid var(--cyan);background:var(--bg-1);border-radius:0 var(--r-md) var(--r-md) 0;
+    padding:10px 14px;margin:14px 0}
+  .note.good{border-left-color:var(--green)}
+  .note.warn{border-left-color:var(--amber)}
+  .note.bad{border-left-color:var(--red)}
+  .note p{margin:4px 0}
+  .note .t{font-weight:700;color:var(--txt);font-size:13px;letter-spacing:.02em}
+  .note.good .t{color:var(--green-txt)} .note.warn .t{color:var(--amber-txt)} .note.bad .t{color:var(--red-txt)}
+  /* tables: generous columns, first column never wraps mid-word */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th{color:var(--txt-3);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em;text-align:left}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px;font-weight:600;color:var(--txt)}
+  td{color:var(--txt-2)}
+  .price{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 18px;margin:14px 0}
+  /* status chips: single-purpose atoms, each chip is one element so flex is safe here */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+  .chip{white-space:nowrap;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2)}
+  .chip.ok{color:var(--green-txt);border-color:rgb(70 210 126 / .35);background:rgb(70 210 126 / .08)}
+  .chip.dead{color:var(--red-txt);border-color:rgb(239 95 95 / .35);background:rgb(239 95 95 / .08);text-decoration:line-through}
+  .chip.warn{color:var(--amber-txt);border-color:rgb(232 178 60 / .35);background:rgb(232 178 60 / .08)}
+  .chip.info{color:var(--cyan-txt);border-color:rgb(70 200 220 / .35);background:rgb(70 200 220 / .08)}
+  /* timeline: spine + block entries */
+  .tl{border-left:2px solid var(--line);margin:16px 0 6px 6px;padding-left:18px}
+  .tl-item{position:relative;margin:0 0 16px}
+  .tl-item::before{content:"";position:absolute;left:-24px;top:5px;width:9px;height:9px;border-radius:50%;
+    background:var(--bg-3);border:2px solid var(--accent)}
+  .tl-item.break::before{border-color:var(--red)}
+  .tl-date{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--txt-3);text-transform:uppercase}
+  .tl-item p{margin:2px 0 0}
+  /* verdict ribbon */
+  .verdict{background:linear-gradient(135deg,rgb(139 92 246 / .12),rgb(198 75 214 / .10));
+    border:1px solid rgb(139 92 246 / .4);border-radius:var(--r-lg);padding:16px 18px;margin:18px 0}
+  .verdict .t{color:var(--violet-txt);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+  .verdict p{color:var(--txt)}
+  .toc{margin:16px 0 0;padding:0;list-style:none;column-count:2;column-gap:24px}
+  .toc li{margin:3px 0;break-inside:avoid}
+  .toc a{color:var(--txt-2)}
+  .toc a:hover{color:var(--accent-2)}
+  .toc .no{color:var(--accent);margin-right:6px;font-variant-numeric:tabular-nums}
+  .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--txt-3);font-size:12px}
+  @media (max-width:640px){ .toc{column-count:1} td:first-child{max-width:160px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">LUCID Agent IDE · Advisor Guide</div>
+  <h1>Anthropic Claude plans, from Free to Enterprise</h1>
+  <p class="sub">Which Claude subscription actually pays for itself, why the $13/dev/day Claude Code number
+    matters more than any sticker price, and exactly which boxes to fill in LUCID's Settings.</p>
+  <p class="stamp">Prices and policies verified September 2026. Anthropic revises tiers and model prices with
+    each release wave; the sources at the bottom are the places to re-check.</p>
+  <ul class="toc">
+    <li><span class="no">1</span><a href="#now">Do this in LUCID right now</a></li>
+    <li><span class="no">2</span><a href="#plans">The plan ladder</a></li>
+    <li><span class="no">3</span><a href="#seatmath">The $13/dev/day seat math</a></li>
+    <li><span class="no">4</span><a href="#history">Model releases, Sonnet 4.5 to Fable 5.1</a></li>
+    <li><span class="no">5</span><a href="#models">Models, API prices, benchmarks</a></li>
+    <li><span class="no">6</span><a href="#maxvsapi">When Max beats API billing</a></li>
+    <li><span class="no">7</span><a href="#sources">Sources</a></li>
+  </ul>
+</header>
+
+<h2 id="now"><span class="no">1</span>Do this in LUCID right now</h2>
+<div class="verdict">
+  <div class="t">The short version</div>
+  <p>Two clean paths, no gotchas. <b>Connect via OAuth</b> signs in your Claude subscription (Pro, Max, or
+     Team) and bills against its usage caps. Pasting an <b>ANTHROPIC_API_KEY</b> is pure pay-as-you-go per
+     token. Either way, a fresh LUCID lands on <b>Opus 5</b>: it is the house default model, so the moment
+     the card is connected you are on Anthropic's flagship.</p>
+</div>
+
+<h3>Path A: subscription OAuth (Pro, Max, Team)</h3>
+<p>If you already pay for Claude, use it. In LUCID: <b>Settings &gt; Providers &gt; Anthropic · Claude</b>,
+   click <b>Connect via OAuth</b>, and sign in with the account that holds the plan. Claude Code access is
+   included on Pro and up, and LUCID rides the same entitlement. Your subscription's usage caps apply; a
+   Max plan raises them 5x or 20x over Pro.</p>
+
+<h3>Path B: API key, pay per token</h3>
+<p>Create a key in the Anthropic console and paste it into the <code>ANTHROPIC_API_KEY</code> box on the
+   same card, then Save. No subscription needed: you get the commercial catalog billed per million tokens
+   at the rates in section 5. Best for spiky or light usage, worst for a heavy daily driver (section 6 has
+   the crossover math).</p>
+<div class="chips">
+  <span class="chip ok">Works: OAuth with Pro / Max / Team</span>
+  <span class="chip ok">Works: ANTHROPIC_API_KEY pay-as-you-go</span>
+  <span class="chip info">LUCID default model: Opus 5</span>
+  <span class="chip warn">Fable 5: billed as premium API credits</span>
+</div>
+
+<h2 id="plans"><span class="no">2</span>The plan ladder</h2>
+<p>Anthropic's ladder is unusually legible: every rung is the previous one with bigger caps, and Claude
+   Code is included from Pro upward.</p>
+<table>
+  <tr><th>Plan</th><th>Price (Sep 2026)</th><th>Who it is for</th></tr>
+  <tr><td>Free</td><td class="price">$0</td>
+      <td>Kicking the tires in the Claude app. No Claude Code, so nothing for LUCID's OAuth to ride.</td></tr>
+  <tr><td>Pro</td><td class="price">$20/mo ($17 annual)</td>
+      <td>Light-to-moderate daily use. The entry ticket to Claude Code and to LUCID's OAuth path.</td></tr>
+  <tr><td>Max 5x</td><td class="price">$100/mo</td>
+      <td>The daily Claude Code developer. 5x Pro caps; the sweet spot for one person running agents
+          most working days.</td></tr>
+  <tr><td>Max 20x</td><td class="price">$200/mo</td>
+      <td>Power users running long agent sessions or parallel work. 20x Pro caps; buy this when you hit
+          the 5x ceiling, not before.</td></tr>
+  <tr><td>Team</td><td class="price">$25 or $125 /seat/mo</td>
+      <td>Small orgs: standard seats at $25, premium seats at $125 with the bigger caps, plus central
+          billing and admin controls.</td></tr>
+  <tr><td>Enterprise</td><td class="price">custom</td>
+      <td>Procurement-grade: SSO, data controls, and contract terms. Talk to sales.</td></tr>
+</table>
+
+<h2 id="seatmath"><span class="no">3</span>The $13/dev/day seat math</h2>
+<p>Anthropic's own docs put average Claude Code spend at <b>$13 per developer per active day</b> when
+   billed through the API. That one number is the whole purchasing decision:</p>
+<ul>
+  <li>At roughly 20 active days a month, an average Claude Code developer burns about <b>$260/mo</b> in
+      API terms (approximate, derived from the $13 figure).</li>
+  <li><b>Max 5x at $100</b> is therefore cheaper than API billing for anyone using Claude Code most
+      working days, and <b>Max 20x at $200</b> still undercuts the average heavy month.</li>
+  <li>For a team, a <b>$25 standard seat</b> covers light users and a <b>$125 premium seat</b> covers the
+      daily agent drivers; mixing seat types usually beats putting everyone on API keys.</li>
+</ul>
+<div class="note good">
+  <p class="t">Rule of thumb</p>
+  <p>Fewer than about 8 active Claude Code days a month: stay on the API key. More than that: a
+     subscription wins, and the only question left is which cap you keep hitting.</p>
+</div>
+
+<h2 id="history"><span class="no">4</span>Model releases, Sonnet 4.5 to Fable 5.1</h2>
+<p>Anthropic shipped fast through 2026: two flagship Opus releases, a cheap-and-strong Sonnet 5, and the
+   Fable line that now tops both benchmark boards.</p>
+<div class="tl">
+  <div class="tl-item"><div class="tl-date">Sep 2025</div>
+    <p><b>Sonnet 4.5.</b> The workhorse of late 2025; the baseline this whole wave improved on.</p></div>
+  <div class="tl-item"><div class="tl-date">Feb 5, 2026</div>
+    <p><b>Opus 4.6.</b> Flagship refresh opening the 2026 cycle. Followed in the same wave by
+       <b>Sonnet 4.6</b> at $3/$15 per 1M tokens and <b>Opus 4.8</b> at $5/$25 (88.6% SWE-bench Verified,
+       self-reported; 69.2% on standardized SWE-bench Pro).</p></div>
+  <div class="tl-item"><div class="tl-date">Jun 16, 2026</div>
+    <p><b>Fable 5</b> tops the SWE-bench Verified board at 95.0% (self-reported). Priced at $10/$50 per 1M
+       and billed as premium API credits, even for subscribers.</p></div>
+  <div class="tl-item"><div class="tl-date">Jun 30, 2026</div>
+    <p><b>Sonnet 5.</b> 85.2% SWE-bench Verified at a launch price of $2/$10 per 1M (until Aug 31, 2026;
+       $3/$15 after). The value pick of the family.</p></div>
+  <div class="tl-item"><div class="tl-date">Jul 24, 2026</div>
+    <p><b>Opus 5.</b> The current flagship at $5/$25 per 1M, and the default model a fresh LUCID
+       lands on.</p></div>
+  <div class="tl-item"><div class="tl-date">Sep 3, 2026</div>
+    <p><b>Fable 5.1</b> takes the lead on standardized SWE-bench Pro at 81.2%, with Mythos 5 second
+       at 80.3%.</p></div>
+</div>
+
+<h2 id="models"><span class="no">5</span>Models, API prices, benchmarks</h2>
+<table>
+  <tr><th>Model</th><th>Released</th><th>API $/1M in/out</th><th>Standing (Sep 2026)</th></tr>
+  <tr><td>Sonnet 4.5</td><td>Sep 2025</td><td class="price">n/a (superseded)</td>
+      <td>Previous-generation workhorse; use Sonnet 5 instead.</td></tr>
+  <tr><td>Sonnet 4.6</td><td>2026</td><td class="price">$3 / $15</td>
+      <td>Solid mid-tier, now outclassed by Sonnet 5 at the same price.</td></tr>
+  <tr><td>Opus 4.8</td><td>2026</td><td class="price">$5 / $25</td>
+      <td>88.6% SWE-bench Verified (self-reported), 69.2% SWE-bench Pro.</td></tr>
+  <tr><td>Sonnet 5</td><td>Jun 30, 2026</td><td class="price">$2/$10 to Aug 31, then $3/$15</td>
+      <td>85.2% SWE-bench Verified. Best cost-to-strength ratio in the family.</td></tr>
+  <tr><td>Opus 5</td><td>Jul 24, 2026</td><td class="price">$5 / $25</td>
+      <td>Flagship. LUCID's house default model.</td></tr>
+  <tr><td>Fable 5</td><td>Jun 16, 2026</td><td class="price">$10 / $50 (premium credits)</td>
+      <td>95.0% SWE-bench Verified, top of that board. Premium API-credit billed.</td></tr>
+  <tr><td>Fable 5.1</td><td>Sep 3, 2026</td><td class="price">premium tier</td>
+      <td>Leads standardized SWE-bench Pro at 81.2%; Mythos 5 second at 80.3%.</td></tr>
+</table>
+<div class="note warn">
+  <p class="t">Read the benchmarks honestly</p>
+  <p>SWE-bench Verified numbers are largely <b>self-reported</b> by vendors under their own harnesses;
+     standardized <b>SWE-bench Pro</b> runs score every vendor much lower. That is why Fable 5 can post
+     95.0% on Verified while Fable 5.1 leads the standardized board at 81.2%. Compare models within one
+     board, never across the two.</p>
+</div>
+
+<h2 id="maxvsapi"><span class="no">6</span>When Max beats API billing</h2>
+<table>
+  <tr><th>Usage profile</th><th>Cheapest sane option</th><th>Why</th></tr>
+  <tr><td>Occasional sessions</td><td class="price">API key, usage</td>
+      <td>A few dollars per active day beats any flat fee under ~8 active days/mo.</td></tr>
+  <tr><td>Light daily chat + code</td><td class="price">Pro $20</td>
+      <td>Claude Code included; caps are fine for non-agent workloads.</td></tr>
+  <tr><td>Daily Claude Code agents</td><td class="price">Max 5x $100</td>
+      <td>Beats the ~$260/mo API average for a daily developer by a wide margin.</td></tr>
+  <tr><td>Long or parallel agent runs</td><td class="price">Max 20x $200</td>
+      <td>Still under the API average; buy when 5x caps interrupt your day.</td></tr>
+  <tr><td>Teams of mixed intensity</td><td class="price">Team $25 / $125 seats</td>
+      <td>Standard seats for light users, premium for agent drivers, one invoice.</td></tr>
+</table>
+<div class="note">
+  <p class="t">The Fable exception</p>
+  <p>Fable 5 is billed as premium API credits at $10/$50 per 1M regardless of subscription, so a Max plan
+     does not make it free. Keep Opus 5 (the LUCID default) as the daily driver and reach for Fable
+     deliberately, on hard problems worth the premium.</p>
+</div>
+
+<h2 id="sources"><span class="no">7</span>Sources</h2>
+<ul>
+  <li>Official pricing: <a href="https://www.anthropic.com/pricing">anthropic.com/pricing</a></li>
+  <li>Plan comparison (2026 tiers):
+      <a href="https://ai-toolbox.co/claude-models/claude-pricing-plans-2026">ai-toolbox.co/claude-models/claude-pricing-plans-2026</a></li>
+  <li>Model benchmarks and API prices:
+      <a href="https://morphllm.com/claude-benchmarks">morphllm.com/claude-benchmarks</a></li>
+  <li>Standardized SWE-bench Pro board:
+      <a href="https://benchlm.ai/benchmarks/swe-bench-pro">benchlm.ai/benchmarks/swe-bench-pro</a></li>
+  <li>Pricing history and Claude Code spend data:
+      <a href="https://mem0.ai/blog/anthropic-claude-pricing">mem0.ai/blog/anthropic-claude-pricing</a></li>
+</ul>
+
+<div class="foot">
+  Generated for LUCID Agent IDE · TechLead 187 LLC · Prices are point-in-time (September 2026) and change
+  without notice. Links do not open inside this sandboxed preview; copy them into your browser.
+</div>
+
+</div>
+</body>
+</html>

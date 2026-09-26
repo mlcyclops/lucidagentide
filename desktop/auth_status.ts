@@ -28,7 +28,13 @@ export interface ProviderAuth {
   oauthActive: boolean; oauthIdentity?: string;
   keySet: boolean; keyLast4?: string;
   fields?: ProviderFieldAuth[];
+  /** Why the LAST OAuth attempt died after the browser said "success" (broker exited without a
+   *  credential). Set by dev.ts from the drained broker output; absent once a login lands. */
+  oauthError?: { message: string; at: number };
 }
+
+/** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). */
+export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
 
 // The AskSage gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY. Surfaced ABOVE the
 // Providers section in its own card (it routes through an accredited gov proxy, not a direct provider).
@@ -74,11 +80,23 @@ export const MAJORS: Provider[] = [
   // is Application Default Credentials: `gcloud auth application-default login` mints a browser-consented
   // refresh token (or use a service-account JSON via GOOGLE_APPLICATION_CREDENTIALS), which omp reads together
   // with the project + location. A GOOGLE_CLOUD_API_KEY is the non-OAuth alternative for the key box.
+  //
+  // Air-gapped / government (ADR-0372): Gemini also runs INSIDE customer enclaves on Google Distributed
+  // Cloud air-gapped (DoD IL5/IL6 provisional authorizations; Secret and Top Secret per Google's
+  // il6-gdc-compliance-scope). Those endpoints live at a customer-local hostname signed by the GDC zone's
+  // OWN certificate authority, so trusting that CA is a hard prerequisite for ANY private deployment.
+  // NODE_EXTRA_CA_CERTS is the Node/Bun-native trust env: it rides the same setKey→env→omp seam (the omp
+  // child restarts on save and picks it up at boot; proven with a live self-signed TLS server, see
+  // docs/GEMINI-GOV-AIRGAP.md). What LUCID can NOT do yet: point omp's google-vertex provider at the
+  // enclave hostname. omp 18 hardcodes `*.googleapis.com` via resolveVertexEndpointHost with no override
+  // env; that is an upstream omp ask (invariant 1: extend, never fork). Until it lands, an enclave's
+  // OpenAI-compatible endpoint is wired through Local Providers, which take any base URL today.
   { id: "google-vertex", name: "Google Cloud · Gemini Enterprise", env: "GOOGLE_CLOUD_API_KEY", oauthId: "", canOauth: false,
     fields: [
       { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID", placeholder: "my-project-123" },
       { env: "GOOGLE_CLOUD_LOCATION", label: "Location", placeholder: "us-central1 (or global)" },
       { env: "GOOGLE_APPLICATION_CREDENTIALS", label: "Service-account JSON (blank = gcloud OAuth / ADC)", placeholder: "/path/to/sa.json — or run: gcloud auth application-default login" },
+      { env: "NODE_EXTRA_CA_CERTS", label: "Private CA bundle (air-gapped / GDC zone CA)", placeholder: "/path/to/zone-ca.pem, trust for private Gemini endpoints (GDC air-gapped, NIPRNet+)" },
     ] },
   // Perplexity (Sonar) is U.S.-based. omp supports OAuth too, but its login is interactive email-OTP /
   // the macOS app token — neither works through our non-interactive broker spawn — so we expose the
@@ -91,11 +109,23 @@ export const OTHERS: Provider[] = [
   { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", oauthId: "openrouter", canOauth: true },
   { id: "deepseek", name: "DeepSeek", env: "DEEPSEEK_API_KEY", oauthId: "deepseek", canOauth: false },
   { id: "moonshot", name: "Moonshot · Kimi", env: "MOONSHOT_API_KEY", oauthId: "moonshot", canOauth: false },
+  // P-PROV.2: native omp open-weight / regional providers (models pre-bundled in omp's catalog, so a saved
+  // key surfaces that provider's models). Qwen has a real browser OAuth broker (qwen-portal); GLM (z.ai) and
+  // MiniMax authenticate by key only; omp's "login" for them is an api-key paste, so we expose the key path
+  // and DON'T render a dead OAuth button (same call the repo already makes for DeepSeek / Moonshot).
+  { id: "qwen-portal", name: "Alibaba · Qwen", env: "QWEN_PORTAL_API_KEY", oauthId: "qwen-portal", canOauth: true },
+  { id: "zai", name: "Z.AI · GLM", env: "ZAI_API_KEY", oauthId: "", canOauth: false },
+  { id: "minimax", name: "MiniMax", env: "MINIMAX_API_KEY", oauthId: "", canOauth: false },
   { id: "groq", name: "Groq", env: "GROQ_API_KEY", oauthId: "", canOauth: false },
   // P-VOICE.1 (ADR-0115): ElevenLabs is a VOICE provider (TTS/STT), not a chat model. It's listed here so
   // the key gets the same masked keySet/last4 plumbing, but the Settings UI renders it in a dedicated
   // "Voice" card (secVoice) and EXCLUDES it from the model-provider list — it never enters the model picker.
   { id: "elevenlabs", name: "ElevenLabs · Voice", env: "ELEVENLABS_API_KEY", oauthId: "", canOauth: false },
+  // P-JEV.1 (ADR-0374): TypeSafe is a JUDGMENT provider (Jev / System One answers typed choice / yes-no /
+  // score questions), not a chat model: omp's catalog has no providers/typesafe entry on purpose, so it never
+  // enters the model picker. Same keySet/last4 plumbing as ElevenLabs, rendered in its own Settings card
+  // (secJudgment) and excluded from the model-provider lists. Key-only: omp's `/login typesafe` is a key paste.
+  { id: "typesafe", name: "TypeSafe · Jev judgment", env: "TYPESAFE_API_KEY", oauthId: "", canOauth: false },
 ];
 
 function vaultRows(): any[] {
@@ -108,7 +138,13 @@ function vaultRows(): any[] {
   } catch { return []; }
 }
 
-export function providerAuth(): { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] } {
+/** P-JEV.2 (ADR-0377): is a TypeSafe key saved, by the same rule the Judgment card's `keySet` pill uses
+ *  (the settings slot first, then the process env the omp child inherits). */
+export function typesafeKeySet(): boolean {
+  return !!((load().keys ?? {})["TYPESAFE_API_KEY"] ?? process.env.TYPESAFE_API_KEY);
+}
+
+export function providerAuth(): ProviderAuthSnapshot {
   const rows = vaultRows();
   const keys = load().keys ?? {};
   const valueFor = (env: string): string | undefined => (env ? (keys[env] ?? process.env[env]) : undefined) || undefined;

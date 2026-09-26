@@ -10,14 +10,61 @@
 // could not be exercised headlessly).
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-type Pending = { resolve: (v: any) => void; reject: (e: any) => void };
+// Support diagnosability (the "agent process exited (code 1)" support ticket): every omp child's stderr
+// is appended to ONE rolling log so a fresh-install failure leaves evidence a human can send in. The
+// write is best-effort - diagnostics must never break the client - and the file is bounded: past 512KB
+// it is rewritten keeping the newest 256KB.
+const ACP_LOG = join(homedir(), ".omp", "lucid-acp.log");
+const ACP_LOG_MAX = 512 * 1024;
+const ACP_LOG_KEEP = 256 * 1024;
+function acpLog(text: string): void {
+  try {
+    appendFileSync(ACP_LOG, text);
+    if (statSync(ACP_LOG).size > ACP_LOG_MAX) {
+      const tail = readFileSync(ACP_LOG, "utf8").slice(-ACP_LOG_KEEP);
+      writeFileSync(ACP_LOG, tail);
+    }
+  } catch { /* best-effort; never break the client over a log line */ }
+}
+
+/** A JSON-RPC error object from the agent, as a real Error whose message says what went wrong.
+ *  P-NORESP.2: rejecting with the raw `{code, message, data}` object reached the chat as
+ *  "[object Object]" (every `String(e)` downstream), hiding the provider's actual failure. The
+ *  message folds in `data` (where omp puts the provider detail), clamped; `code` and `data` stay on
+ *  the Error for any caller that branches on them. Pure. */
+export function rpcError(err: unknown): Error & { code?: number; data?: unknown } {
+  const o = (err && typeof err === "object" ? err : { message: String(err) }) as { code?: number; message?: unknown; data?: unknown };
+  const base = typeof o.message === "string" && o.message ? o.message : "agent returned an error";
+  const d = o.data;
+  const detail = d === undefined || d === null ? "" : typeof d === "string" ? d : (() => { try { return JSON.stringify(d); } catch { return String(d); } })();
+  const msg = detail && !base.includes(detail) ? `${base}: ${detail}` : base;
+  const e = new Error((o.code !== undefined ? `${msg} (code ${o.code})` : msg).slice(0, 500)) as Error & { code?: number; data?: unknown };
+  e.code = o.code;
+  e.data = d;
+  return e;
+}
+
+type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
+
+/** Per-request bounds. Without at least one of these a request waits forever (P-KG-INGEST.5, ADR-0264). */
+export type RequestOpts = {
+  /** Reject after this many ms with no response. Omit only for calls already raced against another clock. */
+  timeoutMs?: number;
+  /** Reject as soon as the caller aborts. */
+  signal?: AbortSignal;
+};
 
 export class ACPClient {
   private proc: ChildProcess | null = null;
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private buf = "";
+  /** Set once the child is gone (exit or spawn error). Every later request rejects with this reason. */
+  private dead: string | null = null;
 
   /** notifications from the agent (e.g. "session/update"). */
   onNotify: (method: string, params: any) => void = () => {};
@@ -33,12 +80,52 @@ export class ACPClient {
   // child inherits process.env exactly as before.
   constructor(private cmd: string, private args: string[], private cwd: string, private env: Record<string, string> = {}) {}
 
+  /** Newest stderr bytes from THIS child (bounded). A non-zero exit quotes the last line so the UI
+   *  error names the actual failure instead of a bare exit code. */
+  private errTail = "";
+
   start(): void {
     this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, ...this.env } });
+    acpLog(`\n[acp spawn ${new Date().toISOString()} cmd=${this.cmd} cwd=${this.cwd}]\n`);
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
-    this.proc.stderr!.on("data", (d) => this.onStderr(String(d)));
-    this.proc.on("exit", (code) => this.onExit(code));
+    this.proc.stderr!.on("data", (d) => {
+      const s = String(d);
+      this.errTail = (this.errTail + s).slice(-4096);
+      acpLog(s);
+      this.onStderr(s);
+    });
+    this.proc.stdin!.on("error", () => { /* EPIPE once the child is gone; the exit handler drains */ });
+    // A spawn failure (ENOENT, EACCES) emits "error" and NO "exit". Both must drain `pending`,
+    // otherwise every in-flight request stays unsettled forever (the import-hang bug).
+    this.proc.on("error", (e) => this.die(`acp: agent process failed to start: ${e.message}`, null));
+    this.proc.on("exit", (code) => {
+      const hint = code ? this.lastStderrLine() : "";
+      this.die(`acp: agent process exited (code ${code ?? "null"})${hint ? ` - last stderr: ${hint}` : ""}`, code);
+    });
   }
+
+  /** The newest non-empty stderr line, clamped for a UI-safe error suffix. */
+  private lastStderrLine(): string {
+    const lines = this.errTail.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const t = lines[i]!.trim();
+      if (t) return t.slice(0, 200);
+    }
+    return "";
+  }
+
+  /** Child is gone: reject everything still waiting, then notify the owner exactly once. */
+  private die(reason: string, code: number | null): void {
+    if (this.dead) return;
+    this.dead = reason;
+    const waiting = [...this.pending.values()];
+    this.pending.clear();
+    for (const p of waiting) { p.cleanup(); p.reject(new Error(reason)); }
+    this.onExit(code);
+  }
+
+  /** True once the child has exited or failed to spawn: the connection can never answer again. */
+  get isDead(): boolean { return this.dead !== null; }
 
   private onData(s: string): void {
     this.buf += s;
@@ -57,7 +144,7 @@ export class ACPClient {
     // response to one of our requests
     if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
       const p = this.pending.get(msg.id);
-      if (p) { this.pending.delete(msg.id); msg.error ? p.reject(msg.error) : p.resolve(msg.result); }
+      if (p) { this.pending.delete(msg.id); p.cleanup(); msg.error ? p.reject(rpcError(msg.error)) : p.resolve(msg.result); }
       return;
     }
     // request FROM the agent (needs a response)
@@ -70,11 +157,34 @@ export class ACPClient {
     if (msg.method) this.onNotify(msg.method, msg.params);
   }
 
-  request<T = any>(method: string, params?: any): Promise<T> {
+  request<T = any>(method: string, params?: any, opts: RequestOpts = {}): Promise<T> {
+    if (this.dead) return Promise.reject(new Error(this.dead));
+    if (!this.proc) return Promise.reject(new Error("acp: agent process not started"));
+    if (opts.signal?.aborted) return Promise.reject(new Error(`acp: ${method} cancelled`));
     const id = this.nextId++;
-    const pr = new Promise<T>((resolve, reject) => this.pending.set(id, { resolve, reject }));
-    this.write({ jsonrpc: "2.0", id, method, params });
-    return pr;
+    // Classic executor (not Promise.withResolvers): the VS Code extension typechecks this file under a
+    // pre-ES2024 lib, and the desktop tsconfig targets Node types - the executor form works on every
+    // surface this client compiles on.
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      clearTimeout(timer);
+      timer = undefined;
+      opts.signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} cancelled`)); };
+    // The JSON-RPC result is untyped on the wire; the caller declares the shape it expects.
+    this.pending.set(id, { resolve: (v) => resolve(v as T), reject, cleanup });
+    if (opts.timeoutMs && opts.timeoutMs > 0) {
+      timer = setTimeout(() => { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} timed out after ${opts.timeoutMs}ms`)); }, opts.timeoutMs);
+      timer.unref?.();
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    try { this.write({ jsonrpc: "2.0", id, method, params }); }
+    catch (e) { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} write failed: ${String(e)}`)); }
+    return promise;
   }
 
   /** Send a JSON-RPC NOTIFICATION (no id, no response) — e.g. ACP `session/cancel`. */
@@ -87,5 +197,88 @@ export class ACPClient {
     this.proc?.stdin!.write(JSON.stringify(o) + "\n");
   }
 
-  stop(): void { try { this.proc?.kill(); } catch { /* ignore */ } }
+  /** The stop in progress or finished. stop() is idempotent: every call shares it, except that a FAILED
+   *  attempt is dropped while its root process still runs, so the next call tries again. */
+  private stopping: Promise<boolean> | null = null;
+
+  /**
+   * End the child and everything it started. Requests still waiting are rejected at once; the returned
+   * promise resolves true only once the end is CONFIRMED, and false when part of the tree may still be
+   * running, so a caller about to start a replacement can refuse instead of letting two agents act in one
+   * workspace. Never rejects. Callers that only need the connection gone may ignore the result.
+   */
+  stop(): Promise<boolean> {
+    if (!this.stopping) {
+      const attempt = this.endTree();
+      this.stopping = attempt;
+      // Once the root is gone nothing can walk its tree again, so only a failure with the root still
+      // running is worth a retry.
+      void attempt.then((ok) => { if (!ok && this.stopping === attempt && this.proc && running(this.proc)) this.stopping = null; });
+    }
+    // Ending the process is async on every platform; drain now so callers awaiting a reply fail fast.
+    this.die("acp: agent connection stopped", null);
+    return this.stopping;
+  }
+
+  private async endTree(): Promise<boolean> {
+    const proc = this.proc;
+    if (!proc || proc.pid === undefined || !running(proc)) return true; // never spawned, or already exited
+    if (process.platform === "win32") {
+      // P-RECOVER.1 (ADR-0385): on Windows `omp.exe` is a Bun shim and the real agent is a `bun.exe cli.js`
+      // GRANDCHILD, with the agent's own tool processes under it. kill() ends only the shim, so the agent
+      // outlived stop() until it noticed stdin EOF (or never, when wedged). taskkill /T ends the whole tree.
+      // Ownership is proven: this is the pid WE spawned and it has not exited (a reused pid is impossible
+      // while our handle is still live), and taskkill is named by its absolute System32 path so PATH cannot
+      // substitute another binary. Confirmed means taskkill reported every process ended (exit 0) and the
+      // child's own exit was observed. If taskkill fails, the direct child is still killed so the
+      // connection does not linger, but the result is false: the rest of the tree is unaccounted for.
+      const treeEnded = await taskkillTree(proc.pid);
+      if (!treeEnded) { try { proc.kill(); } catch { /* already gone */ } }
+      const childExited = await exited(proc, STOP_EXIT_MS);
+      return treeEnded && childExited;
+    }
+    // POSIX: `omp` is the agent process itself. SIGTERM, then SIGKILL if it has not exited in time.
+    try { proc.kill(); } catch { /* already gone */ }
+    if (await exited(proc, STOP_EXIT_MS)) return true;
+    try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+    return exited(proc, STOP_EXIT_MS);
+  }
+}
+
+/** Bounds for stop(): taskkill's own run, then the child's exit. */
+const TASKKILL_MS = 10_000;
+const STOP_EXIT_MS = 5_000;
+
+function running(proc: ChildProcess): boolean {
+  return proc.exitCode === null && proc.signalCode === null;
+}
+
+/** True once `proc` has exited, false if it is still running after `ms`. */
+function exited(proc: ChildProcess, ms: number): Promise<boolean> {
+  if (!running(proc)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onExit = (): void => { clearTimeout(timer); resolve(true); };
+    const timer = setTimeout(() => { proc.off("exit", onExit); resolve(false); }, ms);
+    timer.unref?.();
+    proc.once("exit", onExit);
+  });
+}
+
+/** `taskkill /PID <pid> /T /F`, awaited. True only when it exits 0, which it does when every process in
+ *  the tree was ended; any failure, a spawn error, or no answer in TASKKILL_MS is false. */
+function taskkillTree(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let tk: ChildProcess;
+    try {
+      tk = spawn(join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    } catch {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => { try { tk.kill(); } catch { /* already gone */ } resolve(false); }, TASKKILL_MS);
+    timer.unref?.();
+    tk.once("error", () => { clearTimeout(timer); resolve(false); });
+    tk.once("exit", (code) => { clearTimeout(timer); resolve(code === 0); });
+    tk.unref();
+  });
 }

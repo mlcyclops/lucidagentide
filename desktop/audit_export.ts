@@ -19,7 +19,7 @@
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { managedConfig, type ManagedLogging } from "./managed_config.ts";
 
@@ -122,6 +122,20 @@ export interface Sink {
   status(): SinkStatus;
 }
 
+/** Where the OCSF audit line lands by default.
+ *
+ *  Under `bun test` this is NEVER the operator's real audit file. `emitSecurityEvent` is called from all
+ *  over the app (every scanner block, approval, egress refusal), so any test that touches one of those
+ *  paths used to append to ~/.omp/lucid-audit.jsonl and silently grow the operator's real SIEM export with
+ *  fixture events. `LUCID_AUDIT_PATH` overrides it explicitly; under test without an override it goes to a
+ *  per-process temp file. Same rule and same reasoning as the block ledger in security_log.ts. */
+function defaultAuditPath(): string {
+  const override = process.env.LUCID_AUDIT_PATH?.trim();
+  if (override) return override;
+  if (process.env.NODE_ENV === "test") return join(tmpdir(), `lucid-audit-test-${process.pid}.jsonl`);
+  return join(homedir(), ".omp", "lucid-audit.jsonl");
+}
+
 /** The public append-only FILE sink: one OCSF JSON line per event at ~/.omp/lucid-audit.jsonl. */
 export class FileSink implements Sink {
   readonly name = "file";
@@ -130,7 +144,7 @@ export class FileSink implements Sink {
   private failed = 0;
   private lastError?: string;
   private lastDeliveryTs?: string;
-  constructor(private readonly path = join(homedir(), ".omp", "lucid-audit.jsonl")) {}
+  constructor(private readonly path = defaultAuditPath()) {}
   deliver(ocsf: Record<string, unknown>, _ev: SecurityEvent): void {
     try {
       mkdirSync(dirname(this.path), { recursive: true });

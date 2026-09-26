@@ -9,9 +9,9 @@
 // is needed — the launcher is structured so the gate can't be bypassed.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   APPENDED_POLICY,
   assets,
@@ -115,6 +115,70 @@ test("resolveScannerEnv points the scanner at the repo's on-disk sidecar (compil
   const withPy: Record<string, string | undefined> = { SCANNER_PYTHON: __filename };
   resolveScannerEnv(withPy, "/repo");
   expect(withPy.SCANNER_PYTHON).toBe(__filename);
+});
+
+// P-SCANPY.1 (ADR-0366): the standalone launcher had NO bundled-interpreter branch, so a packaged
+// install fell through scanner_client.resolvePython() to the bare name `python`. On a box with no
+// global `python` (Ubuntu 24.04 ships only python3) the scanner child died on spawn and `lucid check`
+// reported "scanner sidecar unreachable: scanner stdin not writable" while a perfectly good bundled
+// CPython sat one directory away. Found by running a real packaged arm64 AppImage on a DGX Spark.
+test("resolveScannerEnv finds the BUNDLED interpreter in a packaged tree (ADR-0225 air-gap promise)", () => {
+  const root = mkdtempSync(join(tmpdir(), "scanpy-"));
+  try {
+    // The packaged layout: resources/repo and resources/runtimes are SIBLINGS.
+    const repo = join(root, "repo");
+    const leaf = `python-${process.platform}-${process.arch}`;
+    const rel = process.platform === "win32" ? ["python.exe"] : ["bin", "python3"];
+    const bundled = join(root, "runtimes", leaf, ...rel);
+    mkdirSync(dirname(bundled), { recursive: true });
+    writeFileSync(bundled, "");
+    mkdirSync(join(repo, "scanner-sidecar"), { recursive: true });
+
+    const env: Record<string, string | undefined> = {};
+    resolveScannerEnv(env, repo);
+    expect(env.SCANNER_PYTHON).toBe(bundled);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveScannerEnv prefers the bundled interpreter OVER a project venv", () => {
+  // Order matters: ADR-0225 bundles CPython so a packaged install never needs a venv, and runtime.ts
+  // already resolves bundled-first (findScannerPython). If the venv won here, an air-gapped install
+  // with a stale venv would use the stale one, and the two launch paths would disagree.
+  const root = mkdtempSync(join(tmpdir(), "scanpy-order-"));
+  try {
+    const repo = join(root, "repo");
+    const leaf = `python-${process.platform}-${process.arch}`;
+    const rel = process.platform === "win32" ? ["python.exe"] : ["bin", "python3"];
+    const venvRel = process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"];
+    const bundled = join(root, "runtimes", leaf, ...rel);
+    const venv = join(repo, "scanner-sidecar", ".venv", ...venvRel);
+    for (const p of [bundled, venv]) {
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, "");
+    }
+    const env: Record<string, string | undefined> = {};
+    resolveScannerEnv(env, repo);
+    expect(env.SCANNER_PYTHON).toBe(bundled);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveScannerEnv still finds a project venv when nothing is bundled (dev checkout)", () => {
+  const root = mkdtempSync(join(tmpdir(), "scanpy-venv-"));
+  try {
+    const venvRel = process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"];
+    const venv = join(root, "scanner-sidecar", ".venv", ...venvRel);
+    mkdirSync(dirname(venv), { recursive: true });
+    writeFileSync(venv, "");
+    const env: Record<string, string | undefined> = {};
+    resolveScannerEnv(env, root);
+    expect(env.SCANNER_PYTHON).toBe(venv);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // ── fail-closed preflight ─────────────────────────────────────────────────────
@@ -310,7 +374,9 @@ test("buildTuiArgs without lucidTheme carries no theme extension (cosmetic = opt
 });
 
 test("assets exposes the theme extension beside the gates", () => {
-  expect(assets("/repo").lucidTheme).toBe("/repo/harness/omp/lucid_theme_extension.ts");
+  // join() emits host separators; the asset path feeds a spawn argv where either form works,
+  // so the assertion is separator-agnostic instead of failing on every Windows checkout.
+  expect(assets("/repo").lucidTheme.replace(/\\/g, "/")).toBe("/repo/harness/omp/lucid_theme_extension.ts");
 });
 
 test("runTui loads the skin -e in the spawned argv (repo asset exists), gate still first", async () => {
@@ -397,8 +463,9 @@ test("buildTuiArgs WITHOUT lucidWelcome/quietConfig has no --config entry", () =
 });
 
 test("assets exposes the welcome extension and quiet config", () => {
-  expect(assets("/repo").lucidWelcome).toBe("/repo/harness/omp/lucid_welcome_extension.ts");
-  expect(assets("/repo").lucidTuiConfig).toBe("/repo/harness/omp/lucid_tui.config.yml");
+  const posixy = (p: string): string => p.replace(/\\/g, "/");
+  expect(posixy(assets("/repo").lucidWelcome)).toBe("/repo/harness/omp/lucid_welcome_extension.ts");
+  expect(posixy(assets("/repo").lucidTuiConfig)).toBe("/repo/harness/omp/lucid_tui.config.yml");
 });
 
 test("runTui welcome ON: spawned argv includes welcome -e after theme and --config for quiet overlay", async () => {

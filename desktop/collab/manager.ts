@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/manager.ts — P-COLLAB.3 (ADR-0192): the backend host lifecycle owner.
+// desktop/collab/manager.ts - P-COLLAB.3 (ADR-0192): the backend host lifecycle owner.
 //
 // One `CollabManager` per LUCID backend owns the CURRENT share: it mints the room + invite links, stands up
 // a `CollabHost` over a relay transport, taps the live session's ChatEvents into it, and exposes a small
@@ -18,7 +18,7 @@ import { CollabHost, type HostTransport } from "./host.ts";
 import { generateRoomId, mintRoomLinks } from "./link.ts"; // P-COLLAB.19 (ADR-0241): one room, two capabilities
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto.ts";
 import type { ChatEvent } from "../renderer/chat_events.ts";
-import type { CollabOptions, CollabParticipant } from "./frames.ts";
+import type { CollabOptions, CollabParticipant, CollabTranscriptTurn, PromptAudio, SttSource } from "./frames.ts";
 
 /** An authorized relay endpoint: `wsBase` is the origin (no path); `httpBase` its http(s) form for links.
  *  `pwaBase` (P-REMOTE.2b): when set (the hosted rendezvous), the browser invite points at the phone PWA
@@ -35,8 +35,9 @@ export interface CollabManagerDeps {
   /** Injected clock (the workflow/test host forbids Date.now()); UNIX ms. */
   now(): number;
   /** P-COLLAB.12: run an EDIT guest's prompt in the host's session (through the host's fail-closed gate).
-   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer. */
-  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[]) => void;
+   *  P-REMOTE.8: `images` (validated data URLs) ride along as vision input, staged into the host composer.
+   *  P-REMOTE.14: `sttSource` is the validated transcription provenance, staged with the turn for the audit. */
+  onGuestPrompt?: (text: string, guest: CollabParticipant, images?: string[], audio?: PromptAudio, sttSource?: SttSource) => void;
   /** P-COLLAB.12: an EDIT guest asked to stop the in-flight turn. */
   onGuestAbort?: (guest: CollabParticipant) => void;
   /** P-COLLAB.18 (ADR-0204): a guest joined/left the hosted share (host-authoritative audit hook). */
@@ -48,14 +49,27 @@ export interface CollabManagerDeps {
   onGuestSetModel?: (value: string, guest: CollabParticipant) => void;
   /** P-COLLAB.14: an EDIT guest picked an already-used folder by its OPAQUE id (validated host-side). */
   onGuestSetWorkspace?: (id: string, guest: CollabParticipant) => void;
+  /** P-PWA-FLEET.1: an EDIT guest prompts / stops / answers a fleet lane, or injects a mid-turn operator
+   *  note ("master" or a laneId). All edit-gated host-side; laneId/target validated by the backend wiring. */
+  onGuestFleetPrompt?: (laneId: string, text: string, guest: CollabParticipant) => void;
+  onGuestFleetStop?: (laneId: string, guest: CollabParticipant) => void;
+  onGuestFleetAnswer?: (laneId: string, allow: boolean, scope: "once" | "session" | undefined, guest: CollabParticipant) => void;
+  onGuestInterject?: (target: string, text: string, guest: CollabParticipant) => void;
+  /** P-REMOTE.14: the host's CUI + lockdown stance, re-read per welcome/state push and per incoming prompt.
+   *  Guests use it to decide whether device speech-to-text is allowed; absent = strictest (fail-closed). */
+  posture?: () => { cui: boolean; lockdown: boolean };
+  /** P-PWA-FOCUS.1: a fleet lane's recent turns, for the `lane-sync` replay sent when a guest starts
+   *  watching that lane. Wired to the lane engine's own bounded recovery transcript, so watching a lane
+   *  retains nothing extra. Expected to return a COPY. */
+  laneTranscript?: (laneId: string) => CollabTranscriptTurn[];
 }
 
 export interface ShareStatus {
   active: boolean;
   roomId?: string;
-  /** The full (edit-capable) link — held back in Phase 1 UI, but returned for when guest-write lights up. */
+  /** The full (edit-capable) link, held back in Phase 1 UI but returned for when guest-write lights up. */
   fullLink?: string;
-  /** The view (read-only) link — the default thing to share in Phase 1. */
+  /** The view (read-only) link: the default thing to share in Phase 1. */
   viewLink?: string;
   /** The browser deep link a phone opens: EDIT-capable when the share allows editing, else view-only. */
   browserLink?: string;
@@ -91,7 +105,7 @@ export class CollabManager {
   async start(opts: { allowEdit?: boolean } = {}): Promise<ShareStatus> {
     const relay = this.#deps.resolveRelay();
     if (!relay) {
-      throw new Error("no collaboration relay is configured — set a self-hosted relay URL in Settings, or opt into the public relay");
+      throw new Error("no collaboration relay is configured - set a self-hosted relay URL in Settings, or opt into the public relay");
     }
     if (this.#host) this.stop("restarting the share");
     const allowEdit = !!opts.allowEdit;
@@ -119,6 +133,17 @@ export class CollabManager {
       options: this.#deps.collabOptions?.() ?? null,
       onGuestSetModel: this.#deps.onGuestSetModel,
       onGuestSetWorkspace: this.#deps.onGuestSetWorkspace,
+      // P-PWA-FLEET.1: fleet controls + mid-turn interjection (edit-gated in CollabHost like set-model).
+      onGuestFleetPrompt: this.#deps.onGuestFleetPrompt,
+      onGuestFleetStop: this.#deps.onGuestFleetStop,
+      onGuestFleetAnswer: this.#deps.onGuestFleetAnswer,
+      onGuestInterject: this.#deps.onGuestInterject,
+      // P-REMOTE.14: the CUI + lockdown stance guests decide device speech-to-text from, and the host's
+      // fail-closed backstop against cloud-transcribed text entering a CUI session.
+      posture: this.#deps.posture,
+      // P-PWA-FOCUS.1: the replay a guest gets when it starts watching a lane. Absent provider = no replay,
+      // and the live stream still arrives.
+      laneTranscript: this.#deps.laneTranscript,
     });
     this.#host.start();
     this.#allowEdit = allowEdit;
@@ -142,9 +167,17 @@ export class CollabManager {
     return IDLE;
   }
 
-  /** Forward one live session event to the share, if active. */
-  tapEvent(event: ChatEvent): void {
-    this.#host?.pushEvent(event);
+  /** Forward one live session event to the share, if active.
+   *  P-PWA-FOCUS.1: `lane` scopes the event to a FLEET LANE's conversation, which reaches only the guests
+   *  that asked to watch that lane. Omitted = the master session, unchanged. */
+  tapEvent(event: ChatEvent, lane?: string): void {
+    this.#host?.pushEvent(event, lane);
+  }
+
+  /** P-PWA-FOCUS.1: is any guest watching this lane? The lane observer checks before translating events, so
+   *  a fleet running with no phone attached does no per-event work at all. False when not sharing. */
+  laneWatched(laneId: string): boolean {
+    return this.#host?.laneWatched(laneId) ?? false;
   }
 
   /** Record a user prompt into the replay transcript + broadcast it LIVE to guests (P-COLLAB.15), if active.

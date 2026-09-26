@@ -26,8 +26,11 @@ const joinBlocks = (blocks: readonly string[]): string => blocks.join("\u0000");
 
 // The omp version this regression is pinned to (R-02). A silent dependency bump trips the assertion
 // below; R-01's scheduled omp-compat CI reruns the suite against candidate versions before adopting.
-const SUPPORTED_OMP = "16.1.20";
-const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-catalog", "@oh-my-pi/pi-utils"] as const;
+const SUPPORTED_OMP = "18.2.10";
+// pi-tui joined at 18.2.6: omp 18.2.5 moved the status-line context-usage helpers there, so it must
+// bump in lockstep with the other four (omp-compat.mjs enforces the same five-way agreement).
+// pi-catalog joined with R-07 (#347): harness/omp/provider_catalog.test.ts pins its provider universe.
+const OMP_PACKAGES = ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-agent-core", "@oh-my-pi/pi-ai", "@oh-my-pi/pi-catalog", "@oh-my-pi/pi-tui", "@oh-my-pi/pi-utils"] as const;
 
 const PkgDeps = (() => {
 	const raw: unknown = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
@@ -50,9 +53,9 @@ test("R-02: auto-compaction never mutates the frozen prefix (layers 1-4)", async
 	const { session, model, cleanup } = await createEchoSession({ systemPrompt: [FROZEN_PREFIX] });
 	try {
 		// Shrink the keep-recent window so a small headless session is actually compactable (the
-		// default keeps the last 20k tokens, far more than echo turns produce). context-full strategy
+		// default keeps the last 20k tokens, far more than echo turns produce). portable text summarization
 		// avoids snapcompact's vision-model requirement (the mock model has no image input).
-		session.settings.set("compaction.strategy", "context-full");
+		session.settings.set("compaction.methodOrder", ["soft"]);
 		session.settings.set("compaction.keepRecentTokens", 10);
 
 		// Build conversation history so compaction has something older than the keep window to compact.

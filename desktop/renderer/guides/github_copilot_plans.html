@@ -1,0 +1,258 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC
+     SPDX-License-Identifier: BUSL-1.1 -->
+<!-- desktop/renderer/guides/github_copilot_plans.html - the in-app GitHub Copilot plan advisor. Opened from
+     the GitHub Copilot provider card in Settings into the Preview panel (Yours lane). Fully self-contained:
+     the preview frame is sandboxed with NO network and NO app stylesheet, so every byte lives inline.
+     House rules apply: lucid-dark palette, block-paragraph prose (never prose inside flex), one-line
+     ellipsizing labels, and no em dashes anywhere. Prices verified September 2026; the sources section
+     at the bottom names where each number came from. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GitHub Copilot plans: a LUCID field guide</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-elev:#12151f;
+    --line:#252a3a; --line-soft:#1a1e2a;
+    --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90;
+    --accent:#c64bd6; --accent-2:#e07bf0; --cyan:#46c8dc; --green:#46d27e; --amber:#e8b23c;
+    --red:#ef5f5f; --violet:#8b5cf6;
+    --green-txt:#8ee8ad; --amber-txt:#f3cf7a; --red-txt:#ffb0b0; --cyan-txt:#8fe0ee; --violet-txt:#e9ddff;
+    --r-lg:12px; --r-md:9px; --r-sm:6px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg-0);color:var(--txt);
+    font:14px/1.55 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 22px 64px}
+  header{padding:26px 0 18px;border-bottom:1px solid var(--line)}
+  .brand{font-size:11px;letter-spacing:.22em;color:var(--accent-2);text-transform:uppercase;font-weight:700}
+  h1{margin:8px 0 6px;font-size:26px;line-height:1.25;letter-spacing:-.01em}
+  .sub{color:var(--txt-2);margin:0;max-width:64ch}
+  .stamp{margin-top:10px;color:var(--txt-3);font-size:12px}
+  h2{font-size:18px;margin:40px 0 4px;letter-spacing:-.01em}
+  h2 .no{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  h3{font-size:14.5px;margin:20px 0 6px;color:var(--accent-2)}
+  p{margin:8px 0;color:var(--txt-2);max-width:72ch}
+  p b,li b{color:var(--txt)}
+  a{color:var(--cyan);text-decoration:none;word-break:break-all}
+  ul{margin:6px 0 10px;padding-left:20px;color:var(--txt-2)}
+  li{margin:4px 0}
+  code{background:var(--bg-2);border:1px solid var(--line-soft);border-radius:4px;
+    padding:1px 5px;font:12px ui-monospace,Consolas,monospace;color:var(--cyan-txt);white-space:nowrap}
+  /* callouts: block paragraphs with a colored spine, NEVER flex around prose */
+  .note{border-left:3px solid var(--cyan);background:var(--bg-1);border-radius:0 var(--r-md) var(--r-md) 0;
+    padding:10px 14px;margin:14px 0}
+  .note.good{border-left-color:var(--green)}
+  .note.warn{border-left-color:var(--amber)}
+  .note.bad{border-left-color:var(--red)}
+  .note p{margin:4px 0}
+  .note .t{font-weight:700;color:var(--txt);font-size:13px;letter-spacing:.02em}
+  .note.good .t{color:var(--green-txt)} .note.warn .t{color:var(--amber-txt)} .note.bad .t{color:var(--red-txt)}
+  /* tables: generous columns, first column never wraps mid-word */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th{color:var(--txt-3);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em;text-align:left}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px;font-weight:600;color:var(--txt)}
+  td{color:var(--txt-2)}
+  .price{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 18px;margin:14px 0}
+  /* status chips: single-purpose atoms, each chip is one element so flex is safe here */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+  .chip{white-space:nowrap;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2)}
+  .chip.ok{color:var(--green-txt);border-color:rgb(70 210 126 / .35);background:rgb(70 210 126 / .08)}
+  .chip.dead{color:var(--red-txt);border-color:rgb(239 95 95 / .35);background:rgb(239 95 95 / .08);text-decoration:line-through}
+  .chip.warn{color:var(--amber-txt);border-color:rgb(232 178 60 / .35);background:rgb(232 178 60 / .08)}
+  .chip.info{color:var(--cyan-txt);border-color:rgb(70 200 220 / .35);background:rgb(70 200 220 / .08)}
+  /* timeline: spine + block entries */
+  .tl{border-left:2px solid var(--line);margin:16px 0 6px 6px;padding-left:18px}
+  .tl-item{position:relative;margin:0 0 16px}
+  .tl-item::before{content:"";position:absolute;left:-24px;top:5px;width:9px;height:9px;border-radius:50%;
+    background:var(--bg-3);border:2px solid var(--accent)}
+  .tl-item.break::before{border-color:var(--red)}
+  .tl-date{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--txt-3);text-transform:uppercase}
+  .tl-item p{margin:2px 0 0}
+  /* verdict ribbon */
+  .verdict{background:linear-gradient(135deg,rgb(139 92 246 / .12),rgb(198 75 214 / .10));
+    border:1px solid rgb(139 92 246 / .4);border-radius:var(--r-lg);padding:16px 18px;margin:18px 0}
+  .verdict .t{color:var(--violet-txt);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+  .verdict p{color:var(--txt)}
+  .toc{margin:16px 0 0;padding:0;list-style:none;column-count:2;column-gap:24px}
+  .toc li{margin:3px 0;break-inside:avoid}
+  .toc a{color:var(--txt-2)}
+  .toc a:hover{color:var(--accent-2)}
+  .toc .no{color:var(--accent);margin-right:6px;font-variant-numeric:tabular-nums}
+  .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--txt-3);font-size:12px}
+  @media (max-width:640px){ .toc{column-count:1} td:first-child{max-width:160px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">LUCID Agent IDE · Advisor Guide</div>
+  <h1>GitHub Copilot plans: one bill, three frontier vendors</h1>
+  <p class="sub">The plan ladder from Free to Enterprise, what the June 2026 AI-Credits billing change
+    actually means for your money, why Copilot is the odd one out in LUCID's provider list, and the exact
+    device-code steps that connect it.</p>
+  <p class="stamp">Prices and policies verified September 2026. GitHub adjusts credit allowances and promos
+    often; re-check against the sources at the bottom before committing a team.</p>
+  <ul class="toc">
+    <li><span class="no">1</span><a href="#now">Do this in LUCID right now</a></li>
+    <li><span class="no">2</span><a href="#plans">The plan ladder</a></li>
+    <li><span class="no">3</span><a href="#credits">AI Credits: the June 2026 billing change</a></li>
+    <li><span class="no">4</span><a href="#catalog">Why Copilot is special in LUCID</a></li>
+    <li><span class="no">5</span><a href="#pick">Which plan for whom</a></li>
+    <li><span class="no">6</span><a href="#sources">Sources</a></li>
+  </ul>
+</header>
+
+<h2 id="now"><span class="no">1</span>Do this in LUCID right now</h2>
+<div class="verdict">
+  <div class="t">The short version</div>
+  <p>Any Copilot plan, even <b>Free</b>, connects to LUCID with two clicks and a pasted code. If you
+     already pay for Copilot through work or your own GitHub account, this is the fastest way to get
+     GPT, Claude, and Gemini family models into the picker without buying anything new.</p>
+</div>
+
+<h3>Device-code OAuth, step by step</h3>
+<p>Open <b>Settings &gt; Providers &gt; GitHub Copilot</b> and click <b>Connect</b>. LUCID shows you a short
+   one-time <b>device code</b> and opens the GitHub device-activation page. Paste the code there, approve the
+   sign-in on your GitHub account, and come back: the card flips to connected and the Copilot model catalog
+   appears in the model picker. No API key exists in this flow; the subscription itself is the credential.</p>
+
+<h3>GitHub Enterprise accounts</h3>
+<p>If your organization runs GitHub Enterprise on its own domain, fill the <b>GitHub Enterprise domain</b>
+   field on the card before clicking Connect. Leave it <b>blank for github.com</b>, which is the right value
+   for personal accounts, Free, Pro, Pro+, Max, and most Business seats.</p>
+<div class="note">
+  <p class="t">If the connect fails</p>
+  <p>A failed device-code exchange explains itself with a red toast on the card. The usual causes: the code
+     expired before you pasted it (just click Connect again), or your organization requires an admin to
+     enable Copilot for your seat first.</p>
+</div>
+
+<h2 id="plans"><span class="no">2</span>The plan ladder</h2>
+<p>Six plans, individual on the left of the ladder, per-seat organizational on the right. All prices are
+   monthly, September 2026:</p>
+<table>
+  <tr><th>Plan</th><th>Price</th><th>AI Credits included</th><th>Notes</th></tr>
+  <tr><td>Free</td><td class="price">$0</td>
+      <td>None</td>
+      <td>Limited completions and chat. Real, usable, and the cheapest way to test the LUCID connection.</td></tr>
+  <tr><td>Pro</td><td class="price">$10/mo</td>
+      <td>Monthly allowance</td>
+      <td>Unlimited code completions plus a monthly AI Credit allowance for premium model use.</td></tr>
+  <tr><td>Pro+</td><td class="price">$39/mo</td>
+      <td>Larger allowance (about $69, approximate: inferred from Max being 2.9x Pro+)</td>
+      <td>The individual power tier below Max.</td></tr>
+  <tr><td>Max</td><td class="price">$100/mo</td>
+      <td class="price">$200</td>
+      <td>2.9x the Pro+ allowance and priority model access. Note the credits exceed the sticker price.</td></tr>
+  <tr><td>Business</td><td class="price">$19/seat</td>
+      <td class="price">$19 ($30 promo)</td>
+      <td>Org management and policy controls. Promo credit boost to $30/seat runs through August 2026.</td></tr>
+  <tr><td>Enterprise</td><td class="price">$39/seat</td>
+      <td class="price">$39 ($70 promo)</td>
+      <td>The full governance tier. Promo credit boost to $70/seat runs through August 2026.</td></tr>
+</table>
+<div class="note warn">
+  <p class="t">The promos have a clock on them</p>
+  <p>The $30 and $70 per-seat credit boosts on Business and Enterprise were promotional and dated through
+     August 2026. If you are reading this later, assume seats are back to credits matching the sticker
+     price ($19 and $39) until you verify otherwise.</p>
+</div>
+
+<h2 id="credits"><span class="no">3</span>AI Credits: the June 2026 billing change</h2>
+<div class="tl">
+  <div class="tl-item break"><div class="tl-date">Jun 1, 2026</div>
+    <p><b>Every plan moves to dollar-denominated AI Credits.</b> One credit equals exactly $0.01, so an
+       allowance reads like a balance: Pro's allowance, Max's $200, Business's $19/seat. Premium model
+       requests draw the balance down; when it is empty you either wait for the monthly refresh or buy more.</p></div>
+  <div class="tl-item"><div class="tl-date">Same date</div>
+    <p><b>Code completions become free on every paid plan.</b> The autocomplete stream no longer touches
+       your credits at all. Credits are spent only on premium chat and agent model calls.</p></div>
+  <div class="tl-item"><div class="tl-date">Through Aug 2026</div>
+    <p>Launch promos sweeten the org tiers: Business seats carry $30 in credits instead of $19, Enterprise
+       $70 instead of $39.</p></div>
+</div>
+<div class="note good">
+  <p class="t">Why this pricing model is easy to reason about</p>
+  <p>1 credit = $0.01 means no opaque request multipliers: you can read a model's burn rate straight off
+     your usage page in dollars. For LUCID agent work, the practical outcome is that heavy sessions spend
+     credits while everyday completions cost nothing extra on any paid plan.</p>
+</div>
+
+<h2 id="catalog"><span class="no">4</span>Why Copilot is special in LUCID</h2>
+<p>Every other card in Settings connects you to <b>one</b> vendor's models. Copilot is the exception:
+   <b>one subscription surfaces a multi-vendor catalog</b>, with GPT, Claude, and Gemini family models all
+   available through the same Copilot entitlement. For $10 to $39 a month you get to mix frontier families
+   inside a single bill, switch models per task in the picker, and never manage a vendor API key.</p>
+<div class="chips">
+  <span class="chip ok">GPT family: included</span>
+  <span class="chip ok">Claude family: included</span>
+  <span class="chip ok">Gemini family: included</span>
+  <span class="chip info">One bill, one OAuth</span>
+  <span class="chip info">Completions: free on paid plans</span>
+  <span class="chip warn">Premium calls draw AI Credits</span>
+</div>
+<p>Two caveats worth knowing. First, which exact models appear depends on your plan and, on org seats, on
+   what your admin enabled; Max additionally buys <b>priority model access</b>. Second, you are renting these
+   models through GitHub's gateway, so brand-new vendor releases can land on Copilot later than they land on
+   the vendor's own card.</p>
+<div class="note">
+  <p class="t">A word on benchmark claims</p>
+  <p>When you compare the catalog's families, remember that headline SWE-bench Verified numbers are largely
+     self-reported by vendors. Standardized harnesses such as Scale's SWE-bench Pro score every vendor
+     noticeably lower and reshuffle the order. Treat leaderboard deltas of a point or two as noise and pick
+     by trying models on your own work.</p>
+</div>
+
+<h2 id="pick"><span class="no">5</span>Which plan for whom</h2>
+<table>
+  <tr><th>You are</th><th>Buy</th><th>Why</th></tr>
+  <tr><td>Curious, zero budget</td><td class="price">Free</td>
+      <td>Limited completions and chat, but the full LUCID connection works. Upgrade only when you hit
+          the limits.</td></tr>
+  <tr><td>Solo dev, light agent use</td><td class="price">Pro $10</td>
+      <td>Unlimited completions plus enough credit for everyday premium chat. The best value-per-dollar
+          entry into three frontier families at once.</td></tr>
+  <tr><td>Solo dev, daily agent work</td><td class="price">Pro+ $39 or Max $100</td>
+      <td>Max's $200 credit balance exceeds its own price and adds priority access; Pro+ is the middle
+          step when Max is overkill.</td></tr>
+  <tr><td>A team already on GitHub</td><td class="price">Business $19/seat</td>
+      <td>Central billing and policy on the platform you already administer. The multi-vendor catalog means
+          one procurement covers GPT, Claude, and Gemini needs.</td></tr>
+  <tr><td>An org with compliance needs</td><td class="price">Enterprise $39/seat</td>
+      <td>The governance tier, and the one to pair with a GitHub Enterprise domain in LUCID's card.</td></tr>
+</table>
+<div class="note good">
+  <p class="t">The honest comparison against single-vendor plans</p>
+  <p>A $20 single-vendor subscription buys deeper access to that one family. Copilot Pro at $10 buys
+     shallower but wider access to three. If your work benefits from picking the right family per task,
+     Copilot is the cheapest way to get that breadth; if you live inside one vendor's flagship all day,
+     that vendor's own plan usually serves you better.</p>
+</div>
+
+<h2 id="sources"><span class="no">6</span>Sources</h2>
+<ul>
+  <li>Official plans and feature matrix:
+      <a href="https://github.com/features/copilot">github.com/features/copilot</a></li>
+  <li>Cost breakdown and credit math:
+      <a href="https://www.cloudzero.com/blog/github-copilot-cost">cloudzero.com/blog/github-copilot-cost</a></li>
+  <li>Plan-by-plan pricing walkthrough:
+      <a href="https://nocode.mba/articles/github-copilot-pricing">nocode.mba/articles/github-copilot-pricing</a></li>
+</ul>
+
+<div class="foot">
+  Generated for LUCID Agent IDE · TechLead 187 LLC · Prices are point-in-time (September 2026) and change
+  without notice. Links do not open inside this sandboxed preview; copy them into your browser.
+</div>
+
+</div>
+</body>
+</html>

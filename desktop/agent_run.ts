@@ -11,7 +11,7 @@
 // invalid spec is refused. Runs in an isolated per-agent dir under `.omp/agent-runs/` (v1 doesn't touch the
 // user's workspace). Bounded by a hard timeout so a wedged run can't hang the engine.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildAgent } from "../harness/agent/compiler.ts";
@@ -22,18 +22,31 @@ import { loadSpecFile, loadSpecTrust } from "../harness/agent/file_store.ts";
 import { TraceRecorder } from "../harness/agent/trace.ts"; // P-AGENT.13: best-effort run provenance
 import { buildKmsFetchRequest } from "../harness/agent/kms.ts"; // P-AGENT.16: provider-sourced secrets
 import { connectorStatus, runConnector } from "./addon_seam.ts"; // P-AGENT.16: enterprise kms connector
+import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + acp_backend.ts
+import { gatePath, gateRefusal } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
 import { validateSpec, type AgentSpec } from "../harness/agent/spec.ts";
 import type { TrustLabel } from "../harness/contracts.ts";
 
-const REPO = join(import.meta.dir, "..");
-// Absolute so the gate loads from THIS repo even when omp runs in the isolated run dir (mirrors acp_backend).
-const GATE = join(REPO, "harness", "omp", "security_extension.ts");
-
+// One probed omp resolver, shared with dev.ts + acp_backend.ts (desktop/omp_bin.ts). Existence is not
+// runnability: a packaged install's omp sits in an ACL-protected directory, which is how the v2.0.0
+// OAuth broker ended up spawning a path Bun could not read.
+let ompBinCache: string | null = null;
 function ompBin(): string {
-  const fromMain = process.env.LUCID_OMP_BIN;
-  if (fromMain && existsSync(fromMain)) return fromMain;
-  for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
-  return "omp";
+  if (ompBinCache) return ompBinCache;
+  // P-OMP-BOOT.2 (ADR-0358): a timeout is "slow machine", not "missing binary". See omp_bin.ts.
+  const probe = (candidate: string): boolean | "timeout" => {
+    try {
+      return bunProbeVerdict(Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: OMP_PROBE_TIMEOUT_MS }));
+    } catch { return false; }
+  };
+  const r = resolveOmpBin(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    probe,
+  );
+  if (r.indeterminate) console.error(`[omp] probe timed out; using ${r.bin} anyway (slow cold start): ${r.timedOut.join(", ")}`);
+  else if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
+  ompBinCache = r.bin;
+  return r.bin;
 }
 
 export interface AgentRunResult {
@@ -133,7 +146,17 @@ interface SpawnOpts {
 /** One gated `omp -p` invocation (shared by the one-shot path and the P-AGENT.11a segment runner). The
  *  fail-closed gate loads FIRST (invariant #4), then the agent's generated allow-list extension. */
 function spawnGatedOmp(o: SpawnOpts): AgentRunResult {
-  const gateArgs = o.withGate !== false && existsSync(GATE) ? ["-e", GATE] : []; // gate FIRST (invariant #4)
+  // P-GATE-PATH.1 (ADR-0356): the gate loads FIRST (invariant #4), and a gate we cannot FIND is a
+  // REFUSAL, never a silent ungated run. This line used to read `existsSync(GATE) ? ["-e", GATE] : []`
+  // with GATE built from import.meta.dir, which in a compiled engine is Bun's virtual root - so on every
+  // packaged install the guard was false, the `-e` vanished, and the headless runner scanned nothing and
+  // said nothing. `withGate: false` remains an explicit caller opt-out; a missing file is not one.
+  const gateArgs: string[] = [];
+  if (o.withGate !== false) {
+    const gate = gatePath();
+    if (!gate) return { ok: false, blocked: true, reason: gateRefusal(), error: gateRefusal() };
+    gateArgs.push("-e", gate);
+  }
   const args = ["-p", "--model", o.model, "--no-lsp", "--no-session", ...gateArgs, ...o.ompExtensionArgs, "--append-system-prompt", o.systemPrompt, o.prompt];
   try {
     const proc = Bun.spawnSync([ompBin(), ...args], {

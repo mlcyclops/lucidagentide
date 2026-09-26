@@ -64,6 +64,22 @@ test("the live profile reflects the latest value each turn (re-read, not cached)
   expect(t2.preamble).toContain("B"); // newly-learned fact shows up on the next turn
 });
 
+test("P-VOICE.5: the spoken-reply block is STANDING while conversation mode is on, and vanishes with it", () => {
+  const spoken = `<spoken-reply mode="conversation">\nWrite for the ear.\n</spoken-reply>`;
+  const on = base({ spokenReply: spoken, persona, skill });
+  const t1 = buildUserTurnPreamble(on);
+  expect(t1.preamble).toContain("spoken-reply");
+  // Re-delivered next turn (it is standing guidance, not a one-shot like the memory recall).
+  expect(buildUserTurnPreamble({ ...on, memoryRecallDelivered: t1.memoryRecallDelivered }).preamble).toContain("spoken-reply");
+  // Switched off -> gone from the very next turn, with the other standing blocks untouched.
+  const off = buildUserTurnPreamble(base({ spokenReply: null, persona, skill }));
+  expect(off.preamble).not.toContain("spoken-reply");
+  expect(off.preamble).toContain("Be terse.");
+  expect(off.preamble).toContain("active-skill");
+  // It sits LAST of the standing blocks, so it shapes the reply without displacing persona/skill guidance.
+  expect(t1.preamble.indexOf("spoken-reply")).toBeGreaterThan(t1.preamble.indexOf("active-skill"));
+});
+
 test("P-DESIGN.1: DESIGN.md invariants are STANDING guidance, re-delivered every turn", () => {
   const design = "<design-invariants>\nHonor them: 8px grid, brand blue.\n</design-invariants>";
   const state = base({ designInvariants: design });

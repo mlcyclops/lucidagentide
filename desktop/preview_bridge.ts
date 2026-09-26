@@ -8,10 +8,144 @@
 // headings, buttons, captured console errors) — there is NO arbitrary eval and NO mutation. Inline JS is
 // allowed by the frame CSP (`script-src 'unsafe-inline'`), and `connect-src 'none'` still blocks all egress.
 
+// ── P-PREVIEW.13: the EARLY shim (runs before any page script) ──────────────────────────────────────
+//
+// THE DEFECT. The preview frame is deliberately sandboxed `allow-scripts allow-forms` with NO
+// `allow-same-origin`, which gives it an OPAQUE origin. In an opaque origin the `localStorage` and
+// `sessionStorage` GETTERS THROW a SecurityError. So a page whose first statement is
+//
+//     const best = Number(localStorage.getItem('best') || 0);
+//
+// dies on line 1. The browser still applies the HTML and CSS, so the user sees a styled but DEAD page:
+// a canvas with its border and background painted and nothing drawn in it. That is the "preview panel
+// doesn't work" report, and it hits most model-built games and apps, because storing a high score, a
+// todo list, or a theme preference is the first thing they reach for. Confirmed by isolating the single
+// line: the identical game with the storage read removed animates correctly in the same sandbox.
+//
+// THE FIX, AND WHY NOT THE OBVIOUS ONE. Adding `allow-same-origin` would make storage work and is the
+// wrong answer: the frame would then share OUR origin, which is the origin holding the per-launch
+// capability token and every /api route. Previewed code is UNTRUSTED (invariant 5) and must never sit
+// inside the trust boundary. So the origin stays opaque and we hand the page an in-memory Storage
+// instead. That is also semantically right: a preview is ephemeral, so preview state SHOULD die with
+// the frame rather than persist into the next thing the user previews.
+//
+// It must be the FIRST script in the document, so it is injected after `<head>` rather than before
+// `</body>` like the inspect bridge below. Installing the error capture here too means an early throw
+// is recorded (the bridge's own listener is registered too late to see one) and, crucially, becomes
+// VISIBLE: a page that dies gets a banner saying so instead of rendering blank in silence.
+
+/** The early shim (inline JS). Self-contained IIFE, idempotent, no egress (connect-src stays 'none'). */
+export const PREVIEW_SHIM_JS = `(function(){
+  if (window.__lucidShim) return; window.__lucidShim = 1;
+  // Links cannot navigate the opaque preview or its host. Ask the host to confirm an external
+  // HTTP(S) open; a postMessage is only a request, never permission to bypass the egress gate.
+  function link(e){
+    if ((e.type==='click' && e.button!==0) || (e.type==='auxclick' && e.button!==1)) return;
+    var node=e.target, a=null;
+    if (node && node.nodeType===3) node=node.parentElement;
+    if (node && node.closest) a=node.closest('a[href],area[href]');
+    if (!a) return;
+    var raw=a.getAttribute('href') || '', base=document.querySelector('base[target]');
+    var target=(a.getAttribute('target') || (base && base.getAttribute('target')) || '').toLowerCase();
+    var url=null;
+    try { url=new URL(raw,document.baseURI); } catch(_) {}
+    // Ordinary in-document TOC links still scroll. Targets cannot turn a fragment into a popup
+    // or a parent navigation, and empty hrefs cannot reload the frame.
+    if ((!target || target==='_self') && e.type==='click' && !e.ctrlKey && !e.metaKey && !e.shiftKey
+      && raw.indexOf('#')!==-1 && url && url.href.split('#')[0]===window.location.href.split('#')[0]) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (target && target!=='_self' && target!=='_blank') return;
+    if (!url || !raw || /[\\u0000-\\u0020\\u007f\\\\]/.test(raw)
+      || (url.protocol!=='http:' && url.protocol!=='https:') || !url.hostname || url.username || url.password) return;
+    // A relative local resource is not an external website. Do not open the host's API endpoints.
+    try { if (url.origin===new URL(window.location.href).origin) return; } catch(_) { return; }
+    try { window.parent.postMessage({__lucid:'preview-external-link',url:url.href},'*'); } catch(_) {}
+  }
+  window.addEventListener('click',link,true);
+  window.addEventListener('auxclick',link,true);
+
+  // Shared, bounded error buffer. The inspect bridge ADOPTS this array, so preview_inspect's
+  // { what: 'errors' } reports failures that happened before the bridge existed.
+  var errs = window.__lucidErrs = window.__lucidErrs || [];
+  function push(s){ try{ errs.push(String(s)); if(errs.length>60) errs.shift(); }catch(_){} }
+  window.addEventListener('error', function(e){ push('error: ' + ((e && e.message) || e)); flag(); });
+  window.addEventListener('unhandledrejection', function(e){ push('unhandledrejection: ' + (e && e.reason)); flag(); });
+
+  // In-memory Storage, used ONLY when the real one is unreachable (opaque origin). Implements the
+  // surface real code uses; index access (storage[0]) is not emulated, which no practical page needs.
+  function memStorage(){
+    var m = Object.create(null);
+    var api = {
+      getItem: function(k){ k=String(k); return Object.prototype.hasOwnProperty.call(m,k) ? m[k] : null; },
+      setItem: function(k,v){ m[String(k)] = String(v); },
+      removeItem: function(k){ delete m[String(k)]; },
+      clear: function(){ m = Object.create(null); },
+      key: function(i){ var ks=Object.keys(m); return i>=0 && i<ks.length ? ks[i] : null; }
+    };
+    Object.defineProperty(api, 'length', { get: function(){ return Object.keys(m).length; } });
+    return api;
+  }
+  ['localStorage','sessionStorage'].forEach(function(name){
+    var ok = false;
+    // Touching the getter is what throws, so the probe itself has to be guarded.
+    try { var s = window[name]; if (s) { s.getItem('__lucid_probe'); ok = true; } } catch(_) { ok = false; }
+    if (ok) return; // a real Storage is available (top-level open, or a future allow-same-origin): leave it
+    try {
+      Object.defineProperty(window, name, { value: memStorage(), configurable: true, writable: false });
+      push('note: ' + name + ' is in-memory for this preview (the frame is sandboxed, so nothing persists)');
+    } catch(e) { push('error: could not polyfill ' + name + ': ' + ((e && e.message) || e)); }
+  });
+
+  // A dead page must SAY it is dead. One compact banner, first error only, dismissible, inline-styled
+  // (no stylesheet reaches this frame). Invariant 11: the text is ONE block child, and the close button
+  // is positioned, so nothing shatters a sentence into flex slivers.
+  var shown = false;
+  function flag(){
+    if (shown) return; shown = true;
+    var first = null;
+    for (var i=0;i<errs.length;i++){ if (errs[i].indexOf('error:')===0 || errs[i].indexOf('unhandledrejection:')===0){ first = errs[i]; break; } }
+    if (!first) { shown = false; return; }
+    function paint(){
+      if (!document.body || document.getElementById('lucid-script-error')) return;
+      var d = document.createElement('div');
+      d.id = 'lucid-script-error';
+      d.setAttribute('style','position:fixed;left:0;right:0;top:0;z-index:2147483647;padding:9px 34px 9px 12px;'
+        + 'background:#2b1116;color:#ffd9df;border-bottom:1px solid #7d2233;font:12px/1.5 ui-sans-serif,system-ui,sans-serif;'
+        + 'text-align:left');
+      var p = document.createElement('div');
+      p.textContent = 'This preview stopped early: ' + String(first).slice(0,180)
+        + ' - the page rendered but its script did not finish, so parts of it may be blank.';
+      var x = document.createElement('button');
+      x.textContent = '\\u00d7';
+      x.setAttribute('style','position:absolute;right:6px;top:5px;width:22px;height:22px;cursor:pointer;'
+        + 'background:transparent;border:0;color:#ffd9df;font-size:16px;line-height:1');
+      x.onclick = function(){ d.remove(); };
+      d.appendChild(p); d.appendChild(x);
+      document.body.appendChild(d);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paint); else paint();
+  }
+})();`;
+
+/** Inject the early shim immediately after `<head>` (else after `<html>`, else prepend) so it is the
+ *  FIRST script in the document and can repair the environment before page code runs. Pure. */
+export function injectPreviewShim(html: string): string {
+  const tag = `<script>${PREVIEW_SHIM_JS}</script>`;
+  const head = /<head[^>]*>/i.exec(html);
+  if (head) return html.slice(0, head.index + head[0].length) + tag + html.slice(head.index + head[0].length);
+  const htmlTag = /<html[^>]*>/i.exec(html);
+  if (htmlTag) return html.slice(0, htmlTag.index + htmlTag[0].length) + tag + html.slice(htmlTag.index + htmlTag[0].length);
+  return tag + html;
+}
+
 /** The bridge script body (inline JS). Self-contained IIFE; idempotent; listens only to its own parent. */
 export const PREVIEW_BRIDGE_JS = `(function(){
   if (window.__lucidInspect) return; window.__lucidInspect = 1;
-  var errs = [];
+  // P-PREVIEW.13: ADOPT the early shim's buffer rather than starting a fresh one, so preview_inspect's
+  // { what: 'errors' } also reports failures thrown before this script existed. That is the common case
+  // for a dead page: the throw happens in the page's own first script, long before </body>.
+  var errs = window.__lucidErrs = window.__lucidErrs || [];
   function push(s){ try{ errs.push(String(s)); if(errs.length>60) errs.shift(); }catch(_){} }
   window.addEventListener('error', function(e){ push('error: ' + (e && e.message || e)); });
   window.addEventListener('unhandledrejection', function(e){ push('unhandledrejection: ' + (e && e.reason)); });
@@ -61,11 +195,57 @@ export const PREVIEW_BRIDGE_JS = `(function(){
       return { error:'unknown action: '+action+' (allowed: click, type, focus, scroll)' };
     }catch(e){ return { error:String(e&&e.message||e) }; }
   }
+  // CREATOR-3b (ADR-0287 item 3): deterministic FRAME CAPTURE. The parent hands a plan of TIMES; for each
+  // one this asks the page to render that time and reads its canvas back. Two honesty rules live here:
+  //
+  //   * A scene exposing window.lucidRenderAt(tMs) is DRIVEN: the times are LUCID's, so the capture is
+  //     reproducible and a regression compare means something. A page without it can only be SAMPLED on its
+  //     own clock, and the answer says "sampled", so nobody reads a wall-clock animation as a deterministic
+  //     capture.
+  //   * NOTHING HERE EVALUATES A STRING. lucidRenderAt is a function the PREVIEWED DOCUMENT defined, called
+  //     only behind a typeof check; this block adds no dynamic-code primitive and no markup-writing path of
+  //     any kind, and the read is the plain canvas API. A scene that throws is reported, never swallowed.
+  //     The demo asserts that absence by scanning this very string, which is why the forbidden spellings do
+  //     not appear even inside a comment.
+  //
+  // WebGL note, stated rather than left to be discovered: the readback happens in the SAME synchronous task
+  // as the render call, before compositing can clear the drawing buffer. A WebGL scene with no
+  // lucidRenderAt and no preserveDrawingBuffer reads back blank, which the audit surfaces as a stuck
+  // capture rather than as a pass. Backticks are avoided in this comment on purpose: the whole bridge is a
+  // template literal, so one would end the string.
+  var CAP_MAX_FRAMES=64, CAP_MAX_EDGE=2048;
+  function capture(cmd){
+    try{
+      var sel=cmd&&cmd.selector, cv=null;
+      if(sel){ try{ cv=document.querySelector(sel); }catch(e){ return { error:'bad selector: '+String(e&&e.message||e) }; } }
+      else { var all=document.querySelectorAll('canvas');
+        for(var i=0;i<all.length;i++){ var c=all[i]; if(!cv || (c.width*c.height)>(cv.width*cv.height)) cv=c; } }
+      if(!cv || String(cv.tagName||'').toLowerCase()!=='canvas') return { error: sel ? 'no canvas matches '+clip(sel,80) : 'this page has no canvas to capture' };
+      var w=cv.width|0, h=cv.height|0;
+      if(!w||!h) return { error:'that canvas is '+w+'x'+h+', so there are no pixels to read' };
+      if(w>CAP_MAX_EDGE||h>CAP_MAX_EDGE) return { error:'that canvas is '+w+'x'+h+', over the '+CAP_MAX_EDGE+'px capture limit' };
+      var plan=(cmd&&cmd.plan)||[];
+      if(!plan.length) return { error:'a capture needs a frame plan' };
+      if(plan.length>CAP_MAX_FRAMES) return { error:plan.length+' frames is over the '+CAP_MAX_FRAMES+'-frame limit for one capture pass' };
+      var driven = typeof window.lucidRenderAt==='function';
+      var frames=[];
+      for(var j=0;j<plan.length;j++){
+        var p=plan[j]||{}, t=Number(p.tMs);
+        if(!isFinite(t)) return { error:'frame '+j+' carries no usable time' };
+        if(driven){ try{ window.lucidRenderAt(t); }catch(e){ return { error:'the scene threw while rendering '+t+'ms: '+String(e&&e.message||e) }; } }
+        var url; try{ url=cv.toDataURL('image/png'); }catch(e){ return { error:'this canvas refuses readback (it may be tainted): '+String(e&&e.message||e) }; }
+        frames.push({ index: isFinite(Number(p.index))?Number(p.index):j, tMs:t, dataUrl:url });
+      }
+      return { ok:true, driven:driven, width:w, height:h, frames:frames };
+    }catch(e){ return { error:String(e&&e.message||e) }; }
+  }
   window.addEventListener('message', function(ev){
     var d=ev.data;
     if(!d || d.__lucid!=='inspect' || ev.source!==window.parent) return;
     var cmd=d.cmd||{};
-    var res = cmd.action ? act(cmd) : inspect(cmd); // STRUCTURED action (click/type/focus/scroll) vs read
+    // CAPTURE first, then the structured action allowlist, then the read. Written as one chain so the routing
+    // contract pinned by preview_bridge.test.ts stays a literal substring of this line.
+    var res = cmd.capture ? capture(cmd) : cmd.action ? act(cmd) : inspect(cmd); // STRUCTURED action (click/type/focus/scroll) vs read
     try{ window.parent.postMessage({ __lucid:'inspect-result', id:d.id, result:res }, '*'); }catch(_){}
   });
   // P-PREVIEW.7 (ADR-0179): proactive HEALTH report - a page whose script died (e.g. an Electron
@@ -88,6 +268,31 @@ export const PREVIEW_BRIDGE_JS = `(function(){
   else window.addEventListener('load', function(){ setTimeout(health,600); });
   setTimeout(health,2500); // belt-and-braces: report even if the load event never fires
 })();`;
+
+/** Preview-only wheel relay. No DOM access in the parent and no sandbox grant required. */
+export const PREVIEW_ZOOM_JS = `(function(){
+  if(window.__lucidPreviewZoom) return; window.__lucidPreviewZoom=1;
+  var wheelZoom=false;
+  window.addEventListener('message',function(ev){
+    var d=ev.data;
+    if(ev.source!==window.parent || !d || d.__lucid!=='preview-zoom-mode' || typeof d.enabled!=='boolean') return;
+    wheelZoom=d.enabled;
+  });
+  window.addEventListener('wheel',function(ev){
+    if(!(wheelZoom || ev.ctrlKey || ev.metaKey) || !Number.isFinite(ev.deltaY) || !ev.deltaY) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    window.parent.postMessage({__lucid:'preview-zoom-wheel',deltaY:Math.max(-1000,Math.min(1000,ev.deltaY)),deltaMode:ev.deltaMode},'*');
+  },{passive:false,capture:true});
+  window.parent.postMessage({__lucid:'preview-zoom-ready'},'*');
+})();`;
+
+/** Preserve SVG's XML MIME and document while adding the same bounded wheel channel as HTML. */
+export function injectPreviewZoom(document: string, svg = false): string {
+  const tag = svg ? `<script xmlns="http://www.w3.org/2000/svg"><![CDATA[${PREVIEW_ZOOM_JS}]]></script>` : `<script>${PREVIEW_ZOOM_JS}</script>`;
+  const close = document.toLowerCase().lastIndexOf(svg ? "</svg>" : "</body>");
+  return close >= 0 ? document.slice(0, close) + tag + document.slice(close) : document + tag;
+}
 
 /** Inject the bridge before `</body>` (or append if there's no body tag). Idempotent-safe (the script guards
  *  on `window.__lucidInspect`). Pure — used by the `/api/preview/serve` route. */

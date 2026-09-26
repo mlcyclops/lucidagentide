@@ -6,7 +6,9 @@
 // providerAuth() reports each extra config field's status: secret fields masked to last4, non-secret config
 // (project id, resource name, location) echoed back so the Settings inputs pre-fill.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MAJORS, providerAuth, type Provider } from "./auth_status.ts";
 
 const find = (id: string): Provider | undefined => MAJORS.find((m) => m.id === id);
@@ -55,6 +57,11 @@ describe("providerAuth() field reporting", () => {
   const touched: string[] = [];
   const setEnv = (k: string, v: string) => { touched.push(k); process.env[k] = v; };
   afterEach(() => { for (const k of touched.splice(0)) delete process.env[k]; });
+  // Machine-state isolation: providerAuth() reads load().keys FIRST (persisted settings shadow
+  // process.env by design), so a developer whose real lucid-gui.json saves e.g. GOOGLE_CLOUD_PROJECT
+  // would watch these env-driven assertions fail. Point the store at a file that does not exist:
+  // load() then yields {} and the env values under test are the only input.
+  beforeEach(() => setEnv("LUCID_GUI_SETTINGS_FILE", join(tmpdir(), "lucid-gui-does-not-exist.json")));
 
   test("secret key masks to last4; non-secret config echoes its value", () => {
     setEnv("AZURE_OPENAI_API_KEY", "sk-azure-SECRET-9animal7"); // secret primary key

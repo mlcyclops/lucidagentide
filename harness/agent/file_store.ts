@@ -12,8 +12,9 @@
 // Fail-closed both ways: `saveSpecFile` REFUSES an invalid spec (never writes it); the readers re-validate and
 // skip/return-null on a corrupted file. `spec_id` is sanitized to a safe filename to defeat path traversal.
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { ensureDir } from "../fs_dirs.ts"; // tolerates Bun-on-Windows EEXIST when the dir already exists
 import { validateSpec, type AgentSpec } from "./spec.ts";
 import { assertSecretFree } from "./secret_guard.ts";
 import type { TrustLabel } from "../contracts.ts";
@@ -54,14 +55,14 @@ export function saveSpecFile(root: string, spec: AgentSpec): void {
   assertSecretFree(v.spec!); // P-AGENT.8: never persist a spec that embeds a secret
   const id = safeId(spec.spec_id);
   if (!id) throw new Error(`invalid spec_id: ${String(spec.spec_id)}`);
-  mkdirSync(agentsDir(root), { recursive: true });
+  ensureDir(agentsDir(root));
   writeFileSync(specFile(root, id), JSON.stringify(spec, null, 2));
   // P-AGENT.17: revision snapshot, keyed by updated_at (the canvas bumps it on every edit — identical
   // timestamps are re-saves of the same revision and simply overwrite). History is best-effort provenance:
   // a snapshot/prune failure NEVER fails the save that matters.
   try {
     const dir = historyDir(root, id);
-    mkdirSync(dir, { recursive: true });
+    ensureDir(dir);
     writeFileSync(join(dir, `${spec.updated_at}.json`), JSON.stringify(spec, null, 2));
     const snaps = readdirSync(dir).filter((f) => /^\d+\.json$/.test(f)).sort((a, b) => Number.parseInt(b) - Number.parseInt(a));
     for (const stale of snaps.slice(SPEC_HISTORY_KEEP)) rmSync(join(dir, stale));
@@ -172,7 +173,7 @@ export function saveSpecTrust(root: string, id: string, trust: SpecTrustRecord):
   const sid = safeId(id);
   if (!sid) throw new Error(`invalid spec_id: ${String(id)}`);
   if (!TRUST_LABELS[trust.trustLabel]) throw new Error(`invalid trust label: ${String(trust.trustLabel)}`);
-  mkdirSync(agentsDir(root), { recursive: true });
+  ensureDir(agentsDir(root));
   writeFileSync(trustFile(root, sid), JSON.stringify(trust, null, 2));
 }
 

@@ -11,8 +11,11 @@
 //
 //   bun run desktop:web        # http://localhost:5319
 
-import { join, dirname } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname, basename } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { ndjsonStream } from "./chat_stream.ts";
+import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
+import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
 import { renderTurnEvalReport, evalMetricsForTurn, type ObservedTool, type ObservedTurn } from "../harness/brief/eval_report.ts"; // P-CHAT.C (ADR-0190): settled-turn Model-Evaluation report
@@ -23,14 +26,44 @@ import { ingestLatency, readLatencyCalls } from "../harness/memory/latency_inges
 import { renderEvalMetricsRollupMarkdown } from "../harness/brief/eval_metrics_report.ts"; // P-EVAL.3 Part B
 import { rollupLatency, renderLatencyRollupMarkdown } from "../harness/brief/evals.ts"; // P-EVAL.1 latency rollup
 import { mkdtempSync, rmSync } from "node:fs"; // P-EVAL.3 Part B: throwaway rollup DB
-import { tmpdir } from "node:os";
+import { appendFileSync, copyFileSync } from "node:fs"; // CREATOR-0 (ADR-0281): the append-only track ledger
+import { execFileSync } from "node:child_process"; // CREATOR-0 (ADR-0283): the fixed-argv GPU query
+import { tmpdir, totalmem, cpus, freemem } from "node:os";
 import { buildChangeGraph, buildSchemaChanges, renderAnnexes } from "../harness/brief/change_graph.ts"; // P-REPORT.8: report annexes
 import { renderRepoActivityAnnex } from "../harness/brief/repo_activity.ts"; // P-REPORT.9: cross-repo activity annex
 import { addReportRepo, collectRepoActivity, ghAvailable, listReportRepos, type RepoSelection } from "./repo_collect.ts"; // P-REPORT.9 (ADR-0162)
 import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.1: personalized chat background
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
-import { assessSystem, sampleSystem, topProcesses, type ProcGroup, type SystemSnapshot, type SystemVerdict } from "./system_profile.ts"; // P-SYSRES.1: resource guard
+import { assessSystem, sampleSystem, topProcesses, type ProcGroup, type ProfileIo, type SystemSnapshot, type SystemVerdict } from "./system_profile.ts"; // P-SYSRES.1: resource guard
+import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { buildLocalAgentManifest, writeLocalAgentManifest } from "./local_agent_manifest.ts"; // P-LEGIBLE.1 (ADR-0384)
+import { mcpServersForAcp } from "./settings_store.ts"; // P-LEGIBLE.1: the configured MCP servers the manifest declares
+import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
+import {
+  CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
+  pushCreatorSample, sampleCreatorCpu, sampleLocalGpu, sampleOf, telemetryFromAgentJson, validateRemoteTarget,
+  type CreatorResourcesData, type CreatorSample, type TargetTelemetry,
+} from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): normalized CPU/GPU telemetry + job admission
+import { CREATOR_PROVIDER_IDS, creatorRegistryStatus, type CreatorCapabilityId, type CreatorEndpointDef, type CreatorProviderId, type CreatorProviderStatus } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
+import { addTrack, foldLibrary, libraryLedger, libraryStats, removeTrack, trackAudio, updateTrack, type CreatorTrack, type LibraryIo, type LibraryStats, type TrackOrigin } from "./creator_library.ts"; // CREATOR-0 (ADR-0281)
+import {
+  ComfyClient, applyWorkflowTemplate, artifactDir, artifactLedger, buildGif, buildSpriteSheet, decodePngDataUrl,
+  decodeWireFrames, foldArtifacts, storeArtifact, type ArtifactIo, type ArtifactKind, type CompositionInput,
+  type CreatorArtifact,
+} from "./creator_image.ts"; // CREATOR-IMG (ADR-0291): generation, mixing, sheets, GIFs, memes
+import { decodeTimelineDoc, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
+import { decodeMixGraph, mixerTracks, renderAndSaveMix } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer
+import { openComfyProgress, runRenderPipeline, type PipelineDeps, type ScanVerdict } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the video/3D pipeline + its /ws telemetry
+import { blenderJobNeed, runBlenderRender, type SpawnLike } from "./creator_blender.ts"; // CREATOR-3: Blender background renders
+import { manifestCapabilities, parseModelManifest, reconcileManifest } from "../harness/creator/model_manifest.ts"; // CREATOR-3: declared models, reconciled against the probe
+import type { MediaKind } from "../harness/creator/comfy_stream.ts"; // CREATOR-3: the closed media kinds
+import { scanAndDecide } from "../harness/security/gate.ts"; // CREATOR-3: the fail-closed gate every artifact's metadata passes
+import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
+import {
+  createJob, finishJob, jobStats, listJobs, recordJobArtifact, requestJobCancel, startJob,
+  type CreatorJobKind, type JobAdmissionSnapshot, type JobIo,
+} from "./creator_jobs.ts"; // CREATOR-1 (ADR-0292): the durable job ledger
 import { saveSpecFile, loadSpecFile, listSpecFiles, deleteSpecFile, saveSpecTrust, loadSpecTrust, listSpecHistory, loadSpecRevision } from "../harness/agent/file_store.ts"; // P-AGENT.2b/.9/.17: spec persistence + trust sidecar + revisions
 import { validateSpec } from "../harness/agent/spec.ts"; // P-AGENT.1: fail-closed Agent Spec validation
 import { buildAgent } from "../harness/agent/compiler.ts"; // P-AGENT.3: spec -> AgentBundle
@@ -45,45 +78,194 @@ import { listTraces, loadTrace } from "../harness/agent/trace.ts"; // P-AGENT.13
 import { probeEnabledServers } from "./mcp_probe.ts"; // P-AGENT.12: MCP tool discovery for the Builder catalog
 import { archiveBrief, deleteBrief, listBriefs, readBrief, restoreBrief, saveBrief } from "./report_store.ts";
 import { OpenAiCompatibleTtsBackend } from "../harness/brief/tts_backend.ts";
-import { ElevenLabsTtsBackend, ElevenLabsSttBackend, listElevenVoices } from "../harness/voice/elevenlabs.ts";
-import { OpenAiCompatibleSttBackend, type TranscriptionBackend } from "../harness/voice/transcription.ts";
+import { ElevenLabsTtsBackend, ElevenLabsSttBackend, elevenLabsSpeak, listElevenVoices } from "../harness/voice/elevenlabs.ts";
+import { TTS_PROVIDERS, mapDotsVoices, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247) + P-VOICE.6 dots
+import { digestSpokenReply } from "../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
+import { parseVoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7: portable endpoint contract
+import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint } from "./settings_store.ts";
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
+import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
+import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
+import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
+import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
+import { addGrant, applyGrantAce, consumePending, loadGrants, managedPolicyFolderPlan, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
+import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
-import { clearAllOauthCredentials, clearDisabledCredential, disconnectCredential } from "./auth_vault.ts";
-import { approveBlock, dismissBlock, liveBlocks } from "./security_log.ts";
+import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
+import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
+import { GUIDE_FILES } from "./guides_manifest.ts";
+import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
-import { backend } from "./acp_backend.ts";
+import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from "./acp_backend.ts";
+import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
+import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
+import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
+import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
+import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
+import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
-import { providerAuth } from "./auth_status.ts";
-import { cloneRepo, setWorkspace, workspaceInfo } from "./workspace.ts";
+import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
+import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
+import { cloneRepo, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
-import { readPreviewFile, toFsPath } from "./preview_file.ts"; // P-PREVIEW.4: read a local file's content for the preview
+import { probePreviewFile, readPreviewFile, toFsPath } from "./preview_file.ts";
+import { getState as trainerState, submitAnswer as trainerAnswer, getGames as trainerGames, setRole as trainerSetRole, useDemoPack as trainerUseDemoPack } from "./trainer_session.ts"; // P-TRAINER.7/.8 (ADR-0255) // P-PREVIEW.4: read a local file's content for the preview
 import { PREVIEW_FRAME_CSP } from "./preview_resolve.ts"; // P-PREVIEW.4b: per-frame CSP for the served preview doc
 import { parseImageDataUrl } from "./renderer/image_data_url.ts"; // P-IMG.1 (ADR-0208): strict image gate
 import { previewImageHtml } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): image → preview wrapper
-import { inlinePreviewAssets } from "./preview_inline.ts"; // P-PREVIEW.4c: fold a multi-file app's relative assets inline
-import { injectPreviewBridge } from "./preview_bridge.ts"; // P-PREVIEW.6b (ADR-0153): read-only DOM-inspect bridge
+// P-PREVIEW.4c: fold a multi-file app's relative assets inline.
+// P-PREVIEW.12: findBlockedRefs / blockedRefsMessage / injectBlockedRefsBanner make the frame CSP's
+// refusal of REMOTE refs legible to both the user (an in-frame banner) and the agent (the tool result),
+// instead of a silently blank page. previewTextDocument renders the non-markup kinds (markdown, json,
+// csv, txt, log, ...) as a readable document so a model can finally show a report it just wrote.
+import { blockedRefsMessage, findBlockedRefs, injectBlockedRefsBanner, inlinePreviewAssets, previewTextDocument } from "./preview_inline.ts";
+import { injectPreviewBridge, injectPreviewShim, injectPreviewZoom } from "./preview_bridge.ts"; // Preview sandbox bridges
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
+import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
+import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
+import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
-import { providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
+import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, setAsksage, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+// CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
+// route reports (both flavors resolve it through the same seam).
+import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreatorEndpoint, removeCreatorTarget, upsertCreatorEndpoint, upsertCreatorTarget, type CreatorRemoteTargetDef } from "./settings_store.ts";
 
 // ADR-0088/0089: the /api/settings payload — profile + attribution + the cosmetic role/tour state.
 // `role` is null until the user has EXPLICITLY chosen one (so the renderer can fire the first-run role
 // picker); once chosen it's the concrete role. tourSeen guards the first-run walkthrough replay.
+// P-THEME.1: `theme` rides here too - it is the same class of state (cosmetic, policy-free, per-user).
+// "" means never chosen, which the renderer folds to the OS light/dark preference.
 function settingsData() {
   const s = loadSettings();
-  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null };
+  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null, theme: themeId() };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
+
+// P-STT.2b: the real WhisperRuntimeDeps for the managed offline-Whisper lifecycle - os specs, the model dir,
+// the streamed downloader + integrity gate, spawn/health, and STT wiring. The single running server handle
+// lives in whisper_runtime.ts. Bundling the whisper-server binary in the installer is the remaining packaging
+// step; until then it resolves LUCID_WHISPER_BIN / a binary on PATH.
+// P-REMOTE.12: ONE transcription path for the local mic (/api/transcribe) AND remote-guest voice clips.
+// Provider from settings: elevenlabs (cloud Scribe) or offline whisper. whisper.cpp serves /inference
+// (verified live); faster-whisper / any OpenAI-compatible server serves /v1/audio/transcriptions - try
+// the whisper.cpp shape first, then the OpenAI shape ONLY on a real transport failure (never on silence,
+// which would mislabel a healthy server - see sttTransportFailed).
+async function transcribeClip(audio: Uint8Array, mimeType?: string, language?: string): Promise<{ text: string; note: string }> {
+  const v = voiceSettings();
+  const topts = { mimeType, language };
+  if (v.sttProvider === "elevenlabs") {
+    const key = process.env.ELEVENLABS_API_KEY;
+    if (!key) return { text: "", note: "Add your ElevenLabs API key (Settings \u2192 Voice), or switch STT to offline Whisper." };
+    const er = await new ElevenLabsSttBackend({ apiKey: key }).transcribe(audio, topts);
+    return { text: er.text, note: er.note ?? "" };
+  }
+  let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
+  if (sttTransportFailed(r)) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
+  return { text: r.text, note: r.note ?? "" };
+}
+
+function whisperModelDir(): string { return join(homedir(), ".omp", "whisper"); }
+
+// P-VOICE.7: the same-machine handoff mailbox. The DGX Loader's "Send to LUCID" writes
+// <home>/.omp/voice_endpoints/<id>.json (ADR-0017 in that repo); LUCID auto-scans on every endpoints
+// read, so the transfer is: click there, pick it here. Per-file fail-soft: one malformed file is
+// reported by name and skipped, never fatal, and NOTHING is imported without passing the fail-closed
+// contract gate (parseVoiceEndpointConfig - version/kind/slug/no-secrets).
+const voiceEndpointHandoffDir = (): string => join(homedir(), ".omp", "voice_endpoints");
+function scanVoiceEndpointHandoff(): { imported: number; rejects: { file: string; reason: string }[] } {
+  const rejects: { file: string; reason: string }[] = [];
+  let imported = 0;
+  let files: string[];
+  try { files = readdirSync(voiceEndpointHandoffDir()).filter((f) => f.endsWith(".json")); } catch { return { imported, rejects }; } // no mailbox yet
+  const have = voiceSettings().voiceEndpoints;
+  for (const f of files) {
+    let parsedJson: unknown;
+    try { parsedJson = JSON.parse(readFileSync(join(voiceEndpointHandoffDir(), f), "utf8")); }
+    catch { rejects.push({ file: f, reason: "unreadable or not JSON" }); continue; }
+    const r = parseVoiceEndpointConfig(parsedJson);
+    if (!r.ok) { rejects.push({ file: f, reason: r.reason }); continue; }
+    const existing = have.find((e) => e.id === r.config.id);
+    if (existing && (existing.exportedAt ?? 0) >= (r.config.exportedAt ?? 0)) continue; // already current
+    importVoiceEndpoint(r.config);
+    imported += 1;
+  }
+  return { imported, rejects };
+}
+/** P-STT.7: make a whisper-server resolvable, staging the pinned build when nothing resolves yet.
+ *  Returns null when a binary is available (already or after staging), else the user-facing reason. */
+async function ensureWhisperBinary(): Promise<string | null> {
+  if (whisperDeps().resolveBin()) return null;
+  const r = await stageWhisperBinary(join(whisperModelDir(), "bin"));
+  if (!r.ok) return r.reason;
+  console.log(`[whisper] staged the pinned whisper-server at ${r.path}`);
+  return null;
+}
+function whisperDeps(): WhisperRuntimeDeps {
+  const dir = whisperModelDir();
+  try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
+  return {
+    specs: () => ({ arch: process.arch, platform: process.platform, totalRamGB: totalmem() / 1e9, cpuCores: cpus().length, accel: process.platform === "darwin" ? "metal" : "cpu" }),
+    modelDir: dir,
+    listModels: () => { try { return readdirSync(dir); } catch { return []; } },
+    resolveBin: () => resolveWhisperBin({ env: process.env, exists: existsSync, which: (n) => Bun.which(n), resourcesPath: process.env.LUCID_RESOURCES || engineDesktopDir(import.meta.dir, process.execPath, existsSync), stagedDir: join(dir, "bin"), platform: process.platform }),
+    download: (model, dest, onProgress) => downloadWhisperModel(model, dest, {
+      fetch: globalThis.fetch,
+      writeStream: async (path, body, onBytes) => { const w = Bun.file(path).writer(); const rd = body.getReader(); let tot = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; if (value) { w.write(value); tot += value.length; onBytes(value.length); } } await w.end(); return tot; },
+      readHead: async (path, n) => new Uint8Array(await Bun.file(path).slice(0, n).arrayBuffer()),
+      rename: async (a, b) => renameSync(a, b),
+      remove: async (path) => { try { rmSync(path); } catch { /* best-effort */ } },
+    }, onProgress),
+    spawn: spawnWhisperServer,
+    health: async (port) => {
+      try {
+        const res = await fetch(`${whisperServeUrl(port)}/health`, { signal: AbortSignal.timeout(2000) });
+        return res.ok && (await res.json() as { status?: unknown }).status === "ok";
+      } catch { return false; }
+    },
+    setSttUrl: (url) => { setVoiceSettings({ sttProvider: "whisper", sttUrl: url }); },
+    sleep: (ms) => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, ms); return promise; },
+    // P-STT.6 (ADR-0267): deletion + on-disk size for the installed-models list in the Voice card.
+    removeModel: (f) => { try { rmSync(join(dir, f)); return true; } catch { return false; } },
+    modelSizeMB: (f) => { try { return statSync(join(dir, f)).size / (1024 * 1024); } catch { return null; } },
+    // P-STT.5: kill whatever LISTENs on the managed port (an orphan whisper-server from a previous run).
+    // whisper.cpp binds SO_REUSEPORT, so a duplicate would otherwise co-bind and silently split requests
+    // across two model loads. Best-effort: the caller re-probes health and adopts any survivor.
+    reapPort: async (port) => {
+      try {
+        if (process.platform === "win32") {
+          const out = Bun.spawnSync(["netstat", "-ano", "-p", "TCP"]).stdout.toString();
+          for (const line of out.split("\n")) {
+            const m = /TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
+            if (m && Number(m[1]) === port) Bun.spawnSync(["taskkill", "/PID", m[2]!, "/F"]);
+          }
+        } else {
+          const out = Bun.spawnSync(["lsof", "-ti", `tcp:${port}`, "-sTCP:LISTEN"]).stdout.toString();
+          for (const line of out.split("\n")) {
+            const pid = Number(line.trim());
+            if (pid > 0 && pid !== process.pid) { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
+          }
+        }
+      } catch { /* best-effort; the caller re-probes health */ }
+    },
+  };
+}
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
+import { planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
+import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
+import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
@@ -101,14 +283,43 @@ import { RelayTokenCache } from "./collab/relay_token_cache.ts"; // P-REMOTE.2c:
 import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watch a shared session read-only
 import { parseShareLink } from "./collab/link.ts";
 import { importRoomKey } from "./collab/crypto.ts";
-import type { CollabOptions } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks
+import type { CollabOptions, SttSource } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks; P-REMOTE.14: voice provenance
+import { laneEventToChatEvent } from "./collab/lane_event_adapter.ts"; // P-PWA-FOCUS.1: lane engine event -> guest-facing ChatEvent (pure)
 import { MAX_FAVS, offeredModels } from "./renderer/model_favorites.ts"; // P-REMOTE.11b (ADR-0238): favorites-filtered guest picker (pure, DOM-free)
 import { accessCounts, buildShareAwareness, type ShareCounts } from "./collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness preamble
 import { recordCollabShareStarted, recordCollabShareStopped, recordCollabGuestJoined, recordCollabGuestLeft, recordCollabAudit } from "./collab/collab_audit.ts"; // P-COLLAB.18 (ADR-0204)
 import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
-import { sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode
+import { asksageOnly, sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode; ADR-0217: the AskSage lockdown flag
 import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // ADR-0221: BYO-embeddings config
+import { judgmentProvider, setJudgmentProvider } from "./settings_store.ts"; // P-JEV.1 (ADR-0374): the judgment backend choice
+import { jevActive, resolveJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1: the lockdown clamp; P-JEV.2: the Jev-active rule
+import { activeAccountId, addKeyAccount, providerAccounts, removeAccount, renameAccount, setActiveAccount } from "./settings_store.ts"; // P-ACCT.1 (ADR-0375)
+import { activateOauthIdentity, disconnectOauthIdentity, listOauthRows, parkAllOauth } from "./auth_vault.ts"; // P-ACCT.1: omp-vault appliers
+import { deriveAccounts, LEGACY_KEY_ACCOUNT_ID, type AccountView } from "./account_policy.ts"; // P-ACCT.1: pure derivation
+import { GATEWAY, MAJORS, OTHERS, type Provider as ProviderDesc } from "./auth_status.ts";
+
+// P-ACCT.1: one provider descriptor by id, across every section (gateway + majors + others).
+function providerById(id: string): ProviderDesc | undefined {
+  return [...GATEWAY, ...MAJORS, ...OTHERS].find((x) => x.id === id);
+}
+// P-ACCT.1: the full accounts snapshot the renderer consumes: providerId -> derived account views.
+// Only providers that actually HAVE at least one account appear, so the payload stays small and the
+// UI renders account chrome only where it means something.
+function accountsSnapshot(): Record<string, AccountView[]> {
+  const out: Record<string, AccountView[]> = {};
+  const keys = loadSettings().keys ?? {};
+  for (const prov of [...GATEWAY, ...MAJORS, ...OTHERS]) {
+    const views = deriveAccounts({
+      oauthRows: prov.oauthId ? listOauthRows(prov.oauthId) : [],
+      stored: providerAccounts(prov.id),
+      legacyKey: prov.env ? keys[prov.env] || undefined : undefined,
+      activeId: activeAccountId(prov.id),
+    });
+    if (views.length) out[prov.id] = views;
+  }
+  return out;
+}
 
 // ADR-0221: the desktop's Embedder — an ApiEmbedder built from the stored config + the vault secret injected as
 // LUCID_EMBEDDINGS_KEY by main, or null when semantic search is off/incomplete (retrieval stays lexical).
@@ -137,10 +348,10 @@ async function syncVectorIndex(kgId: string, kgName: string, embedder: Embedder)
 import { hostname as osHostname } from "node:os";
 import { analyzeWork, codifyCandidate, gatherWorkDigest, type SkillCandidate, type StudioWindow } from "./skill_studio.ts"
 import { buildSkillArtifact, PublishDispatcher, publishersFor } from "./skill_publish.ts";
-import { kbScanner, kbStore, listKgs, activeKgId, createKg, renameKg, setActiveKg, knowledgeVectorStore, vectorDatasetFor } from "./kb_store.ts"
+import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, setActiveKg, knowledgeVectorStore, vectorDatasetFor } from "./kb_store.ts"
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
-import { exportKgPack, importKgPack, installPackFromUrl } from "./kb_pack.ts"
+import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
@@ -154,21 +365,36 @@ import { createUserCommand, deleteUserCommand, listUserCommands } from "./user_c
 import { archiveGoalReport, deleteGoalReport, listResumableLoops, listGoalReports, readGoalReport, restoreGoalReport } from "./goal_memory.ts";
 import { createAutomation, deleteAutomation, listAutomations, normalizeCadence, updateAutomation } from "./automations.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { profileWorkspace, scaffoldAgentsFramework } from "./workspace_setup.ts"; // P-WSSETUP: .agents framework offer
+
+// P-WSSETUP: remember that this workspace was already offered setup (agents-init or an explicit
+// dismissal), keyed by the exact folder path. Bounded to the 50 most recently asked folders so
+// the map can never grow without limit.
+function markWorkspaceSetupAsked(path: string): void {
+  const s = loadSettings();
+  const m = { ...(s.workspaceSetupAsked ?? {}) };
+  m[path] = Date.now();
+  const keep = Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 50);
+  s.workspaceSetupAsked = Object.fromEntries(keep);
+  saveSettings(s);
+}
 import { recordSkillActivated } from "./skills_log.ts";
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { addReportToKg, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
-import { explainCommand } from "./explain_command.ts";
+import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
+import { EXPLAIN_SYSTEM, explainCommand, explainUserPrompt } from "./explain_command.ts";
 import type { PersonalScope } from "../harness/personal/store.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
+import type { CompleteFn } from "../harness/personal/distiller.ts";
 import { homedir } from "node:os";
-import { existsSync, readdirSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { listDir } from "./fs_browse.ts";
+import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
-import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
+import { apiAuthorized, isAllowedRequest, reqShape } from "./origin_guard.ts";
 
 /** Sanitize an untrusted /api/goal `dial` payload into a LoopDial — only known command types + valid
  *  risk tiers survive; everything else is dropped (the backend clamps it by the managed ceiling anyway). */
@@ -198,7 +424,7 @@ if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compre
 // backend; off until the user turns it on. Every start is governance-gated (fail-closed): a managed
 // allowServe:false or a bind outside the absolute allowlist is refused BEFORE any listener opens.
 let collabRelay: RelayHandle | null = null;
-const DEFAULT_RELAY_PORT = 8790;
+const DEFAULT_RELAY_PORT = Number(process.env.LUCID_RELAY_PORT) > 0 ? Number(process.env.LUCID_RELAY_PORT) : 8790;
 
 function relayServeStatus() {
   const mc = managedConfig().config;
@@ -233,6 +459,46 @@ function serveRelay(host: string, port: number): { ok: boolean; error?: string }
 function stopRelay(): void { try { collabRelay?.stop(); } catch { /* already gone */ } collabRelay = null; }
 // Best-effort: never leave the inbound listener open past the process (the OS reclaims the port anyway).
 process.on("exit", () => { try { collabRelay?.stop(); } catch { /* already gone */ } });
+// P-STT.5: never orphan the managed whisper-server. Electron stops this child with SIGTERM (main.ts
+// dev?.kill()), and a DEFAULT SIGTERM terminates without running "exit" handlers - which is exactly how
+// two whisper-server pids ended up co-bound to port 9111 (SO_REUSEPORT). Handle the signals explicitly:
+// kill the child (stopWhisper's proc.kill() is synchronous), then re-exit, which also fires "exit" above.
+process.on("exit", () => { void stopWhisper(); });
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.on(sig, () => { void stopWhisper(); process.exit(0); });
+}
+// P-PORTGUARD.2: never OUTLIVE the Electron main that spawned this engine. main.ts kills this child
+// from app.on("quit"), but that handler never runs when the main process dies any other way (crash,
+// Task Manager, app.exit(), an updater swapping the binary), and Windows does not reap a spawned child
+// with its parent. The orphan kept port 5319 - and its whisper/headroom children - forever, so the NEXT
+// launch could not bind and died with "Failed to start server. Is port 5319 in use?" (2026-09-23).
+// Exiting through process.exit(0) runs the "exit" handlers above, so the managed children go down too.
+// Standalone runs (bun run desktop/dev.ts) set no LUCID_MAIN_PID and are never watched.
+const parentWatch = parentWatchConfig(process.env, process.pid);
+if (parentWatch) {
+  const watchdog = setInterval(() => {
+    if (parentAlive(parentWatch.pid, (pid) => process.kill(pid, 0))) return;
+    clearInterval(watchdog);
+    console.error(`[engine] parent process ${parentWatch.pid} is gone - exiting so port ${PORT} and the managed children are released`);
+    process.exit(0);
+  }, parentWatch.intervalMs);
+  watchdog.unref?.(); // diagnostic, never a reason to keep the loop alive
+}
+// P-STT.6 + P-STT.7: autostart the managed offline Whisper so dictation works out of the box - in the
+// INSTALLED app (bundled binary) AND in a dev run that has a resolvable binary (the runtime-staged
+// pinned build, LUCID_WHISPER_BIN, or PATH). The gate (shouldAutostartWhisper, unit-tested) skips
+// non-whisper STT, a user-pointed REMOTE sttUrl, incapable hardware, an already-running/adopted server,
+// and any machine with NO binary (a fresh dev checkout stays quiet until Install & start stages one).
+// First launch downloads the default tiny model (~78MB); fire-and-forget so the HTTP server never waits.
+void (async () => {
+  try {
+    const d = whisperDeps();
+    const v = voiceSettings();
+    if (!shouldAutostartWhisper(whisperRuntimeStatus(d), v)) return;
+    const r = await startWhisper(d, {});
+    console.log(r.ok ? `[whisper] autostarted${r.tier ? ` (${r.tier})` : " (adopted a running server)"}` : `[whisper] autostart did not run: ${r.reason}`);
+  } catch (e) { console.warn("[whisper] autostart failed:", e); }
+})();
 
 /** The relay a new share will use: THIS device's embedded relay when running (no third party), else the
  *  configured external relay (self-hosted default / public opt-in), else null (start fails closed). */
@@ -269,7 +535,7 @@ function leaveCollabGuest(): void { try { collabGuest?.guest.leave("you left the
 // P-COLLAB.13 (ADR-0198): an EDIT guest's prompt/abort lands here; the HOST renderer polls this inbox and
 // runs it through its OWN composer (so omp's scan gate + exec/egress approvals fire, and the turn taps back to
 // collab). Consume-on-read. The prompt text is a remote guest's input - clamp its length defensively.
-let pendingGuestPrompt: { text: string; from: string; images?: string[] } | null = null;
+let pendingGuestPrompt: { text: string; from: string; images?: string[]; sttSource?: SttSource } | null = null;
 let guestAbortRequested = false;
 // P-COLLAB.14 (ADR-0228): a connected EDIT guest's model / already-used-folder pick, consumed-on-read by the
 // host renderer's guest-inbox poll and applied through its OWN picker path (applyConfig / applyWorkspace).
@@ -278,6 +544,27 @@ let pendingGuestWorkspace: { path: string; from: string } | null = null;
 // OPAQUE id -> absolute workspace path, host-LOCAL only: a guest picks by id and never sends (or learns) a
 // filesystem path. Rebuilt on every buildCollabOptions() (share start + refreshOptions).
 let collabWsById: Record<string, string> = {};
+
+// P-REMOTE.14: the SHORT provenance marker appended to a guest turn's author label. `from` is the ONE string
+// that survives the whole staging path (this inbox -> the host renderer -> POST /api/chat -> tapUserTurn ->
+// UserTurnFrame.from), so putting the marker there shows the provenance in the shared transcript AND the
+// audited turn with NO protocol change and no UserTurnFrame consumer touched. `sttSource` also rides the
+// inbox record as an adjacent field, for any consumer that wants the raw value instead of the label.
+// Only the NOTABLE cases are marked. "host" is the default and safe path (the desktop's own offline
+// whisper), so labelling it would put "(voice: desktop)" on every hold-to-talk turn and make the author
+// column noise; absence of a marker already means "transcribed here".
+const STT_MARKER: Record<SttSource, string> = {
+  "device-local": " (voice: on-device)",
+  "device-cloud": " (voice: vendor cloud)",
+  host: "",
+};
+/** Build a staged guest turn's author label, keeping the whole string inside the 48-char clamp /api/chat
+ *  applies to `from` - so the marker is never the part that gets truncated away. */
+function guestTurnLabel(name: string, src?: SttSource): string {
+  const marker = src ? STT_MARKER[src] : "";
+  if (!marker) return name;
+  return `${name.slice(0, Math.max(1, 48 - marker.length))}${marker}`;
+}
 
 /** P-COLLAB.14: a stable, path-revealing-nothing id for a workspace (short SHA-256 of the absolute path). */
 function collabWorkspaceId(path: string): string { return createHash("sha256").update(path).digest("base64url").slice(0, 16); }
@@ -335,20 +622,114 @@ const collabManager = new CollabManager({
     ...(effectiveRelay()?.gated ? { authToken: () => relayTokenCache.get() } : {}),
   }),
   now: () => Date.now(),
-  onGuestPrompt: (text, guest, images) => { pendingGuestPrompt = { text: String(text).slice(0, 20_000), from: guest.name, ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}) }; },
+  onGuestPrompt: (text, guest, images, audio, sttSource) => {
+    // P-REMOTE.14: `src` is the provenance recorded WITH the turn: the guest's validated claim, or "host"
+    // once the desktop's own offline transcription actually produced text (whatever the phone claimed).
+    const stage = (finalText: string, src?: SttSource): void => {
+      if (!finalText.trim() && !(Array.isArray(images) && images.length)) return;
+      pendingGuestPrompt = { text: finalText.slice(0, 20_000), from: guestTurnLabel(guest.name, src), ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}), ...(src ? { sttSource: src } : {}) };
+    };
+    if (!audio) { stage(String(text), sttSource); return; }
+    // P-REMOTE.12: a push-to-talk clip (already host-validated in CollabHost). Transcribe on the SAME
+    // path as the local mic, fold the transcript into the guest text, and stage it like any typed
+    // prompt - the fail-closed scan gate sees it identically. Fire-and-forget: a slow STT must never
+    // block the relay pump; a silent/failed clip stages nothing (the guest keeps their local echo).
+    void (async () => {
+      try {
+        const bytes = new Uint8Array(Buffer.from(audio.b64, "base64"));
+        const r = await transcribeClip(bytes, audio.mime);
+        stage([String(text).trim(), r.text.trim()].filter(Boolean).join(" "), r.text.trim() ? "host" : sttSource);
+      } catch { stage(String(text), sttSource); }
+    })();
+  },
   onGuestAbort: () => { guestAbortRequested = true; },
+  // P-REMOTE.14: the CUI + lockdown stance a phone needs to decide whether IT may transcribe (and the host's
+  // fail-closed backstop against cloud-transcribed text). Read FRESH on every call, never cached, so flipping
+  // a session's mode or the AskSage lock lands on the very next state push. `lockdown` mirrors
+  // acp_backend's asksageLocked() (the user's lock OR the org-managed one); sessionMode() already defaults
+  // an unknown session to "cui" fail-closed.
+  posture: () => ({ cui: sessionMode(backend.currentSessionId() ?? "") === "cui", lockdown: asksageOnly() || managedAsksageOnly() }),
   // P-COLLAB.14 (ADR-0228): offer EDIT guests the model + already-used-folder allowlists, and honor their
   // picks. The host has already re-validated the value/id against the allowlist (fail-closed); here we just
   // stage it for the host renderer to apply through its OWN picker path (its UI + omp reconcile identically).
   collabOptions: buildCollabOptions,
   onGuestSetModel: (value, guest) => { pendingGuestModel = { value: String(value).slice(0, 200), from: guest.name }; },
   onGuestSetWorkspace: (id, guest) => { const path = collabWsById[String(id)]; if (path) pendingGuestWorkspace = { path, from: guest.name }; },
+  // P-PWA-FLEET.1: EDIT-guest fleet controls + mid-turn interjection. Edit rights + frame shapes were
+  // re-validated in CollabHost (mirrors set-model); the lane manager re-validates the laneId itself
+  // (an unknown lane is refused there, fail-closed). Guests follow progress via the fleet-status
+  // broadcast below, so the prompt sink only watches for the busy refusal.
+  onGuestFleetPrompt: (laneId, text) => {
+    const clipped = String(text).slice(0, 20_000);
+    // Queue-if-busy: run the turn NOW when the lane is idle; a mid-turn lane stages it on the existing
+    // P-FLEET.L3 queue instead (drained FIFO when the lane goes idle), so the guest's prompt never drops.
+    let busy = false;
+    void fleet
+      .prompt(laneId, clipped, (e) => { if (e.type === "error" && e.message.includes("busy")) busy = true; })
+      .then(() => { if (busy) fleet.enqueue(laneId, clipped); })
+      .catch(() => { /* non-fatal: the lane records its own error state */ });
+  },
+  onGuestFleetStop: (laneId) => { fleet.stop(laneId); },
+  onGuestFleetAnswer: (laneId, allow, scope) => { fleet.answer(laneId, allow, scope); },
+  // Target is "master" or a laneId; the store trims/caps the note (8 per target, 4000 chars). Delivery
+  // to the omp child lands OUTSIDE untrusted-content delimiters, marked operator-origin (AGENTS.md #5).
+  onGuestInterject: (target, text) => { addInterject(String(target).slice(0, 64), String(text)); },
+  // P-PWA-FOCUS.1: catch-up for a guest that taps a lane - the host answers its `watch` with the lane's
+  // conversation so far, so the phone opens a populated transcript instead of an empty pane awaiting the
+  // next token. The lane manager already returns a COPY; the explicit per-turn map is the deliberate part.
+  // LaneTurnRecord and CollabTranscriptTurn are structurally compatible TODAY, so passing the array
+  // straight through would typecheck - and would silently ship any future ENGINE-only field (cwd, model,
+  // internal ids) to a remote guest the moment someone widens LaneTurnRecord. Naming role+text here is
+  // what stops that: a new engine field cannot ride along, it has to be added on purpose.
+  laneTranscript: (laneId) => fleet.laneTranscript(laneId).map((t) => ({ role: t.role, text: t.text })),
   // P-COLLAB.18 (ADR-0204): host-authoritative audit — a guest joined/left the RELAY share. Metadata only.
   onParticipant: (kind, guest) => {
     const meta = { transport: "relay" as const, access: guest.access, roomId: collabManager.status().roomId, guest: guest.name };
     if (kind === "join") recordCollabGuestJoined(meta); else recordCollabGuestLeft(meta);
   },
 });
+
+// P-PWA-FLEET.1: the fleet-status + process-list broadcasters. While a share is ACTIVE, poll the lane
+// manager every 5s, map lane views to the guest-safe shape (cwd -> BASENAME: the frames.ts "no file
+// paths" invariant), and tap a ChatEvent into the share ONLY when the payload changed (hash diff - an
+// unchanged fleet sends nothing). The participant count rides in the stamp so a newly joined guest gets
+// a fresh snapshot on the next tick without waiting for a real lane change; an all-lanes-gone tick sends
+// one final empty snapshot so the phone clears its FLEET section. The process list follows the same
+// discipline, reusing the /api/processes builder DIRECTLY (never a loopback fetch).
+let lastFleetStamp = "";
+let lastFleetSent = "[]";
+let lastProcStamp = "";
+let lastProcSent = "[]";
+setInterval(() => {
+  if (!collabManager.active) { lastFleetStamp = ""; lastFleetSent = "[]"; lastProcStamp = ""; lastProcSent = "[]"; return; }
+  void (async () => {
+    const count = collabManager.status().participantCount;
+    try {
+      const lanes = (await fleet.status()).lanes.map((l) => ({
+        id: l.id, name: l.name, status: l.status as string, cwd: basename(l.cwd), turns: l.turns,
+        lastActivityAt: l.lastActivityAt,
+        ...(l.pendingApproval ? { pendingApproval: { summary: l.pendingApproval.summary, kind: l.pendingApproval.kind } } : {}),
+      }));
+      const body = JSON.stringify(lanes);
+      const stamp = `${body}#${count}`;
+      if (stamp !== lastFleetStamp && (lanes.length > 0 || lastFleetSent !== "[]")) {
+        collabManager.tapEvent({ type: "fleet-status", lanes });
+        lastFleetSent = body;
+      }
+      lastFleetStamp = stamp;
+    } catch { /* non-fatal: a failed poll never breaks the share */ }
+    try {
+      const processes = await buildProcessViews();
+      const body = JSON.stringify(processes);
+      const stamp = `${body}#${count}`;
+      if (stamp !== lastProcStamp && (processes.length > 0 || lastProcSent !== "[]")) {
+        collabManager.tapEvent({ type: "process-list", processes });
+        lastProcSent = body;
+      }
+      lastProcStamp = stamp;
+    } catch { /* non-fatal */ }
+  })();
+}, 5000);
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
 let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
@@ -383,26 +764,525 @@ function memorySnapshotMemo(path: string | undefined): ReturnType<typeof memoryS
 // 5s memo for /api/system — the process listing spawns one fixed-argv command (ADR-0182 P-SYSRES.1).
 let sysResCache: { at: number; data: { snap: SystemSnapshot; verdict: SystemVerdict; procs: ProcGroup[] } } | null = null;
 
-function ompBin(): string {
-  // Honor the omp the Electron main process resolved (bundled shim / app-managed install) FIRST — exactly
-  // like acp_backend.ts. Without this, the OAuth broker + logout here resolved a DIFFERENT omp (a stale
-  // ~/.bun global, or none), so "Connect via OAuth" produced no sign-in URL even though the model list —
-  // which runs through acp_backend's LUCID_OMP_BIN-aware resolver — worked fine. They must use the SAME omp.
-  const fromMain = process.env.LUCID_OMP_BIN;
-  if (fromMain && existsSync(fromMain)) return fromMain;
-  for (const c of [join(homedir(), ".bun", "bin", "omp.exe"), join(homedir(), ".bun", "bin", "omp")]) if (existsSync(c)) return c;
-  return "omp";
+// ---- CREATOR-0: the Creator control-plane helpers (ADR-0281/0282/0283) ----
+// Every route below is Creator-build gated; these helpers are plumbing over the pure cores
+// (creator_monitor / creator_registry / creator_library) so the routes stay thin.
+
+const PROFILE_IO: ProfileIo = {
+  // node's CpuInfo.times is a fixed-key struct; ProfileIo takes an index signature so tests can inject
+  // fixtures. Structurally identical, so the cast only bridges what inference cannot unify (same as
+  // system_profile's own REAL_IO).
+  cpus: () => cpus() as unknown as { model: string; speed: number; times: Record<string, number> }[],
+  totalmem,
+  freemem,
+  sleep: (ms) => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, ms);
+    return promise;
+  },
+};
+
+/** The one GPU command, run with a FIXED argv and a hard timeout. Never a shell. */
+const gpuExec = (argv: readonly string[]): string =>
+  execFileSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 4000, windowsHide: true, maxBuffer: 1024 * 1024 });
+
+const libraryIo: LibraryIo = {
+  ensureDir: (dir) => { try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ } },
+  readText: (path) => { try { return readFileSync(path, "utf8"); } catch { return ""; } },
+  appendLine: (path, line) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, line + "\n", { mode: 0o600 }); },
+  copyIn: (src, dest) => { copyFileSync(src, dest); return statSync(dest).size; },
+  readBase64: (path) => readFileSync(path).toString("base64"),
+  removeFile: (path) => { try { rmSync(path, { force: true }); } catch { /* the ledger is the truth */ } },
+  exists: (path) => existsSync(path),
+  now: () => Date.now(),
+  id: () => `trk_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
+};
+
+interface CreatorLibraryData { tracks: CreatorTrack[]; stats: LibraryStats }
+function creatorLibraryData(): CreatorLibraryData {
+  const tracks = foldLibrary(libraryIo.readText(libraryLedger(CREATOR_DIR)));
+  return { tracks, stats: libraryStats(tracks) };
 }
 
-const ROOT = join(import.meta.dir, "renderer");
-const PORT = Number(process.env.PORT ?? 5319);
+/** Env var per provider that HOLDS its secret at runtime. Settings never carry a secret VALUE. */
+const CREATOR_SECRET_ENV: Record<string, string> = {
+  elevenlabs: "ELEVENLABS_API_KEY",
+  suno: "LUCID_SUNO_TOKEN",
+  comfyui: "LUCID_COMFY_TOKEN",
+};
+
+interface CreatorRegistryData extends CreatorLibraryData {
+  providers: CreatorProviderStatus[];
+  /** CREATOR-1: the last probe per provider, so the UI can show what was proven and how fresh it is. */
+  probes: ProbeResult[];
+}
+// CREATOR-1 (ADR-0292): the last probe per provider. In memory by design - a capability answer goes stale
+// the moment a node is installed or a VPN drops, so it is never persisted as if it were fact.
+const probeCache = new ProbeCache();
+
+function creatorSecretFor(id: CreatorProviderId): string {
+  const env = CREATOR_SECRET_ENV[id];
+  if (env && (process.env[env] ?? "").trim()) return process.env[env]!.trim();
+  const ref = listCreatorEndpoints().find((e) => e.enabled && e.providerId === id && !!e.vaultRef)?.vaultRef;
+  if (!ref) return "";
+  const name = `LUCID_CREATOR_TARGET_${ref.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`;
+  return (process.env[name] ?? "").trim();
+}
+
+const probeDeps: ProbeDeps = {
+  fetchImpl: fetch,
+  exec: (argv) => execFileSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 6000, windowsHide: true, maxBuffer: 512 * 1024 }),
+  exists: (path) => existsSync(path),
+  now: () => Date.now(),
+  secret: creatorSecretFor,
+  timeoutMs: 8000,
+};
+
+function creatorRegistryData(): CreatorRegistryData {
+  const all = listCreatorEndpoints();
+  const now = Date.now();
+  const byProvider: Partial<Record<CreatorProviderId, { endpoints: CreatorEndpointDef[]; secretPresent: boolean; discovered?: readonly CreatorCapabilityId[] }>> = {};
+  for (const id of CREATOR_PROVIDER_IDS) {
+    const mine = all.filter((e) => e.providerId === id);
+    const env = CREATOR_SECRET_ENV[id];
+    // Honest "a credential is registered": either the engine env carries it, or the user stored one in the
+    // vault and the declaration references it by NAME. Nothing here reads a secret value.
+    const secretPresent = !!(env && (process.env[env] ?? "").trim()) || mine.some((e) => e.enabled && !!e.vaultRef);
+    // CREATOR-1: `ready` now requires a LIVE probe that attested something. An expired answer is dropped.
+    byProvider[id] = { endpoints: mine, secretPresent, discovered: probeCache.discovered(id, now) };
+  }
+  return { providers: creatorRegistryStatus(byProvider), probes: probeCache.all(), ...creatorLibraryData() };
+}
+
+// ---- CREATOR-1: jobs ----
+
+const jobIo: JobIo = {
+  ensureDir: (dir) => { try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ } },
+  readText: (path) => { try { return readFileSync(path, "utf8"); } catch { return ""; } },
+  appendLine: (path, line) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, line + "\n", { mode: 0o600 }); },
+  now: () => Date.now(),
+  id: () => `job_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`,
+};
+
+const creatorJobsData = () => { const jobs = listJobs(jobIo, CREATOR_DIR); return { jobs, stats: jobStats(jobs) }; };
+
+/** CREATOR-3: MEASURE ONLY, write no job. The pipeline routes own their own job row (they attach artifacts
+ *  to it), so they take the governor's snapshot and record the job themselves. One measurement path, two
+ *  callers: `admitCreatorJob` below is this plus a job. */
+async function creatorAdmissionSnapshot(label: string, need: { gpu?: boolean; vramMB?: number } = {}): Promise<JobAdmissionSnapshot> {
+  const res = await creatorResources(false);
+  const local = res.targets.find((t) => t.kind === "local");
+  const verdict = creatorAdmission(res.history, { label, ...need }, local?.gpu ?? { available: false, source: "none", devices: [], note: "" });
+  return {
+    ok: verdict.ok, cpuPct: verdict.cpuPct, memPct: verdict.memPct, gpuPct: verdict.gpuPct, vramPct: verdict.vramPct,
+    gpuEvidenceMissing: verdict.gpuEvidenceMissing, reason: verdict.reason,
+  };
+}
+
+/** CREATOR-3: the fail-closed seam the render pipeline scans artifact metadata through. Same sidecar, same
+ *  law as every other import path: a dead or slow scanner returns a BLOCKING decision, never a pass. */
+const creatorScan = (text: string): Promise<ScanVerdict> => scanAndDecide(agentScanner(), text);
+
+/** CREATOR-3: Blender runs as a fixed argument VECTOR through `Bun.spawn`. There is no shell here, and that
+ *  is load-bearing rather than incidental: `ARGV_UNSAFE_CHARS` in blender_cli.ts only refuses what cannot
+ *  ride an argv slot (NUL, newlines, control characters) precisely because nothing re-parses these strings.
+ *  Reintroduce a shell and that guard becomes too weak; creator_blender.test.ts fails if anyone tries. */
+const blenderSpawn: SpawnLike = async (argv, opts) => {
+  const proc = Bun.spawn([...argv], { cwd: opts.cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const timer = setTimeout(() => { try { proc.kill(); } catch { /* already exited */ } }, opts.timeoutMs);
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr };
+  } finally { clearTimeout(timer); }
+};
+
+/** Ask the governor, then record the answer as a job. A refusal becomes a `refused` job carrying the measured
+ *  reason, so the user sees WHY nothing happened instead of a silent no-op. */
+async function admitCreatorJob(kind: CreatorJobKind, label: string, provider: string, need: { gpu?: boolean; vramMB?: number } = {}):
+  Promise<{ ok: boolean; jobId: string; reason: string }> {
+  const snapshot = await creatorAdmissionSnapshot(label, need);
+  const job = createJob(jobIo, CREATOR_DIR, { kind, label, provider, admission: snapshot });
+  if (!snapshot.ok) return { ok: false, jobId: job.id, reason: snapshot.reason };
+  startJob(jobIo, CREATOR_DIR, job.id, snapshot);
+  return { ok: true, jobId: job.id, reason: "" };
+}
+
+// The pressure window lives in memory: it is presentation + admission evidence, never an audit log.
+let creatorHistory: CreatorSample[] = [];
+let creatorResCache: { at: number; data: CreatorResourcesData } | null = null;
+let creatorProcsCache: { at: number; procs: ProcGroup[] } | null = null;
+
+function errorTarget(t: { id: string; label: string }, at: number, reason: string): TargetTelemetry {
+  return {
+    id: t.id, label: t.label, kind: "remote", sampledAt: at, ageMs: 0, freshness: "blind",
+    cpu: null, mem: null, gpu: { available: false, source: "none", devices: [], note: reason }, procs: [], error: reason,
+  };
+}
+
+/** Read one remote target. A token rides an Authorization HEADER (never the URL) and never reaches an
+ *  error string. Any failure is an honest blind target, not a fabricated reading. */
+async function remoteTargetTelemetry(t: CreatorRemoteTargetDef): Promise<TargetTelemetry> {
+  const at = Date.now();
+  const headers: Record<string, string> = { accept: t.kind === "dcgm-exporter" ? "text/plain" : "application/json" };
+  const token = t.vaultRef ? (process.env[`LUCID_CREATOR_TARGET_${t.vaultRef.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`] ?? "").trim() : "";
+  if (token) headers.authorization = `Bearer ${token}`;
+  try {
+    const res = await fetch(t.url, { headers, signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return errorTarget(t, at, `that host answered ${res.status}`);
+    if (t.kind === "dcgm-exporter") {
+      const gpu = gpuFromDcgm(await res.text());
+      return { id: t.id, label: t.label, kind: "remote", sampledAt: at, ageMs: 0, freshness: "fresh", cpu: null, mem: null, gpu, procs: [], error: "" };
+    }
+    return telemetryFromAgentJson(await res.json(), t, at);
+  } catch {
+    return errorTarget(t, at, "no answer from that host");
+  }
+}
+
+async function creatorResources(fresh: boolean): Promise<CreatorResourcesData> {
+  const now = Date.now();
+  if (!fresh && creatorResCache && now - creatorResCache.at < 3000) return agedResources(creatorResCache.data, now);
+  const { cpu, mem } = await sampleCreatorCpu(PROFILE_IO);
+  const gpu = sampleLocalGpu(gpuExec);
+  // The process list spawns a command, so it moves on a slower clock than the cheap CPU/GPU sample.
+  if (fresh || !creatorProcsCache || now - creatorProcsCache.at > 15_000) creatorProcsCache = { at: now, procs: topProcesses() };
+  const local: TargetTelemetry = {
+    id: "local", label: "This machine", kind: "local", sampledAt: now, ageMs: 0, freshness: "fresh",
+    cpu, mem, gpu, procs: creatorProcsCache.procs, error: "",
+  };
+  const remotes = await Promise.all(listCreatorTargets().filter((t) => t.enabled).map(remoteTargetTelemetry));
+  creatorHistory = pushCreatorSample(creatorHistory, sampleOf(local));
+  const data: CreatorResourcesData = {
+    targets: [local, ...remotes],
+    history: creatorHistory,
+    admission: creatorAdmission(creatorHistory, { label: "a Creator job" }, gpu),
+    policy: { pressurePct: CREATOR_PRESSURE_PCT, warmPct: CREATOR_WARM_PCT, sustainMs: CREATOR_SUSTAIN_MS },
+  };
+  creatorResCache = { at: now, data };
+  return data;
+}
+
+// ---- CREATOR-IMG (ADR-0291): generation + artifact plumbing ----
+
+const artifactIo: ArtifactIo = {
+  ensureDir: (dir) => { try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ } },
+  writeBytes: (path, bytes) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes, { mode: 0o600 }); },
+  writeText: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text, { mode: 0o600 }); },
+  appendLine: (path, line) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, line + "\n", { mode: 0o600 }); },
+  readText: (path) => { try { return readFileSync(path, "utf8"); } catch { return ""; } },
+  now: () => Date.now(),
+  id: () => `art_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`,
+};
+
+const creatorArtifacts = (): CreatorArtifact[] => foldArtifacts(artifactIo.readText(artifactLedger(CREATOR_DIR)));
+
+// CREATOR-2 (ADR-0286): the editor renders a timeline in MEMORY and then hands it to the library's own
+// addTrack, which imports from a path - so it needs the one capability LibraryIo lacks. Same byte writer
+// the artifact store uses; nothing else about the library's IO changes.
+const editorIo: EditorIo = { ...libraryIo, writeBytes: artifactIo.writeBytes };
+
+/** The enabled ComfyUI declaration, or null. Its `workflow` field is the user's own exported graph. */
+function comfyEndpoint(): CreatorEndpointDef | null {
+  return listCreatorEndpoints().find((e) => e.enabled && e.providerId === "comfyui" && !!e.baseUrl) ?? null;
+}
+/** The credential for one Creator endpoint, by NAME: a declaration stores a vault REF, and the value only
+ *  ever arrives through the environment the vault populated. Never inlined, never logged, never in a URL. */
+function creatorEndpointToken(ep: CreatorEndpointDef): string {
+  const envName = ep.vaultRef ? `LUCID_CREATOR_TARGET_${ep.vaultRef.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}` : "";
+  return (envName ? process.env[envName] : "") || process.env.LUCID_COMFY_TOKEN || "";
+}
+
+function comfyClient(ep: CreatorEndpointDef): ComfyClient {
+  return new ComfyClient({ baseUrl: ep.baseUrl!, token: creatorEndpointToken(ep), timeoutMs: 20_000 });
+}
+
+interface GenerateReply { ok: boolean; error?: string; data?: { artifacts: CreatorArtifact[]; produced: CreatorArtifact[] } }
+
+/** Generate through the user's OWN workflow template: upload mixed inputs, substitute, submit, wait, import.
+ *  Refuses with the precise missing piece rather than guessing a graph. */
+async function generateCreatorImage(b: Record<string, unknown>): Promise<GenerateReply> {
+  const ep = comfyEndpoint();
+  if (!ep) return { ok: false, error: "No ComfyUI endpoint is configured. Add one in Creator Studio first." };
+  const templateRaw = typeof b.workflow === "string" && b.workflow.trim() ? b.workflow : ep.workflow;
+  if (!templateRaw || !templateRaw.trim()) {
+    return { ok: false, error: "No workflow template is saved for this endpoint. Export your graph from ComfyUI with Save (API Format) and paste it into the endpoint, using {{prompt}}, {{model}}, {{seed}} and {{image:role}} where LUCID should fill values in." };
+  }
+  let template: unknown;
+  try { template = JSON.parse(templateRaw); }
+  catch { return { ok: false, error: "That workflow template is not valid JSON." }; }
+  const client = comfyClient(ep);
+  const prompt = typeof b.prompt === "string" ? b.prompt.slice(0, 4000) : "";
+  const model = typeof b.model === "string" ? b.model : "";
+  // Mixed inputs: each carries a ROLE, so the template binds them by name rather than by position.
+  const inputs: CompositionInput[] = [];
+  const rawInputs = Array.isArray(b.inputs) ? b.inputs.slice(0, 6) : [];
+  for (const [i, item] of rawInputs.entries()) {
+    if (!item || typeof item !== "object") continue;
+    const rec: Record<string, unknown> = item;
+    const role = typeof rec.role === "string" && rec.role.trim() ? rec.role.trim().slice(0, 40) : `input${i + 1}`;
+    const decoded = decodePngDataUrl(rec.dataUrl);
+    if (!decoded.ok) return { ok: false, error: `Input "${role}": ${decoded.error}` };
+    const up = await client.uploadImage(`lucid-${role.replace(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now()}.png`, decoded.bytes, decoded.mime);
+    if (!up.ok || !up.filename) return { ok: false, error: `Input "${role}" could not be uploaded: ${up.error ?? "unknown reason"}.` };
+    inputs.push({ role, filename: up.filename });
+  }
+  const applied = applyWorkflowTemplate(template, {
+    prompt,
+    negative: typeof b.negative === "string" ? b.negative.slice(0, 2000) : "",
+    model,
+    seed: typeof b.seed === "number" ? b.seed : Math.floor(Math.random() * 2 ** 31),
+    width: typeof b.width === "number" ? b.width : undefined,
+    height: typeof b.height === "number" ? b.height : undefined,
+    inputs,
+  });
+  if (applied.unresolved.length) {
+    return { ok: false, error: `The workflow still needs: ${applied.unresolved.join(", ")}. Fill those fields (or remove the placeholders) before generating.` };
+  }
+  const sub = await client.submit(applied.workflow);
+  if (!sub.ok || !sub.promptId) return { ok: false, error: `ComfyUI did not accept the workflow: ${sub.error ?? "unknown reason"}.` };
+  const done = await client.waitForImages(sub.promptId, { pollMs: 1200, maxWaitMs: 240_000 });
+  if (!done.ok || !done.refs) return { ok: false, error: done.error };
+  const produced: CreatorArtifact[] = [];
+  for (const ref of done.refs.slice(0, 8)) {
+    const img = await client.fetchImage(ref);
+    if (!img.ok || !img.bytes) continue;
+    const stored = storeArtifact(artifactIo, CREATOR_DIR, {
+      kind: "image", bytes: img.bytes, mime: img.mime ?? "image/png",
+      width: typeof b.width === "number" ? b.width : 0, height: typeof b.height === "number" ? b.height : 0,
+      source: `comfyui ${client.baseUrl}`, prompt, model,
+    });
+    if (stored.ok && stored.artifact) produced.push(stored.artifact);
+  }
+  if (!produced.length) return { ok: false, error: "That render finished but no image could be read back from the server." };
+  return { ok: true, data: { produced, artifacts: creatorArtifacts() } };
+}
+
+/** Re-age a memoized payload so a cached reading can never present itself as brand new. */
+function agedResources(data: CreatorResourcesData, now: number): CreatorResourcesData {
+  return {
+    ...data,
+    targets: data.targets.map((t) => ({ ...t, ageMs: Math.max(0, now - t.sampledAt), freshness: t.error ? "blind" : freshnessOf(t.sampledAt, now) })),
+  };
+}
+
+// The omp binary, resolved ONCE per engine process and PROVEN to run.
+//
+// v2.0.0 regression this fixes: this resolver accepted `LUCID_OMP_BIN` on existence alone. In a packaged
+// Windows install that path lives under C:\Program Files, whose ACLs made Bun's read of the shim's target
+// fail, so "Connect via OAuth" died with `EPERM reading ...pi-coding-agent\dist\cli.js` instead of
+// returning a sign-in URL. Existence was never the question. resolveOmpBin probes each candidate by
+// actually running it (`--version`) and falls through to one that works.
+//
+// Cached because the probe spawns: the broker, logout, and every later call reuse one answer.
+// P-OMP-BOOT.1 (ADR-0357): set once by ompBin() when NOTHING runs. Read by the request catch so the
+// hundredth identical failure costs one line, not one stack trace.
+let ompUnrunnable: string | null = null;
+let ompFailures = 0; // requests already refused for that one reason, so the log stops repeating itself
+let ompBinCache: string | null = null;
+function ompBin(): string {
+  if (ompBinCache) return ompBinCache;
+  const probe = (candidate: string): boolean | "timeout" => {
+    try {
+      // A real capability probe. `--version` touches no auth, no network and no session state, so it is
+      // safe to run at resolve time. P-OMP-BOOT.2 (ADR-0358): the budget is now OMP_PROBE_TIMEOUT_MS and
+      // a timeout is reported as its own verdict, because 6 s condemned a perfectly good bundled omp on
+      // a cold, antivirus-scanned launch (10 of 21 boots in the reported reproduction).
+      return bunProbeVerdict(Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: OMP_PROBE_TIMEOUT_MS }));
+    } catch { return false; } // EPERM / ENOENT / EACCES all mean "cannot run this one"
+  };
+  const r = resolveOmpBin(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    probe,
+  );
+  if (r.indeterminate) {
+    // NOT fatal, and deliberately does NOT set ompUnrunnable: a slow probe is no evidence that the
+    // binary is missing, and the old code's fall-through to a bare `omp` is what turned a slow laptop
+    // into ten days of dead turns. Use the candidate and say why once.
+    console.error(`[omp] probe timed out; using ${r.bin} anyway (slow cold start, not a missing binary): ${r.timedOut.join(", ")}`);
+  } else if (!r.proven) {
+    // Name every path we tried. This is the line that turns "OAuth just fails" into a diagnosable report,
+    // which is exactly what the field report for this bug lacked.
+    // P-OMP-BOOT.1 (ADR-0357): and record it, so the per-request catch can report THIS instead of
+    // reprinting a ten-line spawn stack on every /api/commands and /api/modes poll forever.
+    ompUnrunnable = ompUnavailableReport(r).detail;
+    console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
+  } else if (r.rejected.length) {
+    console.error(`[omp] using ${r.bin} (skipped unrunnable: ${r.rejected.join(", ")})`);
+  }
+  ompBinCache = r.bin;
+  return r.bin;
+}
+
+// P-WINBOOT.2 (ADR-0260): the engine's on-disk base. In the `bun build --compile` engine binary,
+// import.meta.dir is a VIRTUAL bunfs path, so engineDesktopDir derives the real <repo>/desktop from
+// process.execPath (the on-disk binary at <repo>/bin/lucid-engine); a dev run uses import.meta.dir as-is.
+const DESKTOP_DIR = engineDesktopDir(import.meta.dir, process.execPath, existsSync);
+const REPO_DIR = join(DESKTOP_DIR, "..");
+const ROOT = join(DESKTOP_DIR, "renderer");
+// CREATOR-0 (ADR-0279): the engine serves on its FLAVOR's native port (Agent 5319, Creator 5320) unless
+// PORT overrides it, so both products can run side by side with no launcher gymnastics.
+const BUILD = flavorInfo(resolveBuildFlavor(process.env));
+const PORT = Number(process.env.PORT ?? BUILD.defaultPort);
+// CREATOR-0: the Creator data root (library ledger, artifacts). Falls back beside the settings file so a
+// browser-only dev run still works without Electron having threaded LUCID_CREATOR_DIR.
+const CREATOR_DIR = process.env.LUCID_CREATOR_DIR || join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "creator");
 // ADR-0024: per-launch capability token. Minted once per server process, injected into the served
 // HTML (only a same-origin document can read it), and required on every sensitive /api call. A new
 // random value each launch means a token never outlives the process that issued it.
-const TOKEN = randomBytes(32).toString("hex");
+// P-BROWSER.1 (wave 2): when the Electron main spawned us it minted the token itself and passed it
+// down as LUCID_MAIN_TOKEN - adopting it means main's agent-browser poll loop can authenticate its
+// /api/browser/commands + /api/browser/result calls with the standard x-lucid-token header (there is
+// no other channel from this child back up to its parent). Still one random value per launch; a
+// standalone `bun run desktop/dev.ts` has no main and mints its own exactly as before.
+const TOKEN = process.env.LUCID_MAIN_TOKEN || randomBytes(32).toString("hex");
+// P-SANDBOX.15 (ADR-0396): whether an Electron main launched us (it delivers TOKEN to its window over IPC,
+// so the served HTML must not carry it). Captured, then the variable is REMOVED from process.env so no omp
+// child or fleet lane (they inherit process.env) ever holds the UI token.
+const HAS_MAIN = !!process.env.LUCID_MAIN_TOKEN;
+delete process.env.LUCID_MAIN_TOKEN;
+// P-SANDBOX.15 (ADR-0396): the omp children's OWN token. Every LUCID_*_URL handed to a child carries this,
+// never TOKEN, and the engine accepts it only on AGENT_ROUTES (below), so the agent cannot reach human-only
+// routes such as /api/security/approve or the sandbox switch.
+const AGENT_TOKEN = randomBytes(32).toString("hex");
+// Routes the OMP CHILD (or the Electron main) calls directly. They cannot set an `x-lucid-token` header,
+// so each inherits a ready URL with `?t=<TOKEN>` and these paths additionally accept the query token.
+// Everything else stays header-only. Hoisted to module scope (was a 17-clause `||` chain rebuilt on every
+// request) so adding a self-report route is a one-line edit and costs no per-request allocation.
+const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
+  "/api/preview/serve", "/api/preview/shot", "/api/preview/open", "/api/preview/inspect", "/api/preview/act",
+  "/api/kb/retrieve",        // ADR-0220: the knowledge_search tool grounds on the local compiled KB
+  "/api/fleet/status",       // P-FLEET.L1: the master's fleet_status tool
+  "/api/sandbox/grant",      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool POSTs the approved grant claim
+  "/api/git/exec",           // P-SANDBOX.17 (ADR-0399): the contained agent's git shim asks the host to run git
+  "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
+  "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
+  "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
+  "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
+  "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
+  "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
+  "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
+]);
+// P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. Only
+// /api/preview/serve is left out: the renderer's iframe loads it with the UI token, and no child calls it.
+const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve"));
+// P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
+// sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
+// another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
+// the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
+// P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
+// interject_extension drains only the notes addressed to it (the master child gets target "master").
+const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }), interject: (laneId, text) => { addInterject(laneId, text); } });
+// P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
+// /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
+fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-LEGIBLE.1 (ADR-0384): publish the metadata-only local-agent manifest into this install's userData, so
+// endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
+// when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
+// launch, so MCP changes surface at the next start. Advisory: a failed write is logged, never fatal.
+if (process.env.LUCID_DATA_ROOT) {
+  const manifest = buildLocalAgentManifest({
+    build: BUILD,
+    version: APP_VERSION,
+    port: PORT,
+    hostExecutable: process.env.LUCID_HOST_EXE || null,
+    engineExecutable: basename(process.execPath),
+    // Agent mode answers omp's per-tool asks itself (the in-process gate and the exec/egress tier prompts
+    // still apply), and fleet full-auto removes the human ask for lanes.
+    autoApprove: uiModePosture("agent").permissionMode === "auto" || !!loadSettings().fleetAutoApprove,
+    mcpServers: mcpServersForAcp(),
+    now: new Date(),
+  });
+  const written = writeLocalAgentManifest(process.env.LUCID_DATA_ROOT, manifest);
+  if (!written.ok) console.error(`[legibility] local-agent manifest not written: ${written.error}`);
+}
+// P-HEALTH.1: the harness watches its OWN sessions so a stalled long run never needs an app restart. The
+// master session and every lane climb the same ladder (quiet, then the canned status probe, then a
+// cancel-and-resume in place). The ticker is coarse on purpose: the thresholds are minutes, and a tick
+// that finds nothing wrong does no IO at all. Both calls are fail-quiet - a watchdog that can throw into
+// the event loop is a worse bug than the stall it watches for.
+backend.startHealthWatch();
+setInterval(() => { void fleet.healthTick().catch(() => {}); }, 30_000).unref?.();
+// P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
+// BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
+// process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
+const LAST_SESSION_FILE = lastSessionPath(PORT);
+const PREVIOUS_SESSION = readLastSession(LAST_SESSION_FILE);
+backend.configureRecovery({ persistSession: (sessionId) => { writeLastSession(LAST_SESSION_FILE, { sessionId, cwd: currentWorkspace(), at: Date.now() }); } });
+// P-PWA-FOCUS.1: the lane-to-guest tap. ONE persistent observer, registered here at module scope right
+// after the lane manager exists (this file is evaluated once per engine process, and this statement sits
+// outside every route handler and every poll tick) - so it is installed exactly once and covers all lanes
+// present AND future, unlike a per-spawn sink that would need re-attaching. It is deliberately NOT next to
+// the collab broadcaster above: `fleet` is still in its const TDZ up there, and observe() is an immediate
+// call, not a closure like the deps and the 5s poll.
+// The laneWatched() guard comes FIRST on purpose: a fleet grinding through turns with no phone attached
+// must do ZERO per-event work - no translation, no allocation, no frame - so the guard has to precede the
+// adapter, not follow it. It is false whenever the share is inactive, so the common case is one map lookup.
+fleet.observe((laneId, e) => {
+  if (!collabManager.laneWatched(laneId)) return; // nobody is looking at this lane
+  const ev = laneEventToChatEvent(e);
+  if (!ev) return; // deliberately untranslatable (permission/status already ride the lane card)
+  collabManager.tapEvent(ev, laneId); // scoped: only the guests watching THIS lane
+});
+
+// P-INTERJECT.1: the unified Processes list - everything "running" in this app right now, assembled
+// from the live sources this server already holds. One builder, two consumers: GET /api/processes
+// and the collab process-list broadcast (P-PWA-FLEET.1). Every source is fail-quiet: a broken one
+// drops its entries, never the whole list.
+async function buildProcessViews(): Promise<ProcessView[]> {
+  const processes: ProcessView[] = [];
+  try {
+    const mt = backend.midTurn();
+    if (mt.busy) processes.push({ id: "master-turn", kind: "master-turn", label: "Master chat turn", status: "running", startedAt: mt.startedAt, lastActivityAt: null, detail: backend.activeModelName() });
+  } catch { /* backend not up yet - no master entry */ }
+  try {
+    for (const lane of (await fleet.status()).lanes) {
+      if (lane.status === "stopped") continue;
+      processes.push({ id: `lane:${lane.id}`, kind: "lane", label: lane.name, status: lane.status, startedAt: lane.createdAt, lastActivityAt: lane.lastActivityAt, detail: basename(lane.cwd) });
+    }
+  } catch { /* fleet status failed - no lane entries */ }
+  try {
+    const job = importJobStatus();
+    if (job?.state === "running") processes.push({ id: `import:${job.jobId}`, kind: "import", label: "Chat-history import", status: job.cancelRequestedAt ? "stopping" : "running", startedAt: job.startedAt, lastActivityAt: job.updatedAt, detail: `${job.messages}/${job.totalMessages} messages` });
+  } catch { /* no import entry */ }
+  processes.push(...browserProcesses()); // [] until wave 2 registers browser sessions
+  return processes;
+}
+// P-FLEET.L3: the P-VISION.1 image filter for lane prompts and the staged queue - identical discipline to
+// /api/chat (well-formed {data, mimeType} blocks only, capped at 6; anything torn is dropped, not trusted).
+function laneImages(raw: unknown): { data: string; mimeType: string }[] {
+  if (!Array.isArray(raw)) return [];
+  const out: { data: string; mimeType: string }[] = [];
+  for (const im of raw) {
+    if (out.length >= 6) break;
+    if (im && typeof im === "object" && "data" in im && "mimeType" in im && typeof im.data === "string" && typeof im.mimeType === "string") {
+      out.push({ data: im.data, mimeType: im.mimeType });
+    }
+  }
+  return out;
+}
+// Lanes are child processes: an engine shutdown must never orphan a worker turn (deny open asks, cancel,
+// kill). "exit" is the last-resort sync path; SIGINT/SIGTERM cover a clean stop.
+process.on("exit", () => { try { fleet.stopAll(); } catch { /* dying anyway */ } });
+process.on("SIGINT", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
+process.on("SIGTERM", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
+// P-BROWSER.1 (wave 2): the live agent-browser session feeds the unified Processes list (the popover
+// renders a Close action for kind "browser" rows). Label/detail come straight from the status store;
+// `browserKilledByUser` flips when main reports a user-X close, so later commands fail with the honest
+// "browser closed by user" instead of a generic timeout, until a fresh browser_open succeeds.
+let browserKilledByUser = false;
+let browserCmdSeq = 0;
+setBrowserProcessSource(() => {
+  const s = getBrowserStatus();
+  if (!s.active) return [];
+  return [{ id: "browser", kind: "browser", label: `Agent browser: ${s.title || s.url}`, status: "open", startedAt: s.startedAt, lastActivityAt: lastBrowserActivityAt() || s.startedAt, detail: s.url }];
+});
 // P-PREVIEW.6b (ADR-0153): relay for the agent's read-only DOM inspect of the sandboxed preview.
 const inspectRelay = new InspectRelay();
 const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
@@ -433,11 +1313,34 @@ async function refreshRecall(): Promise<void> {
 function bundleError(msg: string): { js: string; ok: boolean } {
   return { ok: false, js: `document.body.innerHTML='<pre style="color:#ef5f5f;padding:20px;font:13px monospace;white-space:pre-wrap">'+${JSON.stringify(msg)}+'</pre>';` };
 }
+// P-AVATAR.2a, retained through the P-MASCOT pivot (ADR-0251): the renderer bundles with code
+// splitting, so any dynamic import in app.ts lands in a lazy hashed "./chunk-*.js" instead of bloating
+// the entry (three.js used this before its removal; the capability stays for future heavy features).
+// Every chunk is kept in memory and served at its emitted name - the browser resolves the entry's
+// relative chunk imports against /app.js, i.e. /chunk-*.js. With no dynamic imports, output is a
+// single entry and the chunk route simply never fires.
+let appChunks = new Map<string, string>();
 async function bundleApp(): Promise<{ js: string; ok: boolean }> {
+  // P-WINBOOT.2 (ADR-0260): a packaged build ships a prebuilt renderer bundle (build-renderer), so the
+  // engine never Bun.build()s renderer TypeScript from the (possibly protected) install dir at runtime -
+  // the last path by which Bun would touch .ts on the install disk. Dev has no prebuilt bundle -> build live.
+  const prebuilt = join(ROOT, "app.bundle.js");
+  if (existsSync(prebuilt)) {
+    try { return { ok: true, js: await Bun.file(prebuilt).text() }; }
+    catch (e) { console.error("[bundleApp] prebuilt bundle unreadable, rebuilding:", e); }
+  }
   try {
-    const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline" });
+    const out = await Bun.build({ entrypoints: [join(ROOT, "app.ts")], target: "browser", sourcemap: "inline", splitting: true });
     if (!out.success) return bundleError(out.logs.map((l) => String(l)).join("\n"));
-    return { ok: true, js: await out.outputs[0]!.text() };
+    let entry = "";
+    const chunks = new Map<string, string>();
+    for (const o of out.outputs) {
+      const text = await o.text();
+      if (o.kind === "entry-point") entry = text;
+      else chunks.set("/" + o.path.replace(/^\.\//, ""), text);
+    }
+    appChunks = chunks;
+    return { ok: true, js: entry };
   } catch (e) {
     // A THROW from Bun.build (e.g. an unresolved import in a packaged build where a renderer dep
     // wasn't bundled) must NOT fall through to the generic JSON error handler — that ships as
@@ -458,7 +1361,58 @@ const json = (data: unknown) =>
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
 // real-world exposure is low, but we keep the boundary clean: log the FULL error server-side (dev console)
 // and return a curated message that derives ONLY from `generic`, never from `e`. Every `catch` that surfaces
-// an error to the browser routes through here, so no exception text reaches the shared json() sink.
+// ── P-VOICE.2 (ADR-0247): which TTS engines can actually speak right now ──────────────────────────────
+// The picker used to list every engine unconditionally, so choosing ChatGPT/OpenAI with only a subscription
+// sign-in offered thirteen voices and then failed on every reply. Readiness is computed here, once, and both
+// the picker and /api/tts/speak render the SAME reason - a failure can never contradict the menu.
+const LOCAL_TTS_URL = (): string => process.env.LUCID_TTS_URL || "http://localhost:8880";
+// Is a self-hosted Kokoro actually listening? ANY HTTP answer counts - even a 404 proves something is bound.
+// Cached for a few seconds because the picker probes on every open, and a refused connection costs a syscall
+// round-trip we do not want in the menu's critical path.
+let localTtsProbe = { at: 0, up: false, url: "" };
+async function localTtsUp(url: string = LOCAL_TTS_URL()): Promise<boolean> {
+  const now = Date.now();
+  if (localTtsProbe.url === url && now - localTtsProbe.at < 5000) return localTtsProbe.up;
+  let up = false;
+  try { await fetch(url, { signal: AbortSignal.timeout(700) }); up = true; }
+  catch { up = false; } // connection refused / DNS / timeout - nothing is serving there
+  localTtsProbe = { at: now, up, url };
+  return up;
+}
+// P-VOICE.6: the dots.tts probe is separate state (different URL, same any-HTTP-answer-counts rule) so
+// flipping the picker between Kokoro and dots never serves one engine the other's cached verdict.
+let dotsTtsProbe = { at: 0, up: false, url: "" };
+async function dotsTtsUp(url: string): Promise<boolean> {
+  const now = Date.now();
+  if (dotsTtsProbe.url === url && now - dotsTtsProbe.at < 5000) return dotsTtsProbe.up;
+  let up = false;
+  try { await fetch(`${url.replace(/\/+$/, "")}/health`, { signal: AbortSignal.timeout(1500) }); up = true; }
+  catch { up = false; } // tunnel down / VPN off / service stopped
+  dotsTtsProbe = { at: now, up, url };
+  return up;
+}
+/** Every TTS engine with its LIVE readiness + the specific reason it can't speak. */
+async function ttsEngines(): Promise<(TtsProviderInfo & { ready: boolean; reason: string })[]> {
+  const v = voiceSettings();
+  const localUp = await localTtsUp();
+  const dotsUp = await dotsTtsUp(v.dotsTtsUrl); // P-VOICE.6: 5s-cached like the Kokoro probe
+  const auth = providerAuth(); // one SQLite read, not one per engine
+  const rows = [...auth.majors, ...auth.others];
+  const localUrl = LOCAL_TTS_URL();
+  return TTS_PROVIDERS.map((e) => ({
+    ...e,
+    ...ttsEngineStatus(e.id, {
+      keySet: !!(e.keyEnv && process.env[e.keyEnv]),
+      // The OpenAI engine's OAuth row is the CHAT sign-in ("openai"); ttsEngineStatus uses it to explain why
+      // being signed in still isn't enough for the platform speech API.
+      oauthActive: !!rows.find((r) => r.id === (e.id === "openai-tts" ? "openai" : e.id))?.oauthActive,
+      localUp: e.id === "dots-tts" ? dotsUp : localUp,
+      localUrl: e.id === "dots-tts" ? v.dotsTtsUrl : localUrl,
+    }),
+  }));
+}
+
+// A caught exception must never reach the client verbatim (CWE-209/497). Log it, return a curated message.
 function clientError(e: unknown, generic: string): string {
   console.error(`[dev] ${generic}:`, e);
   return generic;
@@ -518,7 +1472,7 @@ async function gatedAgentImport(specJson: string, notes: string[]): Promise<Gate
 
 // P-AGENT.17: the in-repo starter-template gallery. Only digest-valid portable files are listed; a
 // corrupted/tampered template simply disappears from the gallery (fail-soft for the UI, fail-closed for use).
-const TEMPLATES_DIR = join(import.meta.dir, "..", "templates", "agents");
+const TEMPLATES_DIR = join(REPO_DIR, "templates", "agents");
 interface AgentTemplateSummary {
   file: string;
   name: string;
@@ -562,6 +1516,19 @@ function gitChangeInputs(repo: string): { numstat: string; nameStatus: string; r
   return { numstat: gitOut(repo, ["diff", "--numstat", ...args]), nameStatus: gitOut(repo, ["diff", "--name-status", ...args]), range: range ? `the last ${Math.min(10, cnt - 1)} commits` : "the working tree" };
 }
 
+/** providerAuth() + the last per-provider OAuth failure (oauth_failure.ts) merged onto inactive rows,
+ *  so the Settings poller can STOP spinning and tell the user why the sign-in died. An active login
+ *  never carries an error (success clears the slot; a stale record must not shadow a good credential). */
+function authWithOauthErrors(): ProviderAuthSnapshot {
+  const a = providerAuth();
+  for (const row of [...a.gateway, ...a.majors, ...a.others]) {
+    if (!row.oauthId || row.oauthActive) continue;
+    const f = getOauthFailure(row.oauthId);
+    if (f) row.oauthError = f;
+  }
+  return a;
+}
+
 // OAuth via omp's `auth-broker login` — it opens the provider, runs a LOCAL callback server
 // (e.g. :1455) for the redirect, exchanges the code, stores the token, then exits. It MUST stay
 // alive AND have BOTH pipes drained until the callback lands — otherwise a full stdout/stderr pipe
@@ -575,6 +1542,10 @@ const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
 // that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
 // line (the GHE domain, or "" for github.com); it's written to stdin immediately after spawn.
 function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string }> {
+  // Snapshot the vault BEFORE the broker runs, so the exit handler below can tell whether a genuinely
+  // fresh token landed rather than trusting the broker's exit code. Read-only; absent row => not present.
+  const beforeCred = credentialSnapshot(oauthId);
+  clearOauthFailure(oauthId); // a fresh attempt owns the failure slot - stale reasons never linger
   let proc: ReturnType<typeof Bun.spawn>;
   try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
@@ -591,21 +1562,43 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
     if (sink && typeof sink !== "number") { try { sink.write(new TextEncoder().encode(promptAnswer.trim() + "\n")); } catch { /* broker may have exited */ } }
   }
   proc.exited.finally(() => { if (oauthBrokers.get(oauthId) === proc) oauthBrokers.delete(oauthId); });
-  // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child
-  // built its model list at spawn and won't see it. Respawn so the new provider's models surface
-  // (mirrors what adding an API key does). The front-end re-fetches /api/config after the badge flips.
-  proc.exited.then((code) => {
-    if (code !== 0) return;
+  // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child built
+  // its model list at spawn and won't see it. Respawn so the new provider's models surface (mirrors what
+  // adding an API key does). The front-end re-fetches /api/config after the badge flips.
+  //
+  // We deliberately do NOT gate this on the broker's exit code. The broker runs a local callback server,
+  // and it can exit non-zero (or be torn down noisily, or linger) AFTER it has already written a valid
+  // token. In that case the badge flips green - it reads the vault directly - while omp is never
+  // respawned, which presents to the user as "the browser said I'm signed in, but the picker has no
+  // models" and only clears on a full app restart. The vault is the ground truth, so compare a
+  // before/after snapshot instead: a first row, a replaced row, a rewritten blob or a bumped
+  // `updated_at` all mean a fresh token landed. This also keeps a FAILED login from resurrecting a
+  // credential the user logged out of, which a blind clear-and-restart would.
+  // Drained broker output, hoisted above the exit handler so it can extract a failure reason. The
+  // browser shows "Authentication Successful" the instant the callback lands, but the token exchange
+  // and provider onboarding (Gemini's loadCodeAssist/onboardUser project discovery, notably) run AFTER
+  // that page renders - when one of those throws, the broker's stderr is the ONLY record of why. We
+  // persist that reason (oauth_failure.ts) so /api/auth can show it instead of a forever-"not set" badge.
+  const dec = new TextDecoder();
+  let out = "", err = "";
+  proc.exited.then(() => {
+    if (!landedFreshCredential(beforeCred, credentialSnapshot(oauthId))) {
+      const f = recordOauthFailure(oauthId, extractOauthFailure(out, err));
+      console.error(`[oauth] ${oauthId} login left no new credential - not respawning omp: ${f.message}`);
+      return;
+    }
+    clearOauthFailure(oauthId);
     // omp's login writes the fresh token but may leave a stale `disabled_cause` from a prior logout,
     // so the just-fetched credential stays ignored. Clear that one flag (token blob untouched) so the
     // login actually "sticks", THEN respawn omp to pick up the now-active provider.
     const r = clearDisabledCredential(oauthId);
     if (r.cleared) console.log(`[oauth] re-enabled ${oauthId} after login (cleared stale disabled flag)`);
+    console.log(`[oauth] ${oauthId} credential landed - respawning omp so its models surface`);
     backend.restart();
   }).catch(() => { /* ignore */ });
-  return new Promise((resolve) => {
-    const dec = new TextDecoder();
-    let out = "", err = "", done = false, ended = 0;
+  const { promise, resolve } = Promise.withResolvers<{ started: boolean; url: string; output: string }>();
+  {
+    let done = false, ended = 0;
     const finish = (url: string) => {
       if (done) return; done = true;
       if (!url && loadSettings().developerMode) {
@@ -617,7 +1610,9 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
     };
     // Match a COMPLETE url (followed by whitespace) so a chunk boundary mid-URL can't resolve a truncated
     // link; scan BOTH streams — omp prints the URL to stdout today, but tolerate a future move to stderr.
-    const scan = () => { const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/); if (m) finish(m[1]); };
+    // `m[1]` is `string | undefined` under noUncheckedIndexedAccess, and finish() takes a string: an
+    // unguarded m[1] fails the desktop server typecheck AND would hand the caller `undefined` as a URL.
+    const scan = () => { const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/); if (m?.[1]) finish(m[1]); };
     // Drain stdout + stderr fully (never stop) so the broker can't block on a full pipe; grab the URL when it appears.
     (async () => {
       try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { out += dec.decode(c); scan(); } } catch { /* stream ended */ }
@@ -628,7 +1623,8 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
       if (++ended === 2) finish("");
     })();
     setTimeout(() => finish(""), 60_000); // 60s — OTP/MFA flows need time (phone unlock, SMS delay)
-  });
+  }
+  return promise;
 }
 /** Send a device-authorization code to a running broker's stdin (xAI "Grok Build", GitHub device flow, etc.).
  *  The broker prints "Paste the authorization code (or full redirect URL)::" and reads a line from stdin. */
@@ -642,33 +1638,20 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
 
-// Stream NDJSON ChatEvents to the browser with a HEARTBEAT. A long maker tool call (e.g. a broad
-// codebase search during a /goal loop) can run for >60s emitting nothing; without a keepalive the
-// socket goes idle, Bun's `idleTimeout` closes it, and every later event — tool chips AND the final
-// answer — is lost while the turn keeps working server-side (it writes the file, the UI stays frozen
-// on the last event it saw). A `{type:"ping"}` every 15s keeps the connection alive; the client
-// (bridge.ts) drops pings. On a real browser disconnect we log once (developer mode) and keep going.
-function ndjsonStream(label: string, run: (emit: (e: unknown) => void) => Promise<void>): Response {
-  const enc = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      let writeFailed = false;
-      let lastSend = Date.now();
-      const emit = (e: unknown) => {
-        try { controller.enqueue(enc.encode(JSON.stringify(e) + "\n")); lastSend = Date.now(); }
-        catch { if (!writeFailed && loadSettings().developerMode) { writeFailed = true; console.error(`[TURN_DIAG] ${label} stream write failed (browser disconnected) — server turn continues`); } }
-      };
-      const hb = setInterval(() => { if (Date.now() - lastSend >= 15_000) emit({ type: "ping" }); }, 15_000);
-      try { await run(emit); }
-      finally { clearInterval(hb); try { controller.close(); } catch { /* already closed */ } }
-    },
-  });
-  return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" } });
-}
 
-const server = Bun.serve({
+// P-PORTGUARD.2: the bind is the engine's first load-bearing act, and it CAN fail - something else may
+// already hold the port (in the field: this app's own orphaned engine). Unguarded, Bun's throw escaped
+// module evaluation and engine.log got a bare "[Uncaught Exception] ... Is port 5319 in use?" stack while
+// the window sat behind a dialog blaming the install. Catch it, say what happened in one line a human can
+// act on, and exit with ENGINE_EXIT_PORT_BUSY so main names the owning process instead of guessing.
+// The body stays at its original indentation on purpose: the wrapper is 4 lines, not a 3300-line reflow.
+const server = startEngineServer();
+function startEngineServer() {
+try {
+return Bun.serve({
   port: PORT,
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
+  // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
   idleTimeout: 60,
   async fetch(req) {
     const url = new URL(req.url);
@@ -689,14 +1672,30 @@ const server = Bun.serve({
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
       // ADR-0220: /api/kb/retrieve is also called by the omp subprocess's `knowledge_search` tool (via the
       // token'd LUCID_KB_RETRIEVE_URL it inherits), which can't set a header — accept the `?t=` token for it too.
-      const queryTokenOk = p === "/api/preview/serve" || p === "/api/preview/shot" || p === "/api/preview/inspect" || p === "/api/preview/act" || p === "/api/kb/retrieve";
-      const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
-      if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
+      // P-FLEET.L1: /api/fleet/status is also fetched by the omp subprocess's fleet_status tool (via the
+      // token'd LUCID_FLEET_STATUS_URL it inherits), which can't set a header - accept the ?t= token too.
+      // P-INTERJECT.1: /api/interject/pending is drained by the omp child's interject_extension (via the
+      // token'd LUCID_INTERJECT_URL it inherits), which can't set a header - accept the ?t= token too.
+      // P-BROWSER.1 (wave 2): /api/browser/{open,capture,scroll,close,shot} are called by the omp child's
+      // browser_* tools (via the token'd LUCID_BROWSER_URL it inherits), same ?t= convention. The two
+      // main-process endpoints (/commands, /result) and the status push stay header-only: main MINTED the
+      // token (LUCID_MAIN_TOKEN) and sends it as x-lucid-token on every poll.
+      // P-SANDBOX.15 (ADR-0396): the agent's token (AGENT_TOKEN) opens AGENT_ROUTES only; TOKEN opens all.
+      const authorized = apiAuthorized({ path: p, headerToken: req.headers.get("x-lucid-token"), queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES });
+      if (!authorized) return new Response("forbidden", { status: 403 });
     }
     try {
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+      }
+      // P-AVATAR.2a: split chunks (lazy three.js). A miss after a server restart rebuilds once - the
+      // entry the browser holds references the chunk names of ITS build, and bundleApp repopulates them.
+      if (/^\/chunk-[\w-]+\.js$/.test(p)) {
+        if (!appChunks.has(p)) await bundleApp();
+        const chunk = appChunks.get(p);
+        if (chunk) return new Response(chunk, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+        return new Response("// stale chunk - reload", { status: 404, headers: { "content-type": "text/javascript" } });
       }
       // P-IDE.4 (ADR-0029): serve the vendored Monaco editor (AMD min build) from node_modules so it's
       // local/airgap-clean without committing ~16MB. The read-only viewer runs Monaco on the main thread
@@ -719,7 +1718,7 @@ const server = Bun.serve({
           : "editor";
         let asset = "";
         try {
-          const dir = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs", "assets");
+          const dir = join(DESKTOP_DIR, "node_modules", "monaco-editor", "min", "vs", "assets");
           const re = new RegExp(`^${key}\\.worker-.*\\.js$`);
           for (const f of readdirSync(dir)) if (re.test(f)) { asset = `assets/${f}`; break; }
         } catch { /* no assets dir */ }
@@ -729,7 +1728,7 @@ const server = Bun.serve({
         return new Response(body, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
       }
       if (p.startsWith("/vendor/monaco/")) {
-        const base = join(import.meta.dir, "node_modules", "monaco-editor", "min", "vs");
+        const base = join(DESKTOP_DIR, "node_modules", "monaco-editor", "min", "vs");
         const target = join(base, p.slice("/vendor/monaco/".length));
         if (!pathWithin(base, target)) return new Response("forbidden", { status: 403 }); // no path traversal
         const f = Bun.file(target);
@@ -743,11 +1742,133 @@ const server = Bun.serve({
       // in even when the DuckDB snapshot is null, so a fresh machine still shows quarantines.
       if (p === "/api/security") {
         const snap = await securitySnapshotMemo(); // memoized + single-flight (P-PERF.3); live/sandbox/acks stay fresh (in-memory, cheap)
-        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: sandboxStatus(), acks: ackView() } });
+        // P-SANDBOX.8: the standing directory grants ride the sandbox slice so the panel lists them with Revoke.
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView(), control: sandboxControlNow(), runtimeFolders: sandboxRuntimeFoldersNow() }, acks: ackView() } });
+      }
+      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool claims a user-approved directory grant.
+      // Defense in depth over the dialog: win32 + bundled helper + an EXISTING directory + a FRESH
+      // one-shot approval acp_backend parked for exactly this {path,mode} — anything else applies
+      // nothing (fail-closed). On success the helper stamps the ACE and the grant is recorded for the
+      // Security panel (listed, revocable). Every outcome is a legible verdict for the agent.
+      if (p === "/api/sandbox/grant" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown; mode?: unknown; reason?: unknown }>(req);
+        const dirPath = String(b.path ?? "").trim();
+        const mode: GrantMode = b.mode === "read-write" ? "rw" : "rx";
+        const reason = String(b.reason ?? "").slice(0, 200);
+        const deny = (why: string) => {
+          console.error(`[sandbox-grant] refused: ${why} · ${mode} ${dirPath || "(no path)"}`);
+          return json({ ok: true, data: { granted: false, detail: why } });
+        };
+        if (process.platform !== "win32") return deny("directory grants are Windows-only (AppContainer ACEs)");
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        if (!existsSync(helper)) return deny("the bundled lucid-appcontainer helper is missing");
+        let isDir = false;
+        try { isDir = statSync(dirPath).isDirectory(); } catch { /* missing → not a dir */ }
+        if (!dirPath || !isDir) return deny(`not an existing directory: ${dirPath || "(no path)"}`);
+        // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list (checked before the one-shot claim).
+        if (managedSandboxFoldersLocked(managedConfig().config)) return deny("your organization manages which folders the sandbox can reach");
+        // ONE-SHOT claim: any attempt consumes the parked approval; only a fresh exact match proceeds.
+        const claim = consumePending(loadGrants(), dirPath, mode, Date.now());
+        saveGrants(claim.store);
+        if (!claim.ok) return deny(`no matching user approval (${claim.reason ?? "unknown"}) - ask again so the user sees the dialog`);
+        const applied = applyGrantAce(helper, mode, dirPath);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: applied.ok ? "allow" : "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${applied.ok ? "acl granted" : `acl grant failed: ${applied.detail}`} · ${mode} ${dirPath}`.slice(0, 200) });
+        if (!applied.ok) return deny(`the ACL grant did not apply: ${applied.detail}`);
+        saveGrants(addGrant(loadGrants(), { path: dirPath, mode, grantedAt: new Date().toISOString(), reason }));
+        console.log(`[sandbox-grant] granted ${mode} on ${dirPath}${reason ? ` (${reason})` : ""}`);
+        return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} - standing until the user revokes it in the Security panel (${applied.detail})` } });
+      }
+      // P-SANDBOX.17 (ADR-0399): the contained agent's git. Git for Windows cannot start inside the
+      // AppContainer, so its shim asks the engine to run the real git as the user. git_broker.ts owns
+      // every check (subcommand + option allowlist, workspace-confined paths, validated and held repo
+      // config, forced overrides, network through the egress proxy); every call is audited.
+      if (p === "/api/git/exec" && req.method === "POST") {
+        const b = await readBody<{ args?: unknown; cwd?: unknown }>(req);
+        const args = Array.isArray(b.args) ? b.args.map(String) : [];
+        const cmdDir = gitCmdDir();
+        const r = await runBrokeredGit({ args, cwd: String(b.cwd ?? "") }, { workspace: currentWorkspace(), gitExe: cmdDir ? join(cmdDir, "git.exe") : null, proxyUrl: runningEgressProxyUrl() });
+        emitSecurityEvent({ category: "exec", type: "git_broker", decision: r.refused ? "block" : "allow", severity: r.refused ? "medium" : "info", tool: "git", reason: `${r.sub || "(none)"}${r.refused ? ` refused: ${r.refused}` : ` exit ${r.code}`}`.slice(0, 200) });
+        return json({ ok: true, data: { code: r.code, stdout: Buffer.from(r.stdout).toString("base64"), stderr: Buffer.from(r.stderr, "utf8").toString("base64") } });
+      }
+      // P-SANDBOX.12 (ADR-0390): the Security panel's sandbox switch. Off is a LUCID setting (no admin);
+      // On registers the loopback exemption behind UAC when it is missing; "unregister" removes it. Every
+      // change is audited, and the agent is restarted so the next spawn takes the new posture.
+      if (p === "/api/security/sandbox/mode" && req.method === "POST") {
+        const b = await readBody<{ mode?: unknown }>(req);
+        const mode = String(b.mode ?? "");
+        if (mode !== "off" && mode !== "auto" && mode !== "unregister") return json({ ok: true, data: { changed: false, detail: "unknown mode" } });
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        const plan = planModeChange({ mode } as ModeRequest, sandboxControlNow());
+        let changed = false;
+        let detail = "";
+        if (plan.action === "refuse") detail = plan.reason;
+        else if (plan.action === "set-off") { setSandboxWindowsMode("off"); changed = true; detail = "the sandbox is off - the agent restarts as the disclosed passthrough"; }
+        else if (plan.action === "unregister") {
+          const launched = setLoopbackRegistrationElevated(helper, false);
+          resetLoopbackExemptCache();
+          changed = launched && !loopbackExempted();
+          detail = changed ? "the sandbox's Windows loopback registration was removed" : launched ? "the helper ran but the registration is still present" : "the administrator prompt was declined";
+        } else {
+          if (plan.registerFirst) {
+            const launched = setLoopbackRegistrationElevated(helper, true);
+            resetLoopbackExemptCache();
+            if (!launched || !loopbackExempted()) detail = launched ? "the helper ran but Windows still lists no loopback exemption" : "the administrator prompt was declined - the sandbox stays off";
+          }
+          if (!detail) { setSandboxWindowsMode("auto"); changed = true; detail = "the sandbox is on - the agent restarts inside the AppContainer if its runtime boots there"; }
+        }
+        emitSecurityEvent({ category: "approval", type: "sandbox_mode", decision: changed ? "allow" : "block", severity: "medium", tool: "sandbox_mode", reason: `${mode}: ${detail}`.slice(0, 200) });
+        console.log(`[sandbox] panel request ${mode}: ${detail}`);
+        if (changed && mode !== "unregister") backend.restart();
+        return json({ ok: true, data: { changed, detail, control: sandboxControlNow() } });
+      }
+      // P-SANDBOX.13 (ADR-0391): the user adds a folder from the Security panel. The PATH NEVER COMES FROM
+      // THE CALLER: the engine opens the native Explorer dialog itself and grants only what a person picks
+      // there, so nothing holding the loopback token (the agent included) can name a folder to grant.
+      if (p === "/api/security/sandbox-grant/add" && req.method === "POST") {
+        const b = await readBody<{ mode?: unknown }>(req);
+        const mode: GrantMode = b.mode === "rw" ? "rw" : "rx";
+        // P-SANDBOX.14 (ADR-0394): refused before any dialog opens when policy owns the folder list.
+        const refusedAdd = refuseUserFolderAdd(sandboxControlNow());
+        if (refusedAdd) return json({ ok: true, data: { added: false, detail: refusedAdd } });
+        // P-SANDBOX.13b (ADR-0393): helperFallback opens the shell's folder dialog through the bundled helper
+        // when PowerShell's Constrained Language Mode (Smart App Control / WDAC) refuses the scripted picker.
+        const picked = await pickFolderNative({ title: `Give the LUCID sandbox ${mode === "rw" ? "read-write" : "read-only"} access to a folder`, buttonLabel: mode === "rw" ? "Allow read-write" : "Allow read-only", helperFallback: repoAsset("bin", "lucid-appcontainer.exe") });
+        if (!picked.supported) return json({ ok: true, data: { added: false, detail: `no folder dialog could open: ${picked.reason ?? "unknown cause"}` } });
+        if (!picked.path) return json({ ok: true, data: { added: false, cancelled: true, detail: "cancelled" } });
+        const refused = refuseGrantPath(picked.path, homedir());
+        if (refused) return json({ ok: true, data: { added: false, detail: refused } });
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        const applied = applyGrantAce(helper, mode, picked.path);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: applied.ok ? "allow" : "block", severity: "medium", tool: "sandbox_panel", reason: `${applied.ok ? "acl granted by the user" : `acl grant failed: ${applied.detail}`} · ${mode} ${picked.path}`.slice(0, 200) });
+        if (!applied.ok) return json({ ok: true, data: { added: false, detail: `the permission did not apply: ${applied.detail}` } });
+        saveGrants(addGrant(loadGrants(), { path: picked.path, mode, grantedAt: new Date().toISOString(), reason: "added by you in the Security panel" }));
+        console.log(`[sandbox-grant] user added ${mode} on ${picked.path}`);
+        return json({ ok: true, data: { added: true, path: picked.path, detail: `the sandbox can now ${mode === "rw" ? "read and write" : "read"} ${picked.path}` } });
+      }
+      // P-SANDBOX.8: revoke one standing directory grant from the Security panel. The record leaves the
+      // list ONLY when the helper's `--revoke-acl` succeeded — a failed revoke keeps the row visible
+      // (an ACE that persists while the panel forgets it would be invisible standing access).
+      if (p === "/api/security/sandbox-grant/revoke" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        const dirPath = String(b.path ?? "").trim();
+        if (!dirPath) return json({ ok: true, data: { revoked: false, detail: "no path" } });
+        const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
+        if (!helper || !existsSync(helper)) return json({ ok: true, data: { revoked: false, detail: "the bundled lucid-appcontainer helper is missing - cannot remove the ACE" } });
+        const r = revokeGrantAce(helper, dirPath);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant_revoke", decision: r.ok ? "allow" : "block", severity: "medium", tool: "sandbox_grant_dir", reason: `${r.ok ? "acl revoked" : `revoke failed: ${r.detail}`} · ${dirPath}`.slice(0, 200) });
+        if (r.ok) {
+          saveGrants(removeGrant(loadGrants(), dirPath));
+          console.log(`[sandbox-grant] revoked ${dirPath}`);
+        } else {
+          console.error(`[sandbox-grant] revoke failed for ${dirPath}: ${r.detail}`);
+        }
+        return json({ ok: true, data: { revoked: r.ok, detail: r.detail } });
       }
       // Audited fail-closed override: release one quarantined call (ADR-0019 C).
       if (p === "/api/security/approve" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: approveBlock(String(b.id ?? "")) }); }
       if (p === "/api/security/dismiss" && req.method === "POST") { const b = await readBody<{ id?: unknown }>(req); return json({ ok: true, data: dismissBlock(String(b.id ?? "")) }); }
+      // Bulk acknowledge: same acknowledge-without-release for the whole active queue (releases NOTHING).
+      if (p === "/api/security/dismiss-all" && req.method === "POST") return json({ ok: true, data: dismissAllBlocks() });
       // P-SECACK.1 (ADR-0170): mark DB-backed security rows reviewed. GUI-owned ack ledger ONLY -
       // the provenance DB is never written and nothing is released; rows just leave the active view.
       if (p === "/api/security/ack" && req.method === "POST") {
@@ -867,7 +1988,10 @@ const server = Bun.serve({
           codeActivityCache = { at: now, data: codeActivity() };
         return json({ ok: true, data: codeActivityCache.data });
       }
-      if (p === "/api/health") return json({ ok: true });
+      // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
+      // trusts a health answer carrying it, so a squatter on the port can never win the window. The
+      // nonce gates nothing else, so echoing it leaks nothing (unlike LUCID_MAIN_TOKEN: NEVER here).
+      if (p === "/api/health") return json({ ok: true, nonce: process.env.LUCID_ENGINE_NONCE ?? null });
       // P-ENT.2 (ADR-0069): the unified security-event stream (metadata-only, OCSF-ready) + per-sink
       // delivery status, for the in-app dashboard. Read-only; the file sink is the SIEM export source.
       if (p === "/api/audit") return json({ ok: true, data: { events: audit.recent(100), sinks: audit.sinkStatuses() } });
@@ -882,7 +2006,7 @@ const server = Bun.serve({
         const body = req.method === "POST" ? await readBody<{ role?: unknown; save?: unknown; repos?: unknown; window?: unknown }>(req) : {};
         const roleRaw = url.searchParams.get("role") ?? (body.role != null ? String(body.role) : null);
         const role: BriefRole | undefined = roleRaw === "developer" || roleRaw === "security" || roleRaw === "manager" || roleRaw === "executive" ? roleRaw : undefined;
-        const repo = join(import.meta.dir, "..");
+        const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
         const counts = { shipped: u.recentlyShipped.length, loadBearing: u.loadBearingDependencies.length, techDebt: u.techDebt.length, decisions: u.upcomingDecisions.length, risks: u.risks.length };
@@ -920,7 +2044,7 @@ const server = Bun.serve({
       }
       // P-REPORT.8: STIG Viewer .ckl export of the security control crosswalk (native XML checklist).
       if (p === "/api/brief/ckl") {
-        const repo = join(import.meta.dir, "..");
+        const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
         const ckl = renderCkl(u, "LucidAgentIDE");
@@ -928,7 +2052,7 @@ const server = Bun.serve({
       }
       // P-REPORT.6: POA&M export - the security control crosswalk as an eMASS-aligned POA&M CSV.
       if (p === "/api/brief/poam") {
-        const repo = join(import.meta.dir, "..");
+        const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const u = buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") });
         const csv = renderPoamCsv(u, "LucidAgentIDE");
@@ -1195,6 +2319,38 @@ const server = Bun.serve({
           return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable — check the URL and that the endpoint is up") } });
         }
       }
+      // P-LOCAL.6: ASK THE SERVER. `GET <baseUrl>/models` is the same list omp's own discovery reads, so a
+      // model's real id and real context window come from the endpoint instead of the catalog's editorial
+      // guess. A SAVED provider (`id`) authenticates with the secret MAIN injected into this child's env at
+      // spawn (P-LOCAL.2); a key is NEVER accepted in this request body, because ADR-0135 keeps provider
+      // secrets off the engine's HTTP surface entirely. An unsaved credentialed endpoint therefore reports
+      // authRequired, and the user saves the provider first - one extra click instead of a new secret path.
+      if (p === "/api/local-providers/discover" && req.method === "POST") {
+        const b = await readBody<{ baseUrl?: unknown; id?: unknown }>(req);
+        const saved = typeof b.id === "string" && b.id ? listLocalProviders().find((d) => d.id === b.id) : undefined;
+        const target = providerModelsUrl(saved?.baseUrl ?? (typeof b.baseUrl === "string" ? b.baseUrl : ""));
+        if (!target) return json({ ok: true, data: { reachable: false, error: "invalid base URL" } });
+        const headers = saved ? discoveryHeaders(saved, (process.env[providerEnvVar(saved)] ?? "").trim() || undefined) : {};
+        try {
+          const r = await fetch(target, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(6000) });
+          const base = { reachable: true, status: r.status, models: [] as unknown[], dropped: 0 };
+          if (r.status === 401 || r.status === 403) return json({ ok: true, data: { ...base, authRequired: true } });
+          if (!r.ok) return json({ ok: true, data: { ...base, error: `the endpoint answered HTTP ${r.status}` } });
+          // The body is untrusted and remote: cap it before parsing so a broken or hostile endpoint
+          // cannot make the engine buffer an unbounded response.
+          const declared = Number(r.headers.get("content-length") ?? 0);
+          if (declared > MAX_DISCOVERY_BYTES) return json({ ok: true, data: { ...base, error: "the model list is implausibly large" } });
+          const raw = await r.text();
+          if (raw.length > MAX_DISCOVERY_BYTES) return json({ ok: true, data: { ...base, error: "the model list is implausibly large" } });
+          let parsed: unknown;
+          try { parsed = JSON.parse(raw); }
+          catch { return json({ ok: true, data: { ...base, error: "the endpoint did not answer with an OpenAI model list" } }); }
+          const d = parseDiscoveredModels(parsed);
+          return json({ ok: true, data: { reachable: true, status: r.status, authRequired: false, models: d.models, dropped: d.dropped } });
+        } catch (e) {
+          return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable - check the URL and that the endpoint is up") } });
+        }
+      }
       // P-AGENT.6: enterprise export — compile the spec + write a portable, tamper-evident bundle (with a
       // SHA-256 content digest) for a deploy target under .omp/agent-exports/<spec_id>/<target>/. Fail-closed:
       // an invalid spec is refused before anything is compiled or written.
@@ -1416,7 +2572,23 @@ const server = Bun.serve({
       // P-EXEC.3: "TLDR" - explain an intimidating command in plain terms via a cheap keyed model.
       if (p === "/api/explain" && req.method === "POST") {
         const b = await readBody<{ command?: unknown }>(req);
-        const r = await explainCommand(String(b.command ?? ""));
+        const cmd = String(b.command ?? "");
+        let r = await explainCommand(cmd); // direct keyed path first (cheapest, no session spawn)
+        // P-EXEC.3 fix: OAuth-only users have NO direct API key - don't dead-end them. Route the SAME
+        // inert-DATA prompt through the omp session (which holds the OAuth/key auth) with a cheap accessible
+        // model. Uses the dedicated util connection, so it never clobbers the live chat turn.
+        if (!r.ok && /Add an Anthropic/.test(r.error ?? "")) {
+          const trimmed = cmd.trim();
+          if (trimmed && trimmed.length <= 8000) {
+            try {
+              const model = backend.checkerModelInfo().recommended || undefined; // cheapest accessible (OAuth-safe)
+              const text = (await backend.complete(EXPLAIN_SYSTEM, explainUserPrompt(trimmed), { model, idleMs: 20_000 })).trim();
+              r = text
+                ? { ok: true, text, model: model ? model.replace(/^[^/]*\//, "") : undefined }
+                : { ok: false, error: "Could not explain right now. Make sure a provider is connected in Settings, then try again." };
+            } catch { r = { ok: false, error: "Could not explain right now. Make sure a provider is connected in Settings, then try again." }; }
+          }
+        }
         return json({ ok: r.ok, data: r, error: r.error });
       }
       // P-BRIEF.4 (ADR-0113) + P-VOICE.1 (ADR-0115): SYNTHESIZE the podcast to WAV via a TTS backend,
@@ -1427,13 +2599,21 @@ const server = Bun.serve({
       // Fail-safe: a missing key is an actionable note; a synth failure returns the note (never a 500).
       if (p === "/api/brief/audio" && req.method === "POST") {
         const b = await readBody<{ provider?: unknown; voiceId?: unknown }>(req);
-        const provider = b.provider === "local-tts" ? "local-tts" : b.provider === "elevenlabs" ? "elevenlabs" : "openai-tts";
+        const provider = b.provider === "local-tts" ? "local-tts" : b.provider === "elevenlabs" ? "elevenlabs" : b.provider === "dots-tts" ? "dots-tts" : "openai-tts";
         const pickedVoice = typeof b.voiceId === "string" && b.voiceId ? b.voiceId : "";
-        const repo = join(import.meta.dir, "..");
+        const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
         const script = buildPodcastScript(buildEngineeringUpdate({ label: "LucidAgentIDE", progressMd: rd("PROGRESS.md"), decisionsMd: rd("DECISIONS.md") }));
         let backend: PodcastBackend;
-        if (provider === "local-tts") {
+        if (provider === "dots-tts") {
+          // P-VOICE.6: the podcast through the user's own cloned voices. Host = the picked/stored voice;
+          // Engineer = the next favorite when one exists (mirrors the ElevenLabs pairing below).
+          const v = voiceSettings();
+          const host = pickedVoice || v.ttsVoice || v.ttsVoiceFavorites[0] || "";
+          if (!host) return json({ ok: true, data: { note: "Pick one of your DGX voices first (Settings \u2192 Voice).", audioB64: null, mime: "audio/wav", turns: 0 } });
+          const engineer = v.ttsVoiceFavorites.find((id) => id !== host) || host;
+          backend = new OpenAiCompatibleTtsBackend({ baseUrl: v.dotsTtsUrl, model: v.dotsTtsModel, voices: { Host: host, Engineer: engineer, default: host } });
+        } else if (provider === "local-tts") {
           backend = new OpenAiCompatibleTtsBackend({ baseUrl: process.env.LUCID_TTS_URL || "http://localhost:8880", model: process.env.LUCID_TTS_MODEL || "kokoro", voices: { Host: "af_heart", Engineer: "am_onyx", default: "af_heart" } });
         } else if (provider === "elevenlabs") {
           const key = process.env.ELEVENLABS_API_KEY;
@@ -1456,51 +2636,171 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await readBody<Record<string, unknown>>(req); return json({ ok: true, data: setVoiceSettings(b as never) }); }
         return json({ ok: true, data: voiceSettings() });
       }
-      // P-VOICE.1: list the account's ElevenLabs voices for the picker (favorites first), + the selection.
-      if (p === "/api/voices") {
-        const key = process.env.ELEVENLABS_API_KEY;
-        const v = voiceSettings();
-        if (!key) return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
-        try { return json({ ok: true, data: { voices: await listElevenVoices({ apiKey: key }), favorites: v.ttsVoiceFavorites, selected: v.ttsVoice } }); }
-        catch (e) { return json({ ok: true, data: { voices: [], favorites: v.ttsVoiceFavorites, selected: v.ttsVoice, note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
+      // P-JEV.1 (ADR-0374): the judgment backend (omp `providers.judgmentProvider`). GET returns the stored
+      // choice AND the effective value after the lockdown clamp, so the card can say why they differ. POST
+      // persists the choice and restarts the omp child, because the overlay is written at spawn.
+      // P-JEV.2 (ADR-0377): both answers also carry `configured`: can Jev answer a judgment in the running
+      // child (effective mode + a saved TypeSafe key). The chat's per-turn "Jev not consulted" note is gated
+      // on it, so a user who never set Jev up is never told about it.
+      if (p === "/api/judgment") {
+        if (req.method === "POST") {
+          const b = await readBody<{ mode?: unknown }>(req);
+          const before = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective;
+          setJudgmentProvider(b.mode);
+          const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
+          if (r.effective !== before) backend.restart();
+          return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+        }
+        const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
+        return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
       }
-      // P-VOICE.1: transcribe recorded mic audio → text. Provider from settings: elevenlabs (cloud Scribe)
+      // P-JEV.2 (ADR-0377): the omp child reports each typed judgment here (the judgment extension wraps
+      // pi-ai's judge classes in-process and AWAITS this POST, so the chat has the row before omp acts on the
+      // answer). Same token'd self-report shape as /api/tool/meta. Parsed at this boundary, never trusted
+      // because it was JSON; an unparseable body is ignored, never an error the child could stall on.
+      if (p === "/api/judgment/trace" && req.method === "POST") {
+        const report = parseJudgmentReport(await readBody<unknown>(req));
+        return json({ ok: true, data: { noted: !!report && backend.noteJudgment(report) } });
+      }
+      // P-VOICE.1 + P-VOICE.2 (ADR-0247): list the selectable voices for ONE engine, so the picker works for
+      // every engine rather than only ElevenLabs. OpenAI and Kokoro publish a FIXED voice set with no list
+      // endpoint, so those come from the static catalog; ElevenLabs is per-account and fetched live.
+      // `?provider=` previews another engine's voices without committing the setting.
+      if (p === "/api/voices") {
+        const v = voiceSettings();
+        const provider = normalizeTtsProvider(url.searchParams.get("provider") || v.ttsProvider);
+        const selected = resolveVoice(provider, provider === v.ttsProvider ? v.ttsVoice : "");
+        const engines = await ttsEngines();
+        const base = { provider, engines, favorites: v.ttsVoiceFavorites, selected, autoSpeak: v.ttsAutoSpeak, conversation: v.ttsConversation };
+        // P-VOICE.6: dots.tts voices are per-BOX (the user's cloned voices) and fetched live, like
+        // ElevenLabs' per-account list. A dead tunnel returns [] plus the same reason the picker shows.
+        if (provider === "dots-tts") {
+          try {
+            const res = await fetch(`${v.dotsTtsUrl.replace(/\/+$/, "")}/v1/voices`, { signal: AbortSignal.timeout(4000) });
+            return json({ ok: true, data: { ...base, voices: mapDotsVoices(await res.json()) } });
+          } catch (e) {
+            return json({ ok: true, data: { ...base, voices: [], note: clientError(e, `No dots.tts service answered at ${v.dotsTtsUrl} - bring the SSH forward / VPN up, or fix the URL.`) } });
+          }
+        }
+        if (provider !== "elevenlabs") return json({ ok: true, data: { ...base, voices: voicesForProvider(provider) } });
+        const key = process.env.ELEVENLABS_API_KEY;
+        if (!key) return json({ ok: true, data: { ...base, voices: [], note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
+        try { return json({ ok: true, data: { ...base, voices: await listElevenVoices({ apiKey: key }) } }); }
+        catch (e) { return json({ ok: true, data: { ...base, voices: [], note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
+      }
+      // P-VOICE.7: portable voice endpoints. GET scans the handoff mailbox then lists; import is the
+      // manual-upload fallback (the renderer posts the file's text); activate makes an endpoint THE
+      // speaking engine in one click; remove forgets it.
+      if (p === "/api/voice/endpoints") {
+        const scan = scanVoiceEndpointHandoff();
+        const v = voiceSettings();
+        return json({ ok: true, data: { endpoints: v.voiceEndpoints, active: v.activeVoiceEndpointId, handoffDir: voiceEndpointHandoffDir(), ...scan } });
+      }
+      if (p === "/api/voice/endpoints/import" && req.method === "POST") {
+        const b = await readBody<{ json?: unknown }>(req);
+        let parsedJson: unknown;
+        try { parsedJson = JSON.parse(String(b.json ?? "")); }
+        catch { return json({ ok: false, error: "That file is not JSON." }); }
+        const r = parseVoiceEndpointConfig(parsedJson);
+        if (!r.ok) return json({ ok: false, error: r.reason });
+        const v = importVoiceEndpoint(r.config);
+        return json({ ok: true, data: { endpoints: v.voiceEndpoints, active: v.activeVoiceEndpointId, imported: r.config.id } });
+      }
+      if (p === "/api/voice/endpoints/activate" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const v = activateVoiceEndpoint(typeof b.id === "string" ? b.id : "");
+        return json({ ok: true, data: { endpoints: v.voiceEndpoints, active: v.activeVoiceEndpointId, url: v.dotsTtsUrl } });
+      }
+      if (p === "/api/voice/endpoints/remove" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const v = removeVoiceEndpoint(typeof b.id === "string" ? b.id : "");
+        return json({ ok: true, data: { endpoints: v.voiceEndpoints, active: v.activeVoiceEndpointId } });
+      }
+      // P-VOICE.6: compress a settled reply into a short SPOKEN digest (slow-engine mode). The verbatim
+      // text stays in the composer; only the audio narration shrinks. Uses the session's own completion
+      // seam (backend.complete), fail-soft: any failure returns the empty digest and the caller falls
+      // back to speaking the tail verbatim rather than losing speech entirely.
+      if (p === "/api/voice/digest" && req.method === "POST") {
+        const b = await readBody<{ text?: unknown }>(req);
+        const text = String(b.text ?? "").slice(0, 16_000);
+        if (!text.trim()) return json({ ok: true, data: { digest: "" } });
+        try {
+          const d = digestSpokenReply(text);
+          const out = await backend.complete(d.system, d.user);
+          return json({ ok: true, data: { digest: (out ?? "").trim().slice(0, 1200) } });
+        } catch (e) {
+          return json({ ok: true, data: { digest: "", note: clientError(e, "digest unavailable") } });
+        }
+      }
+      // P-VOICE.1: transcribe recorded mic audio \u2192 text. Provider from settings: elevenlabs (cloud Scribe)
       // or whisper (offline OpenAI-compatible server). The transcript is ordinary user input (scanned on send).
       if (p === "/api/transcribe" && req.method === "POST") {
         const b = await readBody<{ audioB64?: unknown; mime?: unknown; language?: unknown }>(req);
         const audio = typeof b.audioB64 === "string" && b.audioB64 ? new Uint8Array(Buffer.from(b.audioB64, "base64")) : new Uint8Array();
-        const v = voiceSettings();
-        let stt: TranscriptionBackend;
-        if (v.sttProvider === "elevenlabs") {
-          const key = process.env.ELEVENLABS_API_KEY;
-          if (!key) return json({ ok: true, data: { text: "", note: "Add your ElevenLabs API key (Settings → Voice), or switch STT to offline Whisper." } });
-          stt = new ElevenLabsSttBackend({ apiKey: key });
-        } else {
-          stt = new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" });
-        }
-        const r = await stt.transcribe(audio, { mimeType: typeof b.mime === "string" ? b.mime : undefined, language: typeof b.language === "string" ? b.language : undefined });
-        return json({ ok: true, data: { text: r.text, note: r.note } });
+        const r = await transcribeClip(audio, typeof b.mime === "string" ? b.mime : undefined, typeof b.language === "string" ? b.language : undefined);
+        return json({ ok: true, data: r });
       }
-      // P-VOICE.1: read arbitrary text aloud (assistant replies, an AAR summary) with the selected voice.
+      // P-STT.2b: the no-code managed offline-Whisper lifecycle (hardware-gated install / start / stop / status).
+      if (p === "/api/whisper/status") return json({ ok: true, data: whisperRuntimeStatus(whisperDeps()) });
+      if (p === "/api/whisper/install" && req.method === "POST") {
+        const wb = await readBody<{ tier?: unknown }>(req);
+        // P-STT.7: a dev run with no binary stages the pinned whisper-server FIRST, so Install & start
+        // means what it says on every path (previously it downloaded a model no server could load).
+        const staged = await ensureWhisperBinary();
+        if (staged) return json({ ok: false, data: { ok: false, reason: staged }, error: staged });
+        const rr = await installWhisper(whisperDeps(), typeof wb.tier === "string" ? (wb.tier as WhisperTier) : undefined, () => {});
+        return json({ ok: rr.ok, data: rr, error: rr.reason });
+      }
+      if (p === "/api/whisper/start" && req.method === "POST") {
+        const wb = await readBody<{ tier?: unknown }>(req);
+        const staged = await ensureWhisperBinary(); // P-STT.7: same stage-on-demand as install
+        if (staged) return json({ ok: false, data: { ok: false, reason: staged }, error: staged });
+        const rr = await startWhisper(whisperDeps(), { tier: typeof wb.tier === "string" ? (wb.tier as WhisperTier) : undefined });
+        return json({ ok: rr.ok, data: rr, error: rr.reason });
+      }
+      if (p === "/api/whisper/stop" && req.method === "POST") { const rr = await stopWhisper(whisperDeps()); return json({ ok: rr.ok, data: rr }); }
+      // P-STT.6 (ADR-0267): delete a downloaded model's weights (reclaim disk; the only path for the
+      // no-longer-offered medium/large tiers). Fail-closed on the running tier - stop the server first.
+      if (p === "/api/whisper/remove" && req.method === "POST") {
+        const wb = await readBody<{ tier?: unknown }>(req);
+        const rr = removeWhisperModel(whisperDeps(), (typeof wb.tier === "string" ? wb.tier : "") as WhisperTier);
+        return json({ ok: rr.ok, data: rr, error: rr.reason });
+      }
+      // P-VOICE.1 + P-VOICE.2: read arbitrary text aloud (assistant replies, an AAR summary), selected voice.
       if (p === "/api/tts/speak" && req.method === "POST") {
         const b = await readBody<{ text?: unknown; voiceId?: unknown; provider?: unknown }>(req);
         const text = String(b.text ?? "").slice(0, 8000);
         if (!text.trim()) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: "nothing to speak" } });
         const v = voiceSettings();
-        const provider = b.provider === "openai-tts" || b.provider === "local-tts" ? String(b.provider) : (v.ttsProvider || "elevenlabs");
+        const provider = typeof b.provider === "string" && b.provider ? normalizeTtsProvider(b.provider) : v.ttsProvider;
         try {
+          // P-VOICE.2: the SAME readiness reason the picker shows, so a failure never contradicts the menu
+          // (notably: an OpenAI OAuth sign-in cannot reach the speech API - only a platform key can).
+          const status = (await ttsEngines()).find((e) => e.id === provider);
+          if (status && !status.ready) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: status.reason } });
           if (provider === "elevenlabs") {
-            const key = process.env.ELEVENLABS_API_KEY;
-            if (!key) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: "Add your ElevenLabs API key (Settings → Voice)." } });
-            const { elevenLabsSpeak } = await import("../harness/voice/elevenlabs.ts");
+            const key = process.env.ELEVENLABS_API_KEY!;
             const voiceId = (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice || v.ttsVoiceFavorites[0];
             const out = await elevenLabsSpeak(text, { apiKey: key, voiceId, format: "mp3" });
             return json({ ok: true, data: { audioB64: Buffer.from(out.audio).toString("base64"), mime: out.mime, note: "" } });
           }
+          // P-VOICE.6: dots.tts speaks the SAME OpenAI /v1/audio/speech shape the Kokoro path uses, so the
+          // one compatible backend covers all three self-hosted/platform engines; only base URL + model differ.
+          if (provider === "dots-tts") {
+            const voice = resolveVoice(provider, (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice);
+            if (!voice) return json({ ok: true, data: { audioB64: null, mime: "audio/wav", note: "Pick one of your DGX voices first (Settings \u2192 Voice)." } });
+            const backend = new OpenAiCompatibleTtsBackend({ baseUrl: v.dotsTtsUrl, model: v.dotsTtsModel, voices: { default: voice } });
+            const r = await backend.synthesize({ title: "read", turns: [{ speaker: "default", text }] });
+            const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
+            return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });
+          }
           const kokoro = provider === "local-tts";
-          const key = kokoro ? undefined : process.env.OPENAI_API_KEY;
-          if (!kokoro && !key) return json({ ok: true, data: { audioB64: null, mime: "audio/wav", note: "Add your OpenAI API key (Providers → OpenAI), or pick ElevenLabs / Kokoro." } });
-          const backend = new OpenAiCompatibleTtsBackend({ baseUrl: kokoro ? (process.env.LUCID_TTS_URL || "http://localhost:8880") : (process.env.OPENAI_TTS_URL || "https://api.openai.com"), apiKey: key, model: kokoro ? (process.env.LUCID_TTS_MODEL || "kokoro") : (process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts"), voices: { default: kokoro ? "af_heart" : "alloy" } });
+          const key = kokoro ? undefined : process.env.OPENAI_API_KEY; // presence guaranteed by the readiness check above
+          // P-VOICE.2: honour the SELECTED voice (this was pinned to alloy/af_heart, which made the picker a
+          // no-op for these engines). resolveVoice falls back to the engine default when the stored id
+          // belongs to a different engine, so a mid-session provider switch can't 400 the request.
+          const voice = resolveVoice(provider, (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice);
+          const backend = new OpenAiCompatibleTtsBackend({ baseUrl: kokoro ? (process.env.LUCID_TTS_URL || "http://localhost:8880") : (process.env.OPENAI_TTS_URL || "https://api.openai.com"), apiKey: key, model: kokoro ? (process.env.LUCID_TTS_MODEL || "kokoro") : (process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts"), voices: { default: voice } });
           const r = await backend.synthesize({ title: "read", turns: [{ speaker: "default", text }] });
           const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
           return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });
@@ -1514,6 +2814,20 @@ const server = Bun.serve({
       // ADR-0022's still-intact transport gates — loopback bind (H1) + Origin/Host/CSRF + token (H2).
       if (p === "/api/fs/list") {
         return json({ ok: true, data: listDir(url.searchParams.get("path"), { allowedRoots: managedWorkspaceRoots() }) });
+      }
+      // P-FS.2 (ADR-0265): open the REAL OS folder dialog from the browser build. The GUI server runs on
+      // the same machine as the browser (loopback bind, H1), so it shows Explorer / Finder / zenity itself
+      // and returns the chosen path. `supported:false` = headless or no dialog binary; the renderer then
+      // falls back to the in-app browser (ADR-0103). A CANCEL is `supported:true, path:null` and the
+      // renderer must NOT re-prompt. POST: it blocks on user interaction and must never be cacheable.
+      if (p === "/api/fs/pickfolder" && req.method === "POST") {
+        const b = await readBody<{ title?: unknown; buttonLabel?: unknown }>(req);
+        const r = await pickFolderNative({
+          title: typeof b.title === "string" ? b.title : undefined,
+          buttonLabel: typeof b.buttonLabel === "string" ? b.buttonLabel : undefined,
+          helperFallback: process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : undefined, // P-SANDBOX.13b
+        });
+        return json({ ok: true, data: r });
       }
       // P-PREVIEW.3b (ADR-0096): may a remote URL load in the preview iframe? Reuses the egress allow-list /
       // managed ceiling (ADR-0062/0094) — a remote preview reaches the internet, so it only loads for a site
@@ -1530,7 +2844,22 @@ const server = Bun.serve({
       if (p === "/api/preview/file") {
         const target = (url.searchParams.get("path") ?? "").trim();
         const r = readPreviewFile(target);
-        return json(r.ok ? { ok: true, data: { html: r.html, label: r.label } } : { ok: false, error: r.error });
+        // P-PREVIEW.12: `html` + `label` are unchanged for existing callers; `kind` + `mime` are additive
+        // so a caller can tell a markdown report from an app, and `bytes` is base64 so an image can come
+        // through this JSON route as well as the raw /serve one.
+        return json(r.ok
+          ? { ok: true, data: { html: r.html, label: r.label, kind: r.kind, mime: r.mime, ...(r.bytes ? { bytes: Buffer.from(r.bytes).toString("base64") } : {}) } }
+          : { ok: false, error: r.error });
+      }
+      // P-PREVIEW-PWA.4 (ADR-0335): does this target resolve, WITHOUT reading it? The /serve route answers a
+      // failed preview with HTTP 200 and an HTML body that says so (an iframe pointed at a 404 shows the
+      // browser's own error chrome instead of our message), so nothing on the client could distinguish a
+      // rendered preview from a rendered failure. That is how the phone auto-send captured an error page and
+      // published it to a guest as a permanent snapshot. One `stat`, no read, no inlining.
+      if (p === "/api/preview/probe") {
+        const target = (url.searchParams.get("path") ?? "").trim();
+        const r = probePreviewFile(target);
+        return json({ ok: true, data: r.ok ? { resolves: true, kind: r.kind } : { resolves: false, error: r.error } });
       }
       // P-PREVIEW.4b (ADR-0096): serve a local previewable file's CONTENT as an HTML document with its OWN
       // per-frame CSP (PREVIEW_FRAME_CSP), loaded by the renderer via `iframe.src`. A `srcdoc` frame inherits
@@ -1551,6 +2880,10 @@ const server = Bun.serve({
       // query on the frame (via the postMessage bridge) and posts the result back — or an 8s timeout returns a
       // helpful "no preview open" message. Read-only by construction (the command only describes a query).
       if (p === "/api/preview/inspect") {
+        // P-PREVIEW.11b (ADR-0308): glow the panel from the ROUTE the agent hit. The old title-sniffing
+        // path in acp_backend cannot see a custom tool once intent tracing rewrites the ACP title, so
+        // every preview pill was dark. Emitted BEFORE the await so the pill shows during the wait.
+        backend.notePreviewActivity("inspect");
         const { id, promise } = inspectRelay.enqueue({ selector: url.searchParams.get("selector") ?? undefined, what: url.searchParams.get("what") ?? undefined });
         const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then inspect it" }), 8000);
         const result = await promise; clearTimeout(t);
@@ -1559,6 +2892,7 @@ const server = Bun.serve({
       // P-PREVIEW.6c (ADR-0153): the agent's preview_click / preview_type tools — a STRUCTURED action (a named
       // op on a CSS selector) through the same held relay + bridge. Same fail-closed timeout. No arbitrary JS.
       if (p === "/api/preview/act") {
+        backend.notePreviewActivity("act"); // P-PREVIEW.11b (ADR-0308): as above, before the await
         const { id, promise } = inspectRelay.enqueue({ action: url.searchParams.get("action") ?? undefined, selector: url.searchParams.get("selector") ?? undefined, value: url.searchParams.get("value") ?? undefined });
         const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then act on it" }), 8000);
         const result = await promise; clearTimeout(t);
@@ -1575,7 +2909,241 @@ const server = Bun.serve({
         return json({ ok: true, data: { resolved } });
       }
       if (p === "/api/preview/shot") {
+        // P-PREVIEW.11b (ADR-0308): only the agent's preview_screenshot tool GETs this (the renderer
+        // PUSHES to /api/preview/shot-cache and polls the relay routes), so a hit here is unambiguously
+        // the agent looking at its own work - safe to glow the panel on.
+        backend.notePreviewActivity("screenshot");
         return json({ ok: true, data: { png: latestPreviewShot } });
+      }
+      // P-PREVIEW.11 (ADR-0308): the agent's `preview_open` tool reports ITSELF here, instead of the
+      // desktop pattern-matching omp's ACP call title. With intent tracing on (omp injects an `i` field
+      // into every tool schema), buildToolTitle returns the model's intent prose, so the
+      // `"preview_open: <path>"` title the old detection keyed on never arrives - and the ACP update
+      // carries no tool-name field at all. Same shape as the shot/inspect/act channels beside it: the omp
+      // child inherits a ready token'd URL (LUCID_PREVIEW_OPEN_URL) and POSTs the path. backend.openPreview
+      // emits into the ACTIVE turn stream, and the renderer still re-gates the path through resolvePreview
+      // + readPreviewFile before anything renders, so this is a trigger, never a trust bypass.
+      if (p === "/api/preview/open" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        const target = typeof b.path === "string" ? b.path : "";
+        const opened = backend.openPreview(target);
+        // P-PREVIEW.12: close the feedback loop the agent never had. The frame CSP allows NO remote
+        // origins, so a model's CDN <script src>, remote <img>, webfont or fetch() is refused and the
+        // page renders blank or broken - previously with no signal to the user AND none to the model, so
+        // it could not self-correct and would just try again. Report what was refused, in the tool's own
+        // result, phrased as the fix (inline it, or vendor the asset next to the file and use a relative
+        // path). HTML only: the other kinds have no remote refs to block. Best-effort, and never a gate:
+        // a read failure here must not stop the panel from opening.
+        let blocked = "";
+        try {
+          const r = readPreviewFile(target);
+          if (r.ok && r.kind === "html") blocked = blockedRefsMessage(findBlockedRefs(r.html));
+        } catch { /* the panel still opens; the agent simply gets no blocked-ref advice */ }
+        return json({ ok: true, data: { opened, ...(blocked ? { blocked } : {}) } });
+      }
+      // P-EVAL.4 (ADR-0318): the omp child reports the REAL name of each tool call here. Same token'd
+      // self-report shape as /api/preview/open above, and for the same structural reason: omp's ACP
+      // tool_call update carries only a coarse `kind` ("other" for every custom + MCP tool) plus a title
+      // that intent tracing rewrites to model prose, so the desktop cannot identify a tool from the
+      // stream alone. The hook API inside omp CAN, so it posts `{ id, name, ok? }` and the backend joins
+      // on toolCallId. Pure metadata: it labels chips and the engineering report's tool breakdown, and is
+      // never consulted by a gate, so a dropped report costs a label and nothing more.
+      if (p === "/api/tool/meta" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; name?: unknown; ok?: unknown }>(req);
+        const noted = backend.noteToolMeta({
+          id: typeof b.id === "string" ? b.id : "",
+          name: typeof b.name === "string" ? b.name : "",
+          ...(typeof b.ok === "boolean" ? { ok: b.ok } : {}),
+        });
+        return json({ ok: true, data: { noted } });
+      }
+      // ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ──────────────────────────
+      // The Electron MAIN owns the real BrowserWindow (compositor-level capturePage defeats DOM-locking
+      // pages; the user watches every step and closing the window is a hard kill switch). Main cannot be
+      // imported from this child process, so these routes are the mailbox: agent tools enqueue + await,
+      // main polls /commands (500ms) and posts /result. Mirrors the /api/preview conventions above.
+      if (p === "/api/browser/open" && req.method === "POST") {
+        const b = await readBody<{ url?: unknown }>(req);
+        const target = String(b.url ?? "").trim();
+        // http/https only - the visible window must never be steered at file:// or a custom scheme.
+        if (!/^https?:\/\//i.test(target)) return json({ ok: false, error: "browser_open needs an http:// or https:// URL" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "open", url: target });
+        const r = await waitBrowserResult(id, 20_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "the browser window did not respond" });
+        browserKilledByUser = false; // a fresh window supersedes an earlier user-X kill
+        const wasActive = getBrowserStatus().active;
+        setBrowserStatus({ active: true, title: r.title ?? target, url: r.url ?? target, ...(wasActive ? {} : { startedAt: Date.now(), shots: 0 }) });
+        return json({ ok: true, data: { title: r.title ?? "", url: r.url ?? target } });
+      }
+      if (p === "/api/browser/capture" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "capture" });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok || !r.png) return json({ ok: false, error: r.error ?? "capture failed" });
+        setLatestBrowserShot(r.png);
+        setBrowserStatus({ shots: getBrowserStatus().shots + 1, ...(r.title ? { title: r.title } : {}), ...(r.url ? { url: r.url } : {}) });
+        return json({ ok: true, data: { png: r.png, title: r.title ?? "" } });
+      }
+      if (p === "/api/browser/scroll" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ dy?: unknown }>(req);
+        const dy = Number.isFinite(Number(b.dy)) ? Math.max(-20_000, Math.min(20_000, Number(b.dy))) : 800;
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "scroll", dy });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "scroll failed" });
+        return json({ ok: true, data: { dy, title: r.title ?? "" } });
+      }
+      // Click + type: the window's own input path, so the page sees ordinary user interaction (a
+      // synthesized DOM .click() misses handlers that read real pointer state). Coordinates are the
+      // agent's snapshot space; MAIN maps them onto the live content bounds. Both are pointless without
+      // an open window, and both stay cheap acks - the agent re-screenshots to see what changed.
+      if (p === "/api/browser/click" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ x?: unknown; y?: unknown; button?: unknown }>(req);
+        const x = Number(b.x), y = Number(b.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return json({ ok: false, error: "browser_click needs finite x and y snapshot coordinates (0 or greater)" });
+        const button = b.button === "right" ? "right" : "left";
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "click", x, y, button });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "click failed" });
+        return json({ ok: true, data: { button, title: r.title ?? "", url: r.url ?? "" } });
+      }
+      if (p === "/api/browser/type" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ text?: unknown; pressEnter?: unknown }>(req);
+        const text = String(b.text ?? "");
+        if (!text || text.length > 2000) return json({ ok: false, error: "browser_type needs text of 1 to 2000 characters" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "type", text, pressEnter: b.pressEnter === true });
+        const r = await waitBrowserResult(id, 15_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "type failed" });
+        return json({ ok: true, data: { typed: text.length, title: r.title ?? "" } });
+      }
+      // Drag needs intermediate moves between press and release: HTML5 drag-and-drop, sliders, and canvas
+      // handles all watch the move stream, and a down-then-up with nothing between reads as a click.
+      if (p === "/api/browser/drag" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ x?: unknown; y?: unknown; toX?: unknown; toY?: unknown }>(req);
+        const x = Number(b.x), y = Number(b.y), toX = Number(b.toX), toY = Number(b.toY);
+        const finite = [x, y, toX, toY].every((n) => Number.isFinite(n) && n >= 0);
+        if (!finite) return json({ ok: false, error: "browser_drag needs finite x, y, toX and toY snapshot coordinates (0 or greater)" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "drag", x, y, toX, toY });
+        const r = await waitBrowserResult(id, 15_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "drag failed" });
+        return json({ ok: true, data: { title: r.title ?? "", url: r.url ?? "" } });
+      }
+      // Key combos are parsed HERE as well as in main: an unknown name comes back as a named error
+      // immediately instead of costing the agent a round trip that acks and changes nothing.
+      if (p === "/api/browser/keys" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ keys?: unknown }>(req);
+        const keys = String(b.keys ?? "");
+        const parsed = parseKeyCombo(keys);
+        if ("error" in parsed) return json({ ok: false, error: `browser_keys: ${parsed.error}` });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "keys", keys });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "key press failed" });
+        return json({ ok: true, data: { keys, title: r.title ?? "", url: r.url ?? "" } });
+      }
+      // P-JEV.4 (ADR-0379): the Jev browser policy's two primitives. `snapshot` reads the indexed element
+      // table MAIN builds in its isolated world (the model picks an offered index, never a selector or a
+      // coordinate); `act` executes ONE chosen candidate only after main re-verifies the freshness reference
+      // the decision was made against - a stale page comes back as { stale: true } with nothing executed,
+      // so the tool re-snapshots instead of acting on a page the model never saw. Fail-closed throughout.
+      if (p === "/api/browser/snapshot" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "snapshot" });
+        const r = await waitBrowserResult(id, 10_000);
+        if (!r.ok || !r.page) return json({ ok: false, error: r.error ?? "snapshot failed" });
+        setBrowserStatus({ ...(r.title ? { title: r.title } : {}), ...(r.url ? { url: r.url } : {}) });
+        return json({ ok: true, data: { page: r.page } });
+      }
+      if (p === "/api/browser/act" && req.method === "POST") {
+        const s = getBrowserStatus();
+        if (!s.active) return json({ ok: false, error: browserKilledByUser ? "browser closed by user" : "no browser window is open - call browser_open first" });
+        const b = await readBody<{ action?: unknown; fresh?: unknown; text?: unknown }>(req);
+        if (!isBrowserAction(b.action)) return json({ ok: false, error: "browser_act needs a snapshot action (id, kind, label, and node/delta for its kind)" });
+        const fresh = b.fresh && typeof b.fresh === "object" && !Array.isArray(b.fresh) ? b.fresh : null;
+        if (!fresh) return json({ ok: false, error: "browser_act needs the freshness reference of the snapshot the decision was made against" });
+        const text = b.text === undefined ? undefined : String(b.text);
+        if (b.action.kind === "fill") {
+          if (!text || text.length > 2000) return json({ ok: false, error: "browser_act fill needs text of 1 to 2000 characters" });
+        } else if (text !== undefined) {
+          return json({ ok: false, error: "browser_act only accepts text for a fill action" });
+        }
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "act", action: b.action, fresh, ...(text !== undefined ? { text } : {}) });
+        const r = await waitBrowserResult(id, 15_000);
+        if (!r.ok) return json({ ok: false, error: r.error ?? "act failed", ...(r.stale === true ? { stale: true } : {}) });
+        return json({ ok: true, data: { title: r.title ?? "", url: r.url ?? "" } });
+      }
+      // Close is idempotent and shared by three callers (agent tool, pill button, Stop-agent path):
+      // an already-closed window answers ok so a stop sequence never trips over a race with the user's X.
+      if (p === "/api/browser/close" && req.method === "POST") {
+        if (!getBrowserStatus().active) return json({ ok: true, data: { closed: true } });
+        const id = `bcmd_${++browserCmdSeq}`;
+        enqueueBrowserCommand({ id, op: "close" });
+        await waitBrowserResult(id, 10_000); // best-effort ack; inactive either way below
+        setBrowserStatus({ active: false });
+        failAllBrowserCommands("browser window closed");
+        return json({ ok: true, data: { closed: true } });
+      }
+      if (p === "/api/browser/shot") {
+        const png = latestBrowserShot();
+        return png ? json({ ok: true, data: { png } }) : json({ ok: false, error: "no shot yet" });
+      }
+      if (p === "/api/browser/status" && req.method === "POST") {
+        // Push from MAIN: title/navigation updates while the window lives, and the close notification.
+        // `closedByUser` is the kill switch - queued + pending commands settle immediately with the
+        // honest error (never a 10-20s timeout), and stay failing until a fresh browser_open.
+        const b = await readBody<{ active?: unknown; title?: unknown; url?: unknown; closedByUser?: unknown }>(req);
+        if (b.closedByUser === true) {
+          browserKilledByUser = true;
+          setBrowserStatus({ active: false });
+          failAllBrowserCommands("browser closed by user");
+        } else if (b.active === false) {
+          setBrowserStatus({ active: false });
+          failAllBrowserCommands("browser window closed");
+        } else if (getBrowserStatus().active) {
+          setBrowserStatus({ ...(typeof b.title === "string" ? { title: b.title } : {}), ...(typeof b.url === "string" ? { url: b.url } : {}) });
+        }
+        return json({ ok: true, data: getBrowserStatus() });
+      }
+      if (p === "/api/browser/status") return json({ ok: true, data: getBrowserStatus() });
+      // Drained by MAIN's 500ms poll loop (x-lucid-token header; main minted the token).
+      if (p === "/api/browser/commands") return json({ ok: true, data: { commands: drainBrowserCommands() } });
+      if (p === "/api/browser/result" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; ok?: unknown; error?: unknown; png?: unknown; title?: unknown; url?: unknown; page?: unknown; stale?: unknown }>(req);
+        if (typeof b.id === "string" && b.id) {
+          // P-JEV.4 (ADR-0379): a snapshot page is forwarded only when it is on-shape AND main fingerprinted
+          // it - the policy keys every decision to that fingerprint, so an unfingerprinted page is no page.
+          const page = isBrowserPageShape(b.page) && "fingerprint" in b.page && typeof b.page.fingerprint === "string"
+            ? { ...b.page, fingerprint: b.page.fingerprint } : null;
+          completeBrowserCommand(b.id, {
+            ok: b.ok === true,
+            ...(typeof b.error === "string" ? { error: b.error } : {}),
+            ...(typeof b.png === "string" && b.png.startsWith("data:image/") ? { png: b.png } : {}),
+            ...(typeof b.title === "string" ? { title: b.title } : {}),
+            ...(typeof b.url === "string" ? { url: b.url } : {}),
+            ...(page ? { page } : {}),
+            ...(typeof b.stale === "boolean" ? { stale: b.stale } : {}),
+          });
+        }
+        return json({ ok: true, data: { settled: typeof b.id === "string" && !!b.id } });
       }
       // P-PREVIEW.7 (ADR-0179): is the previewed file part of an ELECTRON app (which the sandboxed
       // frame cannot run - no Node/require)? Read-only detection for the renderer's explain-overlay.
@@ -1612,23 +3180,53 @@ const server = Bun.serve({
           "x-content-type-options": "nosniff",
         };
         if (r.ok) {
-          // P-PREVIEW.4c (ADR-0096): fold the app's OWN relative assets (css/js/img/fonts) inline so a
-          // MULTI-FILE app renders under the opaque-origin, egress-blocked frame CSP. HTML only (an .svg is
-          // self-contained); best-effort — a read failure just serves the raw HTML (the CSP blocks the ref).
-          let body = r.html;
-          if (/\.html?$/i.test(toFsPath(target))) {
+          // Images need a document host for sandbox wheel routing; PDFs retain their native viewer.
+          if (r.bytes) {
+            if (r.kind === "image") {
+              const data = Buffer.from(r.bytes).toString("base64");
+              const image = `<!doctype html><html><head><meta charset="utf-8"><title>Preview image</title><style>html,body{margin:0;min-height:100%;background:#fff}img{display:block;max-width:100%;height:auto}</style></head><body><img alt="Preview image" src="data:${r.mime};base64,${data}"></body></html>`;
+              return new Response(injectPreviewZoom(image), { headers });
+            }
+            return new Response(r.bytes, { headers: { ...headers, "content-type": r.mime } });
+          }
+          // P-PREVIEW.12: text-ish kinds (markdown, txt, json, csv, log, yaml, xml, ...) are wrapped in a
+          // minimal readable document by previewTextDocument. This is the core of the reported bug: a model
+          // that wrote a markdown report or a JSON payload previously got "not an .html/.svg file" and had
+          // no way to show its own work. html/svg pass through it untouched.
+          let body = (r.kind === "html" || r.kind === "svg") ? r.html : previewTextDocument(r.kind, r.html, r.label);
+          if (r.kind === "html") {
+            // P-PREVIEW.4c (ADR-0096): fold the app's OWN relative assets (css/js/img/fonts) inline so a
+            // MULTI-FILE app renders under the opaque-origin, egress-blocked frame CSP. HTML only (an .svg is
+            // self-contained); best-effort, a read failure just serves the raw HTML (the CSP blocks the ref).
             try {
               body = inlinePreviewAssets(body, dirname(toFsPath(target)), {
                 readText: (pp) => readFileSync(pp, "utf8"),
                 readBytes: (pp) => readFileSync(pp),
               });
             } catch { /* serve raw HTML on any inlining failure */ }
+            // P-PREVIEW.13: the EARLY environment shim. Injected right after <head>, so it is the FIRST
+            // script in the document and runs BEFORE the page's own code. It hands the page an in-memory
+            // localStorage/sessionStorage (the frame's origin is opaque, so the real ones THROW and an
+            // uncaught throw kills the rest of the script - the "styled but dead page" bug), installs the
+            // error capture early enough to actually see that first throw, and shows a banner when one
+            // happens so a blank frame is never silent. Injection ORDER does not matter here, only
+            // document position, which injectPreviewShim owns.
+            body = injectPreviewShim(body);
+            // P-PREVIEW.6b (ADR-0153): inject the read-only DOM-inspect bridge (inline JS, CSP-allowed; egress
+            // still blocked by connect-src 'none'). Only for HTML: an .svg is self-contained + has no DOM to
+            // inspect. It answers postMessage queries from the LUCID renderer; it never mutates or evals.
+            body = injectPreviewBridge(body);
+            // P-PREVIEW.12: LAST, and only for HTML. The frame CSP allows no remote origins, so a CDN
+            // <script src>, a remote <img>, a webfont or a fetch() dies silently and the user sees a blank
+            // page with no explanation. This banner names what was refused and what to do instead. It runs
+            // after inlining, so anything successfully folded in locally is no longer reported as blocked,
+            // and it is never injected into an .svg (which has no place to put it).
+            body = injectBlockedRefsBanner(body);
           }
-          // P-PREVIEW.6b (ADR-0153): inject the read-only DOM-inspect bridge (inline JS, CSP-allowed; egress
-          // still blocked by connect-src 'none'). Only for HTML — an .svg is self-contained + has no DOM to
-          // inspect. It answers postMessage queries from the LUCID renderer; it never mutates or evals.
-          if (/\.html?$/i.test(toFsPath(target))) body = injectPreviewBridge(body);
-          return new Response(body, { headers });
+          body = injectPreviewZoom(body, r.kind === "svg");
+          // svg keeps its own image/svg+xml MIME: served as text/html a browser would render the markup
+          // as text rather than as an image.
+          return new Response(body, { headers: r.kind === "svg" ? { ...headers, "content-type": r.mime } : headers });
         }
         const safe = r.error.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
         return new Response(
@@ -1655,6 +3253,413 @@ const server = Bun.serve({
           sysResCache = { at: now, data: { snap, verdict: assessSystem(snap), procs: topProcesses() } };
         }
         return json({ ok: true, data: sysResCache.data });
+      }
+      // CREATOR-0 (ADR-0279): this build's identity - flavor, ports, data roots, and which Creator
+      // surfaces exist. Token-gated like the rest of /api (it names local paths); it NEVER carries a
+      // credential, a vault ref, or decrypted material.
+      if (p === "/api/build-info") {
+        return json({ ok: true, data: buildInfoView(BUILD, {
+          version: APP_VERSION,
+          port: PORT,
+          dataRoot: process.env.LUCID_DATA_ROOT || "",
+          settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
+          personalDir: personalBaseDir(),
+        }) });
+      }
+      // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail. Creator builds
+      // only; a standard build refuses rather than growing a surface it does not ship.
+      if (p === "/api/creator/resources") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator resources are only in the Creator build." });
+        return json({ ok: true, data: await creatorResources(url.searchParams.get("fresh") === "1") });
+      }
+      // CREATOR-0 (ADR-0282): the integration registry - every provider, its honest capability labels,
+      // and whether THIS machine has an endpoint and a credential for it.
+      if (p === "/api/creator/registry") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
+        return json({ ok: true, data: creatorRegistryData() });
+      }
+      // CREATOR-0: upsert / remove one endpoint DECLARATION. Fail-closed: an invalid declaration (shell
+      // string, credential in the URL, pasted secret) is refused with its reasons and nothing is stored.
+      if (p === "/api/creator/endpoint" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
+        const b = await readBody<{ remove?: unknown; endpoint?: unknown }>(req);
+        if (typeof b.remove === "string" && b.remove) {
+          return json({ ok: true, data: { removed: removeCreatorEndpoint(b.remove), registry: creatorRegistryData() } });
+        }
+        const raw = (b.endpoint ?? {}) as Partial<CreatorEndpointDef>;
+        const def: CreatorEndpointDef = {
+          id: String(raw.id ?? "").trim().toLowerCase(),
+          providerId: (CREATOR_PROVIDER_IDS as readonly string[]).includes(String(raw.providerId)) ? String(raw.providerId) as CreatorProviderId : "comfyui",
+          label: String(raw.label ?? "").trim(),
+          baseUrl: raw.baseUrl ? String(raw.baseUrl).trim() : undefined,
+          command: raw.command ? String(raw.command).trim() : undefined,
+          args: Array.isArray(raw.args) ? raw.args.slice(0, 24).map((a) => String(a)) : undefined,
+          zone: raw.zone === "internal" || raw.zone === "external" ? raw.zone : "local",
+          vaultRef: raw.vaultRef ? String(raw.vaultRef).trim() : undefined,
+          workflow: raw.workflow ? String(raw.workflow) : undefined,
+          enabled: raw.enabled !== false,
+        };
+        const r = upsertCreatorEndpoint(def);
+        return json({ ok: r.ok, error: r.ok ? undefined : r.errors.join("; "), data: { registry: creatorRegistryData() } });
+      }
+      // CREATOR-0 (ADR-0283): remote monitoring targets (a DGX Spark, a GPU VM behind the VPN).
+      if (p === "/api/creator/target" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator resources are only in the Creator build." });
+        const b = await readBody<{ remove?: unknown; target?: unknown }>(req);
+        if (typeof b.remove === "string" && b.remove) return json({ ok: true, data: { removed: removeCreatorTarget(b.remove) } });
+        const raw = (b.target ?? {}) as Record<string, unknown>;
+        const def = {
+          id: String(raw.id ?? "").trim().toLowerCase(),
+          label: String(raw.label ?? "").trim(),
+          url: String(raw.url ?? "").trim(),
+          kind: raw.kind === "lucid-agent" ? "lucid-agent" as const : "dcgm-exporter" as const,
+          vaultRef: raw.vaultRef ? String(raw.vaultRef).trim() : undefined,
+          enabled: raw.enabled !== false,
+        };
+        const v = validateRemoteTarget(def);
+        if (!v.ok) return json({ ok: false, error: v.errors.join("; ") });
+        upsertCreatorTarget(def);
+        return json({ ok: true, data: { saved: true } });
+      }
+      // CREATOR-0 (ADR-0281): the local track library - list, import, review, remix, re-prompt, remove.
+      // Every one of these works with no provider API at all.
+      if (p === "/api/creator/library") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator library is only in the Creator build." });
+        if (req.method === "POST") {
+          const b = await readBody<Record<string, unknown>>(req);
+          const op = String(b.op ?? "");
+          const id = typeof b.id === "string" ? b.id : "";
+          if (op === "add" || op === "remix" || op === "reprompt") {
+            const r = addTrack(libraryIo, CREATOR_DIR, {
+              sourcePath: String(b.sourcePath ?? ""),
+              title: typeof b.title === "string" ? b.title : undefined,
+              origin: typeof b.origin === "string" ? b.origin as TrackOrigin : undefined,
+              prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+              lyrics: typeof b.lyrics === "string" ? b.lyrics : undefined,
+              tags: Array.isArray(b.tags) ? b.tags.map((t) => String(t)) : undefined,
+              parentId: op === "add" ? null : id,
+              kind: op === "add" ? "original" : op === "remix" ? "remix" : "reprompt",
+            });
+            return json({ ok: r.ok, error: r.error, data: creatorLibraryData() });
+          }
+          if (op === "update") {
+            const r = updateTrack(libraryIo, CREATOR_DIR, id, {
+              title: typeof b.title === "string" ? b.title : undefined,
+              prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+              lyrics: typeof b.lyrics === "string" ? b.lyrics : undefined,
+              tags: Array.isArray(b.tags) ? b.tags.map((t) => String(t)) : undefined,
+              rating: b.rating === null ? null : typeof b.rating === "number" ? b.rating : undefined,
+              review: typeof b.review === "string" ? b.review : undefined,
+            });
+            return json({ ok: r.ok, error: r.error, data: creatorLibraryData() });
+          }
+          if (op === "remove") {
+            const r = removeTrack(libraryIo, CREATOR_DIR, id);
+            return json({ ok: r.ok, error: r.error, data: creatorLibraryData() });
+          }
+          return json({ ok: false, error: "Unknown library operation." });
+        }
+        return json({ ok: true, data: creatorLibraryData() });
+      }
+      // CREATOR-1 (ADR-0292): probe one provider (or every declared one) and cache what it PROVED. This is
+      // what turns registry state `configured` into a truthful `ready`.
+      if (p === "/api/creator/probe" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator probes are only in the Creator build." });
+        const b = await readBody<{ providerId?: unknown }>(req);
+        const endpoints = listCreatorEndpoints();
+        const wanted = (CREATOR_PROVIDER_IDS as readonly string[]).includes(String(b.providerId))
+          ? [String(b.providerId) as CreatorProviderId]
+          : [...CREATOR_PROVIDER_IDS];
+        for (const id of wanted) {
+          const job = createJob(jobIo, CREATOR_DIR, { kind: "probe", label: `probe ${id}`, provider: id });
+          startJob(jobIo, CREATOR_DIR, job.id);
+          const r = await probeProvider(probeDeps, id, endpoints);
+          probeCache.set(r);
+          finishJob(jobIo, CREATOR_DIR, job.id, r.state === "ready" ? "done" : "failed", r.state === "ready" ? "" : `${r.state}: ${r.detail}`);
+        }
+        return json({ ok: true, data: { registry: creatorRegistryData(), ...creatorJobsData() } });
+      }
+      // CREATOR-1: the job ledger - what ran, what it produced, what the governor measured, what failed.
+      if (p === "/api/creator/jobs") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator jobs are only in the Creator build." });
+        if (req.method === "POST") {
+          const b = await readBody<{ cancel?: unknown }>(req);
+          const r = requestJobCancel(jobIo, CREATOR_DIR, String(b.cancel ?? ""));
+          return json({ ok: r.ok, error: r.error, data: creatorJobsData() });
+        }
+        return json({ ok: true, data: creatorJobsData() });
+      }
+      // CREATOR-IMG (ADR-0291): the model dropdown - a LIVE probe of the configured ComfyUI install's own
+      // loaders. No hardcoded model list, and an unreachable server says so instead of offering fiction.
+      if (p === "/api/creator/models") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const ep = comfyEndpoint();
+        if (!ep) return json({ ok: true, data: { models: [], endpoint: "", note: "Connect a ComfyUI endpoint in Creator Studio to list its models." } });
+        const probe = await comfyClient(ep).probeModels();
+        return json({ ok: true, data: { models: probe.models, endpoint: ep.baseUrl ?? "", note: probe.note } });
+      }
+      // CREATOR-IMG: generate an image from a prompt plus mixed input images, through the USER's own workflow
+      // template. Fail-closed at every step: no endpoint, no template, or an unresolved placeholder refuses
+      // with the exact reason rather than submitting a half-built graph.
+      if (p === "/api/creator/image" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        // CREATOR-1: a generation is a JOB - admitted by the governor, recorded with what it produced.
+        const label = typeof b.prompt === "string" && b.prompt.trim() ? b.prompt.trim().slice(0, 80) : "image generation";
+        const admit = await admitCreatorJob("image", label, "comfyui", { gpu: true });
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { ...creatorJobsData() } });
+        const r = await generateCreatorImage(b);
+        for (const a of r.data?.produced ?? []) recordJobArtifact(jobIo, CREATOR_DIR, admit.jobId, a.id);
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.error ?? "");
+        return json({ ok: r.ok, error: r.error, data: r.data ? { ...r.data, ...creatorJobsData() } : { ...creatorJobsData() } });
+      }
+      // CREATOR-3 (ADR-0287): a VIDEO or 3D render through the user's own workflow. Every gate in one place
+      // and in this order: a live probe must have ATTESTED the capability, the governor must admit the work,
+      // the template must have no holes, the bytes must prove their own type, and the server-supplied
+      // metadata must clear the fail-closed scanner before anything is written. The seam's result object is
+      // returned WHOLE rather than hand-projected, so the pane reads the same fields the tests pin.
+      if (p === "/api/creator/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const kind: MediaKind = b.kind === "model-3d" ? "model-3d" : b.kind === "image" ? "image" : "video";
+        const ep = comfyEndpoint();
+        if (!ep) return json({ ok: false, error: "No ComfyUI endpoint is configured. Add one in Creator Studio first." });
+        const templateRaw = typeof b.workflow === "string" && b.workflow.trim() ? b.workflow : ep.workflow;
+        if (!templateRaw || !templateRaw.trim()) {
+          return json({ ok: false, error: `No workflow template is saved for this endpoint. Export the graph that produces your ${kind} from ComfyUI with Save (API Format) and paste it into the endpoint, using {{prompt}}, {{model}} and {{seed}} where LUCID should fill values in.` });
+        }
+        let template: unknown;
+        try { template = JSON.parse(templateRaw); }
+        catch { return json({ ok: false, error: "That workflow template is not valid JSON." }); }
+        const prompt = typeof b.prompt === "string" ? b.prompt.slice(0, 4000) : "";
+        const label = prompt.trim() ? `${kind}: ${prompt.trim().slice(0, 70)}` : `${kind} render`;
+        const deps: PipelineDeps = { client: comfyClient(ep), artifactIo, jobIo, scan: creatorScan, now: () => Date.now() };
+        // The websocket is opened BEFORE the submit, so the first frames of a fast render are not missed,
+        // and closed in the `finally` whatever happens: an unclosed socket would keep the drain alive past
+        // the response. A server with no reachable socket simply yields no feed and polling decides.
+        const clientId = `lucid-${randomBytes(8).toString("hex")}`;
+        const socket = openComfyProgress(ep.baseUrl ?? "", creatorEndpointToken(ep), clientId);
+        try {
+        const run = await runRenderPipeline(deps, CREATOR_DIR, {
+          kind,
+          workflow: template,
+          clientId,
+          feed: socket?.feed,
+          spec: {
+            prompt,
+            negative: typeof b.negative === "string" ? b.negative.slice(0, 2000) : "",
+            model: typeof b.model === "string" ? b.model : "",
+            seed: typeof b.seed === "number" ? b.seed : Math.floor(Math.random() * 2 ** 31),
+            width: typeof b.width === "number" ? b.width : undefined,
+            height: typeof b.height === "number" ? b.height : undefined,
+          },
+          // The probe cache is the ONLY source of attested capability, and it returns nothing once a probe
+          // has expired, so a stale install refuses here rather than at the server.
+          attested: probeCache.discovered("comfyui", Date.now()) ?? [],
+          admission: await creatorAdmissionSnapshot(label, { gpu: true }),
+          label,
+          maxArtifacts: typeof b.maxArtifacts === "number" ? b.maxArtifacts : undefined,
+          poll: { pollMs: 1200, maxWaitMs: 600_000 },
+        });
+        return json({ ok: run.ok, error: run.error, data: { run, artifacts: creatorArtifacts(), ...creatorJobsData() } });
+        } finally { socket?.close(); }
+      }
+      // CREATOR-3: a Blender BACKGROUND render. Fixed argv, no shell. A user `--python` script is the user's
+      // own code, so it needs `approved: true` (the exec-approval decision) before it will run: LUCID adds no
+      // Python of its own (invariant 2) and never runs someone else's silently.
+      if (p === "/api/creator/blender" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const ep = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "blender" && !!e.command);
+        const exe = typeof b.exe === "string" && b.exe.trim() ? b.exe.trim() : (ep?.command ?? "");
+        if (!exe) return json({ ok: false, error: "No Blender executable is configured. Add it in Creator Studio first." });
+        const range = b.range && typeof b.range === "object"
+          ? { start: Number((b.range as Record<string, unknown>).start), end: Number((b.range as Record<string, unknown>).end) }
+          : undefined;
+        const input = {
+          exe,
+          blend: String(b.blend ?? ""),
+          outPattern: String(b.outPattern ?? ""),
+          format: b.format as "PNG" | "JPEG" | "OPEN_EXR" | "WEBP" | undefined,
+          engine: b.engine as "CYCLES" | "BLENDER_EEVEE_NEXT" | "BLENDER_WORKBENCH" | undefined,
+          scene: typeof b.scene === "string" ? b.scene : undefined,
+          frame: typeof b.frame === "number" ? b.frame : undefined,
+          range,
+          pythonScript: typeof b.pythonScript === "string" ? b.pythonScript : undefined,
+          approved: b.approved === true,
+          label: typeof b.label === "string" ? b.label : undefined,
+          timeoutMs: typeof b.timeoutMs === "number" ? b.timeoutMs : undefined,
+          cwd: typeof b.cwd === "string" ? b.cwd : undefined,
+          admission: null as JobAdmissionSnapshot | null,
+        };
+        const need = blenderJobNeed(input);
+        input.admission = await creatorAdmissionSnapshot(need.label, need);
+        const run = await runBlenderRender({ spawn: blenderSpawn, jobIo, exists: (path) => existsSync(path), now: () => Date.now() }, CREATOR_DIR, input);
+        return json({ ok: run.ok, error: run.error, data: { run, ...creatorJobsData() } });
+      }
+      // CREATOR-3: the model MANIFEST. A declaration of what a given install can do, reconciled against what
+      // the probe actually reported: the probe is the truth and the manifest is only the claim, so a declared
+      // model the server does not list is reported ABSENT rather than offered.
+      if (p === "/api/creator/manifest" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator render pipelines are only in the Creator build." });
+        const b = await readBody<{ manifest?: unknown }>(req);
+        const parsed = parseModelManifest(b.manifest);
+        if (!parsed.ok) return json({ ok: false, error: parsed.error });
+        const ep = comfyEndpoint();
+        const probe = probeCache.get("comfyui");
+        const models = ep ? (await comfyClient(ep).probeModels()).models : [];
+        const reconciliation = reconcileManifest(parsed.manifest, {
+          models,
+          attested: probe?.attested ?? [],
+          probeState: probe?.state ?? "skipped",
+          ageMs: probe ? Math.max(0, Date.now() - probe.at) : Number.MAX_SAFE_INTEGER,
+        });
+        return json({ ok: true, data: { reconciliation, claimed: manifestCapabilities(parsed.manifest), warnings: parsed.warnings } });
+      }
+      // CREATOR-IMG: store a renderer-encoded PNG (a meme, a markup export, a canvas composite) as an
+      // artifact with its provenance. The data URL is gated: no SVG, no mislabeled bytes.
+      if (p === "/api/creator/artifact" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const decoded = decodePngDataUrl(b.dataUrl);
+        if (!decoded.ok) return json({ ok: false, error: decoded.error });
+        const kinds: Record<string, ArtifactKind> = { image: "image", sheet: "sheet", gif: "gif", meme: "meme", markup: "markup" };
+        const stored = storeArtifact(artifactIo, CREATOR_DIR, {
+          kind: kinds[String(b.kind ?? "image")] ?? "image",
+          bytes: decoded.bytes,
+          mime: decoded.mime,
+          width: typeof b.width === "number" ? b.width : 0,
+          height: typeof b.height === "number" ? b.height : 0,
+          source: typeof b.source === "string" ? b.source : "local",
+          prompt: typeof b.prompt === "string" ? b.prompt : "",
+          model: typeof b.model === "string" ? b.model : "",
+        });
+        return json({ ok: stored.ok, error: stored.error, data: stored.ok ? { artifact: stored.artifact, artifacts: creatorArtifacts() } : null });
+      }
+      // CREATOR-IMG: compose frames into a sprite sheet PNG plus its manifest and a steps() CSS animation.
+      // Pure TypeScript encoding - no provider, no key, no network.
+      if (p === "/api/creator/sheet" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const frames = decodeWireFrames(b.frames);
+        if (!frames.ok) return json({ ok: false, error: frames.error });
+        const admit = await admitCreatorJob("sheet", `sprite sheet - ${frames.frames.length} frames`, "local");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { ...creatorJobsData() } });
+        const r = buildSpriteSheet(artifactIo, CREATOR_DIR, frames.frames, {
+          name: typeof b.name === "string" ? b.name : "sprite",
+          columns: typeof b.columns === "number" ? b.columns : undefined,
+          durationMs: typeof b.durationMs === "number" ? b.durationMs : undefined,
+        });
+        if (r.ok && r.result) recordJobArtifact(jobIo, CREATOR_DIR, admit.jobId, r.result.artifact.id);
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.error ?? "");
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { artifact: r.result!.artifact, css: r.result!.css, manifest: r.result!.manifest, artifacts: creatorArtifacts(), ...creatorJobsData() } : { ...creatorJobsData() } });
+      }
+      // CREATOR-IMG: encode frames into an animated GIF (GIF89a, global palette, LZW) in-process.
+      if (p === "/api/creator/gif" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req);
+        const frames = decodeWireFrames(b.frames);
+        if (!frames.ok) return json({ ok: false, error: frames.error });
+        const delays = Array.isArray(b.delayMs) ? b.delayMs.filter((d): d is number => typeof d === "number") : undefined;
+        const admit = await admitCreatorJob("gif", `gif - ${frames.frames.length} frames`, "local");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { ...creatorJobsData() } });
+        const r = buildGif(artifactIo, CREATOR_DIR, frames.frames, {
+          delayMs: delays && delays.length ? delays : (typeof b.delayMs === "number" ? b.delayMs : 100),
+          loop: typeof b.loop === "number" ? b.loop : 0,
+        });
+        if (r.ok && r.artifact) recordJobArtifact(jobIo, CREATOR_DIR, admit.jobId, r.artifact.id);
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.error ?? "");
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { artifact: r.artifact, artifacts: creatorArtifacts(), ...creatorJobsData() } : { ...creatorJobsData() } });
+      }
+      // CREATOR-IMG: the artifact list, and one artifact's bytes as a data URL (for inline display and for
+      // the hand-off into the Preview panel's existing markup surface).
+      if (p === "/api/creator/artifacts") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
+        const id = url.searchParams.get("id");
+        if (!id) return json({ ok: true, data: { artifacts: creatorArtifacts() } });
+        const art = creatorArtifacts().find((a) => a.id === id);
+        if (!art) return json({ ok: false, error: "That artifact is not in the library." });
+        try {
+          const bytes = readFileSync(join(artifactDir(CREATOR_DIR), art.file));
+          return json({ ok: true, data: { artifact: art, dataUrl: `data:${art.mime};base64,${bytes.toString("base64")}` } });
+        } catch { return json({ ok: false, error: "That artifact's file is missing." }); }
+      }
+      // CREATOR-0: playable bytes for one track, base64 + mime like the TTS path (the renderer turns it
+      // into one blob URL). Path-confined: the id resolves through the ledger, never a caller path.
+      if (p === "/api/creator/track") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator library is only in the Creator build." });
+        const r = trackAudio(libraryIo, CREATOR_DIR, url.searchParams.get("id") ?? "");
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { audioB64: r.audioB64, mime: r.mime, title: r.title } : null });
+      }
+      // CREATOR-2 (ADR-0286): open one track as a follow-along timeline - its audio, its waveform, the words
+      // bound to it, and the PROVENANCE of that binding (carried verbatim from the aligner, never re-worded).
+      // A container the editor cannot decode is refused by name; there is no transcoder to pretend with.
+      if (p === "/api/creator/editor/open" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator editor is only in the Creator build." });
+        const b = await readBody<{ trackId?: unknown; text?: unknown; buckets?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That editor request was not JSON." });
+        const r = openEditor(libraryIo, CREATOR_DIR, {
+          trackId: typeof b.trackId === "string" ? b.trackId : "",
+          text: typeof b.text === "string" ? b.text : undefined,
+          buckets: typeof b.buckets === "number" ? b.buckets : undefined,
+        });
+        return json({ ok: r.ok, error: r.error, session: r.session });
+      }
+      // CREATOR-2: save an edit. The document is gated off the wire fail-closed (one malformed word refuses
+      // the body), then rendered and APPENDED as a remix - the edited track keeps its bytes and its row.
+      if (p === "/api/creator/editor/save" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator editor is only in the Creator build." });
+        const b = await readBody<{ trackId?: unknown; doc?: unknown; title?: unknown; prompt?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That editor request was not JSON." });
+        const decoded = decodeTimelineDoc(b.doc);
+        if (!decoded.ok) return json({ ok: false, error: decoded.error });
+        const r = saveEdit(editorIo, CREATOR_DIR, {
+          trackId: typeof b.trackId === "string" ? b.trackId : "",
+          doc: decoded.doc,
+          title: typeof b.title === "string" ? b.title : "",
+          prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+        });
+        // The result IS this route's wire shape, so it is returned whole. A hand-written field-by-field
+        // projection here would be a SECOND copy of that contract living in the one file no headless test
+        // can import, where a dropped or renamed field reaches the pane as a report its guard refuses on
+        // every clean save, with the suite still green. Same reasoning as /api/creator/mixer/render.
+        return json(r);
+      }
+      // CREATOR-5 (ADR-0289): the layers a mix can be built from, plus the format the mix will run at (the
+      // MAJORITY WAV format in the library, because this build ships no resampler). Every WAV is listed with
+      // its real sample rate and channel count, so the UI can say WHY a track is not offered instead of
+      // hiding it; nulls mean the format is unknown to this build, never a guess and never 0.
+      if (p === "/api/creator/mixer/tracks") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator mixer is only in the Creator build." });
+        const r = mixerTracks(libraryIo, CREATOR_DIR);
+        return json({ ok: r.ok, error: r.error, data: r.ok ? { tracks: r.tracks, sampleRate: r.sampleRate, channels: r.channels } : null });
+      }
+      // CREATOR-5: render a mix and APPEND it. The graph is untrusted input, gated field by field like a
+      // timeline (one malformed clip refuses the body rather than rendering a layer short), and every source
+      // it names must resolve - a mix that quietly substituted silence would be a lie the rendered file could
+      // not admit. Headroom is opt-in, and the EXACT gain applied comes back in the answer.
+      if (p === "/api/creator/mixer/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator mixer is only in the Creator build." });
+        const b = await readBody<{ graph?: unknown; title?: unknown; prompt?: unknown; primaryTrackId?: unknown; applyHeadroom?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That mixer request was not JSON." });
+        const decoded = decodeMixGraph(b.graph);
+        if (!decoded.ok) return json({ ok: false, error: decoded.error });
+        const r = renderAndSaveMix(editorIo, CREATOR_DIR, {
+          graph: decoded.graph,
+          title: typeof b.title === "string" ? b.title : "",
+          prompt: typeof b.prompt === "string" ? b.prompt : undefined,
+          primaryTrackId: typeof b.primaryTrackId === "string" ? b.primaryTrackId : "",
+          applyHeadroom: b.applyHeadroom === true,
+        });
+        // Deliberately NOT a field-by-field projection like the editor's save above: RenderMixResult IS this
+        // route's wire shape (ok, error and the measurements, all top-level, which is why bridge.ts runs
+        // isRenderMixReport on the body itself), and `error: undefined` drops on serialization. Re-listing
+        // the fields here would put the same invariant in two places, and only the seam's copy is testable:
+        // dev.ts cannot be imported headless, so a key dropped from a re-listing would reach the pane as "a
+        // report this build cannot read" on every clean render with every test still green. One copy, owned
+        // by desktop/creator_mixer.test.ts. The GET above keeps its projection because there the result is
+        // NOT the wire shape: it nests under `data`.
+        return json(r);
       }
       // real omp ACP backend (genuine model replies + live session config)
       if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
@@ -1685,6 +3690,12 @@ const server = Bun.serve({
         if (req.method === "POST") { const b = await readBody<{ path?: unknown }>(req); setWorkspace(String(b.path ?? "")); backend.restart(); if (collabManager.active) collabManager.refreshOptions(); /* P-COLLAB.14: mirror the folder switch to edit guests */ }
         return json({ ok: true, data: workspaceInfo() });
       }
+      // Drop a folder from the recents pills. Local list change only - the active workspace is untouched, so
+      // NO backend restart (unlike setWorkspace/clone). Returns the refreshed workspace info.
+      if (p === "/api/workspace/recent-remove" && req.method === "POST") {
+        const b = await readBody<{ path?: unknown }>(req);
+        return json({ ok: true, data: removeRecentWorkspace(typeof b.path === "string" ? b.path : "") });
+      }
       if (p === "/api/workspace/clone" && req.method === "POST") {
         // `pat` (ADR-0216): an OPTIONAL, freshly-entered git token passed inline so a private clone works THIS
         // session before the vault-injected env var lands on the next launch. It is used only to spawn git
@@ -1694,16 +3705,42 @@ const server = Bun.serve({
         if (r.ok && r.path) { setWorkspace(r.path); backend.restart(); }
         return json({ ok: r.ok, data: { ...workspaceInfo(), cloned: r.ok, error: r.error } });
       }
+      // P-WSSETUP: the workspace-initialization offer. Profile the current folder (is it empty?
+      // a code repo? already framework-equipped?), scaffold the .agents framework on accept, or
+      // record a dismissal so the popup never re-asks for this folder.
+      if (p === "/api/workspace/setup-profile") {
+        const ws = currentWorkspace();
+        return json({ ok: true, data: { ...profileWorkspace(ws), asked: !!loadSettings().workspaceSetupAsked?.[ws] } });
+      }
+      if (p === "/api/workspace/agents-init" && req.method === "POST") {
+        const b = await readBody<{ purpose?: unknown; scan?: unknown }>(req);
+        const purpose = b.purpose;
+        if (purpose !== "app" && purpose !== "docs" && purpose !== "analysis" && purpose !== "other") return json({ ok: false, error: "invalid purpose" });
+        const ws = currentWorkspace();
+        const r = scaffoldAgentsFramework(ws, { purpose, scan: !!b.scan });
+        markWorkspaceSetupAsked(ws);
+        return json({ ok: r.ok, data: r, error: r.error });
+      }
+      if (p === "/api/workspace/setup-dismiss" && req.method === "POST") {
+        markWorkspaceSetupAsked(currentWorkspace());
+        return json({ ok: true, data: { asked: true } });
+      }
 
       // settings + provider auth
       if (p === "/api/settings") {
         if (req.method === "POST") {
-          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown }>(req);
+          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown; theme?: unknown }>(req);
           // ADR-0088/0089 + P-GOVCUI.1: role + first-run-tour + gov/CUI answer are cosmetic onboarding state,
           // policy-free — set them up front, independent of the email-attribution policy gate below.
           if (b.role != null && (USER_ROLES as string[]).includes(String(b.role))) setUserRole(String(b.role) as UserRole);
           if (b.tourSeen != null) setTourSeen(!!b.tourSeen);
           if (typeof b.govconCui === "boolean") setGovconCui(b.govconCui);
+          // P-THEME.1: stored as an opaque string and NOT validated against a theme list here. The
+          // renderer's THEMES registry is the single source of truth for which ids exist, and resolveTheme
+          // already treats an unknown id as "not chosen", so validating here would only duplicate that
+          // list server-side and break every time a theme ships. A junk value is inert, not dangerous:
+          // it is only ever written into a [data-theme] attribute, escaped by the DOM API.
+          if (typeof b.theme === "string") setThemeId(b.theme);
           // Enforce enterprise-managed attribution policy server-side (the UI also reflects it).
           if (b.skip && !skipAllowed()) return json({ ok: false, error: "Your organization requires a corporate email.", data: settingsData() });
           if (b.email != null && String(b.email).trim() && !emailDomainAllowed(String(b.email))) {
@@ -1774,6 +3811,32 @@ const server = Bun.serve({
         }
         return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
       }
+      // P-MEET.1: the Meetings panel's window onto the Lucid Meeting Hub (its one write: marking an action item
+      // done). UI token only - none of these is in AGENT_ROUTES, so an omp child cannot reach them. Everything here is a
+      // pass-through to the Hub's bearer-scoped /ext/* surface, normalized for the renderer. Nothing about a
+      // meeting is cached or written to disk on this side. The renderer never receives the bearer: it rides
+      // from meetings_hub.ts straight to the Hub, and only the one-time pairing claim returns it (so the
+      // renderer can push it into the OS-encrypted vault, which is reachable only from the Electron main
+      // process - see meetings_hub.ts for why this transit exists).
+      if (p === "/api/meetings") {
+        const limit = Number(url.searchParams.get("limit") ?? 50);
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        return json({ ok: true, data: await meetingsView({ limit, offset, q: url.searchParams.get("q") ?? "" }) });
+      }
+      if (p === "/api/meetings/detail") {
+        const r = await meetingDetail(url.searchParams.get("file") ?? "");
+        return json({ ok: true, data: r });
+      }
+      if (p === "/api/meetings/todo" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; done?: unknown }>(req);
+        return json({ ok: true, data: await markTodo(String(b.id ?? ""), !!b.done) });
+      }
+      if (p === "/api/meetings/pair" && req.method === "POST") {
+        const b = await readBody<{ code?: unknown }>(req);
+        const r = await claimPairing(String(b.code ?? ""));
+        // `vaultRef` tells the renderer WHERE to store the token; the token itself is returned exactly once.
+        return json({ ok: true, data: { ok: r.ok, error: r.error, token: r.token, vaultRef: MEETING_HUB_CRED_REF } });
+      }
       // ADR-0221: "Test endpoint" - a one-vector connectivity probe against the ENTERED values (incl. an inline
       // key, so it works before saving/relaunch), reporting the dimension the model returns so the UI auto-fills it.
       if (p === "/api/embeddings/test" && req.method === "POST") {
@@ -1799,7 +3862,21 @@ const server = Bun.serve({
         }
         return json({ ok: true, data: { ok: true, kgs, pages, stored } });
       }
-      if (p === "/api/auth") return json({ ok: true, data: providerAuth() });
+      // P-GUIDE.1/.2: bundled advisor guides (renderer/guides/*.html, packaged with the app). The Preview
+      // panel renders LOCAL files by ABSOLUTE path (/api/preview/serve), and only the engine knows where
+      // the packaged renderer tree lives (dev checkout vs installed resources), so this route is the path
+      // oracle the Settings links resolve through. Read-only, no params, no user input touches the path.
+      // Keys come from the shared GUIDE_FILES manifest; a missing file (partial build) is simply omitted,
+      // so the renderer's fail-soft toast handles it instead of the preview 404ing.
+      if (p === "/api/guides") {
+        const out: Record<string, string> = {};
+        for (const [id, file] of Object.entries(GUIDE_FILES)) {
+          const abs = join(ROOT, "guides", file);
+          if (existsSync(abs)) out[id] = abs;
+        }
+        return json({ ok: true, data: out });
+      }
+      if (p === "/api/auth") return json({ ok: true, data: authWithOauthErrors() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
         setKey(String(env), String(key ?? ""));
@@ -1842,6 +3919,65 @@ const server = Bun.serve({
         const r = clearAllOauthCredentials();
         return json({ ok: true, data: providerAuth(), removed: r.removed });
       }
+      // ── P-ACCT.1 (ADR-0375): named provider accounts. GET = the full snapshot; the mutations answer
+      // with the refreshed snapshot so the renderer repaints from server truth. Switching is the only
+      // route that touches omp state: it parks/unparks oauth rows in agent.db (omp's own soft-disable
+      // column, LUCID's cause only) and swaps the single env-key slot, then restarts the omp child.
+      if (p === "/api/accounts") return json({ ok: true, data: accountsSnapshot() });
+      if (p === "/api/accounts/add" && req.method === "POST") {
+        const b = await readBody<{ providerId?: unknown; name?: unknown; key?: unknown }>(req);
+        const prov = providerById(String(b.providerId ?? ""));
+        if (!prov?.env) return json({ ok: false, error: "unknown provider or no key slot" });
+        const rec = addKeyAccount(prov.id, String(b.name ?? ""), String(b.key ?? ""));
+        if (!rec) return json({ ok: false, error: "invalid name or empty key" });
+        return json({ ok: true, data: accountsSnapshot() });
+      }
+      if (p === "/api/accounts/rename" && req.method === "POST") {
+        const b = await readBody<{ providerId?: unknown; accountId?: unknown; name?: unknown }>(req);
+        renameAccount(String(b.providerId ?? ""), String(b.accountId ?? ""), String(b.name ?? ""));
+        return json({ ok: true, data: accountsSnapshot() });
+      }
+      if (p === "/api/accounts/remove" && req.method === "POST") {
+        const b = await readBody<{ providerId?: unknown; accountId?: unknown }>(req);
+        const prov = providerById(String(b.providerId ?? ""));
+        const accountId = String(b.accountId ?? "");
+        if (!prov) return json({ ok: false, error: "unknown provider" });
+        if (accountId.startsWith("oauth:")) {
+          // Disconnect ONE identity: rows (token blob included) gone; other accounts untouched.
+          const idk = accountId.slice("oauth:".length);
+          disconnectOauthIdentity(prov.oauthId, idk === "unknown" ? null : idk);
+        } else if (accountId === LEGACY_KEY_ACCOUNT_ID) {
+          setKey(prov.env, ""); // the legacy slot IS the env slot
+        } else {
+          const rec = providerAccounts(prov.id).find((a) => a.id === accountId);
+          // Removing the account whose key sits in the live env slot clears that slot too.
+          if (rec?.key && (loadSettings().keys ?? {})[prov.env] === rec.key) setKey(prov.env, "");
+        }
+        removeAccount(prov.id, accountId);
+        backend.restart();
+        return json({ ok: true, data: accountsSnapshot() });
+      }
+      if (p === "/api/accounts/switch" && req.method === "POST") {
+        const b = await readBody<{ providerId?: unknown; accountId?: unknown }>(req);
+        const prov = providerById(String(b.providerId ?? ""));
+        const accountId = String(b.accountId ?? "");
+        if (!prov) return json({ ok: false, error: "unknown provider" });
+        const view = (accountsSnapshot()[prov.id] ?? []).find((a) => a.id === accountId);
+        if (!view) return json({ ok: false, error: "unknown account" });
+        if (view.kind === "oauth") {
+          // Stored OAuth outranks an env key in omp, so unparking the identity is sufficient.
+          const idk = accountId.slice("oauth:".length);
+          activateOauthIdentity(prov.oauthId, idk === "unknown" ? null : idk);
+        } else {
+          // A key account only wins once NO active oauth row remains (omp precedence), so park them all.
+          parkAllOauth(prov.oauthId);
+          const rec = providerAccounts(prov.id).find((a) => a.id === accountId);
+          if (rec?.key) setKey(prov.env, rec.key); // legacy slot already holds its own key
+        }
+        setActiveAccount(prov.id, accountId);
+        backend.restart();
+        return json({ ok: true, data: accountsSnapshot() });
+      }
       // P-IMG.1 (ADR-0208): "Send to preview" for a chat image. Validate the image through the strict gate,
       // write a self-contained wrapper HTML (image embedded as a data: URI — allowed by the preview frame CSP)
       // into the workspace, and hand back its path. The existing local-file preview pipeline then renders it
@@ -1863,6 +3999,7 @@ const server = Bun.serve({
         if (req.method === "POST") {
           const b = await readBody<{ baseUrl?: unknown; only?: unknown; limit?: unknown; datasets?: unknown; queryModel?: unknown; persona?: unknown }>(req);
           const prev = asksageConfig();
+          const judgeBefore = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective; // P-JEV.1
           setAsksage({
             baseUrl: typeof b.baseUrl === "string" ? b.baseUrl : undefined,
             only: typeof b.only === "boolean" ? b.only : undefined,
@@ -1872,8 +4009,11 @@ const server = Bun.serve({
             persona: typeof b.persona === "string" ? b.persona : undefined,
           });
           const next = asksageConfig();
-          // The omp child reads datasets/model/persona/base from env at spawn - restart to apply.
-          if ((typeof b.baseUrl === "string" && next.base !== prev.base) || (b.datasets !== undefined && next.datasets.join(",") !== prev.datasets.join(",")) || (b.queryModel !== undefined && next.queryModel !== prev.queryModel) || (b.persona !== undefined && next.persona !== prev.persona)) backend.restart();
+          // The omp child reads datasets/model/persona/base from env at spawn - restart to apply. P-JEV.1: a
+          // lockdown flip that changes the judgment pin (auto/typesafe -> llm, or back) restarts too, so a
+          // saved TypeSafe key stops receiving judgments the moment the lock goes on, not at the next spawn.
+          const judgeAfter = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective;
+          if ((typeof b.baseUrl === "string" && next.base !== prev.base) || (b.datasets !== undefined && next.datasets.join(",") !== prev.datasets.join(",")) || (b.queryModel !== undefined && next.queryModel !== prev.queryModel) || (b.persona !== undefined && next.persona !== prev.persona) || judgeAfter !== judgeBefore) backend.restart();
         }
         const c = asksageConfig();
         return json({ ok: true, data: { configured: c.configured, base: c.base, only: c.only, limit: c.limit, datasets: c.datasets, queryModel: c.queryModel, persona: c.persona } });
@@ -1892,7 +4032,39 @@ const server = Bun.serve({
         backend.setPersona(wrapPersona(persona.id, persona.text)); // delimited, delivered in the user turn
         return json({ ok: true, data: { applied: true, scan } });
       }
+      // P-TRAINER.7 (ADR-0255): the in-app Trainer, driven by the real harness core over trainer.duckdb.
+      // State (coverage/domains/gap/question) + games are pure over confirmed units; the answer -> unit
+      // distiller is fail-closed on a model + the scanner sidecar (submitAnswer returns distilled:false when
+      // absent, never storing unscanned text).
+      if (p === "/api/trainer") return json({ ok: true, data: await trainerState() });
+      if (p === "/api/trainer/answer" && req.method === "POST") { const b = await readBody<{ text?: unknown }>(req); return json({ ok: true, data: await trainerAnswer(typeof b.text === "string" ? b.text : "") }); }
+      if (p === "/api/trainer/games") return json({ ok: true, data: await trainerGames() });
+      // P-TRAINER.8: build + activate a coverage pack for ANY role from a name + tasks and/or a pasted
+      // Position Description (the PD is the user's own text, parsed as data, never executed).
+      if (p === "/api/trainer/role" && req.method === "POST") {
+        const b = await readBody<{ role?: unknown; tasks?: unknown; pdText?: unknown; demo?: unknown }>(req);
+        // demo:true = the user explicitly picked the labeled WMO sample; seed + activate it (idempotent).
+        if (b.demo === true) return json({ ok: true, data: { ok: true, state: await trainerUseDemoPack() } });
+        const role = typeof b.role === "string" ? b.role : "";
+        const tasks = Array.isArray(b.tasks) ? b.tasks.filter((t): t is string => typeof t === "string") : [];
+        const pdText = typeof b.pdText === "string" ? b.pdText : undefined;
+        return json({ ok: true, data: await trainerSetRole({ role, tasks, pdText }) });
+      }
       if (p === "/api/config") return json({ ok: true, data: await backend.getConfig() });
+      // P-MODELDEF: the user's explicitly-chosen model (sticky default across launches). GET reads it;
+      // POST {value} persists it ("" clears). The renderer sets it only on a genuine user pick.
+      if (p === "/api/model/chosen") {
+        if (req.method === "POST") { const b = await readBody<{ value?: unknown }>(req); setChosenModel(typeof b.value === "string" ? b.value : ""); }
+        return json({ ok: true, data: chosenModel() });
+      }
+      // P-MODEL.2: the LAST model the composer actually ran on, as persisted by the backend's syncModelEnv.
+      // Read-only: it is written from omp's reported active model, never from the UI. The renderer needs it
+      // because "what was I last using?" and "what did I once click in the picker?" (chosenModel, above)
+      // are different questions, and the renderer's boot-time default used to consult only the latter. A
+      // user who switched models via the composer and never opened the picker therefore had an empty
+      // chosenModel and got re-defaulted to a heuristic pick on every launch, which is the "it keeps
+      // going back to Opus 4.8" the user reported.
+      if (p === "/api/model/last") return json({ ok: true, data: loadSettings().lastModel ?? "" });
       // Manual "Refresh models": respawn omp so it re-reads the credential vault, then return the
       // fresh model list. Used after connecting a provider (OAuth or key) without relaunching.
       if (p === "/api/config/refresh" && req.method === "POST") { backend.restart(); return json({ ok: true, data: await backend.getConfig() }); }
@@ -2020,9 +4192,57 @@ const server = Bun.serve({
         const mode: RetrieveMode = vector ? "hybrid" : (requested === "vector" ? "compiled" : requested);
         return json({ ok: true, data: await retrieveKnowledge({ query: String(b.query ?? ""), mode, compiled: { store }, vector }) });
       }
+      // ── P-KG.3: the agent's read/write path into the UNLOCKED personal knowledge graph ──────────────
+      // Backs the omp-native `memory_recall` / `memory_retain` tools (harness/omp/knowledge_extension.ts),
+      // which POST here through the token'd LUCID_KG_RECALL_URL / LUCID_KG_RETAIN_URL they inherit.
+      //
+      // Before this, the agent could only SEE the graph as a server-injected <user-profile> preamble and
+      // could not write to it at all, so "remember that I prefer X" was a promise the product could not
+      // keep. All gating (locked / trust / compartment / shape) lives in the pure agent_kg.ts and is
+      // applied by desktop/personal.ts; these routes are transport only and add no policy of their own.
+      //
+      // FAIL-CLOSED on both sides, and the two failure modes are deliberately DISTINGUISHABLE to the
+      // model: a locked vault reports `locked` with a reason, never an empty success on a read (which
+      // would read as "the user has told me nothing") and never a silent success on a write (which would
+      // teach the model it has memory it does not have).
+      if (p === "/api/kg/recall" && req.method === "POST") {
+        const b = await readBody<{ query?: unknown; kinds?: unknown; limit?: unknown }>(req);
+        return json({ ok: true, data: agentRecall({
+          query: String(b.query ?? ""),
+          ...(Array.isArray(b.kinds) ? { kinds: b.kinds.filter((k): k is string => typeof k === "string") } : {}),
+          ...(typeof b.limit === "number" ? { limit: b.limit } : {}),
+        }) });
+      }
+      // The body is passed through UNVALIDATED on purpose: vetAgentWrite is the single validator, and
+      // re-deriving the shape here would create a second, drifting copy of that contract. It receives
+      // `unknown` and returns either a normalized write or a refusal reason.
+      if (p === "/api/kg/retain" && req.method === "POST") {
+        return json({ ok: true, data: agentRetain(await readBody<unknown>(req)) });
+      }
       if (p === "/api/kb/graph") {
-        const s = await kbStore();
-        return json({ ok: true, data: { pages: await s.listPages(), links: await s.listLinks() } });
+        try {
+          // Capture identity before awaiting: changing the active KG cannot relabel this snapshot.
+          const kgId = url.searchParams.get("kgId") ?? activeKgId();
+          if (!kgId || !kgEntry(kgId)) return json({ ok: false, error: "Unknown knowledge graph.", data: null });
+          const snapshot = await (await kbStore(kgId)).graphSnapshot();
+          return json({ ok: true, data: { kgId, ...snapshot } });
+        } catch (e) {
+          return json({ ok: false, error: clientError(e, "could not load the knowledge graph"), data: null });
+        }
+      }
+      if (p === "/api/kb/page") {
+        try {
+          // Detail reads must name the KG that supplied the selected node, never the current active KG.
+          const kgId = url.searchParams.get("kgId");
+          const pageId = url.searchParams.get("pageId");
+          if (!kgId || !pageId) return json({ ok: false, error: "kgId and pageId are required.", data: null });
+          if (!kgEntry(kgId)) return json({ ok: false, error: "Unknown knowledge graph.", data: null });
+          const page = await (await kbStore(kgId)).getPage(pageId);
+          if (!page) return json({ ok: false, error: "Knowledge page not found.", data: null });
+          return json({ ok: true, data: page });
+        } catch (e) {
+          return json({ ok: false, error: clientError(e, "could not load the knowledge page"), data: null });
+        }
       }
       // P-KGPACK.2 (ADR-0205): the named-KG picker. list/create/rename/activate over the KG registry
       // (file-per-KG, ADR-0205). Mutations return the refreshed list; a validation error rides on `error`
@@ -2030,6 +4250,19 @@ const server = Bun.serve({
       // registry only maps ids↔files; ingest gating (fail-closed) is unchanged and lives in the pipeline.
       if (p === "/api/kb/list") {
         return json({ ok: true, data: kgListView() });
+      }
+      // P-KGUI.3 (ADR-0336): page count per KG, for the Personalization stat tiles. Each KG is its OWN
+      // DuckDB file, so this costs one open per KG the first time (kbStore caches per kg_id after that).
+      // That is exactly why the renderer fetches it AFTER the panel paints and never blocks on it, and why
+      // a KG that fails to open is reported as absent rather than as zero: a missing number reads as "not
+      // known yet", a fabricated 0 reads as "this graph is empty", and only one of those is honest.
+      if (p === "/api/kb/counts") {
+        const pages: Record<string, number> = {};
+        for (const kg of listKgs()) {
+          try { pages[kg.kg_id] = await (await kbStore(kg.kg_id)).pageCount(); }
+          catch { /* leave it absent: the tile shows a dash, not a wrong zero */ }
+        }
+        return json({ ok: true, data: { pages } });
       }
       if (p === "/api/kb/create" && req.method === "POST") {
         const b = await readBody<{ name?: unknown }>(req);
@@ -2074,7 +4307,9 @@ const server = Bun.serve({
             const result = await ingestSourcesIntoKg({
               store: await kbStore(targetId),
               scanner: kbScanner(),
-              complete: (system: string, user: string) => backend.complete(system, user, model ? { model } : {}),
+              // The job's abort signal rides along, so Stop interrupts the in-flight compile call instead
+              // of waiting it out (same fix as the chat-history import, ADR-0264).
+              complete: (system: string, user: string) => backend.complete(system, user, { ...(model ? { model } : {}), signal }),
               docs: src.scan.docs,
               onProgress: onTick,
               signal,
@@ -2118,7 +4353,9 @@ const server = Bun.serve({
         const b = await readBody<{ path?: unknown }>(req);
         const path = String(b.path ?? "");
         if (!path) return json({ ok: true, data: { ok: false, error: "path is required" } });
-        return json({ ok: true, data: await importKgPack(path) });
+        // P-KGPACK.7 (ADR-0340): accepts the downloaded .lkgpack.zip, an unzipped .lkgpack folder, or the
+        // manifest.json inside one. The picker used to be folder-only, so the delivered zip was unselectable.
+        return json({ ok: true, data: await importPackFromPath(path) });
       }
       // P-KGMARKET.4 (ADR-0206): download a signed `.lkgpack.zip` (the entitlement backend's getPackDownload
       // URL) and install it through the SAME gate as a local import (verify + re-scan fail-closed, read-only).
@@ -2188,7 +4425,11 @@ const server = Bun.serve({
         // so the request never blocks the app for ~25 minutes. The renderer polls /status + can /cancel.
         const b = await readBody<{ model?: unknown; path?: unknown; vendor?: ImportVendor }>(req);
         const path = String(b.path ?? ""), vendor = b.vendor;
-        const complete = b.model ? (system: string, user: string) => backend.complete(system, user) : undefined;
+        // The extractor's signal is the JOB's abort signal, so Stop interrupts the in-flight model call
+        // instead of waiting for it (P-KG-INGEST.5, ADR-0264).
+        const complete: CompleteFn | undefined = b.model
+          ? (system, user, o) => backend.complete(system, user, { signal: o?.signal })
+          : undefined;
         const started = startImport({
           vendor: typeof vendor === "string" ? vendor : undefined,
           run: (onProgress, signal) => importChatExport(path, { vendorHint: vendor, complete, onProgress, signal }),
@@ -2239,7 +4480,9 @@ const server = Bun.serve({
       // P-ACP.3: the composer's 3-way Plan/Ask/Agent. Ask = omp `default` + per-tool approval prompts.
       if (p === "/api/uimode" && req.method === "POST") {
         const b = await readBody<{ uiMode?: unknown }>(req);
-        const m = b.uiMode === "ask" ? "ask" : b.uiMode === "plan" ? "plan" : "agent";
+        // CREATOR-0 (ADR-0279): `creator` is accepted only in a Creator build; anywhere else it folds to
+        // `agent`, so a forged POST cannot light up a surface this build does not ship.
+        const m: UiMode = normalizeUiMode(b.uiMode, BUILD.creatorBuild);
         return json({ ok: true, data: await backend.setUiMode(m) });
       }
       // P-ACP.3: the renderer's answer to a forwarded tool-permission request (Ask mode). optionId
@@ -2249,7 +4492,13 @@ const server = Bun.serve({
         return json({ ok: true, data: { resolved: backend.resolvePermission(String(b.id ?? ""), b.optionId != null ? String(b.optionId) : null) } });
       }
       // P-ACP.4: Stop — interrupt the in-flight turn (reply + tool calls) via ACP session/cancel.
-      if (p === "/api/chat/cancel" && req.method === "POST") { backend.cancel(); return json({ ok: true, data: { cancelled: true } }); }
+      if (p === "/api/chat/cancel" && req.method === "POST") {
+        const body = req.body ? await readBody<{ turnId?: unknown; requestId?: unknown }>(req) : {};
+        if ((body.turnId !== undefined && typeof body.turnId !== "string") || (body.requestId !== undefined && typeof body.requestId !== "string")) return Response.json({ ok: false, error: "turnId and requestId must be strings" }, { status: 400 });
+        if ((body.turnId !== undefined || body.requestId !== undefined) && !backend.turnStatus(body.turnId, body.requestId)) return Response.json({ ok: false, error: "The requested chat turn is no longer available. A different turn will not be cancelled." }, { status: 409 });
+        backend.cancel();
+        return json({ ok: true, data: { cancelled: true } });
+      }
       if (p === "/api/goal/cancel" && req.method === "POST") { backend.cancelGoal(); return json({ ok: true, data: { cancelled: true } }); } // P-GOAL.2: stop the loop
       // P-IDE.2 (ADR-0029): set/clear the active BUNDLED skill. Its prompt is TRUSTED (app corpus), so
       // it's wrapped in `<active-skill>` and delivered as a user-turn preamble (persona/recall path) —
@@ -2272,8 +4521,256 @@ const server = Bun.serve({
       }
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
       if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
+      // P-FLEET.L5 (ADR-0274): the reviewable timeline - every session on this machine (master chats,
+      // lane sessions labeled through the durable ledger, ingest throwaways), across ALL workspaces,
+      // newest first. Reading a point reuses the same transcript reader the sidebar resume uses; the
+      // injected user-turn preamble is already stripped for display there (issue #52).
+      // `?selfTest=1` opts the repo's own echo/demo throwaways back IN (held back by default).
+      if (p === "/api/timeline") {
+        const limit = Number(url.searchParams.get("limit") ?? 100);
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        const includeSelfTest = url.searchParams.get("selfTest") === "1";
+        return json({ ok: true, data: listTimeline({ limit: Number.isFinite(limit) ? limit : 100, offset: Number.isFinite(offset) ? offset : 0, includeSelfTest }) });
+      }
+      if (p === "/api/timeline/session" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; limit?: unknown }>(req);
+        const lim = Number(b.limit ?? 40);
+        return json({ ok: true, data: sessionMessages(String(b.id ?? ""), Number.isFinite(lim) && lim > 0 ? lim : 40) });
+      }
+      // P-FLEET.L1/L2: the local lane fleet. Status is metadata (lanes + pressure evidence); prompt streams
+      // the lane's turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on
+      // silence).
+      if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
+      if (p === "/api/fleet/spawn" && req.method === "POST") {
+        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown }>(req);
+        // P-FLEET.L2: a lane can be spawned straight from a GitHub / GitLab / Azure DevOps remote. The clone
+        // lands INSIDE the folder the user picked in the OS dialog (or under ~/.omp/lucid-workspaces when
+        // they picked none) and an existing clone is reused, so re-spawning the same repo is idempotent.
+        // `pat` is the freshly-typed token: used only to spawn git, redacted out of any error, never logged,
+        // never persisted here (the vault copy is written by the renderer through main's safeStorage) and
+        // never forwarded to the agent.
+        const repoUrl = typeof b.repoUrl === "string" ? b.repoUrl.trim() : "";
+        let cwd = String(b.cwd ?? "");
+        if (repoUrl) {
+          const c = await cloneRepo(repoUrl, typeof b.pat === "string" && b.pat ? b.pat : undefined, cwd || undefined);
+          if (!c.ok || !c.path) return json({ ok: true, data: { ok: false, reason: c.error || "git clone failed" } });
+          cwd = c.path;
+        }
+        const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined });
+        return json({ ok: true, data: r });
+      }
+      // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
+      // capped at 6). The same filter guards the queue and its drain below.
+      if (p === "/api/fleet/prompt" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown }>(req);
+        const laneId = String(b.laneId ?? "");
+        const text = String(b.text ?? "");
+        return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, text, emit, laneImages(b.images)));
+      }
+      // P-FLEET.L3: the staged-prompt queue - manager-owned (survives dock close), drained FIFO by the
+      // renderer when the lane goes idle, so every drained turn streams into a visible card.
+      if (p === "/api/fleet/queue" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown }>(req);
+        return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images)) });
+      }
+      if (p === "/api/fleet/queue/remove" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
+        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index)) });
+      }
+      if (p === "/api/fleet/queue/move" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown; dir?: unknown }>(req);
+        return json({ ok: true, data: fleet.queueMove(String(b.laneId ?? ""), Number(b.index), Number(b.dir) < 0 ? -1 : 1) });
+      }
+      if (p === "/api/fleet/drain" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        const laneId = String(b.laneId ?? "");
+        return ndjsonStream("fleet", (emit) => fleet.drain(laneId, emit));
+      }
+      // P-FLEET.L4 (ADR-0274): retry streams the re-sent last turn exactly like /api/fleet/prompt;
+      // respawn revives an error/stopped lane IN PLACE (same id, memory carried) and returns its view.
+      if (p === "/api/fleet/retry" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        const laneId = String(b.laneId ?? "");
+        return ndjsonStream("fleet", (emit) => fleet.retry(laneId, emit));
+      }
+      if (p === "/api/fleet/respawn" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        return json({ ok: true, data: await fleet.respawn(String(b.laneId ?? "")) });
+      }
+      // P-FLEET.L6: answer carries an optional approval SCOPE - "session" remembers the pending ask's
+      // kind for the lane's lifetime (only on an allow; the manager ignores scope on a deny, fail-closed).
+      if (p === "/api/fleet/answer" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; allow?: unknown; scope?: unknown }>(req);
+        if (b.scope !== undefined && b.scope !== "once" && b.scope !== "session") return json({ ok: false, error: `invalid scope "${String(b.scope)}"` });
+        return json({ ok: true, data: fleet.answer(String(b.laneId ?? ""), b.allow === true, b.scope as "once" | "session" | undefined) });
+      }
+      // P-FLEET.L6: full auto-mode. laneId targets ONE lane; omitted applies to ALL lanes and persists
+      // fleetAutoApprove as the default for new lanes. Turning auto ON anywhere is refused until the user
+      // has explicitly accepted the risk once (fleetAutoRiskAcceptedAt; acceptRisk === true records it).
+      // The in-omp security gate still scans every tool call in auto mode - only the human ask goes away.
+      if (p === "/api/fleet/auto" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; on?: unknown; acceptRisk?: unknown }>(req);
+        const on = b.on === true;
+        if (on && !loadSettings().fleetAutoRiskAcceptedAt) {
+          if (b.acceptRisk !== true) return json({ ok: false, error: "full auto-mode needs an explicit risk acceptance first" });
+          saveSettings({ ...loadSettings(), fleetAutoRiskAcceptedAt: Date.now() });
+        }
+        const laneId = typeof b.laneId === "string" && b.laneId ? b.laneId : "";
+        if (laneId) return json({ ok: true, data: fleet.setAuto(laneId, on) });
+        fleet.setAutoAll(on);
+        saveSettings({ ...loadSettings(), fleetAutoApprove: on });
+        return json({ ok: true, data: { ok: true } });
+      }
+      if (p === "/api/fleet/cancel" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        return json({ ok: true, data: fleet.cancel(String(b.laneId ?? "")) });
+      }
+      if (p === "/api/fleet/stop" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        return json({ ok: true, data: fleet.stop(String(b.laneId ?? "")) });
+      }
+      // P-FLEET.L10: DISMISS a lane (stop parks it, this forgets it). Fail-closed on a live turn unless
+      // the caller passes `force`, so one click can never destroy work in flight; the UI makes it a
+      // two-step gesture instead. The lane's on-disk session log and its ledger line both survive, so a
+      // dismissed lane is still reviewable on the timeline.
+      if (p === "/api/fleet/remove" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; force?: unknown }>(req);
+        return json({ ok: true, data: fleet.remove(String(b.laneId ?? ""), b.force === true) });
+      }
+      if (p === "/api/fleet/model" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; model?: unknown }>(req);
+        return json({ ok: true, data: await fleet.setModel(String(b.laneId ?? ""), String(b.model ?? "")) });
+      }
+      // P-FLEET.L8: the composer ATTACHES to a lane. Promotion does not move the ACP session - the
+      // lane's omp child, cwd, and model are untouched - so it works MID-TURN and demotion is instant.
+      // The response carries the lane's bounded transcript so the composer can render history without a
+      // second round trip, and the manager writes the promote/demote provenance line itself.
+      if (p === "/api/fleet/promote" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        return json({ ok: true, data: fleet.promote(String(b.laneId ?? "")) });
+      }
+      if (p === "/api/fleet/demote" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        const laneId = typeof b.laneId === "string" && b.laneId ? b.laneId : undefined;
+        return json({ ok: true, data: fleet.demote(laneId) });
+      }
+      if (p === "/api/fleet/promoted") return json({ ok: true, data: { lane: fleet.promotedLane() } });
+      // P-FLEET.L8: FOLLOW a lane's live events without owning its turn. This is what lets the composer
+      // join a turn that is ALREADY RUNNING: fleet.observe() is a persistent sink that survives turn
+      // boundaries and respawns, so a promote mid-turn starts streaming from the next chunk instead of
+      // waiting for the turn to end. Distinct from /api/fleet/prompt, which OWNS a turn; a watcher must
+      // never be able to start one.
+      if (p === "/api/fleet/watch" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown }>(req);
+        const laneId = String(b.laneId ?? "");
+        if (!laneId) return json({ ok: false, error: "laneId is required" });
+        return ndjsonStream("fleet-watch", async (emit) => {
+          const gate = Promise.withResolvers<void>();
+          const dispose = fleet.observe((id, e) => { if (id === laneId) emit(e); });
+          // The stream lives until the CLIENT leaves. Without this it would resolve immediately and the
+          // renderer would reconnect in a tight loop.
+          const stop = () => { dispose(); gate.resolve(); };
+          if (req.signal.aborted) stop();
+          else req.signal.addEventListener("abort", stop, { once: true });
+          const seed = fleet.laneTranscript(laneId);
+          if (seed.length) emit({ type: "watch-seed", turns: seed });
+          await gate.promise;
+        });
+      }
+      if (p === "/api/fleet/transcript") {
+        const laneId = url.searchParams.get("laneId") ?? "";
+        return json({ ok: true, data: { turns: fleet.laneTranscript(laneId) } });
+      }
+      // P-HEALTH.1: what the self-watch currently thinks, and a manual kick. The GET is read-only (it
+      // takes no action), so the renderer can poll it beside the status poll; the POST forces one ladder
+      // step, which is the "I do not want to wait for the next tick" button.
+      //
+      // NAMED `/api/session-health`, NOT `/api/health`: that path is already the ADR-0305 port-guard
+      // nonce endpoint, and it is the ONE route deliberately exempt from the token gate above, because a
+      // foreign process squatting the engine port has to be detectable before anything is authenticated.
+      // Reusing it would have both shadowed this route (the guard is registered first and wins) and hung
+      // session telemetry off an unauthenticated path.
+      if (p === "/api/session-health") return json({ ok: true, data: { master: backend.healthStatus(), lanes: fleet.healthReport() } });
+      if (p === "/api/session-health/tick" && req.method === "POST") {
+        const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
+        return json({ ok: true, data: { master, lanes } });
+      }
+      // P-RECOVER.1 (ADR-0385): self-recovery the user can see. Behind the same token gate as every /api
+      // route above. Every body field is type- and shape-checked before it reaches the backend or the
+      // incident store (ids address files and ACP sessions, so a malformed one is a 400, never a lookup).
+      // Nothing here submits anything: submission is the user opening the prefilled issue URL themselves.
+      if (p === "/api/recovery/state" && req.method === "GET") {
+        return json({ ok: true, data: { previous: PREVIOUS_SESSION, currentSessionId: backend.currentSessionId(), incidents: listIncidents().filter((m) => !m.seen).map(incidentView) } });
+      }
+      if (p === "/api/recovery/resume" && req.method === "POST") {
+        const b = parseResumeBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        return json({ ok: true, data: await backend.resumeSession(b.value.sessionId) });
+      }
+      if (p === "/api/recovery/recover" && req.method === "POST") return json({ ok: true, data: await backend.recoverMaster() });
+      if (p === "/api/incidents" && req.method === "GET") {
+        return json({ ok: true, data: listIncidents().map(incidentView) });
+      }
+      if (p === "/api/incidents/report" && req.method === "GET") {
+        const q = parseIncidentIdBody({ id: url.searchParams.get("id") });
+        if (!q.ok) return Response.json({ ok: false, error: q.error }, { status: 400 });
+        // Rebuilt from the validated record (incident_store.ts), never a file's text: no path is read from
+        // the metadata, and the report is redacted again on the way out.
+        const markdown = incidentReport(q.value.id);
+        if (markdown === null) return Response.json({ ok: false, error: "no such incident" }, { status: 404 });
+        return json({ ok: true, data: { markdown } });
+      }
+      if (p === "/api/incidents/seen" && req.method === "POST") {
+        const b = parseIncidentIdBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        return json({ ok: true, data: { ok: markIncidentSeen(b.value.id) } });
+      }
+      if (p === "/api/incidents/update" && req.method === "POST") {
+        const b = parseIncidentUpdate(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { id, outcome, note } = b.value;
+        // The store redacts the note (home folder included) before it is written.
+        const meta = updateIncident(id, { outcome, events: note ? [{ at: Date.now(), what: note }] : [] });
+        return json({ ok: true, data: meta ? incidentView(meta) : null });
+      }
+      // P-INTERJECT.1: mid-turn operator interjections. POST queues a note for "master" or a laneId
+      // (store enforces trim/4000-char/8-note discipline; validation here mirrors it for a crisp error).
+      // GET /pending returns AND clears atomically - the single consumer is the target's omp child
+      // (interject_extension.ts polls it once per tool result via the token'd LUCID_INTERJECT_URL).
+      if (p === "/api/interject" && req.method === "POST") {
+        const b = await readBody<{ target?: unknown; text?: unknown }>(req);
+        const target = String(b.target ?? "").trim();
+        const text = String(b.text ?? "").trim();
+        if (!target) return json({ ok: false, error: "target required" });
+        if (!text) return json({ ok: false, error: "text required" });
+        if (text.length > 4000) return json({ ok: false, error: "note too long (max 4000 chars)" });
+        const r = addInterject(target, text);
+        return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, error: r.reason });
+      }
+      if (p === "/api/interject/pending" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        return json({ ok: true, data: { notes: target ? drainInterjects(target) : [] } });
+      }
+      // P-INTERJECT.1: the unified Processes list (master turn, live lanes, import job, wave-2 browsers).
+      if (p === "/api/processes") return json({ ok: true, data: { processes: await buildProcessViews() } });
+      if (p === "/api/chat/status" && req.method === "GET") return json({ data: backend.turnStatus() });
+      // Recovery subscribes to exactly one execution; it never sends another model prompt.
+      if (p === "/api/chat/attach" && req.method === "POST") {
+        const body = await readBody<{ turnId?: unknown; requestId?: unknown }>(req);
+        if ((body.turnId !== undefined && typeof body.turnId !== "string") || (body.requestId !== undefined && typeof body.requestId !== "string")) {
+          return Response.json({ ok: false, error: "turnId and requestId must be strings" }, { status: 400 });
+        }
+        const status = backend.turnStatus(body.turnId, body.requestId);
+        if (!status) return Response.json({ ok: false, error: "The requested chat turn is no longer available. A different turn will not be attached." }, { status: 409 });
+        // No await between identity validation and synchronous observer attachment.
+        return ndjsonStream("chat-attach", async (emit, connectionAbort) => {
+          const attachment = backend.attachTurn(emit, status.turnId, connectionAbort);
+          try { await attachment.ended; } finally { attachment.detach(); }
+        }, req.signal);
+      }
       if (p === "/api/chat" && req.method === "POST") {
-        const { text, images, from, share } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown }>(req);
+        const { text, images, from, share, requestId } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown; requestId?: unknown }>(req);
+        if (requestId !== undefined && typeof requestId !== "string") return Response.json({ ok: false, error: "requestId must be a string" }, { status: 400 });
         // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
         const imgs = Array.isArray(images)
           ? images.filter((im): im is { data: string; mimeType: string } => !!im && typeof (im as { data?: unknown }).data === "string" && typeof (im as { mimeType?: unknown }).mimeType === "string").slice(0, 6)
@@ -2297,12 +4794,41 @@ const server = Bun.serve({
         const counts = collabManager.active ? accessCounts(collabManager.status().participants) : bodyShare;
         const awareness = buildShareAwareness(counts);
         const modelPrompt = awareness ? `${awareness}\n\n${prompt}` : prompt;
-        return ndjsonStream("chat", (emit) => backend.prompt(modelPrompt, (e) => {
-          // acp_backend's ChatEvent and bridge's are structurally identical (kept in parity); bridge over the
-          // separate declarations at this one boundary.
-          if (collabManager.active) { try { collabManager.tapEvent(e as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ } }
-          emit(e);
-        }, imgs));
+        // P-REATTACH.1 + P-INTERJECT.1: a prompt that arrives while the master turn is RUNNING is an
+        // INTERJECTION, not a superseding turn. The old path called backend.prompt() unconditionally,
+        // which silently stole the running turn's listener and raced a second session/prompt onto the
+        // same session - omp cancelled the in-flight turn (stopReason=cancelled), the new stream never
+        // saw the events, and the composer froze on a blinking cursor while work continued invisibly.
+        // Now: attach THIS stream as the running turn's live output, then queue the text on the
+        // interject store (delivered into the turn at its next tool boundary). Attach BEFORE queueing:
+        // if the turn ended in the race, fall through to a normal prompt and no orphan note is left.
+        const runPrompt = async (emit: (e: unknown) => void, connectionAbort: AbortSignal) => {
+          const execution = backend.prompt(modelPrompt, emit, imgs, { signal: connectionAbort, prompt, requestId });
+          // Sharing observes execution independently of the originating browser connection.
+          const shared = collabManager.active ? backend.attachTurn((event) => {
+            try { collabManager.tapEvent(event as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ }
+          }) : undefined;
+          try { await execution; }
+          catch (e) {
+            // P-RECOVER.1 (ADR-0385): the stream wrapper masks every error as "The chat stream failed.", which
+            // hid the one refusal the window can act on. Pass exactly that fixed text through; nothing else.
+            if (!(e instanceof Error) || e.message !== TURN_ALREADY_RUNNING) throw e;
+            emit({ type: "error", message: TURN_ALREADY_RUNNING });
+            emit({ type: "done" });
+          }
+          finally { shared?.detach(); }
+        };
+        const activeTurn = backend.turnStatus();
+        if (activeTurn?.running) {
+          const noteText = prompt.trim();
+          return ndjsonStream("chat-interject", async (emit, connectionAbort) => {
+            const attachment = backend.attachTurn(emit, activeTurn.turnId, connectionAbort);
+            if (!attachment.attached || !attachment.running) { attachment.detach(); await runPrompt(emit, connectionAbort); return; }
+            if (noteText) addInterject("master", noteText);
+            try { await attachment.ended; } finally { attachment.detach(); }
+          }, req.signal);
+        }
+        return ndjsonStream("chat", runPrompt, req.signal);
       }
       // P-COLLAB.3 (ADR-0192): live session sharing. `status` is the Share panel's poll; `start` mints a
       // room + view/full links + stands up the host (fail-closed if no relay is authorized); `stop` ends it.
@@ -2548,9 +5074,14 @@ const server = Bun.serve({
       // ADR-0024: serve the HTML with the per-launch token injected as a meta tag. Same-origin
       // policy keeps a cross-origin page from reading this response body, so the token stays secret
       // to the real renderer; no-store so it's never cached across launches.
-      if (rel === "index.html") {
-        const html = (await Bun.file(join(ROOT, "index.html")).text())
-          .replace("</head>", `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
+      // P-TRAINER.7: trainer.html is a same-origin iframe that calls the token-gated /api/trainer routes, so
+      // it needs the per-launch token meta injected exactly like index.html.
+      // P-SANDBOX.15 (ADR-0396): NOT when an Electron main launched us. `GET /` needs no token, so any local
+      // process (the agent's own curl included) could read the meta tag; under Electron the preload fetches
+      // the token from main over IPC instead. Only a standalone browser dev run (`bun run web`) still injects.
+      if (rel === "index.html" || rel === "trainer.html") {
+        const html = (await Bun.file(join(ROOT, rel)).text())
+          .replace("</head>", HAS_MAIN ? "</head>" : `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       }
       const file = Bun.file(join(ROOT, rel));
@@ -2564,25 +5095,86 @@ const server = Bun.serve({
     } catch (err) {
       // js/stack-trace-exposure: log the detail server-side, return a generic message to the client
       // so an internal error/stack never reaches the renderer (or a forged caller).
+      // P-OMP-BOOT.1 (ADR-0357): a repeated "omp cannot start" is ONE known condition, not N internal
+      // errors. The v2.2.0 report shipped an engine.log that was mostly the same ten-line stack, once per
+      // UI poll, which buried the single fact that mattered. Log the named cause once, then only count,
+      // and tell the CLIENT the real reason so the UI can say it too (it is a boot/config fault, not a
+      // leak: it names paths the user already owns, and never a credential).
+      if (ompUnrunnable && isOmpSpawnFailure(err)) {
+        ompFailures++;
+        if (ompFailures === 1) console.error(`[dev] ${p}: the omp agent cannot be started\n${ompUnrunnable}`);
+        else if (ompFailures % 100 === 0) console.error(`[dev] the omp agent still cannot be started (${ompFailures} requests affected)`);
+        return json({ ok: false, error: "the omp agent cannot be started", detail: ompUnrunnable });
+      }
       console.error(`[dev] ${p}:`, err);
       return json({ ok: false, error: "internal error" });
     }
     return new Response("not found", { status: 404 });
   },
 });
+} catch (err) {
+  const e = err as NodeJS.ErrnoException;
+  if (e?.code !== "EADDRINUSE" && !/is port \d+ in use/i.test(e?.message ?? "")) throw err; // not ours to explain
+  console.error(
+    `[engine] FATAL: cannot start - port ${PORT} is already in use (EADDRINUSE). Another process is ` +
+    `listening on 127.0.0.1:${PORT}; most often that is a leftover ${basename(process.execPath)} from a ` +
+    `previous session. End it and relaunch, or set LUCID_PORT to a free port for a separate instance.`,
+  );
+  process.exit(ENGINE_EXIT_PORT_BUSY);
+}
+}
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
 // THIS process) and inherits process.env, so setting it here — after the server binds — is enough; no
 // ACPClient env plumbing needed. 127.0.0.1 (not localhost) matches the loopback bind.
-process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${AGENT_TOKEN}`;
 // P-PREVIEW.6b (ADR-0153): the agent's preview_inspect tool GETs this (with ?selector=&what=) to read the DOM.
-process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${AGENT_TOKEN}`;
 // P-PREVIEW.6c (ADR-0153): preview_click / preview_type GET this (with ?action=&selector=&value=) to act.
-process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${AGENT_TOKEN}`;
+// P-PREVIEW.11 (ADR-0308): preview_open POSTs {path} here so the panel opens from the TOOL's own call.
+// The old path (acp_backend matching "preview_open: <path>" in the ACP title) is dead under intent
+// tracing, which rewrites that title to the model's intent prose; it stays only as a fallback.
+process.env.LUCID_PREVIEW_OPEN_URL = `http://127.0.0.1:${server.port}/api/preview/open?t=${AGENT_TOKEN}`;
 // ADR-0220: the `knowledge_search` tool (omp subprocess) POSTs the user's query here to ground on the local
 // compiled knowledge base. Token'd URL, same pattern as the preview tools; retrieval returns delimited untrusted DATA.
-process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${TOKEN}`;
+process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${AGENT_TOKEN}`;
+// P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
+// metadata only (lane replies render in the fleet dashboard, never through this URL).
+process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
+// P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
+// claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
+// fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
+process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
+// P-SANDBOX.17 (ADR-0399): tools/git-broker/git_shim.ts POSTs the contained agent's git calls here.
+process.env.LUCID_GIT_URL = `http://127.0.0.1:${server.port}/api/git/exec?t=${AGENT_TOKEN}`;
+// P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the
+// real tool name exists ONLY inside omp's hook API - the ACP update carries a coarse `kind` and an
+// intent-shadowed title. Unset means the extension self-skips, and reports fall back to the coarse kind.
+process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${AGENT_TOKEN}`;
+// P-JEV.2 (ADR-0377): the judgment extension POSTs every typed judgment (question, answers, backend,
+// latency, error) here, because omp records none of them and has no hook for them. Unset means the
+// extension self-skips and the chat draws no judgment row.
+process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${AGENT_TOKEN}`;
+// P-KG.3: the agent's memory_recall / memory_retain tools reach the UNLOCKED personal knowledge graph
+// through these. Both fail closed when the vault is locked: recall returns no hits and retain refuses,
+// so a locked vault can never be mistaken for an empty one (which would teach the model it has no memory)
+// nor silently swallow a write (which would teach it that it does).
+process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${AGENT_TOKEN}`;
+process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${AGENT_TOKEN}`;
+// P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
+// LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
+// token'd drain endpoint (same pattern as LUCID_FLEET_STATUS_URL - /api requires the per-launch token,
+// which a child can only carry as ?t=). Per-child LUCID_INTERJECT_TARGET rides the spawn env overlay
+// (interjectChildEnv in acp_backend.ts for the master, the fleet env dep above for lanes).
+process.env.LUCID_DEV_URL = `http://127.0.0.1:${server.port}`;
+process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${AGENT_TOKEN}`;
+// P-BROWSER.1 (wave 2): the omp child's browser_* tools reach the agent-browser routes through this
+// token'd BASE (the extension appends /open, /capture, /scroll, /close, /shot and keeps the ?t=).
+// Gated on LUCID_MAIN_TOKEN: without the Electron main there is no window executor, so the env stays
+// unset and browser_extension.ts skips registration entirely (bun-only / plain-browser dev runs).
+if (HAS_MAIN) process.env.LUCID_BROWSER_URL = `http://127.0.0.1:${server.port}/api/browser?t=${AGENT_TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp
@@ -2594,3 +5186,27 @@ await refreshRecall();
 backend.startAutomationScheduler();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
+
+/** P-SANDBOX.12 (ADR-0390): the facts the panel's sandbox switch is drawn from (see sandbox_control.ts). */
+function sandboxControlNow(): SandboxControlView {
+  const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
+  const helperBundled = !!helper && existsSync(helper);
+  return sandboxControlView({
+    platform: process.platform,
+    helperBundled,
+    mode: loadSettings().sandboxWindowsMode,
+    policyRequiresIsolation: managedSandboxLocksOn(managedConfig().config), // P-SANDBOX.14: either policy knob
+    registered: helperBundled && loopbackExempted(),
+    foldersLocked: managedSandboxFoldersLocked(managedConfig().config),
+  });
+}
+
+/** P-SANDBOX.13 (ADR-0391): the folders LUCID itself grants the contained agent, for the panel's list. The
+ *  same inputs acp_backend passes to appContainerRuntimeGrants, so the list matches the real grants. */
+function sandboxRuntimeFoldersNow(): RuntimeFolderView[] {
+  if (!sandboxControlNow().available) return [];
+  let shellPath: string | null = null;
+  try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config */ }
+  const g = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: process.env.LUCID_OMP_BIN, shellPath, gitRoot: discoverGitRoot(process.env) });
+  return runtimeFolderView({ workspace: currentWorkspace(), grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir, policy: managedPolicyFolderPlan(false) });
+}

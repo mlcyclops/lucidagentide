@@ -64,6 +64,21 @@ jobs:
           bun install
           bun x tsc --noEmit
 
+      # ADR-0359 (P-BUILD-GATE.1): COMPILE the two shipped binaries. This step exists because v2.2.1
+      # went out with 5249 green tests, two clean typechecks and a green prompt-prefix keystone, and all
+      # three release legs still died in seconds: omp 16.5.2 added a `legacy-pi-compat` plugin whose
+      # dynamic `import("omp-legacy-pi-modules")` is meant to be resolved by omp's OWN Bun build plugin,
+      # and `bun build --compile` chases the literal. Nothing in the suite or either typecheck runs a
+      # compile, so a dependency bump could break the release and every PR check would still pass. These
+      # take about 10 seconds combined and they are the only thing here that validates the ARTIFACT
+      # rather than the source. Renderer bundle included: dev.ts serves the prebuilt artifact.
+      - name: Compile the shipped binaries (engine + launcher + renderer bundle)
+        working-directory: desktop
+        run: |
+          bun run build-renderer
+          bun run compile-lucid
+          bun run compile-engine
+
       # ADR-0177/0178: the RELEASE must BOOT under the packaging filter. This guard materializes a filtered
       # install (the extraResources exclusions applied for real) and boots the real dev.ts, then requires
       # lazily-imported feature deps to load. A filter/import mismatch - e.g. v1.11.0's `desktop/collab`
@@ -72,12 +87,42 @@ jobs:
       - name: Packaged-boot guard (release boots under the packaging filter)
         run: bun test desktop/packaged_boot.test.ts
 
-  scanner:
-    name: Unicode scanner tests (Python)
-    runs-on: ubuntu-latest
+  # ADR-0352 (P-TEST.W2): the developer machine is Windows, CI was Linux-only, and the gap grew
+  # 8 standing environmental test failures that no PR ever saw (ADR-0351 fixed them). This leg
+  # replicates the LOCAL gate (`make test`'s bun half: the full suite under TEST_IGNORES) on
+  # windows-latest, so path-separator / path-module / machine-state rot fails the PR that
+  # introduces it instead of a developer's baseline ritual days later.
+  gate-windows:
+    name: Full test gate (Windows)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install (root)
+        run: bun install
+
+      - name: Install (desktop)
+        working-directory: desktop
+        run: bun install
+
+      # The same exclusion-only scope as the local gate (ADR-0303: scope by exclusion, never by
+      # positional pattern) - vendored trees and the packaged release copy stay out.
+      - name: Full test suite (Windows)
+        run: bun test --path-ignore-patterns="desktop/release/**" --path-ignore-patterns="vendor/**" --path-ignore-patterns="lucidaddon_audit/**"
+
+  scanner:
+    name: Unicode scanner tests (Python, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 

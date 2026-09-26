@@ -15,14 +15,18 @@
 import { closeSync, fchmodSync, fstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
+import { parseJudgmentProvider, type JudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
+import { validAccountName, type StoredAccount } from "./account_policy.ts"; // P-ACCT.1 (ADR-0375)
 import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
-import { validateLocalProvider, type LocalProviderDef } from "./local_providers.ts";
+import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
+import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 
-// LUCID_GUI_SETTINGS_FILE: test seam - point the store at a temp file (never set in production).
-// Read per call (not at module init) so the seam is immune to module-cache order in the test runner.
+// LUCID_GUI_SETTINGS_FILE is a supported instance-isolation seam. Creator and Fleet builds point it at
+// their own settings file; tests use the same seam for temporary stores. Read per call so environment
+// changes made before engine startup are honored without a module-cache dependency.
 const settingsFile = (): string => process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json");
 
 // P-MCP.1 (ADR-0020): one configured MCP server. The token is a bearer credential sent as an
@@ -39,8 +43,10 @@ export interface McpServerEntry {
 // ADR-0088 (P-ROLE.1): the four onboarding roles. A role is a COSMETIC presentation preset — it
 // shapes which surfaces are foregrounded by default. It never reads into or weakens the security
 // gate (invariant #3). Unset folds to "developer", the safe, full-surface default.
-export type UserRole = "developer" | "security" | "manager" | "executive";
-export const USER_ROLES: UserRole[] = ["developer", "security", "manager", "executive"];
+// P-AVATAR.1 (ADR-0251): "lucid-agent" is the ONE behavioral role - it additionally drives the immersive
+// stage layout (rails hidden). The other four stay cosmetic; none of them ever gates security (invariant #3).
+export type UserRole = "developer" | "security" | "manager" | "executive" | "lucid-agent";
+export const USER_ROLES: UserRole[] = ["developer", "security", "manager", "executive", "lucid-agent"];
 
 export interface GuiSettings {
   username?: string;
@@ -66,6 +72,25 @@ export interface GuiSettings {
   // (spillage protection); a "search" session allows web search (the user affirmed no CUI datasets). Absent/
   // unknown ⇒ "cui" (fail-closed). Keyed by omp session id; pruned to a bounded size.
   sessionModes?: Record<string, "cui" | "search">;
+  // P-JEV.1 (ADR-0374): omp's `providers.judgmentProvider` (auto | typesafe | llm) as the USER chose it. The
+  // value omp is told comes from judgment_policy.resolveJudgmentProvider, which pins `llm` under lockdown; the
+  // stored choice is kept so lifting the lock restores it. Absent = "auto" (omp's default).
+  judgmentProvider?: "auto" | "typesafe" | "llm";
+  // P-ACCT.1 (ADR-0375): named provider accounts. Key accounts carry their secret here (same 0600-file
+  // posture as `keys`); oauth records exist only to carry a rename of an identity that lives in omp's
+  // vault. `activeAccount` maps providerId -> accountId ("key:<uuid>" | "oauth:<identityKey>").
+  accounts?: Record<string, StoredAccount[]>;
+  activeAccount?: Record<string, string>;
+  // P-FLEET.L6: fleet full-auto approvals. `fleetAutoApprove` is the default for NEW lanes (per-lane
+  // toggles live in the running manager). Enabling auto anywhere is refused server-side until the user
+  // has explicitly accepted the risk warning once - `fleetAutoRiskAcceptedAt` records that acceptance
+  // (epoch ms). The in-omp security gate still scans every tool call either way; auto-mode only stops
+  // asking the human for permission.
+  fleetAutoApprove?: boolean;
+  fleetAutoRiskAcceptedAt?: number;
+  // P-WSINIT.1: workspaces already offered the init/.agents-framework popup (path -> epoch ms of the
+  // offer). Bounded to the 50 most recent so the map can never grow without limit.
+  workspaceSetupAsked?: Record<string, number>;
   // ADR-0221: bring-your-own-embeddings config for SEMANTIC knowledge search (non-AskSage RAG increment 2).
   // Non-secret (baseUrl/model/dim/auth); the token lives in the OS vault behind `vaultRef` and is injected into
   // the dev child env by main as LUCID_EMBEDDINGS_KEY (the Figma/git-PAT vault→env pattern). Off ⇒ lexical only.
@@ -87,6 +112,9 @@ export interface GuiSettings {
   // P10.3: opt-in live rate-limit probe for API-KEY providers (Anthropic/OpenAI). OFF by default —
   // it makes a tiny request per provider to read the rate-limit headers, which costs a token or two.
   rateLimitProbe?: boolean;
+  /** P-SANDBOX.12 (ADR-0390): the user's Windows AppContainer switch. "off" = the disclosed passthrough by
+   *  choice (no admin needed); absent/"auto" = isolate when the host can. Managed require-isolation wins. */
+  sandboxWindowsMode?: "auto" | "off";
   // ADR-0009 Phase D: developer-mode logging view (telemetry + lineage + audit trails, read-only).
   // OFF by default; flips on the "Logs" rail tab. Gated server-side too.
   developerMode?: boolean;
@@ -106,6 +134,10 @@ export interface GuiSettings {
   // P-LOC.1 (ADR-0031): the last model omp reported active, persisted so the AI-LOC gate can tag
   // edits with the authoring model from the very first edit of a fresh session (env at spawn).
   lastModel?: string;
+  // P-MODELDEF: the model the USER explicitly picked in the picker. DISTINCT from lastModel, which the
+  // backend also writes from omp's reported default "did the user deliberately choose a model?". Empty ⇒
+  // never chosen ⇒ the renderer boots to the highest-level available model for the active provider.
+  chosenModel?: string;
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
@@ -118,6 +150,10 @@ export interface GuiSettings {
   // ADR-0088 (P-ROLE.1): the user's chosen role. Cosmetic preset; unset = "developer". Captured at
   // first-run onboarding (before the email step) and switchable in Settings → Profile.
   userRole?: UserRole;
+  // P-THEME.1: the chosen app theme id (desktop/renderer/theme.ts). Cosmetic, like userRole. Unset means
+  // "never chosen", which follows the OS light/dark preference; a KNOWN id always wins over the OS, since
+  // an explicit choice must not be overridden by a system setting change.
+  theme?: string;
   // ADR-0089 (P-ROLE.1b): the first-run guided walkthrough has been shown (finished OR skipped).
   // Replay-guard so the tour never re-appears uninvited; the About "Take the tour" button ignores it.
   tourSeen?: boolean;
@@ -131,11 +167,35 @@ export interface GuiSettings {
   sttProvider?: "elevenlabs" | "whisper";
   // sttUrl: the offline OpenAI-compatible Whisper server (whisper.cpp / faster-whisper). Default :9000.
   sttUrl?: string;
-  // ttsProvider: default engine for the brief podcast + read-aloud — "elevenlabs" | "openai-tts" | "local-tts".
-  ttsProvider?: "elevenlabs" | "openai-tts" | "local-tts";
-  // ttsVoice: selected ElevenLabs voice id; ttsVoiceFavorites: starred voice ids (favorites shown first).
+  // ttsProvider: default engine for the brief podcast + read-aloud.
+  ttsProvider?: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
+  // dotsTtsUrl: the self-hosted dots.tts service (P-VOICE.6) - normally an SSH -L forward of the DGX's
+  // loopback :8084, or an nginx /voice/ proxy URL. Only used when ttsProvider is "dots-tts".
+  dotsTtsUrl?: string;
+  // ttsDigest: speak a short model-written digest instead of the verbatim reply (P-VOICE.6) - built for
+  // slow self-hosted engines (dots.tts synthesizes 5-10s per clip).
+  ttsDigest?: boolean;
+  // P-VOICE.7: imported voice-endpoint configs (the portable lucid-voice-endpoint contract) + which one
+  // is active. Environment data, never code: no box name is ever hardcoded anywhere in LUCID.
+  voiceEndpoints?: VoiceEndpointConfig[];
+  activeVoiceEndpointId?: string;
+  // dotsTtsModel: the checkpoint the active endpoint serves (set by activation; overridable).
+  dotsTtsModel?: string;
+  // ttsVoice: LEGACY single voice id (an ElevenLabs id — the only engine whose picker worked pre-P-VOICE.2).
+  // Superseded by ttsVoices, which remembers a voice PER ENGINE so switching engines never sends a foreign
+  // voice id (an ElevenLabs id would 400 against Kokoro). Read as the ElevenLabs fallback, then retired.
   ttsVoice?: string;
+  ttsVoices?: Record<string, string>;
+  // ttsVoiceFavorites: starred ElevenLabs voice ids (listed first in the picker; also the brief's two hosts).
   ttsVoiceFavorites?: string[];
+  // P-VOICE.2 (ADR-0247): ttsAutoSpeak - read every assistant reply aloud as it streams, without clicking the
+  // per-message button. OFF by default: it is cloud egress (the reply text goes to the TTS provider) plus
+  // per-character cost, so it is strictly opt-in, chosen from the composer's voice chip.
+  ttsAutoSpeak?: boolean;
+  // P-VOICE.3: ttsConversation - hands-free turn-taking. When the spoken reply ENDS, the mic opens by
+  // itself; a longer silence ends your turn and sends it. Requires ttsAutoSpeak (it is the other half of the
+  // loop) and is opt-in on top of it: it holds the microphone open between turns.
+  ttsConversation?: boolean;
   // P-LOCAL.1 (ADR-0135): self-hosted / custom OpenAI-compatible LLM endpoints (Ollama, llama.cpp,
   // vLLM, a DGX box over a VPN tunnel, …). DECLARATIONS only — each carries an opaque `vaultRef`; the
   // API key/token lives ONLY in the OS-encrypted vault (cred_vault.ts), never in this file.
@@ -153,14 +213,32 @@ export interface GuiSettings {
   collabIceUrls?: string[];         // stun:/turn: server URLs for NAT traversal
   collabTurnUsername?: string;      // TURN long-term credential (user-local file; not a high-value secret)
   collabTurnCredential?: string;
+  // CREATOR-0 (ADR-0282): Creator integration endpoints (ComfyUI, a dots.tts server, a Suno partner base
+  // URL, Blender, Unreal). DECLARATIONS only - each carries an opaque `vaultRef`; the token itself lives
+  // in the OS-encrypted vault, exactly like localProviders. Only a Creator build ever writes these.
+  creatorEndpoints?: CreatorEndpointDef[];
+  // CREATOR-0 (ADR-0283): remote monitoring targets (a DGX Spark, a GPU VM) - a DCGM/Prometheus exporter
+  // or a LUCID JSON agent URL plus an optional vault credential NAME. Never a secret value.
+  creatorTargets?: CreatorRemoteTargetDef[];
+}
+
+/** CREATOR-0: the stored shape of a remote monitoring target. Mirrors creator_monitor's RemoteTargetDef
+ *  without importing that module (it pulls node child_process in through system_profile). */
+export interface CreatorRemoteTargetDef {
+  id: string;
+  label: string;
+  url: string;
+  kind: "dcgm-exporter" | "lucid-agent";
+  vaultRef?: string;
+  enabled: boolean;
 }
 
 export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 
 /** Base directory for all personalization artifacts. Defaults to `~/.omp`; `LUCID_PERSONAL_DIR`
- *  relocates the whole set (store, CUI store, audit, exports) as one unit — for tests and isolated
- *  demos that must NOT touch the real encrypted store. Override-only; it changes WHERE the encrypted
- *  file lives, never WHETHER content is gated (the security gate is independent of this path). */
+ *  relocates the whole set (store, CUI store, audit, exports) as one unit for isolated Creator/Fleet
+ *  instances and tests. It changes WHERE the encrypted file lives, never WHETHER content is gated.
+ *  The security gate is independent of this path. */
 export function personalBaseDir(): string {
   return process.env.LUCID_PERSONAL_DIR || join(homedir(), ".omp");
 }
@@ -189,6 +267,9 @@ export function setPersonalAiExtract(enabled: boolean): GuiSettings {
 }
 export function setRateLimitProbe(enabled: boolean): GuiSettings {
   const s = load(); s.rateLimitProbe = enabled; save(s); return s;
+}
+export function setSandboxWindowsMode(mode: "auto" | "off"): GuiSettings {
+  const s = load(); s.sandboxWindowsMode = mode; save(s); return s;
 }
 export function setDeveloperMode(enabled: boolean): GuiSettings {
   const s = load(); s.developerMode = enabled; save(s); return s;
@@ -241,32 +322,111 @@ export function setCollabP2P(patch: { preferDirect?: boolean; iceUrls?: string[]
 function wsToHttp(u: string): string { return u.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:"); }
 function originLabel(u: string): string { try { return new URL(u).host; } catch { return u; } }
 
+import type { VoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7 portable endpoints
+
 // P-VOICE.1 (ADR-0115): voice (TTS/STT) config. Effective values with defaults, for the server + UI.
 export interface VoiceSettings {
   sttProvider: "elevenlabs" | "whisper";
   sttUrl: string;
-  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
+  /** P-VOICE.6: base URL of the self-hosted dots.tts service (SSH forward / proxy of the DGX's :8084). */
+  dotsTtsUrl: string;
   ttsVoice: string;
   ttsVoiceFavorites: string[];
+  ttsAutoSpeak: boolean;
+  ttsConversation: boolean;
+  /** P-VOICE.6: speak a short digest aloud instead of the verbatim reply (slow-engine mode). */
+  ttsDigest: boolean;
+  /** P-VOICE.7: imported portable endpoint configs (labels + urls; environment data, never code). */
+  voiceEndpoints: VoiceEndpointConfig[];
+  activeVoiceEndpointId: string;
+  /** P-VOICE.7: model checkpoint for the dots engine (activation sets it; env overrides win). */
+  dotsTtsModel: string;
 }
 export function voiceSettings(): VoiceSettings {
   const s = load();
+  const ttsProvider = s.ttsProvider ?? "elevenlabs";
+  // P-VOICE.2: the voice is remembered PER ENGINE. `ttsVoice` (pre-P-VOICE.2, when only ElevenLabs had a
+  // working picker) is read as the legacy ElevenLabs choice, so an existing install keeps its voice.
+  const perProvider = s.ttsVoices?.[ttsProvider];
   return {
     sttProvider: s.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper", // offline is the safe default
     sttUrl: s.sttUrl || process.env.LUCID_STT_URL || "http://localhost:9000",
-    ttsProvider: s.ttsProvider ?? "elevenlabs",
-    ttsVoice: s.ttsVoice ?? "",
+    ttsProvider,
+    ttsVoice: perProvider ?? (ttsProvider === "elevenlabs" ? s.ttsVoice ?? "" : ""),
     ttsVoiceFavorites: Array.isArray(s.ttsVoiceFavorites) ? s.ttsVoiceFavorites : [],
+    ttsAutoSpeak: s.ttsAutoSpeak === true, // opt-in only (cloud egress + per-character cost)
+    // Conversation mode is meaningless without the speaking half, so it reads false whenever auto-speak is
+    // off - the stored preference survives, but nothing opens the mic behind the user's back.
+    ttsConversation: s.ttsConversation === true && s.ttsAutoSpeak === true,
+    dotsTtsUrl: s.dotsTtsUrl || process.env.LUCID_DOTS_TTS_URL || "http://127.0.0.1:8084",
+    // Digest reads false without auto-speak for the same reason conversation does: it only shapes speech.
+    ttsDigest: s.ttsDigest === true && s.ttsAutoSpeak === true,
+    voiceEndpoints: Array.isArray(s.voiceEndpoints) ? s.voiceEndpoints : [],
+    activeVoiceEndpointId: s.activeVoiceEndpointId ?? "",
+    dotsTtsModel: process.env.LUCID_DOTS_TTS_MODEL || s.dotsTtsModel || "rednote-hilab/dots.tts-soar",
   };
 }
-/** Merge a partial voice-settings patch. Favorites are replaced wholesale (the UI sends the full list). */
+
+/** P-VOICE.7: upsert an imported endpoint (validated upstream by parseVoiceEndpointConfig). Dedupe by
+ *  id; a re-import of the same id replaces the stored copy (the loader re-exports after edits). The
+ *  list is capped defensively - an import can never grow the settings file without bound. */
+export function importVoiceEndpoint(cfg: VoiceEndpointConfig): VoiceSettings {
+  const s = load();
+  const rest = (s.voiceEndpoints ?? []).filter((e) => e.id !== cfg.id);
+  s.voiceEndpoints = [cfg, ...rest].slice(0, 20);
+  save(s);
+  return voiceSettings();
+}
+
+/** P-VOICE.7: make an imported endpoint THE speaking engine in one click: url + model + provider all
+ *  switch together, so "Send to LUCID" then "Activate" is the whole transfer. Unknown id: no-op. */
+export function activateVoiceEndpoint(id: string): VoiceSettings {
+  const s = load();
+  const cfg = (s.voiceEndpoints ?? []).find((e) => e.id === id);
+  if (cfg) {
+    s.activeVoiceEndpointId = cfg.id;
+    s.dotsTtsUrl = cfg.url;
+    s.dotsTtsModel = cfg.model || undefined;
+    s.ttsProvider = "dots-tts";
+    save(s);
+  }
+  return voiceSettings();
+}
+
+/** P-VOICE.7: forget an imported endpoint. Removing the ACTIVE one keeps the effective url (the user
+ *  may have tuned it) but clears the active marker so the UI stops claiming the pairing. */
+export function removeVoiceEndpoint(id: string): VoiceSettings {
+  const s = load();
+  s.voiceEndpoints = (s.voiceEndpoints ?? []).filter((e) => e.id !== id);
+  if (!s.voiceEndpoints.length) s.voiceEndpoints = undefined;
+  if (s.activeVoiceEndpointId === id) s.activeVoiceEndpointId = undefined;
+  save(s);
+  return voiceSettings();
+}
+/** Merge a partial voice-settings patch. Favorites are replaced wholesale (the UI sends the full list).
+ *  `ttsVoice` targets whichever engine is selected AFTER this patch applies, so the UI can switch engine and
+ *  voice independently and each engine keeps its own remembered voice. */
 export function setVoiceSettings(patch: Partial<VoiceSettings>): VoiceSettings {
   const s = load();
   if (patch.sttProvider) s.sttProvider = patch.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper";
   if (patch.sttUrl !== undefined) s.sttUrl = patch.sttUrl.trim() || undefined;
   if (patch.ttsProvider) s.ttsProvider = patch.ttsProvider;
-  if (patch.ttsVoice !== undefined) s.ttsVoice = patch.ttsVoice.trim() || undefined;
+  if (patch.ttsVoice !== undefined) {
+    const voices = { ...(s.ttsVoices ?? {}) };
+    const target = s.ttsProvider ?? "elevenlabs";
+    const id = patch.ttsVoice.trim();
+    if (id) voices[target] = id; else delete voices[target];
+    s.ttsVoices = Object.keys(voices).length ? voices : undefined;
+    if (target === "elevenlabs") s.ttsVoice = undefined; // the per-engine map supersedes the legacy scalar
+  }
   if (patch.ttsVoiceFavorites) s.ttsVoiceFavorites = patch.ttsVoiceFavorites.slice(0, 100);
+  // The UI sends checkbox state as a real boolean and select state as a string; accept both so a
+  // `data-voice-set` control can drive this the same way it drives the engine pickers.
+  if (patch.ttsAutoSpeak !== undefined) s.ttsAutoSpeak = patch.ttsAutoSpeak === true;
+  if (patch.ttsConversation !== undefined) s.ttsConversation = patch.ttsConversation === true;
+  if (patch.dotsTtsUrl !== undefined) s.dotsTtsUrl = patch.dotsTtsUrl.trim() || undefined; // P-VOICE.6
+  if (patch.ttsDigest !== undefined) s.ttsDigest = patch.ttsDigest === true; // P-VOICE.6
   save(s); return voiceSettings();
 }
 
@@ -339,10 +499,19 @@ export function upsertLocalProvider(def: LocalProviderDef): LocalProviderDef {
     id: def.id, name: def.name?.trim() ?? "", ompProvider: def.ompProvider, baseUrl: def.baseUrl?.trim() ?? "",
     api: def.api, authKind: def.authKind, vaultRef: def.vaultRef || undefined, headerName: def.headerName?.trim() || undefined,
     zone: def.zone, enabled: def.enabled !== false,
-    models: (def.models ?? []).map((m) => ({
-      id: m.id, name: m.name?.trim() || undefined, contextWindow: m.contextWindow, maxTokens: m.maxTokens,
-      reasoning: m.reasoning || undefined, vision: m.vision || undefined, supportsTools: m.supportsTools,
-    })),
+    // P-LOCAL.5: `compat` is part of the DECLARATION (a preset's wire shape), so it has to survive the
+    // clean copy or the runtime overlay reads a stored def that lost it and GLM's reasoning stream dies
+    // silently. Re-sanitized HERE as well as at emission: this is the file a user hand-edits, and omp
+    // discards the whole models.yml on one out-of-enum value.
+    models: (def.models ?? []).map((m) => {
+      const cm: LocalModelDef = {
+        id: m.id, name: m.name?.trim() || undefined, contextWindow: m.contextWindow, maxTokens: m.maxTokens,
+        reasoning: m.reasoning || undefined, vision: m.vision || undefined, supportsTools: m.supportsTools,
+      };
+      const compat = sanitizeModelCompat(m.compat);
+      if (compat) cm.compat = compat;
+      return cm;
+    }),
     createdAt: def.createdAt, updatedAt: def.updatedAt,
   };
   const errs = validateLocalProvider(clean);
@@ -478,8 +647,140 @@ export function setLastModel(model: string): void {
   const gen = ++lastModelGen;
   setTimeout(() => { if (gen === lastModelGen) flushPendingSettings(); }, 250);
 }
+/** P-MODELDEF: the user's explicitly-chosen model ("" if they've never picked one). Set ONLY on a genuine
+ *  user selection in the picker; never from a system switch (lockdown clamp, no-response
+ *  fallback, collab-guest mirror, boot default-select), so it cleanly signals an explicit preference. */
+export function chosenModel(): string { return load().chosenModel ?? ""; }
+export function setChosenModel(model: string): GuiSettings {
+  const s = load(); const m = (model ?? "").trim();
+  if (m) s.chosenModel = m; else delete s.chosenModel;
+  save(s); return s;
+}
+// P-THEME.1: the user's chosen app theme id (see desktop/renderer/theme.ts THEMES). "" / unset means
+// "not chosen", which resolveTheme folds to the DEFAULT (lucid-dark). P-THEME.2: it used to fold to the
+// OS colour-scheme preference, which silently moved long-time users off the dark UI they already had;
+// following the OS is now the explicit `system` id. Stored as an opaque STRING, deliberately not a union:
+// the renderer's
+// theme registry is the single source of truth for which ids exist, and resolveTheme already treats an
+// unknown id as unset, so shipping or retiring a theme never needs a migration here.
+export function themeId(): string { return load().theme ?? ""; }
+export function setThemeId(id: string): GuiSettings {
+  const s = load(); const t = (id ?? "").trim();
+  if (t) s.theme = t; else delete s.theme;
+  save(s); return s;
+}
+// ── CREATOR-0 (ADR-0282/0283): Creator endpoint + remote-target declarations ──
+// Storage only, and fail-closed on write: an invalid declaration is REFUSED rather than saved half-formed,
+// and no path here ever accepts a secret value (the vault owns those; these carry a `vaultRef` NAME).
+
+export function listCreatorEndpoints(): CreatorEndpointDef[] {
+  const raw = load().creatorEndpoints;
+  return Array.isArray(raw) ? raw : [];
+}
+export function upsertCreatorEndpoint(def: CreatorEndpointDef): { ok: boolean; errors: string[] } {
+  const v = validateCreatorEndpoint(def);
+  if (!v.ok) return v;
+  const s = load();
+  const list = Array.isArray(s.creatorEndpoints) ? s.creatorEndpoints : [];
+  const i = list.findIndex((e) => e.id === def.id);
+  if (i >= 0) list[i] = def; else list.push(def);
+  s.creatorEndpoints = list;
+  save(s);
+  return { ok: true, errors: [] };
+}
+export function removeCreatorEndpoint(id: string): boolean {
+  const s = load();
+  const list = Array.isArray(s.creatorEndpoints) ? s.creatorEndpoints : [];
+  const next = list.filter((e) => e.id !== id);
+  if (next.length === list.length) return false;
+  s.creatorEndpoints = next;
+  save(s);
+  return true;
+}
+export function listCreatorTargets(): CreatorRemoteTargetDef[] {
+  const raw = load().creatorTargets;
+  return Array.isArray(raw) ? raw : [];
+}
+export function upsertCreatorTarget(def: CreatorRemoteTargetDef): void {
+  const s = load();
+  const list = Array.isArray(s.creatorTargets) ? s.creatorTargets : [];
+  const i = list.findIndex((t) => t.id === def.id);
+  if (i >= 0) list[i] = def; else list.push(def);
+  s.creatorTargets = list;
+  save(s);
+}
+export function removeCreatorTarget(id: string): boolean {
+  const s = load();
+  const list = Array.isArray(s.creatorTargets) ? s.creatorTargets : [];
+  const next = list.filter((t) => t.id !== id);
+  if (next.length === list.length) return false;
+  s.creatorTargets = next;
+  save(s);
+  return true;
+}
+
 /** Whether the user has set the "AskSage only" model lock (the org-managed lock is OR'd in by callers). */
 export function asksageOnly(): boolean { return !!load().asksageOnly; }
+// ── P-ACCT.1 (ADR-0375): named provider accounts. ────────────────────────────────────────────────────
+/** Stored accounts for one provider (empty when none were ever named). */
+export function providerAccounts(providerId: string): StoredAccount[] { return load().accounts?.[providerId] ?? []; }
+/** The persisted active-account choice for one provider, if the user ever switched explicitly. */
+export function activeAccountId(providerId: string): string | undefined { return load().activeAccount?.[providerId]; }
+/** Add a named API-key account. Returns the new record, or null when the name is invalid or empty key. */
+export function addKeyAccount(providerId: string, name: string, key: string): StoredAccount | null {
+  const n = validAccountName(name);
+  const k = key.trim();
+  if (!n || !k || !providerId) return null;
+  const s = load();
+  const rec: StoredAccount = { id: `key:${randomUUID()}`, name: n, kind: "key", key: k, createdAt: Date.now() };
+  s.accounts = { ...(s.accounts ?? {}), [providerId]: [...(s.accounts?.[providerId] ?? []), rec] };
+  save(s);
+  return rec;
+}
+/** Rename an account. For an oauth-derived id with no record yet, a rename-only record is created. */
+export function renameAccount(providerId: string, accountId: string, name: string): boolean {
+  const n = validAccountName(name);
+  if (!n || !providerId || !accountId) return false;
+  const s = load();
+  const list = s.accounts?.[providerId] ?? [];
+  const hit = list.find((a) => a.id === accountId);
+  if (hit) hit.name = n;
+  else if (accountId.startsWith("oauth:")) list.push({ id: accountId, name: n, kind: "oauth", identityKey: accountId.slice("oauth:".length), createdAt: Date.now() });
+  else return false; // "key:legacy" and unknown ids carry no record to rename
+  s.accounts = { ...(s.accounts ?? {}), [providerId]: list };
+  save(s);
+  return true;
+}
+/** Remove a stored account record (key account, or an oauth rename). Clears the active pointer if it
+ *  pointed here. The caller handles the vault side (disconnectOauthIdentity) and env side. */
+export function removeAccount(providerId: string, accountId: string): boolean {
+  const s = load();
+  const list = s.accounts?.[providerId] ?? [];
+  const next = list.filter((a) => a.id !== accountId);
+  const hadRecord = next.length !== list.length;
+  if (s.accounts && hadRecord) s.accounts[providerId] = next;
+  if (s.activeAccount?.[providerId] === accountId) delete s.activeAccount[providerId];
+  save(s);
+  return hadRecord;
+}
+export function setActiveAccount(providerId: string, accountId: string): void {
+  const s = load();
+  s.activeAccount = { ...(s.activeAccount ?? {}), [providerId]: accountId };
+  save(s);
+}
+/** P-JEV.1 (ADR-0374): the user's STORED judgment-backend choice. Callers wanting the value omp is told go
+ *  through judgment_policy.resolveJudgmentProvider with the live lock state; this never applies the clamp. */
+export function judgmentProvider(): JudgmentProvider { return parseJudgmentProvider(load().judgmentProvider); }
+export function setJudgmentProvider(mode: unknown): GuiSettings {
+  const s = load();
+  const m = parseJudgmentProvider(mode);
+  if (m === "auto") delete s.judgmentProvider; else s.judgmentProvider = m;
+  save(s);
+  return s;
+}
+/** P-JEV.1: the omp `--config` overlay LUCID rewrites at every spawn, beside the settings file so the
+ *  LUCID_GUI_SETTINGS_FILE isolation seam isolates it too. */
+export function judgmentOverlayFile(): string { return join(dirname(settingsFile()), "lucid-judgment.yml"); }
 /** ADR-0221: the stored embeddings config (non-secret), or null when semantic search was never set up. */
 export type StoredEmbeddingsConfig = NonNullable<GuiSettings["embeddings"]>;
 export function embeddingsConfig(): StoredEmbeddingsConfig | null { return load().embeddings ?? null; }

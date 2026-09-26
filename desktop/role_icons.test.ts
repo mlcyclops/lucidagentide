@@ -18,12 +18,12 @@ describe("each role has a distinct, animated, family-matching glyph", () => {
     }
   });
 
-  test("the four glyphs are distinct and carry their animated hook class", () => {
+  test("the glyphs are distinct and carry their animated hook class", () => {
     const rootClass: Record<string, string> = {
-      developer: "ri-dev", security: "ri-sec", manager: "ri-mgr", executive: "ri-exec",
+      developer: "ri-dev", security: "ri-sec", manager: "ri-mgr", executive: "ri-exec", "lucid-agent": "ri-agt",
     };
     const hooks: Record<string, string> = {
-      developer: "ri-caret", security: "ri-check", manager: "ri-bar", executive: "ri-bust",
+      developer: "ri-caret", security: "ri-check", manager: "ri-bar", executive: "ri-bust", "lucid-agent": "ri-rain",
     };
     const seen = new Set<string>();
     for (const r of USER_ROLE_LIST) {

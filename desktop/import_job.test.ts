@@ -5,8 +5,21 @@
 
 import { beforeEach, expect, test } from "bun:test";
 import { __resetImportJob, cancelImport, importJobStatus, startImport } from "./import_job.ts";
+import type { ImportResult } from "./personal.ts";
+import type { ImportProgressTick } from "../harness/personal/importer.ts";
 
 const settle = () => new Promise((r) => setTimeout(r, 5));
+
+type Started = { ok: true; jobId: string } | { ok: false; error: string };
+/** Narrow the start result instead of casting, so a refused start fails the test loudly. */
+function jobIdOf(started: Started): string {
+  if (!started.ok) throw new Error(`expected the import to start, got: ${started.error}`);
+  return started.jobId;
+}
+/** Flush microtasks so the job's settle handler has run. Deterministic: no wall-clock wait. */
+const flush = async (): Promise<void> => { for (let i = 0; i < 4; i++) await Promise.resolve(); };
+/** A run that never settles and ignores its abort signal, i.e. the wedged import this fix is about. */
+const wedged = (_onTick: (t: ImportProgressTick) => void, _signal: AbortSignal): Promise<ImportResult> => new Promise(() => {});
 beforeEach(() => __resetImportJob());
 
 test("start returns a jobId, reports running with live counts, then done", async () => {
@@ -45,6 +58,47 @@ test("cancel aborts the run; the result is marked cancelled", async () => {
   await settle();
   expect(sawAbort).toBe(true);
   expect(importJobStatus(jobId)!.state).toBe("cancelled");
+});
+
+// ── P-KG-INGEST.5 (ADR-0264): Stop must always terminate, even when the run itself is wedged ──
+
+test("cancel marks the job stopping and stays running while it unwinds", () => {
+  const jobId = jobIdOf(startImport({ run: wedged }));
+  expect(cancelImport(jobId).ok).toBe(true);
+  const st = importJobStatus(jobId)!;
+  expect(st.state).toBe("running");           // still unwinding, not yet terminal
+  expect(st.cancelRequestedAt).toBeGreaterThan(0); // the UI reads this to show "Stopping"
+});
+
+test("pressing Stop twice force-cancels a run that ignores its abort signal", () => {
+  const jobId = jobIdOf(startImport({ run: wedged }));
+  cancelImport(jobId);
+  expect(importJobStatus(jobId)!.state).toBe("running");
+  cancelImport(jobId); // second press: stop waiting for the unwind
+  expect(importJobStatus(jobId)!.state).toBe("cancelled");
+});
+
+test("a force-cancelled job releases single-flight so the user can retry", async () => {
+  const first = jobIdOf(startImport({ run: wedged }));
+  cancelImport(first);
+  cancelImport(first);
+  const second = startImport({ run: async () => ({ ok: true, learned: 0 }) });
+  expect(second.ok).toBe(true); // before the fix this stayed refused until app restart
+  await flush();
+  expect(importJobStatus(jobIdOf(second))!.state).toBe("done");
+});
+
+test("a late result cannot resurrect a job the user already force-cancelled", async () => {
+  let finish!: (v: ImportResult) => void;
+  const jobId = jobIdOf(startImport({ run: () => new Promise<ImportResult>((res) => { finish = res; }) }));
+  cancelImport(jobId);
+  cancelImport(jobId);
+  expect(importJobStatus(jobId)!.state).toBe("cancelled");
+  finish({ ok: true, learned: 9 });
+  await flush();
+  const st = importJobStatus(jobId)!;
+  expect(st.state).toBe("cancelled"); // stays terminal
+  expect(st.result?.learned).toBe(9); // but the partial facts are still reported
 });
 
 test("status is jobId-scoped (a stale/foreign id sees nothing)", () => {

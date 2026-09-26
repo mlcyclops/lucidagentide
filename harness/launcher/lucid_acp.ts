@@ -20,8 +20,7 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { BUILD_POLICY, DELEGATION_POLICY } from "../prompt/assembler.ts";
 import { ScannerClient, ScanUnavailableError } from "../security/scanner_client.ts";
@@ -37,19 +36,21 @@ import { ensureEgressProxy } from "../runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR
 import { egressAuditSink } from "../../desktop/egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { caps } from "../runs/profiles.ts";
 import { managedConfig, managedRequireIsolation } from "../../desktop/managed_config.ts";
+import { resolvedRepo } from "../../desktop/repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): the ONE probed repo root
 
 type Env = Record<string, string | undefined>;
 const EXE = process.platform === "win32" ? ".exe" : "";
-const HERE = dirname(fileURLToPath(import.meta.url));
 
 /** Repo root. In a dev checkout / packaged resources/repo this file lives at <repo>/harness/launcher/.
  *  In a `bun build --compile` standalone `lucid` binary (P-EXT.4), import.meta is VIRTUALIZED, so the
- *  source-relative path is wrong — there we derive the repo from the real on-disk binary, which ships
- *  at <repo>/bin/lucid[.exe] (so repo = dirname(execPath)/..). */
+ *  source-relative path is wrong: there the repo is derived from the real on-disk binary, which ships
+ *  at <repo>/bin/lucid[.exe] (so repo = dirname(execPath)/..).
+ *
+ *  P-GATE-PATH.1 (ADR-0356): that probe now lives in ONE place (desktop/repo_root.ts) because the
+ *  desktop engine lacked it and shipped `B:\~BUN\harness\omp\security_extension.ts` to omp on every
+ *  packaged install. Two copies of this rule meant one of them could be, and was, missing. */
 export function repoRoot(): string {
-  const fromSource = join(HERE, "..", "..");
-  if (existsSync(join(fromSource, "harness", "omp", "security_extension.ts"))) return fromSource;
-  return join(dirname(process.execPath), "..");
+  return resolvedRepo().root;
 }
 
 /** The desktop app's userData dir (Electron app.getPath('userData') == productName under the OS app-data
@@ -62,16 +63,53 @@ function userDataDir(): string {
   return join(process.env.XDG_CONFIG_HOME || join(home, ".config"), "LucidAgentIDE");
 }
 
+/** Every interpreter the standalone launcher may use for the scanner, best first.
+ *
+ *  The BUNDLED relocatable CPython comes first, because that is the whole point of ADR-0225: a packaged
+ *  install must provision its scanner interpreter OFFLINE. `desktop/runtime.ts` already does exactly
+ *  this (`findScannerPython() = bundledPython() ?? venvs`), but it reads Electron's
+ *  `process.resourcesPath`, which does not exist here, so this path had NO bundled branch at all and
+ *  fell through `scanner_client.resolvePython()` to the bare name `python`.
+ *
+ *  P-SCANPY.1 (ADR-0366): that is why a packaged arm64 install failed `lucid check` with "scanner
+ *  sidecar unreachable: scanner stdin not writable" on a box whose bundled interpreter was sitting
+ *  right there and working. Ubuntu 24.04 ships `python3` and NO `python`, so the fallback could not
+ *  resolve and the child died instantly. Nothing arm64-specific about it: `bin/lucid` is the binary the
+ *  marketplace IDE extensions spawn (P-EXT.1/ADR-0038), so on ANY packaged platform without a global
+ *  `python` or a pre-existing scanner venv, the gated ACP agent could not start.
+ *
+ *  Two bundled layouts, because the launcher runs from both: a packaged tree puts `repo` and `runtimes`
+ *  side by side under `resources/`, while a dev checkout has `desktop/runtimes/` (build/fetch-runtimes
+ *  writes there). POSIX prefers `bin/python3` and falls back to the versioned `bin/python3.12`, the real
+ *  binary the aliases symlink to, matching runtime.ts bundledPython(). */
+function scannerPythonCandidates(repo: string): string[] {
+  const leaf = `python-${process.platform}-${process.arch}`;
+  const rel = process.platform === "win32"
+    ? [["python.exe"]]
+    : [["bin", "python3"], ["bin", "python3.12"], ["bin", "python"]];
+  const out: string[] = [];
+  for (const base of [join(repo, "..", "runtimes", leaf), join(repo, "desktop", "runtimes", leaf)]) {
+    for (const parts of rel) out.push(join(base, ...parts));
+  }
+  // Then the venvs: a dev checkout's project venv, then the desktop app's first-run provisioning.
+  const venvPy = process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"];
+  for (const venv of [join(repo, "scanner-sidecar", ".venv"), join(userDataDir(), "runtimes", "scanner-venv")]) {
+    out.push(join(venv, ...venvPy));
+  }
+  return out;
+}
+
 /** Point the scanner at the REAL on-disk sidecar + a usable Python, so the gate's fail-closed scan can
  *  actually run from a standalone/compiled launch. Best-effort: if no interpreter is found the preflight
  *  simply fails closed (never a false "safe"). Mutates `env` (and so the omp child inherits it). */
 export function resolveScannerEnv(env: Env, repo: string): void {
   env.LUCID_SCANNER_DIR = join(repo, "scanner-sidecar");
   if (env.SCANNER_PYTHON && existsSync(env.SCANNER_PYTHON)) return;
-  const py = process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"];
-  for (const venv of [join(repo, "scanner-sidecar", ".venv"), join(userDataDir(), "runtimes", "scanner-venv")]) {
-    const cand = join(venv, ...py);
-    if (existsSync(cand)) { env.SCANNER_PYTHON = cand; return; }
+  for (const cand of scannerPythonCandidates(repo)) {
+    if (existsSync(cand)) {
+      env.SCANNER_PYTHON = cand;
+      return;
+    }
   }
 }
 
@@ -368,7 +406,7 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
     const a = assets();
     resolveScannerEnv(process.env, a.repo);
     const pf = await preflight({ gate: a.gate });
-    process.stdout.write(pf.ok ? "[lucid check] OK — gate + scanner ready\n" : `[lucid check] FAIL-CLOSED — ${pf.reason}\n`);
+    process.stdout.write(pf.ok ? "[lucid check] OK: gate + scanner ready\n" : `[lucid check] FAIL-CLOSED: ${pf.reason}\n`);
     return pf.ok ? 0 : 1;
   }
   if (sub === "agent-firewall") {

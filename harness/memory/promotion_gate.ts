@@ -20,7 +20,11 @@ import type { Db } from "./db.ts";
 import { promoteFact, type PromoteFactInput } from "./memory.ts";
 import type { Telemetry } from "../telemetry/events.ts";
 
-const BLOCKED_TRUST = new Set<string>(["suspicious", "quarantined"]);
+// The trust labels that may NEVER auto-promote into semantic memory (correctness keystone #2).
+// EXPORTED (P-KG.3) so the agent-facing personal-KG write path in harness/personal/agent_kg.ts gates on
+// the SAME set rather than re-listing the labels: two copies of this set is how a "suspicious" fact
+// eventually slips through one path and not the other.
+export const BLOCKED_TRUST = new Set<string>(["suspicious", "quarantined"]);
 
 export interface PromotionOutcome {
   promoted: boolean;

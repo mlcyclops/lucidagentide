@@ -4,7 +4,7 @@
 // desktop/renderer/sandbox_panel.test.ts — P-SANDBOX.5 (ADR-0169): the "Runtime sandbox" panel builder.
 
 import { expect, test } from "bun:test";
-import { renderSandboxSection } from "./sandbox_panel.ts";
+import { addFolderRow, controlSection, renderSandboxSection } from "./sandbox_panel.ts";
 import type { SandboxStateView, SandboxStatusView } from "./bridge.ts";
 
 const st = (over: Partial<SandboxStateView> = {}): SandboxStatusView => ({
@@ -64,4 +64,107 @@ test("refused subprocess reach-outs are listed with a count; hostile host/reason
 test("isolated + no blocks shows the reassuring 'none refused' line", () => {
   const h = renderSandboxSection(st({ isolated: true }));
   expect(h).toContain("No subprocess reach-outs have been refused");
+});
+
+// ── P-SANDBOX.8: the standing directory-grants list ──────────────────────────
+test("directory grants render path, mode label, date, and a Revoke button; hostile paths are ESCAPED", () => {
+  const status: SandboxStatusView = {
+    ...st(),
+    grants: [
+      { path: "C:\\data\\<img src=x>", mode: "rw", grantedAt: "2026-02-03T10:00:00.000Z", reason: "user asked" },
+      { path: "D:\\repo", mode: "rx", grantedAt: "2026-02-01T09:00:00.000Z", reason: "" },
+    ],
+  };
+  const h = renderSandboxSection(status);
+  expect(h).toContain("Directory grants");
+  expect(h).toContain("read-write");
+  expect(h).toContain("read-only");
+  expect(h).toContain("2026-02-03");
+  expect(h).not.toContain("<img src=x"); // escaped
+  expect(h).toContain('data-grant-revoke="D:\\repo"');
+});
+
+test("grants stay visible/revocable even before a spawn resolves a state (grants-only accordion)", () => {
+  const h = renderSandboxSection({ state: null, egressBlocks: [], grants: [{ path: "C:\\data", mode: "rx", grantedAt: "2026-02-01T00:00:00.000Z", reason: "r" }] });
+  expect(h).toContain("Runtime sandbox");
+  expect(h).toContain("1 directory grant");
+  expect(h).toContain("data-grant-revoke");
+});
+
+test("no grants → no grants section (and the no-state guard still returns empty)", () => {
+  expect(renderSandboxSection({ state: null, egressBlocks: [], grants: [] })).toBe("");
+  expect(renderSandboxSection(st())).not.toContain("Directory grants");
+});
+
+// ── P-SANDBOX.12 (ADR-0390): the sandbox switch ──
+const ctl = (o: Partial<{ available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean }> = {}) =>
+  ({ available: true, userOff: false, policyLocked: false, registered: true, ...o });
+
+test("the switch: on offers Turn off; off offers Turn on (+ Remove from Windows while registered)", () => {
+  expect(controlSection(ctl())).toContain('data-sbx-mode="off"');
+  const off = controlSection(ctl({ userOff: true }));
+  expect(off).toContain('data-sbx-mode="auto"');
+  expect(off).toContain('data-sbx-mode="unregister"');
+  expect(controlSection(ctl({ userOff: true, registered: false }))).not.toContain("unregister");
+});
+
+test("policy-locked shows a note and never a button; unavailable shows nothing", () => {
+  const locked = controlSection(ctl({ policyLocked: true }));
+  expect(locked).toContain("policy");
+  expect(locked).not.toContain("data-sbx-mode");
+  expect(controlSection(ctl({ available: false }))).toBe("");
+  expect(controlSection(undefined)).toBe("");
+});
+
+test("the switch renders even before the first spawn, and Off reads as the user's choice", () => {
+  expect(renderSandboxSection({ state: null, egressBlocks: [], grants: [], control: ctl() })).toContain('data-sbx-mode="off"');
+  const h = renderSandboxSection({ state: { backend: "noop", isolated: false, disclosed: true, platform: "win32", execBlocked: null, proxied: false, at: "" }, egressBlocks: [], control: ctl({ userOff: true }) });
+  expect(h).toContain("you turned the Windows sandbox off");
+});
+
+// ── P-SANDBOX.13 (ADR-0391): add folders, and see everything the sandbox can reach ──
+test("Add folder offers read-only and read-write, and never carries a path (the engine opens the picker)", () => {
+  const h = addFolderRow(ctl());
+  expect(h).toContain('data-sbx-add="rx"');
+  expect(h).toContain('data-sbx-add="rw"');
+  expect(h).not.toContain(":\\");
+  expect(addFolderRow(ctl({ available: false }))).toBe("");
+});
+
+test("the section lists user folders (with Revoke) and LUCID's always-allowed folders (without)", () => {
+  const h = renderSandboxSection({
+    state: { backend: "appcontainer", isolated: true, disclosed: false, platform: "win32", execBlocked: null, proxied: true, at: "" },
+    egressBlocks: [],
+    control: ctl(),
+    grants: [{ path: "C:\\Users\\U\\Pictures\\Screenshots", mode: "rx", grantedAt: "2026-09-24T00:00:00.000Z", reason: "added by you in the Security panel" }],
+    runtimeFolders: [{ path: "C:\\ws", mode: "rw", why: "the current workspace" }],
+  });
+  expect(h).toContain("Screenshots");
+  expect(h).toContain("data-grant-revoke");
+  expect(h).toContain("Always allowed");
+  expect(h).toContain("the current workspace");
+  expect((h.match(/data-grant-revoke/g) ?? []).length).toBe(1); // the runtime folders are not revocable
+});
+
+// ── P-SANDBOX.14 (ADR-0394): managed folders, and no em dashes anywhere in the section ──
+test("policy-managed folders: a note replaces the Add folder buttons, revoking stays available", () => {
+  const h = addFolderRow({ ...ctl(), foldersLocked: true });
+  expect(h).toContain("Your organization manages");
+  expect(h).not.toContain("data-sbx-add");
+  const full = renderSandboxSection({ state: null, egressBlocks: [], control: { ...ctl(), foldersLocked: true }, grants: [{ path: "D:\\x", mode: "rx", grantedAt: "2026-09-24T00:00:00.000Z", reason: "r" }] });
+  expect(full).toContain("data-grant-revoke");
+});
+
+test("the Runtime sandbox section never renders an em dash", () => {
+  const states: SandboxStateView[] = [
+    { backend: "appcontainer", isolated: true, disclosed: false, platform: "win32", execBlocked: null, proxied: true, at: "" },
+    { backend: "appcontainer", isolated: true, disclosed: false, platform: "win32", execBlocked: null, proxied: false, at: "" },
+    { backend: "noop", isolated: false, disclosed: true, platform: "win32", execBlocked: null, proxied: false, at: "" },
+    { backend: null, isolated: false, disclosed: false, platform: "win32", execBlocked: "x", proxied: false, at: "" },
+  ];
+  const controls = [ctl(), ctl({ userOff: true }), ctl({ policyLocked: true }), { ...ctl(), foldersLocked: true }];
+  for (const state of states) for (const control of controls) {
+    const h = renderSandboxSection({ state, egressBlocks: [{ channel: "http", host: "h", reason: "r", at: "" } as never], control, grants: [{ path: "D:\\x", mode: "rx", grantedAt: "2026-09-24T00:00:00.000Z", reason: "r" }], runtimeFolders: [{ path: "C:\\ws", mode: "rw", why: "w" }] }, true);
+    expect(h).not.toContain("\u2014");
+  }
 });

@@ -37,6 +37,7 @@ Thumbs.db
 # desktop electron app
 desktop/node_modules/
 desktop/dist/
+desktop/renderer/app.bundle.js
 
 # --- secrets / credentials (NEVER commit keys or tokens) ---
 lucid-gui.json
@@ -73,12 +74,23 @@ desktop/runtimes/*
 !desktop/runtimes/.gitkeep
 !desktop/runtimes/README.md
 
+# bundled whisper.cpp server binary + libs (P-STT.2c): staged per-OS by build/fetch-whisper.ts, never committed
+desktop/whisper/*
+!desktop/whisper/.gitkeep
+
 # Local-only: contains real personal data (PII) — never commit
 tools/seed_personal_facts.ts
 
-# P-EXT.4: compiled lucid launcher (built during desktop dist)
-/bin/
+# P-EXT.4: compiled lucid launcher (built during desktop dist). The DIR itself stays tracked via
+# .gitkeep: compile-lucid/compile-engine write --outfile ../bin/<exe>, and a fresh CI checkout with
+# no bin/ dir fails ENOENT under current Bun (it no longer creates the outfile parent).
+/bin/*
+!/bin/.gitkeep
 netwatch.log
+
+# Machine-generated memory/fact extraction scratch (local analysis artifacts, never source)
+/.memory-extract.json
+/extracted_facts.json
 
 # P-KG-CODE.1: generated per-workspace code-graph cache (the tracked .omp/commands stays)
 .omp/codegraph.json
@@ -109,3 +121,12 @@ tools/remote-pwa/config.js
 lucidaddon_audit/
 # pasted-image scratch from chat sessions (runtime artifacts)
 .omp/images/
+# P-MAINT.1: maintainer-agent SBOM baselines (per-workspace runtime state, never source)
+.omp/maintainer/
+# Support bundles collected by tools/collect-support-logs.ps1. These are a USER'S machine state: their
+# email, their workspace paths, their install layout, and length/last4 fingerprints of their provider
+# keys. This repo is PUBLIC, so a bundle must never be committed. The collector writes to the Desktop by
+# default; one landed here once and a `git add -A` would have shipped it. Pattern, not a single filename,
+# so the next one is safe too.
+lucid-support-*.zip
+tools/lucid-support-*.zip

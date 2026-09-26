@@ -3,7 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark" />
+  <!-- P-THEME.1: both schemes are supported now (desktop/renderer/theme.ts + the [data-theme] blocks in
+       styles.css), so the UA may paint light form controls, scrollbars and caret when a light theme is
+       active. Each theme block also sets `color-scheme` itself; this meta is the pre-CSS default.
+       NOTE: the theme attribute is set on <html> by app.js as its very first statement, from a
+       localStorage mirror of the persisted choice. It CANNOT be an inline <script> here, because the CSP
+       below allows script-src 'self' only. The base :root in styles.css therefore also answers
+       prefers-color-scheme, so a light-OS user's FIRST paint is already light and there is no flash. -->
+  <meta name="color-scheme" content="dark light" />
   <!-- font-src adds data: for Monaco's codicon font (inlined as a data:font/ttf URL in its min build);
        worker-src adds blob: for Monaco's language-service workers; media-src adds blob:/data: for the
        locally-synthesized TTS audio (read-aloud + podcast player, decoded to a Blob URL in-renderer).

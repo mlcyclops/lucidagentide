@@ -22,6 +22,19 @@
 1. New `make demo-<this-increment>` passes.
 1. Full `make test` green (every prior demo still passes).
 1. If you touched the prompt prefix, re-run the prefix-hash test.
+1. **If you touched anything under `desktop/renderer/`, run
+   `cd desktop && bun run build-renderer`, then GREP THE SERVED BYTES for a
+   marker your change introduced.** `dev.ts bundleApp()` serves the prebuilt
+   `desktop/renderer/app.bundle.js` whenever it exists and NEVER compiles from
+   source (ADR-0260: Bun must not module-load a `.ts` from a protected install
+   dir). So renderer source edits are invisible in the running app until that
+   artifact is rebuilt, and no amount of restarting helps. A source typecheck or
+   a scratch `bun build` proves the code COMPILES; it proves nothing about the
+   bytes the app serves. Verify by fetching `/app.js` and `/styles.css` from a
+   freshly booted engine and grepping for a new identifier, plus one retired
+   identifier that must be ABSENT. This is the ADR-0303 vacuous-green trap in
+   its most expensive form, because everything looks green and the user sees no
+   change at all.
 1. Append exactly 3 lines to PROGRESS.md: shipped / stubbed / next.
 
 Do not start the next increment in the same session. A half-finished second
@@ -111,6 +124,29 @@ regenerated for the same logical entity.
 
 Schema changes only ever happen through numbered migration files. Never edit a
 table definition in place. The schema is a frozen contract.
+
+### 11. UI text is never cramped into wrapping columns.
+
+Readability is load-bearing. Any list/grid of rows (providers, models, settings,
+tiles, chips) MUST keep each row's primary label on one line: the label takes the
+space and ellipsizes on overflow (`white-space: nowrap; overflow: hidden;
+text-overflow: ellipsis`); it NEVER mid-word wraps inside a narrow column.
+Secondary chips/badges are `white-space: nowrap`. Grid tracks use a generous
+`minmax()` (about 220px or more) so labels do not fold; when content will not fit,
+use fewer/wider columns or a single column, NEVER a fixed narrow multi-column grid
+that word-wraps its text into unreadable slivers. If a label can be long, widen the
+column or truncate it with a tooltip. This applies to every panel, popup, and
+mockup (a mockup that word-wraps is a design bug, not a rendering artifact).
+
+The #1 cause is a FLEX container holding prose: `display: flex` makes every raw
+text run AND every inline element (`<b>`, `<a>`, `<code>`) its OWN flex item, so a
+sentence with bold phrases shatters into narrow stacked columns. A flex row MUST
+therefore contain a SINGLE text child: give a leading icon `flex: none` and wrap the
+message in ONE element, OR (preferred, as `.set-note` does) absolutely-position the
+icon and let the text flow as a normal BLOCK paragraph. NEVER place raw text plus
+inline tags directly as siblings inside a flex box. And mockups MUST reuse the real
+component CSS (or copy it verbatim) - a hand-rolled divergent style that flexes
+prose is this same bug wearing a costume, which is exactly how it slipped back in.
 
 -----
 

@@ -16324,3 +16324,7841 @@ the tail, never the cached layers).
 
 ADR-0244 (prerequisite), ADR-0066/0067 (exec gate + Speed/Risk dial), ADR-0046-0056 (/goal + checker
 model), CLAUDE.md keystones #1/#2.
+
+## ADR-0246 -- P-RELEASE.2: macOS in-app auto-update is silently inert (unsigned + one-shot + logless) (SCOPE/PLAN) (2026-07-26)
+
+**Status:** Accepted -- SCOPE/PLAN, roadmap only. No code this ADR. P-RELEASE.2a is unblocked by an Apple
+Developer account (expected the week of 2026-07-27); P-RELEASE.2b/.2c/.2d are independent of it and are each
+their own session.
+
+### Context
+
+Observed symptom: after publishing a release, the macOS app does not pick it up. Quitting and relaunching,
+then waiting five minutes, changes nothing. Read as "the update is slow." It is not slow. It is a stack of
+four independent defects, three of which are silent, and the whole stack is invisible because the updater
+has no user-facing log.
+
+Traced through the shipped code (`electron-updater@6.8.9`, pinned in `desktop/bun.lock`):
+
+1. **One check, at launch, forever.** `desktop/updater.ts:70` calls `autoUpdater.checkForUpdates()` exactly
+   once from `initAutoUpdate`, itself called once at `desktop/main.ts:396`. There is no interval, no manual
+   "Check for updates" action, and no `checkForUpdatesAndNotify` anywhere in `desktop/`. A relaunch buys
+   exactly one attempt; if that attempt misses, the next chance is the next relaunch.
+
+2. **The check reads three CDN-cached github.com endpoints with no cache-busting.**
+   `GitHubProvider.getLatestVersion` fetches `releases.atom` (`GitHubProvider.js:43`), then
+   `releases/latest` with `Accept: application/json` to resolve the tag GitHub marks Latest
+   (`GitHubProvider.js:158-168`), then `releases/download/<tag>/latest-mac.yml`
+   (`GitHubProvider.js:118,183-185`). `Provider.createRequestOptions` (`Provider.js:59-72`) attaches only
+   `Accept`. The single `Cache-Control: no-cache` in the flow is on the LOCAL Squirrel proxy feed
+   (`MacUpdater.js:214`), not on anything pointed at GitHub. A just-published release is therefore
+   invisible at the edge for some minutes. This is the only cause that genuinely presents as "slow," and it
+   is the smallest of the four.
+
+3. **Then a full, silent zip download.** macOS always takes the `.zip`, explicitly excluding pkg and dmg
+   (`MacUpdater.js:81`). The differential path requires a previously cached `update.zip`, so the first
+   update after any fresh install is always a FULL download (`MacUpdater.js:94-96`). Since the bundled
+   `whisper-server` + 18 dylibs landed (PROGRESS.md, `test/bundled-installers`), that zip is large. No
+   `download-progress` handler exists, so the only UI event in the entire flow is the terminal
+   "Restart now / Later" dialog at `desktop/updater.ts:42`.
+
+4. **The hard stop: the mac build is unsigned, and Squirrel.Mac validates AFTER the download.**
+   `desktop/package.json` sets `mac.identity: null`; `build-desktop.yml:18-19` states builds are unsigned
+   and signing is opt-in on `secrets.MAC_CSC_LINK` (`:137-149`, `:158-162`). `desktop/updater.ts:18-19` and
+   `desktop/SIGNING.md` both already record that Squirrel.Mac refuses unsigned updates. The download is
+   paid in full first, then discarded.
+
+5. **None of it is observable.** `autoUpdater.logger` is bare `console` (`desktop/updater.ts:38`) and the
+   error handler is `console.warn` (`:40`). A packaged app launched from Finder has nowhere for that to go
+   and writes no log file. Causes 1 through 4 are therefore indistinguishable from each other and from
+   "nothing published yet": in every case the UI does nothing at all.
+
+**The trap that would waste the signing work.** Adding the five Apple secrets is NOT sufficient. In
+`macPackager.js:182-190`, `sign()` reads `options.identity` and, when it is `null`, logs "skipped macOS code
+signing" and returns false BEFORE any keychain or `CSC_LINK` lookup. Notarization runs inside that same
+`sign()` (`macPackager.js:288-290`), so it is skipped too. With `mac.identity: null` still in
+`desktop/package.json`, a correctly-configured cert produces a build that is still unsigned, still
+un-notarized, and still cannot auto-update, with only an informational log line to say so.
+
+### Decision (phased)
+
+- **P-RELEASE.2a -- sign and notarize the mac build (unblocks mac auto-update entirely).** Add
+  `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` per
+  `desktop/SIGNING.md`, AND in the same change REMOVE `mac.identity: null` from `desktop/package.json` (or
+  set it to the Developer ID Application name) so `macPackager.sign()` does not short-circuit. Acceptance is
+  a real device test, not a green CI run: `codesign -dv --verbose=4` on the installed app shows a Developer
+  ID authority (not `Signature=adhoc`), `spctl -a -vv` accepts it, and an installed build actually applies a
+  newer published release end to end. Until this ships, mac in-app update CANNOT work, and the UI should say
+  so rather than imply an update is coming.
+
+- **P-RELEASE.2b -- make the updater observable (do this first; everything else is guesswork without it).**
+  Replace the `console` logger at `desktop/updater.ts:38` with a real file log under
+  `app.getPath("logs")`, and surface `error` and `update-not-available` in the UI. `AppUpdater.js:405`
+  already emits the exact line that distinguishes "no newer version" from a signature failure; today it goes
+  nowhere. This is independent of the Apple account and is the cheapest fix in the set.
+
+- **P-RELEASE.2c -- visible progress + a retry path.** Add a `download-progress` handler wired to the status
+  bar so a multi-minute full-zip download reads as work rather than as a hang, plus a manual "Check for
+  updates" action and a periodic re-check (order of 30 to 60 minutes) so a launch check that lands inside the
+  GitHub edge-cache window is no longer terminal.
+
+- **P-RELEASE.2d -- resolve the rolling-`latest` / prerelease interaction.** `publish-latest` stamps non-tag
+  builds `X.Y.(Z+1)-test.<run#>` (version step, `build-desktop.yml:59-113`) and publishes them to tag
+  `latest` with `make_latest: "true"` (`:250-252`). `isUpdateAvailable` is a plain `semver.gt` and does NOT
+  filter prereleases (`AppUpdater.js:339-365`); `allowPrerelease` (default false, derived from the INSTALLED
+  version at `AppUpdater.js:125,218`) only steers provider tag selection. So when that job runs it both
+  repoints GitHub's Latest at tag `latest`, hiding the real tagged release from the updater, and offers
+  `1.11.12-test.N` to everyone on stable `1.11.11`. Decide whether the rolling release should set
+  `make_latest` at all, given the README download buttons are its only actual requirement. Reasoned from the
+  code; not yet observed live.
+
+### Open questions
+
+Whether `pkg` (an installer, not an app bundle) should remain a mac target once the zip path actually works,
+or be download-only. Whether the periodic re-check in .2c is acceptable for the air-gapped and
+`updateChannel: "managed"` fleets (it must stay behind the same `updatePolicy()` gate at
+`desktop/updater.ts:29-33`, which already disables the check entirely for managed). Whether to keep serving
+unsigned mac builds at all once .2a lands, or hard-fail the release when the cert is absent
+(`forceCodeSigning`), so an unsigned mac artifact can never ship again by omission.
+
+### Relates to
+
+ADR-0213 (P-RELEASE.1, the version-stamp derivation this depends on), `desktop/SIGNING.md`,
+`desktop/updater.ts`, `desktop/package.json` `build.mac`, `.github/workflows/build-desktop.yml`, ADR-A009 /
+`managed_config.ts` (the `github` / `feed` / `managed` update channels, which .2b and .2c must not bypass).
+
+## ADR-0247 -- P-VOICE.2: live read-aloud from the composer (voice picker + auto-speak)
+
+**Date:** 2026-07-26
+**Status:** Accepted -- BUILT. Extends ADR-0115 (P-VOICE.1, the TTS/STT backends + the Settings Voice card).
+No new engine, no new transport: the ElevenLabs / OpenAI / Kokoro backends and `POST /api/tts/speak` are
+unchanged. This makes them REACHABLE and makes them stream.
+
+### Problem
+
+Read-aloud existed but was effectively invisible and slow.
+
+1. **Unreachable.** The engine + voice pickers lived in Settings -> Voice, three scrolls down. Nothing in the
+   composer, where the mic already is, said LUCID could speak at all.
+2. **The picker only worked for one engine.** `GET /api/voices` listed ElevenLabs only (it is the only engine
+   with a `/v1/voices` endpoint). OpenAI and Kokoro voice ids were inline literals in `dev.ts`
+   (`voices: { default: kokoro ? "af_heart" : "alloy" }`), so choosing a voice for those engines did NOTHING --
+   the selection was read from settings and then discarded.
+3. **One voice field for three engines.** `ttsVoice` was a single string. Picking an OpenAI voice and then
+   switching to Kokoro sent an OpenAI id to Kokoro.
+4. **No auto-speak, and no streaming.** Audio only played on a per-message button click, and it synthesized
+   the WHOLE settled reply as one clip -- roughly twenty seconds of silence on a long answer.
+
+### Decision
+
+**A canonical catalog, a composer chip, and a sentence-at-a-time queue.**
+
+- `harness/voice/catalog.ts` -- the fixed voice sets (OpenAI 13, Kokoro 13) plus provider metadata, and
+  `resolveVoice(provider, selected)`, the guard that falls back to an engine default rather than forwarding a
+  foreign voice id. `/api/voices?provider=` now answers for every engine; ElevenLabs is still fetched live.
+- `settings_store.ts` -- `ttsVoices: Record<engine, voiceId>` replaces the single `ttsVoice` scalar (which is
+  kept as a READ fallback for the ElevenLabs slot and retired on first write, so existing installs keep their
+  voice with no migration step). `ttsAutoSpeak` is new and defaults OFF -- it is cloud egress plus
+  per-character cost, so it is opt-in.
+- `harness/voice/speech_stream.ts` -- `takeSpeechChunks(buf, cursor, opts)`: a cursor over the GROWING answer
+  buffer that only yields text which is syntactically complete. Withholds anything after an odd-numbered
+  ``` fence (otherwise mid-stream source gets narrated aloud) and does not treat `3.14` / `v2.1` / `e.g. ` as
+  sentence ends. First span uses a low `minChars` for fast first audio, later spans batch to ~180.
+- `desktop/renderer/speech_queue.ts` -- `SpeechQueue`, the ordering/cancellation half, fully dependency-
+  injected (synth/open/play/close/onError/onChange) so the interleaving is testable without a DOM or an audio
+  device. Serial synthesis (order cannot invert), at most one clip audible, a prefetch ceiling of 2, and a
+  generation counter so a synth in flight from a cancelled turn is discarded rather than spoken.
+- `desktop/renderer/popover_place.ts` -- `placePopover()`, extracted from `ui.ts`. The composer pickers are
+  anchored to the BOTTOM of the window, so "flip above" is their normal case; the old inline math never
+  capped height (a card taller than the room was pinned to the top margin and ran off-screen) and chose
+  "above" even when below had more room. `popover()` now also returns `reposition()`, which callers whose
+  content arrives asynchronously MUST call -- the voice picker paints a skeleton, then the fetched list.
+
+### Alternatives rejected
+
+- **A `/api/tts/stream` endpoint (SSE or chunked ElevenLabs).** Real, and lower latency still, but it needs a
+  streaming audio path in the renderer (MediaSource / Web Audio) to beat what per-sentence clips already give.
+  Sentence chunking gets first-audio down to one sentence with zero transport change. Deferred, not dismissed.
+- **`eleven_flash_v2_5` for auto-speak.** ~75ms inference vs turbo, but it would silently change how the brief
+  podcast sounds too. Chunking is the dominant win; the model stays a single constant.
+- **Migrating the TTS keys into the OS-encrypted vault (`cred_vault.ts`).** Considered and NOT done -- see
+  "Not done" below. It is a provider-key-store change, not a voice change.
+- **A separate `ttsStreaming` toggle.** Rejected as a knob nobody asked for; streaming is simply how
+  auto-speak works.
+
+### Not done (deliberate)
+
+**The TTS provider keys are still plaintext-at-0600 in `~/.omp/lucid-gui.json`.** TTS has no key of its own --
+it reads the same `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` the LLM providers use, via `settings_store.applyEnv()`.
+Moving those two alone would fork the key store; moving all of them is an architecture change, because the
+vault is main-process-only (Electron `safeStorage`) while `dev.ts` is a child process. Today `setKey()` writes
+`process.env` in that child and the key works immediately; under a vault model a newly-entered key could not
+take effect without a child respawn or a main->child push. That is its own ADR, with a user-visible
+regression to design around, and it does not belong inside a voice increment.
+
+### Verification
+
+`bun run harness/scripts/demo_pvoice2.ts` (npm `demo-P-VOICE.2`) -- 18 checks over four areas: per-engine voice
+memory + legacy migration + auto-speak default-off; the chunker over a fenced reply (first span at char 35 of
+75, open fence withheld, every sentence spoken once); SpeechQueue ordering / prefetch ceiling / cancellation /
+handle accounting; and placement (a 520px picker flips above the chip, re-placement after the list loads moves
+it UP 340px instead of overflowing, a 620px window caps it to 548px and scrolls). Plus 13 unit tests in
+`harness/voice/speech_stream.test.ts` + `catalog.test.ts`. `bun test harness` 1745 pass / 3 fail -- the 3 are
+pre-existing `lucid_acp.test.ts` launcher-asset failures, identical on a stashed HEAD. Typecheck at baseline
+(31 pre-existing diagnostics in `symbol_graph.ts` + `dev.ts`, unchanged).
+
+### Next
+
+- On-device pass: auto-speak a long reply on each engine; confirm audio starts mid-stream, that stopping is
+  immediate, and that a code block is never narrated.
+- Optional `/api/tts/stream` for true chunked transport (the deferred alternative above).
+- dots.tts (`studio-dots-ai/dots.tts`, Apache-2.0, 48kHz) needs NO client change: wrap its
+  `DotsTtsRuntime.generate_stream()` in a FastAPI `/v1/audio/speech` shim and point `LUCID_TTS_URL` at it --
+  it arrives as the existing `local-tts` engine.
+
+## ADR-0248 -- P-VOICE.3/.4/.5: the voice arc completed (engine readiness, conversation mode, the equalizer, and answering for the ear)
+
+**Date:** 2026-07-26
+**Status:** Accepted -- BUILT. Three increments on top of ADR-0247 (P-VOICE.2, the composer voice picker +
+streaming auto-speak). Same seams throughout: the TTS backends of ADR-0115, the user-turn preamble of issue
+#54 / ADR-0154, and the floating-dock geometry of ADR-0232/0242. No new transport, no new provider.
+
+### P-VOICE.3 -- an engine you cannot use must not be offered
+
+A user signed in to ChatGPT via OAuth could select ChatGPT/OpenAI, see thirteen voices, pick one, and get a
+failure toast on EVERY reply. The cause is external and unfixable here: `/v1/audio/speech` is an OpenAI
+PLATFORM endpoint that takes a platform key (`sk-...`); a ChatGPT subscription login is a different credential
+for a different backend, the platform API rejects it, and no OAuth flow mints a platform key.
+
+So readiness became a first-class, per-engine fact: pure `ttsEngineStatus()` (`harness/voice/catalog.ts`),
+resolved live in `dev.ts` from key presence, the omp OAuth row (`providerAuth()`), and a cached 700ms probe of
+`LUCID_TTS_URL`. Unavailable engines render greyed + non-selectable with a "needs setup" tag; the selected one
+explains itself inline; `/api/tts/speak` returns the SAME string so a failure can never contradict the menu.
+The OAuth-only message names the subscription, the platform key, AND the ElevenLabs/Kokoro escape hatch -
+"add your API key" alone reads like a bug to someone who is visibly signed in.
+
+### P-VOICE.3 -- conversation mode
+
+Its own checkbox, gated on auto-speak. Reply finishes being SPOKEN -> `SpeechQueue.onIdle` -> the mic opens ->
+the tested dictation VAD ends the turn on a longer silence -> it sends. `ttsConversation` reads false whenever
+auto-speak is off (the preference survives; nothing opens the mic while the agent is silent). Auto-send fires
+ONLY on a silence-ended session, never a click-stop, and only once every in-flight transcription has landed.
+`onIdle` fires on natural drain only, never from `stop()` - otherwise silencing the agent would re-open the mic.
+`getUserMedia` now asks for echo cancellation explicitly rather than trusting the UA default.
+
+### P-VOICE.4 -- the equalizer and the "LUCID Agent [Voice]" panel
+
+A segmented, peak-holding LED spectrum analyser driven by the REAL audio. This forced a queue change:
+`createMediaElementSource()` may be called once per element, so the old fresh-`Audio()`-per-sentence path
+could never be analysed; one persistent element now has its `.src` swapped per clip. Two surfaces (a mini strip
+in the composer, and a floating panel the user drags and anchors anywhere) share one analyser and one rAF loop
+that retires itself once the bars settle. The maths is pure and tested (`harness/voice/eq_bands.ts`):
+log-spaced bands and 40/220ms attack-release with a 380ms peak hold are what separate an instrument from a
+twitching bar chart.
+
+FAIL-SAFE, non-negotiable: the audio graph is built lazily and ONLY after `resume()` actually succeeds.
+Routing an element into a suspended context mutes it irreversibly, so if Web Audio cannot run, playback stays
+native and the display idles. A visual is never traded for the agent's voice.
+
+### P-VOICE.5 -- in conversation mode, answer for the EAR
+
+Observed in live use: the user had to TYPE "keep the response short and neat so I can understand you in
+conversation mode". That instruction is the app's job. Hands-free, a normal reply - headings, numbered lists,
+tables, code fences, file paths - is unusable: speakable() strips the markup, but what remains is a written
+answer read at dictation speed, and a four-item list is forgotten by item three.
+
+`spokenReplyGuidance()` (`harness/voice/spoken_reply.ts`) emits a trusted `<spoken-reply>` block on the
+user-turn preamble - the same channel as the active skill and the DESIGN.md invariants, never the frozen
+prefix (invariant #6) - rebuilt from live settings each turn, so it appears and vanishes with the toggle. It
+constrains SHAPE only (lead with the answer, two or three sentences, prose not markup, no paths/code unless
+asked, at most one follow-up question) and says explicitly that the WORK behind the answer is unchanged -
+a naive "be brief" instruction makes agents investigate less, which trades correctness for brevity.
+
+Deliberately NOT applied to plain auto-speak: there the user is watching the reply stream while hearing it,
+and a rich written answer is still the right answer. Only hands-free changes the medium.
+
+**Bug found while wiring it:** `stripInjectedPreamble()` (sessions.ts) listed only four of the blocks that
+actually ride the user-turn tail, so `<design-invariants>` (ADR-0154) and `<session-share>` (ADR-0240) had
+been leaking into the DISPLAYED transcript as though the user had typed them. All three - plus the new
+`<spoken-reply>` - are now stripped, with a stacking test over every block.
+
+### Verification
+
+`make demo-P-VOICE.2` 25 checks; 60 unit tests across the voice suites (readiness reasons incl. the OAuth-only
+wording, per-engine voice memory, the stream chunker, queue ordering/cancellation/onIdle, EQ band spacing +
+ballistics + peak-hold decay rate, spoken-reply gating); 29 across preamble + sessions (spoken-reply is
+standing, vanishes with the toggle, sits last of the standing blocks; every injected block strips). Typecheck
+at the 31-diagnostic pre-existing baseline. Electron main rebuilt.
+
+### Next
+
+On-device: the autoplay-policy path on a first click (the one thing a synthetic harness cannot prove), and a
+real hands-free loop end to end. dots.tts still drops in as a fourth engine behind an OpenAI-compatible shim
+with no client change.
+
+## ADR-0249 -- P-VOICE.6: spoken progress cues + the conversation hotkey
+
+**Date:** 2026-07-26
+**Status:** Accepted -- BUILT. Completes the voice arc (ADR-0247/0248) after live use.
+
+### Problem
+
+Two gaps only visible once conversation mode was actually used hands-free:
+
+1. **Dead air.** On screen a long turn is legible - thinking streams, tool chips tick, the HUD counts. Eyes-off,
+   all of that is silence, and thirty seconds of it is indistinguishable from a crash. The user talks again,
+   which starts a second turn on top of the first.
+2. **No way in or out without the mouse.** Conversation mode is the one control you need while NOT looking at
+   the screen, and it was a checkbox two clicks deep.
+
+### Decision
+
+**Spoken cues, governed by restraint.** `nextThinkingCue()` is a pure function of (cues already spoken, ms
+since the agent last said anything, whether the answer has started, whether a tool is running). Escalating
+gaps (2.6s / 11s / 22s), a hard cap of three, silence once the answer speaks, and nothing queued behind audio
+already playing. The clock measures silence since the last SPOKEN thing rather than the turn start, so a long
+tool run in the middle of a reply is covered by the same rule as the opening think. Two phrase banks, because
+"let me check that" is a lie when nothing is running and "still thinking" undersells a tool sweep.
+
+Conversation mode only. With eyes on the screen the thinking block is the acknowledgement, and a spoken cue
+would talk over what the user is reading.
+
+**`Ctrl/Cmd+G` toggles conversation mode.** Key choice was a constraint-satisfaction problem: near the mic's
+`Ctrl/Cmd+D`, free on Windows AND macOS AND Linux, and not a Chromium binding. Ctrl+E/F/R/S/W/A/Q are all
+spoken for (omnibox, find, reload, save, close, select-all, quit); G is adjacent on the home row, and macOS
+"Find Next" needs a Find menu LUCID does not have. Asymmetric by design: ON implies auto-speak (the loop needs
+the speaking half) and starts listening immediately when idle; OFF closes the mic and stops cues but leaves
+auto-speak alone - you stop being listened to, replies are still read.
+
+### Alternatives rejected
+
+- **A spoken tool narration** ("reading app dot ts") - accurate and unbearable. Cues acknowledge, they do not
+  report; the screen still has the detail.
+- **Random phrasing.** Rotation by index is deterministic, testable, and guarantees no line repeats in a turn.
+- **`Ctrl+Shift+D`.** Memorable as a modifier of the mic key, but the ask was a nearby BUTTON, and a
+  three-finger chord is worse for the one control you use without looking.
+
+### Verification
+
+6 unit tests pinning the restraint rules (nothing before the gap, the answer always wins, gaps provably
+escalate, hard cap, distinct + tool-flavoured lines, and every line short/markdown-free/sentence-terminated so
+the engine lands the intonation). 66 voice tests; renderer tsc clean.
+-----
+
+## ADR-0174 - P-SANDBOX.7b: the mediated --loopback-only posture for the AppContainer helper, BUILT
+
+**Date:** 2026-07-05
+**Status:** Accepted / Built (security guarantee verified; the proxy-reachability completion is install-time
+admin). Increment 7b of the ADR-0157 epic. Activation/packaging (bundle + install-time register) is next.
+
+### Context
+
+P-SANDBOX.7 (ADR-0173) shipped the verified `--deny-network` AppContainer helper but the COMMON omp session
+is `trusted-local` (`canNetwork:true`), which the P-SANDBOX.6 seam maps to `--loopback-only` (mediated egress
+through the loopback proxy) - and `.7` left that mode refusing (exit 3). This implements it.
+
+### The Windows loopback wrinkle
+
+An AppContainer with an EMPTY capability set has **no `internetClient` ⇒ no direct outbound internet** (that
+is `.7`'s deny-network guarantee, and it holds for `--loopback-only` too). But AppContainers ALSO block
+**loopback** by default (a deliberate Windows security measure), so an empty-caps container can't reach the
+`127.0.0.1` proxy either. Reaching loopback requires a **loopback EXEMPTION** for the AppContainer SID -
+and `CheckNetIsolation LoopbackExempt -a` **requires administrator** (verified: "Access Denied, run as
+administrator"). It is a system-wide, per-SID setting, so it cannot be a per-spawn operation.
+
+### Decision
+
+- **`--loopback-only` runs the SAME empty-caps AppContainer as `--deny-network`** (no `internetClient`). The
+  child additionally inherits `HTTP(S)_PROXY` (set by the seam's `AppContainerBackend.wrap`) and relies on a
+  one-time, admin-registered loopback exemption to reach ONLY the proxy. Two postures, one container; the
+  difference is ambient system state + env, not the spawn. **The no-direct-internet guarantee is identical
+  and unconditional** - with or without the exemption, the child cannot reach the internet directly.
+- **`--register-loopback` / `--unregister-loopback`** (admin subcommands) shell to `CheckNetIsolation
+  LoopbackExempt -a/-d -n=<our AppContainer name>`. Run ELEVATED once at install; the pure
+  `checkNetIsolationArgs()` builds the command and is unit-tested.
+- **Fail-safe:** if the exemption is NOT registered, `--loopback-only` degrades to "no network at all"
+  (empty caps + blocked loopback) - safe (no exfil), just not usable until install registers it. It NEVER
+  becomes direct internet.
+
+### Verified (and the honest boundary)
+
+Live on Windows 10: `--loopback-only -- curl https://example.com` is **BLOCKED** (`http_code=000`, exit 28 -
+same empty-caps guarantee as `.7`), while a benign child runs (exit 0); `--register-loopback` reaches
+`CheckNetIsolation` and returns its "needs admin" (exit 5) without elevation - proving the mechanism is wired.
+NOT verifiable in this (non-admin) environment: the "contained child reaches the loopback proxy WITH the
+exemption registered" completion - that is exercised at **install time** (admin) and in packaging QA. The
+SECURITY guarantee (no direct internet) is fully verified; the USABILITY completion (proxy reachable) is the
+documented admin step. This is why `.7b` still does not bundle/activate the helper (that is the next
+increment: build + sign + bundle the `.exe`, run `--register-loopback` elevated at install, then let
+`resolveBackend` select it).
+
+### Invariants preserved
+
+Inv #1 (no omp fork). **Inv #2 (TypeScript/Bun only - the added registration shells to a stock Windows tool;
+no new native/Python source).** Inv #3 (fail-closed: no exemption ⇒ no network, never direct internet;
+non-Windows/errors ⇒ refuse). Inv #4/#6/#7/#8 (untouched).
+
+### Verification
+
+`lucid_appcontainer.test.ts` (+ `checkNetIsolationArgs` + the platform-guarded main() refuse-codes) green;
+`demo-P-SANDBOX.7b` green (live internet-denial on Windows; register reaches the OS; off-Windows fail-closed);
+`demo-P-SANDBOX.7` updated to the post-.7b truth and still green. Typecheck + license clean. Isolated worktree.
+
+### Relates to
+
+ADR-0173 (P-SANDBOX.7 - the deny-network helper this extends), ADR-0172 (the seam that emits `--loopback-only`),
+ADR-0166 (the mediated proxy the exempted loopback reaches), ADR-0157 (the epic).
+## ADR-0246 -- zombie-SID GPU-sandbox self-heal: relaunch with --disable-gpu-sandbox on the boot brick (P-GPUFIX.1) (2026-07-18)
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+On 2026-07-18 the installed v1.11.9 bricked at launch on the dev machine: every sandboxed Chromium GPU
+child exited 0xC0000022 (STATUS_ACCESS_DENIED); after 9 retries Electron logged FATAL "GPU process isn't
+usable. Goodbye." and the app died before the window ever showed. Root cause is upstream
+electron/electron#51761: an unresolvable ("zombie") AppContainer SID inherited in the DACL of the install
+dir under AppData\Local makes the GPU child's sandbox init fail on some Windows machines. The manual fix
+(icacls grant `*S-1-15-2-2:(OI)(CI)(RX)` on the install dir) works, but an NSIS upgrade recreates the
+folder and re-inherits the zombie SID, so it regresses on every release. (Same host lesson as the
+zombie-SID note in project memory; previously worked around by hand.)
+
+A second, adjacent gap: `startDevServer` attached no "error" listener to the spawned engine child, so a
+spawn failure (missing/blocked bun exe) was silently swallowed - engine.log showed only the banner and
+the app waited out the 30s health timeout with nothing to diagnose.
+
+### Decision
+
+Self-heal in the main process, shapes verified against the installed Electron 33.4.11:
+
+- **Pure core** (`desktop/gpu_watchdog.ts`, unit-tested): `decideGpuAction` counts fatal GPU deaths
+  (`type === "GPU"`, reason in launch-failed / abnormal-exit / crashed; clean-exit / killed / non-GPU
+  children are ignored) and verdicts ignore / log / relaunch. Relaunch triggers on death #2 BEFORE the
+  first window renders (1 death could be a one-off crash; Electron's own FATAL is at 9). Two guards:
+  a post-render GPU crash is a recoverable driver hiccup, never the brick; and a sandbox-off instance
+  NEVER relaunches again (no relaunch loop).
+- **Wiring** (`desktop/main.ts`): `app.on("child-process-gone")` consults the core; on relaunch it
+  persists a flag file (`gpu-sandbox-off.flag` in userData, which SURVIVES the NSIS reinstall that
+  re-inherits the zombie SID), tees a self-diagnosing line into engine.log (unsigned-hex NTSTATUS so it
+  literally reads 0xC0000022 + the upstream issue number), and `app.relaunch` with the switch appended
+  to argv (so the mitigation applies even if the flag write failed) + `app.exit(0)`. At module load,
+  BEFORE Chromium spawns the GPU process, the flag file or argv switch applies
+  `app.commandLine.appendSwitch("disable-gpu-sandbox")`.
+- **Scope**: ONLY the GPU sandbox is dropped, and only after the brick is observed twice. The renderer
+  sandbox (`sandbox`/contextIsolation on the BrowserWindow) is untouched; `--no-sandbox` is never used.
+  Deleting the flag file re-enables the GPU sandbox.
+- **The silent spawn failure**: `dev.on("error", ...)` now tees `[engine] dev-server spawn failed: ...`
+  into engine.log + stderr, so the existing error dialog's pointer at engine.log actually explains a
+  never-started engine.
+
+### Alternatives rejected
+
+- **icacls at install time (NSIS hook)**: fixes only OUR install dir, needs elevation timing to be
+  right, and re-breaks if the OS re-inherits later; the watchdog heals any future recurrence.
+- **Always disabling the GPU sandbox**: needlessly weakens defense-in-depth on the healthy majority of
+  machines. The flag is opt-in-by-evidence, per machine.
+- **`app.disableHardwareAcceleration()` fallback**: heavier (loses GPU compositing entirely) and does
+  not address the sandbox-init failure class; the sandbox switch keeps GPU acceleration.
+
+### Relates to
+
+CLAUDE.md invariant #1 (extend, never fork - this is app-side healing of an upstream Electron bug),
+ADR-0177 (engine.log self-diagnosis), the v1.10.2/v1.11.0 packaged-boot bricks (packaged_boot.test.ts),
+electron/electron#51761.
+
+## ADR-0250 -- P-MODEL.1: the fresh-session model default follows the user, not omp's hardcoded Opus
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+Every fresh session (launch, New session, respawn) opened the picker on omp's own hardcoded default, Claude
+4.8 Opus, regardless of which providers the user configured or which model they were using five minutes ago.
+Worse, `syncModelEnv()` persists whatever omp reports as `lastModel` the moment the session initializes, so
+the genuine last-used value was overwritten by the default before anything could read it.
+
+### Decision
+
+A pure, tested resolver (`desktop/startup_model.ts`, `resolveStartupModel`) picks what the session should
+open on: (1) the LAST-USED model when it is still offered and its provider still holds a credential - an
+explicit user choice is never re-litigated against heuristics; (2) else the BEST model among CONFIGURED
+providers: capability tier first (flagship > balanced > small, with `\bmini` so "gemini" never reads as a
+mini), direct route over the gov gateway on ties, then newest via `cmpModelsNewestFirst`; auxiliary/RAG
+routes, deprecated ids, and sovereignty-gated China-origin models are never auto-picked; (3) else null - omp's
+default stands (a fresh install with nothing configured has no better signal).
+
+`acp_backend.ensureSession` captures `lastModel()` BEFORE `session/new` (dodging the syncModelEnv stamp),
+then applies the pick fire-and-forget via `session/set_config_option` - the exact ADR-0217 lockdown pattern,
+and the lockdown still wins: a locked session runs `enforceAsksageLock` INSTEAD. Configured = the
+`providerConfigured` test (OAuth active, key set, or any field set) against `providerAuth()`; AskSage-routed
+ids check the GATEWAY credential (providerForModel deliberately maps them to the family provider, right for
+the budget pill, wrong here); unknown prefixes (user-added local providers) count as configured.
+
+**Seam note:** `renderer/budget_gate.ts` dropped its `bridge.ts` type import for local structural slices
+(`ProviderAuthLike`/`AuthGroupsLike`, generic-preserving) - bridge.ts is DOM-typed and the server program now
+imports budget_gate; `providerConfigured`'s one-line test is inlined at the call site for the same reason.
+
+### Alternatives rejected
+
+- **Spawning omp with a model flag/env** - undocumented seam vs the proven set_config_option path; the
+  fire-and-forget switch self-heals through config_option_update either way.
+- **Awaiting the switch in ensureSession** - re-creates the picker-freeze ADR-0217 explicitly avoided.
+- **Auto-picking acknowledged China models** - a sovereignty-gated default should always be a deliberate
+  manual pick; last-used still honors an explicit standing choice.
+
+### Verification
+
+13 unit tests on the resolver (last-used precedence incl. vanished/de-configured fallbacks, best-configured
+ranking, gov-only, China exclusion, gemini-vs-mini regex, nothing-configured null). All three tsconfigs clean
+(only the pre-existing symbol_graph + dev.ts diagnostics); full desktop suite 4541 pass / 6 fail, the same 6
+pre-existing failures as the baseline.
+
+## ADR-0251 -- P-AVATAR: the "LUCID Agent" immersive role - three.js talking face, hands-free agent mode, voice tool approval, cinematic boot, PWA voice (SCOPE/PLAN)
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT (2026-08-01, same day, through the P-MASCOT pivot). All increments shipped:
+P-AVATAR.1 (role + immersive layout), P-MASCOT.1/.2/.3 (the ninja + prompt-bar parkour + smoothness,
+replacing the killed face direction), P-AVATAR.4 (enter flow), .5/.5b (voice approvals + impact prompts),
+.6/.6b/.6c/.6d (boot cinematic + blade finale + live keyboard), P-REMOTE.12 (PWA push-to-talk),
+P-REMOTE.13 (invisible hourly reconnect). Residual release-cut items live in PROGRESS.md. Originally:
+SCOPE/PLAN, roadmap only; facts verified against the live tree by five parallel scouts as of v1.12.0.
+
+### The ask
+
+A fifth role, "LUCID Agent", that hides both rails and replaces the IDE chrome with a neon-green,
+Matrix-styled 3D digital face (particle digit-rain flowing down it) that talks in sync with the TTS engine;
+selecting it enters full-agent conversation mode on a fast model (GPT-5.6 Terra / Claude Sonnet / Gemini
+Flash class) with background subagents enabled and VOICE approval of gated tool calls; unconfigured users are
+guided (voice + visuals) through provider/voice/Knowledge-Graph setup including vault unlock; boot shows a
+cinematic opening instead of dead air; and the Remote PWA gains voice input without a visible 60-minute drop.
+
+### What exists today (the seams this plugs into)
+
+- **Roles are cosmetic** (ADR-0088/0089): `USER_ROLES` in `settings_store.ts` (+ duplicate list in
+  `renderer/tour.ts`), picker modal in `runOnboarding()` (`app.ts` ~2037), animated glyphs in
+  `role_icons.ts`, per-role tour subsets. This role becomes BEHAVIORAL - a deliberate, contained deviation.
+- **Layout**: 5-column grid `.body` (`styles.css:153`) - 54px `.rail`, collapsible `.sidebar`
+  (`state.sidebarCollapsed`), center chat, 440px `.inspector` (`state.inspectorRail`, `.collapsed` CSS).
+  Sidebar/inspector already collapse; the activity rail has no hide path yet.
+- **Voice arc complete** (ADR-0247/0248/0249): sentence-streamed TTS through ONE persistent `<audio>`
+  element; `VoiceEqualizer` (`voice_eq.ts`) already taps it with a Web Audio `AnalyserNode` (built lazily,
+  fail-safe); conversation mode (`toggleConversationMode`, Ctrl/Cmd+G) with VAD dictation loop, auto-send
+  (`maybeSendSpokenTurn`), thinking cues; engine readiness per provider (`ttsEngineStatus`,
+  `/api/voices`); STT via bundled Whisper (autostarts in the installed app since P-STT.6).
+  **No word-level TTS timing exists** - ElevenLabs with-timestamps is not invoked; Kokoro/OpenAI paths
+  return plain audio.
+- **Tool approvals**: omp -> `session/request_permission` -> `{type:"permission", id, tool, options,
+  danger}` ChatEvent (`acp_backend.ts` ~556-795) -> inline card (`createPermissionCard`, `app.ts` ~1036) ->
+  `respondPermission(id, optionId)`; fail-closed 300s timeout in `askUser()`. `setUiMode("agent")` flips
+  permissionMode; subagent runs already surface via `/api/subagents` cards (P-TASK.5).
+- **Models**: `setConfig("model", id)` over ACP; catalog already carries `gpt-5.6-terra` (256k),
+  `claude-sonnet-4-6` (1M), `google-gemini-3.5-flash-gov`, `google-claude-sonnet-5` (gov); ADR-0250's
+  `resolveStartupModel` established configured-provider ranking utilities to reuse.
+- **Onboarding signals** (all readable today): `configuredProviderCount`, `roleChosen`, `tourSeen`,
+  workspace, voice readiness, `whisperStatus`, `PersonalStore.exists()` / `personalStatus().unlocked`,
+  `/api/personal/unlock`, KG endpoints `/api/kb/*` + background ingest job. Boot to first config is ~6-9s
+  (`CONFIG_WARM_MS` 6000 + renderer warm-poll), with an Electron `splash.ts` before the window and instant
+  shell first-paint after.
+- **Remote PWA** (`tools/remote-pwa/app.ts`): text + images only; frame protocol (`collab/frames.ts`)
+  tolerates new optional fields; host already owns `/api/transcribe`. The "60-minute timeout" is Cloud
+  Run's hard WS request cap - ADR-0227 deliberately leans on it for hourly token re-verification; the
+  guest already re-auths on every reconnect.
+- **Renderer build**: bun-bundled ES module, CSP `script-src 'self'` (no unsafe-eval) - three.js bundles
+  cleanly under this (no eval; WebGL/GLSL is not CSP-gated). Canvas precedent: equalizer, waveform, KG
+  graph engine. No three dependency today (`desktop/package.json` deps: katex, monaco, electron-updater).
+
+### Decisions (the load-bearing ones)
+
+1. **Rights-safe art direction, procedural-first - USER-CONFIRMED (2026-08-01), scaled UP; REVISED same
+   day after the first build: SERENE, never scary.** The v1 face (glowing iris rings, hollow sockets, a
+   hard silhouette rim) was rejected by the user as scary. Settled direction, grounded in skills.sh
+   three.js skills (cloudai-x threejs-shaders/postprocessing, emalorenzo three-best-practices) and the
+   particle-portrait prior art (Codrops interactive-particles; GLTF-to-particles boilerplates): CLOSED
+   eyes as downward lash arcs (no eye contact - the uncanny trigger), a calm mouth with gently lifted
+   corners, features as smooth curved bands, a normal-based view fade dissolving the silhouette instead
+   of a rim, and a mint-white lift on feature glow. Encoded as the first-party `.agents/skills/
+   threejs-stage` skill so later sessions inherit the rules; SOURCES.md records provenance (nothing
+   third-party vendored - the pull rule stands).** "Neo" is a likeness we do not ship; the head is a stylized original.
+   Procedural: a head mesh from bundled typed-array vertex data (no third-party GLB, no asset licensing),
+   but rendered at HERO scale - the face fills the immersive stage's center viewport, lit by its own
+   emission. Layered look, back to front: a full-stage sparse glyph-rain field with depth (parallax on
+   slow idle camera drift), the head as a dense particle/wireframe hybrid with fresnel rim glow, a
+   SECOND denser rain layer depth-masked to stream down the face itself, and a post stack (UnrealBloomPass
+   bloom + subtle film grain + faint chromatic aberration) for the neon read. The whole scene is
+   AUDIO-REACTIVE: rain speed/brightness and rim intensity pulse with the same band energy that drives the
+   mouth, and the state choreography is explicit - particles converge to form the face on entry, drift
+   calm when idle, tighten and brighten while listening, cascade while speaking, slow-orbit shimmer while
+   thinking. Degrade ladder (fewer particles, no post, static glow) keeps integrated GPUs at 60fps.
+2. **Lip sync = amplitude visemes first, timestamps later.** Tier 1 drives jaw/mouth blend from the
+   EXISTING AnalyserNode - `voice_eq.ts` must grow a second-subscriber tap API because
+   `createMediaElementSource` is once-per-element (naive duplication silently breaks the equalizer). Bands
+   from `eq_bands.ts` (low = jaw, mid/high = lip spread), `stepEq`-style ballistics. Works for EVERY engine
+   incl. air-gapped Kokoro. Tier 2 (optional): ElevenLabs with-timestamps -> char/phoneme visemes,
+   `/api/tts/speak` gains an optional `timings` field; elevenlabs-only.
+3. **Voice approval is fail-closed and keyword-strict - USER-CONFIRMED (2026-08-01) incl. repeat-back
+   confirm for the danger class.** A pure `matchApprovalUtterance(transcript,
+   options, danger)` maps speech to an optionId: plain tools accept "approve/yes/deny/no"; danger-class
+   (exec/egress) REQUIRES the literal word "approve" after a spoken repeat-back of the command/host, and
+   anything ambiguous falls through to the visual card. Silence never approves (the 300s fail-closed
+   timeout stands). Voice can DENY anything freely. No voice path may widen permissionMode.
+4. **The 60-minute cap stays; it becomes invisible - USER-CONFIRMED (2026-08-01). PWA voice is
+   push-to-talk (also confirmed).** Hourly re-verify is a security feature (ADR-0227),
+   not a bug. We make the reconnect seamless (buffered composer, silent resume, no toast unless resume
+   fails) instead of re-hosting the relay to dodge the platform cap.
+5. **Fast-model pick reuses ADR-0250.** A `CONVERSATION_MODEL_PREFS` ranked matcher (terra/sonnet/flash
+   class) filtered by configured providers, falling back to `resolveStartupModel`; the user's prior model
+   is remembered and restored on exit from the role/mode.
+6. **Three.js loads lazily.** `three` lands in `desktop/package.json`, dynamically imported only when the
+   immersive stage mounts (bun build --splitting), so the other four roles pay zero parse/GPU cost. DPR
+   capped, rAF paused when hidden (same visibility discipline as `maybeListen`), `prefers-reduced-motion`
+   honored with a static-glow fallback.
+7. **Prompt-side content rides the user-turn preamble channel** (like `spoken_reply.ts`), never the frozen
+   prefix (invariant #6). Immersive UI text obeys invariant #11 (no cramped wrapping columns).
+
+### Increments
+
+- **P-AVATAR.1 - the role + immersive layout.** Add `lucid-agent` to `USER_ROLES` (+ tour.ts list), picker
+  card + `role_icons.ts` glyph, `.body.immersive` hiding rail/sidebar/inspector (Esc exits, state
+  persisted), center stage container. Tour subset for the role. Pure: role normalization + layout state.
+- **P-AVATAR.2a - the face stage scaffold.** three.js dep + lazy chunk; hero-scale procedural head,
+  full-stage rain field + face-masked rain layer, entry particle-convergence; idle/listening/speaking/
+  thinking states driven by the EXISTING speech/dictation state machine. Perf gate: 60fps on integrated
+  GPU, DPR cap, hidden-pause. Demo: state-machine + degrade-ladder transitions pure-tested; visual QA via
+  preview screenshots.
+- **P-AVATAR.2b - the cinematic polish pass.** The post stack (bloom, grain, chromatic aberration), idle
+  camera drift + parallax, audio-reactive rain/rim coupling, choreography tuning until it genuinely wows;
+  ships only after 2a's perf gate holds with the post stack ON (else the ladder drops post first).
+- **P-AVATAR.3 - amplitude lip sync.** The `voice_eq.ts` tap API (keystone risk: one MediaElementSource) +
+  band->viseme mapping module (pure, tested) + jaw/mouth blend in the stage. Tier-2 timestamps increment
+  parked behind it.
+- **P-AVATAR.4 - enter-the-Matrix flow + guided setup.** Role select (or hotkey) -> readiness sweep using
+  the existing signal inventory -> auto: conversation mode ON, `setUiMode("agent")`, fast-model switch
+  (remember/restore prior), whisper autostart already handled by P-STT.6. Not ready -> an in-stage,
+  spoken + visual checklist (one item at a time, never a wall) deep-linking Voice card / Provider Hub,
+  with test-voice playback; KG: offer setup (`/api/kb/create` + ingest) or vault unlock
+  (`/api/personal/unlock`) when `PersonalStore.exists()` and locked - ASK, never nag twice per session.
+- **P-AVATAR.5 - voice tool approval.** `matchApprovalUtterance` (pure + heavily tested), permission
+  ChatEvent -> spoken summary -> scoped listen window -> `respondPermission`; repeat-back confirm for
+  danger class; visual card always rendered as the fallback and the source of truth.
+- **P-AVATAR.6 - cinematic boot.** Renderer-side matrix-rain opening (2D canvas, no three needed at boot)
+  gated to the lucid-agent role: staged REAL progress lines (health, session, config, model, voice) over
+  the ~6-9s warm window, particle-converge handoff into the face stage when config lands; skippable,
+  reduced-motion aware, hard-capped so it never outlives readiness by more than ~2s. Electron `splash.ts`
+  untouched (it ends before the renderer exists).
+- **P-REMOTE.12 - PWA voice.** Push-to-talk mic in the PWA composer (iOS-safe user gesture), client-side
+  16k mono WAV transcode reusing the pure `dictation.ts` helpers already bundled with collab code,
+  `PromptFrame.audio?` optional field (protocol-compatible; 12MB cap is ~30x headroom for a 30s clip),
+  host transcribes via `/api/transcribe` and treats the transcript as an ordinary guest prompt (existing
+  scan gate + approvals apply). Host-side voice reply stays desktop-side (guests read the transcript).
+- **P-REMOTE.13 - invisible hourly reconnect.** Silent resume across the Cloud Run 60-min WS cap: auto
+  re-join with fresh token (already implemented) minus the user-visible drop - buffer an in-flight
+  composer/mic session across the flap, suppress the disconnect toast when resume succeeds within a grace
+  window, surface only real failures. No relay re-host.
+
+### Risks / non-goals
+
+- **GPU floor**: integrated-GPU laptops must hold 60fps or degrade (fewer particles, no bloom) - perf
+  budget is part of P-AVATAR.2's acceptance, not an afterthought.
+- **Likeness/IP**: stylized original face only; matrix-rain glyph aesthetic is fine, a recognizable actor
+  likeness is not.
+- **STT mishears**: approval grammar is allowlist-exact; a mumbled "yeah" never fires exec. Fail-closed
+  everywhere (invariant #3 spirit).
+- **Roles were cosmetic**: this ADR consciously makes ONE role behavioral; the other four stay cosmetic.
+- **Non-goal v1**: phoneme-accurate visemes, PWA-side TTS playback of replies, removing the hourly
+  re-verify, a marketplace of faces.
+
+### Order + estimate
+
+.1 -> .2a -> .2b -> .3 -> .4 -> .5 are sequential (each leans on the prior); .6, P-REMOTE.12, P-REMOTE.13
+are independent and can interleave. Nine increments, each a session; the split .2a/.2b reflects the
+user-requested hero-scale ambition (2026-08-01) - scaffold first, then a dedicated polish session judged on
+looks, not just function.
+
+### DIRECTION PIVOT (2026-08-01, same day): the talking head + particles are OUT; a game-character MASCOT is IN
+
+After two art passes (ring-eyed v1: "scary"; serene closed-eye v2: "still very bad") the user killed the
+talking-head-and-particles direction entirely. New brief: LUCID is a FUN, COOL game character - an original
+never-created fighting-game ninja mascot - that PLAYS while the agent works and stays in line with what is
+actually happening (idle / listening / speaking / working / victory follow the real session state).
+
+Consequences:
+- **P-MASCOT.1 replaces P-AVATAR.2a/2b/3.** 2D pixel-art sprite system (fighting-game heritage IS sprite
+  art): procedural frame grids in code (no binary assets, rights-safe original character), a pure animation
+  state machine + activity scheduler (kata combos, shuriken practice, meditation while working; victory pose
+  when a turn lands), nearest-neighbor canvas scaling for the crisp retro read. No uncanny valley risk by
+  construction - the single biggest lesson from the face attempts.
+- **three.js is REMOVED** (dep, avatar_stage.ts, avatar_math.ts, their tests + demo). The dev.ts splitting
+  bundler + /chunk route STAYS - a generic, documented capability the mascot may use later and P-REMOTE
+  work can lean on. The `.agents/skills/threejs-stage` skill is retired with a tombstone note (its QA-
+  workflow section migrates to the mascot skill notes; the three.js rendering rules go dormant with it).
+- **Lip sync (old .3) is dead**; the mascot's speaking state is a talk-gesture loop instead - the voice_eq
+  analyser tap idea survives only as OPTIONAL audio-reactive bounce, a P-MASCOT.2 nicety.
+- **Unchanged**: P-AVATAR.1 (role + immersive layout - the mascot mounts into the same #agentStage),
+  P-AVATAR.4 (enter flow + guided setup), .5 (voice approvals), .6 (cinematic boot - now themed to the
+  mascot), P-REMOTE.12/.13. The lockdown/security posture was never touched by any of this.
+- P-MASCOT.2 (more activities, audio-reactive bounce, polish) trails as the new .2b-equivalent.
+
+## ADR-0252 -- P-TRAINER: the LUCID Agent as knowledge trainer - process extraction, distillation, and teach-back for business roles (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- harness core BUILT (2026-08-02, same day): P-TRAINER.1-.6 shipped as
+`harness/trainer/` (coverage rubric, planner, store, redaction, distiller, teach-back, quiz
+generation), migration 0012, the trainer EventNames, and demo-P-TRAINER.1..5 (the .5 demo runs the
+whole flywheel). Model-agnostic guarantee added same day: `desktop/trainer_model.ts` resolves the
+trainer's model from the user's CONFIGURED catalog (the ADR-0250 ranking; flash/local tiers stay
+eligible, non-chat routes never qualify, current capable model is kept), and the distiller tolerates
+any family's reply style (fence/prose JSON extractor + one corrective retry, then fail-safe).
+Remaining: .7 (the desktop stage act) and .8 (engagement instrumentation).
+Numbering note: ADR-0250 (P-MODEL.1) and ADR-0251 (P-AVATAR/P-MASCOT) were authored on the
+`feat/lucid-agent-immersive-mascot` branch (since merged into this one); this ADR deliberately
+started at 0252 so both series survive the merge without a collision. Companion ADRs: 0253 (data
+contract), 0254 (trust pipeline), 0255 (interview mechanics). Facts below verified against master
+as of v1.12.0 plus a read of the mascot branch and of the external TacticalGenAI repo.
+
+### The ask
+
+Make the LUCID Agent role (ADR-0251's immersive, voice-first role) more than a coding companion: a
+TRAINER and knowledge-distillation engine that interviews a human expert about a business role,
+extracts process, procedure, and edge-case knowledge in an engaging conversation, distills it into
+the knowledge graph with provenance, verifies it by teaching it back, and can then train the next
+person from what was captured. First target role family: financial management and wealth-management
+operations for boutique firms of the Questmont Virtual Family Office class (multi-adviser
+coordination, custody, money movement, billing, tax and estate choreography, compliance).
+
+### Prior art: what TacticalGenAI proves, and the inversion
+
+`mlcyclops/TacticalGenAI` (the author's certification-training app, read end to end) is a working
+trainer in the PUSH direction: a curriculum of stable objectives (`GAIL-1.1`, `PCA-2.3`, each
+`{id, domain, title, description, sourceUrl, referenceLinks}` with per-domain exam weights) is pushed
+into a human via generated briefings, scenario quizzes, and practice exams, all through STRUCTURED
+OUTPUT schemas (quiz `{question, options[4], correctAnswer, explanation, verifiedSource}`;
+free-response evaluation `{score, feedback, isGrounded, missingPoints[]}`). Progress is a
+`masteryMap Record<objectiveId, 0-100>`, exams derive `weakDomains[]` from misses, and a
+`RANK_SYSTEM` of thresholds keeps it engaging.
+
+The innovative move here is running that machinery in REVERSE, then forward again, as one flywheel:
+
+1. **EXTRACT**: the agent interviews the expert, planning questions against a coverage map (the
+   objective map inverted: how completely is each objective CAPTURED, not learned).
+2. **DISTILL**: transcripts become typed knowledge units (procedures, edge cases, exceptions,
+   checklists, escalation rules) via structured output, scanned and stored with provenance.
+3. **VERIFY**: the agent teaches the procedure BACK to the expert, who confirms, corrects, or
+   rejects; `missingPoints` becomes the next round of questions, and confirmation is the promotion
+   event (ADR-0254).
+4. **TRAIN**: quizzes and scenario drills for new staff are generated FROM confirmed units,
+   TacticalGenAI-style; trainee misses reveal under-specified knowledge and feed new extraction
+   targets back to step 1.
+
+Extraction coverage is the inverted masteryMap; teach-back is the inverted practice exam; the gap
+queue is the inverted weakDomains. One engine, both directions.
+
+### What exists today (the seams this plugs into)
+
+- **The role and the stage** (branch ADR-0251): the `lucid-agent` role, immersive layout, hands-free
+  conversation mode, keyword-strict voice approvals, the mascot state machine, and the guided-setup
+  rule "one item at a time, never a wall". The trainer is a second ACT on that stage. On master
+  without the branch, the trainer degrades to plain chat plus panels; nothing below hard-depends on
+  the mascot.
+- **Interview precedent**: `desktop/loop_preflight.ts` (P-GOAL.12, ADR-0057) is literally "scope + a
+  short prompt-engineering interview": pure, DOM-free, with an `assessReadiness` L0-L3 rubric of
+  weighted `ReadinessCheck`s and `nudge` text, and best-effort model maturation (structured answers
+  alone still produce a complete report). `desktop/renderer/gov_onboarding.ts` (P-GOVCUI.1) is the
+  pure-questionnaire pattern; `runOnboarding()` and `tour.ts` (ADR-0089) own sequential guided flows.
+  House pattern throughout: pure tested module in one file, DOM in `app.ts`.
+- **Trainer-adjacent precedent**: Trivia Wire (`desktop/renderer/trivia_roles.ts`, `trivia_bank.ts`,
+  P-TRIV.2, ADR-0175): role-keyed question banks behind an `isTriviaQuestion` validation gate, with
+  generated packs pouring through the same selection seam and falling back to static banks when
+  malformed. The trainee-quiz mode reuses this exact shape.
+- **The knowledge substrate**: compiled KB per KG (`kb_graph.duckdb`: `kb_documents`, `kb_pages`,
+  `kb_links`, `kb_page_sources`, `kb_changelog`, ADR-0099) behind a fail-closed ingest (scan the
+  source, compile, RE-SCAN every derived page, store), a `vector|compiled|hybrid` retrieve router
+  (ADR-0100), the agent-callable `knowledge_search` tool (ADR-0220), multi-KG registry
+  (`desktop/kb_store.ts`), and `.lkgpack` packs (`harness/kb/pack.ts`, `LKGPACK_FORMAT "lkgpack/1"`,
+  signature proves origin never safety) with a storefront (`kg_packs.ts`) and 11 SKUs already
+  cataloged in KG-PACKS-STATUS.md. Role packs are ALREADY the product concept (flagship:
+  `senior-proposal-manager`); this arc adds the pack flavor that can author itself from interviews.
+- **The promotion keystone**: `harness/memory/promotion_gate.ts` (P4.3, correctness keystone #2)
+  blocks `suspicious|quarantined` sources, resolves trust from artifact provenance not caller claim,
+  fails closed on unknown, and is unblocked ONLY by a recorded `approval_events` row (actions
+  `approve | quarantine_release | promotion_approve`). `promotion_approve` already exists: expert
+  confirmation maps onto it with zero new security surface (ADR-0254).
+- **Frozen contracts**: `AGENT_MODES` in `contracts.ts` is a closed set and mode does not drive
+  prompts or tools (only `security-review|replay` force the audit profile). EventName is closed and
+  raising. DuckDB schemas freeze on first write; next free global migration number is 0012.
+
+### Decisions (the load-bearing ones)
+
+1. **The trainer is NOT a new AgentMode and not a fork of anything.** `AGENT_MODES` stays untouched;
+   the trainer is a session behavior ("act") of the lucid-agent role, entered like conversation mode,
+   implemented as pure modules + panels + prompt-tail content, riding existing hooks and tools.
+   The ONLY frozen-contract change in the whole arc is the EventName additions, isolated in its own
+   increment (P-TRAINER.2) per the frozen-file rule.
+2. **Coverage maps and knowledge units are DATA, not code** (ADR-0253). A new business role is a new
+   extraction pack, zero code. The wealth-management-operations pack is the first; the pack carries
+   the coverage map, elicitation seeds, and scenario seeds, and receives the distilled units.
+3. **Extraction rides the existing trust pipeline unchanged** (ADR-0254). Everything the expert says
+   is untrusted content (invariant 5); units are born `untrusted`; teach-back confirmation records
+   the approval that lets `promoteFactGated` project confirmed knowledge into semantic memory.
+   The P4.3 gate is reused verbatim, never bypassed, never widened.
+4. **Engagement is a designed system, not a vibe** (ADR-0255): scenario probes over abstract
+   questions, one question at a time, live visible capture, L0-L3 coverage rubric driving both the
+   planner and the HUD, milestones and session recaps, mascot choreography where present.
+5. **Trainee mode is generation FROM confirmed units only.** Quizzes cite their source unit the way
+   TacticalGenAI questions carry `verifiedSource`; an unconfirmed or superseded unit can never
+   generate training content. Trainee misses append to the gap queue as extraction targets.
+6. **Compliance posture is structural for the first vertical** (detailed in ADR-0254): packs hold
+   PROCEDURES, never client identities or account data; the scanner plus a redaction pass run before
+   storage; unresolved PII quarantines the unit. A wealth-management pack must be exportable as firm
+   IP without ever being a books-and-records liability.
+
+### Increments
+
+- **P-TRAINER.1 - the interview engine core (pure).** Coverage-map types, the L0-L3 objective rubric,
+  the session planner (pick the least-covered objective, branch on the expert's answers, never
+  repeat a confirmed unit, one question at a time), and the extract-act state machine
+  (opening recap -> probe -> capture -> follow-up -> recap). Pure, DOM-free, heavily tested; in-memory
+  store only. Demo: a scripted interview transcript drives the planner through a WMO fixture map.
+- **P-TRAINER.2 - contracts + storage.** The frozen-contract increment: `trainer_*` EventNames added
+  to `contracts.ts` (ADR-0254 lists them), plus migration `0012_trainer_tables.sql` in kb_graph
+  (ADR-0253 schema). Nothing else in the same session.
+- **P-TRAINER.3 - distillation.** Transcript spans -> typed knowledge units via structured output
+  (TacticalGenAI-style response schemas), fail-closed scan of every DERIVED unit mirroring
+  `kb/ingest.ts`, provenance stamping, kb_pages projection so retrieval/viz/knowledge_search see the
+  units with zero changes.
+- **P-TRAINER.4 - teach-back verification.** The agent recites a unit as steps; confirm / correct /
+  reject per step; confirmation writes `approval_events` + `promoteFactGated`; corrections mint a
+  superseding unit; `missingPoints` enqueue follow-ups. The trainer's practice-exam inversion.
+- **P-TRAINER.5 - the extraction pack.** Pack format extension (additive `coverage_map` manifest
+  member, ADR-0253) + the authored wealth-management-operations v1 pack (ADR-0255 content outline);
+  export path proves a round trip: interview -> confirmed units -> installable signed pack.
+- **P-TRAINER.6 - trainee mode.** Quiz/scenario generation from confirmed units through the Trivia
+  Wire selection-seam pattern with static fallbacks; trainee masteryMap and weak-domain derivation;
+  misses append extraction targets. The flywheel closes here.
+- **P-TRAINER.7 - the stage act.** Voice cadence for interviews, live capture cards, the coverage
+  HUD (invariant 11: labels never wrap into slivers), mascot states (scribe while distilling,
+  victory on confirmation milestones), graceful downgrade without the mascot branch.
+- **P-TRAINER.8 - engagement instrumentation.** Milestones/ranks on coverage thresholds, session
+  summaries ("2 procedures, 5 edge cases, 3 confirmations today"), streaks, the extraction
+  dashboard, telemetry review of drop-off points.
+
+### Risks / non-goals
+
+- **Expert fatigue is the product risk.** A 200-question checklist kills the whole idea; the planner
+  MUST cap sessions (20-30 minutes), lead with scenarios, and always close with visible progress.
+- **Garbage-in**: an expert can be wrong. Teach-back plus provenance means a wrong confirmed unit is
+  traceable and supersedable, never silently authoritative; trainee mode always cites its source.
+- **Regulated domain**: the first vertical touches SEC/FINRA-adjacent process. We capture HOW THE
+  FIRM WORKS, never advice, never client data; the ADR-0254 redaction posture is not optional.
+- **Non-goals v1**: multi-expert reconciliation, org charts, auto-ingesting the firm's document
+  store into the pack (existing KB ingest already covers documents separately), any new trust label,
+  any change to AGENT_MODES, phoneme-level interview VAD tuning.
+
+### Order + estimate
+
+.1 -> .2 -> .3 -> .4 are sequential (each leans on the prior); .5 needs .2 only for schema, .6 needs
+.4 (confirmed units exist), .7/.8 can interleave after .3. Eight increments, each one session, per
+the CLAUDE.md ritual.
+
+## ADR-0253 -- P-TRAINER data contract: coverage maps, knowledge units, and the extraction pack (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- BUILT (2026-08-02): migration `0012_trainer_tables.sql` +
+`harness/trainer/store.ts` (append-only proven by tests + demo-P-TRAINER.2); the lkgpack
+`coverage_map` member shipped in `harness/kb/pack.ts` (signature-bound, tamper-refused). The
+kb_pages projection of confirmed units is deferred to the desktop wiring increment. 0012 was the
+next free global number; the memory/0011 vs kb/0011 collision is prior art we do not repeat.
+
+### Problem
+
+The compiled KB stores PAGES about documents. An interview produces something more structured: an
+ordered procedure with roles and systems, an edge case with a trigger and a resolution, a checklist,
+an escalation rule. Flattening those to prose pages loses exactly the structure that teach-back and
+trainee-quiz generation need. And the coverage map (what a role contains, how completely each part
+is captured) has no home at all.
+
+### Decision
+
+**New tables live in `kb_graph.duckdb`** (per-KG, so a firm's extraction stays inside its KG and
+rides the existing registry, backup, and pack machinery), added by numbered migration, invariant 10:
+
+- `coverage_objectives`: `objective_id` TEXT PK (stable, pack-authored, e.g. `wmo-2.1`), `pack_id`,
+  `domain`, `title`, `description`, `weight` (the TacticalGenAI exam-weight idea repurposed as
+  extraction priority), `elicitation` JSON (seed questions, scenario seeds, follow-up patterns),
+  `created_at`.
+- `knowledge_units`: `unit_id` TEXT PK (minted once, invariant 9), `objective_id` FK, `kind` CHECK
+  IN (`procedure`, `edge_case`, `exception`, `checklist`, `glossary`, `escalation`), `title`,
+  `body_md`, `structure` JSON (ordered steps with actor/system/timing for procedures; trigger/
+  deviation/resolution for edge cases), `trust_label` (invariant 7 closed set, NO new labels),
+  `completeness` 0-100 (an ordinary column, never a trust signal), `source_session_id`,
+  `source_artifact_id`, `confirmed_at` NULL, `confirmed_by`, `superseded_by` NULL FK.
+- `extraction_sessions`: `session_id`, `pack_id`, `expert_label` (a display handle, deliberately not
+  an identity record), `started_at`, `ended_at`, `stats` JSON.
+- `teachback_results`: `teachback_id`, `unit_id`, `verdict` CHECK IN (`confirmed`, `corrected`,
+  `rejected`), `notes`, `approval_event_id` (the ADR-0254 link into the promotion gate).
+
+**Knowledge is append-only.** A correction never edits a unit; it mints a successor and sets
+`superseded_by` on the old one (the kb_changelog philosophy applied to units). Coverage per
+objective is DERIVED (from unit kinds present, completeness, confirmations), never hand-stored, so
+the rubric can evolve without a migration.
+
+**Confirmed units project into the existing graph.** Each confirmed unit compiles to a `kb_pages`
+row (existing kind `concept`, existing closed set untouched) with wikilinks and a `kb_page_sources`
+citation back to the unit's artifact, THROUGH the existing fail-closed ingest path. Retrieval, the
+KG visualizer, and the `knowledge_search` tool therefore work on trainer knowledge with zero
+changes; the trainer tables stay the structured source of truth.
+
+**The extraction pack is an additive evolution of lkgpack/1.** The manifest gains an OPTIONAL
+`coverage_map` member (objectives + elicitation seeds); `verifyPack` validates it when present and
+ignores its absence, format tag unchanged, old importers unaffected. The pack trust rule stands
+verbatim: signature proves origin, never safety; imported packs stay read-only and `untrusted`; the
+scanner remains the safety gate. An exported pack contains coverage objectives and CONFIRMED units
+only (draft and rejected units never leave the firm's KG).
+
+### Alternatives rejected
+
+- **Units as kb_pages with a new `kind`.** Touches the frozen kb_pages CHECK constraint for a shape
+  it cannot actually hold (ordered steps, verdicts); the projection gives graph visibility without
+  bending the page contract.
+- **A fifth DuckDB file.** Nothing here contends with kb writes the way vectors did (ADR-0053);
+  per-KG locality matters more than isolation, and packs already ship `kb_graph.duckdb`.
+- **Editing units in place on correction.** Destroys the provenance chain that makes an
+  expert-sourced KB auditable; supersession is the whole point in a regulated vertical.
+- **Storing coverage scores.** A stored score goes stale the moment the rubric improves; deriving it
+  keeps the rubric a pure function (and testable, loop_preflight-style).
+
+### Verification (planned)
+
+Migration applies on a fresh and an existing KG; unit round-trip property tests (mint, supersede,
+derive coverage); pack round trip (export -> verify -> import elsewhere -> retrieval finds the
+projected pages); a fixture WMO map drives derivation tests.
+
+## ADR-0254 -- P-TRAINER trust pipeline: extracted knowledge is untrusted until taught back (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- BUILT (2026-08-02): `harness/trainer/redact.ts` + `distiller.ts` +
+`teachback.ts` and the trainer EventNames in contracts.ts. Every decision below is pinned by tests
+(dead-scanner, poisoned-span, poisoned-derivation, hard-PII-quarantine, refused-confirm) and
+demo-P-TRAINER.3/.4. Adds NO new security surface; keystone #2 runs verbatim underneath.
+
+### Problem
+
+An interview is a firehose of human-typed and human-spoken content: the exact class of input the
+architecture already refuses to trust (invariant 5). Naively, a trainer is a machine for laundering
+untrusted prose into durable semantic memory, which is precisely the cross-session poisoning that
+the P4.3 promotion gate exists to prevent. The trainer must make extraction FLOW THROUGH the gate,
+not around it. Separately, the first vertical (wealth-management operations) is regulated: a pack
+that absorbs client names, account numbers, or balances becomes a books-and-records liability the
+moment it is exported.
+
+### Decision
+
+1. **Capture is untrusted by construction.** Expert turns enter prompts only inside the untrusted
+   delimiters, after scanning, after the cache breakpoint (invariant 5, unchanged). Distilled units
+   are DERIVED content and are re-scanned before storage, mirroring the `kb/ingest.ts` rule (scan
+   the source, then re-scan everything the model derived from it). Units are born
+   `trust_label = untrusted`.
+2. **Fail-closed stands mid-interview** (invariant 3). Sidecar dead, malformed scan, timeout: no
+   unit is minted, the capture card says so, and the planner parks the objective. The conversation
+   may continue; storage may not. No transcript span reaches a unit without a valid scan result.
+3. **Teach-back confirmation IS the approval.** A `confirmed` verdict in `teachback_results` records
+   an `approval_events` row with the EXISTING action `promotion_approve`, then calls
+   `promoteFactGated` to project the unit's entity/fact statements into `semantic_entities` /
+   `semantic_facts` with `source_artifact_id` provenance. The gate still resolves trust from
+   artifact provenance, still blocks on unknown, still emits `memory_promotion_blocked`. Nothing
+   about `promotion_gate.ts` changes; the trainer is just its first systematic supplier of
+   legitimate approvals.
+4. **Suspicious is never one-click.** Confirmation approvals apply to `untrusted` units only. A unit
+   whose source scan found injection signals is `suspicious|quarantined` and the trainer UI offers
+   NO release; the standard quarantine-release flow (its own approval action, existing) is the only
+   path, deliberately outside the interview's engagement loop. An enthusiastic expert clicking
+   "confirm" must never be the mechanism that frees a poisoned span.
+5. **PII posture: procedures, never people.** The interview prompt instructs role-shaped answers
+   ("what does the firm do", not "what did Mrs. X do"); the distiller normalizes actors to roles
+   (adviser, client, custodian, CPA) and strips names, account numbers, dollar-specifics into
+   placeholders; scanner findings for residual PII quarantine the unit (fail-closed, not a warning).
+   Exported packs contain confirmed units only (ADR-0253), so nothing quarantined can ever ship.
+6. **New EventNames** (the P-TRAINER.2 frozen-contract increment, invariant 8; every event carries
+   `run_id`/`session_id`/`artifact_id`): `trainer_session_started`, `trainer_question_asked`,
+   `trainer_unit_captured`, `trainer_teachback_run`, `trainer_unit_confirmed`,
+   `trainer_unit_rejected`, `trainer_pack_exported`. Blocked promotions keep emitting the existing
+   `memory_promotion_blocked`.
+
+### Alternatives rejected
+
+- **A `trainer` trust label** (e.g. `expert-confirmed`). Invariant 7 is a closed set for a reason;
+  confirmation state lives in `confirmed_at`/`teachback_results`, and PROMOTION state lives where it
+  always has, in the gate's own records.
+- **Auto-promoting on capture because "the expert said it live".** Exactly the laundering scenario
+  keystone #2 exists to stop; also wrong on the merits, experts misspeak, and teach-back catches it.
+- **Trusting the voice channel more than typed text.** STT output is still untrusted input; the
+  voice-approval grammar lesson from ADR-0251 (allowlist-exact, silence never approves) applies to
+  confirmation verdicts spoken aloud.
+- **Redaction as a post-export scrub.** By then the data has lived in the KG, been embedded, and
+  leaked into retrieval; redact before storage or not at all.
+
+### Verification (planned)
+
+The keystone tests stay green untouched. New: a poisoned-transcript fixture must land quarantined
+and unpromotable through the trainer path (gate blocks, event emitted); a sidecar-kill mid-interview
+test asserts zero units minted; a PII fixture (names, account numbers) must quarantine; a
+confirmed-unit promotion asserts the approval row, the gate outcome, and the semantic_facts
+provenance chain end to end.
+
+## ADR-0255 -- P-TRAINER interview mechanics: engagement as a designed system, and the wealth-management-operations pack (SCOPE/PLAN)
+
+**Date:** 2026-08-02
+**Status:** Accepted -- harness core BUILT (2026-08-02): the planner cadence rules (scenario-first,
+one-question-at-a-time, five-whys, session cap, L0-L3 rubric) shipped pure + tested in
+`harness/trainer/planner.ts`/`coverage.ts`; the 13-objective WMO coverage map + due-diligence seed
+shipped in `wmo_pack.ts`; trainee quizzes + the miss-to-extraction-target return edge in
+`quizgen.ts` (demo-P-TRAINER.5). The stage/HUD presentation (decisions 4-5) lands with
+P-TRAINER.7/.8.
+
+### Problem
+
+Experts do not fail interviews for lack of knowledge; they fail them for boredom, vagueness, and
+the wall-of-questions effect. TacticalGenAI keeps learners engaged with scenario stakes, visible
+progress, and ranks; a knowledge EXTRACTOR needs the same psychology pointed the other way, and it
+needs question craft that surfaces tacit knowledge (the Friday-4pm exceptions nobody writes down),
+not the official version of the process.
+
+### Decision
+
+1. **Scenario probes are the primary instrument.** Direct questions get the documented process;
+   concrete scenarios get the real one. The planner leads each objective with a generated situation
+   ("A client calls Friday at 4pm needing a $2M wire before a holiday weekend and the custodian
+   cutoff has passed. Walk me through exactly what happens.") and only then fills structural gaps
+   with direct questions. Every captured procedure ends with the standing probe "what goes wrong
+   here, and what do you do when it does" so edge cases are pursued, not incidental. Scenario seeds
+   ship in the pack's `elicitation` JSON; generation personalizes them, TacticalGenAI-style
+   structured output keeps them typed.
+2. **The L0-L3 coverage rubric** (the `assessReadiness` pattern from loop_preflight, reused as a
+   pure function over ADR-0253 data): L0 unexplored -> L1 outline captured -> L2 procedure stepped ->
+   L3 edge cases captured AND confirmed. Weighted by objective `weight`, it drives the planner's
+   next-question choice, the HUD, and the milestone system. `missingPoints` from teach-back
+   evaluations demote and re-queue, the weakDomains inversion.
+3. **Conversation cadence rules** (all testable as pure planner properties): one question at a time
+   (ADR-0251's checklist rule, promoted to the interview); follow the expert's energy (a story in
+   the answer spawns follow-ups before the planner returns to the map); five-whys on any mentioned
+   deviation; sessions capped at 20-30 minutes with an opening recap ("last time we mapped quarterly
+   billing; two edge cases still open") and a closing summary of what was captured. Voice-first
+   where the role provides it: questions short enough to speak, capture shown on screen.
+4. **Live visible capture builds trust.** While the expert talks, the capture card shows the unit
+   being structured (steps appearing, placeholders where names were redacted). The expert watches
+   the machine understand them, the single strongest engagement lever an extractor has, and
+   pre-verifies informally before teach-back makes it formal. Cards and HUD obey invariant 11: a
+   label owns its line and ellipsizes; no prose in flex rows.
+5. **Milestones, not points.** RANK_SYSTEM inverted: thresholds on confirmed coverage ("first
+   domain at L3", "ten edge cases confirmed", "pack export ready") with mascot victory beats where
+   the stage exists. No leaderboards, no scores on the expert themselves; the FIRM's knowledge
+   levels up, which reads as respect rather than gamification of a professional.
+6. **The wealth-management-operations pack v1** (`wmo`, authored in P-TRAINER.5), coverage domains
+   drawn from the boutique virtual-family-office shape (Questmont-class: coordinated investment,
+   tax, estate, insurance, and business-adviser work over an RIA affiliation):
+   - `wmo-1` client lifecycle: prospect intake, discovery, onboarding paperwork, custodial account
+     opening, ACAT transfers, funding, review cadence, offboarding and death-of-client.
+   - `wmo-2` money movement: wires/ACH/journals, standing instructions, verification callbacks,
+     fraud red flags, cutoffs and holiday handling.
+   - `wmo-3` investment operations: rebalancing, trade errors, corporate actions, cash management.
+   - `wmo-4` billing and fees: fee schedules, quarterly runs, prorations, refunds, disclosures.
+   - `wmo-5` tax coordination: gain/loss reporting, harvesting windows, CPA handoffs, K-1 season,
+     estimated-payment choreography.
+   - `wmo-6` estate, trust, and insurance coordination: attorney handoffs, beneficiary updates,
+     trust funding, policy reviews, business-sale and exit-planning support.
+   - `wmo-7` compliance and regulatory: which entity signs what (brand LLC vs the registered
+     adviser), ADV updates, fiduciary documentation, books and records, marketing review,
+     complaint handling.
+   - `wmo-8` the adviser network: custodian relationships, RIA/TAMP affiliations, outside
+     professional coordination, and due-diligence checklists (the entity/custody/fee/fiduciary
+     question set ships as a seed `checklist` unit, the one unit kind a pack may pre-fill).
+   Unit kinds per ADR-0253; every domain's elicitation seeds include at least one scenario probe
+   and one edge-case probe. The pack captures firm process, never advice and never client data
+   (ADR-0254 posture).
+
+### Alternatives rejected
+
+- **A fixed questionnaire per role.** The gov_onboarding pattern is right for four questions, fatal
+  for four hundred; a planner over a coverage map is what makes long extraction survivable.
+- **Free-form "tell me about your job" chat.** Engaging for one session, unmeasurable forever; no
+  coverage derivation, no teach-back targets, no pack.
+- **Scoring the expert.** The fastest way to lose a professional's goodwill; coverage belongs to
+  the knowledge base, not the person.
+- **Shipping pre-written WMO procedures in the pack.** Then it is a content SKU, not an extractor,
+  and every boutique firm's actual process differs; seeds are questions (plus one due-diligence
+  checklist), units come from the interview.
+
+### Verification (planned)
+
+Planner property tests (one-question invariant, energy-following branch, five-whys trigger, session
+cap, no repeat of confirmed units); rubric derivation fixtures; a full scripted WMO interview
+fixture driving extract -> distill -> teach-back -> quiz-generation round trip in demo form; HUD
+snapshot obeys invariant 11.
+
+## ADR-0256 -- P-FLEET: a Chief-of-Staff fleet - one LUCID orchestrating N gated LUCID workers across machines (SCOPE/PLAN)
+
+**Date:** 2026-08-14
+**Status:** Accepted -- SCOPE/PLAN (no code this ADR). Increments P-FLEET.1-.4 below are each their
+own session. Facts below verified against this tree (harness/mcp, harness/launcher, tools/remote-pwa).
+
+### Context
+
+Grok Bot popularized the always-on agent teammate: a chief-of-staff agent that owns the goal and
+farms work out to a standing team. LUCID already has every load-bearing piece of that pattern, built
+for other reasons and lying in a row:
+
+- **The Agent Firewall** (P-AGENTFW.1, ADR-0147; `harness/mcp/agent_firewall.ts` +
+  `harness/mcp/acp_client.ts`): a fail-closed stdio MCP proxy that scans OUTBOUND prompts before
+  they leave (the injection-relay block) and scans INBOUND replies, withholding a quarantined reply
+  and wrapping everything else in UNTRUSTED_CONTENT delimiters with a trust label that is never
+  `trusted`, delimiter literals neutralized (`neutralizeDelimiters`) so a hostile reply cannot break
+  the envelope. It is spawned per connection as `lucid agent-firewall --conn <id>`
+  (`remoteAgentMcpServers()` in `harness/mcp/registry.ts`), so each remote agent is its own gate
+  instance.
+- **The connection registry** (`harness/mcp/registry.ts`): `~/.omp/lucid-agents.json` at mode 0600
+  (dir 0700), each entry an ARBITRARY `command` + `args`, secrets kept out by the `--token-file`
+  pattern (ADR-0147 custody rule: the file stores how to reach an agent, never a credential).
+- **Every LUCID install is already a gated headless worker.** `lucid acp`
+  (`harness/launcher/lucid_acp.ts`, P-EXT.1/ADR-0038) is the sanctioned fail-closed ACP entrypoint:
+  it reproduces the exact gated omp command the desktop uses and refuses to start if the gate or
+  scanner sidecar is missing. An ungated worker session cannot exist.
+- **The management surface exists**: the Remote-agents Settings card + `GET/POST /api/agents`,
+  `/api/agents/remove`, `/api/agents/toggle` (P-AGENTFW.2, ADR-0149) already add/edit/enable
+  connections with no hand-edited JSON.
+- **The phone drives the orchestrator**: the P-REMOTE PWA (`tools/remote-pwa/`, ADR-0226/0227) can
+  watch and drive the HOST desktop session over the E2E relay. A phone driving the orchestrator that
+  drives the fleet is composition, not new code.
+
+The transport insight that makes this an ADR and not a project: because the registry stores an
+arbitrary command, `command: ssh, args: [<host>, lucid, acp]` IS a remote LUCID worker over
+stdio-over-SSH with ZERO new transport code, and N same-box workers are N plain `lucid acp`
+entries. The fleet is configuration.
+
+What is genuinely missing, and what this ADR decides to close, one increment each: the firewall's
+`prompt` tool is one synchronous round-trip (the orchestrator blocks per worker, so "fan out to
+five workers" serializes); nothing keeps a worker alive on a remote box or reports liveness; the
+Settings card and PWA show configuration, not fleet health; and workers cannot talk to each other
+at all.
+
+### Decision
+
+Build the fleet as configuration + four increments on existing surfaces, under these pinned
+security invariants:
+
+1. **Each connection is its own trust domain.** One firewall instance per connection (the existing
+   `--conn <id>` spawn), no shared parsing state, no cross-connection reply mixing.
+2. **Every inbound byte from a worker enters the orchestrator's model only inside UNTRUSTED_CONTENT
+   delimiters, after a scan, trust-labeled and never `trusted`** (invariant 5, exactly the ADR-0147
+   behavior, extended to every new reply path this ADR adds).
+3. **Scan unavailable = block** (invariant 3). A dead scanner means no dispatch, no result
+   delivery, no health-probe text reaching the model. Fail-closed is law on every new tool.
+4. **The firewall gate stays in-process** (invariant 4). Async job handles change WHEN a reply is
+   delivered, never WHERE the gating happens.
+5. **Secrets stay in token-files / the OS vault, never in the registry** (ADR-0147 precedent). SSH
+   credentials are the operator's keys and agent config, not registry fields.
+6. **No new EventName until the increment that logs it** (invariant 8): any fleet event names are
+   quarantined to their own contracts increment, exactly the P-TRAINER.2 / P-REMOTE.4 pattern.
+
+### Increments
+
+- **P-FLEET.1 - async job handles on the firewall.** Today `AgentFirewall.handlePrompt`
+  (`harness/mcp/agent_firewall.ts`) is ONE synchronous round-trip: outbound scan, send, inbound
+  scan, return; the orchestrator blocks per worker. Add three MCP tools beside `prompt`:
+  `dispatch` (outbound-scans and sends, returns a job id immediately), `status` (running / done /
+  failed, plus scanned partials), and `result` (the gated reply). Every reply and partial keeps the
+  EXACT inbound pipeline: scan, quarantine-withhold, UNTRUSTED_CONTENT wrap, trust label,
+  delimiter neutralization. Fail-closed law unchanged: dead scanner = no dispatch.
+- **P-FLEET.2 - worker keepalive + health.** A documented supervisor recipe (systemd unit /
+  Windows service wrapper) keeping `lucid acp` alive on a VPS, plus a lightweight health probe the
+  firewall can call (connection-level `ping`) so the orchestrator sees liveness before it
+  dispatches, not after a timeout.
+- **P-FLEET.3 - fleet visibility.** Extend the Remote-agents Settings card and add a PWA view with
+  per-connection health, running job count, and the last reply's trust label. All of this data
+  already flows through the firewall; this increment is surfacing, not new trust paths.
+- **P-FLEET.4 - agent-to-agent threads.** Worker-to-worker messages relayed THROUGH the
+  orchestrator's firewall so every hop is scanned and wrapped like any other inbound reply.
+  Explicitly NOT direct worker-to-worker links: a direct link would bypass the gate, and one
+  poisoned worker could then relay injection to the rest of the fleet unscanned.
+
+### Alternatives rejected
+
+- **A bespoke fleet RPC / daemon protocol.** Rejected: `lucid acp` over ssh (and the openclaw
+  wss-bridge precedent, `openclaw acp --url wss://gateway`, already a registry citizen per
+  ADR-0147) reuses the existing gated launcher and the existing transport patterns end to end.
+  Invariant 1 spirit: extend, never fork; a second protocol would be a fork of our own trust
+  perimeter.
+
+### Consequences
+
+- SSH key management is on the operator: provisioning keys, rotating them, and locking down the
+  worker account are deployment concerns this ADR deliberately does not absorb.
+- The synchronous `prompt` tool stays for single-shot use; `dispatch`/`status`/`result` are
+  additive, and P-FLEET.1 changes no frozen contract file (new MCP tools on the firewall's own
+  server, not new EventNames, not AGENT_MODES).
+- The PWA drives the fleet only THROUGH the orchestrator host. There is no direct phone-to-worker
+  path, deliberately: the orchestrator's firewall is the single choke point, and adding a second
+  entry would double the trust surface for zero capability.
+
+### Relates to
+
+ADR-0147 (P-AGENTFW.1: the firewall, registry, and launcher this fleet is made of), ADR-0149
+(P-AGENTFW.2/.3: the Settings card + `/api/agents*` endpoints P-FLEET.3 extends), ADR-0226/0227
+(P-REMOTE: the phone PWA that drives the orchestrator), ADR-0038 (P-EXT.1: `lucid acp`, the gated
+worker entrypoint), and CLAUDE.md invariants 1, 3, 4, 5, and 8.
+
+## ADR-0257 -- P-TRAINER.9: the trainer is role-generic by default; the WMO pack is an explicit sample (BUILT)
+
+**Date:** 2026-08-14
+**Status:** Accepted -- BUILT (this session).
+
+### Context
+
+The trainer core has been role-agnostic since P-TRAINER.8 (`rolepack.ts` builds a coverage pack for
+ANY role from a task list or a pasted Position Description), but the PRODUCT presented as a
+wealth-management tool: `desktop/trainer_session.ts` `activeRole()` silently fell back to the WMO
+demo role, `ensure()` unconditionally seeded `WMO_OBJECTIVES` plus the 8 authored reference units
+into every `trainer.duckdb`, and `trainer.html` booted with a hardcoded "Wealth-Management Ops"
+role chip. A fresh install therefore BECAME a wealth-management trainer before the user ever chose
+a role, and the WMO objectives leaked into stores that would only ever hold a custom role.
+
+### Decision
+
+No silent default role. The role choice is the trainer's first interaction:
+
+- `activeRole()` returns null when no role was ever chosen; `getState()` then returns a minimal
+  `needsRole: true` state (label "Choose a role", empty domains, no question) and does NOT create
+  or touch `trainer.duckdb`. `TrainerStateView` gains `needsRole` (not a frozen contract file).
+- WMO seeding moved out of `ensure()` into `seedDemoPack()`, called ONLY by the new exported
+  `useDemoPack()`, which activates the sample role (labeled "Wealth-Management Ops (sample)"),
+  seeds idempotently, and resets the planner onto it. `setRole` for user-built roles is unchanged
+  and never seeds WMO material.
+- `POST /api/trainer/role` accepts `demo: true` and routes to `useDemoPack()` (no new endpoint).
+- `trainer.html`: the chip defaults to "Choose a role"; live boot with `needsRole` opens the
+  role-setup modal, which now carries an explicitly-labeled "Try the sample role" button; the
+  OFFLINE standalone fallback keeps the embedded WMO sandbox data, labeled "(sample)", so the
+  self-contained page still demos without a backend.
+- `harness/trainer/wmo_pack.ts` and the `demo-P-TRAINER.1..5` scripts are untouched: the WMO pack
+  remains the authored fixture for demos, tests, and the sample role.
+
+### Consequences
+
+- A fresh install asks for the user's role instead of assuming wealth management; custom-role
+  stores carry zero WMO objectives (regression-tested: fresh-state, demo-activation idempotence,
+  and no-leak custom-role tests in `desktop/trainer_session.test.ts`).
+- `submitAnswer` with no active role advances nothing and stores nothing (`distilled: false`,
+  "choose a role first"); `getGames` returns empty. Fail-safe, not fail-open.
+- The Five Whys drill stays gated to the sample pack (it is authored WMO content); a generic
+  deviation-derived Five Whys generator is future work, not this increment.
+
+### Relates to
+
+ADR-0252..0255 (the trainer flywheel, data contract, trust pipeline, and interview mechanics this
+increment re-fronts), and CLAUDE.md invariants 3 and 5 (the distiller path is untouched).
+
+## ADR-0258 -- P-RELEASE.3: Homebrew is the working macOS update channel - pin the cask per release + CI re-pin (2026-08-15)
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+Observed on a real machine: `brew upgrade --cask lucidagentide` after the v1.12.1 release reported
+"successfully installed", yet About still showed v1.12.0. Traced end to end:
+
+1. The cask was `version :latest` + `sha256 :no_check`, downloading
+   `releases/download/latest/LucidAgentIDE-mac-<arch>.pkg` - the rolling `latest` TAG release.
+2. That rolling release is refreshed ONLY by the manual `publish-latest` dispatch
+   (`build-desktop.yml`), never by tag builds. Last refresh: 2026-07-05, with v1.10.0-era assets.
+   Every release since (v1.11.x, v1.12.x) was cut by tag push, so brew kept serving the July build
+   byte-for-byte (361,395,667 bytes - matched the observed download exactly).
+3. Latent second break: the mac artifact was renamed `LucidAgentIDE-mac-*` to `LucidAgent-mac-*`
+   (ADR-0225 rename era), so even a refreshed rolling release would 404 the cask URL.
+4. The installed app stayed at 1.12.0 (not downgraded to the pkg's 1.10.0): macOS `installer(8)`
+   bundle-version semantics left the newer bundle in place while still reporting success, which is
+   what made the failure look like "the version label is wrong" instead of "the artifact is stale".
+5. This matters because in-app auto-update CANNOT rescue macOS: the build is unsigned and
+   Squirrel.Mac refuses unsigned updates after paying for the full zip download (ADR-0246, all four
+   defects confirmed live on this machine: minutes-long silent download, Restart-then-nothing).
+   Windows NSIS has no such signing gate, which is why Windows updates in seconds and mac never.
+
+Net: Homebrew is the ONLY working macOS update channel until P-RELEASE.2a (signing) ships, and it
+was silently serving six-week-old unverified bits. A security-first product distributing unsigned
+installers with `sha256 :no_check` was also simply wrong.
+
+### Decision
+
+1. **Pin the cask** (`Casks/lucidagentide.rb`): `version "X.Y.Z"` + per-arch `sha256`, URL on the
+   versioned release (`releases/download/v#{version}/LucidAgent-mac-#{arch}.pkg`), livecheck via
+   `:github_latest`. Every brew install is now checksum-verified against a tagged release.
+2. **CI re-pins on every release**: new `update-cask` job in `build-desktop.yml` (tag builds only,
+   after `build`) rewrites version + both sha256s from the tag's uploaded assets (API digest, with
+   download-and-hash fallback) and pushes to master. Fail-closed: missing asset, missing digest, or
+   a drifted cask format fails the job loudly; it can never half-pin.
+3. **README** Homebrew section now states the real contract: `brew update && brew upgrade --cask`
+   is the macOS update path; in-app auto-update is inert on mac until ADR-0246/P-RELEASE.2a.
+
+The rolling `latest` release is no longer load-bearing for brew. The ADR-0246 open question
+(P-RELEASE.2d, whether `publish-latest` should set `make_latest` at all) stands and is now easier:
+only the README download buttons still reference GitHub's Latest pointer.
+
+### Verification
+
+`brew style` clean (one pre-existing cosmetic cop, frozen_string_literal, same as the old file);
+`brew fetch --cask` against the pinned cask downloaded the real v1.12.1 arm64 pkg from the
+versioned release and the sha256 matched the actual bytes. Workflow YAML parse-verified; the job
+only takes effect for tags cut after this lands on master (a tag build runs the workflow frozen at
+the tagged commit).
+
+### Relates to
+
+ADR-0213 (tolerant tag-to-semver derivation, reused verbatim), ADR-0246 (P-RELEASE.2: mac
+auto-update inert; this ADR is the interim channel), ADR-0225 (the artifact rename that broke the
+old URL), `Casks/lucidagentide.rb`, `.github/workflows/build-desktop.yml`, README "Homebrew".
+
+## ADR-0259 -- P-WINBOOT.1: Windows installed-app startup hardening (protected-directory failure)
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT (mitigation). The permanent rearchitecture (Increment B) + its CI guard
+(Increment C) are named follow-ups below, each its own ADR.
+
+### Problem
+
+v1.12.0 for Windows showed a blank window for 30 seconds, then a generic "could not start its local engine"
+dialog, when installed under `C:\Program Files`. The portable build worked. Root cause, confirmed against the
+code and a field report: `startDevServer()` (main.ts) spawns `bun run desktop/dev.ts` with cwd
+`<resources>/repo`, and the packaged app ships raw TypeScript there (`extraResources` includes
+`desktop/**/*.ts`). Bun 1.3.14's runtime module loader returns `EPERM` loading a `.ts` entrypoint out of the
+ACL-protected `Program Files` tree; `Bun.file().text()` reads the same bytes fine, and disabling the
+transpiler cache does not help. The behavioural tell (plain read succeeds, module-load is refused) points at
+the loader memory-mapping the source, which the directory's security refuses even with `Users:(RX)`. The
+engine dies before binding port 5319; the shell then waits the full `waitForServer(30000)` window before
+saying anything, because `startDevServer()` never watched `dev.on("exit")`.
+
+The installer let users get there: nsis `perMachine:false` but `allowElevation:true` +
+`allowToChangeInstallationDirectory:true`, so the dir chooser + a UAC elevation reach `Program Files`.
+(Per-machine would land there unconditionally, so that path is broken too.)
+
+This is the third packaged-engine startup failure (ADR-0177 v1.10.2 stripped a runtime import; ADR-0178
+v1.10.3 shipped broken-but-quiet). Those added the engine.log tee this increment reuses. The common
+product-level cause remains: production executes raw dev TypeScript from install resources.
+
+### Decision (mitigation: prevent the state, and diagnose it honestly)
+
+1. **Installer can no longer reach `Program Files`.** nsis `allowElevation:false` +
+   `allowToChangeInstallationDirectory:false` (perMachine stays false), so every install lands in the writable
+   per-user default (`%LOCALAPPDATA%\Programs\LucidAgentIDE`) where the `bun run` path works. Portable stays
+   the power-user escape hatch.
+2. **Fail fast, not after 30s.** `startDevServer()` now wires `dev.on("exit")` and keeps a bounded (4KB)
+   rolling tail of engine output; `waitForServer()` returns the instant the child exits instead of polling the
+   whole window.
+3. **An actionable dialog.** New pure module `desktop/engine_boot.ts` classifies the failure into
+   `protected-location | engine-exited | timeout`. A protected location is asserted only on real evidence (a
+   `Program Files`/`Windows` path, a failed write-probe of the engine dir, or an `EPERM`/`EACCES` signal in
+   the log), and the message names the exact folder and the two real fixes (reinstall per-user, or run
+   portable). A plain crash keeps its exit code + crash line; an alive-but-silent engine keeps "may still be
+   starting". `bestEngineLine()` surfaces the error line, not the trailing `Bun v...` noise. A dev run never
+   blames the install location.
+
+Deliberately NOT done here: the batch launcher's misleading diagnostics (Increment D) and the deep fix.
+
+### Alternatives rejected
+
+- **Ship a bundled `.js` engine artifact.** Tempting, but a `.js` module still takes Bun's file-mapping load
+  path, so it can `EPERM` from `Program Files` exactly like the `.ts`. Only `bun build --compile` (code
+  embedded in the exe, nothing mapped off disk) or running from a writable location is guaranteed. A naive
+  `.js` bundle would re-brick; do not assume it fixes this without a protected-location test.
+- **Copy `resources/repo` into writable user data on first run.** Fixes the ACL but weakens provenance
+  (~0.57 GiB of mutable executable source) unless every file is hash-verified before execution. Wrong tradeoff
+  for a security-first harness.
+- **Path-name check alone.** Kept as one signal, but the failed write-probe is the general, cross-platform
+  truth ("the engine's own directory is not user-writable"); the log's permission signal is a third corroborator.
+
+### Verification
+
+`bun run desktop/scripts/demo_p_winboot_1.ts` (make demo-P-WINBOOT.1): 20 checks over all three classifications
+(path / write-probe / log-signal), the dev-run exemption, the surfaced EPERM line, the main.ts wiring
+(`dev.on("exit")`, early-return `waitForServer`, classifier + bounded tail, old message gone, no em dash in
+dialog copy), and the nsis guard. 16 unit tests in `desktop/engine_boot.test.ts`. Desktop `tsc --noEmit`
+clean. Not exercised here (no Windows install harness in this environment): a real `Program Files` install
+boot; that is Increment C.
+
+### Next (each its own ADR / increment)
+
+- **Increment B - the permanent fix:** a `bun build --compile` production engine (not a `.js` bundle),
+  preserving `import.meta.dir`, DuckDB/native-addon resolution, the in-process gate, and the frozen prompt
+  prefix (invariant #6). Removes the raw-TS-from-resources dependency entirely and re-enables per-machine.
+- **Increment C - the regression that would have caught this:** on the Windows runner, install/copy the
+  packaged tree into a `Program Files`-ACL location, run the EXACT Electron spawn command with only bundled
+  runtimes, and require `/api/health`. `packaged_boot.test.ts` only ever booted from a writable temp dir.
+- **Increment D:** make `LucidAgentIDE.bat` bundled-runtime aware (discover `resources/runtimes`) or label it
+  developer-only, and stop prompting for an API key when it could not read the omp vault.
+
+## ADR-0260 -- P-WINBOOT.2: the permanent fix - ship the engine as a compiled binary
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT. The permanent fix behind ADR-0259's mitigation (Increment B of that plan).
+Re-enabling per-machine installs + the exact protected-location CI smoke are the named follow-ups below.
+
+### Problem
+
+ADR-0259 stopped NEW installs from reaching `Program Files` and made the failure legible, but the root cause
+remained: main.ts ran `bun run desktop/dev.ts` from `<resources>/repo`, and Bun's module loader EPERMs
+loading a `.ts` out of an ACL-protected tree. The permanent fix must make the engine independent of Bun
+module-loading source off the (possibly protected) install disk at runtime.
+
+### Spike (evidence before design)
+
+`bun build --compile desktop/dev.ts` embeds the code in the binary (no `.ts` mapped off disk), the precedent
+`harness/launcher/lucid_acp.ts` -> `bin/lucid` already sets. But dev.ts is a DuckDB server, and
+`lucid_acp.ts`'s own comment warns `--compile` "chases every platform's DuckDB `.node` and dies resolving
+other-OS binaries" (why it keeps DuckDB out via lazy import). The spike confirmed it: a bare
+`bun build --compile dev.ts` dies on `Could not resolve: "@duckdb/node-bindings-linux-x64-musl/duckdb.node"`.
+Then `--external "*.node"` cleared it (3641 modules -> exe): the JS shims EMBED, only the native addons stay
+external. A tiny compiled probe proved the two remaining unknowns: `import.meta.dir` is VIRTUALIZED to a
+bunfs path (`B:\~BUN\root`) while `process.execPath` is the real binary, and an externalized DuckDB binding
+RESOLVES AND RUNS from the compiled binary (`select 42` -> `[[42]]`). A native `.node` loads via the OS
+loader (LoadLibrary), which works from `Program Files`, unlike Bun's TS-mmap module-load path.
+
+### Decision
+
+Ship the engine as `bin/lucid-engine`, a `bun build --compile dev.ts --external "*.node"` standalone binary:
+
+1. **Embed all JS/TS, external only native `.node`.** dev.ts + every imported module lives inside the binary,
+   so Bun never module-loads a `.ts` off the install disk. DuckDB/onnx/pi-natives load from
+   `resources/repo/node_modules` via the OS loader (main.ts spawns with cwd = `<resources>/repo`, proven to
+   resolve the externals).
+2. **execPath-derived base dir.** `engine_launch.ts:engineDesktopDir()` returns `import.meta.dir` in a dev
+   run (renderer/ exists there) and `dirname(execPath)/../desktop` in the compiled binary (bunfs
+   import.meta.dir has no renderer/). dev.ts's ROOT / monaco / templates / repo-doc reads all route through
+   it (`DESKTOP_DIR` / `REPO_DIR`).
+3. **Prebuilt renderer.** `/app.js` used to `Bun.build(renderer/app.ts)` per request - the LAST path by which
+   Bun touches `.ts` on the install disk. `build-renderer` prebuilds `renderer/app.bundle.js` at package
+   time; `bundleApp()` serves it when present, and only Bun.build()s live in dev.
+4. **Spawn cutover.** `resolveEngineSpawn()` returns the compiled binary in packaged mode (fallback to
+   `bun run desktop/dev.ts` when it is absent - a dev run, or an older package), wired in main.ts.
+
+### Alternatives rejected
+
+- **A bundled `.js` (not `--compile`).** Still loaded by Bun's module loader from disk -> same mmap EPERM.
+  Rejected in ADR-0259 and confirmed here: only an embedded (`--compile`) binary removes the `.ts`/`.js`
+  disk load.
+- **Externalize DuckDB's `.js` shim too.** Would move the mmap risk to `duckdb.js` in `Program Files`
+  node_modules. Externalizing ONLY `*.node` keeps every JS shim embedded; the sole disk load is the native
+  addon (OS loader, PF-safe).
+- **Verified staging (copy engine to a writable dir).** Works but duplicates ~0.5 GiB and needs a hash
+  manifest to keep provenance. The compiled binary is smaller-surface and needs neither.
+
+### Verification
+
+`bun run desktop/scripts/demo_p_winboot_2.ts` (make demo-P-WINBOOT.2): the pure launch decisions + the
+main.ts/dev.ts/package.json wiring, then it BUILDS and BOOTS the real compiled engine and asserts
+`/api/health` -> `{ok:true}` (DuckDB natives resolved at runtime) and the prebuilt `/app.js` serves 7 MB of
+real JS from the execPath-derived root (not an error page, no runtime Bun.build). Confirmed manually too:
+`/api/brief` (200, built from PROGRESS.md/DECISIONS.md via REPO_DIR). 7 engine_launch unit tests + 16
+engine_boot (ADR-0259) green. Desktop `tsc --noEmit` clean. `airgap-smoke.ts` now fails the build if
+`bin/lucid-engine` or `renderer/app.bundle.js` did not ship (so a broken dist can't silently revert to the
+vulnerable `bun run dev.ts` path). NOT verified here (no Windows install harness): the end-to-end boot from
+an actual `Program Files` ACL location - that is Increment C.
+
+### Next
+
+- **Increment C:** the CI smoke that installs to a `Program Files`-ACL location and boots the compiled
+  engine to `/api/health` - the regression that would have caught ADR-0259's brick.
+- **Re-enable per-machine installs.** With the engine no longer running raw TS from resources, the ADR-0259
+  installer clamp (`allowElevation:false`, `allowToChangeInstallationDirectory:false`) can be relaxed once
+  Increment C proves a protected-root boot; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged from ADR-0259).
+
+## ADR-0261 -- P-WINBOOT.2C: the Program Files boot gate (Increment C of ADR-0259/0260)
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Numbering note (settled at the v1.12.2 merge): this branch's
+P-WINBOOT.1/.2 ADRs were originally 0250/0251, colliding with master's independently-numbered 0250
+(P-MODEL.1) and 0251 (P-AVATAR) - master's numbers win (they shipped in v1.12.1 code), so the WINBOOT
+pair renumbered to 0259/0260. The parked `wip/adr-0252-0260-sessions` branch renumbers on top of
+master's log when it lands.
+
+### Problem
+
+The v1.12.0 brick (ADR-0259) shipped because NOTHING ever booted the app from an ACL-protected install
+tree: `packaged_boot.test.ts` materializes the packaging filter but boots from a writable temp dir, and
+`demo_p_winboot_2.ts` boots the compiled engine from the writable repo. The compiled engine (ADR-0260)
+removes the root cause by construction, but without a gate that actually boots from a protected tree, a
+future change that reintroduces an install-dir write or on-disk load ships silently - again.
+
+### Constraints the design fell out of (both found by EXECUTING the gate, not by review)
+
+1. **CI runners are administrators.** Inherited `Program Files` ACLs allow admins full control, so
+   merely staging there constrains nothing. The standard-user posture must be reproduced with an
+   explicit DENY ACE for the current user (deny beats allow, even for admins).
+2. **Never deny generic `W`.** The first hardening denied `(W,DE,DC)` - and the engine could not even
+   SPAWN (`uv_spawn EPERM`), because icacls' generic write maps to FILE_GENERIC_WRITE, which includes
+   SYNCHRONIZE, and CreateProcess needs it. Real Program Files blocks a standard user by LACKING a
+   write allow, not by denying handle-open rights. The deny is therefore the SPECIFIC rights only:
+   `(WD,AD,WEA,WA,DE,DC)` - write data, append, write EA/attributes, delete, delete child - leaving
+   read+execute+synchronize intact. A `deny-probe` write inside the stage must FAIL before the boot is
+   attempted, so a hardening that silently did not take can never produce a green run.
+3. **Drain the pipes, kill before reading.** The first boot loop piped stdout/stderr undrained: the
+   engine filled the 64KB pipe buffer mid-console.log and never finished booting - then the smoke
+   awaited stderr EOF on the still-running process and deadlocked itself. The gate drains both pipes
+   from spawn and kills the process BEFORE awaiting the tails.
+
+### Decision
+
+`desktop/build/pf-boot-smoke.ts` (IO) over pure decisions in `desktop/engine_pf_smoke.ts`:
+
+1. **Stage.** Packaged mode: the `*-unpacked/resources/repo` tree (the exact bytes the installer lays
+   down) staged verbatim - robocopy on win32 (long-path-safe; exit codes 0-7 are success). Source mode
+   (a dev box with no fresh dist): compile the engine + renderer into a minimal skeleton plus every
+   native-addon package (`**/*.node` -> its top-level package dir, both node_modules trees).
+2. **Location.** `pickSmokeRoot`: strict (CI) REQUIRES the real `Program Files` tree and the packaged
+   layout - any fallback THROWS, because a silent downgrade to a temp dir is exactly how the original
+   gap survived. Non-strict falls back to a temp dir with the same deny hardening. The staged leaf
+   keeps a SPACE ("Lucid PF Smoke") so path-quoting bugs stay in scope.
+3. **Boot.** `resolveEngineSpawn({packaged:true, repoRoot: stage})` must pick the compiled binary (the
+   exact main.ts decision), spawned with cwd = stage and PORT like main.ts; `/api/health` must answer
+   `{ok:true}` within 30s and the prebuilt `/app.js` must serve >1MB from the protected tree.
+4. **Cleanup.** Remove the deny ACE, then delete (retrying - Windows briefly locks a just-killed exe).
+5. **CI.** `build-desktop.yml` runs it on the Windows runner right after the air-gap smoke, STRICT.
+
+### Alternatives rejected
+
+- **Rely on inherited Program Files ACLs.** Constrains nothing on an admin runner (constraint 1).
+- **Install via the real NSIS installer.** The ADR-0259 clamp deliberately prevents a Program Files
+  install, and the one-click installer ignores a target dir by design; staging the unpacked resources
+  verbatim exercises the same bytes without fighting the clamp.
+- **A .ts-load canary instead of a boot.** The brick class is broader than the one loader behavior
+  (any install-dir write also bricks); booting the real engine gates the whole class.
+
+### Verification
+
+`make demo-P-WINBOOT.2C`: the pure decisions (strict-never-downgrades, specific-rights deny, generic-W
+prohibition, restore, layout gate), the CI wiring (windows-gated, strict), then the REAL smoke end to
+end - on this Windows box: source skeleton (7 native-addon packages), write-denial PROVEN by a failed
+probe write, engine booted from the write-denied tree in ~2s, `/api/health` ok, 7.1MB prebuilt
+`/app.js` served, stage un-denied and deleted. 14 unit tests (`engine_pf_smoke.test.ts`); desktop tsc
+clean. NOT verified here: the strict path against a REAL `Program Files` root + the packaged tree -
+that is precisely what the CI step runs on the next installer build (this shell is non-elevated, and
+the local `win-unpacked` predates the compiled engine).
+
+### Limits (honest)
+
+The deny ACE reproduces the standard-user WRITE constraint; it cannot reproduce whatever exact
+machine-specific condition made Bun's loader EPERM on the v1.12.0 host (AV, CIG, mmap flags - never
+pinned). The gate's value is structural: the engine must boot + serve while the install tree refuses
+every write and delete, from the real Program Files path in CI.
+
+### Next
+
+- **Relax the ADR-0259 installer clamp** (re-enable per-machine installs) once this gate is green on a
+  real CI installer build; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged; the bat's shim-guard work is
+  parked on `wip/adr-0252-0260-sessions`).
+
+## ADR-0262 -- P-WINBOOT.3: relax the installer clamp - per-machine installs are legal again
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Closes the ADR-0259/0260 arc: mitigation (0259) -> permanent fix
+(0260) -> regression gate (0261) -> this relax.
+
+### Problem
+
+ADR-0259 clamped the NSIS installer (`allowElevation:false`, `allowToChangeInstallationDirectory:
+false`) so no new install could reach `Program Files` while the engine still module-loaded `.ts` off
+the install disk. That was a mitigation with a real UX cost: no per-machine installs (multi-user
+boxes duplicate the app per user; org-imaged machines cannot install to the standard location), and a
+user explicitly wanting `Program Files` is silently redirected. The justification for the clamp ended
+when ADR-0260 shipped the compiled engine and ADR-0261's CI gate proved - on the real runner, from
+the real `C:\Program Files`, against the exact packaged bytes - that the engine boots and serves from
+a write-denied protected tree.
+
+### Decision
+
+`desktop/package.json` build.nsis: `oneClick:false` (assisted installer - the location choice is
+conscious), `perMachine:false` (the DEFAULT stays per-user `%LOCALAPPDATA%\Programs`: writable, no
+elevation, the posture every user got during the clamp era), `allowElevation:true` +
+`allowToChangeInstallationDirectory:true` (per-machine `Program Files` allowed for those who choose
+it). The two flag flips are the exact diff the test branch carried as "test-only: DO NOT MERGE" since
+Aug 1; this ADR makes them intended. The branch history is deliberately kept as-is (no force-push):
+the old commit title stays, this ADR supersedes it, and the PR should SQUASH-merge so the title never
+reaches master.
+
+**The relax is COUPLED to the gate.** demo-P-WINBOOT.1 section [5] now asserts BOTH the posture and
+that `build-desktop.yml` still runs `build/pf-boot-smoke.ts` STRICT on the Windows runner: whoever
+removes or weakens the gate turns the demo red, so the clamp-relax can never outlive its
+justification silently.
+
+### What stays
+
+- `engine_boot.ts`'s protected-location classifier + dialog: installs from a STALE pre-engine package
+  (or a future regression between gate runs) still die in `Program Files`, and they must keep failing
+  FAST and ACTIONABLY (reinstall per-user / run portable), not as a 30s blank box.
+- The per-user DEFAULT: elevation prompts on every update are worse for the common single-user case,
+  and auto-update writes into the install dir - per-user keeps that writable without UAC.
+
+### Verification
+
+`make demo-P-WINBOOT.1` green with the new section [5] (posture + gate coupling); demos P-WINBOOT.2
+and .2C still green; engine_boot/engine_launch/engine_pf_smoke tests green; root + desktop tsc clean;
+license clean. The real-installer click-through (choose `C:\Program Files`, elevate, boot) is the
+user's on-device pass with the run-32796994917 artifacts - the gate already proved the boot half on
+the runner from the identical staged bytes.
+
+### Next
+
+- Drop nothing: the branch is PR-ready once history is rewritten (no DO-NOT-MERGE tip).
+- v1.12.2 release cut with the compiled engine + gate + this relax.
+- Increment D (`LucidAgentIDE.bat`) rides with the parked `wip/adr-0252-0260-sessions` branch.
+
+## ADR-0263 -- P-STALL.2: no turn cutoff - long work runs to completion, and the wait is legible
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. Supersedes the cutoff half of ADR-0186 (P-STALL.1); its visibility half
+(the 2-minute slow notices) stays and gains content.
+
+### Problem
+
+P-STALL.1's 10-minute total-silence kill (`IDLE_MS`, raced against `session/prompt`) was designed for
+provider overload, but it murders LEGITIMATE work: an agent that fans tasks out to subagents (omp's
+`task` tool) can sit quiet far longer than any fixed clock while the work is genuinely running - the
+parent streams nothing while a subagent grinds. The user reported exactly this in the field: long
+runs now routinely exceed ten minutes, every one died with "the model sent nothing for 10 minutes",
+and the UI gave no visibility into WHAT the turn was waiting on. Any fixed number is the same bug
+with a different constant: the clock is guessing how long work is allowed to take.
+
+### Decision (user call: remove the cutoff, add visibility)
+
+1. **No time-based turn cutoff.** `IDLE_MS`, the stall promise, and the `Promise.race` around the
+   CHAT `session/prompt` are gone; the request is awaited directly. A turn ends when the work ends,
+   when the user presses Stop, or when the transport dies.
+2. **Transport death is event-driven, not a clock.** The only failure the old timer actually guarded
+   against is a dead omp child - and on this branch `ACPClient` never rejected pending requests on
+   exit, so removing the timer alone would trade early kills for infinite hangs. `ACPClient.start()`
+   now drains every pending request with a clear error on child `exit` and on spawn `error`
+   (`failPending`). Pinned by a REAL child process in `acp.test.ts` (and the demo): the child exits
+   mid-request, the promise rejects with the exit code, event-driven.
+3. **Visibility: every slow notice names the open work.** New pure `desktop/turn_pending.ts` tracks
+   the turn's OPEN tool calls from the raw ACP stream (`tool_call` opens; a terminal
+   `tool_call_update` - completed/failed/rejected/cancelled - closes; spawned subagent tasks are
+   labeled `subagent <agent> \u00d7N: <title>`). The `{ type:"slow" }` ChatEvent (additive field) now
+   carries `pending: { label, elapsedMs }[]` - longest-running first, capped at 6 - and the renderer
+   shows it: HUD phase `Working \u00b7 waiting on N tasks \u00b7 quiet for M min`, and the once-per-turn toast
+   lists the tasks (`stall_notice.ts: pendingSummaryLine`). No cap is ever named in copy; Stop is.
+
+### Scope (deliberate)
+
+- CHAT turns only. The util completions (`completeOn`/`completeShared`: KG extraction, the /goal
+  checker) keep their own deliberate background clocks - they are invisible background jobs with no
+  Stop affordance mid-flight, and the parked `wip/adr-0252-0260-sessions` branch (P-KG-INGEST.5)
+  reworks that path properly with bounded handshakes + cancellation. The inverse-lockstep test pins
+  the chat path precisely (`promptContent`), not the whole file.
+- `ACPClient.failPending` deliberately overlaps the parked P-KG-INGEST.5 redesign (request
+  `{timeoutMs, signal}` + `die()`); this is its minimal chat-unblocking subset, and the wip branch
+  supersedes it at its merge (a small, intentional conflict).
+
+### Verification
+
+`make demo-P-STALL.2` (clock gone from the chat path, REAL-child death rejection, tracking
+lifecycle, slow-event contract, honest copy) + the evolved `demo-P-STALL.1` (the visibility half that
+remains); 20 unit tests across `turn_pending.test.ts` (labels incl. subagent batches, terminal-only
+settling, snapshot order/cap), `acp.test.ts` (real child exit + spawn failure reject), and the
+rewritten `stall_notice.test.ts` (no-cap copy, pending summary, inverse lockstep). Root + desktop tsc
+clean; full desktop suite at the documented baseline. NOT exercised here: a live >10-minute
+provider-silent turn end to end (needs a real long model run; the removal is structural and the
+death/Stop exits are individually pinned).
+
+### Next
+
+- On-device: run a long fan-out and watch the HUD name the subagent tasks while quiet.
+- When the wip branch lands, fold `failPending` into its fuller `die()` path and extend pending
+  visibility to the util/ingest jobs it reworks.
+  engine to `/api/health` - the regression that would have caught ADR-0250's brick.
+- **Re-enable per-machine installs.** With the engine no longer running raw TS from resources, the ADR-0250
+  installer clamp (`allowElevation:false`, `allowToChangeInstallationDirectory:false`) can be relaxed once
+  Increment C proves a protected-root boot; its own increment.
+- **Increment D:** the `LucidAgentIDE.bat` diagnostics fix (unchanged from ADR-0250).
+
+## ADR-0264 -- P-KG-INGEST.5: the ingest cannot hang, and Stop always stops
+
+**Date:** 2026-08-01
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+A user's chat-history import sat at `0/500 messages - 0 facts` and never moved. Pressing Stop stuck on
+`Stopping...` forever, and no retry was possible: single-flight kept refusing a new import until the app
+was restarted. Nothing was actually being ingested.
+
+### Root cause
+
+`ACPClient.request()` had NO timeout and NEVER rejected when the omp child went away. `pending` was a Map
+keyed by request id that nothing drained: `spawn` had no `error` handler (an ENOENT emits `error` and no
+`exit`), and the `exit` handler only notified the owner. A spawned-but-mute or dead agent therefore left
+`initialize` / `session/new` pending forever.
+
+The AI import awaits exactly those calls BEFORE its first message: `complete()` -> `start()` ->
+`startUtil()` (second omp, `initialize`) -> `session/new` -> `session/prompt`. Only `session/prompt` was
+raced against an idle clock; everything upstream of it was unbounded. One wedge there froze the import at
+its initial 0/N tick, and `utilLock` chained every later extraction behind it.
+
+Stop could not rescue it. `importConversations` checked `signal.aborted` only at the OUTER conversation
+boundary, and the signal was never threaded into `distillTurn` / `modelExtractor` / `backend.complete`. In
+model mode one conversation is hundreds of slow completions, so the check was effectively unreachable.
+`cancelImport` only called `abort.abort()`; the job stayed `running` forever and blocked every retry.
+
+### Decision
+
+Bound every wait, observe cancel everywhere, and make the terminal state reachable.
+
+1. **The ACP request layer always settles.** `request(method, params, { timeoutMs?, signal? })`. A `die()`
+   path drains `pending` with a rejection on child exit AND on spawn error (notifying `onExit` exactly
+   once); `stop()` drains too; a request on a dead client rejects immediately (`isDead`).
+2. **Bounds on the lifecycle calls.** HANDSHAKE_MS (20s) on `initialize`, SESSION_MS (30s) on
+   `session/new` / `session/set_config_option` / `session/close`, COMPLETE_MS (180s) as the whole-attempt
+   ceiling in `complete()`. Prompts keep their own idle clock: a real turn may legitimately think for
+   minutes. A failed chat handshake clears `starting` so the next call respawns instead of inheriting a
+   permanently rejected promise, and a dead util connection is forgotten rather than reused.
+3. **Cancel is threaded end to end.** `Extractor` turns carry an optional `signal`; `CompleteFn` takes
+   `{ signal }`; `distillTurn` short-circuits when aborted (reported as cancelled, NOT as a gate block, so
+   the audit is not corrupted); the importer checks the signal per MESSAGE; `completeOn` /
+   `completeShared` pass it to every request and send ACP `session/cancel` on the way out. The KB
+   batch-ingest callsite passes its job signal the same way.
+4. **Stop is always terminal.** First press aborts and marks `cancelRequestedAt`; a wedged run is
+   force-cancelled after CANCEL_GRACE_MS (15s), and a second press forces it immediately. A late result
+   cannot resurrect a cancelled job but its partial counts are still reported. Single-flight releases, so
+   the user can retry without restarting.
+5. **The UI stops lying.** `formatImportLine` reports `stalled` when a running job has not ticked for
+   STALL_MS (90s) and renders `No response from the model for Ns`; the pill turns amber and the Stop
+   button stays LIVE as "Force stop" instead of disabling itself forever.
+
+### Also in this increment: the folder picker
+
+Every folder pick now goes through `pickFolderDialog()`, which uses the NATIVE OS dialog (Explorer /
+Finder) in Electron exactly as the workspace/git picker already did, falling back to the in-app browser only
+in a plain browser. `lucid:pickFolder` takes `{ title, defaultPath, buttonLabel }` (mirroring
+`lucid:pickFile`) so each caller labels its own dialog. The in-app dark browser was hard to navigate: no
+typing a path, no Quick access, no search. Directory-only is sufficient because `loadExportData` is
+folder-first and shard-aware (it finds `conversations-NNN.json`, `conversations.json`, `MyActivity.json`,
+or a `.zip` INSIDE the chosen folder); Electron on Windows cannot combine `openFile` + `openDirectory`
+anyway. Home confinement (ADR-0023) is unchanged, and its error now names the home path.
+
+### Alternatives rejected
+
+- **A blanket default timeout on every ACP request.** Would break `session/prompt`, where a long turn is
+  legitimate. Bounds are per call, and the exit-drain is the universal net.
+- **Killing the omp child on Stop.** Too blunt: the shared connection is the live chat. Cancel unwinds
+  cooperatively; only the JOB is forced.
+- **Polling the job for staleness server-side and self-cancelling.** Silently discarding a merely slow run
+  is worse than telling the user it went quiet and letting them decide.
+
+### Verification
+
+`bun run desktop/scripts/demo_p_kg_ingest_5.ts` (make demo-P-KG-INGEST.5) spawns a real MUTE child and a
+real DYING child and asserts the requests reject, aborts a real `importConversations` mid-conversation,
+force-cancels a wedged job and starts a fresh one, and renders the healthy / stalled / stopping lines. New
+`desktop/acp.test.ts` (8 tests) pins the request contract including the happy path. Cancellation tests
+added to importer / distiller / import_job / import_progress. Demos 1, 1b, 2, 3, 4 still pass; desktop
+`tsc --noEmit` clean; the renderer bundles. NOT verified here: an end-to-end run against a real wedged
+omp on the user's machine, which is what the bounds exist to make impossible.
+
+### Next
+
+- Thread the abort signal through `harness/kb/batch_ingest` -> `ingest` -> `compiler` so KB compile
+  cancels between DOCUMENTS as well as within a call; its own increment.
+- Surface `stalled` in the KB ingest pill too (it shares the pattern, not the formatter).
+
+## ADR-0265 -- P-FS.2: the browser build opens the REAL OS folder dialog
+
+**Date:** 2026-08-03
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+ADR-0264 made every folder pick go through `pickFolderDialog()`, which opens the native Explorer/Finder
+dialog IN ELECTRON. But the default launch path (`LucidAgentIDE.bat` / `lucid.exe`) serves the GUI to a
+PLAIN BROWSER where no `window.lucid` preload exists, so every pick ("Choose a chat export or Obsidian
+markdown folder", KG pack import/export, save-to, workspace) fell back to the in-app dark browser: the
+cramped Up/Home dialog with no path typing, no Quick access, no search. Users asked for the native OS
+folder tool.
+
+### Decision
+
+The GUI server RUNS ON THE SAME MACHINE as that browser (loopback-only bind, ADR-0022 H1), so it can open
+the native dialog itself and hand the path back over the authenticated bridge.
+
+1. **`desktop/native_dialog.ts`** owns the per-platform dialog. win32: powershell (STA) compiles a small
+   C# COM interop and shows the MODERN `IFileOpenDialog` with `FOS_PICKFOLDERS` - the same Explorer picker
+   Electron shows - owned by the foreground window so it lands on top; NOT the legacy
+   `System.Windows.Forms.FolderBrowserDialog` tree. darwin: `osascript choose folder`. linux: zenity, then
+   kdialog (needs a display server). Caller text rides env vars (win32) or a single argv element
+   (darwin/linux): titles are never spliced into a shell-parsed string.
+2. **A three-state result contract** (`NativePickResult`): `supported:false` (headless, no dialog binary,
+   spawn failed, dialog already open) tells the renderer to fall back to the in-app browser (ADR-0103);
+   `supported:true, path:null` is a real user CANCEL and must NOT re-prompt; `supported:true, path` is the
+   pick. Stdout parsing is marker-anchored (`LUCID_PICKED::` / `LUCID_CANCELLED::`) so compiler noise can
+   never be read as a path. One dialog at a time; a 10 minute reaper kills a truly abandoned one.
+3. **`POST /api/fs/pickfolder`** (dev.ts, behind the existing loopback + token transport gates) exposes it;
+   `bridge.pickFolderNative()` calls it; `pickFolderDialog()` (app.ts) now tries Electron preload ->
+   backend native -> in-app browser, in that order. Every existing picker call site inherits the fix.
+
+No new confinement hole: the Electron `lucid:pickFolder` path already returned unconfined paths; workspace
+validation happens where the path is USED, unchanged.
+
+### Alternatives rejected
+
+- **`window.showDirectoryPicker()` in the browser.** Returns a sandboxed handle, not a filesystem path;
+  the backend needs the real path.
+- **`FolderBrowserDialog` via WinForms.** One-liner, but it IS the cramped legacy tree on Windows
+  PowerShell 5.1 / .NET Framework - the exact complaint, restated in native chrome.
+
+### Verification
+
+`make demo-P-FS.2` (bun test `desktop/native_dialog.test.ts`): modern-dialog contract pinned (CLSID +
+FOS_PICKFOLDERS present, `FolderBrowserDialog` absent, env-var text passing), marker-anchored stdout parse
+(picked/cancelled/garbage/noise/empty-path), AppleScript quote escaping, linux argv shape. The C# interop
+was compiled live on this Windows 10 machine via a compile-only probe (`Add-Type` + type load succeeded);
+`Show()` itself is interactive and was not exercised headlessly - first real click is the smoke test, and
+every failure path degrades to the in-app browser. `tsc --noEmit` clean.
+
+### Next
+
+- The `defaultPath` seam (open the dialog at the current workspace) exists in the Electron path; thread it
+  through the backend path when a caller wants it.
+
+## ADR-0266 -- P-DATA.1: the frozen data-integration steer (prefix v10)
+
+**Date:** 2026-08-03
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+Untrained users wire datasets into the agent the wrong way: pasting huge exports, tables, logs, or "here
+is my database" text into the prompt, or asking the agent to keep a dataset "in the prompt". That rots the
+context (mid-prompt facts get ignored or hallucinated over), re-bills the same tokens every turn, and
+moves data outside whatever access controls its real store enforces. Nothing steered the chat agent to
+intercept this and teach the correct path.
+
+### Decision
+
+A new frozen layer-3 policy, `DATA_INTEGRATION_POLICY` (`<data-integration>`), added to the byte-stable
+prefix (PREFIX_VERSION 9 -> 10) and to the live omp chat's `--append-system-prompt` chain (acp_backend),
+like every prior layer-3 policy. It instructs the agent, when it sees prompt-stuffing, to briefly explain
+context rot and route the user, in order: (1) NATIVE ingest when LUCID already handles the source
+(workspace files, the Knowledge panel import); (2) an MCP server for live external datastores, with
+scoped read-only credentials by NAME in the vault; (3) a real RAG pipeline for document knowledge (clean +
+dedupe, semantic chunks with metadata, embed + index, top-K retrieval, retrieved text treated as untrusted
+DATA, re-index on change); (4) for GraphQL / cloud vendor sources, the vendor's OFFICIAL docs + a
+least-privilege token in the vault + exact-host egress, ideally behind MCP or an Agent Builder approval
+step. Declared fallback: users who decline these routes (or need an integration with no native/MCP path)
+are told to contact nicholas.chadwick.ctr@gmail.com and request a contract for their custom integration.
+
+### Alternatives rejected
+
+- **A tail-injected (volatile) hint.** The steer must be always-present and byte-stable; layer 3 is the
+  established home for standing behavioral policy, and the tail would re-bill it uncached.
+- **A hard input gate on large pastes.** Blocking is hostile and wrong (big pastes are sometimes
+  legitimate); teaching at the moment of misuse is the product's pattern.
+
+### Verification
+
+`harness/prompt/assembler.test.ts`: new test pins `<data-integration>`, the context-rot explanation, the
+MCP + top-K RAG guidance, and the contact fallback into `FROZEN_PREFIX`; the existing prefix-hash tests
+prove the prefix still changes ONLY with the version bump and stays byte-identical across volatile state.
+All 21 tests in the demo suite pass; `tsc --noEmit` clean.
+
+### Next
+
+- A `/connect-data` slash command that runs the same interview interactively and ends in the Agent
+  Builder with a drafted MCP-backed workflow; its own increment.
+
+## ADR-0267 -- P-STT.6: Whisper model housekeeping (offer small tiers only, gray out, remove)
+
+**Date:** 2026-08-03
+**Status:** Accepted -- BUILT.
+
+### Problem
+
+Field experience: the medium / large-turbo weights through the managed local `whisper-server` are slow to
+load and buggy - exactly the tiers a big-RAM machine got RECOMMENDED by the capability gate. Meanwhile the
+Voice card's model picker silently HID tiers the hardware could not run (filtered out, no explanation),
+and once a model was downloaded there was no way to delete it: a 1.5GB medium/large install from an
+earlier version squatted on disk forever.
+
+### Decision
+
+1. **Offered set** (`OFFERED_TIERS = tiny/base/small`, whisper_install.ts). `planWhisperInstall` refuses a
+   non-offered tier fail-closed - one choke point that gates BOTH install and start (start plans through
+   it). The default tier and the status recommendation/summary CLAMP to the offered set
+   (`offeredRecommendation`), so a workstation now defaults to `small`, never `large-turbo`.
+2. **Gray out, never hide** (whisper_runtime.ts + app.ts). `WhisperTierView` gains `offered`, `reason`,
+   `approxMB`, `diskMB`; the picker renders every OFFERED tier and disables a non-runnable one with the
+   capability gate's own reason in the label, so a constrained machine sees why a tier is unavailable.
+3. **Removal** (`removeWhisperModel` + `POST /api/whisper/remove` + a per-row Remove button). Every
+   downloaded model - offered or not - lists under the picker with its REAL on-disk size; Remove deletes
+   the weights. Fail-closed: the tier the running server has loaded is refused ("stop it first"), a
+   filesystem failure is reported not thrown, an absent file is idempotent-ok, and a build without the
+   injected remover says so. Legacy medium/large installs surface with a "not offered" badge; removal is
+   their ONLY offered action. The list renders even on an incapable machine (reclaiming disk is exactly
+   what such a machine wants).
+4. **TTS engine graying** (loadVoices, app.ts). The Settings Voice card's TTS engine select now mirrors
+   the composer voice menu's established "needs setup" treatment: an engine that cannot speak on this
+   machine right now (no Kokoro server answering, missing cloud key) is disabled with the reason on the
+   option, EXCEPT the currently selected engine - an in-progress setup is never locked out. LUCID
+   installs nothing for TTS (Kokoro is a self-hosted server), so there are no TTS weights to remove.
+
+### Alternatives rejected
+
+- **Dropping medium/large from the catalog entirely.** Would orphan existing installs invisibly - the
+  catalog entry is what lets the UI name, size, and DELETE the legacy file.
+- **Auto-deleting non-offered installs on upgrade.** Deleting user disk content without a click is
+  hostile; a labeled Remove button keeps the user in charge.
+- **Auto-stopping the server on Remove of the active tier.** Silently killing live dictation to service a
+  disk-cleanup click inverts priorities; the refusal names the fix.
+
+### Verification
+
+`make demo-P-STT.6` (whisper_install + whisper_runtime suites, 63 tests across the 5 whisper files):
+offered set pinned, explicit medium refused on capable hardware with a "no longer offered" reason, default
+and summary clamp on a 512GB spec, non-runnable tiers carry gray-out reasons, diskMB reported only when
+installed, remove deletes / is idempotent / refuses the running tier until stop / reports fs failure /
+fail-closes without a remover. demo-P-STT.2 still passes (capability gate untouched). `tsc --noEmit`
+clean. NOT exercised headlessly: the DOM click paths (Remove button, grayed options) - typechecked and
+rendered from the tested view model.
+
+### Next
+
+- Purge-all button ("remove every model not in use") if users accumulate several tiers.
+- Consider surfacing the whisper model dir path in the card for manual inspection.
+
+## ADR-0268 -- P-FLEET.1: async job handles through the Agent Firewall (the Chief-of-Staff fan-out) (SCOPE/PLAN)
+
+**Date:** 2026-08-14
+**Status:** Accepted -- SCOPE/PLAN. No code in this ADR. P-FLEET.1 is the next session's increment;
+P-FLEET.2 (worker supervisor + health), .3 (fleet panel + the fleet EventName contracts increment), and
+.4 (agent-to-agent threads) are each their own session.
+**Increment:** P-FLEET.1. A refinement of the P-AGENTFW.1 firewall's TOOL SURFACE (ADR-0147), not a new
+surface: no new process, no new transport, nothing new on disk.
+
+### Context
+
+The fleet shape the user asked for (a Chief-of-Staff LUCID that hands work to worker LUCIDs and reports
+back) needs almost no new machinery, because every LUCID install already IS a gated headless agent:
+`lucid acp` speaks ACP over stdio, and a firewall registry entry stores an arbitrary `command` + `args`
+(`RemoteAgentEntry`, registry.ts:29-46). So a worker on another machine is the entry
+`command: "ssh", args: ["vps1", "lucid", "acp"]`, and N specialist lanes on one box are N entries with
+different cwd/model args. Each enabled entry is spawned by omp as its own stdio MCP server named
+`agentfw-<id>` (registry.ts:124), so the CoS model reaches worker `vps1` as the tool
+`mcp__agentfw-vps1_prompt` (omp's verified naming rule: desktop/mcp_probe.ts:34-39). Every hop already
+crosses the fail-closed gate in both directions and every reply already arrives delimited and
+trust-labeled (ADR-0147), which is precisely what a Grok-style bot fleet does not have.
+
+One thing blocks the fan-out, and it is small: **the firewall exposes exactly one tool, and that tool is a
+blocking round-trip.**
+
+- `AgentFirewall.tools()` returns a single tool, `prompt` (agent_firewall.ts:61-64), whose handler awaits
+  `handlePrompt` end to end: outbound scan (agent_firewall.ts:82) -> `remote.prompt()`
+  (agent_firewall.ts:91) -> inbound scan of the whole turn (agent_firewall.ts:100-101) -> wrap
+  (agent_firewall.ts:111). The CoS's tool call IS the wait. Two workers means two sequential tool calls;
+  ten workers means ten. Nothing can be started and left running.
+- The worker turn is capped at two minutes and the registry cannot raise it: `promptTimeoutMs` defaults to
+  120_000 (acp_client.ts:99) and `runAgentFirewall` constructs the client without passing one
+  (agent_firewall.ts:156-159). A twelve-minute refactor on a VPS therefore cannot finish. P-STALL.1
+  (ADR-0186) already settled that a real turn deserves ten minutes of patience.
+- Concurrency inside one connection is not merely missing, it is currently **unsafe**: one
+  `AcpAgentClient` holds ONE `#sessionId` (acp_client.ts:87) memoized by `#ensureSession`
+  (acp_client.ts:141-160), and `prompt()` RESETS the per-turn collectors on entry (acp_client.ts:106-108).
+  Two overlapping prompts on one client would interleave into one remote session and one set of
+  collectors, so replies would cross between jobs.
+
+The increment: make dispatch return a handle instead of a reply, bound the worker turn honestly, and keep
+every byte that reaches the model on exactly the path it takes today.
+
+### Decision - the job handle
+
+The firewall keeps ONE execution path (today's `handlePrompt` body, moved into `#runJob`) and exposes four
+tools over it, per connection, so the CoS sees `mcp__agentfw-<id>_dispatch` and friends.
+
+1. **`dispatch({ prompt, key? })` -> a handle, immediately.** Scans outbound FIRST (same scan, same
+   policy), so an injection-relay block is still reported at the call that tried to send it and a poisoned
+   prompt never sits in a queue. On pass it mints `job-<8 hex>` (`randomUUID().slice(0, 8)`, the harness id
+   convention: registry.ts:86, harness/agent/spec.ts:146; re-rolled on collision, never reused), admits it,
+   and returns `{ job_id, state, queue_position }` as first-party text. Optional `key` makes dispatch
+   idempotent: while a job with that key is live the same `job_id` comes back and no second worker turn
+   starts, so a model retry cannot double-run a VPS.
+2. **`job_status({ ids? })`.** With ids: the per-job record, and for a terminal job the FULL post-gate
+   envelope, byte-identical to what `prompt` returns today (agent_firewall.ts:123-130). Without ids: a
+   compact table of every job on this connection, **metadata only** (state, age, elapsed, queue position,
+   progress counts, a "check again in about N seconds" hint), so harvesting ten workers costs one tool call
+   and does not re-bill ten envelopes.
+3. **`cancel({ id })`.** A queued job is dropped before the remote is ever reached; a running job goes
+   through `AcpAgentClient.cancel()` (acp_client.ts:129-131, the ACP `session/cancel` notification) and
+   lands `cancelled`. The SIGINT/SIGTERM handlers already in `runAgentFirewall`
+   (agent_firewall.ts:180-182) cancel every live job before `remote.stop()`, so shutdown never orphans a
+   worker turn (the P-STT.5 lesson: a process that "stops" without running its handlers leaves the child
+   alive).
+4. **`prompt({ prompt, wait_ms? })` stays**, re-implemented as `dispatch` plus a bounded inline wait ON the
+   job core (not a second implementation). Finishes in time -> today's envelope, one tool call, unchanged
+   bytes. Runs long -> returns the handle with a note to call `job_status`, and the job keeps running. That
+   is what stops a long worker turn from dying inside a tool call.
+
+### The states are a closed set, and "unknown" is an error
+
+`queued | running | done | blocked | error | timeout | cancelled`. Everything but the first two is
+terminal. Two rules make the set load-bearing:
+
+- **An unknown `job_id` is an explicit error result, never "running".** The job table lives in the firewall
+  process, so a restarted firewall has an empty table; answering "still running" for an id nobody owns
+  would park the CoS forever on a worker that no longer exists. "Unknown job" is the fail-closed answer
+  (invariant #3) and a distinct, testable outcome.
+- **Every non-`done` terminal state carries a redacted reason and no payload.** `blocked` is the gate's
+  verdict (outbound relay block or inbound quarantine), `error` is the remote's own failure, `timeout` is
+  the deadline. None of them ever carries remote text.
+
+### Why progress is metadata and never text (the load-bearing security decision)
+
+The obvious "stream the worker's output as it arrives" is refused on purpose. The inbound scan covers the
+WHOLE turn, once (agent_firewall.ts:100-101). Scanning per chunk would hand an adversarial worker a
+trivial evasion: split a bidi-control or zero-width sequence across two `session/update` notifications and
+each chunk scans clean while the model's context reassembles the vector. Therefore:
+
+- `job_status` returns counts and ages only: text chars produced, tool-activity lines, permission asks, ms
+  since last activity. Never a character of remote text.
+- The rule is enforced in the TYPE, not in a comment: the new `onProgress` hook on
+  `AcpAgentClientOptions` carries a counts-only struct with no text field, so no future caller can leak
+  partials through it.
+- Text arrives exactly once, atomically, after the whole-turn scan, in the existing envelope.
+
+That is still a live progress signal (is it working, is it stuck, how long since it last did anything),
+which is what the CoS needs in order to decide between waiting and cancelling.
+
+### Fan-out is across connections; inside one connection, jobs serialize
+
+Given acp_client's single session and per-turn collectors, P-FLEET.1 sets `maxInFlight = 1` per connection
+and QUEUES the rest visibly (`queued` + `queue_position`), with a queue cap (default 8) beyond which
+dispatch refuses rather than silently accumulating pending worker turns. Parallelism comes from having
+many connections, which is exactly the fleet shape: three VPS workers plus four local lanes are seven
+firewall processes with seven independent job tables, all in flight at once. Real per-connection
+concurrency needs a session POOL (a `#sessionId` per job, notification routing by `sessionId` into per-job
+collectors) and is deliberately a later increment, not smuggled in here.
+
+Deadline: a new optional `jobTimeoutMs` on `RemoteAgentEntry` (default 600_000, P-STALL.1's ten minutes)
+is plumbed into `AcpAgentClient` as `promptTimeoutMs` at agent_firewall.ts:156-159. Additive optional
+field, so existing registry files load unchanged (`isEntry` validates only id/command/args:
+registry.ts:131-134).
+
+### Custody: what a job record holds, and where it lives
+
+- **Post-gate only.** The record stores the wrapped, delimited, trust-labeled envelope, or a redacted
+  reason. The raw reply is scanned and then dropped; it is never a field. There is therefore no code path,
+  present or future, that can hand out unscanned worker output.
+- **In the firewall process, in memory.** Not DuckDB (invariant #10 untouched, no migration): a job is
+  ephemeral run state, and ADR-0043 already drew the line that tool I/O is provenance, not durable
+  knowledge. It also keeps an omp-spawned subprocess from becoming a second writer to the frozen schema.
+- **Not on disk at all.** The registry file keeps storing configuration only (registry.ts custody note,
+  mode 0600). Worker prompts and replies never land in `~/.omp/lucid-agents.json`.
+- **Durable audit is P-FLEET.3's job.** Today `FirewallEvent` is a process-local shield line on stderr
+  (agent_firewall.ts:37-43, 166-168). P-FLEET.1 adds `jobId` + state to it and stops there. contracts.ts
+  is NOT touched and no new `EventName` is added (invariant #8 stays an untouched frozen contract); the
+  fleet's real events, `fleet_job_dispatched` / `fleet_job_completed` / `fleet_job_blocked`, are NAMED here
+  and deferred to the P-FLEET.3 contracts increment, exactly as P-SANDBOX and P-KB.1 deferred theirs.
+
+### Invariants preserved
+
+- **#1 extend, never fork.** Four tools on our own first-party MCP server. omp is untouched.
+- **#3 fail-closed.** Every new outcome is a terminal state with no payload: dead scanner -> `blocked`
+  (`scanAndDecide` already blocks fail-closed), dead remote -> `error`, deadline -> `timeout`, unknown id
+  -> error result, firewall restart -> unknown id. No state means "we could not scan, so here it is."
+- **#4 the gate acts in-process.** Deferring DELIVERY does not move the gate: the firewall's own scan is
+  unchanged, and whatever `job_status` hands over crosses omp's in-process MCP result gate
+  (harness/omp/mcp_result_gate.ts, ADR-0152) at the moment it enters the model's context, because these
+  tools carry `mcp__` names like every other MCP tool.
+- **#5 delimited and late.** Same `#wrap` envelope, same UNTRUSTED_CONTENT delimiters, same
+  `neutralizeDelimiters` breakout defense, arriving in the tool-result tail as today.
+- **#6 the prefix is frozen.** Zero prefix bytes change. Fan-out guidance rides the per-connection tool
+  descriptions, which are volatile and travel in the MCP handshake.
+- **#7 trust labels.** Unchanged: `untrusted`, or `suspicious` when the scan demotes
+  (agent_firewall.ts:109). Never `trusted`.
+- **#9 stable ids.** One `job-<8 hex>` per logical job, minted once, never regenerated.
+
+### File-by-file (P-FLEET.1)
+
+- **`harness/mcp/jobs.ts` (new, pure).** The job table and its state machine: `admit()` (dedupe by key,
+  queue cap, position), `start()`, `finish()`, `fail()`, `expire()`, `cancel()`, `view()` / `viewAll()`.
+  No I/O, no timers of its own, clock injected. The closed state set and the unknown-id rule live here.
+- **`harness/mcp/agent_firewall.ts`.** `handlePrompt`'s body becomes `#runJob(jobId, promptText)`;
+  `tools()` returns the four tools; the class owns the job table; the SIGINT/SIGTERM path cancels live jobs
+  before `remote.stop()`; `FirewallEvent` gains `jobId?` and `state?`.
+- **`harness/mcp/acp_client.ts`.** Accept and use the entry's `promptTimeoutMs`; add the counts-only
+  `onProgress` hook, fired from the existing notification handler; `cancel()` becomes the running-job
+  cancel.
+- **`harness/mcp/registry.ts`.** `RemoteAgentEntry.jobTimeoutMs?` and `.maxQueue?` (optional, additive),
+  passed through by `runAgentFirewall`.
+- **`harness/mcp/jobs.test.ts` (new)** for the pure table; **`harness/mcp/agent_firewall.test.ts`**
+  extended for the tool surface. The existing nine firewall tests and six integration tests stay green
+  unchanged, since `prompt`'s successful path stays byte-identical.
+- **`harness/scripts/demo_pfleet1.ts`** plus a `demo-P-FLEET.1` target beside `demo-P-AGENTFW.1`
+  (Makefile:444-446).
+- **`docs/AGENT-FIREWALL.md`.** A "Running several workers" section: the four tools, the serialization
+  rule, and the `ssh` worker entry.
+
+### Verification plan (`make demo-P-FLEET.1`)
+
+Against the FakeRemote and fake-ACP-subprocess harnesses the firewall tests already use
+(agent_firewall.test.ts, agent_firewall.integration.test.ts):
+
+1. `dispatch` returns a `job_id` while a deliberately slow fake remote is still working (non-blocking).
+2. Two firewalls, two slow remotes: both jobs are `running` at the same instant. This is the fan-out
+   proof, and the thing that is impossible today.
+3. Job completes -> `job_status({ ids })` returns an envelope byte-identical to `prompt`'s on the same
+   reply (pins the ADR-0147 wrap).
+4. Poisoned reply -> `blocked`, and the stored record contains neither the poison nor any remote text.
+5. Outbound hidden vector -> `dispatch` refuses, NO job is created, and the fake remote saw nothing.
+6. Scanner killed mid-job -> terminal `blocked` with `failClosed`, never `done` (the invariant #3 kill
+   test, now per job).
+7. Unknown id -> error result; a fresh firewall reports a previously issued id as unknown, never
+   "running".
+8. Deadline exceeded -> `timeout`, `session/cancel` sent, remote stopped, no leaked child.
+9. `cancel` on a queued job: dropped, remote never reached. On a running job: `session/cancel` sent, state
+   `cancelled`.
+10. Two dispatches on ONE connection: the second is `queued`, the fake remote sees the prompts strictly
+    sequentially, and each envelope maps to its own job (no collector crossing).
+11. The same `key` twice while live -> one job, one remote turn, the same id returned twice.
+12. Dispatch past the queue cap -> error result, queue length unchanged.
+13. `job_status({})` on a mixed table returns metadata only: no envelope text for any job, including the
+    finished one.
+14. `prompt` with a fast remote returns the envelope inline; with a slow remote it returns the handle, and
+    the job is collectable afterwards.
+15. SIGTERM with a job running -> cancel, then stop, in that order.
+
+Plus: `demo-P-AGENTFW.1` stays green untouched, and `tsc --noEmit` clean.
+
+### Open questions
+
+- **omp's own MCP tool-call ceiling.** `prompt`'s inline wait must sit under whatever the pinned omp
+  bundle allows a `tools/call` before it gives up. Unmeasured. First task of the increment: measure it
+  against the pinned bundle, set the default `wait_ms` below it (proposal: 90s), and say the number in the
+  tool description.
+- **Deadline default.** 600s from P-STALL.1 for everyone, or per-entry from the start? Leaning per-entry
+  with a 600s default, since a local lane and a VPS refactor deserve different patience.
+- **VPS orphans.** A SIGKILLed firewall's local child dies with it, but `ssh vps1 lucid acp` can leave a
+  worker turn running on the far side. Keeping a remote worker honest is exactly P-FLEET.2 (supervisor +
+  health), not something a job table can fix.
+- **Cross-connection "wait for any".** A real scheduler would want it, and it implies a process above the
+  per-connection firewalls. Deliberately out of scope: N cheap `job_status` polls are the honest version
+  until P-FLEET.3 has a fleet view to hang it on.
+
+### Relates to
+
+- ADR-0147 (P-AGENTFW.1) - the firewall, the bidirectional gate, and the `prompt` tool this refines.
+- ADR-0149 (P-AGENTFW.2/.3) - the Remote-agents Settings surface and per-connection policy the new entry
+  fields extend.
+- ADR-0152 (P-MCP-GATE.1) - the in-process MCP result gate that re-scans every deferred hand-off.
+- ADR-0186 (P-STALL.1) - where the ten-minute patience number comes from.
+- ADR-0264 (P-KG-INGEST.5) - the same lesson on the desktop ACP client: bounded requests, pending calls
+  drained on death, cancel threaded end to end.
+- ADR-0076 (P-KG-INGEST.1) and `desktop/import_job.ts` - the house job pattern this mirrors (mint an id,
+  in-memory state, poll a view, soft-then-hard cancel, test-only reset seam).
+- ADR-0043 - tool I/O is provenance, not durable knowledge; why the job table is not a database.
+- P-FLEET.2 (worker supervisor + health endpoint), P-FLEET.3 (fleet panel on desktop + PWA, and the fleet
+  EventName contracts increment), P-FLEET.4 (agent-to-agent threads through the firewall, each hop
+  scanned) - the rest of the map.
+
+## ADR-0269 -- P-VOICE.7: varied openers, active-listening restatement, and spoken thinking snapshots
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+P-VOICE.6 (ADR-0249) fixed dead air in conversation mode, but every turn opened with the SAME canned line
+("Got it. Thinking this through."), which reads as a recording, not a listener. And past the third cue a
+genuinely long think went silent again - the cues said "working" without ever saying WHAT the agent was
+working on, even though the reasoning stream was right there in the renderer.
+
+### Decision
+
+Extend `nextThinkingCue()` (still pure - state in, cue out; the caller passes a per-turn `seed` so variety
+is deterministic and testable) with three behaviors:
+
+1. **Twelve seeded openers.** One seed per turn: a turn keeps one register, back-to-back turns vary.
+2. **Active listening.** New pure `distillTopic(prompt)` distills the ask into a short fragment (strips
+   code/links/greetings/"can you" wrappers); when it can be restated FAITHFULLY (8-72 chars, speakable),
+   the opener restates it via one of six colon/comma templates ("Got it: {topic}. On it now."). When it
+   cannot, it returns null and the plain opener is the honest fallback - a mangled echo is worse than none.
+3. **Thinking snapshots.** New pure `thinkingSnapshot(thinking, lastSnapshot)` lifts the newest complete,
+   speakable sentence (24-160 chars, no code/URLs/fragments; URLs are neutralized BEFORE sentence-splitting
+   so a severed URL tail can never slip past the filter) out of the reasoning stream. Cues 2-3 prefer a
+   fresh snapshot over canned filler; past the old cap of three, snapshot-only cues continue every
+   SNAPSHOT_GAP_MS (30s) for as long as the thinking genuinely moves forward, hard-capped at MAX_CUES (8).
+   A stalled think returns null (never re-speaks, never narrates backwards).
+
+Return type changed from `string | null` to `{ text, snapshot } | null` so the renderer records which
+snapshot was consumed without recomputation guessing. The renderer (`desktop/renderer/app.ts`) accumulates
+`thinkBuf` from `thinking` events, passes `distillTopic(text)` + a per-turn random seed, and stores
+`cue.snapshot` back as `lastSnapshot`.
+
+### Restraint rules unchanged
+
+Escalating gaps (2.6s/11s/22s), silence once the answer speaks, never queued behind playing audio, gap
+measured from the last thing SPOKEN. `thinking_cues.ts` is not a frozen contract file; its only consumer
+is the renderer, updated in the same increment.
+
+### Verified
+
+13 thinking_cues tests (twelve distinct openers; same seed = same line; restatement contains the topic and
+varies across six templates; distillTopic refuses thin/long/markup asks; snapshot beats filler and is
+echoed in `snapshot`; stalled think falls back then goes silent past cue 3; slow cadence enforced; code/
+URL/fragment sentences rejected; every cue markdown-free, sentence-final, bounded). 73 voice tests green;
+`tsc --noEmit` clean. Full-suite failures on the dev box predate this change (version-bump test, Windows
+path handling, vendored omp suites) - none in harness/voice or the renderer paths touched here.
+
+### Relates to
+
+- ADR-0249 (P-VOICE.6) - the cue engine and restraint rules this extends.
+- ADR-0247 (P-VOICE.2) - speakable() and the speech queue the cues ride on.
+
+## ADR-0270 -- P-FLEET.1 BUILT: job handles through the Agent Firewall, and the deltas from the plan
+
+**Date:** 2026-08-19
+**Status:** Accepted -- BUILT. Supersedes nothing; records the build of ADR-0268's plan and its four
+deltas. ADR-0268 remains the design of record.
+
+### What shipped (per ADR-0268's file-by-file, all delivered)
+
+- `harness/mcp/jobs.ts` (new, pure): the JobTable + closed state set (`queued | running | done | blocked |
+  error | timeout | cancelled`), sticky terminals (a cancelled job whose remote turn later settles can
+  NEVER become done), key dedupe, queue cap (default 8), unknown-id rule, metadata-only `viewAll()` whose
+  projection type has no envelope field. Clock and id minting injected; ids `job-<8 hex>`, re-rolled on
+  collision, never reused.
+- `harness/mcp/agent_firewall.ts`: `handlePrompt`'s body became `#runJob` (ONE execution path); `tools()`
+  returns `prompt` (FIRST - pinned by tests), `dispatch`, `job_status`, `cancel`; `#pump()` enforces
+  maxInFlight=1 per connection; `FirewallEvent` gained `jobId?` + `state?`; the SIGINT/SIGTERM `stop()`
+  cancels live jobs BEFORE `remote.stop()`. Every terminal outcome returns exactly the strings the
+  blocking path returned - check 3 pins the done envelope byte-identical.
+- `harness/mcp/acp_client.ts`: counts-only `onProgress` (`AcpProgress` has NO text field, enforcing the
+  anti-chunk-evasion rule in the type); `AcpTimeoutError` so the firewall can land `timeout`, not `error`.
+- `harness/mcp/registry.ts`: additive `jobTimeoutMs?` (default 600_000 via the firewall wiring) and
+  `maxQueue?`; `isEntry` untouched, so existing registry files load unchanged.
+- `harness/mcp/jobs.test.ts` (11 tests), 14 FLEET tests in `agent_firewall.test.ts`,
+  `harness/scripts/demo_pfleet1.ts` + `make demo-P-FLEET.1` (all fifteen ADR-0268 checks),
+  `docs/AGENT-FIREWALL.md` section 5 "Running several workers".
+
+### Delta 1 - the inline wait is 25s, not the proposed 90s (the measured ceiling)
+
+ADR-0268's open question is answered: the pinned omp bundle times out one MCP `tools/call` at
+`DEFAULT_MCP_TIMEOUT_MS = 30_000` (vendor mcp/timeout.ts; env `OMP_MCP_TIMEOUT_MS`; per-server `timeout`
+is not set by our registry's mcpServers entries). A 90s inline wait would die on the transport and hand
+the model an error instead of a handle. `DEFAULT_PROMPT_WAIT_MS = 25_000`, requested `wait_ms` is CLAMPED
+there, and both numbers are stated in the tool description (`OMP_TOOL_CALL_CEILING_MS = 30_000` is
+exported beside it with the measurement note).
+
+### Delta 2 - cancel/timeout of a running turn force-stops the remote after a grace window
+
+Not in the plan, but load-bearing: the pump starts the next queued job only when the current prompt
+promise SETTLES. A cancelled or timed-out turn whose remote ignores `session/cancel` would wedge the queue
+forever behind an un-settling promise - and pumping anyway would cross collectors (the exact unsafety
+ADR-0268 documents). So: cancel sends `session/cancel`, waits `cancelGraceMs` (default 5s, injectable),
+then `remote.stop()` if the turn has not settled - the child dies, the pending promise rejects, terminal
+stickiness swallows the late rejection, the queue pumps, and the next job gets a fresh session. The
+timeout path stops immediately (the deadline already waited). Demo checks 8b and 9 pin both.
+
+### Delta 3 - `handlePrompt(text, waitMs?)` kept as the public seam
+
+The plan said "prompt stays, re-implemented over the job core". Concretely: the existing public
+`handlePrompt` gained an optional `waitMs` (undefined = unbounded, the direct-call/test path; the MCP tool
+always passes a bounded wait). All nine pre-FLEET firewall tests and six integration tests pass unchanged,
+which is the byte-compat proof.
+
+### Delta 4 - the fake ACP agent gained a `hang` mode
+
+`harness/mcp/testing/fake_acp_agent.ts` now supports `FAKE_ACP_MODE=hang`: never answers
+`session/prompt`, answers `session/cancel` faithfully with stopReason "cancelled". Demo check 8a drives
+the REAL AcpAgentClient stdio transport into a genuine `AcpTimeoutError` with it.
+
+### Verified
+
+`make demo-P-FLEET.1` green (all fifteen ADR-0268 checks, including two firewalls with both jobs provably
+running at the same instant, and a scanner killed mid-job landing `blocked`+fail_closed and never `done`).
+`demo-P-AGENTFW.1` green untouched. 144 mcp+voice tests pass (11 jobs, 14 FLEET, all pre-existing green).
+`tsc --noEmit` clean. contracts.ts untouched; the fleet EventNames stay deferred to P-FLEET.3 as planned.
+
+### Relates to
+
+- ADR-0268 - the plan this builds; its open questions on the ceiling (answered: 30s) and the deadline
+  default (per-entry `jobTimeoutMs`, 600s default) are now settled in code.
+- ADR-0147 / ADR-0152 / ADR-0186 - unchanged foundations (gate, MCP result gate, patience number).
+- P-FLEET.2/.3/.4 - unchanged roadmap (supervisor, fleet panel + EventName contracts, agent threads).
+
+## ADR-0271 -- P-FLEET.L1: local lanes + the fleet grid dashboard
+
+**Date:** 2026-08-19
+**Status:** Accepted -- BUILT.
+**Increment:** P-FLEET.L1. Sits BESIDE the P-FLEET roadmap (ADR-0268): P-FLEET.2 (remote worker
+supervisor + health) and P-FLEET.3 (PWA fleet panel + the fleet EventName contracts increment) remain as
+mapped; this increment is the LOCAL flavor the user asked for first - concurrent lanes on one machine
+with a desktop dashboard.
+
+### Context
+
+P-FLEET.1 gave the master agent job handles to REMOTE workers through the agent-firewall. The user's next
+ask was local: run several LUCID agents on THIS machine, each on its own repo and model, visible as live,
+editable mini windows in a grid, capped so the machine stays usable, reporting to the orchestrator.
+
+### Decision - a lane is one more gated omp, not one more engine
+
+The engine backend already holds one ACPClient to a GATED omp subprocess. A lane reuses exactly that:
+`fleetLaneArgv()` (exported by acp_backend.ts, the ONE source of truth for the gate path so a lane can
+never spawn ungated by drift) builds `omp acp -e GATE -e MCP_RESULT_GATE -e ASKSAGE [--config acp_config]`
+WITHOUT the renderer-coupled extensions (preview/agent-builder/slash-command/fleet_status - no canvas, no
+recursion), and `FleetLaneManager` (desktop/fleet_lanes.ts) drives one ACPClient + one ACP session per
+lane (own cwd via session/new, own model via session/set_config_option - the same mechanism the master
+uses, defaulting to the master's current model).
+
+Key rules:
+- **75% headroom guard** (desktop/fleet_resources.ts): pure admission verdict over system_profile's
+  existing sample (P-SYSRES.1 - NOT re-implemented). Three gates: core-derived lane ceiling
+  (min(6, cores/2)), memory watermark 75%, CPU watermark 75%. Refusals carry the measured number. Fails
+  OPEN on missing evidence (UX guard doctrine, matching system_profile), but the ceiling always applies.
+- **One turn at a time per lane** (one session, per-turn collectors - the ADR-0268 crossing lesson);
+  parallelism is across lanes.
+- **Fail-closed approvals**: every session/request_permission surfaces as needs-approval in the lane's
+  mini window; silence (10 min) or a closed dashboard is a DENY. No standing allowlists in L1. The in-omp
+  security gate (-e GATE) still scans every tool call inside the lane regardless.
+- **ACP cancel semantics**: session/cancel RESOLVES the prompt with stopReason "cancelled" (it does not
+  reject) - a cancelled turn lands awaiting-input, never done and never error.
+- **Metadata-only reporting**: /api/fleet/status (and the master's `fleet_status` tool, registered by
+  harness/omp/fleet_extension.ts via the preview-extension pattern: token'd LUCID_FLEET_STATUS_URL env)
+  carries states, ages, counts - never lane reply text. Lane replies render in the mini windows only.
+- **Shutdown hygiene**: dev.ts exit/SIGINT/SIGTERM run fleet.stopAll() - deny open asks, cancel live
+  turns, kill every child. No orphaned lane.
+
+### The dashboard (desktop/renderer/fleet_grid.ts)
+
+A share-dock-framed panel (lucid.fleetDock.* keys, drag/resize/snap/minimize-to-pill like the join dock)
+holding a CSS grid (repeat(auto-fill, minmax(280px,1fr))) of lane cards: LED + name + cwd chip + model
+dropdown + collapse + stop in the header; streaming output (tokens live, thinking dimmed, tools as
+chips); an approval bar with Allow/Deny; a per-lane composer. The FRAME is the status surface: working =
+cyan pulse (LED), awaiting-input = amber glowing border, needs-approval = red glowing border + header
+tint, done = green steady, error = red steady, stopped = dimmed. ONLY the two action-needed states
+animate; the minimized pill pulses red when any lane needs the user; prefers-reduced-motion stops all
+pulsing while the colors still read. Invariant 11 held everywhere (nowrap+ellipsis labels, single-text-
+child flex rows, 280px minimum tracks). The + Lane form prefills the master's cwd and model; a spawn
+refusal shows the measured 75% reason. Headroom bars (CPU/MEM vs the watermark) live in the dock header.
+
+### Verified
+
+`make demo-P-FLEET.L1` green: two lanes running turns CONCURRENTLY with replies never crossing and the
+master-model default; watermark + ceiling refusals with measured numbers; needs-approval + deny
+fail-closed over a REAL subprocess stdio boundary; cancel -> awaiting-input; stopAll orphans nothing;
+status shapes leak no reply text. 12 new tests (fleet_resources pure verdict, fleet_lanes against the
+fake ACP subprocess). Root tsc clean; renderer project clean for every touched file (pre-existing
+symbol_graph/native_dialog/dev.ts:754 errors on this box predate the increment - untouched regions).
+Electron-shell smoke (open the dock, spawn a real lane, watch the glow) is the first on-device task of
+the next session - it needs the app window this environment cannot open.
+
+### Relates to
+
+- ADR-0268/0258 (P-FLEET.1) - the remote-worker job handles; the serialization lesson reused here.
+- ADR-0182 (P-SYSRES.1) - the system sample + fail-open guard doctrine the 75% verdict sits on.
+- ADR-0096/0153 (preview extension) - the token'd-env callback pattern fleet_status reuses.
+- ADR-0232/0242 (share/join docks) - the dock frame + pill conventions the fleet grid reuses.
+- P-FLEET.2/.3/.4 - unchanged roadmap; P-FLEET.3's PWA panel will subsume the remote view.
+
+## ADR-0272 -- P-FLEET.P1: Fleet Profiles - project-bound full-GUI instances and the lane-or-window spawn choice (SCOPE/PLAN)
+
+**Date:** 2026-08-21
+**Status:** Accepted -- SCOPE/PLAN. No harness/desktop code in this ADR. The one artifact shipped
+beside it is the control panel's new `F) Fleet GUI` option (LucidAgentIDE.bat), a launcher-only
+prototype that proves the profile seams end to end; the native feature is the P-FLEET.P* increments
+mapped below, each its own session.
+**Increment:** P-FLEET.P* family. Sits BESIDE the P-FLEET roadmap exactly as P-FLEET.L1 (ADR-0271)
+did: P-FLEET.2 (remote supervisor), .3 (PWA panel + fleet EventName contracts), .4 (agent threads)
+are unchanged.
+
+### Context
+
+LUCID-FEATURE-REQUEST-FLEET-MANAGEMENT.md documents a real four-repo workflow that ran four Lucid
+Electron instances via LUCID_PORT and hit workspace collision. The claims were verified against the
+code and are all true:
+
+- One shared `~/.omp/lucid-gui.json` holds `workspace`/`recentWorkspaces` for every instance
+  (settings_store.ts:25). `load()` memoizes by mtime+size with no lock and no watch
+  (settings_store.ts:420-462), so instance B's `setWorkspace()` (workspace.ts:42-50) is picked up by
+  instance A on its next `load()`: A's workspace silently flips.
+- The session sidebar filters the shared `~/.omp/agent/sessions` tree by
+  `norm(session.cwd) == norm(currentWorkspace())` (sessions.ts:72-84), so the flip makes A's history
+  "vanish" even though the JSONL is intact.
+- Electron identity is keyed on the PORT, not the project: a non-default LUCID_PORT suffixes
+  userData before the single-instance lock (main.ts:25-38, ADR-0206). Port drift changes identity.
+- No instance-identity endpoint exists; /api/health (dev.ts:1006) says only "something is alive".
+- Fleet lanes (ADR-0271) do not substitute: a lane is a headless gated omp child that inherits the
+  master's env (no per-lane GUI settings or Personal Knowledge), is ephemeral, and renders in a mini
+  window, not a full IDE.
+
+Two distinct fleet shapes fall out, and both are wanted: LANES (one window orchestrating N headless
+workers - shipped, P-FLEET.L1) and PROFILES (N full project-bound IDE windows - this ADR). The user's
+requested UX stitches them together: when the user picks a DIFFERENT cwd, ask whether the new agent
+should be a headless lane inside this window or a full GUI Lucid bound to that folder.
+
+### Decision (planned)
+
+1. **FleetProfile store.** `~/.omp/fleet/fleet.json` (schema-versioned) + per-profile dirs
+   `~/.omp/fleet/profiles/<id>/{gui.json, personal/, electron/}`. A profile = stable string id,
+   name, workspace path, `workspaceMode: "locked"`, timestamps. Port is RUNTIME state kept only as
+   `lastPort` for diagnostics; identity is never the port.
+2. **`LUCID_INSTANCE_ID`.** When set, Electron userData = `<base>/fleet/<profile-id>/electron`.
+   Backward compat chain: instance id > non-default LUCID_PORT (current behavior) > default.
+3. **Seam promotion is explicit.** `LUCID_GUI_SETTINGS_FILE` (settings_store.ts:24, today commented
+   "never set in production") and `LUCID_PERSONAL_DIR` (settings_store.ts:176-181) become supported
+   production surfaces; the comments and docs change with it. This is a deliberate contract change
+   recorded here, not an incidental one.
+4. **`GET /api/instance`.** Metadata only: instanceId, profileName, workspace, pid, port, version.
+   Live identity beats any stale registry for duplicate detection and crash reconciliation.
+5. **The spawn choice.** The fleet dock's + Lane form: when the chosen cwd differs from the master
+   workspace, offer `[ Headless lane (this window) ]` (default) or `[ Full GUI Lucid (new window,
+   project-bound) ]`. The workspace switcher gets the bind prompt: `[ New Fleet Instance ]`
+   (default) / `[ Rebind This Profile ]` / `[ Cancel ]`.
+6. **Duplicate protection.** One active profile per NORMALIZED workspace path; a second request
+   defaults to Focus Existing, with explicit override. Git worktrees at distinct paths are allowed.
+7. **Admission.** Full-GUI spawns go through the P-SYSRES.1 sample and the 75% watermarks like lanes
+   (fleet_resources.ts), with a stricter instance ceiling: an Electron instance weighs several lanes.
+8. **Knowledge policy v1: isolated only.** Concurrent writers on one encrypted store stay PROHIBITED
+   (fail-closed doctrine); shared read-only / brokered modes are a later increment.
+9. **Sessions untouched.** Canonical `~/.omp/agent/sessions` tree stays; a profile pins its
+   workspace so the cwd filter becomes stable. Optional additive `lucidProfileId` in session metadata
+   is a later increment. contracts.ts is NOT touched; the fleet EventNames stay deferred to P-FLEET.3.
+
+### Increment map
+
+- **P-FLEET.P1** - profile store + `LUCID_INSTANCE_ID` + `/api/instance` + seam promotion + demo.
+- **P-FLEET.P2** - the spawn choice UX, duplicate protection, detached lifecycle (start/stop/focus,
+  crash reconciliation), profile cards in the fleet dock (invariant 11 applies).
+- **P-FLEET.P3** - migration/adoption of legacy workspaces, `lucid fleet ...` CLI, worktree awareness.
+
+### Shipped beside this ADR (launcher-only, no increment)
+
+LucidAgentIDE.bat gained `F) Fleet GUI`: prompts for a profile name + workspace, creates
+`%LOCALAPPDATA%\LucidFleet\profiles\<NAME>\{lucid-gui.json, personal\}`, seeds the profile's own
+GUI settings with the bound workspace (never reseeded, so in-app workspace changes stick to the
+profile), prefers the profile's saved `port.txt` port (never 5319 - the default port carries the
+canonical Electron identity + OAuth deep-link, main.ts:30-38), warns "may ALREADY be running" when
+that port is busy before allowing a duplicate, and launches detached via `start` with LUCID_PORT +
+LUCID_GUI_SETTINGS_FILE + LUCID_PERSONAL_DIR (all three propagate into the engine child through
+main.ts:105's `...process.env` spread). Verified: the seeded JSON binds the workspace through the
+real `settings_store.load()` + `currentWorkspace()` (bun script, match:true); the menu F cancel path
+round-trips under a piped-stdin smoke; every cmd construct (quote-strip, tilde-slice, for /d block,
+port roll, JSON echo bytes) exercised in an isolated scratch bat. Interactive two-profile launch is
+the user's on-device test (this environment cannot open app windows).
+
+### Invariants preserved
+
+- #1 extend-not-fork: everything is env seams, new endpoints, and desktop UI; omp untouched.
+- #2 TS only; #3/#4 unaffected: every spawned instance runs its own in-process gate (same app).
+- #6 frozen prefix untouched; #7/#8 contracts.ts untouched (fleet EventNames remain P-FLEET.3).
+- #11 applies to the future profile cards and the bind prompt.
+
+### Relates to
+
+- LUCID-FEATURE-REQUEST-FLEET-MANAGEMENT.md - the request this scopes.
+- ADR-0271 (P-FLEET.L1) - lanes, the other fleet shape; the spawn choice bridges the two.
+- ADR-0268/0258 (P-FLEET.1) - job handles; a full-GUI member is also reachable as a firewall worker.
+- ADR-0206 - the single-instance lock this re-keys by profile.
+- ADR-0182 (P-SYSRES.1) - the admission sample the instance ceiling reuses.
+
+## ADR-0273 -- P-FLEET.L2: unlimited lanes under sustained pressure, lanes from a repo remote, and a minimized fleet HUD that tells the truth
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. `make demo-P-FLEET.L2` (7 checks) and `make demo-P-FLEET.L1` (rewritten
+check 2) are green; new/updated unit suites: fleet_resources (13), git_url (8), workspace (39),
+fleet_lanes (8).
+**Increment:** P-FLEET.L2. Amends ADR-0271 (P-FLEET.L1) on three points: the admission policy, the
+`FleetStatusData.resources` shape, and the minimized dock pill. Does NOT touch the P-FLEET.P* profile
+family (ADR-0272) or the P-FLEET.1 job surface (ADR-0270).
+
+### Context
+
+Four reports from real use, all reproduced in the code:
+
+1. **The guard refused work on machines that had room.** ADR-0271 admitted a lane only under an
+   INSTANTANEOUS 75% watermark AND a hard ceiling of `min(6, floor(cores/2))` (fleet_resources.ts:28,
+   50-58). Both are wrong for the same reason: they measure the wrong thing. A compile, an AST ingest,
+   or a browser opening forty tabs pegs a core for a second or two, and the user gets "system CPU at
+   82% (watermark 75%)" for a machine that is fine. Meanwhile a 4-core box was capped at two lanes
+   whatever its actual load. The ask was explicit: more lanes when CPU and memory allow it, and
+   "90%+ over 30 seconds since they may just have a burst".
+2. **The lane folder was a bare text input.** fleet_grid.ts prefilled the master cwd and made the user
+   hand-edit a path, even though `pickFolderDialog` (app.ts) already routes every other folder pick in
+   the app to the REAL Explorer / Finder / zenity dialog (ADR-0265), create-new-folder included.
+3. **There was no way to point a lane at a repo.** Cloning existed (`cloneRepo`, ADR-0214/0216) but
+   only behind the Settings "Clone" button, which sets the MASTER workspace and restarts the backend,
+   the opposite of what a lane wants. `hostTokenForUrl` also knew only github.com and gitlab.com, so
+   Azure DevOps and every self-hosted host fell through to no token at all.
+4. **The minimized dock flickered, and said nothing.** `renderStatus()` replaces
+   `#statusbar.innerHTML` on every repaint and re-adopts the trivia ticker plus the share and join
+   pills (app.ts:6371-6373), but nobody re-adopted the FLEET pill, so it vanished on every status
+   repaint and reappeared on the fleet's own 2.5s poll. That is the lower-right flicker, and it is
+   worst exactly when a lane is working (more repaints). Compounding it, `mountPill()` `append`ed
+   unconditionally: re-appending a CONNECTED node detaches and reinserts it, restarting the CSS pulse.
+   And the pill's whole payload was one boolean dot, "something is alive", so a minimized fleet could
+   not tell you WHICH lane was blocked on you.
+
+### Decision
+
+**1. Admission is sustained pressure over a rolling window; lanes are unlimited.**
+fleet_resources.ts is now pure window arithmetic: `pushSample` (trim + ring cap), `hotMs` (the
+unbroken streak ENDING at the newest reading), `laneAdmission` (refuse only when `hotMs >= 30_000` at
+`>= 90%`). The core-derived ceiling and `maxLanesFor` are deleted outright; no cap appears anywhere in
+the verdict. Load-bearing details:
+
+- A single hot reading is a SPIKE: a value with no duration, so `hotMs` is 0 and the lane starts.
+- A cool reading OR a NULL reading breaks the streak. A sampling gap can therefore never be counted as
+  load, which is ADR-0182's fail-open doctrine stated as arithmetic instead of a comment.
+- The window keeps TWICE the sustain span, because trimming to exactly 30s would make a just-crossed
+  30s streak read as 27s forever.
+- A backwards clock jump resets the history rather than inventing a streak.
+- Every refusal carries the measured percent AND the measured duration ("system memory has been at
+  94% for 34s"), because 8s and 34s are the same percent and opposite verdicts.
+
+**2. The manager MEASURES the window instead of sampling on demand.** "Sustained" cannot be read off
+one snapshot, so `FleetLaneManager` owns an unref'd 3s sampler that feeds `#history`, retires itself
+once nothing is live and no status has been polled for 20s, and restarts on the next spawn or status.
+The 2.5s dashboard poll rides those readings (2s minimum gap) rather than paying its own CPU window.
+
+**3. `FleetStatusData.resources` changes shape** (a contract change, hence this ADR):
+`{ watermarkPct, maxLanes }` becomes `{ pressurePct, sustainMs, cpuHotMs, memHotMs }`. Every consumer
+moved in the same increment: bridge.ts's FleetStatusView, `fleet_grid.paintHeadroom` (which now shows
+`94% 34s/30s` where a `4/4` cap used to be), and `fleet_extension.fleetResourcesLine` (the master
+agent now reads "lanes unlimited; a lane is refused only above 90% held 30s; mem has held the line 34s
+of 30s"). No UI hardcodes the numbers: the policy is echoed in the payload.
+
+**4. A lane can be spawned from a repo remote, and the folder comes from the OS dialog.** New pure
+`desktop/git_url.ts` (zero imports, so the RENDERER shares it with the server and with Electron main)
+parses the three spellings a clone button actually hands you, `https://host/...`,
+`ssh://git@host/...` and `git@host:...`, classifies the provider, and derives the credential names.
+The scp-like form demands a DOTTED host so a Windows drive path can never be shipped off to
+`git clone`, and an embedded `user:password@` is discarded rather than carried into a label or an
+error. `/api/fleet/spawn` accepts `{ repoUrl, pat }`, clones through the existing `cloneRepo` (now
+taking a `parentDir`, so the repo lands inside the folder the user picked) and spawns the lane on the
+result. An existing clone is REUSED, which is what makes "spawn a lane on this repo" idempotent.
+
+**5. Credentials are per HOST, in the OS-encrypted vault.** The vault ref is `git_pat_<host_slug>`
+(`gitCredRef`), injected back by Electron main as `LUCID_GIT_PAT_<HOST_SLUG>`, and `hostTokenForUrl`
+checks that name FIRST. Three consequences, all deliberate:
+
+- A self-hosted GitLab or Azure DevOps Server works, through its own saved token.
+- An unrecognized https host gets ONLY its own scoped token, never the generic `LUCID_GIT_PAT`.
+  Handing a general-purpose PAT to an arbitrary host is a credential leak dressed as convenience.
+- Azure DevOps joins the known providers (`AZURE_DEVOPS_EXT_PAT`, `AZURE_DEVOPS_PAT`,
+  `SYSTEM_ACCESSTOKEN`), riding the SAME HTTP Basic header `cloneArgv` already builds, so nothing is
+  embedded in the URL and nothing persists into `.git/config` (ADR-0214's rule, unchanged).
+
+An SSH remote is never asked for a token: the form hides the field, and `GIT_SSH_COMMAND` gains
+`BatchMode=yes` so an encrypted key or an unknown host key FAILS FAST with an ssh-specific hint
+instead of blocking forever on a passphrase prompt nobody can see.
+
+**6. The minimized pill is a real snapshot, and it stops flickering.** Two fixes and a feature:
+`mountFleetPill()` is exported and called from `renderStatus()` beside the share/join re-adoptions
+(the flicker's actual cause); `mountPill()` now guards with `contains` (re-appending a connected node
+restarts its animation); and `paintPill()` renders one colored dot PER lane state with its count,
+ordered needs-approval, awaiting-input, working, starting, done, error, stopped, each with a hover
+naming the lanes in that state. The markup is compared before it is written, so an identical repaint
+every 2.5s cannot stutter the pulse. The dots reuse the cards' own `lane-<status>` custom properties,
+so the minimized view and the open panel can never disagree about what amber means.
+
+### Consequences
+
+- A pegged machine can now be given more lanes for up to 30 seconds. That is the point: the user asked
+  for it, a box recovers from a burst, and 30s of held pressure still refuses.
+- With no ceiling a user CAN oversubscribe deliberately (twenty lanes on four cores). The guard stays a
+  UX guard, not a quota: it reports honestly and refuses only on evidence.
+- A token saved for a host reaches the SERVER env only on the next launch, so the freshly typed value
+  is also passed inline for the clone happening now (the ADR-0216 pattern).
+- Deleted, not deprecated: `FLEET_WATERMARK_PCT`, `maxLanesFor`, `watermarkPct`, `maxLanes`. Clean
+  cutover, no shims, no aliases.
+
+### Alternatives rejected
+
+- **Keep a ceiling, just raise it.** Any constant is a guess about a machine we can measure. The
+  measurement is cheap; the guess is not defensible.
+- **Average the window instead of requiring an unbroken streak.** A sawtooth between 20% and 100%
+  averages to 60% and feels terrible, and a mean lets one blind sample dilute real pressure.
+  "Unbroken, ending now" is what sustained means.
+- **One global git token (extend `LUCID_GIT_PAT` to every host).** Simplest, and a credential leak: a
+  typo'd hostname would send the user's PAT to a stranger.
+- **Clone in the renderer, or a second clone endpoint per lane.** `cloneRepo` already redacts, already
+  handles the Windows trailing-dot desync and partial-clone cleanup. Reusing it from
+  `/api/fleet/spawn` adds one branch instead of a second clone implementation.
+- **Debounce the status bar instead of re-adopting the pill.** The bar is the app's live surface; the
+  bug was that one pill was missing from the re-adoption list the ticker and share/join pills use.
+
+### See also
+
+- ADR-0271 (P-FLEET.L1) - the lanes, the dock, and the 75% guard this replaces.
+- ADR-0182 (P-SYSRES.1) - the sampler, and the fail-open-on-no-evidence doctrine.
+- ADR-0214 / ADR-0216 - headless clone auth and the vault-backed PAT this scopes per host.
+- ADR-0265 (P-FS.2) - the real OS folder dialog the spawn form now opens.
+- AGENTS.md invariant 11 - the spawn form's note is a BLOCK paragraph and its rows hold controls, never
+  bare prose beside inline tags.
+
+## ADR-0274 -- P-FLEET.L3/.L4/.L5: lane fidelity, recovery spawns, and the reviewable timeline (SCOPE/PLAN, after a deepseek-harness survey)
+
+**Date:** 2026-08-25
+**Status:** Accepted -- SCOPE/PLAN. No code in this ADR. Three increments are mapped, each its own
+session; build order is by user pain: L4 (fault tolerance) first, then L3 (fidelity), then L5 (timeline).
+**Increment:** P-FLEET.L3/.L4/.L5 family, extending P-FLEET.L1/L2 (ADR-0271/0273). The P-FLEET.P*
+profile family (ADR-0272) and the P-FLEET.1 job surface (ADR-0270) are untouched.
+
+### Context: four field reports, all reproduced in the code
+
+1. **No diffs in a lane.** The lane wire (fleet_lanes.ts `#wire`) collapses every `tool_call` /
+   `tool_call_update` to `{ name, detail: title }` and the card renders one line per tool
+   (fleet_grid.ts `toolLine`, detail clamped to 120 chars). The SAME ACP stream feeds the master chat,
+   where P-CHAT.B chips show +/- diffstats per edit - so the data exists on the wire and the lane
+   surface throws it away.
+2. **No image thumbnails in a lane.** `/api/fleet/prompt` accepts text only (dev.ts), while
+   `/api/chat` takes pasted-image blocks (P-VISION.1, capped at 6, defensively filtered). The lane
+   composer cannot paste, and a lane turn cannot carry an image.
+3. **No staged prompts.** One turn at a time per lane is CORRECT (the ADR-0268 collector-crossing
+   lesson), but the UI merely disables Send while streaming - there is nowhere to park the next
+   prompt, so the user sits on their own thought while a compact card streams.
+4. **A timeout is a grave.** The screenshot error - `acp: session/prompt timed out after 600000ms`,
+   then `lane is error` - is fleet_lanes.ts `LANE_TURN_TIMEOUT_MS = 600_000` (ADR-0186's ten minutes).
+   The MASTER already removed that clock (P-STALL.2, ADR-0263: long turns run to completion with
+   legible waiting); lanes never got the memo. Worse: `prompt()` refuses an `error`-status lane, and
+   `onExit` has no respawn path, so one timeout permanently kills a lane whose transcript lives only
+   in the renderer's in-memory `runs` map.
+
+And one finding that reframes the ask: **lane histories are ALREADY recorded.** omp persists every
+session - interactive or ACP - as a .jsonl under `~/.omp/agent/sessions/<encoded-cwd>/`
+(sessions.ts:6-8). A lane child is a full gated `omp acp`, so every lane turn is on disk today, keyed
+by the LANE's cwd. They are invisible only because the sidebar filters to the MASTER's workspace.
+The timeline feature is therefore an INDEXING problem, not a recording problem.
+
+### The deepseek-harness survey (github.com/deepseek-ai/deepseek-harness, MIT)
+
+DeepSeek Harness (`dsh`, developer preview, 2026-08-13) is an "everything is a plugin" agent harness
+on the Cordis runtime. Its published Agent Notes are the transferable part; three map one-to-one onto
+this roadmap:
+
+- **Result-time applied-hunk diffs** (note 2026-07-02): call-time diffs are context-free snippets; the
+  REAL editor diff is emitted after the mutation applies, as applied hunks with context lines, carried
+  on a persisted, tool-private presentation channel (`presentationMeta`) so replay reproduces the card
+  from the log without recomputation or I/O. Adopt the PRINCIPLE for lanes: forward the result-time
+  diff the omp stream already carries, and persist what the card needs to re-render.
+- **Unified session query service** (note 2026-07-23): ONE service over one session corpus - exact
+  reads inherited and backend-independent, full-text search as the only backend-specific part, a
+  disposable SQLite FTS index beside the persistence root, never authoritative. Adopt the topology for
+  the timeline: one query surface over the EXISTING session .jsonl corpus + the DuckDB event log;
+  any index is derived and disposable; the log stays the truth.
+- **Append-only session log + fork-at-step**: everything the model saw is in the log; a run that went
+  sideways at step 40 forks at step 39 with the full trace. Adopt the SEMANTICS for recovery spawns:
+  a dead lane's replacement replays the recorded transcript, not a summary of vibes.
+
+**Explicitly not adopted:** the Cordis plugin runtime and dsh's session file format. Invariant 1
+(extend omp, never fork or re-platform) rules out a second plugin substrate, and omp owns our session
+files - we index them, we do not replace them. License posture: MIT is compatible; current plan reuses
+CONCEPTS only, and any future copied code carries attribution in a third-party notice.
+
+### Increment map
+
+**P-FLEET.L4 - lanes that survive (build FIRST; it is the active pain).**
+- **Drop the lane turn clock**, exactly as P-STALL.2 dropped the master's: no `LANE_TURN_TIMEOUT_MS`
+  kill; child death is detected event-driven (`onExit` already fires); long waits surface as slow
+  notices on the card, not a synthetic error. The 600s cap on APPROVALS stays - that is fail-closed
+  policy, not patience.
+- **Error is a state, not a grave:** an `error` lane keeps its transcript, offers `Retry last turn`
+  and `Respawn`, and `prompt()` on an error lane triggers recovery instead of refusing.
+- **Recovery spawn with memory:** persist per lane the spec `{cwd, model, name, repoUrl}` and the
+  turn transcript (the renderer already accumulates it; move ownership into the manager and write it
+  through). Respawn = new gated child + `session/new` + REPLAY of the recorded turns as context
+  (dsh fork semantics), then the staged/failed prompt re-sends. Approvals NEVER auto-replay -
+  anything gated re-asks the human (invariant: fail-closed survives recovery).
+- Keystone test: kill a lane child mid-turn; the respawned lane answers a follow-up that requires
+  memory of the pre-crash turns, and a pending approval from before the crash is re-asked, not
+  auto-granted.
+
+**P-FLEET.L3 - lane fidelity (diffs, images, staged prompts).**
+- **Forward the rich tool event:** widen the lane wire's tool events with what omp already sends
+  (kind, file locations, diff content when present) instead of `title.slice(0,120)`; render the
+  master's chip pattern in-card - a diff chip with +/- counts expanding to the hunk. Persisted with
+  the transcript so a reopened card still shows it (the dsh presentation-channel principle).
+- **Images into lanes:** accept the P-VISION.1 image shape on `/api/fleet/prompt`, paste-to-thumbnail
+  in the lane composer (same scanning path as the master - an image block is untrusted input like any
+  other), thumbnails in the transcript.
+- **Staged prompts:** a per-lane FIFO queue owned by the MANAGER (survives dock close), drained on
+  turn end; one-turn-per-lane stays inviolate. UI: compact queued chips above the composer with
+  reorder/delete, invariant-11 clean (one-line ellipsized labels, no wrapping slivers).
+
+**P-FLEET.L5 - histories + the reviewable timeline.**
+- **Name the lane session at spawn:** map lane id -> omp ACP sessionId -> its .jsonl (the files
+  already exist; today nothing ties them to lanes). Stopped lanes become REVIEWABLE, not gone.
+- **One timeline surface** across master chats, lane sessions, and ingest runs, ordered by time,
+  sourced from the session corpus + the DuckDB event log (schema changes only via migrations,
+  invariant 10). Exact reads first; FTS later as a derived, disposable index (the dsh unified-query
+  topology). Scrub the timeline, open any point, read what the model saw.
+- Fork-at-step across the timeline (start a NEW lane from an old step) is named but deferred - it
+  falls out of L4's replay machinery once the timeline can address a step.
+
+### Alternatives rejected
+
+- **Adopt Cordis / re-platform on dsh.** Invariant 1. We extend omp; a second plugin runtime is a
+  fork of our own architecture.
+- **Raise the lane timeout instead of removing it.** ADR-0263 already litigated this for the master:
+  any constant kills a legitimate long fan-out; death detection + legible waiting is the fix.
+- **Client-side prompt queue.** Dies with the renderer state; the manager owns lane lifecycle, so it
+  owns the queue.
+- **Summarize-and-respawn recovery.** A summary loses exactly the tool-level detail the user is asking
+  to SEE; the transcript is already recorded, so replay it.
+
+### See also
+
+- ADR-0263 (P-STALL.2) - the no-turn-clock precedent lanes now inherit.
+- ADR-0271/0273 - the lane surface this extends; ADR-0268/0270 - one-turn-per-lane's origin.
+- P-CHAT.B (ADR-0189) - the chip + diffstat pattern the lane cards adopt.
+- P-VISION.1 (ADR-0136) - the image-block shape `/api/fleet/prompt` adopts.
+- deepseek-harness Agent Notes: result-time applied-hunk diffs (2026-07-02), unified session query
+  service (2026-07-23) - MIT, concept reuse.
+
+## ADR-0275 -- P-FLEET.L4 BUILT: lanes that survive, and the deltas from the plan
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. `make demo-P-FLEET.L4` green (5 checks); fleet_lanes suite 12/12; the
+firewall suite sharing the fake agent unaffected (71 pass); renderer + server typecheck clean.
+**Increment:** P-FLEET.L4, first of the ADR-0274 roadmap. L3 (fidelity) and L5 (timeline) unbuilt.
+
+### What shipped
+
+1. **The lane turn clock is GONE.** `session/prompt` carries no timeout; the request is raced against
+   the child's LIFE - acp.ts `die()` rejects every pending request the instant the process exits, so a
+   mid-turn crash surfaces in milliseconds (measured 9ms in the demo) instead of a 600s deadline. The
+   600s cap on APPROVALS stays: that is fail-closed policy, not patience. A long silent working stretch
+   is legible instead of fatal: the card header shows an amber `quiet Nm` chip after 90s of no stream,
+   computed renderer-side from `lastActivityAt` (no new wire event).
+2. **Error is a state, not a grave.** An error lane keeps its transcript and shows a recovery bar:
+   `Retry` (re-sends `lastPrompt`, offered only when one exists - `LaneView.canRetry`) and `Respawn`.
+   `prompt()` on an error lane recovers it automatically first. A user-STOPPED lane is refused by
+   prompt with the fix named ("respawn it to continue") - stopping was a decision, so only the explicit
+   button revives it.
+3. **Recovery spawns carry memory, on the SAME lane id** (invariant 9: one logical lane, one id;
+   `LaneView.respawns` counts revivals). The manager now OWNS a bounded transcript (40 turns, 8K chars
+   per turn: user turns at prompt time, assistant text + compact `[ran: tool]` lines folded at settle).
+   Respawn = new gated child + handshake + resume:
+   - **Native resume, capability-gated:** only an agent whose `initialize` advertises
+     `agentCapabilities.loadSession` is sent `session/load` - omp then replays its own persisted
+     session log. Probing by trial is UNSAFE (measured: the fake agent acks unknown methods with an
+     empty result, so a trial "load" false-positives), hence the gate.
+   - **Fallback resume:** `session/new` + the recorded transcript as a ONE-SHOT preamble prepended to
+     the next prompt's wire text, delimited as `TRANSCRIPT START/END` and framed as memory, not
+     instructions. The preamble is never recorded as the user's text and costs no extra turn.
+4. **Fail-closed survives recovery.** An ask open at death dies as a DENY (unchanged `onExit`), and
+   nothing gated is ever replayed: a re-attempted action re-asks through the normal permission path.
+   The demo proves the revived lane RE-ASKS and only a fresh explicit allow passes.
+5. **Surface:** `/api/fleet/retry` (NDJSON stream, like prompt) + `/api/fleet/respawn`;
+   `fleetRetry`/`fleetRespawn` on the bridge; the recovery bar mirrors the approve bar's one-text-child
+   flex shape (invariant 11 verified in a headless render: one ellipsized line, nowrap buttons).
+
+### Deltas from ADR-0274's plan
+
+- The plan said "persist ... and write it through": the transcript lives in MANAGER memory only. The
+  DURABLE copy already exists - omp writes every lane session to its own .jsonl - so writing a second
+  file would duplicate the source L5 is about to index. App-RESTART recovery therefore lands with L5
+  (it needs the lane-spec index anyway); process-crash recovery, the reported pain, works today.
+- "Slow notices" became the `quiet Nm` chip: poll-driven, zero new wire events, honest about what it
+  knows (time since last stream activity).
+- `fake_acp_agent.ts` gained a `crash` mode (chunk, then exit 1 mid-turn) - additive; the firewall
+  suites that share the fake are unaffected.
+
+### See also
+
+ADR-0274 (the roadmap this builds), ADR-0263 (the master's no-clock precedent), ADR-0271/0273 (the
+lane surface), acp.ts `die()` (the event-driven death this leans on).
+
+## ADR-0276 -- P-FLEET.L3 BUILT: lane fidelity (diff chips, images, staged prompts), and the deltas
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. `make demo-P-FLEET.L3` green (3 sections); fleet_lanes suite 15/15; the
+firewall suite sharing the fake agent unaffected (71 pass); renderer + server typecheck clean;
+invariant-11 verified in a headless render at 300px card width.
+**Increment:** P-FLEET.L3, second of the ADR-0274 roadmap. L5 (histories + timeline) remains.
+
+### What shipped
+
+1. **Diffs on the lane wire.** The measurement settled the roadmap's open question: omp does NOT emit
+   result-time diffs on this path - the master's chips derive the code from the tool_call's **rawInput
+   at call time** (P-CHAT.1: a write's `content`, an edit's `edits[{old_text,new_text}]` joined into one
+   before/after pair, omp's hashline `patch` in `input`). The lane wire now runs the SAME extraction
+   (`#toolCode`, 16K cap vs the master's 64K - mini windows), with relative paths resolved against the
+   LANE's cwd, never the master's. `LaneEvent` tool gains an optional `code` payload; the card renders a
+   one-line **diff chip** - tool name, ellipsized detail, filename, green +N / red -N - expanding to the
+   escaped hunk in a bounded `<pre>`. Chips live in the module transcript, so a reopened card keeps them.
+   dsh's result-time-hunk PRINCIPLE (persist what the card needs; replay without recompute) is honored;
+   its mechanism was not applicable to this stream.
+2. **Images into lanes.** `/api/fleet/prompt` (and the queue) take the P-VISION.1 shape through one
+   shared `laneImages` filter (well-formed `{data, mimeType}` only, cap 6); the manager appends them as
+   ACP image blocks after the text, byte-identical to the master chat's path. The composer pastes to
+   thumbnails (per-card strip with per-image remove); the user turn renders them. The recovery
+   transcript records `[attached N images]` - the COUNT, never the base64, which would burn the whole
+   replay budget on one screenshot.
+3. **Staged prompts.** A per-lane FIFO **owned by the manager** (survives dock close and renderer
+   reloads), capped at 8 (P-FLEET.1's queue discipline: past the cap, refuse loudly with the number).
+   The card's Send flips to **Stage** (amber) while the lane is busy - never disabled mid-turn - and
+   staged chips render as numbered one-line rows with reorder/remove. The DRAIN is renderer-triggered:
+   when the poll (or a settling stream) sees an idle lane with a queue, it streams the next item into
+   the visible card. The manager never runs a turn nobody can watch - approvals need a human and a card
+   to glow in. One-turn-per-lane is inviolate: a busy lane refuses the drain.
+
+### Deltas from ADR-0274's plan
+
+- "Compact chips above the composer with reorder/delete" landed exactly; the plan's implicit
+  auto-drain-anywhere became **renderer-triggered drain** for the approval-visibility reason above. A
+  headless fleet with a closed dashboard holds its queue rather than running turns whose asks nobody
+  can answer - that is fail-closed posture, not a limitation.
+- Diff fidelity is call-time (rawInput), not result-time: measured against acp_backend, the stream
+  simply does not carry applied result hunks; adopting dsh's mechanism would have required forking the
+  edit tools (invariant 1 says no).
+- `fake_acp_agent.ts` gained an edit-shaped `rawInput` on its tool_call and an `[images: N]` echo -
+  additive; firewall consumers read title/kind only and are unaffected (71 pass).
+
+### See also
+
+ADR-0274 (the roadmap), ADR-0275 (L4: the recovery machinery the queue leans on), P-CHAT.1/ADR-0104
+(the extraction contract), P-VISION.1/ADR-0136 (the image shape), ADR-0268 (one turn per lane).
+
+## ADR-0277 -- P-FLEET.L5 BUILT: histories + the reviewable timeline, and the deltas
+
+**Date:** 2026-08-25
+**Status:** Accepted -- BUILT. `make demo-P-FLEET.L5` green (4 sections); timeline suite 5/5, lane
+ledger test green (fleet_lanes 16/16); firewall suite unaffected (71 pass); typechecks clean;
+invariant-11 verified in a headless render at 380px.
+**Increment:** P-FLEET.L5, the last of the ADR-0274 roadmap. The Fleet fidelity arc (L2/L3/L4/L5) is
+complete; fork-at-step from a timeline row stays named-and-deferred.
+
+### What shipped
+
+1. **Lanes are NAMED at spawn, durably.** `FleetLaneDeps.recordLaneSession` (optional, fail-quiet by
+   contract) fires at every successful handshake - spawn AND recovery - and dev.ts appends it to
+   `~/.omp/lucid-fleet-lanes.jsonl` (the P-LOC.4 sidecar pattern; the session corpus itself is never
+   written). One line = {at, laneId, name, cwd, sessionId, event}. A lane's whole session lineage
+   (fallback recoveries mint fresh session ids) survives engine restarts. `LaneView.sessionId` exposes
+   the current key.
+2. **One reviewable timeline.** New `sessions.listAllSessions` returns every parseable session across
+   ALL workspaces (riding the SAME P-PERF.4 mtime+size index as the sidebar - a timeline poll re-parses
+   only what changed), and pure `timeline.buildTimeline` merges it with the ledger: a ledger-matched
+   session is a LANE row carrying its lane name (LATEST record wins) and its spawn-lineage count; the
+   parser's own kg-ingest kind classifies ingest; everything else is a chat. Newest first, paged,
+   clamped. `GET /api/timeline` + `POST /api/timeline/session` (the transcript read reuses
+   sessionMessages, so the issue-#52 preamble stripping applies for free).
+3. **The Timeline dock.** A clock icon on the rail opens a movable/resizable dock (share_dock
+   primitives, own keys): rows grouped by day - time, kind badge, cyan lane name, one-line ellipsized
+   title, workspace chip, turn count - and clicking a row expands its transcript IN PLACE, tail-limited
+   with an honest "showing the last N of M". Read-only by design: a review surface owns no lifecycle -
+   nothing here prompts, resumes, or deletes. Data loads on open + Refresh; a chronology needs no poll.
+4. **Honest under damage.** Torn ledger lines skip (append-only files earn torn tails); a missing
+   ledger degrades rows to plain chats - labels degrade, the surface never breaks, and no session is
+   ever INVENTED as a lane.
+
+### Deltas from ADR-0274's plan
+
+- "Sourced from the session corpus + the DuckDB event log" landed corpus-only: the omp child holds
+  agent_obs.duckdb read-write for the whole session (the acp_backend live-read constraint), so the
+  event log cannot back a live timeline. The corpus alone already answers "what did the model see" -
+  the DuckDB join (and FTS, per the dsh derived-disposable-index topology) remains the named follow-up.
+- The dsh unified-query shape held: one surface, exact reads, the .jsonl files stay the truth.
+
+### See also
+
+ADR-0274 (the roadmap, now fully built), ADR-0275/0276 (L4/L3), P-PERF.4/ADR-0131 (the session index
+this rides), P-LOC.4/ADR-0211 (the sidecar-JSONL precedent), issue #52 (transcript preamble stripping).
+
+## ADR-0278 -- one safeStorage key across port-keyed instances (the vanishing Local Provider)
+
+**Date:** 2026-08-29
+**Status:** Accepted -- BUILT. oscrypt_seed suite 11/11; desktop typecheck clean; dist/main.js rebuilt.
+
+### The incident
+
+A user stored a Local Provider API key ("key in vault" badge shown, endpoint Test green), hit
+"Restart to apply", and the provider's model never appeared in the picker. models.yml on disk read
+`{"providers": {}}` and the managed-ids sidecar `[]`: the provider was skipped fail-closed at engine
+spawn because readCredential returned null.
+
+### Root cause
+
+Electron `safeStorage` on Windows is Chromium os_crypt: encryptString/decryptString use an AES-256-GCM
+key stored (DPAPI-wrapped) in `<userData>/Local State` -- per PROFILE DIRECTORY, not per OS user.
+main.ts keys userData on the port (`...-<PORT>`, ADR-0206 territory: the single-instance lock) so a
+dev build can run beside the installed app. Net effect: EVERY port instance owned a DIFFERENT
+encryption key, while the credential vault (~/.omp/lucid-cred-vault) is global. The relaunch rolled a
+new free port, the new instance minted a fresh key, and the blob encrypted minutes earlier became
+undecryptable. Fail-closed did its job (invariant 3: scan-or-block thinking applies to secrets too);
+the UI still said "key in vault" because listCredentials reads only meta.json and the endpoint Test
+sends an unauthenticated probe -- neither ever decrypts.
+
+### Decision
+
+Converge every instance on the CANONICAL (unsuffixed userData) key rather than sharing profile dirs:
+
+1. `desktop/oscrypt_seed.ts` (pure, IO-free): seedInstanceFromCanonical copies the canonical
+   `os_crypt.encrypted_key` into the instance's Local State text; backfillCanonicalFromInstance adopts
+   an instance's freshly-minted key into a keyless canonical file (machines that only ever ran
+   port-suffixed builds). A non-empty unparseable Local State is REFUSED, never overwritten
+   (mergeModelsYaml's posture). A divergent pre-fix instance key is deliberately replaced: anything it
+   encrypted was already unreadable everywhere else.
+2. main.ts wiring: the seed runs at MODULE LOAD, right after the userData suffix and before Chromium
+   reads Local State at app-ready; the backfill runs in whenReady. Both win32-only (macOS Keychain and
+   Linux libsecret key by app NAME and already share) and best-effort (a failed seed reverts to
+   pre-fix behavior, never blocks launch).
+3. prepareLocalProviders now tees its `[LOCAL_PROVIDERS]` outcome line (with per-provider skip
+   REASONS) into engine.log: main's console is invisible in a packaged GUI app, and this exact silent
+   skip needed a trail.
+
+DPAPI unwrap of the old blob for in-place re-encryption was written but not run; the user chose to
+re-enter the key once instead (simpler, no secret ever transits a script).
+
+### Alternatives rejected
+
+- Sharing sessionData/profile dirs across instances: Chromium locks profile internals; concurrent
+  dev-beside-installed is the stated use case.
+- Raw DPAPI vault (bypass safeStorage): needs a native module or shelling to PowerShell for every
+  read; heavy, and safeStorage already DPAPI-wraps the shared key.
+- Pinning the relaunch port: fixes only the relaunch drift, not key-stored-on-port-A-read-on-port-B.
+
+### See also
+
+ADR-0135 (Local Providers + vault delivery), ADR-0206 (port-keyed userData / single-instance lock),
+P-KEYS.1/ADR-0107 (vault metadata, last4), invariant 3 (fail-closed).
+
+## ADR-0279 -- CREATOR-0: the Creator product line - one branch, two flavors, side by side
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `make demo-CREATOR-0` green (7 sections, 49 checks); new suites
+build_flavor 15 / creator_monitor 22 / creator_registry 19 / creator_library 14 / creator_preamble 6 /
+renderer creator_monitor 21 / renderer creator_studio 14 / electron-builder.creator 7; root + renderer +
+server typecheck clean apart from the documented pre-existing `dev.ts` `finish(m[1])` TS2345.
+**Increment:** CREATOR-0, on branch `feature/creator-mode`. Sits beside the P-FLEET.P* profile family
+(ADR-0272): profiles are N project-bound instances of ONE product; a flavor is a DIFFERENT product.
+
+### Context
+
+The ask was a Creator build that (a) runs on its own native port so it can sit beside the main app, (b)
+exposes Creator Mode next to Agent Mode only in that build, (c) has its own installer, and (d) still takes
+master's updates without a fork. The existing seams get close but not there: `LUCID_PORT` gives a second
+instance a port (ADR-0206 territory), and ADR-0272 promoted `LUCID_GUI_SETTINGS_FILE` /
+`LUCID_PERSONAL_DIR` to real isolation seams. What they do NOT give is a distinct PRODUCT: one app id, one
+product name, one installer name, one deep-link scheme, one vault. Two instances of the same app id share a
+single-instance lock keyed on userData, and (ADR-0278) share a Windows os_crypt key per profile directory.
+
+### Decision
+
+1. **`desktop/build_flavor.ts` is the single source of product identity.** Pure, electron-free:
+   `BuildFlavor = agent | creator`, `AGENT_FLAVOR` / `CREATOR_FLAVOR` (appId, productName, displayName,
+   artifactStem, defaultPort, defaultRelayPort, defaultWhisperPort, authProtocol, features),
+   `normalizeBuildFlavor` (anything unrecognized is the STANDARD build), `resolveBuildFlavor`
+   (env `LUCID_BUILD_FLAVOR` > packaged `package.json` `lucidBuildFlavor` > agent), `normalizeUiMode`,
+   `uiModePosture`, and `buildInfoView`.
+2. **Creator identity:** appId `com.lucidcreator.desktop`, productName `LucidCreator`, display name
+   "Lucid Creator", port **5320**, relay 8791, managed whisper 9112, scheme `lucid-creator`, artifacts
+   `LucidCreator-*`, output `desktop/release-creator`. The standard build's values are unchanged, and a
+   test pins them so a Creator edit can never move them.
+3. **`main.ts` resolves the flavor FIRST**, then `app.setName()` (Creator only) before anything reads a
+   userData-derived path, so userData, the single-instance lock, and the os_crypt key all separate
+   naturally. `DEFAULT_PORT`, `AUTH_PROTOCOL`, and `CRED_DIR` come from the flavor; the ADR-0278 seeding is
+   untouched and now operates WITHIN a flavor.
+4. **Data isolation by construction.** Creator's engine child gets `LUCID_GUI_SETTINGS_FILE`,
+   `LUCID_PERSONAL_DIR`, `LUCID_CRED_VAULT_DIR`, `LUCID_CREATOR_DIR`, `LUCID_RELAY_PORT`, and
+   `LUCID_WHISPER_PORT` inside its userData. The standard build gets only DESCRIPTIVE vars, so its on-disk
+   layout does not move by a byte. Nothing is migrated: a vault blob from the other identity would not
+   decrypt anyway (ADR-0278's lesson), so Creator starts empty and the user re-enters secrets.
+5. **Packaging is an overlay, not a fork.** `desktop/build/electron-builder.creator.cjs` deep-clones the
+   build config out of `desktop/package.json` and overrides identity only, with
+   `extraMetadata.lucidBuildFlavor = "creator"` so a packaged Creator resolves its flavor with no env var.
+   `desktop/build/build-creator.ts` compiles `dist/main.js` with the flavor baked in as a define (belt and
+   braces), after wiping `dist/` so a stale Agent bundle can never ship as Creator.
+6. **whisper + relay ports move with the flavor.** whisper.cpp binds SO_REUSEPORT, so a shared port would
+   silently split requests across two model loads (the P-STT.5 bug); the relay binds a socket outright.
+7. **`GET /api/build-info`** (token-gated like the rest of /api) reports flavor, creatorBuild, identity,
+   version, ports, data roots, vault scope, and the feature flags. It carries no credential, no vault ref,
+   and no decrypted material - a test asserts the payload contains no credential-shaped field.
+
+### Deliberately shared
+
+omp's own session store and provider OAuth under `~/.omp/agent`. No supported omp home-relocation seam was
+found, and inventing one would mean patching omp (invariant 1). Documented in docs/CREATOR-MODE.md rather
+than quietly implied.
+
+### Alternatives rejected
+
+- **Same appId + a port suffix (today's dev-beside-installed trick).** Shares the NSIS install GUID, the
+  Start-menu entry, the auto-update feed, and per-ADR-0278 the os_crypt key. Two products, one identity.
+- **A forked branch or a second package.json.** Permanent merge pain, and packaging payload would drift.
+- **Creator as a UserRole.** Roles are cosmetic presentation presets (ADR-0088) that a standard build also
+  has; the ask was a separate build with a separate installer and port.
+- **Migrating Agent data into Creator on first launch.** Cross-identity vault blobs cannot decrypt, and
+  silently copying a personal knowledge store is exactly the surprise this project avoids.
+
+### Invariants preserved
+
+#1 extend-not-fork (env seams + additive endpoints; omp untouched), #2 TypeScript only, #3/#4 unchanged
+(the same in-process gate runs in both flavors), #6 frozen prefix untouched, #7/#8/#10 contracts and
+schema untouched, #11 applies to every new surface, BUSL headers on all new files.
+
+### See also
+
+ADR-0272 (fleet profiles: the OTHER multi-instance shape), ADR-0278 (per-identity safeStorage key),
+ADR-0206 (the single-instance lock this re-keys by product), ADR-0135 (vault-by-reference), docs/CREATOR-MODE.md.
+
+## ADR-0280 -- CREATOR-0: Creator Mode is a UI mode with AGENT security semantics
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT (part of CREATOR-0).
+
+### Context
+
+The ask was literally "Creator Mode next to Agent Mode in the settings, but only for that build". LUCID has
+two candidate homes for that: `UserRole` (onboarding presentation, ADR-0088) and the composer's execution
+mode (`agent | ask | plan`, P-ACP.2/.3). The composer control is the one that sits next to "Agent", and it
+is the one users mean.
+
+### Decision
+
+1. `UiMode` becomes `agent | creator | ask | plan` in `build_flavor.ts`. `harness/contracts.ts` AgentMode
+   is NOT touched: it is a frozen provenance contract, not a renderer control.
+2. **`uiModePosture(mode)` is the single mapping** to (omp mode, permission mode). Creator returns exactly
+   what Agent returns: `default` + `auto`. A test asserts the two are byte-identical, so "Creator" can
+   never quietly become a permission grant. Ask stays the only per-tool-approval posture; Plan stays omp's
+   read-only planner.
+3. **Build gating is absent-not-disabled.** The renderer builds the option list with
+   `modeUiOptions(creatorBuild)`; a standard build never emits the Creator button. `POST /api/uimode` and
+   `AcpBackend.setUiMode` independently re-normalize, so a forged request folds to `agent`.
+4. Entering Creator opens the Studio surface. `AgentPrior.uiMode` widened, so a user who was in Creator and
+   used the hands-free LUCID Agent role returns TO Creator rather than being dropped into plain Agent.
+
+### Alternatives rejected
+
+- **A new `AgentMode` in the frozen contracts.** That file is a frozen contract (invariant 7/8); a UI mode
+  does not belong in it, and changing it would be its own increment for no gain.
+- **A Creator UserRole beside `lucid-agent`.** Roles exist in the standard build too, so it could not be
+  build-gated without lying about what a role is.
+- **A separate permission posture for Creator** (for example auto-approving render tools). Rejected on
+  invariant 3: media work is exactly where an untrusted prompt or asset shows up, so it gets the same gate.
+
+### See also
+
+ADR-0027 (P-ACP.2/.3, the mode control), ADR-0088 (roles are cosmetic), ADR-0251 (the one behavioral role),
+ADR-0279 (the flavor that reveals this mode).
+
+## ADR-0281 -- CREATOR-0: Suno, and the local track library that needs no API
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT (the local half). Cloud generation is capability-probed, not claimed.
+
+### Context
+
+The user asked for Suno music generation with local song storage, listing, library updates, remixing,
+re-prompting, listening, reviewing, and editing. The blocking finding: **Suno has no public self-serve API
+as of 2026.** `docs.suno.com` does not resolve; the only official developer signal is a curated partner
+program announced mid-2026 (Music Business Worldwide, 2026-07-02, quoting Suno's CPO), and everything else
+on offer is a third-party reseller that pools accounts.
+
+### Decision
+
+1. **Split the ask honestly.** Generation is a `unverified-endpoint` capability: the user supplies a partner
+   base URL plus the NAME of a vault token, and LUCID probes before it calls. No Suno endpoint is
+   hardcoded, no reseller is registered, and the web product is never automated.
+2. **Everything local ships now**, in `desktop/creator_library.ts`: an append-only JSONL ledger plus the
+   audio files under `<Creator userData>/creator/library`. Import (mp3/wav/flac/ogg/opus/m4a/aac, 200 MB
+   cap), listen, rate 1-5, review notes, tags, prompt and lyrics, remove, and lineage: `remix` (new audio,
+   same chain) and `reprompt` (same idea, new render) each keep their parent, so `lineageOf` reads oldest
+   first and a chain is cycle-safe and bounded.
+3. **The write path is confined by construction.** The destination file name is derived from a generated id,
+   so nothing a caller passes can steer a write out of the audio directory; a rejected oversize import is
+   rolled back rather than half-stored.
+4. **Torn tails cost one record.** `foldLibrary` skips unparseable or unknown lines, exactly like the fleet
+   lane ledger (P-LOC.4 / P-FLEET.L5 pattern).
+5. Playback returns base64 + mime through `GET /api/creator/track`, mirroring the TTS path, so the renderer
+   builds one blob URL and the control plane keeps a single JSON shape.
+
+### Alternatives rejected
+
+- **Wrapping a third-party Suno reseller.** It pools accounts and can break or vanish; registering it would
+  make LUCID lie about what is official.
+- **Browser-automating suno.com.** Scripting a vendor's UI is fragile, likely against their terms, and
+  exactly the "pretend it is an API" behavior the registry labels exist to prevent.
+- **Waiting for the partner API before shipping anything.** The local library is most of the stated value
+  (store, list, listen, review, remix, re-prompt) and needs no API at all.
+
+### See also
+
+ADR-0282 (the registry that carries the honesty label), ADR-0115 (the ElevenLabs voice path), P-LOC.4 /
+ADR-0211 (the GUI-owned append-only ledger pattern), docs/CREATOR-MODE.md.
+
+## ADR-0282 -- CREATOR-0: the Creator integration registry (honest capability labels)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT (the registry, the declarations, and the Studio surface).
+
+### Context
+
+Creator Mode touches seven external surfaces with wildly different maturity: ElevenLabs (rich documented
+API plus a web product that does more), dots.tts (Apache-2.0 local runtime you host), Suno (no public API),
+ComfyUI (documented server whose CAPABILITY depends on which nodes that install has), three.js (a library,
+not a service), Blender (documented CLI), Unreal (documented CLI plus an opt-in editor control plane). The
+failure mode without a registry is an agent that invents an endpoint or claims a feature the vendor only
+ships in their own UI.
+
+### Decision
+
+1. **`desktop/creator_registry.ts` is a pure catalog** with closed provider ids, closed capability ids,
+   closed transports, and per-capability status from a four-value set: `available` (an official documented
+   surface exists TODAY), `unverified-endpoint` (no public API published; user supplies it, probe first),
+   `product-ui-only` (vendor exposes it only inside their own app), `planned` (roadmap).
+2. **Declarations, never secrets.** `CreatorEndpointDef` carries a base URL or an executable plus a
+   `vaultRef` NAME. `validateCreatorEndpoint` refuses: a non-http(s)/ws(s) URL, credentials embedded in a
+   URL, a shell string or metacharacter where an executable belongs, a transport the provider does not
+   have, and a pasted secret in ANY field (the shared `SECRET_SHAPE` guard, ADR-0134/0135 lineage).
+3. **Availability is folded, not assumed.** `foldProviderStatus` yields `built-in` (three.js),
+   `needs-endpoint`, `needs-credential`, `configured`, or `ready`; a capability becomes usable only if it is
+   `available` AND either local/in-runtime or backed by a live probe, and a probe can never introduce a
+   capability the catalog does not list.
+4. **The Studio shows all of it.** Grouped Audio / Video / 3D / Game / Testing, one-line ellipsized labels,
+   block-paragraph notes, one chip per capability carrying its label and its detail on hover (invariant 11).
+
+### Alternatives rejected
+
+- **A free-text capability list per provider.** The agent would pattern-match it into promises.
+- **Auto-discovering providers by scanning the filesystem or HuggingFace.** Noisy, and it would imply
+  support LUCID has not verified. Discovery is an explicit declaration plus a live probe.
+- **One "enabled" boolean per provider.** Hides the difference between "no endpoint", "no credential", and
+  "documented but not wired", which is precisely what a user needs to see.
+
+### See also
+
+ADR-0135 (Local Providers: declaration + vaultRef + egress zone, the pattern this mirrors), ADR-0115
+(ElevenLabs), ADR-0281 (Suno), ADR-0286..0290 (the workflows these labels gate).
+
+## ADR-0283 -- CREATOR-0: normalized CPU/GPU telemetry, evidence-based admission, and the odometer rail
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT (local collectors, remote contracts, admission, and the rail UX).
+
+### Context
+
+ADR-0182 samples aggregate CPU + RAM and fails OPEN; ADR-0273 added sustained-pressure admission for fleet
+lanes (90% held 30s). Neither knows anything about a GPU, and generative media is the first workload that
+can wedge a machine through VRAM rather than cores. The user asked for CPU and GPU odometer chips in the
+right rail with premium hover, a detailed click-through flyout, and remote DGX / GPU-VM monitoring.
+
+### Decision
+
+1. **One normalized contract** in `desktop/creator_monitor.ts`: `CpuTelemetry` (aggregate + PER CORE),
+   `MemTelemetry`, `GpuDeviceTelemetry` (load, VRAM used/total, temp, power, cap), `GpuTelemetry`
+   (available + source + note), `TargetTelemetry` (local or remote, with `sampledAt`, `ageMs`, and a
+   `fresh | stale | blind` label), and `CreatorResourcesData` as the route payload.
+2. **Collectors that only claim what they measure.** Local CPU/memory from two `os.cpus()` readings
+   (per-core included); local GPU from ONE fixed-argv `nvidia-smi` CSV query. Every other vendor reports
+   `available: false` with a platform-specific reason instead of guessing. `[N/A]` and `Not Supported`
+   parse to `null`, never 0.
+3. **Remote targets are plain HTTP reads** of a user-registered URL: a DCGM/Prometheus exporter (a minimal
+   text-exposition parser that drops NaN/Inf) or a LUCID JSON agent whose every field is optional. The
+   token rides an `Authorization` header, never the URL, and never reaches an error string. A dead host is
+   a blind row carrying its reason.
+4. **Telemetry fails open; admission is evidence-based.** `creatorAdmission` refuses only on a MEASURED
+   streak (CPU, memory, or GPU at 90%+ unbroken for 30s - a cool OR blind sample breaks it, a backwards
+   clock resets the window) or a KNOWN VRAM shortfall, and it reports `gpuEvidenceMissing` so a
+   GPU-needing job on an unmeasurable box is admitted WITHOUT being called an all-clear.
+5. **The rail UX** (`desktop/renderer/creator_monitor.ts`, pure builders): two chips, each a 270 degree
+   graduated SVG dial with needle, hub, and a tabular percentage; one CSS custom property drives arc,
+   needle, glow, and text so green/amber/red is state only. `null` renders as a muted face with "no
+   signal" and NO value arc. Clicking a chip expands the detailed flyout in place (per-core strip,
+   per-device GPU rows, memory, processes, and a trend whose line BREAKS across a gap rather than
+   interpolating). Hot pulses, stale dims, blind dashes the needle; all motion is transform/filter/opacity
+   under the global reduced-motion reset.
+
+### Alternatives rejected
+
+- **Averaging cores into one number only.** Hides the single-pegged-core case that actually stalls a render.
+- **Treating a missing counter as 0%.** The dial would tell a human "go ahead", which is the one thing an
+  honest instrument must not do.
+- **Elevated collectors (macOS `powermetrics`, per-process GPU accounting).** Needs privilege LUCID does
+  not ask for; reported as not collected instead.
+- **Persisting the pressure window.** It is presentation and admission evidence, not an audit log, so it
+  stays in memory and bounded (240 samples).
+
+### See also
+
+ADR-0182 (P-SYSRES.1, the fail-open sampler this extends), ADR-0273 (P-FLEET.L2, the sustained-pressure
+shape reused), ADR-0129 (degrade only on evidence), invariant 11 (the chip label discipline).
+
+## ADR-0284 -- CREATOR-0: Creator instructions, skills, and memory boundaries
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT.
+
+### Context
+
+Creator work needs standing guidance (probe before calling, never invent an API, consent before cloning a
+voice, respect resource admission) and it must not touch the frozen prompt prefix (invariant 6) or leak
+creative context into the standard build's memory.
+
+### Decision
+
+1. **`desktop/creator_preamble.ts`** emits ONE `<critical>` block, and only when `creatorBuild && active`.
+   `desktop/preamble.ts` gained a `creatorMode` slot placed after DESIGN.md invariants and before the
+   spoken-reply block, so it is standing guidance that vanishes the turn after the mode is switched off.
+   `harness/prompt/assembler.ts` is untouched: no PREFIX_VERSION bump, no cache bust.
+2. **The block never grants anything.** It restates Agent security semantics, requires capability
+   discovery, forbids invented APIs, declares external media metadata to be DATA, requires honoring
+   resource admission (unknown is not spare capacity), requires scope-matched consent for voice cloning,
+   and forbids weakening a gate.
+3. **`.agents/skills/creator-studio/SKILL.md`** carries the operational craft: the per-provider capability
+   table with its hard limits, the consent rule, the alignment-data rule for the follow-along editor, the
+   library-as-memory habit, and the verify-before-you-claim list. It lives in the operator-curated
+   `.agents` root, so it is discovered read-only and immutable (ADR-0097 posture).
+4. **Memory boundary:** Creator's GUI settings, Personal Knowledge store, CUI store, audit trail, export
+   vault, and credential vault all live under the Creator userData (ADR-0279 env seams). The promotion gate
+   (P4.3) is unchanged, so nothing generated auto-promotes into semantic memory.
+
+### Alternatives rejected
+
+- **Adding Creator rules to the frozen prefix.** Busts the KV cache for every build, and a mode-specific
+  rule is by definition volatile.
+- **A `--append-system-prompt` block.** Same problem as the prefix, and it would persist after the user
+  left Creator Mode.
+- **Bundling the skill as trusted built-in.** `.agents` is the operator-curated root; treating a new skill
+  as bundled-trusted would sidestep the governance the Skills directory exists to provide.
+
+### See also
+
+ADR-0040 (standing guidance is re-delivered every turn), ADR-0154 (the DESIGN.md slot this sits beside),
+ADR-0248 (the spoken-reply block whose lifecycle it mirrors), ADR-0097 (skill roots and trust).
+
+## ADR-0291 -- CREATOR-IMG: image generation, mixing, markup, sprite sheets, GIFs, and memes
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `make demo-CREATOR-IMG` green (5 sections, 34 checks); new suites
+imaging 23 / creator_image 26 / renderer creator_images 17; renderer bundle builds with the meme math and
+ZERO node-only code (`deflateSync` absent from `app.bundle.js`); typechecks clean apart from the documented
+pre-existing `dev.ts` error.
+**Increment:** CREATOR-IMG, on `feature/creator-mode`, immediately after CREATOR-0 (ADR-0279..0284).
+
+### Context
+
+The ask: image generation with a dropdown of specific models, the ability to mix images with prompts, open
+the result in the Preview panel, mark it up, and build sprite sheets for animation, GIFs, and memes
+NATIVELY in the harness.
+
+Two hard constraints shaped the answer. First, LUCID must not invent a provider API: the only local image
+surface with documented HTTP routes is ComfyUI, and its CAPABILITY is per install (a node set, a model
+directory), so a hardcoded model list would be a lie. Second, invariant 2 forbids new Python and the repo
+has no native image dependency, so "natively in the harness" has to mean pure TypeScript.
+
+### Decision
+
+1. **The encoders live in the harness, in pure TypeScript.** `harness/creator/imaging.ts` owns a PNG
+   encoder (deflate via `node:zlib`, one filter-0 scanline per row, CRC-checked chunks), a GIF89a encoder
+   (deterministic global palette, reserved transparent slot, variable-width LZW with sub-blocks, a
+   NETSCAPE2.0 loop block, per-frame GCE delays in ticks), sprite-sheet geometry (near-square packing,
+   per-cell rects, a frame manifest, a `steps()` CSS animation), and deterministic quantization (exact
+   palette when the art fits, else a 6x6x6 cube plus the most frequent exact colours). Meme geometry sits
+   in `harness/creator/meme_layout.ts` - node-free ON PURPOSE, so the renderer can import it without
+   dragging `node:zlib` into the browser bundle (verified: `deflateSync` does not appear in app.bundle.js).
+2. **The renderer owns rasterization, because it is the only side with an image decoder and real fonts.**
+   Canvas decodes sources to RGBA, draws meme text with measured `measureText` metrics, and encodes memes and
+   markup exports with `toDataURL`. Raw RGBA crosses the loopback control plane for sheets and GIFs (a
+   browser cannot encode GIF), gated by `decodeWireFrames`: max 64 frames, max 2048 px per edge, max 48 MB,
+   and a byte-count mismatch refuses the WHOLE request naming the frame.
+3. **Generation runs the user's OWN workflow.** `GET /api/creator/models` probes `/object_info` and reads
+   model names out of `CheckpointLoaderSimple` / `CheckpointLoader` / `UNETLoader` / `VAELoader`; a renamed
+   or missing shape yields NO models rather than a guess. `POST /api/creator/image` substitutes
+   `{{prompt}}`, `{{negative}}`, `{{model}}`, `{{seed}}`, `{{width}}`, `{{height}}`, and `{{image:role}}`
+   into the template the user exported with ComfyUI's "Save (API Format)", then submits `/prompt`, polls
+   `/history` (which lists only FINISHED prompts, so absence means pending, never an error), and imports
+   `/view` bytes. **Any unresolved placeholder refuses the submit and names it.** A whole-string numeric
+   placeholder stays a NUMBER, because ComfyUI type-checks node inputs.
+4. **Mixing is by ROLE, not by position.** Each staged input carries a name (`style`, `composition`,
+   `background`, ...), is uploaded via `/upload/image`, and binds to `{{image:role}}` case-insensitively. Six
+   inputs is the cap.
+5. **Artifacts carry provenance.** Every stored image records kind, mime, bytes, sha256, dimensions, source,
+   prompt, model, and its sidecars, in an append-only ledger under the Creator data root; the write path is
+   derived from a generated id, so no caller can steer it. Sidecars are the sheet manifest and its CSS.
+6. **Markup is not reinvented.** "Open in Preview" hands the artifact to the EXISTING `/api/preview/image`
+   wrapper (P-IMG.1 / ADR-0208), which already renders inside the sandboxed preview frame with the
+   pen/rect/text markup canvas and Screenshot-to-chat (P-PREVIEW.5).
+7. **Everything local works with nothing configured.** With no endpoint and no key, the pane still builds
+   sheets, GIFs, and memes, and it says so in that state rather than looking broken.
+
+### Alternatives rejected
+
+- **A curated model dropdown.** A model list that is not read from the running server is fiction the moment
+  the user installs or renames a checkpoint.
+- **LUCID generating its own ComfyUI workflow graph.** Node availability varies per install; a generated
+  graph would fail in ways the user cannot debug. The user's exported template is the contract.
+- **Shelling out to ffmpeg or ImageMagick for GIF/PNG.** A new native dependency, absent on a clean machine,
+  and a subprocess where a pure function does. The pure encoders also make the output byte-deterministic and
+  therefore testable.
+- **Encoding GIFs in the renderer.** Canvas has no GIF encoder; a WASM one is a new dependency for something
+  ~200 lines of TypeScript does deterministically.
+- **A second markup canvas for images.** The Preview panel already has one, with screenshot-to-chat wired.
+- **Accepting SVG as an input or artifact.** Script risk; refused exactly as P-IMG.1 refuses it.
+
+### Invariants preserved
+
+#2 TypeScript only (no new Python, no native module), #3 fail-closed on every decode/validate path, #5
+external media metadata stays data, #6 frozen prefix untouched, #10 no schema change (the artifact ledger is
+a GUI-owned JSONL, the P-LOC.4 pattern), #11 the artifact grid uses `minmax(224px,1fr)` tracks with
+single-line ellipsized captions, BUSL headers on all new files.
+
+### See also
+
+ADR-0282 (the registry whose ComfyUI entry this drives), ADR-0208/P-IMG.1 (the image data-URL gate and the
+preview wrapper reused), ADR-0096/P-PREVIEW.* (the markup canvas), ADR-0287 (CREATOR-3, where video
+pipelines and deterministic three.js capture continue this arc), docs/CREATOR-MODE.md.
+
+## ADR-0292 -- CREATOR-1: capability probes and the durable job ledger
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `make demo-CREATOR-1` green (4 sections, 33 checks); new suites
+creator_probe 22 / creator_jobs 13, renderer creator_studio grew to 29; renderer bundle builds; typechecks
+clean apart from the documented pre-existing `dev.ts` error.
+**Increment:** CREATOR-1, the first item of the ADR-0285 roadmap, after CREATOR-0 (ADR-0279..0284) and
+CREATOR-IMG (ADR-0291).
+
+### Context
+
+CREATOR-0 could only report `configured`: a declaration exists and a credential is registered. That is not
+the same as "this will work", and the gap is where an agent starts guessing. Two things were missing:
+
+1. **Nothing ever asked the provider.** ComfyUI publishes its node catalog, ElevenLabs publishes model
+   flags, a desktop app either exists on disk or does not - all of that was unread.
+2. **Creative work had no record.** A generation was a fetch that either returned or did not. Nothing showed
+   what ran, what it produced, how long it took, or what the resource governor measured when it started, and
+   a refusal by the governor vanished into a toast.
+
+### Decision
+
+1. **`desktop/creator_probe.ts`: probes that report only what the answer PROVES.** A closed state set
+   (`ready | unauthorized | unreachable | not-installed | no-capabilities | skipped`) plus an `attested`
+   capability list, with one adapter per surface shape:
+   - **ComfyUI** - `/object_info` is REAL capability discovery: `image` needs `SaveImage`/`PreviewImage`,
+     `video` needs an animation/video combine node, `model-3d` needs a 3D save/load node, `workflow-run`
+     needs a sampler. A server with nodes but no output node is `no-capabilities`, not `ready`.
+   - **ElevenLabs** - `/v1/models` validates the key AND maps documented flags
+     (`can_do_text_to_speech`, `can_do_voice_conversion`, ...) to capabilities; TTS implies streaming and
+     alignment because they ride the same endpoint. No key is `skipped`, never a failure.
+   - **A user-run HTTP service** (dots.tts, a Suno partner endpoint) - reachability is all it proves, and the
+     detail line SAYS so. dots.tts attests `tts`; Suno attests nothing, which is the honest answer.
+   - **A desktop app** (Blender, Unreal) - presence of the declared executable is the proof; a version line
+     on a fixed argv is a bonus, and a tool that refuses `--version` is still installed.
+   - **three.js** - ready by construction: it ships in the renderer.
+   Secrets ride headers (`xi-api-key` for ElevenLabs, `Bearer` elsewhere), never a URL, and never appear in
+   a detail line. Every adapter takes injected IO and returns a result object: a dead endpoint is a state.
+2. **`ready` now requires a live probe.** `foldProviderStatus` no longer treats "configured" plus optimism
+   as ready: when a probe exists, ONLY its attested capabilities are usable (a `built-in` needs no probe).
+   `ProbeCache` is in-memory and time-stamped with `fresh | stale | expired`; an expired answer is dropped
+   rather than allowed to keep a provider looking healthy after the user's VPN dropped.
+3. **`desktop/creator_jobs.ts`: an append-only job ledger under the Creator data root.** Closed kind and
+   state sets, a `canTransition` table enforced on WRITE and again on FOLD (so a hand-edited or
+   out-of-order ledger cannot resurrect a settled job), bounded history (200), torn-tail tolerance, and
+   `jobStats` / `jobDurationMs` for the surface.
+4. **Admission is recorded, refusals included.** `admitCreatorJob` samples the governor, snapshots the
+   measured CPU/memory/GPU/VRAM plus `gpuEvidenceMissing`, and writes the job. A refused admission becomes a
+   `refused` JOB carrying the measured reason - the user asked for work, so the ledger says why it did not
+   happen instead of dropping it into a toast. Image, sheet, and GIF routes all run through it and record
+   their artifact ids.
+5. **Cancel is a REQUEST.** `requestJobCancel` records `cancelRequested` immediately and changes nothing
+   else; the job settles as `cancelled` only when its runner confirms. The UI shows "(stopping)" in between
+   rather than claiming a stop it cannot guarantee.
+6. **Surface:** every provider row gets a Probe button, a probe-everything action, and a probe line (verdict,
+   age, latency, the server's own text - escaped); a Recent jobs strip shows kind, label, state, duration,
+   artifact count, the governor's measurement, and a Stop only while stopping is possible.
+
+### Alternatives rejected
+
+- **Trusting the catalog as capability.** The catalog documents what a VENDOR offers; only a probe knows what
+  THIS install has. Shipping the catalog as truth is how an agent ends up calling a node that is not there.
+- **Persisting probe results.** A capability answer is stale the moment a node is installed. Persisting it
+  would make a stale claim look authoritative across restarts.
+- **Marking a job cancelled on the click.** The runner may be mid-write. Recording the request and waiting
+  for confirmation is the only version that cannot lie.
+- **Dropping a refused admission.** A refusal is the most informative event the governor produces; it earns a
+  row more than a success does.
+- **A queue that runs jobs the user cannot see.** The ledger is a record, not a scheduler: work still runs on
+  the request that started it (the P-FLEET.L3 renderer-drain lesson - never run a turn nobody can watch).
+
+### Invariants preserved
+
+#2 TypeScript only; #3 fail-closed (a probe failure narrows capability, never widens it); #5 remote text is
+data and escaped at render; #6 frozen prefix untouched; #10 no schema change (a GUI-owned JSONL, the P-LOC.4
+pattern); #11 the probe line is a BLOCK paragraph with inline chips, job labels are one-line ellipsized.
+
+### See also
+
+ADR-0282 (the registry whose `ready` state this makes truthful), ADR-0283 (the governor whose measurement
+every job records), ADR-0291 (the image routes now wrapped as jobs), ADR-0285 (the roadmap this is the first
+item of), P-FLEET.L3/ADR-0276 (why a queue never runs work nobody can watch).
+
+## ADR-0293 -- CREATOR-2: the follow-along audio editor
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator2.ts` green (9 sections, 55 checks, and
+breaking one claim exits 1 with the named FAIL); new suites timeline 41 / creator_editor 18 / renderer
+creator_editor 37; the four earlier Creator demos and verify-creator-comfy still green; renderer bundle
+builds (124 modules); license headers clean; zero em dashes. Live on this machine: the Creator engine on
+5320 opened a real 24kHz WAV (derived alignment at 0.531 confidence), saved a trimmed edit to exactly
+96044 bytes / 2000ms, recorded it as a remix whose parent kept all 238844 of its bytes, and refused a
+save naming a source the library does not hold.
+**Increment:** CREATOR-2, the second item of the ADR-0285 roadmap, planned in ADR-0286.
+
+### Context
+
+CREATOR-0 shipped a track library: import, listen, rate, tag, remix by lineage. What it could not do was
+touch the INSIDE of a take. The ask (ADR-0286) was the ElevenLabs-style experience: audio that follows the
+text word by word, tap a word to seek, select a span and drag it, delete it, re-render just that span.
+
+Three things made that harder than a waveform widget:
+
+1. **A local engine gives you no word timings.** whisper.cpp's `/inference` returns text
+   (`harness/voice/transcription.ts` returns `{ text, note }` and nothing more), so for the air-gap path
+   there is no vendor alignment to render. Presenting a guess as an engine fact would be exactly the kind
+   of quiet lie this project keeps writing tests against.
+2. **There is no transcoder and there will not be one.** ADR-0291 put the imaging encoders in pure
+   TypeScript on purpose (air-gap safe, byte-deterministic, testable). Audio inherits that: no ffmpeg, no
+   native module.
+3. **"Re-render just that span" is a correctness claim**, not a feature. If a span re-render perturbs one
+   byte outside the span, the user's earlier work is silently damaged.
+
+### Decision
+
+1. **`harness/creator/timeline.ts` is an EDIT DECISION LIST, not a multitrack.** Clips are contiguous and
+   ordered: clip[0] starts at 0, clip[n] starts where clip[n-1] ends, no gaps and no overlaps, and a gap is
+   an explicit `SILENCE_SOURCE` clip. Every span operation is therefore the same shape (split at both
+   boundaries, splice, `reflow`), and render is a straight byte copy in list order. `validateDoc` returns
+   the REASONS a document is broken, so a test failure names the violated invariant instead of asserting
+   `false`.
+2. **Nothing time-stretches.** A clip's timeline length always equals its source region length, so a trim
+   moves `startMs` and `srcStartMs` together and the rendered samples are always the source's own samples.
+   Pitch-preserving stretch is a DSP project, not a checkbox, and pretending otherwise would sound wrong.
+3. **Alignment provenance is data, and the cap is enforced by the validator.** `TimelineItem` carries
+   `source: "vendor" | "derived"` and a confidence. Vendor timings (the ElevenLabs character shape via
+   `alignFromVendor`) get 1. Anything LUCID works out itself is capped at
+   `DERIVED_CONFIDENCE_CEILING = 0.7`, and a derived item claiming more makes the document INVALID, which
+   makes the render refuse. The honesty label is not advisory: it is load-bearing.
+4. **Derived alignment is a measurement plus a distribution, and the note says which is which.**
+   `frameEnergy` takes per-frame RMS from the PCM; `speechRuns` thresholds against the clip's OWN noise
+   floor (its 10th percentile) so a quiet recording is not read as one long silence, merging gaps shorter
+   than a stop consonant and dropping runs shorter than a word. Words are distributed across the measured
+   runs weighted by their own length. The returned note states the run count against the word count, which
+   is exactly the weakness of the estimate, and the confidence falls out of that ratio.
+5. **Undo is a bounded stack of document SNAPSHOTS, not inverse operations.** ADR-0286's keystone was "undo
+   restores the previous clip exactly"; with snapshots that is structural equality, and the test asserts it
+   both ways (the document is equal field for field, and the re-render is byte-identical to the original).
+   Inverse ops would have to reconstruct a dropped clip's `parentClipId` and `prompt`, which is how a
+   history quietly loses lineage.
+6. **Every re-render is a NEW clip carrying `parentClipId` and the `prompt` that produced it**, and a
+   re-render with no prompt is REFUSED. Lineage (ADR-0281) now reaches inside a track, down to the span.
+7. **Render is fail-closed.** A missing source id, or a source whose format does not match the document,
+   REFUSES the render and names the id and both formats. It never substitutes silence, because silence is
+   what a damaged edit sounds like. A source shorter than its clip pads with silence rather than reading
+   past the end of the buffer.
+8. **The ops run in the RENDERER.** The module is pure with no node imports, so the pane imports it
+   directly and a keystroke costs no round trip; the desktop seam (`desktop/creator_editor.ts`) is touched
+   only to OPEN a track (bytes, peaks, derived alignment) and to SAVE a render, which lands as a new
+   library track with `kind: "remix"` and `parentId` set through the library's own `addTrack`, so id
+   minting and path safety stay in one place.
+9. **WAV-only, refused honestly.** A non-WAV or non-16-bit track is refused with a message naming the
+   track's real mime. The editor never claims a conversion it cannot do.
+
+### Alternatives rejected
+
+- **Overlapping multitrack clips.** Every span op would need a conflict policy and render would need a
+  mixer. That is ADR-0289's job; an EDL is the right shape for word-level editing and it makes contiguity a
+  single testable invariant.
+- **Server-side ops.** A round trip per drag, and a doc crossing the wire on every keystroke, to gain
+  nothing: the module is pure and the audio is already in the renderer.
+- **Inferring word timings from a forced aligner.** That is a model, and a model is a dependency plus a
+  second Python surface (invariant 2). Energy runs plus proportional distribution is weaker and says so.
+- **Presenting derived timings without a label** (or with a flattering confidence). The whole point of the
+  ceiling is that the UI cannot accidentally render a guess as a vendor fact.
+- **Reusing the live analyser tap for the waveform** (ADR-0286 item 4 suggested it). The analyser is a
+  real-time tap on a mic stream; the editor needs the whole file's envelope BEFORE playback, so
+  `waveformPeaks` computes it from the same PCM the alignment measured. Delta from the plan, recorded here.
+- **Transcoding mp3 so every track is editable.** No ffmpeg, no native module, no invented decoder.
+
+### Invariants preserved
+
+#2 TypeScript only, and the core has no node imports at all; #3 fail-closed applied to audio assembly (a
+missing source refuses the render); #5 the words being aligned are user text, escaped at render like every
+other untrusted string; #6 frozen prefix untouched; #7/#8 no change to `contracts.ts`; #10 no schema change
+(the library's append-only JSONL absorbs the saved take); #11 word chips are one-line ellipsized with a
+bounded max-width, and the provenance note is a BLOCK paragraph, never flex siblings.
+
+### See also
+
+ADR-0286 (the plan this implements, with the two deltas noted above), ADR-0281 (the lineage model this
+extends from tracks to spans), ADR-0291 (the pure-encoder precedent), ADR-0289 (the mixer that will consume
+this document), ADR-0073 (the STT seam that supplies text but no timings).
+
+## ADR-0295 -- CREATOR-3: the video and 3D render pipelines
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. Authored by a parallel session; the numbers below are the ones VERIFIED
+independently on this machine, not the ones reported. `bun run harness/scripts/demo_creator3.ts` green
+(13 sections, 101 checks, 0 failures) and proven loud (a sabotaged claim exits 1 naming it); 342 new tests
+across comfy_stream / frame_capture / blender_cli / model_manifest / creator_pipeline / creator_blender /
+renderer creator_pipeline, 0 fail; 774 pass across the 24 Creator-adjacent files (the authoring session's
+787 across 25 is the SAME measurement over one more file, `desktop/build_flavor.test.ts` at 13 tests, and
+774 + 13 = 787: a scope difference, NOT another instance of the release-copy inflation below, which is worth
+stating so a later reader who knows about that bug does not go hunting for an error that is not there);
+harness tree 1494 pass /
+2 fail across 136 files and desktop tree 2626 pass / 9 fail across 215 files, every failure a pre-existing
+Windows path-separator or TS-resolution case in `fs_browse`, `symbol_graph` and `lucid_acp`, files this
+increment never touched; `harness/prompt` 11 pass across 2 files (of which `prefix_compaction` is 4), so the
+frozen prefix is untouched; root typecheck clean; license headers clean; renderer bundle 127 modules.
+**Correction, and the lesson in it.** The first version of this ADR published harness 2335 / 3 and desktop
+4947 / 15. Both were inflated: `bun test` matches paths by substring, so omitting
+`--path-ignore-patterns='desktop/release/**'` (which `make test` always passes) pulls in the PACKAGED COPY
+of the repo under `desktop/release` and double-counts it. The authoring session made that omission on its
+harness runs, and this session reproduced the same number with the same omission and called it independent
+confirmation. It was not: **a matching number is not a second measurement when both runs share a wrong
+flag.** The figures above were re-measured here with the flag, and the flag belongs in every tree-wide count
+this repo publishes.
+**NOT verified, deliberately recorded:** `make` is absent on both machines, so the `demo-CREATOR-3` Makefile
+target is structurally checked (tab-prefixed recipe, one recipe line, `.PHONY` above, shape matched against
+its siblings) and UNEXECUTED; the script was run directly. And no real ComfyUI was involved anywhere: the
+end-to-end sections drive a real server PROCESS over real HTTP and a real websocket, but it is the repo's
+own fixture.
+**Increment:** CREATOR-3, the third item of the ADR-0285 roadmap, planned in ADR-0287.
+
+### Context
+
+Four things had been declared but not built. CREATOR-1's probe already attested `video` and `model-3d` from
+installed nodes and nothing consumed it. CREATOR-IMG polled `/history` and read only the `images` key. The
+registry declared `runtime-feedback` as available over `websocket` while no websocket client existed
+anywhere in the tree. And `storeArtifact` wrote unconditionally, so ADR-0287 item 5 (scan and
+provenance-stamp before the library) was unimplemented.
+
+### Decision
+
+1. **Four pure cores in `harness/creator`.** `comfy_stream.ts`: a closed `ComfyEvent` union, the 8-byte
+   binary preview header, a progress state machine that ignores other prompts and treats `error` and
+   `interrupted` as terminal, output parsing by KEY and EXTENSION so an animated webp reads as `video` and
+   not `image`, plus a magic-byte sniff and mismatch check. `frame_capture.ts`: a fixed timestep derived
+   from the frame INDEX, a fingerprint, a comparator, and an audit that names both ways a capture can lie.
+   `blender_cli.ts`: a fixed argv builder plus an output classifier. `model_manifest.ts`: declaration
+   parsing and reconciliation against a probe.
+2. **`desktop/creator_pipeline.ts` is the seam and the keystone**: probe gate, governor, template, submit,
+   telemetry, `/history`, magic-byte proof, fail-closed metadata scan, store, record. The ORDER is the
+   claim and it is tested: the capability and admission gates run before one byte leaves the machine.
+3. **The scan gate.** Every server-supplied string (filename, subfolder, output key, claimed mime) is
+   wrapped in `UNTRUSTED_CONTENT` delimiters and passed to `scanAndDecide` BEFORE the bytes are written; a
+   thrown, missing, or malformed verdict is a BLOCK. The note states what was proven and ADMITS that the
+   media bytes carry a sha256 and not a content scan, because the Unicode scanner cannot read a video frame.
+4. **`/history` is the authority, `/ws` is telemetry.** `openComfyProgress` opens the socket with a
+   `client_id` and the credential on the handshake header; the drain is concurrent and never awaited,
+   bounded by a frame budget and an idle timeout, so a silent, noisy, dead, or foreign-addressed socket
+   cannot hang, fail, or corrupt a render.
+5. **The bytes decide their own type.** A `content-type` contradicted by the magic bytes is refused by name,
+   and unidentifiable bytes are refused rather than stored under a guessed extension.
+6. **Argv is not a shell.** `ARGV_UNSAFE_CHARS` refuses NUL, newline, CR, tab, and control code points
+   only, so `C:\Program Files (x86)\...\blender.exe` is ACCEPTED. The compensating control is that the
+   runner spawns a vector through `Bun.spawn` with no shell, pinned by a test that walks every argv element
+   for `sh`, `bash`, `cmd.exe`, and `-c`. The ADR-0296 guard split is cited in the module.
+7. **A user `--python` script requires `approved: true`** (the exec-approval path). LUCID adds no `.py`
+   (invariant 2).
+8. **The probe is the truth, the manifest is a claim.** Declared-but-unprobed is never usable,
+   probed-but-undeclared is, and a stale or unauthorized probe blesses nothing.
+
+### Alternatives rejected
+
+- **Awaiting the websocket before polling.** A silent socket would become a hung render.
+- **Trusting `content-type`.** That is the entire point of the magic-byte section.
+- **Letting the ws `executed` frame decide outputs.** `/history` is what ComfyUI itself treats as durable.
+- **A browser-side socket.** No custom headers, so the token could not ride a header.
+- **Scanning media bytes with the Unicode scanner and calling it a content scan.**
+- **Refusing shell metacharacters in local argv paths.** A false refusal is as dishonest as a false pass
+  (ADR-0296).
+
+### Deltas from ADR-0287, recorded rather than glossed
+
+- Item 3 ships as the deterministic clock, the fingerprint, the audit, and PNG encoding of a captured frame.
+  Driving a user's own three.js scene through it from the Preview panel is NOT wired, and the docs say so.
+- Item 5's "scan every artifact" is implemented as scanning every server-supplied STRING, with the
+  bytes-are-hashed-not-scanned limit stated in the product surface instead of papered over.
+- `ArtifactKind` gained `video` and `model-3d`; the stored-media map gained `video/webm`, `video/mp4`,
+  `model/gltf-binary`, and `model/gltf+json`.
+
+### Invariants preserved
+
+#2 TypeScript only, and the four cores are node-free; #3 fail-closed extended to media import; #5 every
+remote string delimited, scanned, and escaped at the pane; #6 prefix untouched; #7/#8 `contracts.ts`
+unchanged; #10 no schema change (the append-only JSONL absorbs artifacts and jobs); #11 the pane's rows are
+single-text elements and its prose is block paragraphs, asserted on the emitted markup.
+
+### See also
+
+ADR-0287 (the plan, with the deltas above), ADR-0292 (the probe whose attestation this finally consumes),
+ADR-0291 (the image path this extends), ADR-0296 (the argv-versus-shell guard split this cites), ADR-0002
+(the scanner IPC contract the scan gate rides).
+
+## ADR-0296 -- argv is not a shell: guarding by threat model, and why a false refusal is a bug
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `tools/creator-backend/setup-backend.ts` 23 tests (was 20), pinned in BOTH
+directions; verified by dry run that a Windows key path reaches `ssh -i` intact. Adopted independently by
+CREATOR-3's Blender runner (ADR-0295 decision 6).
+**Scope:** small and cross-cutting. Recorded because it is a SECURITY POSTURE that looks like a bug to
+someone tightening it back up.
+
+### Context
+
+`setup-backend.ts` (the remote GPU backend driver) guarded every user-supplied string with ONE regex that
+refused shell metacharacters, on the sound principle that the driver refuses rather than escapes. The result:
+`--identity C:\Users\me\.ssh\id_ed25519` was REFUSED. That is the only form a Windows user would ever type
+for an SSH key. A parallel session hit the identical posture in a Blender executable path
+(`C:\Program Files (x86)\Blender\blender.exe`) and said so, which is how it surfaced.
+
+### Decision
+
+**One guard per threat model, because there are two.**
+
+1. **`REMOTE_UNSAFE` (unchanged, strict).** For values that reach the remote SHELL. `ssh` joins its trailing
+   arguments into a command string that the far-side login shell parses, so a metacharacter in the host, the
+   user, `--remote-dir`, or the wheel index genuinely can break out. Refused, never escaped.
+2. **`LOCAL_UNSAFE` (new, narrow).** For values that only ever occupy a slot in an argv array THIS process
+   spawns (`--identity`, `--workflow`). No shell parses those, so a backslash, a space, or a parenthesis is
+   an ordinary character in an ordinary path. What stays refused is what could never be a real path and
+   would matter if a future caller ever did build a string: control characters, quotes, backtick, and `$`.
+
+`--workflow` had been unguarded entirely, which was the same inconsistency from the other side, and it now
+takes the local guard.
+
+**A false refusal is as dishonest as a false pass.** It reads as a bug to the first user who hits it, and it
+teaches them the tool is broken rather than careful. This project spends its credibility on refusing things
+that deserve refusal, so refusing `C:\Program Files (x86)\...` spends it on nothing.
+
+**The compensating control is the load-bearing half.** The narrow guard is only honest while the spawn really
+is a fixed vector with no shell. That must be pinned by a TEST that fails if a shell is reintroduced, not by
+a comment: CREATOR-3's Blender runner does this by walking every argv element for `sh`, `bash`, `cmd.exe`,
+and `-c`.
+
+### Alternatives rejected
+
+- **Escaping instead of refusing.** Quoting rules differ per shell and per platform; the original refusal
+  posture is right, and this ADR narrows only WHERE it applies.
+- **Keeping one regex for simplicity.** Simplicity that produces a wrong answer on the maintainer's own
+  operating system is not simplicity.
+- **Allowing everything in a local path.** A newline in a path that a log parser reads back could forge a
+  line; a NUL truncates what the OS receives. Both stay refused for concrete, stated reasons.
+
+### See also
+
+ADR-0295 decision 6 (the same split applied to the Blender runner, with the no-shell test as its
+compensating control), ADR-0157/P-SANDBOX.1 (why argv discipline matters here at all).
+
+## ADR-0297 -- CREATOR-3b: driving a real scene through the deterministic clock
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT, then CORRECTED TWICE by its own on-device pass, which found a real defect and
+then a flaw in the fix's own measurement. See "What the on-device pass found" below. `demo-CREATOR-3` green at
+14 sections / 125 checks (was 13 / 101); `desktop/renderer/capture_driver.test.ts` 27 tests;
+`preview_bridge.test.ts` 5 -> 9; 454 pass across the 11 affected files, 0 fail; `demo-CREATOR-2`,
+`demo-CREATOR-5`, `demo-P-PREVIEW.6b` and `verify-creator-comfy` still green; root and renderer typechecks
+clean, the server program at its documented baseline; license headers clean; renderer bundle 130 modules (was
+127). Every count measured with `--path-ignore-patterns='desktop/release/**'`, per ADR-0295's correction.
+**On-device status: COMPLETE, both halves.** The bridge half was executed under a real headless Chromium
+against the real reference scene, in a real opaque-origin sandboxed iframe served with the real
+`PREVIEW_FRAME_CSP`, through the real driver with real `toDataURL` readback and a real `OffscreenCanvas`
+decode: 60 frames, `driven: true`, 480x270, 0 missing, 0 stuck, 60 distinct fingerprints. The PANEL half was
+then driven through the real UI on a live engine: open the Preview rail, load the scene by path, press
+Capture. First press disabled the button for the duration, unhid the notice with the driven sentence and the
+audit, and toasted "Capture recorded / 60 frames at 30fps, 480x270. Stored as the baseline for this file."
+Second press produced the fix working in situ: a `warn` toast reading "Capture: no verdict / 330 pixel(s)
+differ between two renders of the SAME time here, so a byte compare cannot judge this scene. The capture
+itself is fine.", with the notice carrying the measured reason in full. WITHOUT the fix that second press
+would have read "Capture: not reproducible" and blamed the user's scene for the compositor. Nothing in the
+capture path is now unexercised on this machine; the only unavailable capability is exact regression compare,
+which the platform itself forbids (see below).
+**Increment:** CREATOR-3b, closing the gap ADR-0295 recorded as unbuilt ("driving a user's three.js scene
+through it from the Preview panel is NOT wired"). Requested directly by the user rather than taken off the
+roadmap.
+
+### Context
+
+CREATOR-3 shipped the deterministic clock, the fingerprint, the comparator and the audit, and nothing that
+drove a real scene through them. The pure core could prove its own arithmetic against synthetic fingerprints;
+it could not tell anyone whether a page in the Preview panel actually renders reproducibly. That is the half a
+user can see, so leaving it unbuilt made the feature a claim rather than a capability.
+
+Two facts about this repo shaped the answer. three.js is deliberately NOT a dependency (removed in
+P-MASCOT.2, and the Creator skill states there is no install and no egress for it), so a scene is a
+user-authored document, not a library LUCID drives. And the preview iframe is opaque-origin sandboxed, so the
+renderer cannot touch its DOM at all: everything must cross a `postMessage` boundary that already exists for
+P-PREVIEW.6b's inspect relay.
+
+### Decision
+
+1. **Capture rides the EXISTING bridge.** The responder is added to `PREVIEW_BRIDGE_JS` in
+   `desktop/preview_bridge.ts` and routed ahead of the inspect/action chain, written so P-PREVIEW.6b's pinned
+   routing contract stays a literal substring of the same line. A second channel would have meant a second
+   security surface to review.
+2. **The contract belongs to the SCENE, not to LUCID.** A document defines `window.lucidRenderAt(tMs)`. The
+   bridge calls it behind a `typeof` check and reads the canvas back with `toDataURL` in the SAME synchronous
+   task. LUCID therefore never evaluates scene code: it calls a function the document itself installed, and
+   the file adds no dynamic-code or markup-writing primitive, which `demo_p_preview_6b.ts` enforces by
+   scanning the bridge string.
+3. **DRIVEN versus SAMPLED, labeled on every verdict.** With the hook, the times are LUCID's and a second
+   pass is a real reproducibility result. Without it, the page can only be sampled on its own clock, and the
+   verdict says so and names the hook that would fix it, because two sampled runs agreeing is luck and two
+   disagreeing is not evidence of a change. This is CREATOR-2's vendor-versus-derived discipline applied to
+   time instead of alignment.
+4. **The parent half is a pure-ish driver with injected I/O** (`desktop/renderer/capture_driver.ts`): plan in,
+   verdict out, with `send` and `decode` supplied by the caller, so the whole exchange is unit-tested with no
+   iframe, no canvas and no clock.
+5. **The boundary is untrusted.** The reply arrives as `unknown` and passes a shape gate before any field is
+   read; the bridge's own refusal sentence is passed through verbatim rather than replaced; and ONE malformed,
+   undecodable or oversized frame refuses the WHOLE pass, because a report built from a surviving subset
+   understates its own `missing` count and can read as a clean capture of a shorter animation.
+6. **The caps are pinned equal.** `MAX_CAPTURE_PASS` (driver) and `CAP_MAX_FRAMES` (bridge) are the same
+   number, asserted by a test that greps the bridge string. A driver that asks for more frames than the bridge
+   will ever return would report a phantom missing frame on every capture.
+7. **A baseline is per session and per file, in memory, and only a DRIVEN clean pass earns one.** A baseline
+   that outlived the session would be compared against a scene since edited, which is worse than having none;
+   a sampled baseline would invite a comparison against timings LUCID never controlled.
+8. **A reference scene ships** (`desktop/scripts/capture_scene_example.html`): self-contained, canvas-2D,
+   deterministic by construction, with a deliberately broken variant beside the honest one so a reviewer can
+   watch the compare catch a sub-pixel wobble that looks fine to the eye. The demo asserts the reference
+   honours its own contract, so the teaching material cannot rot into a lie.
+9. **THE PLATFORM IS MEASURED, NOT ASSUMED** (added after the on-device pass, see below). Before judging a
+   baseline the driver asks the page to render one time twice and diffs the readbacks into a `NoiseFloor`. A
+   compare runs only when that floor proves byte-stable; unmeasured is treated as unproven. Otherwise the
+   verdict is `inconclusive`, no regression is claimed in either direction, and `ok` stays true because the
+   scene did nothing wrong. An inconclusive answer is the third honest outcome beside pass and fail.
+
+### What the on-device pass found, and the defect it exposed
+
+The pass ran the real bridge under headless Chromium and immediately failed in a way the headless tests could
+not: two captures of the reference scene at identical planned times DISAGREED. Diagnosis, in order, each step
+ruling out the previous suspect:
+
+1. The same `tMs` rendered twice inside ONE synchronous pass differed, so it was not a between-pass effect and
+   not the scene's live loop interleaving (the capture loop is synchronous, and `lucidRenderAt` paints
+   synchronously).
+2. Four renders of one time all differed, so it was not first-render warmup.
+3. `save`/`restore` were balanced and the only `clip` was properly nested, so it was not leaked canvas state,
+   which had been the leading hypothesis.
+4. A CONTROL in the same browser settled it. Identical drawing code, including a radial-gradient bloom under
+   `lighter` and a `shadowBlur` arc: a fresh DETACHED canvas reproduced byte-identically three times, a reused
+   detached canvas likewise, and an ATTACHED, VISIBLE canvas did NOT, alternating between two bitmaps in a
+   clean 2-cycle. Readback through a detached copy did not help: `drawImage` inherits the source bitmap.
+
+So the scene was never at fault. **Byte equality of a canvas readback is a property of the PLATFORM**, and the
+driver had assumed it: it compared exact fingerprints, so a real panel would have reported a false regression
+on the user's first click, blaming the user's scene for the compositor's rasterization. That is the defect this
+pass existed to find, and it would have shipped.
+
+**The fix (decision 9).** The driver now MEASURES the platform before it judges: it asks for one time twice,
+diffs the two readbacks with `compareFrames`, and records a `NoiseFloor`. A baseline is compared only when the
+floor proves byte-stable. Unmeasured counts as unproven, not as stable. When it cannot be judged the result is
+`inconclusive: true` with no regression verdict at all, the note quotes the measured numbers and points at the
+alternatives, and `ok` is not set false, because the scene did nothing wrong. Verified against the real
+platform afterwards: the floor came back unstable (63 pixels, up to 27 per channel at t=0), no verdict was
+drawn, and the false failure was gone.
+
+**The second correction: the fix's own measurement was too narrow.** With the floor probed at ONE time, the
+tolerance came out as cell delta 0 + 1, and the honest reference scene FAILED its own compare in the real
+panel: "frame 1 differs: 2 of 576 cells moved more than the measured tolerance of 1, up to 3". A single-point
+probe does not bound jitter over a 60-frame pass. So the floor is now sampled at `FLOOR_SAMPLE_POINTS = 3`
+times ACROSS the plan, each duplicated in place, and the worst pair decides. A tolerance has to be measured
+over the same domain the comparison covers.
+
+Worth stating why measuring was the ONLY answer, rather than one of several: detaching was never available.
+`capture()` takes the LARGEST canvas in the document when no selector is given, so it reads an attached,
+visible canvas by construction, which is exactly the case that does not rasterize the same drawing twice. The
+floor is therefore not a workaround for a shortcut and not a concession to a flaky scene; it is the only
+honest verdict the platform leaves available. (Observed while checking this finding against the PWA screenshot
+compositor, which survives for the mirror-image reason: it composites into a DETACHED canvas and re-draws its
+strokes rather than reading the visible one back.)
+
+**Decision 10: a coarse compare, so a jittery platform gets a verdict rather than a shrug.**
+`frameSignature` reduces a frame to a 32x18 luminance grid (576 bytes, so a 60-frame pass costs about 34KB
+rather than 31MB of RGBA, which matters for an edge box), `compareSignatures` and `sameCaptureSignatures`
+compare at an explicit tolerance, and the driver picks: exact on a byte-stable platform, signature at the
+measured tolerance otherwise, inconclusive only when the floor could not be measured at all. Every verdict
+names the method that produced it.
+
+**Verified end to end in the real panel, which is what makes this more than a theory.** Pressing Capture twice
+on the reference scene reports "Capture matches its baseline / Matched by coarse signature at the tolerance
+measured on this machine", tolerance 4. Uncommenting the scene's deliberately nondeterministic renderer and
+re-capturing against the same baseline is CAUGHT: "frame 0 differs: 10 of 576 cells moved more than the
+measured tolerance of 19, up to 33". So the harness now catches the regression it ships an example of.
+
+**A third defect the panel pass exposed:** a capture pressed seconds after a page loads timed out, while the
+same command sent by hand moments later worked. A `postMessage` to a frame whose bridge has not installed its
+listener yet is dropped, and nothing retried it. The panel now pings with the cheapest read there is, up to
+six times, before spending a 60-frame pass, and says "this preview is not answering yet" if it never does.
+
+**The caveat that remains.** The floor cannot distinguish platform jitter from a scene that renders one time
+two ways: both present as "same time, different pixels". A nondeterministic scene therefore inflates its own
+tolerance. The deliberate wobble was still caught comfortably (33 against a tolerance of 19), but a subtler
+instability could hide inside its own floor, and an unusually large measured tolerance is itself evidence
+about the page rather than about LUCID.
+
+**Process note worth keeping.** The headless demo asserted the reference scene's determinism by SEARCHING its
+source for clocks and randomness. That check passed and was structurally incapable of catching any of this,
+because none of it was in the source. A static check can only falsify the hypotheses its author thought of.
+
+### Alternatives rejected
+
+- **Adding three.js and driving `readRenderTargetPixelsAsync`.** ADR-0287 named that API, but taking the
+  dependency back reverses P-MASCOT.2 and buys nothing for a user-authored scene. LUCID captures whatever
+  canvas a page exposes; multi-pass render-target capture stays unbuilt and is now stated as such in the docs.
+- **Injecting a driver into the previewed document.** LUCID does not own that document. A declared hook it
+  opts into is honest; code injected into someone's page is not.
+- **Sampling silently when the hook is absent.** That is the exact lie this increment exists to prevent.
+- **Fingerprinting the PNG bytes instead of decoded pixels.** A browser's encoder is not a contract; decoding
+  first means the fingerprint is over pixels, which is what `compareFrames` and the audit already reason about.
+- **A longer fixed timeout for every inspect query.** `runInspectOnFrame` gained a `timeoutMs` parameter
+  instead: a capture legitimately outlives an inspect, and a fixed 3s clock would abort a valid 60-frame pass
+  and report it as an unresponsive preview.
+
+### Invariants preserved
+
+#2 TypeScript only; #3 fail-closed applied to the capture boundary (a malformed reply judges nothing); #5 the
+reply is untrusted data, shape-gated before it is read; #6 prefix untouched; #11 the new control is a single
+one-line label. The bridge's no-dynamic-code property is unchanged and still enforced by its own demo, which
+caught a forbidden token inside a COMMENT of this very change and was right to.
+
+### See also
+
+ADR-0295 (the increment this closes, and the delta list that named this gap), ADR-0153/P-PREVIEW.6b (the
+bridge and relay this rides), ADR-0287 item 3 (the plan), ADR-0293 (the provenance-labeling discipline reused
+here for time).
+
+## ADR-0294 -- CREATOR-5: the mixer, and refusing to fix a mix quietly
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator5.ts` green (11 sections, 97 checks, and
+breaking one claim exits 1 with the named FAIL); new suites mix 35 / creator_mixer 34 / renderer
+creator_mixer 50, 183 pass across the five mixer-adjacent files; root and desktop typechecks clean;
+renderer bundle builds (126 modules, up from 124); license headers clean; zero em dashes.
+**Increment:** CREATOR-5, planned in ADR-0289. Built after CREATOR-2 (ADR-0293), whose document it consumes.
+
+### Context
+
+CREATOR-2 made one take editable. Layering a narrator over a bed is the other axis, and it is not
+concatenation: two sources occupy the SAME instant and have to sum. That needs overlap, per-track level,
+pan, fades, automation, and one honest answer to the question every mixer eventually faces: what do you do
+when the sum is too loud?
+
+Every consumer tool answers that question by quietly fixing it (normalize, limit, auto-duck). That is the
+one thing this project cannot do, because a silent gain change means the file the user hears is not the file
+they built, and nothing on screen says so.
+
+### Decision
+
+1. **`harness/creator/mix.ts` is the graph as data, and the only place a sample is summed.** Clips (which
+   MAY overlap, unlike the CREATOR-2 timeline) sit on tracks; tracks carry level, pan, mute, solo, and a
+   piecewise-linear envelope; tracks group onto buses; master gain applies last. One level of grouping, not
+   a routing matrix: a matrix is a graph problem with cycles to police and nobody asked for one.
+2. **Pure TypeScript render, not `OfflineAudioContext`** (the delta from ADR-0289 item 1). The plan's own
+   keystone is "the same graph renders byte-identical audio twice", which a Web Audio implementation cannot
+   promise across platforms and cannot be exercised in a unit test at all. Accumulation happens in a
+   `Float64Array` in the graph's own order and quantizes ONCE at the end, so determinism is structural.
+   Same reasoning as ADR-0291's pure encoders and ADR-0293's `renderTimeline`.
+3. **Nothing is automatic. The render REPORTS.** It returns the true `peak` measured before the rail, the
+   exact count of `clipped` samples, which tracks contributed nothing and WHY, and whether a pan had to be
+   ignored by a mono render. `headroomGain(peak)` hands the caller the number that would land the mix at
+   full scale; applying it is an explicit, opt-in act that reports the factor used (`headroomApplied`).
+   Clamping is a clamp, never a wrap: a hot sample reads 32767, not a sudden negative.
+4. **Silence has exactly one reason, and one function produces it.** `trackSilenceReason` returns the
+   sentence or null, and the render uses that same call to decide whether to skip the track. A predicate
+   plus a parallel explainer would eventually disagree, and then the UI would be describing a mix that did
+   not happen.
+5. **A muted, unsoloed, zeroed, or bus-muted track contributes EXACTLY nothing.** Not attenuated: its
+   samples are never added. Proven byte-wise by rendering the graph with the track REMOVED and asserting
+   the two files are identical, for all three silencing paths, with a non-vacuity check that the track is
+   audible otherwise.
+6. **No resampler, so no pretence.** A source whose sample rate differs from the graph's refuses the render
+   naming both rates and saying this build has no resampler. Channels are the exception and deliberately so:
+   `renderMix` folds stereo to mono by averaging and duplicates mono into stereo, so a mono narration under
+   a stereo bed is legal. The seam and the pane both had to be told this, and both were.
+7. **Equal-power pan and linear fades.** Pan uses the sin/cos law so sweeping a track across the image does
+   not make it louder in the middle; fades are linear because a fade the user drew as a straight line should
+   sound like the line they drew.
+8. **A mix has many parents and the ledger has one slot, so the record says so.** `renderAndSaveMix` saves
+   through the library's own `addTrack` as a remix with `parentId` set to the caller's primary track, and
+   writes `mixed from: <id> (Role), ...` for every input as the FIRST line of the saved provenance text.
+   `lyrics` is deliberately left empty: a mix has as many word streams as layers, and concatenating them
+   would claim a timing the file does not have.
+9. **`trackFromTimeline` is the seam ADR-0289 promised.** An edited CREATOR-2 document lifts onto one mix
+   track keeping every clip's position and resolved source region, and the demo proves the lifted track at
+   unity renders byte-identically to `renderTimeline` of the same document. The mixer therefore needs no
+   second notion of an edit.
+
+### Alternatives rejected
+
+- **Normalizing, limiting, or auto-ducking.** The whole point. A mixer that fixes your mix without telling
+  you has replaced your judgment with its own, invisibly.
+- **`OfflineAudioContext`.** Untestable in the runner, not byte-stable, and it would have put the load-bearing
+  math in the one place this repo cannot unit-test.
+- **A full routing matrix with sends and inserts.** Cycle detection, gain staging, and a UI nobody asked
+  for. One bus layer covers "move the beds together".
+- **Refusing a channel mismatch.** The render genuinely folds and duplicates, so refusing would be a FALSE
+  refusal, which these honesty rules forbid as much as a false success.
+- **Reporting a fabricated format when the library holds nothing decodable.** The seam omits the format
+  entirely and the pane says the mixer is not claiming one, rather than defaulting to 44100/2.
+- **Concatenating layer lyrics into the saved record.** It would imply a word timing the mixed file does not
+  have. Empty is the honest value.
+
+### Invariants preserved
+
+#2 TypeScript only, and the core has no node imports; #3 fail-closed (a missing or unusable source refuses
+the render by id, never substitutes silence); #5 track labels and refusal text are escaped at render like
+any other untrusted string; #6 frozen prefix untouched; #7/#8 no change to `contracts.ts`; #10 no schema
+change (the library's append-only JSONL absorbs the mix); #11 track-name cells are one-line ellipsized with
+a bounded max-width and the report is a block paragraph.
+
+### See also
+
+ADR-0289 (the plan, with its one delta), ADR-0293 (the document this consumes), ADR-0281 (the lineage model
+and why a mix's many inputs are recorded as text rather than faked as parents), ADR-0291 (the pure-encoder
+precedent this render follows).
+
+## ADR-0303 -- the gate had never measured what it claimed: scope by exclusion, never by positional pattern
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT in `a4b1d48` (Makefile + package.json). `make test-harness` now reads 357 files
+/ 4256 tests / 4241 pass / 11 fail on this workstation, and the 11 are exactly the documented pre-existing
+set (5 `fs_browse`, 4 `symbol_graph`, 2 `lucid_acp`). Verified through BOTH entry points, make's recipe and
+`bun run test`. CI is deliberately NOT changed by this increment; see the named risk at the end.
+**Increment:** taken from a parallel session that found the defect adjacent to its own release work and
+handed it over rather than folding it into an unrelated increment.
+
+### Context
+
+`make test-harness` was `bun test --path-ignore-patterns='desktop/release/**'` with no path scope, and
+AGENTS.md's session ritual opens with "make test ... the baseline must be green before you change anything".
+Both halves of that sentence were false, and had been for a long time.
+
+### What was measured, in order
+
+1. **Run the documented gate exactly as written and it runs oh-my-pi's test suite.** `vendor/oh-my-pi` is a
+   full vendored copy of omp, tests included: **1659 files, 11466 tests, 9927 pass, 942 FAIL**. `vendor/` is
+   gitignored (`.gitignore:13`) and bun does not care, because gitignore is not a test-discovery boundary.
+   So on any clone with a populated `vendor/`, the documented gate reports 942 failures that are not ours,
+   and it has therefore never once reproduced the numbers PROGRESS.md quotes.
+2. **The habit that grew up around the bug is no better.** Sessions have been running per-tree invocations
+   like `bun test desktop harness`, which LOOKS like a directory scope and is not: bun treats positional args
+   as SUBSTRING matches against the whole path. Naming one more tree proves it, because `tools` also selects
+   every `vendor/oh-my-pi/**/tools/**` file: `bun test desktop harness tools` reports **486 files, 125 fail**
+   against the 357 / 11 the same code actually has. A scope that silently changes meaning when you name one
+   more directory is not a gate.
+3. **That habit was also omitting a tree of ours entirely.** `bun test desktop harness` is 352 files; the
+   exclusion-scoped gate is 357. The five-file difference is all of `tools/`: `build_kg_pack`, `kb_cli`,
+   `creator-backend/setup-backend`, `remote-pwa/device_stt`, `appcontainer/lucid_appcontainer`, **86 tests
+   that no session had ever run**. They are green, which is luck rather than evidence, since nothing was
+   watching them.
+4. **Excluding `vendor/**` then exposes a second tree nobody had gated:** `lucidaddon_audit/`, **51 test
+   files across 11 packages**, each with its own `package.json` and its own dependencies that `make install`
+   does not prepare. Its failures are `Cannot find package 'ajv'` and siblings, environment rather than
+   logic, and they accounted for all 18 extra failures in that run.
+
+### The negative result, which is the better half of the finding
+
+The obvious hypothesis for "352 versus 357" was that the hand-typed scope was silently sweeping in vendored
+files. It is NOT. Measured: `bun test desktop harness` WITH `vendor/**` and `lucidaddon_audit/**` excluded
+returns 352 files / 4170 tests / 4155 pass / 11 fail, byte-identical to the same command without them. So
+`desktop` and `harness` collide with nothing in omp's layout, while `tools` collides badly. The lesson is
+therefore stronger than contamination would have been: **you cannot know which names collide without
+measuring each one**, so an include-by-substring scope is only ever as correct as the last name someone
+tested. Exclusion is the only scope that stays correct under a name nobody tested.
+
+### Decision
+
+Scope is defined by EXCLUSION and never by positional pattern. `TEST_IGNORES` in the Makefile carries the
+three exclusions with a stated reason each, and the comment above it records the substring trap with the
+measured numbers so the next person cannot re-derive the habit. `desktop/release/**` is a generated packaged
+copy of this repo. `vendor/**` is not ours. `lucidaddon_audit/**` IS ours but is independently installed, so
+it gets its own target, `make test-audit`, which `cd`s into the tree instead of filtering by substring,
+because a working directory has no substring semantics to get wrong. It is deliberately not part of
+`make test`: a target that is red by default teaches people to ignore red. `package.json`'s `test` script
+ran `bun test harness` and now runs the same exclusion scope, so the two entry points cannot drift.
+
+**The rule worth keeping.** A gate that names what it INCLUDES will silently change scope as the repo grows
+a sibling directory; a gate that names what it EXCLUDES fails loudly instead, because a new tree arrives as
+new tests rather than as silence. This is the same failure family as the `desktop/release` double-count
+recorded in the CREATOR-3 entry: in both cases a wrong flag produced a plausible number, and a plausible
+number is the hardest kind of wrong to notice.
+
+### Reconciling every number in the record
+
+All four figures in play describe the same code at different scopes, and none of them contradict:
+352 / 4170 / 4155 pass is `desktop harness` on this branch; 355 / 4229 / 4213 pass is that same scope plus
+the three test files added by `8b060b2` (+58 tests) while they were still uncommitted; 357 / 4256 / 4241
+pass is exclusion-only, which is 352 plus the 5 files and 86 tests in `tools/`; and 1659 / 11466 / 942 fail
+is the documented gate with `vendor/` swept in. The 11 real failures are the same 11 in every one of them.
+
+### The CI risk, two thirds of it now closed without a single new run
+
+CI diverges from the Makefile in a third and fourth way, and this increment still leaves it alone.
+`.github/workflows/ci.yml:59` runs `bun test harness`, so the ENTIRE `desktop/` tree is ungated in CI apart
+from the single `desktop/packaged_boot.test.ts` step, while `omp-compat.yml:92` runs `bun test .`, a fourth
+scope again. This ADR originally said classifying the 11 failures needed "one Linux run". It needed none,
+and the argument is recorded here because it is re-derivable rather than remembered:
+`ci.yml:23` is `runs-on: ubuntu-latest`, `ci.yml:59` runs `bun test harness`, CI is green on master, and
+`git diff --stat master HEAD -- harness/launcher/lucid_acp.test.ts` is EMPTY, so that file is byte-identical
+between master and this branch. A green Linux `bun test harness` therefore EXECUTED the same two tests that
+fail on this workstation. Those 2 of the 11 are **Windows-only by observation**, at the cost of one diff.
+
+The remaining 9 are not one kind of problem, which is why the next step is narrower than "widen CI":
+`fs_browse`'s 5 look like genuine path-separator cases, but `symbol_graph`'s 4 are TS-compiler resolution
+against `desktop/node_modules/typescript`, which is an install-LAYOUT failure rather than a separator one and
+may well fail on Linux too, for a reason that is real. So when CI is widened it must be widened with those
+two files named and expected-failing, never blind: a gate that goes red on its first run teaches people to
+ignore it, and a gate that hides a genuine install-layout defect under "known Windows noise" is worse than
+the blind spot it replaced.
+
+### Process note, paid for the hard way
+
+This ADR was written once already and vanished before it was committed. The mechanism was not the amend it
+was first blamed on: `git diff` across that amend touches one path, and an amend cannot alter a path the
+index never held. It was a whole-file write of `DECISIONS.md` from a snapshot that predated the insert. The
+rule that follows is narrower and more useful than "be careful": **never whole-file write a document another
+session is live in; insert into it.** The same hazard cost a demo script earlier the same day. What finally
+worked was not a promise but a boundary: the file changes hands only at a commit, and the holder says so.
+
+**And the reason nobody could name the writer is structural, not careless.** Every commit in this window
+carries the same author AND the same committer, byte for byte: `mlcyclops
+<mlcyclops@users.noreply.github.com>`, verified across six commits with `%an/%ae/%cn/%ce`. Git therefore
+offers NO discriminator between concurrent sessions in one worktree, so every attribution claim made all day
+rested on message text and timing, and several were wrong in both directions. [INFERENCE] It is worse than
+two sessions guessing about each other: two commits in this stretch, `a3bedf4` and `8636db1`, are disclaimed
+by BOTH coordinating sessions, and one of them was found only because a `git commit` returned "nothing to
+commit" against a tree that already matched it. So the actor COUNT was wrong, not just the attribution. The
+practical consequences, in order of cheapness: a session must never infer authorship from `git log`; it must
+announce its own commit hashes, which is the only durable record of who did what; and a shared worktree wants
+distinct `user.name` per session far more than it wants a protocol, because a protocol is a promise and a
+committer field is evidence.
+
+### See also
+
+ADR-0295 (the `desktop/release` double-count, same failure family), and the Creator release-channel ADR, the
+release work this defect was found beside. That one is deliberately cited by TITLE rather than by number: it
+was written as ADR-0302, collided with an ADR-0302 already pushed on the PWA branch, and has since been
+renumbered to 0304. A cross-reference that survives a renumber is worth more than one that is precise today,
+which is the same reason the `compositeShot` guard in `tools/remote-pwa/app.ts` cites ADR-0297 by name and
+not by line.
+
+## ADR-0304 -- LUCID Creator as a separately released product, and the shared update pointer that would have crossed the two
+
+**Date:** 2026-08-30
+**Status:** Accepted -- BUILT. `bun run harness/scripts/demo_creator0.ts` green (8 sections, 55 checks, up
+from 7 and 48); `desktop/build/electron-builder.creator.test.ts` 11 tests (was 7); scoped
+`bun test desktop harness --path-ignore-patterns='desktop/release/**'` 4155 pass / 11 fail / 4170 tests /
+352 files, where all 11 are the documented pre-existing set (5 `fs_browse`, 4 `symbol_graph`, 2
+`lucid_acp`); root and desktop `tsc` clean; the server program shows only the documented pre-existing
+`dev.ts(1332,103)` plus `symbol_graph.ts` errors; license headers clean.
+
+**Numbering note: written as ADR-0302, renumbered to ADR-0304.** Commit `56438b6`'s message still names
+ADR-0302 and cannot be corrected, so this paragraph is the redirect for anyone who searches the history
+for that string. The collision was real rather than a gap-filling preference: branch
+`feature/pwa-focus-master` (`ab15f57`, branched straight off master, and already pushed) carries its own
+ADR-0302, "Nothing on the phone opens itself: no auto-expand on attention". Renumbering the UNPUSHED side
+was the smaller blast radius, and it leaves the merged sequence contiguous: ADR-0297 here (restored onto
+this branch in `a3bedf4`), ADR-0298 through ADR-0302 arriving with the PWA branch, ADR-0303 the test-gate
+fix, and ADR-0304 this one. ADR-0298 through ADR-0301 are still not in this file.
+
+### Context
+
+Creator is to be an optional companion product to LUCID Agent IDE: its own release cadence, its own
+pipeline mirroring Agent's, and eventually its own marketplace. The question put was whether that needs a
+long-lived branch, or a second repository.
+
+CREATOR-0 (ADR-0279) had already built the hard part: `desktop/build_flavor.ts` resolves identity before
+anything reads an identity-derived path, and `desktop/build/electron-builder.creator.cjs` deep-clones the
+standard build config and overrides only identity fields, so packaging payload changes on master reach
+Creator for free. `desktop/package.json` already had `dist:{win,mac,linux}:creator`. What did not exist
+was any release path at all: no workflow, no tag namespace in use, and, as it turned out, no isolation of
+the update feed.
+
+### Decision
+
+**1. One repository, one branch, two tag namespaces.** Creator ships from trunk behind the existing flavor
+gates. Agent releases on `v*` through `build-desktop.yml`; Creator releases on `creator-v*` through the new
+`build-creator.yml`. `creator-v*` does not match `v*`, so one tag builds exactly one product.
+
+Rejected: a long-lived Creator branch. It buys nothing the flavor does not already provide and it
+guarantees permanent merge cost against a fast-moving master, which directly contradicts the stated goal of
+Creator receiving every Agent improvement. Independent cadence is a tag namespace plus a workflow, not a
+branch.
+
+Rejected for now: a separate repository. Creator imports the shared spine directly (the fail-closed scan,
+`harness/contracts.ts`, the renderer shell, the WAV backend). Splitting today means either duplicating that
+spine, which puts two fail-closed gates on independent drift paths and violates invariant 3 in practice, or
+publishing the harness as a versioned package first. The trigger to revisit is precise: when Creator stops
+importing `desktop/` and `harness/` directly. A marketplace is a distribution surface rather than a product
+surface and gets its own repository when it exists.
+
+**2. Creator's version is its tag.** No second committed version field. `desktop/package.json`'s `version`
+is Agent's line, so a malformed `creator-v*` tag is a hard build failure in the Creator workflow rather
+than the fallback the Agent workflow uses: falling back there would publish a Creator release numbered
+from Agent's cadence. The manual test-build stamp is likewise based on the newest published `creator-v*`
+release only, never on the repo's newest release.
+
+### The defect this increment actually found
+
+The overlay deep-cloned Agent's `publish` block and never overrode it. Reading the installed provider
+(`desktop/node_modules/electron-updater/out/providers/GitHubProvider.js`) rather than assuming: with
+`allowPrerelease` unset, which is our case, `getLatestVersion` takes its tag from `getLatestTagName`, which
+GETs `/<owner>/<repo>/releases/latest`. That is a single latest-release POINTER for the whole repository,
+the one `make_latest` moves. It then fetches `releases/download/<that tag>/latest.yml`. Both products emit
+a file named exactly `latest.yml`, and `desktop/updater.ts` sets `autoDownload` and
+`autoInstallOnAppQuit`. A shipped Creator would have resolved Agent's rolling release, downloaded
+`LucidAgent-Setup.exe`, and installed it on the next quit. The atom feed the same function reads is only
+used to attach release notes.
+
+Renaming the channel does not fix it, which is the trap: selection is still that one shared pointer, so
+Creator would find Agent's release and 404 on its own channel file inside it, i.e. an app that never
+updates again. Selection has to be skipped entirely. Creator now publishes a **generic** provider pinned to
+`releases/download/creator-latest`; `GenericProvider.getLatestVersion` fetches `<url>/<channel>.yml` at a
+fixed URL with no release lookup. Same mechanism `managed_config.ts` already uses for the enterprise
+`feed` channel, and an enterprise `updateFeedUrl` still overrides it at runtime.
+
+**The hazard is bidirectional, and that half is worse.** Agent's installed base resolves through the same
+pointer. A Creator release that ever became the repo's latest would send every installed Agent to Creator's
+feed, breaking users who never installed Creator. So every publish step in `build-creator.yml` passes
+`make_latest: "false"`, and the rolling release is additionally a prerelease, which GitHub excludes from
+that pointer outright. Two independent guarantees, both asserted.
+
+### The gates could never have run on Creator bytes
+
+`airgap-smoke.ts` (ADR-0225) and `pf-boot-smoke.ts` (ADR-0261) both hardcoded `desktop/release`. Creator
+packages into `desktop/release-creator`, so a mirrored workflow would have failed on a missing directory
+or, on a runner that had also built Agent, passed by inspecting Agent's tree and reported green about bytes
+it never opened. That second case is the dangerous one: a gate that proves nothing while looking green.
+
+Both now honor `LUCID_RELEASE_DIR`, restricted to a bare directory name under `desktop/`. A gate that can
+be aimed anywhere is a gate that can be made to pass against bytes nobody is shipping, so a value
+containing a separator or a leading dot is refused outright. Verified behaviorally in both scripts:
+default resolves to `desktop\release` (and the Agent air-gap gate still runs its real checks there, with
+the scanner and omp both answering offline), the override resolves to `desktop\release-creator`, and
+`../release` is refused by name.
+
+### Consequences
+
+1. Creator and Agent versions are independent, and neither can renumber the other.
+2. `desktop/build/electron-builder.creator.d.cts` now types the overlay, because two TypeScript programs
+   read it and the root program has `noImplicitAny`. Only asserted fields are named; an index signature
+   carries the rest of electron-builder's surface so adding an override never edits the declaration.
+3. The overlay test parses the workflow with `Bun.YAML` instead of substring-matching it. An indentation
+   error in a release workflow otherwise surfaces only on a release tag, which is the worst moment to find
+   it. It also asserts the tag baked into the packaged feed and the tag the workflow publishes to are the
+   same string, because drift there fails no build and silently leaves every installed Creator
+   un-updatable.
+4. **The payload split is REFUSED, on measurement.** The standing assumption was that Creator makes the
+   standard installer "bigger than some want", so an entry-point split would eventually be needed to keep
+   Creator out of it. Measured instead of assumed: every Creator source file totals **1,102,176 bytes**
+   (1.05 MB), and that ceiling INCLUDES the tests and demo scripts, which are never packaged. The built
+   Windows installer on this machine is **360,012,432 bytes** (343 MB). So Creator is **0.31% of the
+   download as an absolute upper bound**, and roughly half that for code that actually ships. An
+   entry-point split would buy back a fraction of one percent and cost a permanent second renderer entry,
+   conditional route registration, and a new bug class where a surface works in one flavor and is missing
+   in the other. Refused as a bad trade, not deferred.
+
+   The edge-first constraint points somewhere else entirely, which is the useful half of this measurement.
+   343 MB is dominated by Electron plus the bundled bun, uv, CPython and whisper.cpp runtimes that ADR-0225
+   deliberately vendors so an air-gapped host works cold. Anyone trying to shrink the edge footprint should
+   attack those, where the numbers are two orders of magnitude larger. Creator is noise at this scale, and
+   a split sold as an edge-footprint win would be measuring the wrong thing.
+5. `publish-creator-latest` is pinned to `refs/heads/master`, the same double gate Agent's rolling publish
+   uses. That single line is what would change if Creator ever did move to a release branch.
+
+## ADR-0285 -- CREATOR-1..CREATOR-6: the Creator build arc after the foundation (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN. No code in this ADR. Each increment is its own session and its own demo.
+
+### The increments
+
+- **CREATOR-1 - capability probes + the job spine. BUILT: see ADR-0292.** Delivered as planned, with two
+  deltas: artifact manifests already shipped with CREATOR-IMG (ADR-0291), and a refused admission is
+  recorded as a `refused` JOB rather than only returned to the caller.
+- **CREATOR-2 - the follow-along audio editor. BUILT: see ADR-0293.** Delivered as planned, with two
+  deltas: the waveform is computed from the file's PCM (`waveformPeaks`) rather than reusing the live
+  analyser tap, which only exists for a mic stream; and undo is a bounded stack of document snapshots
+  rather than inverse operations, which is what makes "restores the previous clip exactly" testable.
+- **CREATOR-3 - image, video, and 3D pipelines. BUILT: see ADR-0295.** Built by a parallel session. Two
+  deltas: the three.js frame-capture harness ships as the deterministic clock plus fingerprint plus audit
+  but is not wired into the Preview panel, and "scan every artifact" is implemented as scanning every
+  server-supplied STRING with the bytes-are-hashed-not-scanned limit stated in the product surface.
+- **CREATOR-4 - engines and playable feedback** (ADR-0288).
+- **CREATOR-5 - the mixer. BUILT: see ADR-0294.** Delivered as planned, with one delta: the render is pure
+  TypeScript over PCM rather than `OfflineAudioContext`, because the plan's own keystone (byte-identical
+  twice) is not testable through a Web Audio implementation and is not byte-stable across them.
+- **CREATOR-6 - distributed resources and remote execution** (ADR-0290).
+
+### Ordering rationale
+
+CREATOR-1 first because every later increment needs a probe and a job record; the editor next because it is
+the headline creative surface; engines before the mixer because build/test feedback is the riskier seam.
+
+## ADR-0286 -- CREATOR-2: the follow-along audio editor (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Scope
+
+The ElevenLabs-style experience the user described: audio that follows the text item by item, play/pause,
+tap a word to seek, select a span and drag it, re-render just that span, tune it, and scrub.
+
+### Plan
+
+1. **A pure timeline document** (`harness/creator/timeline.ts`): text items, spans, clips, and an alignment
+   map with a per-item confidence. Operations (split, trim, replace-span, move, lock-to-text) are pure and
+   unit-tested; the renderer only paints.
+2. **Alignment comes from real data.** ElevenLabs character/word timestamps where available; for a local
+   engine with no timestamp output, LUCID derives alignment locally and LABELS it derived. A guessed offset
+   is never presented as vendor-provided.
+3. **Non-destructive by construction.** Every re-render is a new clip with its parent and prompt recorded
+   (the ADR-0281 lineage model extended from tracks to spans).
+4. **Scrubbing + waveform** reuse the existing Web Audio analyser tap (ADR-0248) rather than a new stack.
+5. Keystone test: a span re-render changes ONLY that span's audio, the word map stays aligned to the text,
+   and undo restores the previous clip exactly.
+
+## ADR-0287 -- CREATOR-3: image, video, and 3D pipelines (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Plan
+
+1. **ComfyUI as the substrate.** Submit a workflow, stream progress and previews over the websocket, fetch
+   artifacts from history, and record every input/output in the CREATOR-1 job table. Capability strictly
+   from `/object_info`: LUCID never assumes a node, a checkpoint, or a video model exists.
+2. **Local models are declarations, not discoveries.** A model manifest names what a given ComfyUI install
+   can do; LUCID does not scan disks or scrape model hubs.
+3. **three.js gets deterministic frame capture** (fixed timestep, `readRenderTargetPixelsAsync`) so an
+   animation can be reviewed frame by frame and regression-compared.
+4. **Blender authoring** stays user/project Python through the exec-approval path: LUCID adds no `.py` of
+   its own (invariant 2).
+5. Every artifact is scanned and provenance-stamped before it can enter the library or a prompt.
+
+## ADR-0288 -- CREATOR-4: game engines and playable feedback (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Plan
+
+1. **Unreal headless first:** UnrealBuildTool + commandlets for build/cook, the Automation Test framework
+   for suites, exit code plus the failing log line as the evidence the agent quotes.
+2. **The editor Remote Control API is opt-in, loopback-bound, and announced.** It is an open local control
+   plane; enabling it is a user decision with a warning, never a silent capability.
+3. **three.js is the fast lane** for playable prototypes: the Preview panel already runs them, screenshots
+   already return to chat.
+4. **Playtest feedback loop:** a scripted run produces logs plus captured frames plus a pass/fail, and the
+   agent iterates on evidence rather than vibes.
+5. Resource discipline: a cook is the heaviest job in the product, so it goes through admission and reports
+   progress against the pressure window.
+
+## ADR-0289 -- CREATOR-5: the mixer - layering, tuning, and mastering (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Plan
+
+1. **A pure mix graph** (`harness/creator/mix.ts`): tracks, buses, gain, pan, fades, and envelopes as data;
+   rendering is `OfflineAudioContext` in the renderer, so the math is testable without audio hardware.
+2. **Layering voices** means N clips on N tracks with per-track processing, not string concatenation.
+3. **Deterministic offline render** to WAV, reusing the existing `buildWav` / `concatWav` primitives.
+4. **The mixer is local.** No provider offers our mix graph, so nothing here claims a cloud capability.
+5. Keystone test: the same graph renders byte-identical audio twice, and a muted track contributes nothing.
+
+## ADR-0290 -- CREATOR-6: distributed resources and remote execution (SCOPE/PLAN)
+
+**Date:** 2026-08-30
+**Status:** Accepted -- SCOPE/PLAN.
+
+### Plan
+
+1. **Remote render targets** (a DGX Spark, a GPU VM, a second workstation): job submission over the same
+   gated egress path, artifacts pulled back and scanned like any other import.
+2. **Placement by measured capacity**, using the ADR-0283 telemetry: a job that needs more VRAM than the
+   local box measures goes to a target that reports enough, or is refused with both numbers.
+3. **Per-process GPU attribution and richer vendor collectors** (AMD SMI, Apple Metal counters) land here
+   if and only if an unprivileged, documented source exists; otherwise they stay reported as not collected.
+4. **The VPN posture is unchanged** (ADR-0135): the OS client owns the tunnel, LUCID routes to the endpoint
+   and registers it in the whitelist as an internal-zone entry.
+5. Fail-closed stays fail-closed: a remote worker's bytes are untrusted input, scanned on the way in, and a
+   dead scanner blocks.
+## ADR-0298 -- P-REMOTE.15: the phone composer is one tidy row, and the disclaimer is a "?" sheet
+
+**Date:** 2026-08-30
+**Status:** Accepted -- implemented.
+
+### Context
+
+On a 390px phone the composer action row had grown to seven controls (attach, hold-to-talk, dictate, Check
+in, Stop, Push now, Queue/Send) plus a two-line 12.5px voice disclaimer underneath it, and Stop rendered
+even when nothing was running. Measured mid-turn, the row overflowed its own width at 360px and 320px. The
+disclaimer was the least readable text in the app while carrying the most important claim in it: that a
+cloud recognizer would hear your voice.
+
+### Decision
+
+1. **One row that never wraps, verified by measurement.** The sizes in the stylesheet ARE the
+   phone-portrait sizes; breakpoints at 374px (tighter gaps) and 344px (the send label drops to its icon,
+   with the words kept in `aria-label`). Measured mid-turn, the widest state, at 320 / 344 / 360 / 375 /
+   390 / 414 CSS px: zero overflow, single line, in the REAL `index.html`, not only in the mockup.
+2. **Same-family controls collapse into menus, not buttons.** Dictate + Check in live under a MORE control;
+   Push now lives under a caret on the send button. A menu control is HIDDEN when its menu would be empty,
+   so neither is ever a dead affordance.
+3. **Send and Queue are ONE button.** They were always the same `PromptFrame` path (the host stages a
+   mid-turn prompt), so the second button was pure duplication. The label and icon flip while a turn runs.
+4. **Stop is icon-only and mid-turn only.** A red square already reads as stop, and an idle composer now
+   carries no control that cannot do anything.
+5. **The long voice disclaimer moves into the "?" sheet**, which is the SAME component as the language-pack
+   and cloud-consent sheets, gaining a third "voice" flavour whose body is built at open time from the live
+   policy decision. Inline text shrinks to a one-line transient status (listening, or it failed). Honesty is
+   not weakened, and rests on four things that all still hold: the cloud consent gate is untouched and still
+   mandatory before any cloud dictation, the "?" turns amber whenever the current path would send audio off
+   the phone, the dictate menu row states the caution at the point of use, and the status line goes amber
+   while a cloud recognizer is listening.
+6. **Menu anchoring is correct by construction, not by tuning.** The left menu hangs off the ROW (a
+   `position: static` wrapper makes `#composer-actions` its containing block) and the right one off its own
+   group, which already ends at the row's right edge. A 240px readable menu therefore cannot run off any
+   phone width; measured margins are 12px on both sides from 320px through 390px.
+7. **One recording animation, still.** The listening pulse moved from the deleted dictate button onto the
+   MORE control that now opens dictation, rather than the app growing a second animation.
+
+### Notes
+
+- `element.hidden = x` is an `HTMLElement` property and a NO-OP on an SVG element: it sets a dead JS field
+  and the `[hidden]` rule never matches. The send/queue icon swap therefore uses
+  `toggleAttribute("hidden", ...)`. Caught by screenshotting the render, not by reading the code.
+- `mockups/pwa_session_preview.html` copies the composer / menu / sheet CSS from
+  `tools/remote-pwa/index.html` VERBATIM (invariant #11) and sizes its phone frame to `min(390px, 100vw)`,
+  so it renders identically in the Preview panel's phone-portrait mode.
+
+## ADR-0299 -- P-PWA-FLEET.2: the phone fleet collapses to 33px, and a lane is driven IN its own lane
+
+**Date:** 2026-08-30
+**Status:** Accepted -- implemented.
+
+### Context
+
+The phone's fleet strip was permanently expanded: an always-on head (a "Fleet" title plus a filter input)
+over a horizontal scroller of 220px cards, costing the transcript real estate whether or not the user was
+working a lane. Driving a lane went THROUGH the master composer: a card's Prompt button staged a
+`#lane-target` chip above the main input, and the submit handler branched on it. And the phone had invented
+its own status colours, which disagreed with the desktop dock on four of seven states: working and starting
+were both green (desktop: cyan and dim), needs-approval and awaiting-input were both amber (desktop: red
+and amber), error and stopped were both red (desktop: red and dim), and `done` had no rule at all.
+
+### Decision
+
+1. **The strip is an auto-collapsed double-decker**, the same pattern as `#procs` / `#botstrip` /
+   `#catchup`. Collapsed it is **33px** and still answers the only question a glance asks - the desktop
+   pill's own count pips plus a roll-up phrase - leaving the transcript **660px** of 844. Expanded it caps
+   at 44vh, which measures to fleet 447 / transcript 246: enough to keep reading the master session while
+   working a lane. It never auto-expands: a red bar and a red pip are the honest signal, and overriding the
+   user's collapse would be the strip taking the screen back by force.
+2. **The bar sits ABOVE its panel.** `#fleet` is anchored to the TOP of the screen, unlike `#botstrip`
+   which hangs off the bottom, so expanding must push content DOWN from under the bar. Cloning botstrip's
+   panel-then-bar order put the panel above its own label; caught by screenshotting it.
+3. **A lane is driven in its own lane.** Every card carries its own composer - input, Check in, Stop, and
+   one send button that reads Send or Queue depending on whether the lane is busy, with Push beside it
+   while it is. `#lane-target`, `setLaneTarget`, the `data-fleet-act="prompt"` button, and both
+   master-composer lane branches are DELETED: the master input now has exactly one destination.
+4. **The lane composer offers exactly what `CollabGuest` can do for a lane, and nothing more:**
+   `fleetPrompt` (text only - the lane wire has no image field), `interject` for Push and Check in,
+   `fleetStop`, and the three `fleetAnswer` scopes. No spawn, no model picker, no queue reorder, because
+   the guest protocol has none of those. A test asserts those four acts are present and that the five the
+   protocol cannot honour are absent, so a future card cannot grow a control that silently does nothing.
+5. **Colour parity is structural, not copied by eye.** Both surfaces key `--lane` / `--lane-dim` off the
+   same `lane-<status>` class, and the phone now uses the desktop's exact hexes and rgba glows
+   (`#ef5f5f` needs-approval, `#e8b23c` awaiting-input, `#46c8dc` working, `#64748b` starting, `#46d27e`
+   done, `#525a70` stopped). The desktop's rule that ONLY the two action-needed states animate is carried
+   over verbatim, with the same `prefers-reduced-motion` guard. A test pins the class on all seven states,
+   because losing it silently reverts the phone to its own palette.
+6. **Order, wording, and counting are shared code, not two lists.** New pure `desktop/collab/fleet_status.ts`
+   owns `LANE_STATUS_ORDER`, `LANE_STATUS_WORDS`, and `laneRollup`; `fleet_grid.ts` imports it and its
+   local `PILL_ORDER` / `STATUS_WORDS` / `lanesByStatus` are deleted. It is DOM-free and import-free so the
+   PWA bundle can take it without dragging in a renderer module. Colours stay in the two stylesheets on
+   purpose - they are keyed by the shared class, which is what prevents drift without coupling the files.
+7. **An unknown status is COUNTED, never dropped.** A newer host reporting a state this build has no copy
+   for sorts after every known state and keeps its raw name, because silently undercounting work in flight
+   is the worst failure a roll-up can have. It never earns attention, though: only a state we can reason
+   about may light the alarm.
+
+### Notes
+
+- A lane card's input is a live DOM node the user may be mid-sentence in, and a fleet snapshot repaints
+  every poll. Drafts are therefore lifted out by lane id before the repaint and written back after (as a
+  property, never interpolated), and focus is restored to the same lane's input.
+- The panel renders LAZILY: while collapsed only the bar is repainted, so a 2.5s snapshot does not rebuild
+  seven cards nobody is looking at.
+- `laneAttention` / `laneBusy` / `laneSummary` started as three one-expression exports and were folded into
+  one `laneRollup` pass, because every caller needs all of them at once and the project bans one-line
+  wrappers that freeze a shape early.
+
+## ADR-0300 -- P-PWA-FOCUS.1: a fleet lane's CONVERSATION reaches the phone, and tapping it takes the composer
+
+**Date:** 2026-08-30
+**Status:** Accepted -- implemented.
+
+### Context
+
+P-PWA-FLEET.2 gave the phone per-lane status and per-lane controls, and the user immediately hit the wall
+behind them: you could see that Stella was working and send her a prompt, but you could not READ her. The
+reason was structural, not cosmetic. `LaneEvent` (the lane engine's stream) and `ChatEvent` (what a guest
+receives) are disjoint unions, `Lane.transcript` was private with no accessor, and `lane.sinks` were added
+and removed per turn by `prompt()`. No lane byte had any path to a guest.
+
+### Decision
+
+1. **One optional field carries the whole feature.** `EventFrame` gains `lane?: string`; absent means the
+   master session, which is exactly what every pre-focus host and guest already meant. `foldEvent` is
+   untouched, so the phone folds a lane's stream with the code it already had.
+2. **The phone SUBSCRIBES; it does not receive a firehose.** A new guest frame `watch { target }` declares
+   the one conversation being looked at, and the host unicasts lane events only to the peers that asked.
+   A fleet of idle lanes therefore streams nothing at a phone on cellular, and the demo asserts that FIRST,
+   at the wire level (frames sent, not just callbacks fired), because it is the property most likely to rot.
+3. **Watching is READ-ONLY and deliberately NOT edit-gated.** It bypasses `#onGuestWrite` on purpose: a view
+   guest may look at a lane, it just cannot drive it. Driving still goes through prompt / fleetPrompt /
+   interject and their own fail-closed checks, so watching buys no authority. A `watch` from a peer that
+   never sent `hello` is ignored, so a lane transcript never replays to an unauthenticated peer.
+4. **Switching to a lane REPLAYS it.** The host answers a lane watch with `lane-sync`, built from the bounded
+   transcript the lane already keeps for its respawn replay. Nothing extra is retained to make this work, and
+   a lane that has been working for ten minutes does not open as an empty conversation.
+5. **A lane crash gets its own name.** `ChatEvent` gains a broadcast-only `lane-error`, and the phone renders
+   it as a `lane-fail` chip: red, but dashed-ruled and labelled "lane failed", NEVER the `block` chip.
+   `block` means the SECURITY GATE refused something. Dressing an ordinary crash in the gate's clothing
+   would teach the user to misread the one signal that must stay unambiguous, so the adapter refuses to map
+   it there and a test pins the distinction.
+6. **The adapter drops what the lane CARD already says.** `permission`, `auto-approved` and `status` translate
+   to null, because each is already on the card (pendingApproval, the status colour) in the fleet snapshot
+   every guest gets. Re-sending them as conversation would double-report one fact in two places that can then
+   disagree, and an approval rendered as a transcript line looks actionable on a surface that cannot answer
+   it. Anything unrecognized also drops: fail-closed beats guessing a wrong ChatEvent.
+7. **A persistent observer, gated on demand.** `FleetLanes.observe()` attaches to all lanes present AND
+   future and survives a turn ending (`prompt()`'s `finally` deletes only the sink IT added). The dev tap
+   checks `laneWatched(laneId)` BEFORE translating, so a fleet running with no phone attached does zero
+   per-event work.
+8. **Focus replaces the lane-target chip.** The master composer has exactly one destination again; the
+   focused target owns the transcript, the composer, Stop, Push now and Check in. A focus bar names the lane
+   with a way back, because a master composer and a lane's conversation are otherwise identical and a user
+   who cannot tell which agent they are typing at will send the wrong prompt to the wrong lane.
+
+### Notes
+
+- Images and audio stay master-bound: the lane wire has no image field, so a staged attachment while a lane
+  is focused is REFUSED with a visible note rather than silently dropped, and push-to-talk hides.
+- The watch subscription is keyed by PEER id, which a reconnect changes, so the guest re-declares its target
+  on every `hello`. Without that, a phone would sit on a silent lane that still looked alive.
+- Per-lane composer drafts are lifted out by lane id and written back across a repaint, because a fleet
+  snapshot repaints every poll and a lane input is a live node the user may be mid-sentence in.
+- NOT in this increment: the cross-screen-lock SYNC (a per-target catch-up that scrolls to the first unseen
+  update). The existing P-REMOTE.11 catch-up remains master-only. Per-target transcripts and the focus model
+  landed here are its prerequisite; it is P-PWA-FOCUS.2.
+
+## ADR-0301 -- P-PWA-FOCUS.2: the sync - what you missed, per conversation, and where you left off
+
+**Date:** 2026-08-30
+**Status:** Accepted -- implemented.
+
+### Context
+
+When the phone auto-locks, updates keep landing and the user comes back with no idea what moved or where they
+stopped reading. The P-REMOTE.11 catch-up only half-addressed it: it was MASTER-only, it fired only on a
+reconnect welcome-replay (so a lock that did not drop the socket produced nothing), and `seenTurns` / `awayAt`
+were global singletons that could not describe more than one conversation.
+
+### Decision
+
+1. **Progress is per target, and only the FOCUSED one is ever marked seen.** `seen: Map<target, number>` holds
+   the rendered stream length the user actually looked at, updated in `render()` only while the page is
+   visible and only for the focused target. That single rule is the whole mechanism: a lane nobody is looking
+   at accumulates a real backlog instead of being forgiven by a repaint the user never saw.
+2. **The unseen math is a pure keystone.** `desktop/collab/sync_state.ts` `planSync(targets, focus, awayMs)`
+   owns ordering (focused first, then descending count, then label), the counts, the auto decision, and the
+   summary wording. DOM-free and import-free, so all of it is unit-tested rather than inferred from a phone.
+3. **Fail closed toward "nothing new".** A target whose `seen` exceeds its `total` yields ZERO unseen and is
+   omitted, because a fresh `lane-sync` replay legitimately SHRINKS a stream and inventing updates is worse
+   than missing them. Non-finite lengths read as fully seen; a negative or non-finite `awayMs` reads as 0, so
+   a clock that went backwards still auto-syncs rather than stranding the user.
+4. **60s or less syncs itself; longer offers the choice.** A glance is not a departure, so it just resumes.
+   After a real absence a `Sync` action appears, because silently yanking the scroll position ten minutes
+   later is as disorienting as losing the place was. The boundary is inclusive at exactly 60000ms.
+5. **The boundary is drawn, not guessed.** `renderTranscript` takes an optional `newFrom` index and emits ONE
+   `[data-sync-mark]` rule, which `applySync` scrolls to with `block: "center"` - landing it at the very top
+   would hide the last thing the user HAD seen, which is the context that makes the new run readable. The
+   marker is positional, not content-matched, so duplicate messages cannot produce two of them, and a
+   non-integer or out-of-range index emits none at all (the phone SCROLLS to this element, so a
+   wrong-place divider is worse than no divider).
+6. **Sync never repoints the composer.** When the focused conversation has a backlog, sync scrolls it. When a
+   DIFFERENT one does, the card lists it as a tappable row instead of switching automatically: silently moving
+   which agent the input is aimed at, because another lane happened to be busier, is exactly how a prompt
+   lands on the wrong agent. One tap is cheap; a misdirected prompt is not.
+7. **Auto-scroll-to-newest yields to the boundary.** `render()` only jumps to the bottom when no marker is
+   showing, since jumping to the newest message is precisely what loses the place the user asked to return to.
+
+### Notes
+
+- The old master-only catch-up body (a list of missed turn TEXT) is deleted. The transcript itself now carries
+  the boundary, so re-printing the missed turns in a card above it was duplicate reading with no navigation.
+  The card's rows answer WHERE instead, which the old one could not.
+- `<button id="sync-go">` was first written INSIDE `<button id="catchup-bar">`. A button inside a button is
+  invalid HTML and the parser hoists it out, which silently broke the row onto two lines; measuring the
+  rendered DOM caught it. The action is now a sibling under a `.cu-head` flex row.
+
+## ADR-0302 -- Nothing on the phone opens itself: no auto-expand on attention
+
+**Date:** 2026-08-30
+**Status:** Accepted -- user decision, asked and answered explicitly.
+
+### Context
+
+P-PWA-FLEET.2 left one question open on purpose: when a fleet lane hits `needs-approval`, should the
+auto-collapsed fleet strip EXPAND itself so the ask is on screen? It is the obvious "helpful" behaviour, and
+it is the kind of thing a later session adds without asking because it looks like an improvement.
+
+Asked directly. The answer was no: "that could be annoying and disruptive."
+
+### Decision
+
+**No panel on the phone ever opens itself.** Attention is communicated by COLOUR and COUNT in the always-
+visible bar, never by taking the screen. Concretely, on a lane that needs a human: the `Fleet` bar tints red,
+the per-state pip is red and glows, and the lane card is red once opened. The panel's `data-open` attribute is
+set in exactly ONE place, the user's own tap on `#fleet-bar`, and that stays true.
+
+### Why this is right, not just deferential
+
+A self-opening panel on a 390px screen costs about 410px, which is most of the transcript. It arrives while
+the user is mid-sentence in the composer or mid-read in a lane, and worse, it MOVES the thing the thumb was
+already travelling toward. The failure is not merely annoyance: a layout shift under an in-flight tap sends
+the tap somewhere the user did not choose, and on this surface the nearby controls include Stop and Deny.
+An interruption that can mis-route a destructive tap has to be worth more than a colour change, and it is not.
+
+### Scope (so this is not re-litigated per-widget)
+
+This applies to every collapsible on the phone: `#fleet`, `#procs`, `#botstrip`, and the sync card. The sync
+card already follows it (`showSyncCard` explicitly removes `data-open`, so even a 12-update backlog opens
+collapsed and the user chooses to look). Any future "just this once" auto-expand needs a superseding ADR and
+the user's word, not a judgement call in a render function.
+
+### Guard
+
+A comment sits at the exact decision site in `renderFleetStrip` where `data-attn` is toggled, naming this ADR
+and the reasoning, because that is the line someone would edit to add the behaviour.
+
+## ADR-0305 -- P-PORTGUARD.1: the engine port handshake - the window must never render a stranger (SCOPE/PLAN) (2026-08-30)
+
+**Status:** Accepted -- BUILT (same day; see Verification below).
+
+### The incident that proved it
+
+Field report, 2026-08-30: "the v1.14.1 update installed the Tactical GenAI Trainer instead of LUCID
+Agent IDE on macOS via the cask." Full forensics (PROGRESS entry of the same date) proved every
+distribution surface genuine byte-for-byte: cask SHAs matched the release asset digests, the pkg's
+xar Distribution/PackageInfo carried the right identity and payload, deb/rpm and both feeds were
+clean, and the concurrent creator-v0.1.0 build never cross-uploaded. A checksum-verified
+`brew reinstall` plus `rm -rf` of every colliding bundle STILL showed the Trainer UI inside a window
+whose menu bar said LucidAgentIDE.
+
+The actual cause: an orphaned `bun server.ts` from the user's Trainer fork (a scaffold clone of this
+repo) had been LISTENING on `*:5319` since Aug 27, pid 40409. Killing it and relaunching restored the
+real v1.14.1 instantly.
+
+### The defect
+
+`desktop/main.ts` boots by spawning the engine child, then `waitForServer()` polls
+`http://localhost:${PORT}/api/health` and accepts ANY 200. The BrowserWindow then renders whatever
+answers that port. Three gaps compound:
+
+1. **No identity check.** Any local process bound to 5319 first wins the window. The genuine spawned
+   engine loses the bind race and its exit is irrelevant - health is answered by the stranger.
+2. **No roll on macOS/Linux.** Only `LucidAgentIDE.bat` rolls to a free port when 5319 is taken
+   (main.ts comment, ADR-0278 era). The mac .app trusts the port unconditionally - which is exactly
+   why "Windows seems fine" while the Mac rendered the Trainer through two upgrades and a reinstall.
+3. **Bind width is unpoliced.** The squatter listened on `*` (LAN-wide). Our own engine's bind
+   address must be provably loopback (ADR-0022 did this for the control plane; assert it for the
+   engine too).
+
+Threat shape beyond the benign accident: any local process can paint arbitrary UI - including a fake
+auth page, which is literally what the Trainer's sign-in card was - inside LUCID's trusted chrome by
+binding the port first. For a security-first product that is a trust-boundary hole, not a UX nit.
+
+### The decision
+
+1. **Per-launch nonce handshake.** Main mints a random nonce (crypto, per launch) and passes it to
+   the spawned engine via env (`LUCID_ENGINE_NONCE`, alongside the existing flavorEnv block). The
+   engine includes that nonce in its `/api/health` JSON. `waitForServer()` accepts a health response
+   ONLY when the nonce matches what main minted. Missing or mismatched nonce = foreign server. Only
+   the child main spawned can know the value; a squatter answering first cannot fake it, and a
+   forwarding proxy has no bound genuine engine to forward to.
+2. **Fail loudly on a foreign port. Never roll silently.** Per-port userData is a deliberate
+   identity (main.ts ADR-0206/ADR-0278 seams: suffixed userData, safeStorage key seeding, lucid://
+   focus). Auto-rolling the primary launch would silently move the user onto a suffixed profile and
+   "lose" their settings/vault - the ADR-0278 failure class reintroduced. Instead: the ADR-0177/0259
+   pattern - a diagnosable error dialog naming the port, the squatting process (best-effort pid and
+   command via lsof/netstat), and the remediation (quit the other program, or deliberately launch on
+   another port via the control panel), plus an engine.log line. Fail-closed is law (AGENTS.md
+   invariant 3): "someone answered health" is not "my engine is up."
+   The dialog and engine.log MUST carry actionable forensics, not just a verdict (user requirement,
+   2026-08-30): the squatting process NAME, PID, START DATE/TIME, listen address, and the port - and a
+   preformatted COPY/PASTE INCIDENT BLOCK (markdown: app version, OS, port, expected engine, observed
+   process name/pid/start-time/command line, health-nonce verdict) suitable for pasting into an email
+   to a contributor or a GitHub issue verbatim. Best-effort process attribution: `lsof -t` /
+   Get-NetTCPConnection + process query; when attribution fails the block says so explicitly rather
+   than omitting the section.
+3. **Loopback bind, asserted.** The engine binds 127.0.0.1 explicitly; a regression test asserts the
+   listen address. Review relay (8790) and managed whisper (9111) binds in the same pass.
+4. **Both flavors inherit.** Agent 5319 and Creator 5320 flow through the same code path; the nonce
+   and dialog are flavor-agnostic. `LucidAgentIDE.bat` keeps its pre-spawn roll for the dev-beside-
+   installed case - the handshake makes the roll safe rather than replacing it.
+
+### Increment plan (P-PORTGUARD.1)
+
+- `desktop/main.ts`: mint nonce, add to the engine child env, extend `waitForServer()` to verify it,
+  add the foreign-port dialog branch (reuse the engineExit fast-bail structure).
+- A pure `formatPortIncident()` helper (unit-tested) that renders the copy/paste incident block from
+  `{ port, expected, observed: { pid, name, startedAt, cmd } | null, nonceVerdict }`; the dialog and
+  engine.log both consume it, so the report text is tested, not hand-rolled at the callsite.
+- Engine health handler (`server.ts` / compiled `bin/lucid-engine` source): echo
+  `process.env.LUCID_ENGINE_NONCE` in the health payload; bind loopback explicitly.
+- Tests (pure where possible, loop_preflight style): (a) a fixture server answering 200 with no/wrong
+  nonce makes the wait logic return "foreign", (b) matching nonce passes, (c) bind-address assertion.
+  Packaged gates (air-gap, pf-boot-smoke) keep passing - pf-boot-smoke boots the engine WITH a nonce.
+- `make demo-portguard`: spin a squatter on a free test port, prove boot refuses it with the named
+  error; kill squatter, prove boot succeeds.
+
+### Non-goals
+
+- CI release-identity gate (assert pkg Distribution/PackageInfo per flavor before upload) - separate
+  increment; the incident proved distribution was NOT the failing surface.
+- The Trainer fork's own appId/port split - external repo hygiene, not this codebase.
+- Any change to rolling-port semantics or the port picker UX.
+
+### Verification (BUILT, 2026-08-30)
+
+Shipped as planned with two deltas. (1) The loopback item was ALREADY satisfied: dev.ts's single
+Bun.serve has hardcoded hostname 127.0.0.1 (ADR-0022), and the ADR-0199 bind picker feeds only the
+separate fail-closed collab relay - so that item became a load-bearing comment, not a change.
+(2) healthVerdict is stricter than drafted: ANY 200 whose body is not `{ ok: true, nonce: <match> }`
+is foreign (even a matching nonce inside a wrong-shaped body), because a wrong shape already proves
+the answerer is not this build's engine. Evidence: `desktop/port_guard.test.ts` 20 pass / 0 fail;
+`make demo-portguard` green end-to-end against LIVE squatter servers (missing nonce, wrong nonce,
+compliant echo, incident-block forensics incl. the attribution-failed branch, both probe parsers);
+desktop `tsc --noEmit` clean; full harness suite 4324 pass with exactly the pre-existing 11
+environmental failures (fs_browse 5, symbol_graph 4, lucid_acp assets 2 - byte-identical list to the
+pre-change baseline run); sidecar 57 pass; and the REAL engine booted with
+`LUCID_ENGINE_NONCE=fable-test-nonce-42` answered `/api/health` with that exact nonce.
+
+ON-DEVICE, the full path (2026-08-30, Windows 10, dev build): a deliberate squatter answering
+`/api/health` with `{ok:true}` and no nonce was put on 5319, then the dev app was launched pinned to
+5319. Result, 2.8s from launch to a complete report: our own engine died honestly
+(`Failed to start server. Is port 5319 in use?` at dev.ts:1405), NO window was ever created, the
+incident block landed in engine.log, and the dialog appeared titled "Another program is using LUCID's
+port" naming the port, both remediations, and the squatter (bun, PID 20552, started 22:02:02Z).
+"Copy report and quit" put the block on the clipboard verbatim (confirmed by paste-back).
+
+One delta found BY that on-device run and fixed immediately: the win32 probe reported only the image
+path (`bun.exe`), because `Get-Process` does not expose argv. It now joins `Win32_Process` for
+`CommandLine` (falling back to `Path`), so the block prints the full command. That is the field that
+identified the fork's dev server in the original Mac incident, so a bare exe path was not good enough.
+Re-verified live: `Command: "...\bun.exe" ...\lucid-squat-5319.ts`. Two tests cover the preference and
+the fallback (22 pass total). Two prior port-guard incidents in this session's own logs are the
+regression fixtures if this ever needs re-proving.
+
+### Links
+
+PROGRESS entry 2026-08-30 (incident forensics), ADR-0022 (loopback control plane), ADR-0177/0259
+(diagnosable boot failures), ADR-0206/0278 (port-keyed identity + safeStorage), ADR-0279/0304 (the
+flavor-crossing hazard class this generalizes), desktop/main.ts, desktop/port_guard.ts, desktop/dev.ts,
+desktop/scripts/demo_portguard.ts, desktop/build_flavor.ts.
+
+## ADR-0306 -- P-OFFICE.1: first-class Word/Excel/PowerPoint via OfficeCLI, as a gated skill (2026-08-30)
+
+**Status:** Accepted -- BUILT (same day; see Verification below).
+
+### Context
+
+The user wants LUCID agents to be genuinely good at Microsoft Office files. `iOfficeAI/OfficeCLI`
+(Apache-2.0, C#, ~29.5k stars, v1.0.145 as of this writing) is a single self-contained binary that
+reads, edits, and creates `.docx`/`.xlsx`/`.pptx` with no Office installation, addresses elements by
+path (`/slide[1]/shape[1]`), emits structured JSON, and renders documents to HTML/PNG - which closes
+the render -> look -> fix loop that makes agents actually good at documents. Upstream even ships a
+`SKILL.md` and an `officecli install` that injects skills into detected agent harnesses.
+
+### Decision
+
+Integrate as a GATED EXTERNAL TOOL through the seams we already have - a skill plus exec-policy
+classification. No fork, no new tool surface, no Python (invariants 1 and 2 untouched).
+
+1. **Skill, LUCID-authored, version-pinned.** `.agents/skills/officecli/SKILL.md` wraps upstream's
+   command surface (create / view / get / add / set / remove / close), pinned to a named upstream
+   release. It teaches the render-look-fix loop explicitly: render HTML/PNG into the workspace and
+   open it in the Preview panel (existing preview seam, zero new UI).
+2. **Acquisition is verified, never piped.** Upstream's `curl | bash` and `irm | iex` installers are
+   PROHIBITED under our posture. v1: the skill detects `officecli` on PATH and otherwise walks the
+   user through installing the pinned GitHub release manually (egress approval applies). v2
+   (optional, own increment): a fetch-runtimes.ts-style SHA-256-pinned fetch.
+3. **exec_policy.ts classifies `officecli` explicitly.** Unknown programs are already fail-closed T3;
+   add read-only subcommands (view / get) at a low tier and mutating subcommands (create / add / set
+   / remove / close) at the LOCAL_MUTATE-equivalent tier so per-action approvals read sanely.
+4. **Its ports are not our ports.** `officecli watch` runs a live-preview server on localhost:26315,
+   browser-facing only. The ADR-0305 rule holds: LUCID's window only ever renders its own
+   nonce-verified engine.
+5. **License hygiene.** Apache-2.0 is compatible; if v2 ever bundles the binary, NOTICE attribution
+   ships with it and the vendored tree keeps its own license (AGENTS.md licensing rules).
+
+### Increment plan (P-OFFICE.1)
+
+- The skill file + a parity check that its documented commands exist in the pinned upstream release.
+- exec_policy tier entries + tests beside the existing tier tests.
+- `make demo-office`: with the binary present, create a deck, add a slide, view outline, render HTML,
+  assert artifacts; cleanly SKIP (not fail) when the binary is absent so CI stays green.
+
+### Non-goals
+
+- AionUi or any GUI dependency; COM automation of installed Office; bundling the binary in v1;
+- upstream's auto-injection (`officecli install`) writing into LUCID's skill directories - LUCID owns
+  its skill set (the skill is authored here, not installed by a third-party binary).
+
+### Links
+
+github.com/iOfficeAI/OfficeCLI (README + SKILL.md + releases), ADR-0305 (port trust rule),
+desktop/exec_policy.ts, .agents/skills/, desktop/build/fetch-runtimes.ts (the pinned-fetch pattern).
+
+### Verification (BUILT, 2026-08-30)
+
+Shipped as three pieces. (1) `.agents/skills/officecli/SKILL.md`, pinned to the upstream release
+verified that day (v1.0.145, published 2026-08-25): detection first, then the command surface, then
+the render-look-fix loop wired to the existing `preview_open` / `preview_inspect` tools. It PROHIBITS
+both upstream one-liners (`curl | bash`, `irm | iex`) and `officecli install`, because LUCID owns its
+own skill directory and a third-party binary must never write into it. (2) `desktop/exec_policy.ts`
+grades officecli by SUBCOMMAND through a lookup table read in `classifyCommand` (a new step 4), with
+`riskyTier` left byte-identical so the unknown-program fail-closed path is untouched: view/get safe
+T0 (parity-asserted against `cat`), create/add/set/remove/close risky T1 (parity-asserted against
+`cp`), install/watch risky T2 (install rewrites PATH and other harnesses' config; watch BINDS a
+localhost server, which is a reach-out posture, not a one-shot write), and any unrecognized verb
+falls through to T3. (3) `make demo-office`.
+
+Evidence: `bun test desktop/exec_policy.test.ts` 336 pass / 0 fail across both files, so the 8 new
+officecli tests landed with ZERO regressions to the existing SAFE/RISKY/CATASTROPHIC corpora;
+`make demo-office` exits 0, asserting the skill's pinned version and its installer prohibition (the
+demo greps for that exact line, so deleting it fails the gate), every tier above, and that upstream's
+piped installer independently classifies T4 always-prompt.
+
+The live round-trip was then EXERCISED, not skipped (2026-08-30, Windows). The binary was installed
+exactly the way the skill prescribes - pinned release asset, digest-verified, no piped installer:
+`officecli-win-x64.exe` from the v1.0.145 release, sha256
+`760696b262f3d6bd2cd174577220d54541b6e1e04ec58dee051f1897395638b8` agreeing across THREE independent
+sources (the skill's pinned table, the GitHub API asset digest, and the release's own SHA256SUMS),
+size 33,386,408 matching the API, installed to `~/.local/bin/officecli.exe` with that directory added
+to the user PATH (durably, via the .NET environment API rather than `setx`, which truncates long
+PATHs). The binary self-reports 1.0.145. `make demo-office` then passed part 3 for real: create
+produced a valid .pptx with no Office installed, add appended a path-addressed slide, `view outline`
+read the title back OUT of the saved OOXML (so the write really landed), `view html` rendered 21,777
+bytes, and close flushed the resident session. A three-slide deck was then built end to end and
+rendered to 25,279 bytes of HTML carrying all six authored strings.
+
+One real constraint found by doing it: the render-look-fix loop only works when the render lands
+INSIDE the workspace. `preview_open` on `%LOCALAPPDATA%\Temp` silently shows nothing (path
+containment, ADR-0023/0103); the same bytes under `.omp/tmp/` are fine. The skill said "render into
+the workspace" already but did not say WHY, so the reason and the observed failure are now recorded
+there - a rule with its reason survives editing, a bare rule does not.
+
+## ADR-0308 -- P-PREVIEW.11: `preview_open` gets an explicit channel - intent tracing silently broke title-matching (2026-08-30)
+
+**Status:** Accepted -- BUILT.
+
+### The bug, and why it hid
+
+The agent's `preview_open` tool stopped opening the Preview panel. Observed live: the tool returns its
+ack, no panel appears, and a following `preview_inspect` times out with "no preview is open (or it
+didn't respond)". The workspace sits in a OneDrive path with spaces, which made that the obvious
+suspect. It was not: `/api/preview/serve` was proven to return HTTP 200 and 34,409 bytes for the exact
+space-bearing, dot-dir path (`.../Apps AI Vibe/.../.omp/tmp/hardening.html`), with the inspect bridge
+injected. Containment, `isLocalFileTarget`, and `toFileUrl` percent-encoding all handle it.
+
+The real cause is a chain through omp's ACP mapper, read in the vendored source:
+
+1. `sdk.ts:2125` - when `tools.intentTracing` (or `PI_INTENT_TRACING`) is on, omp injects an intent
+   field (`i`) into EVERY tool schema, and the system prompt instructs the model to fill it.
+2. `agent-session.ts:3763` - that argument rides the tool-start event as `intent`.
+3. `acp-event-mapper.ts:413` -> `buildToolTitle(toolName, args, intent)` at 513: **when an intent is
+   present it is returned as the title**, short-circuiting the `` `${toolName}: ${subject}` `` form.
+4. `desktop/acp_backend.ts:600` matched `/\bpreview_open\b/i` against that title. With intent tracing
+   the title is prose like "Opening rendered deck in preview", so the match fails, no
+   `preview-available` event is emitted, the panel never opens, `startPreviewInspectRelay()` never
+   runs, and every later `preview_inspect` / `preview_screenshot` reports nothing open.
+
+Critically, `buildToolCallStartUpdate` (mapper 403-427) carries NO tool-name field at all: only
+`toolCallId`, the intent-polluted `title`, `kind` (which `mapToolKind` collapses to "other" for any
+custom tool), `rawInput`, `content`, `locations`. So title-matching a custom tool is not merely
+fragile, it is structurally unavailable once intent tracing is on. Auto-preview-on-write was never
+affected, because `previewablePath` keys on `kind` ("edit"/"write"), which survives - which is exactly
+why this looked like "the preview works sometimes" and went unnoticed.
+
+### Decision
+
+Stop inferring the tool from the ACP stream. Give `preview_open` the SAME explicit channel the other
+four preview tools already use (`LUCID_PREVIEW_SHOT_URL` / `_INSPECT_URL` / `_ACT_URL`, dev.ts
+4134-4138): dev.ts publishes `LUCID_PREVIEW_OPEN_URL` (real bound port + per-launch token), the
+extension POSTs the path to it from `execute()`, and the route drives the panel by calling into the
+same `backend` singleton whose event stream `/api/chat` is already draining. No string matching, no
+dependence on omp's title policy, and the path is still re-gated by `resolvePreview` /
+`readPreviewFile` before anything renders, so the security posture is unchanged.
+
+Two supporting decisions:
+
+- **The title match STAYS as a fallback.** It is correct when intent tracing is off and costs one
+  regex; removing it would break older configurations for no gain. The direct channel wins when both
+  fire (idempotent: same path, one panel).
+- **The activity pill is fixed the same way.** `previewActivityLabel(u.title)` was broken for ALL five
+  preview tools by the same intent shadowing, so the routes emit the activity directly instead of
+  hoping the title still says `preview_screenshot`. DONE as P-PREVIEW.11b (same day): the labels moved
+  into one exported `PREVIEW_ACTIVITY` map that BOTH paths read, `backend.notePreviewActivity(kind)`
+  emits by kind, and `/api/preview/inspect`, `/api/preview/act`, and `/api/preview/shot` each report
+  their own kind (inspect/act emit BEFORE the held await, so the pill shows during the wait). Emitting
+  on `/api/preview/shot` is unambiguous: only the agent's tool GETs it, since the renderer PUSHES to
+  `/api/preview/shot-cache` and polls the relay routes instead. A drift-guard test pins the by-kind
+  label to what the title path produces for the same tool, because two sources for one user-facing
+  string is precisely how they diverge.
+
+### Alternatives rejected
+
+- **Match `rawInput` shape** (kind "other" + a previewable `path` + no foreign keys): works, but it is
+  a heuristic that silently mis-fires the day another tool takes an `.html` path (`inspect_image`
+  already takes `path`), and it would rot invisibly.
+- **Patch omp's `buildToolTitle`**: forbidden by AGENTS.md invariant 1 (extend, never fork), and it is
+  omp's legitimate behavior - the intent IS a better human title.
+- **Turn intent tracing off**: it improves every other tool's readability in the transcript. Trading
+  that away to fix one detection path is backwards.
+
+### Verification
+
+See the PROGRESS entry of 2026-08-30. Unit tests cover the pure detection (an intent-polluted title
+no longer defeats the open path) and `make demo-preview-open` drives the real route end to end.
+HONEST BOUNDARY: the running desktop instance loads dev.ts + the extension at launch, so the fix is
+not live in an already-running app - confirming it on-device requires a restart, which is the user's
+call since a restart ends the live agent session.
+
+### Links
+
+ADR-0096 (P-PREVIEW.1-3, the panel + `preview_open`), ADR-0153 (P-PREVIEW.6b/6c, the inspect/act
+channels this mirrors), ADR-0023/0103 (path containment - exonerated here), ADR-0041 (omp version-pin
+policy: this is the class of behavior change a pin bump can introduce), vendor `sdk.ts:2125`,
+`agent-session.ts:3763`, `acp-event-mapper.ts:413/513`, `desktop/acp_backend.ts`, `desktop/dev.ts`,
+`harness/omp/preview_extension.ts`.
+
+## ADR-0307 -- P-RELEASE.4: the release-identity gate - CI reads the shipped bytes before upload (2026-08-30)
+
+**Status:** Accepted -- BUILT.
+
+### Context
+
+The 2026-08-30 field report ("v1.14.1 installed the Tactical GenAI Trainer instead of LUCID") was
+disproved by hand: range-reading the released pkg's xar TOC, parsing Distribution and PackageInfo,
+walking the deb's ar members for its control file, reading the rpm lead. The release was genuine and
+the real cause was elsewhere (ADR-0305). But the cost of proving innocence was a full session, and
+the reason is structural: **no gate had ever looked INSIDE an artifact.** CI verified that builds
+succeeded, that runtimes resolved offline (ADR-0225), and that the engine boots from a protected
+install (ADR-0261) - never that the bytes about to be uploaded belong to the product being released.
+
+That gap is not hypothetical for this repo specifically: ONE branch and ONE electron-builder config
+tree build TWO products (ADR-0279 Agent + Creator), their tags can be cut minutes apart from the same
+commit (v1.14.1 and creator-v0.1.0 were), and ADR-0304 already caught one flavor-crossing hazard in
+the shared update pointer. Filenames are the only thing separating the two upload sets, and a
+filename is exactly what a mis-set config gets right while the payload is wrong.
+
+### Decision
+
+A fail-closed identity gate runs on every runner AFTER the existing gates and BEFORE any upload step,
+in both workflows. Structure follows the house pattern (pure decision core + thin IO shell):
+
+1. **`desktop/build/release_identity.ts`** - pure, no fs/zlib/network/electron. Format parsers over
+   caller-supplied bytes and strings (xar header, Distribution/PackageInfo XML, ar members, deb
+   control, rpm lead), `classifyArtifact`, `checkArtifact`, `summarize`. Every parse and every verdict
+   is unit-tested here rather than improvised inside a script that only executes on a release tag.
+2. **`desktop/build/release-identity-gate.ts`** - owns the IO: ranged reads (never loads a 500MB
+   installer), zlib inflate, a minimal tar walk. Builds the expectation from `build_flavor.ts` plus
+   the version in `desktop/package.json` (which the CI version-stamp step rewrites, so it is the
+   right source of truth) and derives the deb/rpm name from the effective electron-builder
+   `artifactName` pattern rather than hardcoding it a second time.
+3. **Workflow wiring** - `--flavor agent` in build-desktop.yml, `--flavor creator` plus
+   `LUCID_RELEASE_DIR: release-creator` in build-creator.yml, placed between the boot gates and the
+   upload/attach steps. The placement is the point: a mis-identified artifact fails the build instead
+   of reaching a Release.
+
+Fail-closed rules, each one a lesson from an earlier ADR: an empty or missing release dir is a
+FAILURE, never a vacuous green (ADR-0303); a kind we should be able to parse but cannot is a FAILURE,
+never a skip; an unrecognized file in the release dir is a FAILURE, because an unexpected file in an
+upload set is the shape of the bug being guarded; a misspelled `--flavor` is a hard failure rather
+than a silent fold to `agent`; and the full report prints on SUCCESS too, so a green CI log carries
+the evidence instead of just a check mark.
+
+### Deltas found while building (all kept)
+
+- **The updater feed is READ, not stem-checked.** Both flavors emit a file named exactly `latest.yml`
+  (electron-builder.creator.cjs), so the filename can never separate them; the feed's declared
+  `path:` is the only real evidence, and it is the auto-update self-replacement path ADR-0304 warned
+  about. A leading `v` on the version is normalized (a formatting difference, not a flavor one).
+- **`rpmNameFromLead` returns the raw name-version-release string.** The package name itself contains
+  hyphens, so only the expectation knows where to cut; `checkArtifact` prefix-matches instead.
+- **`.blockmap` companions inherit their parent artifact's finding** rather than being classified
+  (they are in the upload globs but carry no identity). An ORPHAN companion fails: a blockmap with no
+  installer is a broken upload set.
+- **electron-builder byproducts** (`builder-debug.yml`, `builder-effective-config.yaml`) are skipped
+  by exact name; without that the gate red-lights every real build.
+- **`summarize` is fail-closed on zero findings** - "every finding ok" over an empty list is
+  vacuously true, which is precisely how a green check comes to mean nothing.
+
+### Honest coverage limits
+
+Deep identity is read for **mac-pkg, deb, rpm, and the updater feed**. `mac-zip`, Windows NSIS,
+Windows portable, and AppImage are checked on FILENAME only, because their identity lives in formats
+this increment does not parse (PE version resources; squashfs `.desktop`). So a swapped payload inside
+a correctly named `.exe` would still pass. That is a real gap, deliberately scoped out rather than
+papered over: the pkg is the artifact the Homebrew cask installs and the one the field report was
+about, and the deb/rpm carry their identity cheaply. Extending to PE resources and squashfs is a
+follow-up increment, not a claim made here.
+
+### Verification
+
+`bun test desktop/build/release_identity.test.ts` 63 pass / 0 fail (synthetic byte fixtures built in
+the test: hand-assembled xar headers, ar archives with an odd-sized member to exercise even padding,
+a 96-byte rpm lead - no binaries committed). `make demo-release-identity` exits 0 across 25 checks,
+building REAL xar framing (28-byte header + zlib TOC + inflatable members) so the actual parse path
+runs, and proving: a correct Agent set passes with every artifact inspected by name AND bytes; **THE
+SWAP** (correct Agent filenames wrapping Creator payload) fails with the report naming both sides,
+with not one filename check firing; an empty dir, a missing dir, an unaccounted-for file, and an
+orphan blockmap each fail; gating the same dir as `--flavor creator` fails, proving the expectation
+is really derived per flavor. Workflow steps were placed by anchored-column check against neighbouring
+steps in each file. NOT exercised: the gate inside a real tag build - that runs on the next release
+cut, which is the honest boundary (same boundary ADR-0258's CI job had).
+
+### Links
+
+ADR-0305 (the sibling increment from the same incident: the port handshake), the 2026-08-30 PROGRESS
+forensics entry, ADR-0279/0304 (one branch, two products - the hazard class), ADR-0303 (the vacuous
+green), ADR-0225/0261 (the existing pre-upload gates this sits beside), ADR-0246 (signing, still
+open), `desktop/build/release_identity.ts`, `desktop/build/release-identity-gate.ts`,
+`.github/workflows/build-desktop.yml`, `.github/workflows/build-creator.yml`.
+
+## ADR-0309 -- P-FLEET.L7: lane tool-call fidelity, and the repaint that was eating the transcript (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### Two user-visible bugs with one cause
+
+Reported together: "I want expandable tool calls with chevron down arrows showing the command used,
+similar to the main composer" and "I want to copy/paste content from their windows." They looked like
+two feature requests. The second was a bug, and both trace to the same lines.
+
+`fleet_grid.paintOutput` ran `out.innerHTML = outputHtml(run)` on EVERY token event. Rebuilding the
+whole output subtree per token has two consequences nobody wrote down: it destroys any text selection
+the user is holding (so copy from a working lane is impossible, not merely awkward), and it resets
+every `<details>` element to closed (so an expanded tool call slams shut on the next token). A lane
+that is streaming is exactly when a user wants to read and copy it, so the repaint was worst precisely
+when it mattered.
+
+The chevron half was a real gap. `#toolCode` extracted authored code from `rawInput` for write/edit,
+and `toolLine` rendered a `<details>` only when `code` existed. A bash/read/search/fetch call authors
+no code, so it carried nothing but omp's one-line title: there was literally nothing to put under a
+chevron. The command the agent ran was discarded at the wire.
+
+### Decision
+
+Carry the arguments, and patch the DOM instead of rebuilding it.
+
+The engine gains `input` on the `tool` LaneEvent: the bounded (4KB), code-stripped rawInput, with
+single-string fast paths (`command`, `cmd`, `query`, `pattern`, `url`, `expression`) so a shell line
+reads as itself rather than as JSON wrapping a shell line, plus a sibling `paths`/`path` scope line
+because a search pattern without its scope is not the command. It is emitted ONLY when the call
+authored no code: `code` is the richer view of the same bytes, and showing both would render a diff
+twice, once under a label saying "command". Serialization is defensive (cycles and BigInt cannot take
+down the notify handler, which is a lane's only channel).
+
+`desktop/renderer/lane_transcript.ts` is the new pure keystone. It mints stable monotone ids so a DOM
+node keyed on one is stable for the card's life, and it DELEGATES chip classification to
+`answer_chips.toolChip`, the same function the master composer uses. That delegation is a correctness
+claim, not tidiness: a lane chip and a composer chip describe the same tool call, and calling one
+function is the only way they cannot drift. `laneChipBody` resolves code, then command, then detail,
+and `hasBody` is derived from the SAME internal decision, so the biconditional (`hasBody` is false
+exactly when there is no body) holds by construction rather than by two functions agreeing. The DOM
+then omits the chevron rather than rendering a dead one.
+
+`paintOutput` no longer touches `innerHTML`. Settled turns append once into `div[data-lane-turn=<id>]`
+and are structurally unreachable from the paint path afterwards; only `div[data-lane-live]` repaints,
+and even there prose is written as `textContent` on pre-built nodes. `.fleet-out` re-grants
+`user-select: text`, because the card header is a drag surface and a dragging ancestor suppresses
+selection inside it.
+
+Truncation is VISIBLE. A clipped command or a capped diff says so in its own last row. A card that
+quietly shortens a command is misreporting what ran, which is worse than refusing to show it.
+
+The lane also forwards `usage_update` (context fill, window, cost) untouched. It reports no output-token
+figure because omp sends none on this path.
+
+### Verification
+
+`bun test desktop/renderer/lane_transcript.test.ts` 36 pass / 0 fail. `make demo-P-FLEET.L7` exits 0:
+drives a REAL FleetLaneManager against a fake-ACP child in a new `lanefidelity` mode and proves the
+bash command crosses the wire verbatim while the edit carries `code` and no duplicate `input`; the
+hasBody biconditional over five shapes including whitespace-only input; delegation asserted by
+comparing `laneChip` against `toolChip` directly; 1000 distinct ids; a 10KB command clipped at 4096
+with the truncation declared; a 5000-row diff capped at exactly 400 with the last row saying so; and a
+3-turn copy round-trip that is plain text, in order, and em-dash free. NOT exercised by an automated
+test: the DOM patching itself, because this repo has no DOM test harness installed (renderer tests
+cover the DOM-free modules only). It is verified by isolated typecheck, by structural review (the
+settled-turn cursor is a node COUNT, so an existing turn node cannot be re-read), and by the live
+engine boot below. That is the honest boundary.
+
+### Links
+
+ADR-0274 (P-FLEET.L3, the authored-code wire this extends), ADR-0104 (P-CHAT.1, the rawInput
+extraction contract), ADR-0189 (P-CHAT.B, the composer chip anatomy being mirrored),
+`desktop/renderer/lane_transcript.ts`, `desktop/fleet_lanes.ts`, `desktop/renderer/fleet_grid.ts`.
+
+## ADR-0310 -- P-FLEET.L8: promoting a lane is an ATTACH, not a session handoff (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### The requirement that rules out the obvious design
+
+"I want to click a button on the LUCID Fleet instance and move it to the main composer session with
+its model and working folder, possibly in flight, with the record keeping provenance and composer chat
+showing with history. I want to be able to switch on the fly."
+
+"Possibly in flight" is the whole design constraint. The obvious reading of "move it to the main
+composer" is a handoff: close the lane's ACP session, open it on the master connection, replay the
+transcript. That cannot satisfy the requirement. A lane mid-turn is holding an open `session/prompt`
+and possibly an open tool call; killing the child to re-handshake it elsewhere destroys exactly the
+work the user wanted to keep, and re-driving a session log through a second connection risks
+corrupting it. It would also make demote as expensive as promote, when the user asked for both to feel
+effortless.
+
+### Decision
+
+The composer ATTACHES to the running lane. Nothing about the lane changes: same omp child, same ACP
+session id, same cwd, same model. What moves is which surface the renderer sends prompts to and renders
+events from. `state.composerTarget` is either `{kind:"master"}` or `{kind:"lane", laneId, name, cwd,
+model}`, and `send()` routes to `bridge.fleetPrompt` or `bridge.sendPrompt` through the SAME event
+rendering closure.
+
+Because a promote can land mid-turn, the composer needs to join a turn already in progress. That is
+what `/api/fleet/watch` is for: an NDJSON stream built on the existing `FleetLaneManager.observe()`
+sink, which already survives turn boundaries and respawns. A watcher owns NO turn and cannot start one
+(that is `prompt`'s job), and it gets its own AbortController so leaving a lane never aborts a running
+turn and aborting a turn never silently unsubscribes the composer.
+
+Provenance is the reason this needs a durable record at all. The lane's session log is unchanged by
+promotion, so without a ledger line, a stretch of that session driven from the main chat is
+indistinguishable from lane work. `LaneSessionRecord.event` widens to include `promote`/`demote`, each
+carrying the model IN FORCE at that moment (a promoted lane keeps its own model, not the master's, so
+"which model wrote this" needs recording per event) and the turn count carried. The ledger reader stays
+a WHITELIST so a junk or future event name is dropped rather than silently labeling a session.
+
+Exactly one lane may hold the composer; promoting a second releases the first, because there is one
+prompt box and two attached lanes would send to whichever answered last. `promoteRefusal` is
+fail-closed on an unknown status but explicitly ALLOWS `working`: an in-flight promote is the feature,
+not an error case. `targetCaps` reports what a lane target genuinely cannot drive (images, session
+modes, the goal loop, slash expansion) so the UI hides those controls instead of shipping dead ones.
+
+### Verification
+
+`bun test desktop/renderer/composer_target.test.ts` 38 pass / 0 fail. `make demo-P-FLEET.L8` exits 0
+against a REAL FleetLaneManager: the session id, cwd, and model are byte-identical across a promote;
+promoting a second lane leaves exactly one promoted; demote is idempotent; the ledger carries 2 promote
+and 2 demote lines each naming lane, folder, model, and turns; `working`/`awaiting-input`/`done` all
+promote while `stopped`/`error` refuse naming respawn and `""`/`"banana"` refuse fail-closed; and
+`seedTurns` folds `[ran: x]` bookkeeping to one note with the prose byte-preserved.
+
+LIVE, against a real booted engine on port 5399 with a real spawned lane: promote returned
+`promoted: true` carrying sessionId `01a06a84-8c57-7000-bd89-bfbf51635735`, IDENTICAL to the id the
+spawn reported, which is the central design guarantee observed rather than argued. `/api/fleet/promoted`
+reported the lane, demote returned it to null, and the JSONL ledger showed the promote and demote lines.
+NOT exercised: a promote landing mid-turn against a real provider, which needs a long live turn to
+interleave with; the mid-turn path is covered by the demo's `working`-status assertion and by the watch
+stream's seed-only-if-empty guard.
+
+### Links
+
+ADR-0274 (P-FLEET.L1-L5, the lane engine and its ledger), ADR-0268 (one turn per session: why a watcher
+may not prompt), `desktop/renderer/composer_target.ts`, `desktop/fleet_lanes.ts` (`promote`/`demote`),
+`desktop/dev.ts` (`/api/fleet/promote|demote|promoted|watch|transcript`), `desktop/renderer/app.ts`.
+
+## ADR-0311 -- P-HEALTH.1: the harness recovers its own sessions, so nobody restarts the app (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### The manual habit being automated
+
+"I notice there are some issues with longer running session runs with LUCID where it stalls out and
+needs restarted. I need the models to be responsive and possibly have some automatic harness checks
+like I do after a manual stop where I ask 'Status?' and don't need to restart the entire LUCID app."
+
+That describes a two-step manual protocol: poke the session with "Status?", and if that fails, restart
+everything. The restart is the expensive part and it was never actually necessary. The wedged thing is
+one omp child; the session log on disk lets a fresh child resume the same conversation.
+
+### The constraint that shapes the whole design
+
+ADR-0263 (P-STALL.2) DELETED the 10-minute silence cutoff because it was killing legitimately long
+work: an agent fanning out to subagents can sit quiet far longer than any fixed clock while the work is
+genuinely running, and the kill threw it all away. Any automatic recovery is a wall clock wearing a new
+hat, so this increment had to be built so it cannot regress that.
+
+The resolution is that an OPEN TOOL CALL caps the verdict at `quiet`, unconditionally and at any
+duration. A ten-minute build is real work: probing it would interleave a note into a running call, and
+recovering it would cancel exactly the turn worth running. The only thing that outranks an open call is
+a DEAD child, because that is evidence rather than a guess about how long work is allowed to take. An
+unreadable open-call count (NaN) counts as one open call, so unknown work in flight is never killed.
+
+### Decision
+
+A pure ladder in `desktop/health_watch.ts`: `ok -> quiet -> probe -> recover`. `quiet` shows the stall
+and does nothing. `probe` delivers the canned status ask as an OPERATOR note on the existing interject
+path, not a second prompt (the turn is still open, and two prompts on one session cross collectors).
+`recover` cancels and respawns in place. For the master session that means cancel, drop the wedged
+child, then `session/load` the SAME session id, because `restart()` alone would mint a fresh session on
+the next prompt and silently throw the thread away, which is worse than the stall it was fixing.
+
+Attempts are BOUNDED per stall episode and any real activity resets the budget. Past `maxProbes` it
+never probes again (no nag loop); past `maxRecovers` it never recovers again and SAYS the harness has
+stopped trying, so a permanently wedged provider cannot become a respawn loop. An unusable clock
+(NaN/Infinity/negative) yields `ok` even with a dead child: fail-closed here means an unreadable
+timestamp does not get to authorize a destructive action, since `dead` arrives from the same poll as
+the clock. A lane the USER stopped is never auto-revived, and `healthReport` short-circuits such a lane
+to `ok` rather than reporting a raw verdict about an action nothing will take.
+
+`HEALTH_PROBE_NOTE` explicitly says to continue afterwards, so a probe can never be misread as a stop
+order and end the work it was checking on.
+
+The route is `/api/session-health`, NOT `/api/health`. That path is already the ADR-0305 port-guard
+nonce probe and is the one route deliberately exempt from the token gate, because a foreign process
+squatting the engine port must be detectable before anything is authenticated. This was caught by
+booting the engine and finding the new route shadowed: reusing the path would have both hidden the
+route and hung session telemetry off an unauthenticated endpoint.
+
+### Verification
+
+`bun test desktop/health_watch.test.ts` 37 pass / 0 fail. `make demo-P-HEALTH.1` exits 0 and carries
+the ADR-0263 guarantee as its own named case: busy, silent, `openCalls: 1` stays `quiet` at 3 minutes,
+7 minutes, 30 minutes, and 10 HOURS, with the reason naming the open call. Also proven: inclusive
+thresholds, idle-is-always-ok, a dead child outranking an open call whether busy or idle, budget
+exhaustion saying so, the action gap holding a second tick 1s after a recovery, an unreadable clock
+yielding `ok`, and LIVE that a real lane keeps its id, turn count, and transcript while a user-stopped
+lane is left alone.
+
+LIVE against a booted engine: `/api/health` still returns the port-guard nonce unauthenticated,
+`/api/session-health` returns a real verdict with a plain-sentence reason, the same path without a token
+returns `forbidden`, and `/api/session-health/tick` returns `master: null` on an idle session (the
+correct no-action outcome). NOT exercised end to end: a real provider wedging mid-turn and being
+recovered by the ticker, which needs a genuinely stuck upstream to reproduce. The recovery path itself
+is covered by the lane-level demo and the pure ladder's `recover` verdict.
+
+### Links
+
+ADR-0263 (P-STALL.2, the cutoff this must not reintroduce), ADR-0186 (P-STALL.1, the visible-silence
+notice this shares its activity signal with), ADR-0305 (the `/api/health` port guard this route had to
+avoid), P-INTERJECT.1 (the operator-note path a probe rides), `desktop/health_watch.ts`,
+`desktop/acp_backend.ts`, `desktop/fleet_lanes.ts`.
+
+## ADR-0312 -- P-TOKENS.1 / P-FLEET.L9: a spend meter that refuses to invent numbers, and lane windows (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### What the provider actually reports
+
+"I want more fidelity into token usage per model to show as a small up arrow button above the send
+button, that allows the user to see token spend per tool calls, health checks, input tokens, output
+tokens, and other metrics on the fly."
+
+Over ACP, omp reports exactly three things: context fill (`used`), the context window (`size`), and
+`cost` in USD. It does NOT report per-turn output tokens on this path, and it does not report a cache
+breakdown. So a literal reading of the request cannot be satisfied honestly, and the tempting failure
+mode is to render `0` or `$0.00` for the parts that never arrived. That is the worst possible outcome
+for a spend readout: the user would budget against a fabricated figure.
+
+### Decision
+
+`desktop/renderer/token_meter.ts` makes provenance a field. Every `MeterRow` carries
+`measured: boolean`, and an unreported metric renders the words "not reported", never a plausible zero.
+Output tokens are labeled ESTIMATED (the renderer's own TokenSpeedEngine count) with a hint containing
+the word "estimate", and per-tool `ctxDelta` is ATTRIBUTION (context growth bracketed by two usage
+samples) that stays `null` and says so rather than showing 0 when no two samples bracket the call.
+
+The one distinction worth stating: a REPORTED cost of 0 renders `$0.00` and stays measured, because a
+reported zero is a fact while an unreported zero is an invention. Both are pinned by tests.
+
+The DOM layer renders rows verbatim and does no arithmetic and no formatting, so the honesty rules
+cannot be relitigated in a template. The button's `%` glyph is the only figure the DOM composes, and
+`pct === null` renders BLANK rather than 0%.
+
+### Lane windows (P-FLEET.L9)
+
+"I want to be able to resize using custom handlers the LUCID Fleet instances on the top and right, move
+them around by dragging them to snap positions."
+
+Resizing "on the top" was a missing handle, not a broken drag: `#fleetDock` had only `e`/`s`/`se`, and
+being bottom-right anchored it physically could not grow upward. It now has all eight, and
+`lane_layout.resizeShape` keeps the OPPOSITE edge pinned, so `y + h` is invariant under a north drag
+even once height pins at the minimum.
+
+Per-card resize needed a layout decision first. Cards are now bottom-anchored (`align-items: end`),
+which is what makes a top-edge drag coherent: the card grows UPWARD and the lane's own composer stays
+under the cursor doing the dragging, the chat-window mental model. That makes the sign inversion
+load-bearing: dragging UP is a negative `dy` and must INCREASE height, and it is pinned by an exact
+equality test because an inverted sign here makes the whole feature feel broken. The right edge maps to
+a grid column span with a half-track deadzone so it cannot jitter. Header drag picks a slot by
+nearest-center, bucketing rows by BOTTOM edge rather than top, because bottom-anchored cards in one row
+share a bottom and have different tops.
+
+A corrupt persisted layout yields an EMPTY layout rather than throwing, copying `share_dock.loadDockState`'s
+doctrine: a broken store must never brick the panel.
+
+### Verification
+
+`bun test desktop/renderer/token_meter.test.ts desktop/renderer/lane_layout.test.ts` 83 pass / 0 fail.
+`make demo-P-TOKENS.1` exits 0 with the anti-fabrication assertion stated negatively: a cold meter's
+rows contain no `$0.00` and no `0 tokens` and every provider row is unmeasured. Also proven: the
+measured-zero distinction, output rows always unmeasured with an "estimate" hint, `ctxDelta` attributed
+at +400 when bracketed and declining to guess when not, 70 calls keeping the newest 60, five reducers
+mutating nothing, health checks getting their own row, tone escalating at 75% and 90%; plus the
+geometry: the upward-drag sign inversion, the fixed bottom edge under a north drag (including once
+height pins), seven corrupt layouts degrading to empty, and `resizeShape` composing with
+`share_dock.clampToViewport`.
+
+NOT exercised by an automated test: the pointer gestures themselves and the popover DOM, for the same
+reason as ADR-0309 (no DOM test harness in this repo). Both files typecheck clean in isolation and the
+renderer bundles (134 modules), and all geometry and all numbers come from the two pure modules above,
+which are exhaustively tested. The gestures remain the honest gap.
+
+### Links
+
+ADR-0234 (P-SHARE.1/.2, the `share_dock` chassis whose viewport clamp this composes with), ADR-0263
+(why the meter counts health checks at all), invariant #11 (the one-text-child flex rule the popover
+rows follow), `desktop/renderer/token_meter.ts`, `desktop/renderer/lane_layout.ts`,
+`desktop/renderer/styles.css`.
+
+## ADR-0313 -- P-FLEET.L10: a lane you can dismiss, and the prebuilt-bundle trap that hid a whole increment (2026-09-04)
+
+**Status:** Accepted -- BUILT.
+
+### Part 1: the invisible increment
+
+ADR-0309..0312 shipped green: every test passed, every demo passed, `tsc` was clean, and the user saw
+NO CHANGE AT ALL in the running app. The cause is `dev.ts bundleApp()`: when
+`desktop/renderer/app.bundle.js` exists it is served verbatim and the engine NEVER compiles renderer
+source (ADR-0260, so Bun cannot module-load a `.ts` from a protected install dir). The artifact on the
+user's disk was five days stale, so renderer edits were real, committed, and unreachable. Restarting
+did not help and could not have.
+
+The verification that felt sufficient was `bun build renderer/app.ts --outfile /tmp/scratch.js`
+succeeding. That proves the code COMPILES. It says nothing about the bytes the app serves, which is a
+different claim entirely, and it is ADR-0303's vacuous green in its most expensive form: nothing fails,
+so nothing prompts a second look.
+
+Two fixes. First, the AGENTS.md END ritual now requires, for any `desktop/renderer/` change, running
+`cd desktop && bun run build-renderer` and then GREPPING THE SERVED RESPONSE from a freshly booted
+engine for a new identifier plus one retired identifier that must be ABSENT. Fetching `/app.js` is the
+only check that exercises the path the user actually gets. Second, this ADR records the trap, because
+the next person to edit the renderer will otherwise rediscover it the same way.
+
+### Part 2: dismissing a lane
+
+"I want to be able to remove a lane by hitting the x button again. I get that I can stop it, but now
+it's in the way until I restart LUCID again."
+
+Correct diagnosis of a real gap. `stop()` parked a lane in the `stopped` state and NOTHING ever removed
+it from `#lanes`. That was deliberate as far as it went (a stopped lane keeps a readable transcript and
+Respawn revives it in place), but there was no exit at all, so a finished lane held a grid column for
+the life of the process.
+
+`remove(laneId, force?)` is the exit, and the close button becomes a TWO-STEP gesture: a running lane
+stops, and a second click on an already-stopped lane dismisses it. Two steps rather than one because a
+single click must never be able to destroy work in flight, and because the stopped state is genuinely
+where you read what the lane did. A mid-turn dismissal is REFUSED with the fix named, not force-killed.
+The glyph turns red once armed, since one icon silently doing two different things is how a user loses
+something they meant to park.
+
+Releasing promotion first is not a nicety. The engine demotes server-side, but the composer's target
+lives in the renderer and would not hear about it, leaving the badge pointed at a lane id that no longer
+resolves and every later prompt failing with "unknown lane". The dismissal therefore tells the composer
+directly rather than relying on two layers to agree by luck.
+
+Dismissal is safe to offer precisely because it destroys so little: only the in-memory replay
+transcript. The lane's omp session log stays on disk and its spawn line stays in the durable ledger, so
+the timeline still labels and opens it (P-FLEET.L5: review is an INDEX over files omp already persists,
+never a second recording). No new ledger event was added for removal: the frozen event set is already
+wide enough to attribute the session, and widening a contract for "the user closed a card" would buy
+nothing.
+
+### Verification
+
+`make demo-P-FLEET.L10` (an alias onto the L8 demo, section 8) exits 0 proving: a busy lane refuses with
+`"lane is mid-turn - stop it first, then dismiss it"` and stays exactly where it was; dismissing a
+PROMOTED lane releases the composer so nothing strands; the lane leaves `status()` and holds no
+transcript; a second dismissal is a quiet no-op; and the spawn ledger line OUTLIVES the lane.
+
+Then the new ritual, run on itself. Bundle rebuilt (8.80 MB), engine booted fresh on port 5399, and the
+SERVED bytes grepped: `/app.js` carries `fleet-dismiss`, `fleetRemove`, `dismissLane`, `data-lane-note`
+and `fleet/remove`; `/styles.css` carries both `.fleet-dismiss[data-gone="1"]` rules. Retired
+identifiers `fleet-tool-detail`, `fleet-diff-pre` and `outputHtml` are ABSENT from the served bundle.
+LIVE end to end: a real lane promoted, stopped, and dismissed returned the lane id gone from
+`/api/fleet/status` (0 occurrences) and `/api/fleet/promoted` back to `{lane: null}`.
+
+NOT exercised: the two-click gesture itself, for the standing reason that this repo has no DOM test
+harness. The state machine behind it is fully covered above; the clicks are not.
+
+### Links
+
+ADR-0260 (P-WINBOOT.2, why the prebuilt bundle exists and must not be removed), ADR-0303 (the vacuous
+green), ADR-0274 (P-FLEET.L4, the stopped-is-recoverable state this adds an exit to), ADR-0310
+(P-FLEET.L8, the promotion this must release), AGENTS.md END ritual step 4, `desktop/fleet_lanes.ts`
+(`remove`), `desktop/dev.ts` (`/api/fleet/remove`), `desktop/renderer/fleet_grid.ts` (`dismissLane`).
+
+## ADR-0314 -- P-FLEET.L11: the agent was never told it had been moved, and the card never got the turns (2026-09-04)
+
+**Status:** Accepted -- BUILT. Corrects ADR-0310 and ADR-0312.
+
+### Three defects, reported from one session
+
+**1. The resize grip was on the wrong edges.** ADR-0312 put the per-card handles on the top and right and
+bottom-anchored the cards, reasoning that a top-edge drag grows the transcript upward with the lane's own
+composer staying under the cursor. Rejected in use, and the user is right: the bottom-right corner is
+where a window grip belongs, and bottom-anchoring moved every card in a row whenever one card grew. Now
+`align-items: start`, handles on `s`/`e`/`se`, and `heightFromDrag` takes the conventional sign (drag DOWN
+is positive dy and grows). `snapSlot` had to flip with it: it bucketed rows by BOTTOM edge because
+bottom-anchored cards in a row share a bottom. Top-anchored cards share a TOP, so keying on the bottom
+would have scattered one visual row across several buckets and snapped drags to a row the user was not
+pointing at. The test that pinned the old keying was rewritten with a case that actually distinguishes the
+two (a tall card beside a short one, pointer low but over the short card's column).
+
+**2. The back button described the wrong object.** It said "Back to main chat", which reads as navigating
+away. The action releases the LANE, so it now says "Return to Fleet Agent". Pinned by exact-string test,
+because this is the user's own wording and it should not drift.
+
+**3. THE REAL DEFECT: nothing ever told the agent it had been moved, and the card never received the
+turns.** Observed live: a lane was driven from the main composer for several turns, released, then asked
+to "restate what was written in the main composer" and the model had no idea what that referred to and
+guessed.
+
+That splits into two independent bugs, both mine:
+
+- **The agent was never informed.** `promoteNotice`/`demoteNotice` were written as provenance and land in
+  the human transcript and the ledger. Neither ever reached the model. The session is the SAME session
+  throughout, so every byte of content was present, but nothing had ever stated WHICH SURFACE was driving
+  it, so "the main composer" was an unresolvable reference. Fixed with `promoteAgentNote`/`demoteAgentNote`
+  delivered on the operator-interject path (operator-origin, outside untrusted delimiters, the same
+  channel P-HEALTH.1's probe uses). They name the surface in the user's vocabulary, because the user will
+  use those words in the very next turn, and they explicitly say to continue so an attach or release can
+  never read as a stop order.
+
+- **The card never saw the composer's turns.** `fleet_grid` only ever received events from streams IT
+  owns (`fleetPrompt`/`fleetDrain`/`fleetRetry`); it never subscribed to `observe()`. So while the
+  composer drove a promoted lane, the card got nothing, and releasing the lane dropped the user back to a
+  transcript that stopped at the moment of promotion, with no record of the work or the tool calls in
+  between. The engine's `lane.transcript` was correct the whole time (`prompt()` records into it
+  regardless of who asked), but the card renders from its own richer transcript, which had a hole.
+  Fixed: `syncFollow` holds a `fleetWatch` open for exactly as long as `LaneView.promoted` is true and the
+  card is not itself streaming, feeding events through the SAME `onLaneEvent` the card's own prompts use.
+  So a composer-driven turn lands in the card identically to a card-driven one, tool chips and all. Gated
+  on `!streaming` because when the card owns the turn the events already arrive on the prompt stream and a
+  second subscription would render everything twice. The follow is stopped on dock close, on dismissal,
+  and when a lane vanishes, or it would hold one NDJSON connection per promoted lane for the process life.
+
+### Verification
+
+89 pure tests green across the two touched keystones (the rewritten row-keying case and four new
+agent-note cases: the phrase the user will say is present, the release states the history is still the
+model's own, both are operator-framed with "no reply needed" and "continue", and an unreported field says
+so rather than rendering blank). All four demos green; `tsc` 0 errors.
+
+Then the ADR-0313 ritual, which is what makes this checkable at all. Bundle rebuilt (8.82 MB) and the
+SERVED bytes inspected: `/app.js` carries "Return to Fleet Agent", `promoteAgentNote`, `demoteAgentNote`,
+`syncFollow`, "OPERATOR NOTE" and handles `s`/`e`/`se`, with "Back to main chat" and handles `n`/`ne`
+ABSENT; `/styles.css` carries `align-items:start` and the `s`/`e`/`se` rules with `ne` ABSENT. LIVE: an
+operator note POSTed for a lane target returned `pending: 1`, drained verbatim on the next read, and the
+second read returned empty, proving exactly-once delivery on the channel the promote note rides.
+
+NOT exercised: a real model reading the note and answering a "what happened in the main composer" question
+correctly. That needs a live provider turn and is the honest boundary; what is proven is that the note is
+generated, is worded to resolve the reference, and reaches the session exactly once.
+
+### Links
+
+ADR-0310 (P-FLEET.L8, the promotion this corrects), ADR-0312 (P-FLEET.L9, the drag direction this
+reverses), ADR-0313 (the served-bytes ritual used to verify this), P-INTERJECT.1 (the operator-note
+channel), ADR-0263 (the "never read as a stop order" rule these notes inherit),
+`desktop/renderer/composer_target.ts`, `desktop/renderer/lane_layout.ts`, `desktop/renderer/fleet_grid.ts`
+(`syncFollow`), `desktop/renderer/app.ts`.
+
+## ADR-0315 -- P-TOKENS.1 withdrawn from the composer: the spend button is removed, the accounting stays (2026-09-04)
+
+**Status:** Accepted -- BUILT. Withdraws the composer surface of ADR-0312.
+
+### Decision
+
+"The token spend button is unneeded at this time remove it." Removed, as a clean cutover rather than a
+hide: the markup, the popover, the click wiring, the dismissal listeners, the coalesced repaint, and
+every reducer call that existed only to feed it are all deleted, not disabled behind a flag. A hidden
+button is a maintenance cost with no user, and a feature flag for something nobody asked to keep is
+worse than the button was.
+
+### What was kept, and why that is not a shim
+
+`desktop/renderer/token_meter.ts` and its 36 tests STAY, because the fleet card is a genuine second
+consumer that predates this removal: every lane card folds its OWN usage samples through `onUsage` and
+reads `meterBadge` for the chip value and for the warn/danger thresholds, so the card chip and any future
+spend surface escalate at the same fill. Deleting the module would have meant re-deriving that inside
+`fleet_grid.ts`, which is exactly the duplication the module exists to prevent.
+
+`meterRows`/`toolRows`/`modelRows` are kept too, even though nothing renders them today. They ARE the
+honesty contract (measured versus estimated, "not reported" versus a fabricated `$0.00`), they are
+exhaustively tested, and the next surface that shows spend must inherit that contract rather than invent
+a friendlier-looking one. Keeping a tested pure function with no current caller is cheap; re-litigating
+anti-fabrication in a new template is not.
+
+### What went with it, and what deliberately did not
+
+Removed as newly-dead: `meterModelSpend`, `appendMeterRows`, `renderTokenPop`, `sectionHead`,
+`paintTokenMeter`/`paintTokenMeterNow`, `closeTokenPop`/`toggleTokenPop`, `resetTokenMeter`, the module
+`meter` state, and the whole `laneWatchTool`/`settleLaneWatchTool` open-call tracking (which existed only
+to attribute per-call spend to the popover). A `--noUnusedLocals` pass confirms no orphan is left behind:
+the 5 remaining unused locals in app.ts are all pre-existing and unrelated.
+
+DELIBERATELY KEPT: the `health` ChatEvent still renders its transcript note. That was never part of the
+button. `noteHealth` lost its `onHealth` count and kept its `.evt` note chip, because an automatic probe
+or in-place recovery still has to be visible work rather than an unexplained gap. Also kept: the status
+ring and metrics rail continue to follow `state.liveUsage`, which is pre-existing behavior the button
+merely sat beside, and which correctly follows the attachment when the composer is driving a lane.
+
+### Verification
+
+`tsc --noEmit` 0 errors; all four demos green (the token demo still passes because the module is
+untouched, and its header and the Makefile target now name the fleet card as the consumer rather than a
+popover that no longer exists). ADR-0313 ritual: bundle rebuilt (8.78 MB, DOWN from 8.82) and the SERVED
+bytes checked for ABSENCE, which is the assertion that matters for a removal. Gone from `/app.js`:
+`tokenMeterBtn`, `tokenMeterPop`, `token-meter-btn`, `token-meter-pct`, `toggleTokenPop`,
+`paintTokenMeter`, `resetTokenMeter`, `meterModelSpend`, `appendMeterRows`. Gone from `/styles.css`:
+`token-meter-btn`, `token-pop`, `token-row`. Still present, proving the cut was surgical: `fleet-usage`
+and `meterBadge` in the bundle, and 3 `fleet-usage` rules in the stylesheet.
+
+### Links
+
+ADR-0312 (P-TOKENS.1, the surface this withdraws), ADR-0313 (the served-bytes ritual, used here to prove
+an ABSENCE rather than a presence), `desktop/renderer/token_meter.ts` (kept, tested, one live consumer),
+`desktop/renderer/fleet_grid.ts` (that consumer), `desktop/renderer/app.ts`, `desktop/renderer/styles.css`.
+
+## ADR-0316 -- a login is confirmed by the vault, not by an exit code: the OAuth badge went green while the model picker stayed empty (2026-09-04)
+
+**Status:** Accepted -- BUILT. Fixes a defect in the `auth-broker login` flow, reported from Linux Mint.
+
+### The report
+
+"ChatGPT models aren't showing up after I did an OAuth in the browser and it shows that it's
+authenticated." Both halves of that sentence were true at the same time, which is what made it
+confusing: the provider badge said OAuth active, and the model picker had nothing in it.
+
+### Why both could be true at once
+
+The badge and the model list read two different sources, and nothing reconciled them.
+
+`providerAuth()` (`desktop/auth_status.ts`) reads omp's vault SQLite directly - `~/.omp/agent/agent.db`,
+table `auth_credentials` - and sets `oauthActive` the moment a row exists with `credential_type='oauth'`
+and `disabled_cause IS NULL`. It never asks omp what models it has. The model list is built by omp's
+`ModelRegistry` at omp SPAWN time, so a credential that appears after that spawn is invisible until the
+omp child is respawned. The only bridge between the two was one line in `startOauthBroker`:
+
+    proc.exited.then((code) => { if (code !== 0) return; ...; backend.restart(); })
+
+### The defect
+
+The broker is not a short-lived command. It opens the provider in a browser and runs a LOCAL loopback
+callback server (OpenAI's Codex broker binds a fixed :1455) to catch the redirect. That process can exit
+non-zero, be torn down noisily, or linger long after it has already written a perfectly good token. In
+every one of those cases the token is in the vault, the badge flips green because the badge reads the
+vault, and omp is NEVER respawned. The user sees a successful sign-in over an empty picker, and only a
+full app restart clears it. `/api/auth/oauth` did not restart either; only `/api/auth/key` did.
+
+The renderer made it worse instead of catching it. `pollOauthThenRefresh` carried the comment "the server
+already respawned omp when the broker exited" and then showed a "Connected - models updated" toast over a
+stale list. The one surface positioned to notice the gap instead asserted the thing that was false.
+
+### Decision
+
+The vault is the ground truth for whether a login happened, so ask the vault, not the process.
+
+`credentialSnapshot(provider)` is taken BEFORE the broker spawns and again when it exits: a read-only
+fingerprint of `id`, `updated_at`, and a `Bun.hash` of the token blob, scoped to `credential_type='oauth'`
+so a coexisting API-key row cannot be mistaken for a login. `landedFreshCredential(before, after)` reports
+a genuine write on a first row, a replaced row, a rewritten blob, or a bumped `updated_at`. The broker's
+exit code is no longer consulted at all.
+
+This also closes a hazard the old code had in the opposite direction. It cleared `disabled_cause` and
+respawned on ANY clean exit, including one where nothing was written, which would re-arm a credential the
+user had deliberately logged out of, behind their back. A failed login now leaves the snapshot identical,
+so that repair is never attempted.
+
+Second, independent net: `pollOauthThenRefresh` now calls `bridge.refreshConfig()` (the pre-existing
+`/api/config/refresh`, which respawns omp and returns the fresh list) before `loadConfig()`. That endpoint
+already existed for exactly this purpose and had simply never been wired into the OAuth path. It makes the
+success path self-healing even for a broker that never exits at all, and it means the toast can no longer
+claim an update it did not cause.
+
+### What this does NOT fix, and how to tell the difference
+
+Two adjacent modes present identically to a user and are NOT this bug.
+
+STALE DISABLED FLAG. omp's `login` writes a fresh token but does not clear a `disabled_cause` left by a
+prior `logout`, and omp only honors a credential when that column is null (`desktop/auth_vault.ts`). This
+mode SURVIVES an app restart. Because `providerAuth()` also filters on that column, LUCID's own badge is
+GREY here, so it matches "the browser said I was authenticated" rather than "LUCID says I am". Repair:
+`bun run tools/omp_auth_reenable.ts openai-codex`, then restart.
+
+WRONG EXPECTATION. `openai-codex` OAuth grants the ChatGPT / Codex SUBSCRIPTION models and nothing else.
+The shipped Settings hint already says so, and `harness/voice/catalog.ts` carries the same caveat for the
+speech API. An account with no entitlement yields an empty list with nothing broken.
+
+`bun run tools/omp_auth_status.ts` separates all three, because it prints the disabled cause that the
+badge hides by filtering on it.
+
+Ruled out for this report: the port-keyed `safeStorage` divergence is win32-only (`desktop/main.ts` notes
+that macOS Keychain and Linux libsecret already key by app name), and the OAuth token lives in omp's
+`agent.db` rather than the libsecret-backed `lucid-cred-vault`, so a missing Mint keyring cannot produce a
+GREEN OAuth badge.
+
+### Verification
+
+`desktop/auth_vault.test.ts`, 15 new tests, written for the refusals rather than the happy path: a
+re-login that rewrites the blob inside the same one-second `updated_at` tick is still detected (the clock
+cannot be trusted at that resolution); a replaced row carrying an identical token at an identical clock is
+detected by `id`; a failed login that changed nothing is NOT fresh, and neither is a failed login against
+a logged-out row (the anti-resurrection guarantee, which is what protects a user's explicit logout); an
+API-key row is not an OAuth login; an absent or corrupt vault reports "nothing there" instead of throwing;
+and the snapshot never contains the token blob.
+
+67 pass / 0 fail across auth_vault, budget_gate, provider_hub, voice/catalog and adr_numbering.
+`tsc --noEmit` clean on all three touched files; the 2 remaining `fleet_grid.ts` errors are pre-existing
+in-flight work, confirmed by stashing (3 errors before this change, 2 after).
+
+Caught and repaired during this work: the 15 new cases were first written with a whole-file `write`,
+which CLOBBERED the 9 committed tests already in `desktop/auth_vault.test.ts` (the
+`clearDisabledCredential` / `disconnectCredential` / `clearAllOauthCredentials` suites from commit
+979f522). Noticed only because `git status` reported the file as MODIFIED rather than untracked. Restored
+from HEAD and the new cases appended instead, with prefixed helpers (`snapVault` / `snapRun` /
+`snapLogin`) so nothing collides with the original fixtures; the file now runs 24 tests, 9 original and
+15 new. The lesson is narrow and worth pinning: a new test file for an EXISTING module is very often not
+a new file, so `write` on a `*.test.ts` path needs a tracked-state check first.
+
+ADR-0313 ritual, because `desktop/renderer/app.ts` was touched: bundle rebuilt and the SERVED bytes
+inspected, confirming `refreshConfig(); } catch {} await loadConfig()` sits immediately before the
+"Connected - models updated" toast in `/app.js`. A source typecheck would have proved nothing about the
+bytes the app actually serves.
+
+### Links
+
+`desktop/auth_vault.ts` (`credentialSnapshot`, `landedFreshCredential`), `desktop/auth_vault.test.ts`,
+`desktop/dev.ts` (`startOauthBroker`), `desktop/renderer/app.ts` (`pollOauthThenRefresh`),
+`desktop/auth_status.ts` (`providerAuth`, the badge), `tools/omp_auth_status.ts` and
+`tools/omp_auth_reenable.ts` (diagnosis and repair), `desktop/netdiag.ts` (the loopback-callback failure,
+a different mode), ADR-0210 (the Copilot broker stdin prompt in the same function), ADR-0313 (the
+served-bytes ritual).
+
+
+## ADR-0317 -- P-MODEL.2: the picker default follows the user, and the catalog stops going stale (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user reported that the model picker "keeps defaulting to Claude 4.8 Opus" even though newer
+models exist, that GPT-6 was missing entirely, and that Fable 5.1 was absent. Three separate defects wore
+one costume:
+
+1. **A stale placeholder painted first.** `bridge.ts` `FALLBACK_CONFIG` hardcoded Opus 4.8 / Sonnet 4.6 /
+   Haiku 4.5, and `app.ts` `state.model` hardcoded `claude-opus-4-8`. Both are pre-config placeholders shown
+   while the ACP session warms. The real resolver (ADR-0250 `resolveStartupModel`) was already choosing
+   correctly, but the user sees the placeholder, and on a cold boot it often outlives the wait.
+2. **The renderer fought the backend.** `maybeApplyDefaultModel` consulted only `chosenModel`, which is set
+   ONLY on an explicit picker click. A user who switched models any other way had an empty `chosenModel`
+   and got re-defaulted by a heuristic on every launch. The backend was honoring `lastModel`; the renderer
+   then overrode it.
+3. **Ranking was an artifact, not a decision.** The "best configured" branch sorted ACROSS families by raw
+   version digits, so `gpt-6-astra` [6] beat `claude-opus-5` [5] because 6 > 5. `model_families.ts` itself
+   documents that cross-family version compare is meaningless. Worse, `capabilityTier` matched flagships
+   with a token list containing the literal `gpt-5`, so `gpt-6-astra` matched NOTHING and a brand-new
+   OpenAI flagship was ranked as a mid-tier workhorse.
+
+**Decision.**
+
+- **A curated `DEFAULT_MODEL_PREFERENCE`** (ordered, best-first) plus `preferredDefaultModel()` in
+  `model_families.ts`. A new flagship is now a one-line edit to an explicit list rather than an emergent
+  property of a regex race. It drops auxiliary / deprecated / China-origin / RAG routes, applies the
+  caller predicate, and falls back to `topModel` so an unknown-but-configured provider still resolves.
+- **`capabilityTier` is version-aware for GPT** (`gptVersion >= 5` is flagship), so every future generation
+  is ranked correctly without an edit.
+- **The preference ladder is explicit**: `chosenModel` (an explicit click is never re-litigated), then
+  `lastModel` (what the composer actually last ran on, the fix the user asked for), then the curated
+  default. A remembered model wins only while still offered and still selectable.
+- **One capability heuristic, not three.** `startup_model.ts` had a private `capability()` and
+  `trainer_model.ts` a `trainerTier()`, both hand-copied from `capabilityTier` and both drifted (neither
+  knew GPT-6). Both now delegate; `trainerTier` only re-bases 0..2 onto its displayed 1..3 scale.
+- **API-only models are a FAMILY, not an id.** `isApiOnlyModel` covers Fable and Mythos. The credential
+  gate and the privacy/billing notice were keyed on the literal `claude-fable-5`, so Fable 5.1 would have
+  shipped ungated and unwarned. Gov-routed copies are excluded: they draw on the AskSage credential, so an
+  Anthropic key is irrelevant to whether they can run.
+- **Catalog:** `gpt-6-astra` (1M ctx), `claude-fable-5-1`, `claude-mythos-5-1` added to the gov catalog,
+  `MODEL_CTX`, `MODEL_INFO`, and `tools/session_metrics.ts CTX_WINDOW`.
+- **Pricing corrected** in `model_pricing.ts`, which is load-bearing for the report cost metric: Opus 5 is
+  $5/$25 (was inheriting the generic Opus $15/$75, a 3x overstatement); Fable/Mythos are $10/$50 (were
+  falling through to the sonnet-ish default, a >3x UNDERstatement on the priciest models in the catalog);
+  the GPT family row widened from `gpt-?5|gpt-?4` to `gpt-?\d` so a new generation lands on an in-family
+  estimate instead of an unrelated default. The rows are ORDER-SENSITIVE and now carry tests that guard
+  the ordering, because a future insert above them silently re-prices the flagships.
+
+**Consequences.** A fresh install opens on Opus 5. A returning user opens on whatever they last used, no
+matter how they selected it. Fable 5.1 is gated behind a connected Claude account and states the
+pay-as-you-go billing consequence before the first call, not after the invoice.
+
+**Not verified.** The AskSage gov ids for Fable 5.1 / Mythos 5.1 come from the vendor announcement and are
+NOT live-confirmed against a CIV `/get-models`; the gateway may expose them under its `google-claude-`
+prefix. Noted in place in `asksage_extension.ts`.
+
+**Files:** `desktop/renderer/model_families.ts`, `desktop/startup_model.ts`, `desktop/trainer_model.ts`,
+`desktop/model_pricing.ts`, `harness/omp/asksage_extension.ts`, `desktop/renderer/app.ts`,
+`desktop/renderer/bridge.ts`, `desktop/dev.ts` (`/api/model/last`), `tools/session_metrics.ts`.
+
+
+## ADR-0318 -- P-EVAL.4: ACP cannot name a tool, so the tool names itself (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user reported the engineering reports "seem to be missing a lot of details they used to
+have". Two causes, one structural and one a policy that was too narrow.
+
+**The structural one.** omp builds its ACP tool_call update in `buildToolCallStartUpdate`
+(`node_modules/@oh-my-pi/pi-coding-agent/src/modes/acp/acp-event-mapper.ts:410-417`) and it carries exactly
+five fields: `toolCallId`, `title`, `kind`, `status`, `rawInput`. **The tool NAME is never transmitted.**
+So:
+
+- `kind` is a coarse enum (`mapToolKind`: read | edit | execute | search | fetch | think | other), which
+  means EVERY custom tool and EVERY MCP tool arrives as `"other"`.
+- `title` used to read `` `${toolName}: ${subject}` ``, which is what the desktop scraped instead. With
+  intent tracing on, `buildToolTitle` returns the MODEL'S PROSE, so the name vanished from there too. That
+  is the same shadowing that broke `preview_open` and the preview activity pills (ADR-0308).
+
+Net product effect: the report per-tool breakdown degraded to `other x23`, and the chat chips lost their
+labels. This was never a report bug; the report was faithfully rendering the only thing it was given.
+
+**Decision: an explicit self-report channel, exactly as ADR-0308 established for `preview_open`.** The hook
+API inside omp DOES have the name: `pi.on("tool_call")` fires in-process with `{ toolName, toolCallId,
+input }`, and `pi.on("tool_result")` adds `isError`. A new `harness/omp/tool_meta_extension.ts` posts
+`{ id, name, ok? }` to a token'd loopback URL (`LUCID_TOOL_META_URL`), and both sides join on `toolCallId`,
+which each already has.
+
+Design points that matter:
+
+- **A separate extension, not a line in the gate.** `security_extension.ts` already has a `tool_call` hook
+  and can BLOCK. This one is observability: it never inspects content, never returns a verdict, never
+  awaits. Keeping it separate keeps reporting work off the security decision path, and means a failure here
+  can only cost a label, never a security decision.
+- **Deliberately fail-SOFT, which is the opposite of the gate.** Telemetry is not a security control. If the
+  URL is unset, the POST fails, or the hook API is missing, the correct outcome is a coarser report, not a
+  blocked tool call.
+- **A relay, not a cache.** `noteToolMeta` validates and emits; the RENDERER merges the start and result
+  reports per turn. That is the correct scope: a per-turn map cannot leak a name from an earlier turn onto
+  a reused id and cannot grow unbounded. A second copy in the backend would have needed its own eviction
+  policy and bought nothing.
+- **`ok` absent means UNKNOWN, never "passed".** A non-boolean `isError` leaves `ok` unset, because the
+  report renders measured-vs-unmeasured from exactly that distinction.
+
+**The policy one.** `maybeAppendReport` only offered the CTA when some tool had `path && (add|del)`, on the
+reasoning that "the report evaluates WRITTEN work". That silently swallowed the report for a large class of
+real engineering turns: an investigation that only read and searched, a debugging turn that only ran
+commands, a review turn. Those have plenty to evaluate (tool count, failure rate, wasted tokens, context
+efficiency, latency). It now offers on ANY tool-using turn; a pure-text answer still offers nothing,
+because there genuinely is nothing measured.
+
+**The dead-metric half (report side).** Four of ten metrics were permanently `needs_signal` because nothing
+ever populated `RunRecord.tests` / `.ac` / `.cleanLoc` / `.dod`. A report where 400f the table says "no
+signal" reads as broken. These are now DERIVED from telemetry that is always present, on a **second,
+render-only axis** (`EvalMetrics.derived` + `EvalMetrics.sources`), and every row is labeled
+`measured | derived | not measured`. The measured metrics compute byte-identically to P-EVAL.1 and that is
+what persists, because `Metric.tier` is written verbatim into `eval_metrics.tiers` (migration 0011) and
+cross-run averaged: letting a report-time proxy into a persisted value would make the rollup average one
+real AC check against one tool-failure guess. **The DuckDB ledger keeps storing null-not-fake** (invariant
+10). A derived proxy can never render as a measured spec check.
+
+**Consequences.** The breakdown reads `read x14, edit x6, bash x3 (1 failed)`. A turn with no self-reports
+degrades honestly to an `unattributed` bucket that reconciles against the tool count, rather than a
+mislabeled `other x23`. New report sections: Tool activity, Files touched, Not measured this run.
+
+**Files:** `harness/omp/tool_meta_extension.ts` (+test), `harness/brief/evals.ts`,
+`harness/brief/eval_report.ts`, `desktop/acp_backend.ts`, `desktop/dev.ts` (`/api/tool/meta`),
+`desktop/renderer/app.ts`, `desktop/renderer/bridge.ts`, `desktop/renderer/chat_events.ts`.
+
+
+## ADR-0319 -- P-KG.3: the agent can finally write to the knowledge graph, and a locked vault stops lying (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user asked for the knowledge graph to be "easier for agents to write and read from when
+unlocked, using native tools to omp and this harness, and indexed if necessary". Agents had exactly ONE
+knowledge tool, read-only (`knowledge_search`, ADR-0220), and **no write path at all**. The personal
+encrypted graph reached the model only as a server-injected `<user-profile>` preamble, so "remember that I
+prefer X" was a promise the product could not keep.
+
+**Decision.** Two new omp-native tools through the SAME `pi.registerTool()` surface (that IS the native
+surface; omp ships no retain/recall of its own):
+
+- **`memory_recall`** (approval `read`) -> `POST /api/kg/recall`. Every hit is wrapped in
+  `UNTRUSTED_CONTENT_START/END`. The user's own stored facts are still DATA, never instructions: a stored
+  fact that reads like a command does not become one by being in the graph.
+- **`memory_retain`** (approval `write`) -> `POST /api/kg/retain`. `write` was chosen against omp's own
+  definition (`extensions/types.ts:445`: mutates state without executing code). Declaring it is
+  load-bearing, because an OMITTED approval defaults to `exec`.
+
+The whole decision layer is the PURE `harness/personal/agent_kg.ts` (lock / trust / compartment / shape
+gates plus ranking), so it is unit-tested with no crypto, fs, or HTTP.
+
+**The invariants that shaped it.**
+
+- **Fail-closed in BOTH directions, and the two failure modes are DISTINGUISHABLE.** A locked vault reports
+  `locked` with a reason. It must never be an empty success on a read, which reads to a model as "the user
+  has told me nothing", and never a silent success on a write, which teaches the model it has memory it
+  does not have. Both are worse than an error.
+- **Trust is assigned by the SERVER, never taken from the payload.** An agent does not get to declare its
+  own input trusted (the same discipline as `promoteFactGated`). Agent writes land as `untrusted`:
+  recallable, and treated as data by `buildRecallFromGraph`. `BLOCKED_TRUST` is IMPORTED from
+  `promotion_gate.ts` rather than re-listed, because two copies of that set is how a `suspicious` fact
+  eventually slips through one path and not the other. This is correctness keystone #2 and
+  `promotion_gate.ts` / its test are untouched.
+- **A quarantined fact never leaks back on READ either.** `searchGraph` filters on the same set.
+- **An agent may NEVER write into CUI**, even with the CUI store unlocked and CUI active. CUI is
+  heightened-handling data in its own isolated store with its own DEK (ADR-0014); classifying something as
+  CUI is a call only the user may make. The compartment comes from the session, so a payload-injected
+  `scope` is ignored outright.
+- **NO plaintext index on disk, deliberately.** The personal graph is encrypted at rest precisely so its
+  contents are unreadable without the passphrase. A vector or FTS index file would be a plaintext shadow of
+  exactly that content sitting next to the vault it exists to protect. So ranking happens in memory over
+  the already-decrypted graph while unlocked; these graphs are hundreds of facts, not millions. The
+  separate, NON-secret workspace KB (`harness/kb`) keeps its embeddings index. This is the answer to
+  "indexed if necessary": here it is necessary that it is NOT.
+
+**Bug found and fixed next door.** `addReportToKg` (ADR-0117) called `upsertEntity` + `addFact` and never
+called `save()`. Store mutations are in-memory until `save()` (`store.ts:139`), so every report ever pushed
+to the KG survived only until the next lock or restart, then vanished with no error. Every other mutating
+seam (`forgetFact`, `relateEntities`) already saved.
+
+**Files:** `harness/personal/agent_kg.ts` (+test), `harness/omp/knowledge_extension.ts` (+test),
+`desktop/personal.ts` (`agentRecall` / `agentRetain`), `desktop/personal_agent_kg.test.ts`,
+`desktop/dev.ts` (both routes + the two token'd env URLs), `harness/memory/promotion_gate.ts` (export only).
+
+
+## ADR-0320 -- P-THEME.1: light mode and colour themes, and the token that would have broken them (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user asked for "a light mode and different colour themes available in the settings like
+Discord or Grokbot have". There was no theme mechanism at all: no `prefers-color-scheme`, no `data-theme`,
+no toggle, no persisted field. `styles.css` had exactly one `:root` block (25 colour tokens, dark-only) and
+the 4600-line file carried roughly 80 to 120 further hardcoded colours that bypassed those tokens
+entirely, so flipping the tokens alone would have produced a half-themed app.
+
+**Decision.** Seven themes: `lucid-dark` (the current look, byte-identical), `midnight`, `slate`, `ember`,
+`contrast` (AAA), `lucid-light`, `paper`. `theme.ts` is the single registry; `styles.css` holds one
+`:root[data-theme="<id>"]` palette block per theme; `[data-theme]` lives on the DOCUMENT ELEMENT.
+
+- **Every theme block declares EVERY token.** A test parses `styles.css` from disk and asserts it, because
+  a theme that inherits one colour from the dark base by accident is exactly how a light theme ends up with
+  unreadable dark-on-light text. The 25 colour tokens grew to 78 as the escapees were tokenized (body
+  gradient, scrollbars, titlebar, emboss, badges, and the `lucidGlow`/`piGlow` keyframes that held rgba
+  COPIES of the accent). Keyframes cannot read a per-theme `var()` the way those rgba literals were
+  written, so each theme now publishes `--*-rgb` channel triplets and the derived tints, shadows, emboss
+  and focus ring are computed ONCE from them rather than duplicated per theme.
+- **`lucid-dark` IS the bare `:root`**, via the grouped selector `:root, :root[data-theme="lucid-dark"]`:
+  one block, both roles, zero duplication, and it still gives an explicit dark pick a real attribute block.
+- **The flash-of-wrong-theme problem, and why it needed a CSS answer.** The choice is persisted
+  SERVER-side (`~/.omp/lucid-gui.json` via `/api/settings`), which is an async fetch, and the renderer CSP
+  is `script-src 'self'` so `index.html` cannot carry an inline bootstrap script. Without a synchronous
+  source the body paints in the old theme and then snaps, on every launch. Two mitigations, both needed:
+  the choice is mirrored into `localStorage` and applied as the FIRST statement of `app.ts`, and
+  `styles.css` answers `@media (prefers-color-scheme: light)` on `:root:not([data-theme])` so a
+  first-EVER launch on a light OS is already correct with no JS at all. The `:not([data-theme])` is
+  load-bearing: once the attribute is set, an explicit choice must win over the OS.
+- **"Match system" is a real state, not a guess.** A synthetic tile CLEARS the stored choice, and a
+  `matchMedia` listener re-resolves on an OS flip ONLY while no explicit choice exists.
+- **Invariant 11 is load-bearing in the picker.** `.theme-grid` is `repeat(auto-fill, minmax(220px, 1fr))`,
+  `.theme-nm` owns ONE ellipsizing line, and `.theme-opt` is a GRID with areas `"sw nm" / "bl bl"`, NOT a
+  flex row holding raw text beside inline tags, which is what shatters a blurb into stacked slivers.
+- **Coverage beyond the main window.** Monaco gains a registered `lucid-light` and `applyEditorTheme()`
+  re-themes the live instance (a no-op before Monaco loads, and the recorded value is picked up on first
+  open). `trainer.html` is a same-origin iframe with its own document and its own token block, so it
+  self-syncs by reading `window.parent.document.documentElement.dataset.theme` plus a MutationObserver.
+
+**Consequences.** Theme is stored as an OPAQUE STRING server-side and is deliberately NOT validated against
+a theme list there: the renderer registry is the source of truth for which ids exist, `resolveTheme` already
+treats an unknown id as unset, and validating server-side would duplicate the list and break on every new
+theme. A junk value is inert, not dangerous: it only ever reaches a `[data-theme]` attribute via the DOM API.
+
+**Files:** `desktop/renderer/theme.ts` (+test), `desktop/renderer/styles.css`,
+`desktop/renderer/ide_panel.ts`, `desktop/renderer/trainer.html`, `desktop/renderer/app.ts`,
+`desktop/renderer/index.html`, `desktop/settings_store.ts`, `desktop/dev.ts`, `desktop/renderer/bridge.ts`.
+
+
+## ADR-0321 -- P-PREVIEW.12: the preview refused most of what a model produces, and blocked the rest in silence (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The user reported that "the preview feature seems to make a lot of models not be able to show
+what they want in the preview panel". Two independent causes, and the second is the more interesting one.
+
+**Cause 1: the gate was `/\.(html?|svg)$/i`.** Every `.md`, `.png`, `.json`, `.csv`, `.txt`, `.log`, `.pdf`
+was refused, with the agent-facing message `"<path> is not a local .html/.svg file - nothing to preview."`
+A model that wrote a markdown report or a chart PNG could not show it. Worse, that regex was DUPLICATED in
+three places (`preview_resolve.ts`, `preview_file.ts`, and `isPreviewablePath` in `preview_tabs.ts`), plus a
+fourth copy inside `preview_inline.ts`'s iframe-recursion check.
+
+**Cause 2: the frame CSP has no remote origins, and said nothing about it.** `PREVIEW_FRAME_CSP` is
+`default-src 'none'` with `connect-src 'none'`, `img-src data: blob:`, `font-src data:`. A model page that
+pulls Chart.js, three.js or Tailwind from a CDN, or a remote `<img>`, or a webfont, or calls `fetch()`, is
+refused and renders blank or broken. `inlinePreviewAssets` folds in only RELATIVE LOCAL refs and leaves
+remote refs untouched, so they died at the CSP with **no signal to the user and none to the agent** -- so
+the model could not self-correct and would simply try the same thing again.
+
+**Decision.**
+
+- **ONE kind table.** `PREVIEW_KIND_EXT` + `previewKindOf()` in `preview_resolve.ts`; `PREVIEWABLE_EXT` is
+  DERIVED from it so the two can never drift, and the other three copies now import it. Kinds:
+  `html | svg | image | markdown | text | pdf`. Verified after the change that no second
+  previewable-extension regex survives anywhere in the repo.
+- **Binary kinds are read as BYTES.** A `readFileSync(path, "utf8")` corrupts a PNG. `image`/`pdf` carry
+  `bytes` + a real `mime` and bypass the HTML pipeline entirely; `svg` keeps `image/svg+xml`, because served
+  as `text/html` a browser renders the markup as text instead of as an image. Per-kind size caps: 5 MB for
+  text-ish (a 25 MB markdown file is a mistake), 25 MB for image/pdf (that is normal).
+- **The CSP was NOT weakened. Not one byte.** `PREVIEW_FRAME_CSP` and `PREVIEW_SANDBOX` are byte-identical
+  and their drift-guard tests pass untouched. **The fix is legibility, not permission.** `findBlockedRefs()`
+  reports the remote refs a document contains (script / style / image / font / frame / fetch, treating
+  protocol-relative `//host` as remote, deduped, capped at 20), and that feeds TWO channels:
+  - the USER gets a dismissible in-frame banner, injected LAST so anything successfully inlined locally is
+    no longer reported as blocked, and never into an `.svg`;
+  - the AGENT gets `blockedRefsMessage()` on the `preview_open` result, phrased as the FIX ("inline that
+    script or CSS directly into the file, or save the asset next to the file and reference it with a
+    relative path"), which is the feedback loop that did not exist.
+- **Auto-surface follows the kinds.** `previewablePath()` keeps its write-class requirement (that is what
+  stops a `read` of a random png hijacking the panel) but now admits the new kinds, so a written `.md` /
+  `.png` / `.csv` lights up the panel. Lane tabs show a per-kind icon and label.
+
+**Verified end to end** against a live engine through the real `/api/preview/serve`: `.md`, `.json`, `.csv`,
+`.log` render as readable documents; `.png` returns `image/png` with the PNG signature intact; `.svg`
+returns `image/svg+xml`; a CDN-referencing page produces both the in-frame banner and the agent-facing
+message; and a clean self-contained page produces NEITHER (no false positives).
+
+**Files:** `desktop/preview_resolve.ts`, `desktop/preview_file.ts`, `desktop/preview_inline.ts`,
+`desktop/renderer/preview_tabs.ts`, `harness/omp/preview_extension.ts` (all +tests), `desktop/dev.ts`
+(`/api/preview/serve`, `/api/preview/open`, `/api/preview/file`), `desktop/renderer/app.ts`.
+
+
+## ADR-0322 -- P-PREVIEW.13: the preview was not blank, it was DEAD - localStorage throws in an opaque origin (2026-09-05)
+
+**Status:** Accepted -- BUILT, reproduced and verified live in Chromium.
+
+**Context.** After P-PREVIEW.12 broadened the previewable kinds, the panel still failed for the case the
+user actually cared about: a game the agent had written rendered as a blank frame. P-PREVIEW.12 was not
+wrong, it was answering a different question. HTML was never a refused kind.
+
+**The diagnosis, in the order it actually went.**
+
+1. Served the reported file class through the real `/api/preview/serve` on both engines. The Music-dir
+   report returned **byte-identical 73639B from the installed app AND the repo build**, bridge injected,
+   zero remote refs, no refusal. So the server was not the problem, and the two builds did not differ here.
+2. Rendered those bytes TOP-LEVEL in Chromium: 275 visible elements, 3598px tall, zero console errors.
+   The document was perfect.
+3. Rendered the same bytes inside an iframe carrying the REAL `PREVIEW_SANDBOX`. The report still rendered.
+   A representative canvas game did NOT: its body background and its cyan canvas border painted, and the
+   canvas stayed empty black. A styled, DEAD page.
+4. Isolated the single line by controlled variants. The game with `localStorage.getItem` removed animates.
+   The game with it present does not. Cause confirmed, not inferred.
+
+**The cause.** The frame is sandboxed `allow-scripts allow-forms` with NO `allow-same-origin`, which is
+deliberate and correct: it gives the frame an OPAQUE origin. In an opaque origin the `localStorage` and
+`sessionStorage` GETTERS THROW a SecurityError. A page whose first statement reads a saved high score dies
+on line 1. The browser has already applied the HTML and CSS by then, so the user sees a styled shell with
+nothing scripted, which reads as "blank" and reads as "the preview is broken". `alert()` throws for the
+same reason and aborts the same way. This is a large class, not an edge case: storing a high score, a todo
+list, or a theme preference is the first thing a generated app reaches for.
+
+**Decision: repair the ENVIRONMENT, do not widen the sandbox.**
+
+- **`PREVIEW_SHIM_JS` + `injectPreviewShim`** (`desktop/preview_bridge.ts`), injected immediately after
+  `<head>` so it is the FIRST script in the document. It hands the page an in-memory `Storage` for both
+  `localStorage` and `sessionStorage`, but ONLY when the real one is unreachable, so a top-level open keeps
+  its real storage. Probing has to be inside a try, because reading the getter is what throws.
+- **`allow-same-origin` was NOT added, and that is the whole point.** It would have made storage work in one
+  character. It would also have put untrusted, agent-authored previewed code inside the origin that holds
+  the per-launch capability token and every `/api` route. Previewed content is untrusted (invariant 5) and
+  must stay outside the trust boundary. In-memory storage is also semantically RIGHT for a preview: the
+  state should die with the frame rather than leak into the next thing previewed.
+- **`allow-modals` WAS added.** It is the one token in `PREVIEW_SANDBOX_FORBIDDEN` that never crossed the
+  isolation boundary: a modal is frame-confined by spec and reaches no other origin, no parent, and no
+  network. It was on that list because the list began as "everything we do not need" rather than
+  "everything that would break isolation", and keeping it there cost real function. The forbidden list was
+  narrowed with that reasoning recorded, and its drift-guard test still passes on the five genuine escape
+  tokens.
+- **A dead page now SAYS it is dead.** The shim installs the error capture before page code runs (the
+  inspect bridge registers before `</body>`, far too late to see the first throw), and paints one
+  dismissible in-frame banner naming the error. Both the shim and the bridge share ONE `window.__lucidErrs`
+  buffer, so `preview_inspect` reports failures that happened before the bridge existed. Same principle as
+  P-PREVIEW.12s blocked-ref banner: never fail silently at a security boundary.
+
+**Verified live.** The original game file, byte-unchanged, now animates inside the real sandbox: canvas
+drawing 126000 lit pixels, `localStorage` usable, no errors, no banner. The Music-dir report is unregressed.
+The frame CSP is untouched.
+
+**Files:** `desktop/preview_bridge.ts` (+test), `desktop/preview_resolve.ts` (`PREVIEW_SANDBOX`,
+`PREVIEW_SANDBOX_FORBIDDEN`), `desktop/dev.ts` (`/api/preview/serve`).
+
+
+## ADR-0323 -- P-PREVIEW.14: the path field moves to the tab row, because 18 characters of a path is not a path (2026-09-05)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The preview path field sat in the panel header, wedged between seven toolbar buttons. Measured
+in the running app it showed roughly 18 characters of an absolute Windows path, so the field displayed
+`C:/Users/n/game.h` and the filename you were actually looking at was never visible. Invariant 11 exists
+for exactly this failure (a label crushed into a column too narrow to read it); it had been applied to list
+rows and not to this field.
+
+**Decision.** The field moves down one level onto the Yours / Agent tab row, occupying the whole right side.
+
+- **A new `.preview-tabrow` wrapper holds the tabs AND the path bar as siblings.** The field is NOT placed
+  inside `#prevTabs`, because `renderPrevTabs()` rewrites that element's `innerHTML` wholesale on every
+  lane-tab render, which would silently delete the field the moment a fleet lane opened a preview.
+- **`flex: 1 1 420px; min-width: 260px`**, monospace, single line, `text-overflow: ellipsis`. Measured in
+  the running app: 354px and 41px row height, versus the previous ~18 visible characters.
+- **Hover reveals what is cut off.** `syncPrevPathField` sets `title` to the full path ONLY when the field
+  actually truncates (`scrollWidth > clientWidth`), so a short path gets no redundant tooltip. When the
+  panel is closed the field has no layout, so the title is set unconditionally rather than measured wrongly.
+- **A "show in folder" button** reveals the previewed file SELECTED in the OS file manager. It reuses the
+  existing P-FSREVEAL.1 (ADR-0212) `showInFolder` shell seam the chat feed already uses, so there is one
+  reveal path in the app rather than two. It reads the LANE's loaded path, never the input's text, so a
+  half-typed path cannot send the file manager somewhere the user is not previewing. It is absent, not
+  present-and-dead, when there is no local file, when the target is a remote URL (no containing folder), or
+  in a browser build (no file manager).
+
+**Files:** `desktop/renderer/app.ts` (panel markup, `syncPrevPathField`, the reveal handler),
+`desktop/renderer/styles.css` (`.preview-tabrow`, `.preview-pathbar`, `.prev-pathin`, `.prev-reveal`).
+
+## ADR-0326 -- P-THEME.2: unset means Lucid Dark, because "never chosen" and "follow the OS" were never the same thing (2026-09-05)
+
+**Status:** Accepted -- BUILT. Corrects ADR-0320 (P-THEME.1). User decision, stated directly: "default to
+Lucid Dark in the Theme since existing users are used to this."
+
+**Context.** P-THEME.1 stored the theme preference as one string where `""` carried two different meanings
+at once: "this user has never chosen" AND "this user wants to follow their OS". Those are not the same
+statement, and conflating them had a cost paid entirely by existing users. Someone who had run LUCID for
+months on a machine that prefers light had never opened the theme panel, so their stored preference was
+`""`, so the day light mode shipped their app turned light. They had not asked for a light app. They had
+asked for nothing, and "nothing" was read as consent to a system setting they had never pointed at LUCID.
+
+The first-paint machinery inherited the same conflation and made it structural: because unset followed the
+OS, `styles.css` needed an `@media (prefers-color-scheme: light) { :root:not([data-theme]) { ... } }` block
+carrying a byte-for-byte DUPLICATE of the lucid-light palette (CSS cannot share a declaration block across
+an @media boundary), plus a theme.test.ts equality assertion to keep the copy from drifting. `trainer.html`
+carried its own second copy of the same thing for the same reason.
+
+**Decision.** Split the two meanings.
+
+- **Unset resolves to `DEFAULT_THEME_ID` (lucid-dark), never to the OS hint.** An install nobody configured
+  must not change appearance because of a system preference the user never aimed at this app.
+- **Following the OS is an explicit `system` id** (`SYSTEM_THEME_ID`), and it is what the "Match system"
+  tile now stores and reports as selected. Nothing was removed: a user who wants their app to track the
+  system asks for it, and the `prefers-color-scheme` listener re-resolves for exactly that choice.
+- **A retired or corrupt stored id also lands on the default**, same direction and same reasoning. Dark is
+  additionally the SAFE direction here, because the bare `:root` palette IS lucid-dark, so the stylesheet
+  and the resolved attribute agree even if JS never runs.
+- **Both `prefers-color-scheme` first-paint blocks are DELETED**, in `styles.css` and in `trainer.html`,
+  along with the duplicated light palettes and the parity test that guarded them. With unset meaning dark,
+  the correct no-attribute paint is simply the base block, so the media query had nothing left to fix and
+  the duplication had nothing left to justify. Net effect: 78 lines of duplicated palette gone.
+- **The parity test was INVERTED, not deleted.** It now asserts that no `@palette-osfallback` marker and no
+  such media block exist, in both files. The old assertion protected a copy; the new one protects the
+  absence of the copy, which is the invariant that actually matters now.
+
+**The one visible trade, stated plainly.** A user who explicitly picks `system` on a light-mode OS sees one
+dark frame before `app.js` stamps the attribute. That is the right trade: the alternative is flashing LIGHT
+at the far larger group who never asked for light at all, which is the exact complaint this ADR answers. The
+renderer CSP is `script-src 'self'`, so an inline head bootstrap in `index.html` is not available to remove
+that frame; the trainer frame, which CAN use an inline head script, still does.
+
+**Migration is a no-op by construction.** Nothing is rewritten in storage. An explicit theme pick keeps
+working untouched; `""` simply resolves differently, which is the entire intent. A user who genuinely wants
+OS-following re-selects "Match system" once and it is stored as a real id from then on.
+
+**Files:** `desktop/renderer/theme.ts` (`SYSTEM_THEME_ID`, `resolveTheme`), `desktop/renderer/app.ts` (the
+"Match system" tile, the media listener guard, the picker note), `desktop/renderer/styles.css` and
+`desktop/renderer/trainer.html` (fallback blocks removed), `desktop/settings_store.ts` (comment),
+`desktop/renderer/theme.test.ts` (26).
+
+**Verification.** 26 theme tests including the inverted CSS invariant in both files; full gate 4895 pass /
+375 files with the standing 11 environmental fails. Served bytes checked per ADR-0303: the bundle carries
+the `system` sentinel, and neither styles.css nor trainer.html contains `@palette-osfallback` or a
+`prefers-color-scheme` fallback, while both still declare lucid-dark as the bare `:root`.
+
+## ADR-0325 -- P-FLEET.L12: a card width in PIXELS, a header that wraps, and a grip you can actually grab (2026-09-05)
+
+**Status:** Accepted -- BUILT. Revises the geometry ADR-0312/P-FLEET.L9 shipped. User-reported, three
+symptoms in one message.
+
+**Context.** Three complaints, three different causes, and the first two were the SAME design mistake made
+at two scales: a container that quantizes or clips instead of reflowing.
+
+1. "More adjustable right side handlers, not just snap." Card width was a COLUMN SPAN over 300px tracks
+   (`colsFromDrag`), with `Math.round` as a deliberate half-track deadzone. So a 149px drag moved nothing
+   and a 150px drag jumped a full 300px. The deadzone was correct FOR a span model; the span model was the
+   problem. Height had been plain pixels all along, and nobody ever complained about height.
+2. "The button options in the top get clipped." `.fleet-card-head` was `display:flex` with no `flex-wrap`,
+   inside `.fleet-card{overflow:hidden}`. A narrow card therefore did not wrap its action buttons, it CUT
+   them off, which is visible in the user's screenshot: the eye and lightning icons are sliced.
+3. "The lane windows aren't easily draggable and have some challenges with moving around each other." Two
+   causes. The drag surface was the header MINUS every button, select and input, which in a real lane header
+   leaves almost no pixels to aim at. And `grid-template-columns:repeat(auto-fill,minmax(300px,1fr))` with
+   `span N` cards does not backfill: a card too wide for the rest of its row jumps to the next row and
+   leaves a HOLE, so widening one card visibly broke the packing instead of pushing its neighbour along.
+
+**Decision.**
+
+- **Width is pixels.** `CardSize.cols` becomes `CardSize.w`, `colsFromDrag` becomes `widthFromDrag`, and
+  the right edge tracks the pointer 1:1 with no step and no deadzone. `maxCardW(bodyW)` replaces
+  `gridCols(bodyW)` as the ceiling, because the span model got "never wider than the panel" for free from
+  the track count and pixels have to say it out loud.
+- **The panel is a WRAPPING FLEX ROW, not a grid.** This is what makes cards "auto adjust around each
+  other": widening one pushes the next onto the following line and nothing leaves a gap. Cards carry
+  `flex: 0 1 <w>px` inline, and both numbers are deliberate: grow 0 so a card never stretches to fill a
+  short row (the user sized it, that size is the answer), shrink 1 plus `max-width:100%` so a card wider
+  than the panel gives way instead of overflowing it.
+- **The header wraps.** `flex-wrap:wrap` plus a row gap, with the lane name on a `flex:1 1 90px` basis so a
+  narrow card puts the name on line one and drops the buttons to line two. Invariant 11 is satisfied and
+  not bent: what wraps is a row of BUTTON ELEMENTS, never the text inside a label, and the name and chips
+  keep their one-line ellipsis.
+- **An always-draggable grip.** A `.fleet-grip` span leads every header. The existing rule that buttons,
+  selects and inputs act rather than drag is CORRECT and stays; the grip is simply a target that is always
+  drag, so the gesture has somewhere to live in a header full of controls.
+- **Handles are grabbable.** Hit boxes go 6px to 12px on the edges and 13px to 20px on the corner, while
+  the PAINTED mark stays a thin 2px inset line so the card does not read as thick-bordered. Resting opacity
+  goes 0 to .35: a handle nobody can see is a handle nobody knows exists.
+- **Gestures listen on the WINDOW.** Both drag and resize already called `setPointerCapture`, which is
+  necessary and not sufficient: the fleet poll rebuilds cards every 2.5s, and a node replaced mid-gesture
+  drops its capture, freezing the drag with the button still held. The window keeps the gesture alive
+  regardless of what happens to the element under the cursor.
+
+**The persisted layout is MIGRATED, not discarded.** `loadLayout` converts a legacy `{cols,h}` entry to
+`{w: cols*300 + (cols-1)*10, h}`, gaps included. Dropping the entry would have been three lines shorter and
+would have silently reset every card the user had already sized. An explicit `w` wins over a stale `cols` if
+a payload somehow carries both, and an unreadable span is still DROPPED rather than invented.
+
+**One fallback direction is load-bearing.** `maxCardW` treats an unmeasurable body (0, negative, NaN,
+Infinity) as "do not clamp" and returns the hard maximum, NOT the minimum. `getBoundingClientRect().width`
+reads 0 while the panel is hidden or pre-layout, so clamping down there would rewrite every sized card to
+260px off one bad measurement. Being briefly too permissive costs nothing, because the card shrinks visually
+and the next real measurement re-clamps it; losing the user's sizes is not recoverable. This is the same
+reasoning as the migration above and both are pinned by test.
+
+**Files:** `desktop/renderer/lane_layout.ts` (`CardSize.w`, `widthFromDrag`, `maxCardW`, `clampSize`, the
+migration in `loadLayout`; retired `colsFromDrag` / `gridCols` / `CARD_MIN_COLS` / `CARD_MAX_COLS`),
+`desktop/renderer/fleet_grid.ts` (flex-basis sizing, window-level gestures, the grip and its pointerdown
+branch), `desktop/renderer/styles.css` (flex-wrap panel, wrapping header, widened handles, the grip),
+`desktop/renderer/lane_layout.test.ts` (49), `harness/scripts/demo_ptokens1.ts` (its P-FLEET.L9 geometry
+section now pins the px model + the migration).
+
+**Verification.** 49 layout tests, `make demo-P-TOKENS.1` green over 11 geometry checks including the span
+migration, `demo-P-FLEET.L7` and `demo-P-FLEET.L8/L10` still green, full gate 4894 pass / 375 files with the
+standing 11 environmental fails. Served bytes grepped per ADR-0303: the bundle carries `widthFromDrag`,
+`maxCardW` and `data-fleet-grip` with `colsFromDrag`, `gridCols` and the `gridColumn = span` write all
+ABSENT, and styles.css carries the flex panel, the wrapping header and the grip. VERIFICATION BOUNDARY: the
+FEEL of a drag and a reflow is not assertable headlessly, so the gesture and the wrap are for the user to
+confirm on a window reload.
+
+## ADR-0324 -- P-HEALTH.2: a recovered session RESUMES the run, because healing the session and dropping the work is still a stall (2026-09-05)
+
+**Status:** Accepted -- BUILT. Completes ADR-0311 (P-HEALTH.1) and closes the wedge case left open by
+ADR-0263 (P-STALL.2). User decision, asked and answered explicitly.
+
+**Context.** Three separate mechanisms had each solved part of "the turn is running but I cannot see it",
+and between them they left one hole.
+
+- ADR-0263 (P-STALL.2) deleted the wall-clock turn cutoff, correctly: a ten-minute build is work, and the
+  10-minute silence kill was murdering exactly the turns worth running. It left `slow` notices in place, so
+  a quiet turn is legible, and it left the two real exits: the user (Stop) and transport death.
+- ADR-0311 (P-HEALTH.1) added the self-watch ladder ok -> quiet -> probe -> recover, where `recover`
+  cancels the wedged turn, drops the omp child, and reloads the SAME session id so the conversation lives.
+- This session's earlier fix made a DEAD stream visible instead of silent (the composer used to freeze on
+  its last event while the server turn kept going).
+
+The hole: `recover` heals the SESSION but never resumed the RUN. Dropping the child rejects the in-flight
+`session/prompt`, so the turn fell into its error path, printed `[agent unavailable: ...]`, and settled. The
+session was healthy again and the work was simply gone. The user then had to notice that nothing was
+happening and re-ask, which is the manual habit P-HEALTH.1 was built to remove. Worse, `restart()` nulls
+`this.listener`, so even if something had re-prompted, the resumed run would have streamed into nothing:
+the "listener clobber" hypothesis recorded in PROGRESS.md under the earlier `[TURN_DIAG]` work is real, and
+it is structural in the recovery path rather than a race.
+
+**Decision.** The recovery hands the interrupted run a one-shot authorization, and the run re-sends itself
+on the recovered session with a short operator note. The user is told plainly.
+
+- **The retry lives INSIDE the same `prompt()` call**, not in a detached turn. `onEvent` and the HTTP
+  stream stay attached, so the restart happens in the turn the user is already watching. A detached
+  resume would have needed a re-attach protocol and would have reproduced the original complaint (work
+  happening where the user cannot see it) while nominally fixing it.
+- **The user is told through the existing `health` channel** (`{ action: "recover", reason }`), which the
+  renderer already renders as a harness note with a phase line. The reason is the sentence the user reads:
+  "Restarting the stalled session and picking up where it left off (restart 1 of 2). Nothing already done
+  is lost." No new ChatEvent type, so nothing in the renderer or the fleet mirror had to learn a variant.
+  Silence was the original bug, so a silent fix would have been the same bug.
+- **The agent gets a SHORT operator note**, same origin convention as `HEALTH_PROBE_NOTE`: harness-authored
+  instruction, not model-authored text. It names the original request, the tail of what was produced, and
+  the tool calls that were open, then forbids starting over and requires re-reading any file that may be
+  half-written. It stays short (about 700 chars, hard-clipped near 1.3KB for a 40KB turn) because
+  `session/load` already restored the conversation; re-pasting the turn would just burn context.
+- **The pending tool-call labels are captured at RECOVERY time**, not at failure time, because `restart()`
+  clears `openCalls` before the interrupted request's error handler ever runs.
+- **`this.listener` and `askActive` are re-asserted before the re-send.** Without both, the resumed run
+  streams nowhere and its permission prompts never reach the UI.
+
+**The refusals are the design.** Each one is a way this feature could have become worse than the bug:
+
+- **A user Stop is never resumed.** Stop means stop. `cancel()` clears the authorization for every caller
+  except the recovery itself, which passes `forRecover`.
+- **One mark, one resume.** The authorization is consumable exactly once, so a second failure in the same
+  run cannot reuse it. This is precisely where an infinite restart loop would live.
+- **The budget is per RUN and is NOT refilled by activity.** `HealthEpisode`'s own probe/recover budget
+  resets on any activity, which is right for watching a session, and fatal here: a resumed run that emits
+  a little output and wedges again would refill it forever. So the resume counter lives on the turn, which
+  also means it resets naturally on the next real user message. Wedge -> resume -> wedge -> resume ->
+  wedge STOPS, and says the work so far is saved rather than pretending nothing happened.
+- **A session that failed to reload is never resumed.** `healthRecover` leaves `sessionId` null when
+  `session/load` fails; resuming onto that would talk to a phantom session. The next prompt starting clean
+  is the honest outcome.
+- **Nothing here reintroduces a wall-clock cutoff.** The trigger is still the ADR-0311 ladder, which caps
+  at `quiet` forever while a tool call is open. A long build is still work; this only changes what happens
+  AFTER the harness has already decided to recover.
+
+**Alternative rejected.** Re-prompting from `healthTick` instead of from the interrupted run. It reads
+simpler and is wrong twice: a second `session/prompt` on one session crosses collectors (the ADR-0268
+lesson, already cited by the probe path for the same reason), and the ticker has no `onEvent`, so the
+resumed work would stream into nowhere, which is the exact defect being fixed.
+
+**The marker is a class, not a field.** `RecoverMarker` (set / take / clear) lives in `health_watch.ts`
+with the rest of the policy. As a bare field its whole lifecycle was implied by statement ORDER across
+three call sites in a 100-line method, and untestable because it was private state set from a timer. As a
+class the consume-once and Stop-clears rules are unit-tested. It also removed a real compiler hazard:
+`prompt()` nulls the field at turn start and never assigns it again, so control-flow analysis proved it
+"always null" and typed the whole resume branch as unreachable (`never`). The honest fix was a method call,
+not a type assertion.
+
+**Files:** `desktop/health_watch.ts` (`RESUME_MAX_PER_RUN`, `RecoverMark`, `RecoverMarker`,
+`resumeVerdict`, `buildResumeNote`), `desktop/acp_backend.ts` (`recoverMark`, `recovering`,
+`cancel({ forRecover })`, `healthTick` marking before the drop, the resume loop in `prompt()`),
+`desktop/health_watch.test.ts` (+17), `harness/scripts/demo_phealth2.ts`, `Makefile`.
+
+**Verification.** `make demo-P-HEALTH.2` green over 7 sections (it runs `demo-P-HEALTH.1` first, which
+stays green). 53 health tests. Full gate 4884 pass / 374 files with the standing 11 environmental fails.
+VERIFICATION BOUNDARY: the re-send itself is in `Backend.prompt`, which owns the master omp session and is
+not constructible headlessly, so the demo proves the policy, the marker lifecycle, the wording, and the
+ordering the wiring depends on. The live re-send needs the running app: stall a turn past 7 minutes and
+watch it restart in place.
+
+## ADR-0327 -- P-PREVIEW.15 + P-TURN-VIS.1: a crop measured in the wrong unit, and a turn that streamed into nothing (2026-09-05)
+
+**Status:** Accepted -- BUILT. Two field-reported defects, root-caused rather than guessed. Shipped in the
+v2.0.0 cut (`1961725`).
+
+**Context.**
+
+1. **Every preview capture cropped the WRONG rect on a zoomed window.** The renderer measures the iframe
+   with `getBoundingClientRect()`, which reports CSS pixels, and handed that rect straight to
+   `webContents.capturePage()`, which takes DIP. The two only coincide at zoom factor 1.0. At the reporter's
+   118% the crop started about 18% LEFT of the panel, so the snip bled into the chat and composer column,
+   and it ran about 18% short, so the right and bottom of the previewed app were sliced off. The capture
+   worked perfectly for anyone who had never touched the zoom, which is why it survived so long.
+2. **A turn could stream into nothing.** If the NDJSON stream ended without a terminal event, the read loop
+   simply fell out of its `while` and returned. The composer stayed locked behind a spinner, no line was
+   printed, nothing was logged, and nothing failed. The user's only signal was that the app had gone quiet,
+   which is indistinguishable from a model thinking hard.
+
+**Decision.**
+
+- **The unit conversion happens at the IPC seam, where the authoritative zoom lives.**
+  `captureCropFromCssRect()` is pure; `main.ts`'s `lucid:capturePreview` handler reads
+  `e.sender.getZoomFactor()` (falling back to 1.0 on error) and passes it in. The renderer is never asked to
+  report its own zoom, because the main process owns that number and asking twice is how they disagree.
+- **Edges are scaled and rounded SEPARATELY, then width is derived as right minus left.** Rounding a width
+  directly loses a sub-pixel at fractional zoom (1.1, 1.18, 1.25), and a crop one pixel short of the panel's
+  right edge is precisely the reported symptom. The test pins the rule explicitly:
+  `left = round(x*z)`, `right = round((x+w)*z)`, `width = right - left`.
+- **Garbage degrades, it never throws.** An unknown, zero, negative, NaN, Infinity, or non-numeric zoom
+  falls back to 1.0, never to a zero-area crop; invalid rect fields yield 0 rather than an exception. A
+  screenshot is a convenience and may not take down the IPC handler that serves three callers.
+- **All three capture paths route through the one handler** (agent screenshot cache, user screenshot export,
+  send-to-phone), so none of them can drift into its own crop math.
+- **A stream ending is CLASSIFIED, not assumed.** `StreamEndKind` is `aborted | complete | dropped`, decided
+  from three flags in `StreamEndState`: `aborted` (the AbortSignal fired), `terminalDone` (a terminal event
+  was actually seen on the wire), and `tail` (this stream is legitimately long-lived).
+- **`aborted` takes precedence over everything.** A user who pressed Stop must never be told the engine may
+  still be running. They know: they did it.
+- **`error` and `lane-error` are TERMINAL alongside `done`.** A fleet lane failure emits `lane-error` and no
+  `done`, so without this the real error path would itself be classified as a silent death and the user
+  would get a spurious "may still be running" notice stacked on top of a genuine failure.
+- **`dropped` emits a user-facing notice PLUS a synthetic terminal `done`**, so the composer unlocks instead
+  of staying hostage to a stream that is never coming back. `STREAM_DROPPED_NOTICE` states both facts the
+  user needs and neither more: the engine may still be running, and reopening the session is how to find
+  out. It does not claim the turn failed, because that is not known.
+- **The fleet watch opts out with `tail: true`, at exactly one call site** (`/api/fleet/watch`). A live tail
+  has no turn boundary, so a clean close is its normal ending, not a fault. Making the detector opt-OUT
+  rather than opt-in means a future stream inherits the loud behaviour by default.
+- **Pre-stream failures got loud in the same pass.** A fetch throw, a 404, and a non-OK status each emit an
+  error line plus `done` rather than resolving quietly, and a render exception inside the loop is now caught
+  as itself instead of being swallowed by the JSON-parse catch. That swallow is how this whole class stayed
+  invisible.
+
+**Files:** `desktop/preview_capture.ts` (`CaptureRect`, `captureCropFromCssRect`),
+`desktop/preview_capture.test.ts` (7), `desktop/main.ts` (the `lucid:capturePreview` handler),
+`desktop/renderer/stream_end.ts` (`StreamEndKind`, `TERMINAL_EVENT_TYPES`, `StreamEndState`,
+`STREAM_DROPPED_NOTICE`, `streamEndEvents`), `desktop/renderer/stream_end.test.ts` (8),
+`desktop/renderer/bridge.ts` (`streamNdjson`).
+
+**Verification.** 7 crop tests and 8 stream-end tests, measured today by running both files. The crop suite
+asserts across six zoom factors (1, 1.1, 1.18, 1.25, 1.5, 2) that the crop never starts left of the element,
+which states the reported symptom as an invariant rather than pinning the one case that was reported. The
+stream-end suite pins the notice WORDING ("still be running", "reopen the session"), the abort precedence,
+that a `tail` stream closing cleanly is not a drop, and that nine mid-turn event types (token, thinking,
+tool, tool-meta, permission, usage, slow, ping, goal-iter) are non-terminal. CORRECTION TO THE RECORD: the
+PROGRESS entry for this increment says "15 stream-end" tests; the file runs 8 cases. DELIVERY: `bridge.ts`
+is renderer-only, so a window reload picks it up, while the capture fix is Electron main and needs a full
+app restart. VERIFICATION BOUNDARY: the 118% crop was reproduced arithmetically, not photographically. The
+fix is proven at the seam; confirming the snip visually needs a zoomed window and a human eye.
+
+## ADR-0328 -- P-PREVIEW.16 + P-PREVIEW.17: a markdown preview that showed SOURCE, a path bar that lied, and a PDF that was a blank frame (2026-09-05)
+
+**Status:** Accepted -- BUILT. Three defects found by test-driving the panel across all five kinds after
+ADR-0321 (P-PREVIEW.12) widened it, user-approved in one pass. Shipped in the v2.0.0 cut (`1961725`).
+
+**Context.**
+
+1. `previewTextDocument` served a `.md` file as ESCAPED MONOSPACE SOURCE, so a report the model had just
+   written came back as literal `#`, `**bold**` and fenced blocks. The panel advertises markdown as a
+   supported kind, which made this worse than an unsupported format: the feature claimed to work.
+2. The path field kept a STALE path when the agent loaded a file into an already-visible panel, because
+   that activation path skipped the field sync. A path bar showing the previous file is worse than no path
+   bar, which is the whole reason ADR-0323 put it on the tab row.
+3. A `.pdf` rendered as a blank white frame even with a correct MIME type. Electron's
+   `webPreferences.plugins` defaults to FALSE, and Chromium's built-in PDF viewer is gated behind it.
+
+**Decision.**
+
+- **Markdown renders through a PRIVATE `Marked` instance, never the global `marked`.** The global's options
+  are process-wide mutable state, so any other caller in the process could change how a preview renders. A
+  private instance makes the render deterministic by construction rather than by convention.
+- **`gfm: true`, `breaks: false`:** headings, lists, GFM tables, fenced code. `breaks: false` because a
+  markdown document written for other renderers must not gain spurious line breaks here.
+- **It NEVER emits raw HTML.** The html renderer escapes rather than passing through, so an embedded
+  `<script>` in a generated report is text on the page.
+- **Link and image targets are restricted to a `SAFE_HREF` allowlist**
+  (`^(?:https?://|mailto:|#|\.{0,2}/)`), and a `javascript:` link degrades to plain TEXT rather than being
+  dropped silently, so the reader can see what the document tried to do. `data:image` is the one deliberate
+  exception, because generated charts arrive that way.
+- **Sanitation is ENGINE-side, not renderer-side.** The bytes that reach the sandboxed frame are already
+  safe, which makes the frame's opaque origin and blocked egress defence in depth rather than the only
+  defence. This is the same direction invariant 5 takes with untrusted content: sanitize before the
+  boundary, not at it.
+- **`MAX_DOC_TEXT` caps a document at 1MB.** A 40MB log dropped into the panel is a hang, not a preview.
+- **`MD_CSS` uses BLOCK layout with NO flex, and two tests assert it.** This is invariant 11 at its highest
+  risk surface: a flex container makes every raw text run AND every inline `<b>`/`<a>/`<code>` its own flex
+  item, so a sentence with bold phrases shatters into narrow stacked columns. Markdown is nothing but prose
+  with inline tags, so if that bug is ever going to come back, it comes back here.
+- **`syncPrevPathField(path)` is called from `loadPreview` on every activation**, and ONLY when
+  `document.activeElement` is not the path field, so a sync can never overwrite what the user is mid-way
+  through typing.
+- **`plugins: true` on the main window's `webPreferences`, with a comment stating what it means TODAY.** It
+  enables Chromium's built-in PDF viewer and nothing else: NPAPI and PPAPI are long gone from modern
+  Chromium, so the historical security objection to this flag no longer describes the flag. The previewed
+  document still sits in the same opaque-origin, egress-blocked sandbox as every other kind, so this widens
+  what can be RENDERED without widening what the document can REACH.
+
+**Files:** `desktop/preview_inline.ts` (`previewMarkdownHtml`, `previewTextDocument`, the private `Marked`
+instance, `htmlEscape`, `SAFE_HREF`, `MAX_DOC_TEXT`, `MD_CSS`), `desktop/preview_inline.test.ts` (66),
+`desktop/renderer/app.ts` (`syncPrevPathField`, its call from `loadPreview`), `desktop/main.ts`
+(`createWindow` webPreferences).
+
+**Verification.** 66 preview_inline tests, measured today, including the sanitation cases that matter (raw
+HTML escaped rather than executed, a `javascript:` link degraded to text, `data:image` allowed, relative
+URLs preserved), the markdown truncation rule, and the two invariant-11 block-layout guards. The OLD
+assertion that markdown came back as escaped source was REWRITTEN rather than left to rot, because it pinned
+exactly the behaviour being fixed. Markdown was additionally proven end to end without waiting on a restart,
+by pushing a real 21.5KB markdown file through the actual `previewTextDocument` and loading the result.
+DELIVERY, and this is the whole story on device: the path bar is renderer-only (window reload), the PDF fix
+is Electron main (full app restart), and markdown is ENGINE-side, so it needs an engine restart.
+VERIFICATION BOUNDARY: the PDF viewer itself was not observed rendering a document, because that needs the
+restarted Electron main process. `plugins: true` being the gate is read off Electron's documented default,
+so the causal claim is grounded but the fix is confirmed by construction, not by looking at a PDF.
+
+## ADR-0329 -- P-PREVIEW.18 + P-SEC.4: the preview stopped hijacking the screen, a 100-row queue got one button, and the suite stopped writing to the operator's real ledger (2026-09-05)
+
+**Status:** Accepted -- BUILT. Two user asks, plus one thing found on the way that mattered more than
+either. Narrows ADR-0321 (P-PREVIEW.12). Shipped in the v2.0.0 cut (`1961725`).
+
+**Context.**
+
+1. **The panel auto-surfaced for every kind it could render.** P-PREVIEW.12 widened the panel to five kinds,
+   and one boolean was answering two different questions: can we render this, and is this worth taking over
+   part of the user's screen for. So a routine `.md`, `.json`, `.csv` or `.log` write during a build
+   interrupted whatever the user was reading.
+2. **The Security panel's Live blocks queue had 100 rows and only per-row buttons**, which makes
+   acknowledging a historical queue technically possible and practically unusable.
+3. **Found on the way:** the delegated Dismiss-all test passed ALONE and failed four times in the full suite,
+   which is the signature of load-order state. It redirected `HOME` and then dynamically imported, so in the
+   full suite it found `security_log` already loaded by an earlier file and holding the REAL home. It
+   dismissed the operator's actual quarantine queue and wrote two fixture rows into their real ledger.
+
+**Decision.**
+
+- **`PREVIEW_AUTO_SURFACE` is a `Record<PreviewKind, boolean>`, exhaustive BY TYPE.** html, svg and pdf
+  auto-surface; markdown, text and image do not. Exhaustiveness is the point: a new preview kind cannot be
+  added without answering the interruption question, so the default can never be inherited by accident.
+- **Nothing was removed, only the interruption.** Every kind stays renderable on request through
+  `preview_open`, the Open field, and Browse.
+- **`isAutoPreviewPath(p)` is the renderer's single read of that policy**, consumed by `fleet_grid.ts` when a
+  lane's tool event carries a written path.
+- **The `preview_open` tool description TEACHES the distinction rather than listing kinds**, because the
+  model is the actor whose behaviour is being changed. A list of extensions would have told it what is
+  possible; it needed to know what is worth interrupting a human for.
+- **`dismissAllBlocks(reviewer)` loads the ledger ONCE but writes one `_dismiss` line and one
+  `block_dismissed` event PER BLOCK.** Looping over `dismissBlock` would re-read and re-replay the entire
+  ledger per block, quadratic on the exact queue size that motivated the feature. But the per-block audit
+  records stay per-block, because per-block provenance is the entire point of the trail: collapsing 100
+  dismissals into one aggregate line would have made the convenient path the one that destroys evidence.
+- **The button is TWO-STEP**: "Dismiss all N" arms it and relabels to "Confirm: dismiss N?". Dismissing 100
+  blocks is not undone by clicking again.
+- **THE SEAM, which is the real content of this ADR: both paths resolve PER CALL, never at module load.**
+  `logPath()` (the JSONL ledger) and `defaultAuditPath()` (the OCSF audit) each honor an explicit override
+  (`LUCID_BLOCKS_PATH` / `LUCID_AUDIT_PATH`), then fall back to a PER-PROCESS temp file under
+  `NODE_ENV=test` (`lucid-blocks-test-<pid>.jsonl` / `lucid-audit-test-<pid>.jsonl`), then to the real
+  `~/.omp/` path. Per-call resolution is what defeats load order: a module already imported by an earlier
+  test file can no longer be holding a real path captured before `HOME` was redirected. A test-only guard
+  that lives at module scope is not a guard, it is a race.
+
+**Damage disclosed rather than quietly repaired.** Two fixture rows (`tool: fetch`, `tool: eval`, reviewer
+`soc-analyst`) were written into the user's real ledger at 03:31:53Z, and their real quarantine queue was
+dismissed. The append-only OCSF audit was deliberately NOT rewritten: an audit you edit after the fact is
+not an audit, and a self-inflicted entry is exactly the kind an operator should be able to see. Nothing was
+RELEASED, which is the one mitigating fact: dismissal moves a block out of the queue, it does not unblock
+the content.
+
+**Files:** `desktop/preview_resolve.ts` (`PREVIEW_AUTO_SURFACE`, `previewAutoSurfaces`),
+`desktop/renderer/preview_tabs.ts` (`isAutoPreviewPath`), `desktop/renderer/fleet_grid.ts` (the lane tool
+event), `harness/omp/preview_extension.ts` (the `preview_open` description),
+`desktop/security_log.ts` (`dismissAllBlocks`, `logPath`), `desktop/audit_export.ts` (`defaultAuditPath`),
+`desktop/dev.ts` (`/api/security/dismiss-all`), `desktop/renderer/app.ts` (the two-step button),
+`desktop/preview_resolve.test.ts` (75), `desktop/security_log.test.ts` (4).
+
+**Verification.** 75 preview_resolve tests and 4 security_log tests, measured today. The auto-surface suite
+guards the direction that was wrong: `.md`, `.json`, `.csv` and `.log` must NOT auto-open while staying
+renderable. The security suite pins that an APPROVED block never becomes dismissable and that dismiss-all
+writes one line and one event per block. The pollution fix is verified by the failure it removes: the
+delegated test now passes both alone and inside the full suite, which was the discriminating symptom.
+VERIFICATION BOUNDARY: "no code path can touch a real file during tests" is a STRUCTURAL claim about the two
+resolvers, not an exhaustive audit of every writer in the tree. Any future module that captures a path at
+import time reintroduces this, and nothing mechanically forbids that yet.
+
+## ADR-0330 -- the OAuth broker spawned an omp it could not READ: existence is not executability (2026-09-05)
+
+**Status:** Accepted -- BUILT. Field defect, reported live on a packaged Windows install. No increment id,
+same as ADR-0316: this is a defect fix off a support report, not a planned increment. Extends the probe
+doctrine of ADR-0261 (write probe) and ADR-0305 (port handshake). Second correction to the resolver first
+patched in `c2d8cf9`.
+
+**Context.** "Connect via OAuth" failed with Bun's own error instead of opening a sign-in page:
+
+```
+error: EPERM reading "C:\Program Files\LucidAgentIDE\resources\repo\node_modules\
+       @oh-my-pi\pi-coding-agent\dist\cli.js" Bun v1.3.14 (Windows x64)
+```
+
+A packaged install ships omp inside the application directory, and on Windows that directory is
+ACL-protected: the same protection ADR-0261's boot gate exists to detect. The resolver accepted
+`LUCID_OMP_BIN` because the path EXISTED, so `dev.ts` handed the broker a file Bun then could not read, and
+the spawn died before any loopback callback server was started. No URL, no error the user could act on.
+
+`existsSync` was never the right question. A file can exist and still be unusable: unreadable under an ACL,
+a stale shim pointing at a package that has been removed, a zero-byte truncation, the wrong architecture.
+Those fail at four different layers and every one of them looks identical to a path check.
+
+**Root cause of the root cause.** THREE files had each grown a private copy of this resolver: `dev.ts` for
+the OAuth broker, `acp_backend.ts` for the chat session, `agent_run.ts`. They had already drifted once, and
+that is not a hypothetical: `c2d8cf9` exists solely because the broker resolved a DIFFERENT omp than the
+model list, and `c2d8cf9`'s fix (prefer `LUCID_OMP_BIN`) is precisely what carried the unreadable path into
+the broker. A defect repaired in one copy became a defect in another.
+
+**Decision.** Probe, do not infer, and keep the decision in exactly one place.
+
+- **`resolveOmpBin(input, canRun)` returns the first candidate that PROVABLY runs.** The only honest test of
+  "can we run this" is to run it. The real callers probe `<candidate> --version`, bounded at 6s and cached
+  per process, so the cost is one short spawn per process rather than per resolution.
+- **The probe is INJECTED, so the policy is pure.** `ompCandidates` and `resolveOmpBin` hold the ORDER and
+  the FALLBACK RULE with no `node:path` and no spawning, which is what makes the decision unit-testable
+  cross-platform instead of only observable on a machine that reproduces the ACL.
+- **Candidate order, most specific first:** `LUCID_OMP_BIN` (trimmed, and skipped entirely when blank),
+  then `~/.bun/bin/omp<exeSuffix>`, then the bare name `omp`. **The bare name is always last** because it is
+  the one candidate that cannot be an unreadable file inside a protected install directory, so the OS PATH
+  gets the final word rather than the first.
+- **A throwing probe is a FAILED probe, never a crash.** A probe that spawns can throw EPERM, ENOENT or
+  EACCES, and the resolver must degrade past it. Success is `canRun(c) === true` strictly: a probe that
+  accidentally returns a string or an object must not authorize a spawn.
+- **It never throws and never returns empty.** When every candidate fails, the caller gets the bare name
+  with `proven: false` and the full ordered `rejected` list, and logs every path it tried. "omp is not
+  installed or not on PATH" is a better message for a user than an exception out of a resolver, and the
+  rejected list makes the NEXT field report diagnosable instead of a bare toast.
+- **All three call sites import the one resolver.** The class of bug where the broker and the model list
+  disagree about which omp is authoritative cannot recur, which matters more than this single EPERM.
+
+**Blast radius, stated because the first characterisation was wrong.** This is NOT a v2.0.0 regression.
+`c2d8cf9` is dated 2026-07-15 and ships in every tag from **v1.11.8** onward, so any user whose install
+directory denied that read had been unable to use OAuth for nearly two months. That is what made this worth
+its own release (v2.1.0) rather than riding the next feature batch.
+
+**Files:** `desktop/omp_bin.ts` (`OmpRunProbe`, `OmpCandidateInput`, `ompCandidates`, `OmpResolution`,
+`resolveOmpBin`), `desktop/omp_bin.test.ts` (11), `desktop/dev.ts`, `desktop/acp_backend.ts`,
+`desktop/agent_run.ts` (three private copies deleted, all three now importing the resolver).
+
+**Verification.** 11 tests written against the report rather than the happy path: the exact Program Files
+path from the field report is rejected and the next candidate wins; a blank or whitespace-only
+`LUCID_OMP_BIN` is not even a candidate; the bare name is last under every input shape; a runnable env
+binary wins outright and the fallbacks are never probed; every candidate failing yields the bare name with
+`proven: false` and all three paths in `rejected`; a throwing probe degrades instead of propagating; a
+truthy non-boolean is not accepted. Gate 4910 pass / 7 fail (the standing Windows path assumptions), all
+three typecheck passes clean, license headers clean. VERIFICATION BOUNDARY: the EPERM itself is not
+reproduced in CI, because it needs a genuinely ACL-protected directory. What is proven is that a candidate
+failing its probe is skipped and the next one taken; that the ACL is WHY the probe fails on the reporter's
+box is read off Bun's error text, not observed here.
+
+## ADR-0331 -- P-FLEET.L13: a 5px scrollbar is not a control, and two copies of the scroll math is how the lanes go stale (2026-09-05)
+
+**Status:** Accepted -- BUILT. User-reported, two asks in one message.
+
+**Context.** "The vertical scrollbar is too thin to grab, and the lane wants the two catch-up buttons the
+main composer has."
+
+The first was a scale mistake, not a styling preference. The global scrollbar rule is an 11px track whose
+thumb carries a 3px transparent border with `background-clip:content-box`, so the actual pointer target is
+**5px**. That is fine down the edge of a full-height chat, where the bar is long and the user is aiming at
+an axis rather than an object. Inside a 300px lane card the bar is short as well as thin, so there is no
+forgiving dimension left and it stops being a control.
+
+The second was a duplication risk. `a375cdc` gave the main composer a page stepper and a run-to-end button,
+but the arithmetic lived inline in `app.ts` keyed to `#chat`. Copying "one viewport minus a line of overlap"
+into the lane renderer is exactly how the two surfaces drift: the chat would eventually get a tuning pass
+the lanes never saw, and nothing would fail.
+
+**Decision.**
+
+- **Widen the lane bar only, and give it a resting colour.** `.fleet-out` gets a 14px track with a 2px
+  border, so a 10px thumb: double the pointer target. It also gets a visible colour before hover, so the
+  bar reads as draggable rather than being discovered. Scoped to `.fleet-out`, so the global bar stays slim
+  everywhere else and no other surface pays for this.
+- **The same catch-up pair the composer carries, per lane.** Single chevron steps ONE page and keeps a line
+  of overlap so the reader resumes on a line they have already read; double chevron runs to the newest line
+  INSTANTLY, not smoothly, because a long transcript is a slow ride to somewhere the reader just asked to
+  be. Both stay hidden until there is content below the fold.
+- **The arithmetic moves to `renderer/scroll_jump.ts` and BOTH callers read it.** The main thread was
+  refactored onto the shared helper rather than left holding its inline copy, which is the half of this that
+  actually prevents the drift. One tuning pass now reaches both surfaces by construction.
+- **Lanes carry their own threshold.** `LANE_JUMP_SHOW_PX` is 48 against the chat's `JUMP_SHOW_PX` of 140,
+  because a 180px transcript would essentially never clear a 140px bar and the pair would have been dead
+  weight in the surface that asked for it.
+- **Both listeners are DELEGATED on the dock**, for the same reason `onDockPointerDown` already was: lane
+  cards are built and destroyed on every poll, so per-card listeners would leak with them. `scroll` does not
+  bubble, so it is captured rather than delegated normally. The click calls `stopPropagation` so it can
+  never reach the header's drag-to-reorder gesture.
+- **Every entry point refuses to produce a NaN target.** This is the failure mode the tests are aimed at,
+  because assigning `NaN` to `scrollTop` silently does nothing: no throw, no console line, and the button
+  simply reads as broken. `belowFold` also clamps at 0, since an over-scrolled or mid-layout element can
+  report a `scrollTop` past the bottom and a negative "below" would read as "plenty left to scroll".
+
+**Files:** `desktop/renderer/scroll_jump.ts` (`JUMP_SHOW_PX`, `LANE_JUMP_SHOW_PX`, `ScrollMetrics`,
+`belowFold`, `shouldShowJump`, `pageStep`, `pageDownTarget`), `desktop/renderer/scroll_jump.test.ts` (11),
+`desktop/renderer/fleet_grid.ts` (`onLaneJumpClick`, `syncLaneJump`, the `data-lane-jump` buttons inside
+`.fleet-out`), `desktop/renderer/app.ts` (its inline arithmetic replaced by the shared import),
+`desktop/renderer/styles.css` (the `.fleet-out` scrollbar rules and the per-lane button rules).
+
+**Verification.** 11 pure tests, weighted toward the refusals: unusable metrics collapse to 0 rather than
+NaN, a garbage threshold falls back instead of showing always or never, an unloaded font (NaN line height)
+still yields a usable step, a page-down clamps to the bottom so a smooth scroll cannot overshoot into the
+rubber-band region, and `pageDownTarget` never returns NaN whatever the scroller reports mid-layout. Gate
+4921 pass / 7 fail (the standing Windows path assumptions), all three typecheck passes clean, license
+headers clean. Served bytes checked per ADR-0303: the rebuilt bundle and `styles.css` carry the change and
+the retired inline arithmetic is ABSENT. VERIFICATION BOUNDARY: the pointer target itself is a CSS number,
+not an assertion. Whether 10px is enough to grab is a feel question, and this repo has no DOM test harness,
+so the widths are reviewed and the math is tested.
+
+**Deliberately NOT in this increment.** The tool-call group collapse and live ticker. Lane chips already
+have per-chip body reveal (`laneChip`/`hasBody`); what is missing is a grouped, collapsible header with a
+ticker, and that lives in the incremental repaint path ADR-0309 exists to protect ("a repaint patches, it
+does not rebuild"). It is its own increment, not a rider on this one.
+
+## ADR-0332 -- P-RELEASE.5: the identity gate rejected every PRERELEASE deb and rpm, so the rolling `latest` could never publish (2026-09-05)
+
+**Status:** Accepted -- BUILT. Fixes a defect in ADR-0307 (P-RELEASE.4) and closes, by accident, the
+download-link failure that ADR-0246's P-RELEASE.2d had flagged as an open interaction.
+
+**Context.** Dispatching the rolling-latest refresh after v2.1.0 failed the Linux job on the identity gate:
+
+```
+FAIL rpm  version mismatch: building 2.1.1-test.101, the rpm says 2.1.1~test.101
+FAIL deb  version mismatch: building 2.1.1-test.101, control says 2.1.1~test.101
+```
+
+The artifacts were RIGHT and the gate was wrong. Neither Debian nor RPM may carry `-` in a version field:
+Debian reads it as the separator before the Debian revision, RPM as the separator before the release. So fpm
+(via electron-builder) rewrites a semver PRERELEASE separator to `~`, which both ecosystems additionally
+sort BEFORE the plain release, matching prerelease semantics exactly. The packagers were being correct.
+
+The gate compared the embedded version string literally, so **every** prerelease deb and rpm failed. And
+the ONLY path that stamps a prerelease is the manual `workflow_dispatch` that refreshes the rolling `latest`
+release, which means that job had never once run to completion. Two visible consequences followed from that
+one never-green job: the rolling downloads went stale, and the marketing site's version-pinned `.deb`/`.rpm`
+links had been 404ing since v1.14.0, because they resolve through `/releases/latest/download/` and no
+successful dispatch had ever refreshed those filenames. A tag build carries a clean version with no `-` in
+it at all, which is precisely how this hid through every single release.
+
+**Decision.** Translate the separator, and nothing else.
+
+- **`debRpmVersion(version)` expresses the semver the way Debian and RPM are ALLOWED to express it**, and
+  the deb and rpm checks compare against that form. It rewrites the prerelease separator only.
+- **The scope is deliberately narrow, because ADR-0307 is a security gate, not a formatting helper.** A
+  genuine version mismatch, a stale payload republished under a new tag, and a mis-stamped build all still
+  fail. Loosening the comparison generally (a substring match, a normalising strip) would have been shorter
+  and would have quietly retired the check the ADR exists for.
+- **The failure message names all three strings** (`building X (deb form Y), control says Z`), so the next
+  person to trip it can act without reading fpm's source. The original message named two and the missing
+  one was the whole answer.
+- **A PUBLISHING dispatch carries the real version, never a test stamp.** Found immediately after the fix
+  let the job complete for the first time: it shipped `lucidagentide-desktop_2.1.1-test.102_amd64.deb`. Two
+  bad things at once, because the rolling `latest` is load-bearing twice over: its `latest*.yml` is what the
+  in-app updater reads, so a test-versioned build goes in front of every existing user via auto-update, and
+  its filenames are what the site's version-pinned links resolve to, so a `-test.<run>` stamp leaves them
+  404ing exactly as before. `build-desktop.yml` now branches on `inputs.publish_latest` and uses the
+  committed version verbatim; the `-test.<run>` stamp is retained for non-publishing dispatch builds, which
+  is the case it was correct for.
+
+**Files:** `desktop/build/release_identity.ts` (`debRpmVersion`, `checkDeb`, `checkRpm`),
+`desktop/build/release_identity.test.ts` (+3, 72 in the file),
+`.github/workflows/build-desktop.yml` (the version-stamp branch).
+
+**Verification.** 3 new tests, and two of them exist to prove the gate was not loosened: a prerelease build
+passes with the `~` form fpm actually writes; a DIFFERENT prerelease correctly `~`-formed still FAILS (the
+stale-payload case ADR-0307 exists for), as does a different base version and a literal `-`; and the message
+names all three strings. 72 tests in the file, gate green. Then the real proof, which is not a test: the
+dispatch was re-run and the rolling `latest` release completed for the first time, its artifacts carrying
+clean `2.1.0` names, and the site's `.deb` and `.rpm` links returned **HTTP 200** where they had returned
+404 since v1.14.0. VERIFICATION BOUNDARY: the updater feed BODY was not read. The asset's freshness (337
+bytes, rewritten 2026-09-05T13:28:25Z) and the clean artifact names were confirmed; the `version:` line
+inside `latest.yml` was not, because three local download attempts failed. So "an installed 1.14.x now
+offers exactly 2.1.0" remains unverified, and the first exposure window (about 15 minutes serving
+`2.1.1-test.102`) is closed but was real.
+
+## ADR-0333 -- P-KGMARKET.5: the storefront had no button, and the checkout asked the user to remember the checkout (2026-09-05)
+
+**Status:** Accepted -- BUILT. Four user-requested quick wins in one increment, because three of the four
+turn out to be the same funnel and the fourth is what makes the first one fit. Completes the client half of
+P-KGMARKET.1 (ADR-0206). Corrects a claim I made earlier in the session: "Get pack" was NOT opening the
+wrong URL, `getPackFlow` routes a signed-out user to `beginSignIn` correctly. The defects are elsewhere.
+
+**Context.**
+
+1. **DISCOVERY.** The Role KG Packs storefront existed and nothing pointed at it. Reaching it meant knowing
+   to type "Browse Role KG Packs" into the command palette, so the only commercial surface in the product
+   was the one surface with no way in.
+2. **THE ROUND TRIP.** Clicking "Get pack" while signed out opened the browser and then told the user
+   `"Complete sign-in in your browser, then click the pack again to install it."` That is the checkout
+   asking the user to remember the checkout, and it loses whoever closes the modal.
+3. **THE COPY.** The prompt never said WHY an account was needed, so a request to sign in before buying a
+   file read as a data grab rather than as the licence lookup it is. Worse, its title was byte-identical to
+   the LUCID Remote share sign-in toast (`"Finish signing in"`), so a user with both in flight could not
+   tell which browser tab belonged to which.
+4. **PADDING.** Button padding was loose enough that a seventh control did not fit in the KG header.
+
+**Decision.**
+
+- **The storefront gets a button, in the KG header, with a glow.** A user looking at their knowledge graph
+  is exactly the user who wants more of it. `kgPacksBtnHtml()` renders it; the label is the single word
+  "Packs" so invariant 11 holds even when the panel is dragged narrow. The glow is an accent border plus a
+  soft outward shadow and a 6s low-amplitude breath: findable without being an advertisement, and switched
+  off under `prefers-reduced-motion`.
+- **A pending purchase SURVIVES the sign-in detour.** `getPackFlow` records `{packId, packName, startedAt}`
+  when it opens the browser, and the `lucid://auth` handler resumes that exact pack instead of printing a
+  generic "signed in" toast.
+- **The resume is ONE SHOT and TIME-BOXED, which is the real design content here.** `lucid://auth` is
+  SHARED: the same deep link finishes a LUCID Remote sign-in and a Google Drive authorisation. So "resume
+  the purchase on sign-in" must not mean "any future sign-in, forever, opens a payment page for a pack
+  somebody once clicked". `shouldResumeCheckout` expires the intent after `PENDING_CHECKOUT_MAX_AGE_MS`
+  (15 minutes: long enough for a password manager and a second factor, far too short to still be pending
+  when the user next authorises Drive), refuses a backwards clock, refuses non-finite timestamps, and the
+  handler nulls the pending record BEFORE acting so a second callback cannot replay it.
+- **Held in module state, not storage, deliberately.** An intent that does not survive a window reload
+  should not survive one. The expiry is the belt; the volatility is the braces.
+- **The copy names its object at every step.** `packSignInCopy` returns distinct wording for `pending`,
+  `resumed` and `blocked`, each naming the pack, each carrying `LICENCE_RATIONALE` ("Your account holds the
+  pack licence, so it installs on every machine you sign in to") which is the sentence that was missing.
+  The `blocked` case appends the provider's real reason when there is one and INVENTS NOTHING when there is
+  not. The LUCID Remote toast is now "Finish signing in to share", so the two flows are distinguishable.
+- **Enter in a passphrase field runs that field's action.** A password input with a button beside it and no
+  Enter binding reads as broken, and the unlock path is walked every session. Routed through the BUTTON's
+  own `click()` so the setup/unlock logic stays in exactly one place, and gated by an ALLOWLIST
+  (`ENTER_SUBMIT`) rather than "press the button next to you": `#setBody` is one delegated listener over the
+  whole Settings panel, which also holds provider API-key rows, and some rows carry more than one button.
+  Each field lists both its Create and Unlock ids because the markup renders exactly one of them, and
+  `enterSubmitTarget` resolves against what is actually on screen.
+- **`.btn-mini` padding 5px/10px to 4px/8px, gap 6px to 5px.** This is THE button primitive, about 220 call
+  sites, so the change compounds across every toolbar. Tighter is also the SAFE direction for invariant 11:
+  it gives a label more of its row, so nothing that fit before can start wrapping now.
+
+**The KG header now WRAPS, and the numbers say why.** `.kg-tools` was a no-wrap flex row inside
+`.kg{overflow:hidden}`, which is the same shape ADR-0325 found in `.fleet-card-head`. A flex item never
+shrinks below its min-content width, so `.kg-tools` kept its width and hung off the end of the panel with
+the controls at that end unreachable. Measured against the real stylesheet, one row being 30px tall: the
+PRE-increment six-control header **clipped at every panel width from 580px down**. The shipped
+seven-control header stays ONE row down to **680px** and clips only at **220px**. Making `.kg-search` the
+flexible member (`flex:1 1 96px` with `max-width` for the comfortable size, not the reverse, because flex
+wraps at BASE size and only shrinks items after placing them) bought 60px of that: with the old fixed
+150px field the one-row floor was 740px. The trade is height at the extreme, tools box 66px at a 420px
+panel, 127px at 300px, 157px at 220px, and it is the right trade: the alternative is not a shorter header,
+it is a header whose last controls are gone.
+
+**Files:** `desktop/renderer/pack_cta.ts` (`PACKS_TIP`, `kgPacksBtnHtml`, `PendingCheckout`,
+`PENDING_CHECKOUT_MAX_AGE_MS`, `shouldResumeCheckout`, `PackSignInState`, `LICENCE_RATIONALE`,
+`packSignInCopy`), `desktop/renderer/enter_submit.ts` (`ENTER_SUBMIT`, `enterSubmitTarget`),
+`desktop/renderer/pack_cta.test.ts` (16), `desktop/renderer/enter_submit.test.ts` (8),
+`desktop/renderer/app.ts` (the header button + its wiring, the `#setBody` keydown handler,
+`pendingCheckout`, the resume branch in the `lucid://auth` handler, the Remote toast title),
+`desktop/renderer/styles.css` (`.btn-mini` padding, `.kg-tools` wrap, `.kg-search` flex, the
+`.btn-mini.kg-packs` glow and `@keyframes packGlow`).
+
+**Verification.** 24 new pure tests, weighted toward the refusals, because an auto-resume that fires on the
+wrong callback is worse than the bug it fixes: a stale intent does not resume (at the boundary+1ms and at
+24 hours), the boundary is inclusive so a slow but honest sign-in still lands, a backwards clock and
+NaN/Infinity timestamps refuse, an empty pack id has nothing to resume into, and the retired instruction
+"click the pack again" is asserted ABSENT from the copy rather than merely replaced. The allowlist suite
+asserts Enter is INERT for six real non-passphrase ids, for a listed field whose buttons are off screen,
+for an id-less input, for a throwing probe, and for a truthy non-boolean probe result. Full gate 4948 pass
+/ 379 files with the standing 7 environmental fails (5 `fs_browse`, 2 `lucid_acp`, both Windows path-
+separator assumptions, neither ours); all three typecheck passes clean; license headers clean; no em dashes
+in any added line. Served bytes grepped per ADR-0303 from a freshly booted engine on port 5399 (never the
+user's 5319), sourcemap stripped first because it base64-encodes the source and would satisfy every ABSENT
+check vacuously: **22/22**, with `id="kgPacks"`, the glow class, all three copy states, `ENTER_SUBMIT`,
+`pendingCheckout` and `shouldResumeCheckout` PRESENT, and `"click the pack again to install it"`, `"Sign in
+to buy"`, the ambiguous bare `title: "Finish signing in"`, the old `padding:5px 10px` and the old no-wrap
+`.kg-tools` rule all ABSENT.
+
+**Looked at, not just grepped.** The header was rendered at 900 / 620 / 420px against the REAL inlined
+stylesheet (invariant 11: a mockup that diverges from the component CSS is the bug wearing a costume) and
+inspected in the live DOM: one row at the default 900px width, a clean two-row wrap at 420px with the close
+button still on the second row rather than orphaned onto a third, the Packs glow reading as distinct from
+the neutral buttons beside it, and no label wrapping at any width.
+
+**VERIFICATION BOUNDARY, and it is the important one.** The resume was never exercised against a real
+Firebase provider. There is no configured market provider on this machine, so `prov.configured()` is false
+and `getPackFlow` returns at the storefront-hint branch before any of this runs. What is proven is the
+policy, the expiry, the one-shot clearing, the copy, and that the wiring is present in the served bytes.
+What is NOT proven is a live Stripe checkout resuming after a real hosted sign-in. That needs the private
+add-on repo's provider (P-KGMARKET.2), and it is the one claim here resting on inference. The Enter
+binding and the two-click storefront button also have no automated coverage for the GESTURE, the standing
+reason since ADR-0309: this repo has no DOM test harness, so the tables and policies are exhaustively
+tested and the keystroke itself is verified by served-byte presence and structural review.
+
+**Deliberately NOT done.** `set-close` stays inside `.kg-tools`, so at panel widths below about 300px it
+wraps onto a line of its own. Moving it out to be a direct `.set-head` child would pin it, but `.set-head`
+is `justify-content:space-between` and shared with the Settings, Creator Studio and Preview panels, so a
+third child changes the wide-width alignment of all four headers. That is its own increment, not a rider on
+this one. Purchase-to-install progress also stays out: `kbPackInstallFromUrl` is still atomic (fetch,
+unzip, import) and reports one toast at the end.
+
+## ADR-0335 -- P-PREVIEW-PWA.4: a FAILED preview was photographed and published to a phone guest forever (2026-09-05)
+
+**Status:** Accepted -- BUILT. Field-reported from the phone, with a screenshot. Fixes a defect in the auto
+send-to-phone path (which the code labels P-PREVIEW-PWA.2, though ADR-0239 assigns that id to phone markup
+and send-back; the id drift is noted, not resolved here). This increment is **.4**.
+
+**Context.** The report: "Why do you keep sending me the preview window of game.html, there is something
+still wrong with preview feature. I kept getting that on the PWA version. I see the preview is being too
+permissive now and opening and taking stale snapshots." Then, decisively: "I ended up getting the kg header
+previews later, but at first I got the stale game.html."
+
+The screenshot shows a preview card in the PWA transcript whose image is LUCID's own failure page, "Can't
+preview this file - file not found or unreadable", with an "Opening the preview" toast pill sitting in the
+corner of the shot, captioned `Preview: game.html`. `game.html` had nothing to do with the session being
+watched.
+
+Three separate mistakes stacked into that one card, and the user's phrase "stale snapshots" is the literal
+diagnosis rather than a metaphor:
+
+1. **NOTHING CHECKED THAT THE PREVIEW WORKED.** `/api/preview/serve` answers a failed preview with **HTTP
+   200** and an HTML body that says so. That is deliberate and still correct: an iframe pointed at a 404
+   renders the browser's own error chrome instead of our message. The cost was never paid until now, which
+   is that NOTHING on the client can distinguish a rendered app from a rendered failure. Every guard in
+   `phoneAutoSend` asked "should we send" (share live? agent lane? visible? rate limit?) and none asked "is
+   there anything worth sending". So a failure rendered, captured, and shipped exactly like a success.
+2. **A SNAPSHOT IS PERMANENT.** It is not a live window into the file, it is a PNG in the chat transcript,
+   and the transcript is replayed on every PWA load. One bad capture is therefore not a glitch the guest can
+   dismiss, it is a fixture. That is the whole "keeps reappearing" complaint.
+3. **THE CAPTURE SAW LUCID'S OWN CHROME.** `capturePage` photographs on-screen pixels, and
+   `#toasts` is `position:fixed; right:18px; top:52px`, which is directly over the top-right of the
+   right-edge preview panel. Any toast alive at capture time is in the image, which is exactly the
+   "Opening the preview" pill baked into the reported card.
+
+**Decision.**
+
+- **Give the client the missing signal.** `probePreviewFile(target, io)` runs the same gauntlet as
+  `readPreviewFile` (local target, known kind, exists, within the per-kind cap) and STOPS BEFORE THE READ,
+  so asking "would this render" about a 25 MB PDF costs one `stat`. Exposed as `GET /api/preview/probe` and
+  `bridge.previewProbe`, fail-closed: anything other than an explicit `resolves === true` reads as false.
+- **The probe route is deliberately NOT in `QUERY_TOKEN_ROUTES`.** That set exists for callers that
+  structurally cannot send a header (an iframe `src`, the omp subprocess). The renderer can, so the probe
+  takes the token in `x-lucid-token` like every other endpoint, and the `?t=` surface is not widened by one
+  route more than it has to be.
+- **The send decision becomes a VALUE, not a pile of early returns**, in `snapshotVerdict`. Ordering is
+  load-bearing rather than tidy: `unresolved` is decided BEFORE `too-soon`, and the rate-limit slot is now
+  claimed only once a send is authorized. The old code claimed the slot before capturing (correct, for
+  collapsing a burst) which under the fix would have let a FAILED preview burn the slot and suppress the
+  good preview 900ms behind it. A non-finite clock or gap returns `too-soon` rather than reading as "plenty
+  of time has passed".
+- **The probe is only paid for once the free checks already pass.** `snapshotVerdict` is evaluated first
+  with `resolves: true` to see whether anything OTHER than resolution refuses; a hidden lane or a dead share
+  therefore never costs a round trip.
+- **Capture with LUCID's transient chrome hidden.** `captureWithoutOverlays` adds `body.lucid-capturing`,
+  waits two animation frames so the hide is actually painted, captures, and removes the class in a
+  `finally`. A body class rather than per-element hiding, so a toast that ARRIVES mid-capture is covered
+  too; `visibility` rather than `display`, so nothing reflows and no toast animation restarts; and the
+  `finally` because a stuck `.lucid-capturing` would silently swallow every future toast.
+- **The manual button explains itself; the auto path stays silent.** There is a user standing in front of
+  "To phone", so a refusal there is a toast ("Nothing to send yet ... there is only an error page to
+  capture"). The automatic path no-ops, because a background feature that narrates its own non-events is
+  noise.
+- **A guest sees the BASENAME, never the operator's directory layout.** `snapshotLabel` also fixes a leak
+  found by its own test: the inline version it replaces ended in `|| path`, which looks like a safety net
+  and is actually the leak, because `pop()` already returns the input when it contains no separator, so that
+  branch is reached ONLY for input with no basename at all (`"/"`, `""`, blanks), which is precisely when
+  echoing the raw path is wrong. It now degrades to `Preview: file`.
+
+**What this does NOT do, stated because the user asked for "more testing" and deserves the boundary.** It
+does not retroactively remove the bad card. That snapshot is a PNG already written into the session
+transcript and already delivered to the guest; nothing here rewrites history, and an event log that edits
+itself after the fact is not a log. The stale card will persist in that session's replay until the session
+is cleared. What is fixed is that no NEW failure can be published.
+
+**Files:** `desktop/preview_file.ts` (`probePreviewFile`), `desktop/preview_file.test.ts` (+6, 42 in the
+file with its siblings), `desktop/dev.ts` (`/api/preview/probe`), `desktop/renderer/bridge.ts`
+(`previewProbe` on the interface and the implementation), `desktop/renderer/phone_snapshot.ts`
+(`SnapshotInputs`, `SnapshotVerdict`, `snapshotVerdict`, `snapshotLabel`),
+`desktop/renderer/phone_snapshot.test.ts` (14), `desktop/renderer/app.ts` (`captureWithoutOverlays`, the
+gate in `phoneAutoSend`, the refusal in `sendPreviewToPhone`), `desktop/renderer/styles.css`
+(`body.lucid-capturing #toasts`).
+
+**Verification.** 14 gate tests and 6 probe tests. The gate suite pins the bug directly (`resolves: false`
+yields `unresolved`) and pins the ORDERING that makes the fix safe: with both conditions true at once,
+`unresolved` beats `too-soon`, so a failure cannot burn the rate-limit slot. It also pins a garbage rect, a
+non-finite clock, a backwards clock, and the exact rate-limit boundary. The probe suite includes a
+cross-check worth more than the rest: for five refusal cases, `probePreviewFile` and `readPreviewFile` must
+agree on BOTH the verdict and the wording, so the gate cannot drift from what the renderer will actually
+display. One of my own tests caught the `|| path` leak described above.
+
+Then the part that makes this more than a unit test. A REAL engine was booted on port 5399 (never the user's
+5319), the transport token read from the served page's `<meta name="lucid-token">`, and the new route hit
+live: the reported case `C:/nope/does/not/exist/game.html` returns `resolves=false (file not found or
+unreadable)`, which is byte-for-byte the message in the user's screenshot; a real on-disk file returns
+`resolves=true`; a `.docx` is refused with the shared `NOT_PREVIEWABLE` wording. **3/3 live probe checks**
+and **9/9 served-byte checks** with the sourcemap stripped first, the retired inline caption expression
+proven ABSENT. Renderer suite 1375 pass / 95 files; all three typecheck passes clean.
+
+**VERIFICATION BOUNDARY.** The toast suppression is NOT verified as pixels. It needs Electron's
+`capturePage` against a real window with a live toast, and this repo has no DOM or Electron test harness
+(the standing reason since ADR-0309). What is proven is that the class is applied and removed around the
+capture, that the CSS rule reaching the browser hides `#toasts` under it, and that the paint is awaited
+before the pixels are read. The end-to-end claim, a phone guest receiving a clean shot of a working
+preview, is the on-device step.
+
+## ADR-0336 -- P-KGUI.3: the Personalization card, rebuilt for a user who has MANY knowledge graphs (2026-09-05)
+
+**Status:** Accepted -- BUILT. User-directed, and it explicitly OVERRULES my own proposal: I had scoped
+unlimited named KGs as a schema change (a numbered DuckDB migration to open up the fixed compartment enum).
+The user's call was "let's not change the schema, just add another option drop down". They were right. The
+named-KG registry already exists (ADR-0205, P-KGPACK.2), so this was never a data-model problem, it was a
+SURFACING problem. No schema touched, no migration, no contract change.
+
+**Context.** Two screenshots and a precise brief. The Personalization card showed three fixed stat tiles in
+a `repeat(3,1fr)` grid: `264 PERSONAL`, `521 WORK`, `- CUI (LOCKED)`. Three problems in one strip:
+
+1. **The CUI tile was rendered for a vault that does not exist.** The user has never created a CUI store, so
+   the card advertised a locked door with no room behind it. "If there is no CUI vault it shouldn't have a
+   stat showing. If there is one then it can show." A stat about nothing is worse than no stat.
+2. **The tiles were wide, tall, and fixed at three.** "Tighter padding on the stats boxes and smaller
+   horizontal width to fit more and stack at least two rows of scrollable KG stats."
+3. **The KGs themselves had no presence at all.** "I expect people to have many KGs." The thing the user
+   accumulates was the thing the card could not show.
+
+And the storefront problem underneath it: the KG picker (select, rename, seed from a folder, import a
+`.lkgpack`, browse Role KG Packs, new KG) was fully built and reachable only by opening the KG panel and
+drilling into its Views dropdown. Three clicks deep, in a different panel from the one about your knowledge.
+
+**Decision.**
+
+- **A hero KG row in the Personalization card, mirroring the LUCID Agent hero in the Profile card**, because
+  the user pointed at that button and said "similar to the Agent Mode button but a drop down". It opens the
+  EXISTING `openKgPicker`, anchored on itself. **Zero new capability**: every action the user asked for
+  (select, edit, upload a KG or a KG pack) was already implemented, so the correct change was a button, not
+  a feature. Accent-toned rather than hero-toned so it does not compete with the Profile hero on one screen.
+- **The tile strip is a pure, tested builder** (`personalStatTiles` + `personalStatsHtml`) rather than inline
+  template literals, because the three rules it now enforces are decisions worth pinning:
+  - **A tile is evidence, so it exists only when the thing does.** `cuiConfigured === false` omits the CUI
+    tile entirely. A vault that EXISTS but is locked still gets a tile, with a `locked` qualifier, because
+    that is real information about a real store. Absent and locked are different statements.
+  - **An unknown count is a DASH, never a zero.** Per-KG counts arrive after the card paints, and a
+    fabricated `0` reads as "this graph is empty" when it means "not measured yet". A KG that really is
+    empty shows `0`, and the two are distinguishable on screen.
+  - **The active KG leads.** With many KGs the strip scrolls, so the one you are actually using must be
+    visible without scrolling. The rest keep registry order rather than being reshuffled.
+- **`auto-fit`, not `auto-fill`.** With three tiles the empty tracks collapse and the tiles stretch to fill
+  the row, so a user with one KG sees a balanced strip; with seventeen they shrink to an 84px floor and wrap
+  into a two-row scroller. `auto-fill` keeps the empty tracks and leaves the sparse case looking broken.
+- **The two-row cap is DERIVED from the tile height, not hand-tuned.** `max-height:calc(var(--psc-h)*2+5px)`.
+  This is the part I got wrong twice and it is worth recording why: I guessed `--psc-h:38px`, the tiles
+  rendered at 56px, and the cap sliced row two in half. I tightened the padding, guessed 46px, and it still
+  clipped by 4px. Only measuring the rendered tile (49px) produced a clean two-row strip. `scroll-snap-type:
+  y proximity` was added so a future stale value self-corrects to a row boundary rather than parking
+  mid-tile.
+- **Counts are their own call, fetched AFTER the card paints.** Each KG is a separate DuckDB file, so
+  `/api/kb/counts` costs one open per KG on the first call. Putting it on `kbList` would have made opening
+  Settings wait on N file opens. `fillPersonalKgCounts` is single-flight and repaints only when a number
+  actually changed, so a burst of hydrations can neither fan out into N opens nor flicker the card.
+- **A KG that fails to open is reported ABSENT, not zero**, both server-side (the `catch` leaves the key
+  out) and client-side (`kbCounts` drops any non-finite value rather than coercing it). The tile shows a
+  dash. Same rule as above: never fabricate a measurement.
+- **Invariant 11 is satisfied the way the invariant itself prescribes for a narrow column**: the label takes
+  the space and ellipsizes, with the full name on `title`. KG names are user-authored and long ones are
+  ordinary ("Predictive Logistics for Contested Environments"), so nowrap plus ellipsis plus tooltip is the
+  contract here, NOT a wide track. Nothing in the strip is a flex container holding prose.
+- **KG names are `esc`'d everywhere** (invariant 5: user content is data, never markup), in the tile body,
+  in the `title` attribute, and in the hero label.
+
+**Files:** `desktop/renderer/personal_stats.ts` (`StatTile`, `StatKg`, `PersonalStatsInput`,
+`personalStatTiles`, `personalStatsHtml`), `desktop/renderer/personal_stats.test.ts` (17),
+`desktop/renderer/app.ts` (`personalKgs`, `personalKgPages`, `kgHeroBtnHtml`, `hydratePersonal` now
+two-pass, `fillPersonalKgCounts`, the `#personalKgPick` handler, `secPersonal` rewritten to use the
+builder), `desktop/renderer/bridge.ts` (`kbCounts`), `desktop/dev.ts` (`/api/kb/counts`),
+`desktop/renderer/styles.css` (`.pscope-counts`, `.psc`, `.psc-kg-hero`).
+
+**Verification.** 17 pure tests. The first asserts the reported defect directly (no vault means the tile is
+absent, not locked), and a cluster pins dash-versus-zero from both sides: a missing count is a dash, a real
+0 is a 0, and NaN or Infinity degrade to a dash rather than painting "NaN" on screen. Ordering, id
+uniqueness across 15 tiles, the `active` marker outranking `read only`, and an unnamed KG falling back to
+"Untitled KG" are all pinned. Two tests are hostile-input: a KG named `<img src=x onerror=...>` must not
+parse as markup, and one named `" onmouseover=` must not break out of the `title` attribute. One of my own
+assertions was WRONG and I corrected the test rather than the code: I had asserted the string "onerror" was
+absent, but escaping neutralizes brackets and quotes, it does not delete the word, so the payload correctly
+survives as inert text.
+
+Gate 4985 pass / 381 files with the standing 7 environmental fails; renderer suite 1392 pass / 96 files; all
+three typecheck passes clean; license headers clean. Served bytes grepped per ADR-0303 from a fresh engine
+on port 5399 (never the user's 5319), sourcemap stripped first: **18/18**, with the retired inline tiles
+(`<b class="psc-personal">`, `<b class="psc-cui">`, the `cui (locked)` label) and the old `repeat(3,1fr)`
+grid all proven ABSENT. **3/3 live checks** against this machine's real registry: the counts route answers
+`ok`, every count is finite, and it references only registered KGs, so a tile can never point at a ghost.
+
+**Looked at, not just grepped.** Rendered at the REAL 540px panel width (`.settings` is `min(540px,46vw)`)
+against the inlined production stylesheet, in three populations, and measured in the live DOM: no CUI vault
+gives 3 tiles at 56px total height in one row; a locked vault gives 4; fourteen KGs give 17 tiles capped at
+the derived two-row height with a scrollbar and no mid-tile clipping, the active KG leading, and one
+deliberately-missing count showing a dash. The compartment segmented control keeps "Personal Life" on one
+line at that width.
+
+**VERIFICATION BOUNDARY.** The dropdown itself was not exercised by a click in a test: `openKgPicker` is
+pre-existing and this increment only adds a new anchor for it, and the repo has no DOM harness (standing
+since ADR-0309). What is proven is that the button, its id, and the handler branch are in the served bytes,
+and that the picker it opens is the same function the KG panel already uses. Whether 49px is the right tile
+height on a different OS font stack is also a measurement from this machine, which is why the cap is derived
+from one named constant and carries a comment telling the next person to re-measure it.
+
+## ADR-0337 -- P-FLEET.L14: a fleet lane could not run bash, because it answered a gate omp never asked it (2026-09-05)
+
+**Status:** Accepted -- BUILT. Field-reported from a running `dgx` lane, with the harness's own error text
+quoted back. One missing line, and a structural change so it cannot recur.
+
+**Context.** The report: "on the fleet lane dgx running now it reports that it can't run bash/exec and the
+auto approve isn't working that I have set. Why is it failing?" The lane's transcript carried omp's message
+verbatim:
+
+```
+Tool "bash" requires approval but no interactive UI available.
+  1. Set tools.approvalMode: yolo in /settings
+  2. Add tools.approval.bash: allow to config
+  3. Use an interactive UI that actually shows the approval prompt
+```
+
+Four bash attempts in a row denied, an `auto-approved` chip visible in the same transcript, and the lane's
+own agent reasoning itself into the wrong conclusion ("it seems execution is blocked session-wide by the
+client's approval configuration") and then telling the user to change a setting that would not have helped.
+
+**There are TWO approval gates in front of a tool call, and the lane was answering only the first.**
+
+1. **GATE 1, ours: ACP `session/request_permission`.** Both the main chat (`acp_backend.ts`) and every fleet
+   lane (`fleet_lanes.ts`) answer this. P-FLEET.L6 auto-approve and standing session grants resolve it with
+   no human. This is the gate the user had configured, and it was working perfectly: that is exactly what
+   the `auto-approved` chip in their transcript was.
+2. **GATE 2, omp's: `ExtensionToolWrapper`.** `harness/omp/acp_config.yml` sets `tools.approval.bash: prompt`
+   (P-EXEC.1, ADR-0066) and omp honors per-tool overrides in EVERY approval mode, including its default
+   `yolo`. So bash and eval ALWAYS reach gate 2, by our own deliberate configuration. Under ACP there is no
+   TUI to prompt in, so omp asks the CLIENT through a form elicitation (`elicitation/create`) -- but only
+   when the client ADVERTISED `elicitation.form` at `initialize`. Otherwise it concludes no interactive UI
+   exists and hard-fails the call.
+
+`acp_backend.ts` advertised the capability. `fleet_lanes.ts` sent
+`{ fs: { readTextFile: false, writeTextFile: false } }` and nothing else. And the cruel detail: the lane had
+ALREADY been written an `elicitation/create` handler, complete with a comment explaining the inner gate. That
+handler was **dead code from the day it was written**, because omp never sends the request to a client that
+did not advertise the capability. Someone copied the answer and missed the advertisement, and nothing failed
+loudly enough to notice, because gate 1 kept working and the lane only broke on tools that reach gate 2.
+
+This also explains why the user's diagnosis and their agent's diagnosis both went wrong. Every visible
+signal said approvals were fine. `bash` is the ONLY thing that looked broken, so it read as "bash is
+blocked" rather than "the second approval channel was never opened".
+
+**Decision.**
+
+- **Advertise `elicitation: { form: {} }` from the lane.** That is the one-line fix and the whole behavioral
+  change: omp can now reach the lane's already-written handler, which picks the affirmative option, and
+  bash runs.
+- **Make the drift structurally impossible, not merely currently-absent.** The bug was a mismatch BETWEEN
+  two files that each looked correct in isolation, so the fix is one shared definition,
+  `ACP_INTERACTIVE_CLIENT_CAPS` in `desktop/acp_client_caps.ts`, imported by both interactive clients. A
+  future third client gets it right by construction.
+- **Advertise and answer, or neither.** The module states the coupling explicitly, because both halves of
+  the mistake are live hazards: answering without advertising is this bug, and advertising without
+  answering hangs every gated call until it times out.
+- **`fs.readTextFile` / `writeTextFile` stay FALSE, and the constant says why.** omp runs against the
+  workspace and reads files itself; proxying file I/O back through the client would put an unscanned route
+  around the in-process security gate that invariant 4 exists to protect. Centralizing the capabilities
+  makes that a decision with a reason attached rather than a default nobody revisits.
+- **The UTILITY extraction client keeps its bare capabilities** (`acp_backend.ts`, the chat-history import
+  path). It sets `onRequest = async () => ({})` and runs no tools, so it must NOT gain an approval channel.
+  Deliberately left alone.
+
+**Files:** `desktop/acp_client_caps.ts` (`ACP_INTERACTIVE_CLIENT_CAPS`, `advertisesElicitationForm`),
+`desktop/acp_client_caps.test.ts` (9), `desktop/fleet_lanes.ts` (the `#handshake` capabilities),
+`desktop/acp_backend.ts` (now imports the shared constant instead of restating it).
+
+**Verification.** 9 tests. The unit half pins the predicate against the exact capability object lanes used
+to send (reported unreachable) and against half-declared shapes (`{ elicitation: {} }`,
+`{ elicitation: null }`, `{ elicitation: "form" }`) which must not count as reachable. The important half is
+SOURCE-LEVEL and reads the real files, because a unit test on either client alone would have passed while
+lanes stayed broken: any client that answers `elicitation/create` must import the shared constant and pass
+it to `initialize`. A companion test pins that both clients really do answer `elicitation/create`, so the
+guard cannot pass by finding nothing to check (ADR-0303: a guard that silently matches nothing is worse
+than no guard).
+
+And the guard was proved NON-VACUOUS rather than assumed to be: the pre-fix `clientCapabilities` literal was
+reconstructed and the parity assertions re-run against it, confirming they FAIL on the source as it stood
+when the lane was broken, that the pre-fix source did still answer `elicitation/create` (so the guard
+applied to it), and that the predicate separates the old capability object from the new one. 5/5.
+
+Gate 4994 pass / 382 files with the standing 7 environmental fails; `fleet_lanes` suite 33 pass; all three
+typecheck passes clean; license headers clean.
+
+**VERIFICATION BOUNDARY, and it is the honest one.** A real lane running a real `bash` through both gates
+was NOT observed from here. That needs the packaged app, a live DGX lane, and a restarted engine. What is
+proven is the causal chain end to end in code: `acp_config.yml` forces bash to gate 2, omp's wrapper
+requires an advertised `elicitation.form` to reach a client at gate 2, the lane did not advertise it, the
+main chat did and works, and the lane's handler was unreachable. The fix makes the lane's advertisement
+identical to the client that demonstrably works. Confirming it live is the on-device step, and the lane
+needs an ENGINE restart to pick it up.
+
+**NOT the cause, recorded because both the user and the lane's own agent concluded it was.** Their
+approval setting was not misconfigured, `tools.approvalMode` did not need changing, and
+`tools.approval.bash: allow` was not the right remedy: that would have disabled the P-EXEC.1 command
+classifier (which auto-approves read-only commands and gates risky ones) for every lane, trading a broken
+lane for a blind one.
+
+## ADR-0338 -- P-FLEET.L15: ADR-0337 made omp ASK the lane; the lane's answer was malformed, so it still denied everything (2026-09-05)
+
+**Status:** Accepted -- BUILT. **Corrects my own ADR-0337, which was necessary but NOT sufficient.** Same
+field report, second round: "still having issues", with the lane now reporting "Direct execution is being
+denied at the tool-permission layer (bash x3, eval x1) even after your go-ahead".
+
+**Context.** ADR-0337 added `elicitation: { form: {} }` so omp would deliver its inner approval gate to the
+lane as an `elicitation/create` request. That was correct and it was half the bug. The other half was
+waiting behind it: the lane's `elicitation/create` handler, the one ADR-0337 called "already written" and
+"dead code", was ALSO WRONG. Waking it up did not make it work.
+
+It got both halves of the contract wrong:
+
+```ts
+// what the lane shipped
+const options = params?.options ?? params?.schema?.options ?? [];
+const yes = options.find((o) => /^(yes|approve|...)/i.test(String(o.label ?? o.value ?? "")));
+return yes ? { value: yes.value ?? yes.label } : {};
+```
+
+1. **Wrong options path.** omp sends a JSON-Schema form, so the choices are at
+   `requestedSchema.properties.value.enum` as an array of **strings**. `params.options` is the shape of the
+   OUTER `session/request_permission` request, a different message with a different schema.
+   `params.schema.options` does not exist anywhere. The lane read objects (`o.label ?? o.value`) out of what
+   is actually a string array, so even fed the right path it would have found nothing.
+2. **Wrong response shape.** omp wants `{ action: "accept", content: { value } }`. The lane returned a bare
+   `{ value }` on the (unreachable) success path and `{}` otherwise.
+
+So it returned `{}` every time, and omp reads anything that is not an explicit accept as **"denied by
+user"** -- with no prompt shown to anyone. That is precisely the failure mode `acp_backend`'s own comment
+had warned about since ADR-0110, three lines above the code that gets it right.
+
+**This is the same root cause as ADR-0337, one level deeper: the concept was copied, the implementation was
+not shared.** `acp_backend` already had a correct, unit-tested reader. The lane had a plausible-looking
+re-derivation of it. Two files, two guesses, one of them wrong, and nothing compared them.
+
+**Decision.**
+
+- **The reader and the answer builder move to `exec_policy.ts`, beside the `elicitationApproval` predicate
+  they belong to**: `elicitationOptions(params)` and `elicitationAnswer(params)`. Both interactive clients
+  now call the SAME function. There is exactly one place in the codebase that knows omp's form-elicitation
+  wire shape.
+- **`acp_backend` was collapsed onto it too**, rather than left as the "good" copy. Keeping a correct
+  duplicate is how the next divergence starts. What stays backend-specific is the one genuinely
+  backend-specific thing: the developer-mode gate diagnostic.
+- **Fail-closed stays fail-closed.** A form with no affirmative option gets `{ action: "decline" }`, not a
+  synthesized accept: a custom question is not an approval and we do not answer on the user's behalf. Every
+  missing link in the schema path returns `[]` rather than throwing, and an empty option set declines.
+- **`params: any` became `params: unknown`** on the seam that reads it. This is untrusted wire input from a
+  subprocess; `any` is exactly the wrong type for the one place the shape must be checked, and the whole
+  defect was a shape mistake. `elicitationOptions` narrows with `in` and `typeof` at every step.
+- **The parity guard from ADR-0337 was extended to cover the ANSWER, not just the capability.** Advertising
+  correctly while hand-rolling the answer is this bug, and it is worse than the original: omp asks, the
+  client replies with nonsense, and the call dies silently. The guard now also forbids the two option paths
+  the lane guessed, anywhere outside `exec_policy`.
+
+**Files:** `desktop/exec_policy.ts` (`ElicitationAnswer`, `elicitationOptions`, `elicitationAnswer`),
+`desktop/exec_policy.test.ts` (+16), `desktop/fleet_lanes.ts` (handler collapsed to one call),
+`desktop/acp_backend.ts` (`answerElicitation` collapsed onto the shared pair, `any` to `unknown`),
+`desktop/acp_client_caps.test.ts` (+2 parity assertions, 11 total).
+
+**Verification.** 16 new tests pinning the wire shape by ASSERTION rather than by whoever reads omp's source
+next: the real enum path resolves, both shapes the lane guessed resolve to nothing, non-strings are dropped
+rather than coerced, every missing link in the path refuses instead of throwing, an approval accepts with
+the value nested under `content`, a no-affirmative form declines, and the accepted value is always one of
+the offered options rather than a fabricated string. Gate 5005 pass / 382 files with the standing 7
+environmental fails; all three typecheck passes clean; license headers clean.
+
+**And the smoking gun, measured rather than argued.** The pre-fix handler was transcribed verbatim and fed
+the REAL wire shape that `acp_backend` demonstrably works against:
+
+```
+old answer: {}
+new answer: {"action":"accept","content":{"value":"Approve"}}
+```
+
+The same proof confirms the options WERE readable from that input (so the failure was the read, not omp),
+that the pre-fix source fails both new parity assertions, and, after I corrected a flaw in my own proof
+harness (the first version left the import in place and made the guard look weaker than it is), 7/7.
+
+**VERIFICATION BOUNDARY, unchanged and still the honest one.** A real lane running a real `bash` through
+both gates has still not been observed from here; it needs the packaged app and a live DGX lane. Two
+engine-side defects are now fixed and the lane's behavior at both gates is byte-identical to the client that
+works in production. **The lane needs an ENGINE RESTART to pick either fix up**, and a lane already running
+is still on the old code: its `initialize` handshake happened once, at spawn.
+
+**Process note worth keeping.** ADR-0337 called that handler "dead code" and moved on. It was dead, and it
+was also broken, and I recorded the first fact while not checking the second. The lesson is not "look
+harder": it is that when a code path has provably never executed, its correctness is UNKNOWN rather than
+presumed, and turning it on is a change that needs its own verification.
+
+## ADR-0339 -- P-PREVIEW.19: the Preview panel followed the user into the next conversation (2026-09-05)
+
+**Status:** Accepted -- BUILT. Field-reported with a screenshot. Third preview-surfacing defect in this
+arc, and it uses the probe seam ADR-0335 built.
+
+**Context.** "During a new prompt session you open the preview panel to that file every time without
+reason. Why?" The screenshot shows a fresh session with the Preview panel open on the Agent tab, path field
+reading `/tmp/x.pdf`, body reading "Can't preview this file - file not found or unreadable". A POSIX path,
+on a Windows machine, for a file the user never opened, in a conversation that had nothing to do with it.
+
+Three defects compounded, and each alone would have been survivable:
+
+1. **AN UNRESOLVABLE TARGET WAS STILL REMEMBERED.** `onPreviewAvailable` did
+   `if (!path) return; state.lastPreviewablePath = path;`. It never asked whether the file previews, so a
+   failed open was memorialised exactly like a successful one. That is how a path that had never once
+   rendered became the panel's sticky re-open target.
+2. **IT SURVIVED THE SESSION BOUNDARY.** `state.lastPreviewablePath` is renderer module state and a new chat
+   session does NOT reload the window, so `newSession()` left it sitting there along with
+   `prevPathByLane.agent` and a live document in the hidden agent iframe.
+3. **AND IT RE-OPENED THE PANEL.** Two separate readers surface the panel from that one field:
+   `openPreview()` re-loads it into the agent lane, and the preview-activity pill does
+   `if (panel.hidden && state.lastPreviewablePath) openPreview()`. So the stale value did not merely
+   persist, it took over part of the screen on every new session.
+
+**Decision.**
+
+- **Only remember a target that PROVABLY previews.** `onPreviewAvailable` now gates
+  `state.lastPreviewablePath` on `bridge.previewProbe(path)`. This is the third consumer of the ADR-0335
+  probe and the reason that seam was worth building: `/api/preview/serve` reports a failure with HTTP 200
+  and an HTML body, so a rendered error page is indistinguishable from a rendered document on the client,
+  and every feature that treats "we loaded something" as "it worked" inherits the same bug.
+- **The LOAD still happens regardless of the probe.** A genuine failure must be visible NOW, in the panel,
+  with the engine's own message. What the probe governs is only whether the target is worth RE-OPENING a
+  panel for later. Conflating those two would have made a broken preview silently invisible, which is a
+  worse bug than the one being fixed.
+- **A new session drops the AGENT lane, and leaves YOURS alone.** That asymmetry is the substance:
+  the agent lane is conversation-scoped, while a PDF the user opened by hand in the Yours tab is not ours
+  to close. `previewAfterNewSession` holds the decision and returns `changed` so the caller skips the DOM
+  teardown in the common case where nothing was carried.
+- **The frame is UNLOADED, not just hidden.** `resetAgentPreviewLane` clears `srcdoc`/`src`, because leaving
+  a live document in a hidden iframe keeps its timers, audio and network running for a conversation that is
+  over. The "new" badge is cleared too: there is nothing new to look at.
+- **This is ADR-0329's principle applied to TIME.** That increment ruled that being able to render a file
+  kind is not the same as being worth interrupting a human for. The same holds across sessions: a preview
+  earns the screen because it is live and relevant, not because it once existed.
+
+**Files:** `desktop/renderer/preview_session.ts` (`PreviewLanes`, `previewAfterNewSession`),
+`desktop/renderer/preview_session.test.ts` (7), `desktop/renderer/app.ts` (`onPreviewAvailable` probe gate,
+`resetAgentPreviewLane`, the `newSession` call).
+
+**Verification.** 7 pure tests. They pin the reported case directly (a `/tmp/x.pdf` agent target and
+remembered path both cleared), the asymmetry (a hand-opened `yours` path survives), that
+`lastPreviewable` set ALONE still counts as a change (missing that case would have left the bug half-fixed,
+since that field alone is enough for the activity pill to surface the panel), that the input is not
+mutated, and that clearing twice is stable so a double `newSession` cannot resurrect anything. Gate 5012
+pass / 383 files with the standing 7 environmental fails; all three typecheck passes clean.
+
+Served bytes checked per ADR-0303 from a fresh engine on port 5399, sourcemap stripped first: **10/10**,
+with the unconditional-remember expression proven ABSENT from the bundle.
+
+**A vacuous check caught in my own verifier, worth recording.** The first version of that script checked the
+P-FLEET.L15 engine symbols (`elicitationAnswer`, `elicitationOptions`) against the served RENDERER bundle.
+The two "present" checks failed honestly, which is what exposed it, but the paired "absent" check
+(`params?.schema?.options` must be gone) had PASSED, and it passed for the wrong reason: that string was
+never in the renderer bundle to begin with. Two halves of one increment live in different artifacts, and
+checking both against one of them is exactly the ADR-0303 trap. Split: renderer claims are checked against
+the served bundle, engine claims against the source the engine actually loads.
+
+**VERIFICATION BOUNDARY.** The end-to-end behavior (start a new session, panel stays shut) was not observed
+from here: it needs the packaged app, and there is no DOM harness in this repo. What is proven is the
+decision, the probe gate, and that both are present in the served bytes with the old expression gone.
+Renderer-only, so a WINDOW RELOAD picks it up.
+
+**One thing this does NOT do.** It does not clear a preview the user opened themselves, ever, including a
+broken one. If `/tmp/x.pdf` is sitting in the YOURS tab it stays there until they close it. That is
+deliberate: their tab, their business.
+
+**P-PREVIEW-DISMISSAL amendment (2026-09-15).** The user explicitly rejected the stale PDF returning at all. This supersedes the earlier "LOAD still happens regardless" decision: agent events must now pass the local file probe, or the existing HTTPS egress gate, BEFORE loading or surfacing Preview. A failed check gives a generic unavailable notice, not an error document that takes over the panel. Revision and view ownership still discard late results.
+
+Closing Preview invalidates pending checks and suppresses both its visible Agent target and any pending replacement for the renderer lifetime. Repeated events for those targets cannot reopen it; an explicit user Open opts that document back in. Review activity only decorates a visible panel and never opens one. Yours and the document files are untouched; dismissal adds no disk persistence or filename-specific exception. The running packaged app must load the updated assets before this behavior changes there.
+
+**The test runner was also a source of the popup.** `harness/omp/preview_extension.test.ts` invokes `preview_open` for `/tmp/x.${ext}` across its extension list, ending in PDF. The runner inherits `LUCID_PREVIEW_OPEN_URL` from LUCID; unisolated cases consequently send sample paths to the running desktop. A real loopback sentinel reproduced 48 requests from a nested suite whose 31 tests all passed. File-level hooks now clear all four preview transport endpoints before each case, allow cases to install their own fixtures, and restore inherited values afterward. `preview_extension_isolation.test.ts` supplies real sentinel endpoints to a child test process and requires both suite success and ZERO endpoint requests. It failed before the fix and passed afterward. This correction takes effect for repository test runs without restarting the operator's engine; the renderer safeguards still require updated app assets.
+
+## ADR-0334 -- P-FLEET.DGX: the DGX fleet as one configured provider plus one agent registry, never as hostnames in code (2026-09-05)
+
+**Status:** Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be
+adopted increment by increment when a session picks it up. Wire contracts and the build-to-test path live
+in `DGX-FLEET-INTEGRATION.md` at this repo's root (pointed to from `HANDOFF.md`, Cross-repo briefs); the
+source of truth for the fleet side is the DGX Loader repo's ADRs 0001 to 0014. Numbering note: if another
+session lands 0334 first, renumber this one; content over ordinal.
+
+**Context.** A two-node NVIDIA DGX Spark fleet now runs, behind an isolated enclave: OpenAI-compatible
+serving (LLM :8080 vLLM, GGUF :8083, STT :8081, TTS :8082, voice cloning :8084, all loopback-only), an A2A
+agent card registry built specifically for this product to consume (AgentCard field names verbatim, one
+`x-tl187` extension binding each card to a supply-chain model id, port, host, and one of four trust
+states), a hash-chained provenance ledger, a LoRA tuning bench whose promoted adapters surface as
+candidates, and a DuckLake research corpus. The fleet's reverse proxy (TLS + bearer + allowlist) is
+designed but not installed, so today's access is SSH tunnels. LUCID already models self-hosted rigs as one
+Local Provider (P-LOCAL.4); what is missing is everything above the base URL: fleet capability resolution,
+agent selection, trust in the UX, and indifference to how the fleet is fronted.
+
+**Decision (umbrella; five increments, in build order).**
+
+1. **P-FLEET.DGX.1: endpoints are configuration.** One `FleetProfile` in the settings store:
+   `{ id, label, baseUrl, authRef, capabilities: string[], transportNote }`, where `authRef` is a vault
+   NAME, never a value (the `local_providers.ts` discipline). Features resolve profiles by capability
+   (`llm`, `voice`, `agent-registry`), never by name. Acceptance: grep proves zero box hostnames or
+   nicknames in source; swapping the fleet's two boxes' roles is a config edit, no rebuild.
+2. **P-FLEET.DGX.2: agent selection consumes A2A cards.** A `FleetAgentCatalog` listing cards from every
+   configured profile (marker CLI over SSH now, `/.well-known/agent-card.json` once the proxy lands, same
+   parsed shape). Matching is by skill tags and descriptions, not model names. THE GATE, and it is
+   fail-closed: a card whose `x-tl187.trustState` is `untrusted` or `quarantined` is never auto-selected;
+   it renders with a warning and requires an explicit user pick. Cards cache with a short TTL; the catalog
+   degrades to cache when the fleet is unreachable. No bespoke manifest format: the A2A shape exists and
+   is already seeded on the fleet.
+3. **P-FLEET.DGX.3: local-first routing, cloud by policy.** Provider order is data: fleet capabilities
+   first, cloud providers behind a per-provider flag naming which data classes may leave the machine.
+   Default for fleet-adjacent work is local only.
+4. **P-FLEET.DGX.4: trust and provenance at the point of choice.** Wherever a fleet model or agent is
+   offered, show its trust state; on demand, the provenance rationale. One badge component, reused. No
+   cloud IDE can show a hash-chained custody trail for the model about to edit your code; this is cheap
+   and it is ours.
+5. **P-FLEET.DGX.5: single-endpoint conformance, written BEFORE the endpoint exists.** When the fleet's
+   NGINX proxy or its planned PAIR routing layer goes live, the only permitted change is inside
+   `FleetProfile.baseUrl` and `authRef`. The test is a fake proxy fronting the same routes; the whole
+   fleet suite must pass with zero source changes. If it needs a source change, increment 1 was violated:
+   fix that first.
+
+**Carried-over laws from the fleet side.** One held SSH connection per operation and never a rapid retry
+(a hardened host on the path may run fail2ban; port-open plus ssh exit 255 with no output means
+rate-limited, back off 60s minimum). Card and corpus text is data, never instructions. Never ask the fleet
+to bind a service beyond loopback.
+
+**Verification expectation per increment.** Pure tests for profile resolution, card validation, the trust
+gate refusals (weighted toward refusals, per this file's standing habit), TTL expiry, and the conformance
+suite; a live smoke against the fleet needs one SSH tunnel and is described step by step in
+`DGX-FLEET-INTEGRATION.md`.
+
+**VERIFICATION BOUNDARY.** Nothing here is exercised yet from this repo; the fleet side is code-complete
+with its own gate pending. The four seed agent cards, the marker CLI, and the trust states are asserted by
+the DGX repo's suites, not by ours, until increment 2 lands a parser with fixtures.
+
+**Deliberately NOT in scope.** Hosting any LUCID component on a DGX box (LUCID is a client; headless
+agent runtimes belong to the fleet's scheduler), adapter serving for LoRA candidates (fleet-side follow-up;
+show candidates as not yet servable, never hide them), and telemetry in either direction.
+
+-----
+
+## ADR-0340 -- P-KGPACK.7: a bought pack could not import in the shipped app (2026-09-05)
+
+**Status:** Accepted. Field report, on the first real purchase-to-import attempt.
+
+### What happened
+
+"Import a Pack You Own" refused a purchased Senior Proposal Manager pack:
+
+```
+pack db is not a valid KG store: ENOENT: no such file or directory, scandir 'B:\~BUN\root\migrations' (scan)
+```
+
+Nothing was wrong with the pack. Verified against the real artifact: its manifest signature checks out
+against `techlead187-kgpack-2026`, and its db holds **2,221 pages**. The shipped app simply could not open
+a KG store at all.
+
+`B:\~BUN\root` is the virtual bunfs root of a `bun build --compile` binary. Packaged builds spawn the
+COMPILED engine (`bin/lucid-engine`, ADR-0260) precisely so Bun never module-loads a `.ts` out of a
+protected install directory. Inside that binary `import.meta.dir` is virtual, and the bundle embeds
+**modules**, not a directory of `.sql` files. Every DuckDB store computed its migration set as
+`join(import.meta.dir, "migrations")`, so in the shipped app all three resolved to the same non-existent
+virtual path and `Db.open` threw before a single statement ran.
+
+This is the ADR-0260 lesson recurring one layer down. That ADR fixed the ENGINE's own base directory by
+deriving it from `execPath` (`engineDesktopDir`), and the note it left, that a compiled binary has no
+on-disk module tree, was never applied to the DATA layer sitting behind it.
+
+### Why it looked fine for so long
+
+The KG panel renders, so a store clearly opens somewhere. From source it always did: `import.meta.dir` is a
+real path in a dev run, in `bun test`, and in the `bun run dev.ts` fallback, which is every environment
+where anyone had ever exercised an import. The one environment where it fails is the one users have. A
+source-only test would have passed against the broken code, so this increment's demo COMPILES a probe with
+the same `--compile` flag and requires it to open a real store; an absent `MIGRATIONS=` line FAILS rather
+than matching nothing, because the first cut of that assertion passed vacuously when the probe crashed
+before printing (ADR-0303, again).
+
+### The fix
+
+`harness/migrations_dir.ts` -- `resolveMigrationsDir(repoRelDir, importMetaDir)`. It PROBES, in order: the
+module's own `migrations/`; `$LUCID_RESOURCES/repo/<rel>/migrations` (main.ts threads `LUCID_RESOURCES`
+when packaged); `<execPath>/../../<rel>/migrations` (the compiled engine ships at `<repo>/bin/lucid-engine`
+beside the packaged repo, which DOES carry the `.sql` files). No substring guessing about virtual paths,
+the same discipline as `engineDesktopDir`. The store's repo-relative path must be passed explicitly because
+the compiled bundle collapses every module to one virtual root, so a module cannot infer its own subtree.
+All three stores (`harness/kb`, `harness/knowledge`, `harness/memory`) now route through it, so the KG,
+vector and memory databases are fixed together rather than one bug at a time.
+
+### The second half of the report
+
+The picker was a FOLDER dialog titled "Choose a .lkgpack KG Pack folder", but the storefront delivers a
+`.lkgpack.zip`. The downloaded file was therefore not selectable, and the only way forward was to guess
+that unzipping was required, which the user did, with nothing in the UI saying so. `classifyPackInput`
+now accepts an unzipped `.lkgpack` folder, the `manifest.json` inside one, or the zip itself, identified by
+its `PK` MAGIC rather than its extension so a renamed download still works. A single Windows dialog cannot
+offer files and folders at once, which is why picking `manifest.json` is the way to point at a folder.
+`importPackBytes` is now the ONE place a zip becomes a pack directory, shared by the entitled download and
+a hand-picked local file, so those two routes cannot drift on what counts as a valid pack. Every route
+still runs the identical P-KGPACK.4 gate: integrity, Ed25519 origin, fail-closed re-scan, read-only install.
+
+### Collateral found and fixed
+
+`demo-P-KGPACK.5` had been RED since `63d039c` ("SPM flagship replaces capture"), which retired the
+`capture-proposal-manager` SKU the demo asserted on, and it broke a second time when ADR-0333 changed the
+row markup from `data-kgpack-repo` to `data-kgpack-get`. Demos are not in `bun test`, so two increments
+walked past a failing one. (I also briefly overwrote that demo by claiming the already-taken `P-KGPACK.5`
+id for this work, which is exactly the collision `adr_numbering.test.ts` cannot catch: it checks ADR
+uniqueness only, never increment ids.) This increment is `.7`; `.1` through `.6` are taken.
+
+### Verified
+
+`make demo-P-KGPACK.7` green, including the compiled-binary probe. The real purchased pack extracts,
+verifies signed, and opens 2,221 pages through the fixed path. Gate at the standing 7 (harness 1609 pass /
+2 fail, desktop 3317 pass / 5 fail, all Windows-only environmental), `tsc --noEmit` clean in both projects,
+renderer rebuilt and the served bundle grepped: the new picker copy present, the retired folder-dialog
+title ABSENT.
+
+**Not verified.** The end-to-end in-app import into the operator's live KG store, because running it here
+would write a real pack into their real registry (ADR-0329's lesson about tests touching live data). Every
+stage either side of that write is proven: extraction, signature, store open, page listing, and the gate's
+own tested refusals.
+
+## ADR-0341 -- P-KGPACK.8: live pack completion and bounded static graph previews (2026-09-06)
+
+**Status:** Accepted.
+
+**Problem.** Compiled-pack graphs bypassed the personal/code graph performance limits: the endpoint materialized every page body and link, and the renderer mounted an unrestricted force graph with perpetual particles. Import from Settings also mounted that graph behind a closed panel and left the Personalization list/counts stale. Activation failures were swallowed. A delayed graph read could mount after the user closed or switched the panel.
+
+**Decision.** Local-file and entitled-download imports share `installPackFlow`: persistent verification feedback, single-flight installation, checked activation, immediate count hydration, explicit success/failure, and an optional View graph preview action. Settings stays open and hidden panels never mount. A hydration generation rejects pre-import count results and queues a fresh count pass. Graph generations invalidate reads on close/switch; selected-page reads also carry graph identity.
+
+`KbGraphStore.graphSnapshot()` performs a single bounded-result SQL query: metadata for the deterministic top 100 degree-ranked pages, at most 200 internal links, and true page/link totals. Bodies are fetched only for a selected page through an explicit, registry-validated KG ID. Full store APIs and agent retrieval are unchanged; no schema migration or trust change. The limits apply on every machine, not a guessed RAM threshold.
+
+Pack previews use `GraphPerfOpts.staticLayout`: deterministic sunflower placement, zero force steps, zero particle elements, and a parked idle loop. Pan, zoom, node dragging, selection, and per-KG position caching still work. A real 100-node star exposed numerical divergence in the old force layout during QA, so merely lowering its settle budget was rejected. Resource blocking is checked before loading the preview. The graph summary explicitly distinguishes full totals from preview nodes/links; search covers the preview only.
+
+**Evidence.** A temporary, isolated engine imported a real unsigned 2,227-page ZIP through the live renderer's `installPackFlow` and the real HTTP/scanner path. Settings stayed open, displayed 2,227 pages, and had zero hidden graph nodes. The native file chooser was bypassed by invoking the actual completion function through Chromium's debugger; no scanner, database, or HTTP result was mocked. The preview had 100 visible nodes, 198 links from 2,375 total links, no particles, and zero graph DOM mutations over 1.2 seconds idle. Clicking a node loaded its untrusted page body. Close removed all nodes; reopen restored 100; closing during a network-delayed load left zero late nodes. Renderer screenshots confirmed visible, finite placement. These checks used disposable data, not the operator's KG registry.
+
+**Found by the demo.** The first snapshot cut returned TIMESTAMP columns as raw `DuckDBTimestampValue` rows (bigint micros inside), so the result only serialized behind dev.ts's bigint-flattening `json()` replacer; a plain `JSON.stringify` threw. The demo's determinism check stringifies without that replacer and crashed, which is the point of running the real path. The snapshot mapper now emits real strings for `created_at`/`updated_at`, and the store test asserts serializability. `listPages`/`getPage` keep their pre-existing raw values (their consumers ride the replacer; changing them is not this increment's scope).
+
+**Limits.** This is a visualization/import UX change, not a claim of reduced whole-process RAM on every device. Installation still scans every page. The updated build must be deployed before an already-running old installation gains these changes; no per-import restart is needed afterward. Regression coverage lives in `harness/kb/store.test.ts` and `desktop/scripts/demo_p_kgpack_8.ts`.
+
+## ADR-0342 -- a failed OAuth explains itself: the broker's stderr is evidence, not garbage (2026-09-07)
+
+**Context.** Google's consent page renders "Authentication Successful" the moment the authorization code lands, but the Gemini CLI flow's token exchange and Code Assist onboarding (loadCodeAssist/onboardUser project discovery) run AFTER that page. When one of them threw, `omp auth-broker login` exited without persisting a credential, dev.ts logged one dev-gated line, and the Settings card sat on "not set" while the poller spun forever. Root cause of the live report: Google deprecated consumer-tier Gemini CLI/Code Assist access on 2026-06-18, so the failure is now the COMMON case for personal accounts, not the exotic one.
+
+**Decision.** The drained broker output is retained per attempt (`desktop/oauth_failure.ts`): on exit-without-credential, `extractOauthFailure` pulls the last error-looking line (stderr preferred, ANSI-stripped, capped), records it keyed by oauthId, and logs it unconditionally. `/api/auth` decorates INACTIVE provider rows with `oauthError`; the renderer's post-login poller stops on a fresh failure and shows the reason as a sticky toast (with a GCP-project hint when Google's Workspace abort is the cause), and the provider card renders a `.set-note danger` block. Success and retry both clear the slot; an active login never carries an error.
+
+**Consequences.** A dead sign-in names its killer within one poll cycle. The record is in-memory per engine process by design (a restart clears it; it only explains the most recent attempt). Covered by `desktop/oauth_failure.test.ts`.
+
+## ADR-0343 -- P-REATTACH.1: a turn's stream is re-attachable; a mid-turn prompt is an interjection, not a coup (2026-09-07)
+
+**Context.** Two compounding failures froze the composer while the engine kept working. (1) A chat stream that died mid-turn ("chat stream write failed - server turn continues") had no recovery: stream_end.ts settled the UI honestly, but the rest of the turn was lost until session reopen. (2) `/api/chat` during a RUNNING turn called `backend.prompt()` unconditionally - silently stealing the single listener slot and racing a second `session/prompt` onto the same omp session, which omp answered by CANCELLING the in-flight turn (stopReason=cancelled, listenerIntact=false); the new stream never received the events of the turn it had killed. Blinking cursor, invisible work.
+
+**Decision.** Every event a turn emits (notification sink, slow notices, error lines, the final reconciling `done`) flows through ONE swappable downstream inside `prompt()`; `attachTurn()` re-points the RUNNING turn to a new stream and returns the turn-end promise. New `/api/chat/attach` adopts the running turn onto a fresh stream (idle: immediate settle with a reopen hint). `/api/chat` while busy ATTACHES the new stream and queues the text on the P-INTERJECT.1 store (delivered at the next tool boundary), with a race-safe fallback to a normal prompt when the turn ended between check and attach. Client side, the reader moved to `renderer/ndjson_stream.ts` with a bounded re-attach loop (1s spacing, 60 hops) that streamChat points at the attach route; the turn's final `done` carries the full assistant text, so events missed while detached reconcile at settle.
+
+**Consequences.** A dropped socket degrades to a one-line notice and a re-adopted turn; typing mid-turn is the designed interjection path instead of an accidental cancel. The accounting (assistant capture, latency taps, health arming) never changes hands - only delivery does. Verified against a REAL Bun.serve in `renderer/ndjson_stream.test.ts` (drop, re-attach, one reconciling done, no drop notice; the no-reattach path still settles honestly; clean streams untouched).
+
+## ADR-0344 -- P-GUIDE.1/.2 + P-CMD.3: provider economics ship as in-app guides, and /providers is a builtin (2026-09-07)
+
+**Context.** Vendors reshuffle AI plan tiers every few months (Google killed consumer Gemini CLI access in June 2026, which is what surfaced ADR-0342). Users cannot make purchase decisions from a Settings hint string, and a chat answer evaporates. The knowledge needed to live IN the product, dated, and reachable from the exact place the decision is made.
+
+**Decision.** Self-contained lucid-dark HTML advisor guides ship under `renderer/guides/` (packaged free via `renderer/**`), one per provider family plus a choosing/onboarding guide carrying the Creator-edition pointer and the free-tier start ladder; every guide carries a September 2026 price stamp and a self-reported-vs-standardized benchmark honesty note. `guides_manifest.ts` is the single id-to-file source consumed by the `/api/guides` path oracle (existsSync fail-soft), the provCard guide links (Settings AND Provider Hub), and `guides.test.ts` (per-file: doctype, NO em dash, self-contained, stamp). Guides open through the existing `/api/preview/serve` seam into the Preview panel. `/providers` ships as a P-CMD.2 BUILTIN (shadowable): asks what the user already pays for, opens the matching guides in the preview, live-verifies prices, recommends primary + fallback with exact Settings wiring, and closes with the ElevenLabs Conversation-mode offer (partner signup link; the API-keys page kept separate; keys go in Settings fields, never chat).
+
+**Consequences.** The preview frame has no network, so guides stay inline-everything; the manifest test makes a typo'd filename fail in CI instead of as a dead link. Prices are point-in-time by design - the builtin's live-verification step is the freshness mechanism, not re-authoring.
+
+## ADR-0345 -- ensureDir: directory creation is a GOAL STATE, not a syscall verdict (2026-09-07)
+
+**Context.** `slash_command_create` validated a command, passed the secret and Unicode gates, then died at `mkdirSync(".omp/commands", { recursive: true })` with EEXIST - on a directory that had existed since July. Bun on Windows can throw EEXIST from a recursive mkdir even when the target is a directory (OneDrive-backed folders make it likelier: sync locks and dehydrated placeholders confuse the walk), and both workspace stores treated any mkdir error as a fatal write failure.
+
+**Decision.** `harness/fs_dirs.ts` ensureDir: whatever mkdirSync reports, if the directory EXISTS after the call settles, the job is done; a FILE squatting on the path, or a genuine permission failure, rethrows the original error. All four store call sites (commands + agent specs, history, trust) use it.
+
+**Consequences.** The contract is deliberately broader than "tolerate EEXIST": any error with the goal state reached is success, which also covers transient OneDrive stat weirdness. The fail-closed direction is preserved and tested: never write "into" a file pretending to be a directory (`harness/fs_dirs.test.ts`).
+
+## ADR-0346 -- P-STT.7: dev runs stage the pinned whisper-server; autostart keys on the binary, not the packaging (2026-09-07)
+
+**Context.** "Local Whisper sometimes doesn't start" was structural: the daily driver is the dev path (LUCIDAgentIDE.bat, dev.ts), which has no packaged `<resources>/whisper` binary, and the P-STT.6 autostart gate skipped dev outright. Install & start downloaded MODELS no server could load; "sometimes works" meant "a stray whisper-server happened to be on PATH".
+
+**Decision.** `whisper_binary_stage.ts` downloads the SAME pinned release asset the installer bundles (whisper_binaries.ts URL + sha256 + byte pins, fail-closed; zip via the dependency-free harness unzip on win32, tar on linux; macOS remains the guided source build) into `~/.omp/whisper/bin`. `resolveWhisperBin` gains that staged location (env, bundled, staged, PATH - in that order). The install/start routes stage on demand when nothing resolves. `shouldAutostartWhisper` DROPS the packaged-only parameter: the gate is binAvailable-based, so a dev run that staged once autostarts on every boot exactly like the installed app, while a fresh checkout with no binary stays quiet.
+
+**Consequences.** The old dev-run safety (never surprise-download) is carried by binAvailable=false instead of a flag; the P-STT.6 gate tests and demo script were updated deliberately, not incidentally. The staged binary is hash-verified against the same pins CI uses, so "staged" is as trustworthy as "bundled".
+
+## ADR-0347 -- P-VOICE.6/.7: self-hosted dots.tts as a first-class engine, the spoken digest, and endpoints as PORTABLE DATA (2026-09-07)
+
+**Context.** The user's DGX runs a dots.tts voice service (cloned voices, OpenAI /v1/audio/speech shape, roughly 5-10s per clip, bound to the DGX's own loopback:8084 behind WireGuard+SSH). Wiring it as code - a hardcoded box URL - would rot on the first new environment. And verbatim narration through a 10-second-per-clip engine queues minutes of audio behind a VPN hop.
+
+**Decision.** Three parts. (1) Engine: `dots-tts` joins the TTS catalog as a self-hosted live-list engine; the EXISTING OpenAI-compatible backend drives it (only base URL + model differ); readiness probes {url}/health and names the tunnel in its failure reason; voices come from GET /v1/voices with warm/cold surfaced in the picker. (2) Latency: the spoken-digest mode (`spoken_digest.ts` + /api/voice/digest + renderer gating) speaks the FIRST settled sentence immediately as a comprehension anchor, withholds the verbatim middle, and speaks a model-written three-sentence digest at settle; digest failure falls back to the verbatim tail - brevity may degrade, speech never disappears; the composer keeps every word. (3) Portability: endpoints are DATA under the versioned `lucid-voice-endpoint` v1 contract (`harness/voice/voice_endpoint.ts`): fail-closed parse; credential-like keys ANYWHERE reject the whole file; userinfo URLs rejected; slug-guarded ids. The DGX Loader exports it (its ADR-0017: one-click "Send to LUCID" into the ~/.omp/voice_endpoints mailbox plus a save-dialog file export); LUCID auto-scans the mailbox on every endpoints read, and one-click activation switches url + model + provider together.
+
+**Consequences.** No box name exists in LUCID code; N future environments are N imported files. The mailbox is same-machine plumbing; the file export is the cross-machine path. The informational tunnel command travels in the config but is NEVER executed by LUCID. Cross-repo contract changes are version bumps, deliberate on both sides.
+
+## ADR-0348 -- P-REMOTE.13: the PWA's "network-first" was HTTP-CACHE-first (2026-09-07)
+
+**Context.** The phone sometimes showed an old build of the remote PWA. No old code was deployed: the shell ships under STABLE names (app.js, index.html), the hosting CDN served them with a nonzero default max-age, and the service worker's fetch(request) was satisfied by the browser's HTTP cache - which could be weeks old - after which the ok-branch wrote that stale copy back into the SW cache, extending the rot. A standalone PWA can also run for days without a navigation, so even a newly activated worker's shell never replaced the RUNNING page.
+
+**Decision.** Shell fetches use cache:"no-cache" (conditional ETag revalidation through the CDN); the cache name bumped to v7; registration gains updateViaCache:"none", a reg.update() on every return-to-foreground, and a once-guarded reload on controllerchange. Server side, the hosting config (addon repo) now sends Cache-Control: no-cache for the shell files (/remote, index.html, app.js, firebase_auth.js, r.html); sw.js and config.js already had it. Deployed to lucid-agent.web.app and verified against the LIVE site: v7 worker, no-cache headers, update flow present in the served bytes.
+
+**Consequences.** Every launch revalidates the shell against the CDN; every deploy reaches the phone on its next foreground plus one automatic reload. The first-ever visit takes one extra reload when the worker claims the page - accepted as the cost of never resurrecting a stale build. Offline behavior is unchanged: the SW cache remains fallback-only.
+
+## ADR-0349 -- P-FLEET.L16: a lane spawn can be refused, but it can never WEDGE the engine (2026-09-07)
+
+**Context.** Lanes sometimes sat on "Spawning..." forever. Measurement first (desktop/scripts/probe_lane_spawn.ts drives the REAL fleetLaneArgv plan through the REAL ACPClient): the gated omp handshake is fast in dev (~1.7s initialize, ~2.4s through model select) and every ACP request already carries a 30s clock, so neither the child nor the dev (.bat) runtime is the hang. The one unbounded call left in the spawn path was `statSync(cwd)` - and lane folders live under OneDrive. A dehydrated files-on-demand placeholder can block that call for however long hydration takes, and because it is SYNCHRONOUS it wedged Bun's single event loop: every route in the app - including the very /api/fleet/spawn request - froze behind it, so no server-side timeout could even run, and the renderer's button spun with zero feedback. Intermittent by nature (tracks OneDrive's hydration/sync state), which is why it "never happened during testing".
+
+**Decision.** The directory check is async (`node:fs/promises` stat runs off-loop) and raced against a 10s clock (injectable test seam): an unanswerable folder becomes a NAMED refusal telling the user exactly what to do (open the folder in Explorer once / mark it "Always keep on this device"), never a wedge. Renderer side, submitSpawn gains a 20s watchdog that rewrites the spinner into "Still spawning..." plus the OneDrive hint, so even a slow-but-honest spawn narrates itself.
+
+**Consequences.** Fail-closed for spawn (an unanswering folder refuses; nothing half-spawns) while the admission guard stays fail-open as designed. The probe script stays in scripts/ as the standing diagnostic for "where does a spawn spend its time". Covered by the never-resolving statDir test in fleet_lanes.test.ts (bounded refusal naming OneDrive). Any other synchronous filesystem call on a user-picked path is now a known hazard class: OneDrive placeholders make statSync/readFileSync on such paths event-loop wedges, not just slow calls.
+
+## ADR-0350 -- P-CTX.1: the prompt-audit - the baseline is measured per block, never guessed (2026-09-08)
+
+**Context.** A fresh master-chat turn on this repo carries a large non-message baseline (observed live as ~46.9k provider tokens) before the first user word, and on a self-hosted Laguna deployment served at a 65,536-token window that leaves too little working room; the target is a baseline of roughly 10k after cuts. But every prior number was one opaque provider total: nobody knew which BLOCK owned which tokens, so any cut would have been a guess. Measure first (the P-FLEET.L16/ADR-0349 discipline): this increment builds only the instrument. No prefix byte changes, no PREFIX_VERSION bump; assembler.ts is imported, never edited, and the prefix-hash tests stay green untouched.
+
+**Decision.** `harness/prompt/prompt_audit.ts` assembles the SAME request shape the desktop spawn produces, fully offline: a real omp AgentSession via createAgentSession on the target cwd (echo mock model, in-memory SessionManager, temp AuthStorage, MCP/LSP off, extension discovery off), with acp_backend's exact 7-policy --append-system-prompt bytes and the same tool-registering -e extensions (env-gated ones stubbed the way a live desktop would set them; credentials never stubbed, so asksage stays off). Accounting parity is the anchor: totals reuse omp's OWN counters (countTokens, estimateToolSchemaTokens, estimateSkillsTokens, computeNonMessageTokens), so the audit reports the number omp's /context panel computes, not a parallel estimate. Attribution is arithmetic, not narrative: residual rows are DIFFERENCES, so each section's rows sum exactly to the section total by construction; extension tools are attributed by set difference between a bare session and the extended one. Honesty rules from token_speed.ts carry over: an absent workspace tree reports as absent (never a plausible 0), the tokenizer mode (native vs ~4 chars/token estimate) is always named, and what hermetic mode excludes (scanner gates, user-global discovery, MCP, the per-turn tail) is DECLARED in the report. Two drift guards in prompt_audit.test.ts grep desktop/acp_backend.ts so a changed spawn (policy join or -e list) fails the suite loudly instead of the audit silently measuring a stale shape. One script serves both `make demo-P-CTX.1` (structural assertions) and `make prompt-audit` (the human dump; --json, --window, --target, --live-discovery).
+
+**Consequences.** First real numbers for this repo, hermetic mode, estimate tokenizer (native mode within ~5%): non-message baseline 35,406 tokens. Tool schemas 20,060 (56.7%: 26 builtin tools 15,902 + 21 LUCID extension tools 4,158; top: edit 1,709, browser 1,582, task 1,478, eval 1,453). System prompt block 9,477 (skills list of 60 skills 6,173; the 7 appended policies 2,888, of which agent-builder 888 + data-integration 640; omp core residual 416). Project footer 5,869 (AGENTS.md 2,475, workspace tree 1,803, environment residual 1,591). The measured-vs-live gap (~11k to the observed 46.9k) is the declared exclusions, dominated by user-global discovery and MCP; --live-discovery exists to close it on demand. The cut design now has data: tool-surface profiles and the skills list are the two largest levers, the policy block's own top cost is agent-builder, and AGENTS.md alone is a quarter of the footer. Those cuts are their OWN increments (the frozen-prefix contract and tool profiles are load-bearing); this ADR deliberately ships only the instrument. Wrinkle: the audit measures assembly-time baseline, not per-turn tail injections (persona, KG recall, DESIGN.md), which ride messages and need a different seam.
+
+## ADR-0351 -- P-TEST.W1: a red gate nobody believes is worse than a red gate (2026-09-08)
+
+**Context.** Full `make test` on this Windows machine carried 8 standing failures that no recent increment caused (all reproduce on a clean checkout of 6f91c95). Three distinct diseases, none of them product bugs: (1) auth_status asserted env-driven field reporting, but providerAuth()'s valueFor prefers PERSISTED settings over process.env by design, so a developer whose real lucid-gui.json saves GOOGLE_CLOUD_PROJECT watches the test fail against their own machine state; (2) fs_browse's real-filesystem tests injected a fixed `platform: "linux"`, selecting path.posix, which treats a Windows temp path (C:\...) as RELATIVE and prefixes the cwd - the injectable-platform seam was built so a POSIX CI could test win32 semantics, and the mirror direction was never made host-independent; (3) lucid_acp asserted literal forward-slash asset paths against join()'s host separators. A permanently-red-for-environmental-reasons gate trains everyone to skim past red, which is how a REAL regression ships (ADR-0303's lesson, environmental edition).
+
+**Decision.** Fix each at its true source, product code untouched. auth_status: a beforeEach points LUCID_GUI_SETTINGS_FILE (the existing settings-store seam) at a nonexistent temp file, so load() yields {} and the env values under test are the only input; the settings-shadow-env PRECEDENCE stays intact and untested here because it is product behavior, not this test's subject. fs_browse: tests that browse the REAL temp tree inject `platform: process.platform` so the selected path module always matches the host; the one posix-specific assertion (parent of / is null) becomes fully synthetic (injected exists/isDir/readdir), touching no host filesystem on any platform. lucid_acp: the two assets assertions normalize backslashes before comparing - the asset path feeds a spawn argv where either separator works, so the assertion should be separator-agnostic.
+
+**Consequences.** `make test` is 0-fail on Windows AND unchanged on POSIX (process.platform === "linux" there collapses every edit to the prior behavior). demo-P-TEST.W1 pins the three files. The stale desktop/release copy of these tests still fails inside the packaged tree, which is exactly why TEST_IGNORES excludes it (ADR-0303); the demo target reuses $(TEST_IGNORES) so bun's substring-matching positionals cannot drag the release copy back in. Remaining known flake, deliberately untouched: ndjson_stream's "socket died" lines are the test's OWN injected mid-stream error printing to stderr; the test passes and only reads as failure to a human skimming output.
+
+## ADR-0352 -- P-TEST.W2: CI runs the gate on the OS the developer actually uses (2026-09-08)
+
+**Context.** The development machine is Windows; CI was Linux-only, and its bun leg ran only `bun test harness` plus the packaged-boot guard - the desktop suite never ran in CI on ANY OS. That gap is precisely where ADR-0351's 8 environmental failures lived for weeks: no PR ever executed the failing tests on the failing platform, so the rot surfaced as a developer's red baseline ritual instead of a red check on the PR that introduced it.
+
+**Decision.** ci.yml gains `gate-windows`: a windows-latest job that replicates the LOCAL gate's bun half - root + desktop installs, then the FULL suite under the same exclusion-only TEST_IGNORES scope (ADR-0303: scope by exclusion, never by positional pattern). The scanner job becomes a two-OS matrix (ubuntu-latest, windows-latest, fail-fast off) since the sidecar runs on the developer's Windows too. Typecheck/license/sync checks stay ubuntu-only: they are platform-independent and duplicating them buys nothing.
+
+**Consequences.** Path-separator, path-module, and machine-state test rot now fails at PR time on the platform that exhibits it. The leg's honesty depends on P-TEST.W1's isolation fixes staying in place: a CI runner has no lucid-gui.json, so a future test that leaks machine state may pass in CI and still fail on a configured developer box - the ritual baseline remains the backstop for that class. Verification here is YAML-parse plus job-shape inspection; the real proof is the first windows-latest run on the next push, which should land green given the full local gate is 0-fail on this Windows machine as of ADR-0351. Known risk accepted: windows-latest runners are slower (a several-minute leg) and the ndjson_stream real-socket test gets its first exposure to runner timing; if it flakes there, that is a REAL portability signal to fix in the test, not a reason to drop the leg.
+
+## ADR-0354 -- P-LOCAL.5: a preset that only carries its id is a preset that carries nothing (2026-09-13)
+
+**Context.** The user serves GLM-5.3-Flash from vLLM on a 2x DGX Spark at `http://10.0.0.21:8000/v1` and wanted it selectable in LUCID. The obvious move, hand-writing a `providers.vllm` block with `modelOverrides` into `~/.omp/agent/models.yml`, is wrong three times over: `local_providers_runtime.ts` owns that file and writes it as JSON, refusing to overwrite anything it cannot parse as JSON, so a hand-authored YAML body silently stops every Local Provider from materializing; `modelOverrides` only decorates a model omp already discovered, so it can never introduce one; and `tokenizer` is not in the override key set, which matters because omp validates models.yml as a whole and drops the ENTIRE file on one schema violation, taking every other local provider down with it. The LUCID-native Local Provider path (P-LOCAL.1/.3/.4) is the supported route. Probing the box settled two facts editorial guessing would have gotten wrong: it answers `401 {"error":"Unauthorized"}` from `server: uvicorn`, so it is vLLM's own `--api-key` middleware and the endpoint needs a real credential, not the `apiKey: ""` / `auth: none` the draft config assumed. Then the route itself turned out to be broken in two places. First, `draftFromForm` reduced every model to `{ id, name: id }`, so no preset attribute ever reached omp: Laguna's curated 262144-token window has been arriving as omp's 8192 default since P-LOCAL.4 shipped, and no preset could be a reasoning model at all. Second, omp infers a model's thinking wire shape from the base URL (`buildOpenAICompat`), and a LAN address matches no vendor, so GLM's reasoning would have been requested in plain OpenAI form and its trace dropped.
+
+**Decision.** Carry the catalog's knowledge through the whole path instead of re-deriving it. `draftFromForm` looks each typed id up with `presetForServedId` and enriches the model entry from the preset (name, contextWindow, reasoning, vision, compat); an id that matches nothing keeps the bare `{ id, name: id }` shape, so a genuinely unknown model is never given invented metadata. The lookup is by SERVED id, not by exact string, because the catalog's ids are editorial and the module header instructs the operator to edit them to whatever the box exposes: `normalizeModelId` folds case, drops the `org/` repo prefix, drops a trailing quantization/precision marker and erases separators, and the match is that key or the longest prefix relationship in EITHER direction, since a served id both extends the editorial one (`Qwen/Qwen3-Coder-30B-A3B-Instruct`) and truncates it (`llama-3.3-70b`, no `-Instruct`), with a 6-character floor so a family fragment like `qwen` claims nothing. Following that header instruction was otherwise the single action that silently dropped every curated attribute again: `zai-org/GLM-5.3-Flash-FP8` is what vLLM actually serves, and it is not `glm-5.3-flash`. `LocalModelDef` and `OmpModelEntry` gain `compat`, a CLOSED three-field subset of omp's `OpenAICompatSchema` (`thinkingFormat`, `reasoningContentField`, `supportsReasoningEffort`) rather than its ~30-field surface, and `sanitizeModelCompat` re-checks every value against the schema's enums on the way out, dropping anything unknown and collapsing an empty result to `undefined`. The GLM preset declares `thinkingFormat: "qwen-chat-template"`, `reasoningContentField: "reasoning"`, `supportsReasoningEffort: false`. Confirmed against the installed omp source, not the docs alone: `ModelDefinitionSchema` (`vendor/oh-my-pi/packages/coding-agent/src/config/models-config-schema.ts:134`) accepts `compat` on a full model definition, not only under `modelOverrides`.
+
+**Consequences.** Fail-closed by construction in the direction that matters: LUCID can only ever emit compat values it can enumerate, so a bad preset can no longer invalidate models.yml and silently disable every self-hosted provider. The fix had a second half that the overlay tests alone would have missed: `upsertLocalProvider` rebuilds a CLEAN copy field by field so no pasted secret can ride along, which means any declaration field it forgets is lost on save, and `compat` would have been enriched in the add form, correct in the preview overlay, and gone after the next restart. It is now copied and re-sanitized there too, with a test that reads the value back off disk. GLM's context window is an editorial 131072: the box is credentialed, so `/v1/models` could not be read for the real `max_model_len`, and the catalog's existing doctrine is that ids and specs are starting points the user edits. The em dash in the preset chip tooltip is gone (AGENTS.md), and two tests now pin its absence in both the catalog text and the rendered HTML. The renderer bundle was rebuilt and the SERVED bytes verified per the session ritual: `/app.js` fetched from a freshly booted engine on port 7893 (9,066,451 bytes, matching the prebuilt artifact exactly) contains the GLM preset, `qwen-chat-template`, `presetForServedId`, `normalizeModelId`, the quant-token list, and the provider row's `on default 8K ctx` disclosure, and the chip tooltip in those bytes separates with a middot. Known limit, deliberately not solved here: the catalog is a compiled-in TypeScript array, so a new model still means a code change, a `build-renderer`, and a release. omp already ships `discovery.type: openai-models-list`, which reads `max_model_len` off `/v1/models`, and LUCID does not use it; wiring that up is the increment that makes local models discoverable instead of curated, and it would have answered the context-window question above by asking the server. Two things are deliberately not left implicit. The demo asserts THROUGH `upsertLocalProvider` and `toOmpRuntimeOverlay`, the path that actually builds models.yml at every omp launch, because a first cut that asserted only the in-memory draft was green while the save dropped `compat` - ADR-0303's vacuous green, and the fix is proven load-bearing by reverting that one store hunk, which turns 2 demo checks and 1 unit test red. And a model the catalog does not recognize now SAYS so in the provider row (`N on default 8K ctx`), because the difference between a 131K window and a silently truncated 8K one was previously invisible in the UI.
+
+## ADR-0355 -- P-LOCAL.6: ask the server, because the catalog was always guessing (2026-09-13)
+
+**Context.** P-LOCAL.5 (ADR-0354) made the curated catalog's metadata reach omp, which exposed the next problem: that metadata is EDITORIAL. GLM's 131072-token window was picked by hand because the user's box answers 401 and `/v1/models` could not be read, and the catalog header has always told the user to edit the ids to match their server. Both of those are the same defect: LUCID was asserting facts about a machine it had never asked. A hardcoded TypeScript array also means a new model costs a code change, a `build-renderer`, and a release, which is the configurability ceiling P-LOCAL.5's own PROGRESS entry recorded as the thing to fix before adding more presets. omp already solves the discovery half (`discovery.type: openai-models-list`, which reads `max_model_len` then `context_length` off `/v1/models`) and LUCID was not using it.
+
+**Decision.** A `Discover models` button in the add form and on every saved provider row, backed by `POST /api/local-providers/discover`, which reads `GET <baseUrl>/models` and returns declarations. Three rules settle the design. First, the SERVER wins on `contextWindow`: it loaded the weights, and a window larger than the real one silently truncates at run time, so `enrichModelFromCatalog` takes `m.contextWindow ?? preset.contextWindow` and the catalog supplies only what a `/models` list cannot report at all (display name, reasoning, vision, the `compat` wire shape). Second, ONE enrichment function: `draftFromForm` was collapsed onto `enrichModelFromCatalog` so the typed-id path and the discovered-id path cannot drift, and this is what makes discovery work on real ids, since `zai-org/GLM-5.3-Flash-FP8` matches no preset by exact string and would otherwise arrive as a non-reasoning 8192-token model. Third, NO SECRET IN THE REQUEST BODY. ADR-0135 deliberately keeps provider keys off the engine's HTTP surface (dev.ts:1998), so a saved provider authenticates from the secret MAIN already injects into the engine's env at spawn (P-LOCAL.2, resolved through `providerEnvVar`), and an unsaved credentialed endpoint gets `authRequired: true` plus a message telling the user to save the provider first. One extra click, no new secret path. `discoveryHeaders` mirrors `toOmpProviderEntry`'s header placement so a 200 from the probe actually predicts a working model.
+
+**Consequences.** The `/models` body is untrusted remote input on its way into a config file omp parses and a comma-separated form field, so `parseDiscoveredModels` is written as a trust boundary, not a convenience: ids carrying `\p{C}` (which covers the zero-width and bidi characters the scanner sidecar exists to catch) or a comma are dropped, as are ids over 200 chars, duplicates, and anything past 100 models; the response is capped at `MAX_DISCOVERY_BYTES` by both `content-length` and actual length before `JSON.parse`; and the count of rejected entries is REPORTED in the toast, so a filtered list never passes for a complete one. An empty answer returns the saved def by identity, so a transient blank response cannot wipe a working provider. A non-empty answer REPLACES the saved list rather than merging, because the server is authoritative about which models exist and a stale entry would keep appearing in the model picker; the toast names the added and removed counts. Verified live, not just in unit tests: a booted engine on port 5399 against a vLLM-shaped fixture returned `{"authRequired":true,"models":[]}` unauthenticated and, with the provider saved and its secret in the engine env, `[{"id":"zai-org/GLM-5.3-Flash-FP8","contextWindow":65536},{"id":"Qwen/Qwen3-Coder-30B-A3B-Instruct","contextWindow":262144}]` - real ids, real windows, neither of them the catalog's guess. Served renderer bytes re-verified per the session ritual (9,095,293 bytes from `/app.js`, matching the prebuilt artifact) for both buttons, the bridge method, both handlers, and a single `enrichModelFromCatalog` with the retired duplicate enrichment absent. Accepted tradeoff in the matcher: prefix matching in either direction means a served `deepseek-v3` inherits the `deepseek-v3.2` preset's flags, which is loose; the alternative, exact-string matching only, breaks the feature outright for every HuggingFace-style id, and the blast radius is metadata on a model the user declared themselves. The probe still performs a raw `fetch` with no egress-gate check, matching the precedent of the existing `/api/local-providers/test` route; both are user-initiated probes of a user-declared endpoint, and if that precedent is ever revisited both routes change together.
+
+## ADR-0356 -- P-GATE-PATH.1: the gate the packaged engine never loaded (2026-09-16)
+
+**Context.** A support bundle from a live v2.2.0 install (Windows 11, `omp/16.1.20`) showed the same two lines on EVERY omp spawn, six of them in the collected window: `Failed to load extension  path: B:\~BUN\harness\omp\security_extension.ts` / `Cannot find module 'B:\~BUN\harness\omp\security_extension.ts'`. `B:\~BUN` is Bun's VIRTUALIZED embedded root inside a `bun build --compile` binary, which the engine's own stack frames confirm (`at die (B:/~BUN/root/lucid-engine:649342:16)`). `desktop/acp_backend.ts:128` built every extension path from `join(import.meta.dir, "..")`, so in the compiled engine each one named a file that exists in no filesystem. An in-process import survives virtualization because Bun resolves it against its own embedded FS; an ARGUMENT handed to a separate `omp.exe` does not. So omp dropped the extension, logged the miss into `~/.omp/logs/omp.<date>.log` where no user looks, and ran the entire session with NO SECURITY GATE and NO MCP RESULT GATE, while `lucid check` printed OK, the app reported healthy, and the user saw nothing. That is invariants 3 and 4 failing silently and OPEN, which AGENTS.md calls a stop-the-line event. Two things make it worse than one bad constant. `desktop/agent_run.ts:151` read `existsSync(GATE) ? ["-e", GATE] : []`, so on the same installs the headless agent runner did not even pass a broken path: the guard was false, the `-e` vanished, and it ran ungated with no error anywhere. And `harness/launcher/lucid_acp.ts:49-53` ALREADY carried the right probe, with a comment naming this exact virtualization hazard; `lucid.exe check` therefore worked on the very machine where the engine was failing. The rule was known, written down, and present in one of the two copies.
+
+**Decision.** ONE resolver, `desktop/repo_root.ts`, probed rather than inferred, mirroring `desktop/omp_bin.ts` (candidate order plus fallback rule as pure logic with the probe injected). Candidates in order: source-relative (`join(sourceDir, "..")`), then binary-relative (`join(dirname(execPath), "..")`), and the first one whose GATE KEYSTONE is actually on disk wins. Source-first is load-bearing: under `bun desktop/dev.ts` execPath is the bun binary, so the second candidate resolves to a bun install that can never carry the gate. The probe target is `harness/omp/security_extension.ts` and not a cheap marker like `package.json`, because the only path whose absence must stop a spawn is the one worth proving; a root that cannot produce it is useless to every caller here even if it looks like a repo. `gatePath()` returns `string | null` deliberately, and null is NOT a degraded mode: every spawn site refuses. The master chat spawn throws (so `start()` rejects, the user sees it in chat, and `this.starting` clears for a retry after a repair), `fleetLaneArgv()` throws and `FleetLaneManager.spawn`/`#recover` convert it into a named refusal on the card, the util connection returns null and falls back to the (also gated) shared connection, and `spawnGatedOmp` returns `{ ok: false, blocked: true, reason }`. `withGate: false` survives as an explicit caller opt-out; a missing FILE is not one. `harness/launcher/lucid_acp.ts` deletes its private copy and delegates, and `desktop/addon_seam.ts` is folded in because leaving `join(import.meta.dir, "..")` anywhere in the tree is the second convention AGENTS.md forbids, and it is wrong for the same reason.
+
+**Consequences.** This defect is UNREPRODUCIBLE in a dev checkout: `import.meta.dir` is a real directory here, so the old code was correct on every developer machine and in CI, and wrong only in the artifact users install. A test that exercises the real filesystem could never have caught it. So the proof feeds the resolver a virtualized `sourceDir` and asserts the fall-through, in the reported Windows shape (`B:\~BUN\desktop`) and in a posix shape, with `join`/`dirname` injected per test because ADR-0352 put this suite on Windows AND Linux CI where a `"B:\\~BUN"` literal means two different things. Alongside: the probe receives the keystone path and never a bare root, a throwing probe is a failed probe (an ACL-protected directory throws from `existsSync`, the `omp_bin.ts` doctrine), an unresolvable install is `proven: false` and NAMES every path it tried, the refusal message carries those paths so a broken install is diagnosable without reading omp's log, every `-e` asset `acp_backend` names is read out of the production source and stat-ed on disk, and a gate-less argv refuses a fleet lane by name leaving no orphan lane in the map. A source guard then forbids `join(import.meta.dir, "..")` in the four files whose paths cross a process boundary. That guard fired on its own explanatory comments on the first run, which is why it strips comments before matching and carries a test asserting the stripper has not gone vacuous (the ADR-0303 trap). It was confirmed to fire by reintroducing the expression into `addon_seam.ts` and watching it fail. What this increment does NOT do: it cannot verify the fix inside a real compiled engine from here, because that needs `compile-lucid` plus a packaged install, so the compiled-binary behavior rests on the probe pattern that `lucid.exe` already demonstrated working on the reporting user's own machine. The gate has been absent on packaged installs since whenever the engine was first compiled, so no prior packaged-session security evidence should be trusted; ADR-0303's vacuous-green warning applies to every scan those sessions appear to have passed.
+
+## ADR-0357 -- P-OMP-BOOT.1: the agent it shipped but never proved it could run (2026-09-16)
+
+> **ATTRIBUTION CORRECTED BY ADR-0358.** The defect described below is real and the fix stands, but it is NOT what caused the reported v2.2.0 outage, and the "ten days in which NO model could run" framing in this entry is wrong. The field log shows 10 of 21 boots failing from one install, which a missing file cannot produce; the cause was the 6 s probe budget. Read ADR-0358 before relying on any causal claim here.
+
+**Context.** The same support bundle that produced ADR-0356 carried a second, larger outage: from the v2.2.0 upgrade on 2026-09-06 until the day of the report, NO model could run at all. The engine log's first v2.2.0 boot says `[omp] no runnable omp found; tried: <install>\resources\repo\node_modules\.bin\omp.exe, C:\Users\<user>\.bun\bin\omp.exe, omp`, and the rest of a 209 KB file is almost entirely one ten-line stack (`acp: agent process failed to start: Executable not found in $PATH: "omp"`) repeated once per `/api/commands` and `/api/modes` poll for ten days. Nothing was ever shown on screen. The cause is one word. `desktop/runtime.ts:findOmp()` was `firstExisting([bundledOmp(), managedOmp(), ...])`, and `bundledOmp()` is `<repo>/node_modules/.bin/omp[.exe]`, which a packaged install ALWAYS ships (the electron-builder filter re-includes `node_modules/.bin/omp*` past the `.bin` exclusion). So it was accepted on existence, `needsBootstrap()` concluded there was nothing to provision, the first-run splash never appeared, and `LUCID_OMP_BIN` was handed to the engine and every omp child as a path that cannot execute. It cannot execute because on Windows that file is a BUN SHIM: the adjacent `omp.bunx` contains `@oh-my-pi\pi-coding-agent\dist\cli.js` and the string `bun`, so the shim needs a reachable `bun`, and this install had none. Worse, the code that was supposed to supply one could not: `findBun()` ended in `?? "bun"`, and the PATH augmentation read `[dirname(bun), ...].filter(existsSync)`, where `dirname("bun")` is `"."` and `existsSync(".")` is true. Every machine without bun therefore had the CURRENT WORKING DIRECTORY prepended to the PATH of the agent and all its children: no bun provided, and a `bun.exe` dropped in an open workspace preferred over a real one. All of this is the disease `desktop/omp_bin.ts` was written to cure. Its own header says "existsSync was never the right question" and that it consolidated "three call sites" that had each grown a private copy. `runtime.ts:findOmp()` was a FOURTH, upstream of all three, and it decided what the other three were handed.
+
+**Decision.** `findOmp()` shares the one probed resolver. `OmpCandidateInput` grows an `installed` list so Electron main can contribute the paths only it knows (the packaged `resources/repo` shim, the app-managed userData install, the platform bin dirs), probed after `envBin` and before the generic `~/.bun` and bare-name fallbacks, deduped because main's bundled path is often also `envBin` and probing the same unrunnable shim twice makes the diagnostic read as two separate faults. The probe runs `<candidate> --version` with the resolved bun's directory prepended to PATH, which is REQUIRED for correctness rather than convenience: probing a bun shim without bun reachable would reject the very binary the children will use successfully. `findOmp()` returns null when nothing is proven, which is what finally makes `needsBootstrap()` true and lets `ensureRuntimes` install one, and the freshly provisioned result is re-PROVEN through `findOmp()` rather than accepted from `existsSync(managedOmp())`, because `bun add -g` can lay down a shim and still leave nothing runnable. `resolveBun()` now returns `string | null` and only ABSOLUTE resolved directories reach PATH. For visibility, a pure `ompUnavailableReport(resolution)` produces `{ title, detail }` naming every path tried in order plus the remedy, shown ONCE by Electron main through `dialog.showErrorBox` right after bootstrap (the launch deliberately continues, because the editor, settings and Providers UI are all still useful and the remedy is often entered there), and printed once by the engine. A pure `isOmpSpawnFailure(e)` lets the engine's single request catch report that one named condition instead of reprinting the stack: first occurrence logs the report, then every hundredth logs a count, and the client gets the real reason so the UI can say it too.
+
+**Consequences.** The false-positive risk in `isOmpSpawnFailure` is the sharp edge, and it is deliberately tested as the load-bearing NEGATIVE: misclassifying a genuine internal error would hide it behind a reassuring "omp cannot start" and suppress its stack, which is strictly worse than the spam being removed. A first pass matched `/\bomp(\.exe)?\b/`, which matches `.omp` in `~/.omp/agent/agent.db` because a `.` is a word boundary, so every EPERM on the user's own config directory classified as a spawn failure; the test caught it on the first run. The errno clause now demands a reference to the omp executable itself (`.bin/omp`) or to the package the shim launches (`pi-coding-agent`), which covers both the three verbatim v2.2.0 messages and the v2.0.0 EPERM shape recorded in version.ts:394. Because `runtime.ts` imports `electron` and cannot be imported by a bun test, its contract is pinned by reading its SOURCE (comment-stripped, with a vacuity check, the ADR-0303 discipline from ADR-0356): `findOmp`'s body must contain `resolveOmpBin` and must not contain `firstExisting`, `isAbsolute` must gate the PATH additions, and `existsSync(managedOmp()) ?` must not return. That guard was confirmed to fire by reverting `findOmp` to its broken one-liner and watching exactly that test fail. What this does NOT do: the probe is still not run in a real packaged install from here (same limitation as ADR-0356, and the same follow-up closes both), so the claim that a fresh install now provisions a working omp rests on unit-level proof of the decision logic plus the field evidence of what the old logic decided. The dialog is also the first thing a user sees on a broken install, which is a deliberate tradeoff against a silent, fully-navigable app that cannot answer a single prompt. And one more copy of the repo-root rule remains: `desktop/dev.ts` resolves the engine's serve root through `engineDesktopDir` (P-WINBOOT.2, ADR-0260), which is correct and independent; ADR-0356's consolidation covered the four cross-process ASSET path sites, not that one, so "one resolver" is now true of gate paths and of omp binaries but not yet of every path in the engine.
+
+## ADR-0358 -- P-OMP-BOOT.2: a slow probe is not a missing binary (2026-09-16)
+
+**Context.** This ADR CORRECTS ADR-0357, which got the attribution wrong, and the correction came from auditing my own claim instead of repeating it. ADR-0357 said the reported v2.2.0 outage was caused by existence-based resolution in `desktop/runtime.ts:findOmp()` and described it as ten days in which no model could run. The engine log in the support bundle does not support that. It contains 21 v2.2.0 engine starts from ONE install; exactly 10 of them print `[omp] no runnable omp found` and 11 do not, with successes and failures interleaved across the same days (09-09 fails three times then succeeds; 09-10 fails, succeeds, fails, succeeds; all three 09-14 boots succeed). No missing or unrunnable file produces a 50% split from a fixed path. The actual cause is our own capability probe: `Bun.spawnSync([candidate, "--version"], { timeout: 6000 })`. The bundled omp is a bun SHIM whose `omp.bunx` names `bun` plus a relative `cli.js`, so a probe spawns a 98 MB binary that then loads a large script. Measured warm on a desktop it answers in about 1.2 s; cold on a 15 W laptop with a real-time virus scanner reading both files for the first time it can exceed 6 s. `resolveOmpBin` counted that timeout as a REJECTION, fell through to the bare name `omp`, which a packaged install does not have on PATH, and the answer was cached in `ompBinCache` for the entire engine lifetime. One slow cold start therefore disabled models until the app was restarted, and every UI poll re-threw, which is where the 192 identical `Executable not found in $PATH: "omp"` stacks come from. Two further facts settle it: the published artifact is fine, because `.github/workflows/build-desktop.yml` runs `desktop/build/airgap-smoke.ts`, which SCRUBS every other bun from PATH and requires the bundled shim to print `omp/` before any asset is uploaded (airgap-smoke.ts:116-137); and a version bump alone would have fixed nothing. Worse, ADR-0357 made the problem bigger by adding a SECOND 6 s probe in Electron main, on the cold-start path, where a false negative triggers a reinstall of a working omp.
+
+**Decision.** A probe verdict is three-valued, not two. `OmpRunProbe` returns `true | false | "timeout"`, and `resolveOmpBin` treats a timeout as INDETERMINATE rather than as a rejection: the candidate is recorded in a new `timedOut` list, never in `rejected` (it was never shown to be broken), and when nothing is proven the resolution returns the FIRST timed-out candidate with `indeterminate: true` instead of the bare name. A candidate that actually answers still wins, because slowness is not preference. `OMP_PROBE_TIMEOUT_MS` is 30 s and shared by all four probe sites, which also removes the last of the four private copies: `bunProbeVerdict` and `nodeProbeVerdict` encode the one rule for Bun's and node's differing timeout signalling (killed with no exit code, or `ETIMEDOUT`), so `ENOENT` stays a REAL failure. Callers then split cleanly: `indeterminate` logs one line and proceeds, and in the engine it deliberately does NOT set `ompUnrunnable`, so the ADR-0357 fatal report and the request-catch collapse fire only when something genuinely cannot run. `findOmp()` treats `proven || indeterminate` as usable, so provisioning no longer reinstalls over a working omp on a busy machine, and `ompResolution()` is memoized for the process lifetime (with an explicit `forget` after an install) because `needsBootstrap()` and `ensureRuntimes()` both ask and a 30 s budget must not be paid twice before the window opens. Shipped as v2.2.1 with ADR-0356.
+
+**Consequences.** The three-valued probe buys robustness with a deliberate blind spot: a child that dies on a signal for a REAL reason, a segfaulting omp, also reads as a timeout, so we will try to use it and fail at the real spawn. That direction is correct, because the alternative that shipped was substituting a binary we know is absent. The 30 s budget is a worst-case cost on an otherwise dead launch and is paid once per process thanks to the memo. Accepting `indeterminate` as usable means `LUCID_OMP_BIN` can now name a binary that was never proven; that is exactly the pre-ADR-0357 hazard, and it is accepted knowingly because the field evidence says false negatives cost users far more than unproven positives, with the ADR-0357 loud report still covering the genuinely-missing case. Two corrections were also applied to artifacts of ADR-0357: the "ten days / every turn died" phrasing in `desktop/omp_bin.ts`, `desktop/main.ts`, `desktop/omp_bin.test.ts` and the `demo-P-OMP-BOOT.1` target now reads "roughly half of all launches, 192 identical stack traces" and points here; and `nodeProbeVerdict`'s parameter had to be typed `Error & { code?: string }` rather than `{ code?: string }`, because a structural type with only optional members has nothing in common with `Error` and the real `SpawnSyncReturns` call site was rejected outright (found by the OmpUpgrade subagent reading the desktop typecheck, not by me). Separately, two release-hygiene items surfaced while bumping: `desktop/about.test.ts` asserted the literal `"2.2.0"` in two places, which is the "do not test defaults" trap AGENTS.md names and which `desktop/scripts/demo_p_about_1.ts` had already solved, so both now assert semver SHAPE plus single-sourcing; and an attempt to upgrade omp in the same pass jumped 16.1.20 to 18.2.2 and broke the prompt layer (`pi-agent-core` no longer exports `countTokens`, arity changes at `prompt_audit.ts:242/276/278/283`, and `compaction.strategy` is no longer a valid config key), so the omp major upgrade is explicitly NOT part of this release and needs its own increment. All four `@oh-my-pi` pins must move together regardless, because `packagePin()` in `.github/scripts/omp-compat.mjs` throws unless they agree.
+
+## ADR-0359 -- P-BUILD-GATE.1: 5249 green tests and a release that could not build (2026-09-16)
+
+**Context.** v2.2.1 was tagged and pushed on the strength of a full gate: 5249 pass / 4 skip / 0 fail across 396 files, clean root and desktop typechecks, clean license headers, the Unicode scanner green, and KEYSTONE 2 (the frozen prompt prefix) re-verified at 13747 bytes under the newly bumped omp. All three release legs then failed within seconds of each other, at the same step, with the same error: `bun build --compile dev.ts` -> `error: Could not resolve: "omp-legacy-pi-modules"`, from `node_modules/@oh-my-pi/pi-coding-agent/src/extensibility/plugins/legacy-pi-compat.ts:50`. omp 16.5.2 introduced that plugin, and its own comment (lines 41-43) says the quiet part out loud: "The dynamic import is intentional conditional build code. Dev/test runs never execute it; binary builds resolve the literal through the in-memory plugin in `scripts/legacy-pi-virtual-module.ts`." omp resolves that specifier with a Bun BUILD PLUGIN when it compiles its own binary. We compile with the plain `bun build --compile` CLI, which has no plugin hook, so the literal is unresolvable. The failure is entirely legitimate; what is not legitimate is that we learned about it from a release. Neither typecheck compiles (tsc does not resolve a dynamic import into a bundle), no test runs a build, and `ci.yml` contained no compile step at all, so the ONLY thing in this repo that would ever have caught it was the release itself. This is the same lesson as ADR-0303's vacuous-green trap and the ADR-0356 renderer-artifact rule, arriving from a third direction: a gate that never touches the ARTIFACT cannot vouch for it, however green it is about the source.
+
+**Decision.** Two changes, one narrow and one structural. Narrow: `compile-engine` gains `--external 'omp-legacy-pi-modules'`, exactly as it already carries `--external '*.node'` for the native addons, which is the same shape of problem (a specifier the compiled bundle must not chase). This is safe rather than merely expedient: `ensureBundledModulesLoaded()` rejects outright unless `IS_COMPILED_BINARY`, it is reached only when a user loads a LEGACY pi plugin, which LUCID never does, and the result is a rejected promise rather than a crash. `compile-lucid` is deliberately NOT given the flag: it compiles `harness/launcher/lucid_acp.ts`, whose graph does not reach omp's plugin loader, and it built green in the same CI run. Structural, and the actual point of this ADR: `ci.yml` now COMPILES the shipped binaries on every push and PR (`build-renderer`, `compile-lucid`, `compile-engine`, about 10 seconds combined). That step is the only thing in CI that validates the artifact instead of the source, and it would have failed this exact PR before a tag existed. Also fixed in passing, because it was blocking local reproduction of the very build that broke: `desktop/build/copy-natives.ts:82` called `mkdirSync(BIN, { recursive: true })`, which is documented as a no-op on an existing directory and is not one on a OneDrive-backed Windows path, where `bin/` is a reparse point and the call throws EEXIST. CI never saw it (plain checkout); it broke only on the developer machine, which is the worst possible place for a build bug because it is where the checking is supposed to happen. Only EEXIST is swallowed. Shipped as v2.2.2; the v2.2.1 tag produced no release object and no assets, so nothing was consumable and it is retagged rather than left as an empty version.
+
+**Consequences.** The compile gate is cheap and unconditional, and it changes what "green" is worth: a dependency bump can no longer pass every check and still break the release. It does not cover everything, and the boundary should be stated rather than implied. It proves the binaries COMPILE and, locally, that the engine BOOTS (verified here: the freshly compiled `bin/lucid-engine.exe` answered `/api/health` with `{"ok":true}` on an isolated port 5399, which also closes the compiled-engine verification that ADR-0356 and ADR-0357 both left stubbed). It does NOT run electron-builder, so a packaging-filter regression is still only caught by `packaged_boot.test.ts` and by `airgap-smoke.ts` on a real release runner. The `--external` carries a real, bounded cost: if a future LUCID feature ever wants omp's legacy pi plugin bridge, that import will reject in the compiled engine and the fix is to adopt omp's build plugin via a `Bun.build()` config instead of the CLI. The honest read of this increment is that the previous two ADRs were written about trusting evidence over inference, and then a release went out on a gate that had never once built the thing being released. The 18.2.2 upgrade being BLOCKED (ADR-0358) is now also better understood: its `prompt_audit.ts` breakage was caught by the typecheck, but a 16.x bump broke only the compile, so the two gates catch different halves of an omp upgrade and an upgrade needs both.
+
+## ADR-0360 -- P-OMP-PROBE.1: a weekly alarm that had been ringing for a month (2026-09-16)
+
+**Context.** The scheduled omp compatibility probe (`.github/workflows/omp-compat.yml`) had failed every single week for five consecutive runs, back to 2026-08-17. It was not broken. Each run bumped omp to `latest`, typechecked, failed on the `compaction.strategy` config key, filed issue #352, and left master on the safe pin, which is precisely the behavior it was built for. The defect was that it reported that correct outcome as a RED JOB. A permanently red scheduled job is indistinguishable from a broken scheduled job, so after five weeks nobody read it. The expensive consequence is not the noise: the probe tested ONLY `latest`, so once `latest` moved to a major that breaks our prompt layer, the probe lost the ability to answer the question it exists for. 16.5.2 was available AND fully compatible for those five weeks and the probe never said a word, because it never looked inside the 16.x line. We found it by hand, which is the exact work this workflow was supposed to save.
+
+**Decision.** Resolve the newest release WITHIN the current major and test THAT first; probe the next major only once we are already at the top of our own line, which is when that question becomes the real one. The same-major version is resolved from the full versions LIST rather than `npm view pkg@^16 version`, because that range form prints one line PER matching version and a tail/sed parse of it produced the doubled string `16.5.216.5.2` when tested against the live registry. Prereleases are excluded and the sort is numeric per component, so `16.10.0` cannot lose to `16.9.0` the way a lexical sort would. A failure is now also CLASSIFIED: a major jump failing is expected news, while a SAME-MAJOR bump failing is an alarm, because it means a version we could otherwise have adopted regressed. That distinction rides in the issue title, the issue body and the run summary.
+
+**Consequences.** What this does NOT do, and deliberately says so in the workflow where a reader will find it: it does not make an expected major-jump failure report the job GREEN. A first pass added a later step to do that, and it was deleted before shipping because a GitHub Actions step cannot un-fail a prior step. Once the typecheck step fails the job is failed, so that step's NAME would have lied about its behavior, which is the precise failure mode ADR-0356 through ADR-0359 were written about. Doing it properly needs `continue-on-error: true` on all nine compatibility steps plus one explicit verdict step, which is surgery on a workflow that cannot be executed locally; it is a named follow-up. Verified against the live registry at the current pin rather than reasoned about: with the pin at 16.5.2 the resolver correctly reported the same-major candidate as equal to the pin and fell through to 18.2.2, labelling it a major jump. After ADR-0362 moves the pin into 18.x, the probe will start testing the newest 18.x instead of re-testing a break it already knows about, which is the behavior that was missing all along.
+
+## ADR-0361 -- P-TURNFAIL.1: the ledger called a dead turn a success (2026-09-16)
+
+**Context.** Verbatim from the reported user's `~/.omp/lucid-latency.jsonl`:
+
+    {"model":"xai-oauth/grok-4.20-0309-non-reasoning","ttftMs":0,"totalMs":300,
+     "tokensIn":21723,"costUsd":0,"ok":true}
+
+21,723 tokens went out, no first token ever arrived, the turn was dead in 300 ms, and the ledger recorded `ok: true`. `desktop/acp_backend.ts` computed `ok: !errored`, and `errored` is set only when `session/prompt` THROWS. A provider 4xx does not throw. omp RESOLVES the turn carrying `stopReason: "error"` with zero content blocks, so `errored` stayed false and a turn that produced nothing was logged as a success. The cost was not theoretical: the one file that should have said "this turn failed" said the opposite, so diagnosing that user's outage required joining three separate files by timestamp (this ledger, omp's own `agent_end` line, and the turn-capture NDJSON). The signal was present the whole time and pointed the wrong way.
+
+**Decision.** `ok` becomes `sawOutput && !errored`. A turn that emitted no token, no thinking chunk and no tool call is not a success, whichever way it terminated. Deliberately NOT also writing `stopReason`/`failReason` into the sample: `LatencySample` is the DuckDB-ingested shape and invariant 10 freezes that schema behind numbered migration files. `ok` alone already makes the case self-evident from a single line (no first token, 21.7k tokens in, not ok), and `stopReason` already reaches the user through the existing `no-response` chat event. New columns are their own increment with their own migration.
+
+**Consequences.** `desktop/latency_log.test.ts` cannot reach into acp_backend's turn loop, so the guard is placed on the SHAPE that reached disk: the exact field sample must record as a failure, and one line must carry the whole diagnosis. The third test is the load-bearing NEGATIVE: a normal turn must still be `ok`. That matters because a fix that marked every sample failed would have destroyed the per-model p50/p95 rollup this log exists to feed (`harness/memory/latency_ingest.ts` -> `api_latency`), while looking identical to "fixed" if only the failure case had been tested. This also narrows, without closing, the gap that forced inference in the field report: the provider's HTTP status and body are still not available to LUCID. omp does not put them on stderr (the reported `lucid-acp.log` contained only spawn headers) and did not surface them in its own log at that user's level either, so "log the provider status" remains an omp-side capability, not something this repo can implement. What LUCID can now do is say honestly that the turn failed, in the file a support bundle collects first.
+
+## ADR-0362 -- P-OMP18.1: the major upgrade, and the tokenizer that moved onto an instance (2026-09-16)
+
+**Context.** ADR-0358 recorded omp 18.2.2 as BLOCKED, and the diagnosis it recorded was incomplete in an instructive way. It said `pi-agent-core` "no longer exports `countTokens`", which is true but reads like a removal. `countTokens` was not removed, it MOVED: it is now `Tokenizer#countTokens(text: string | string[], mode: TokenCountMode = "approximate"): number` (`node_modules/@oh-my-pi/pi-agent-core/src/tokenizer.ts:152`, on the class at `tokenizer.ts:131`, re-exported by `src/index.ts:24`). The three arity breaks are the same change seen from the other side: `estimateSkillsTokens(skills, tokenizer)` (`context-usage.ts:119`), `estimateToolSchemaTokens(tools, tokenizer, sourceRevision = 0)` (`:182`), and `computeNonMessageTokens(session, tokenizer)` (`:295`) all gained that same `Tokenizer` as argument two. omp 18 stopped shipping a module-level tokenizer and made the caller supply the one belonging to its session. The fourth break is unrelated and already handled: `compaction.strategy` became `compaction.methodOrder` at 17.4.1, which the sanctioned `omp-compat.mjs migrate` rewrites.
+
+**Decision.** Thread `session.agent.tokenizer` (the `Agent#tokenizer` getter, `agent.ts:768`) rather than constructing a tokenizer or inventing a default. That choice is a PARITY ANCHOR, not a convenience: omp's own `/context` implementation does exactly that, at `session-stats.ts:86-88` and `agent-session.ts:2888`. `harness/prompt/prompt_audit.ts` measures the per-block token baseline of a request, so it must count with the same tokenizer the live session counts with, or its numbers would be a plausible-looking fiction that drifts from what the provider actually bills. A locally constructed tokenizer would have typechecked and produced wrong baselines silently, which is the worst available outcome for a measurement module. Scope was held to `harness/prompt/`: nothing under `desktop/` needed changing, and no new `--external` was required for the compile.
+
+**Consequences.** INVARIANT 6 SURVIVED A TWO-MAJOR JUMP, byte for byte. `demo02_prefix_hash` reports 13747 bytes on both tasks with hash `bfe28eff5e97d20a`, which is the IDENTICAL byte count and the IDENTICAL hash measured under 16.5.2. That is the single most important result here: a major omp upgrade did not move one byte of the frozen prefix, so every KV cache keyed on it stays warm. Fail-closed gate 10/10, both typechecks clean, full suite 5252 pass / 4 skip / 0 fail across 396 files. The ADR-0359 compile gate was run as part of acceptance rather than after the fact, and all three steps pass; the existing `--external 'omp-legacy-pi-modules'` remains needed and harmless. Two incidental observations worth recording because they are the kind of thing that turns into a support bundle later: the compiled bundles got noticeably LEANER (the launcher went 257 to 108 modules, the engine 4193 to 3469), and the `pi_natives` addon grew from about 134 MB to 171 MB, so the installer will gain roughly 37 MB. Neither is a defect; both change the artifact and so belong in the record. What is NOT proven: no packaged build has run on 18.2.2, and no live model turn has been exercised against it, so this is upgrade-compatible rather than field-proven. The omp-compat probe (P-OMP-PROBE.1) will now see the pin at the top of the 18.x line and, per its corrected target selection, test the newest 18.x rather than re-testing a break it already knows about.
+
+## ADR-0363 -- P-ARM64.C: the gate threw away a good arm64 build over a string (2026-09-17)
+
+**Context.** The arm64 Linux leg of run 35176379032 built `LucidAgent-arm64.AppImage` successfully, and the artifact was never uploaded. electron-builder logged `appOutDir=release/linux-arm64-unpacked` and finished the AppImage at 02:59:44. The very next step, the ADR-0225 air-gap gate, died instantly: `air-gap smoke: found no packaged resources dir`. `desktop/build/airgap-smoke.ts` INFERRED the output dir name with a literal, `PLAT === "linux" ? join(RELEASE, "linux-unpacked", "resources") : ...`, and that literal is correct only for x64. electron-builder derives the name as `${buildConfigurationKey}${getArchSuffix(arch, defaultArch)}${MAC ? "" : "-unpacked"}` (`app-builder-lib/out/platformPackager.js:88`), where `getArchSuffix` is `arch === defaultArch ? "" : "-" + Arch[arch]` (`builder-util/out/arch.js:35`). Only the DEFAULT arch gets a bare name. Because the air-gap gate sits before every upload step by design, its refusal meant steps 12 to 15 were all skipped and a real, shippable arm64 build was discarded. `desktop/build/pf-boot-smoke.ts:78-79` carried a byte-identical copy of the same literal. This is the ADR-0356 lesson in a second location: the path was inferred rather than derived, and the comment at `build-desktop.yml:55-57` asserting that this gate "is the real proof this leg works" was itself false, because the gate could not find the tree to look at.
+
+**Decision.** One derived resolver, `desktop/build/packaged_tree.ts`, shared by both gates, following the `release_identity.ts` + `release-identity-gate.ts` split already in this directory: `appOutDirName(plat, arch, defaultArch)` reproduces electron-builder's own rule, `parseAppOutDirName` inverts it, and `resolveResourcesDir` returns a discriminated result so each caller keeps its own semantics. That split is load-bearing rather than cosmetic: `airgap-smoke.ts` is a GATE and fails closed on an unresolvable tree, while `pf-boot-smoke.ts` legitimately returns null when no package exists on disk (a dev box drops to source mode), so a shared `fail()` would have converted every dev-box run into a hard error. The second decision is that the dir NAME is the arch discriminator and a mismatched name is REFUSED, not ranked. `build.extraResources` copies `runtimes/**/*` with no arch filter, so every linux package contains both `python-linux-x64` and `python-linux-arm64`; the old "pick the tree that has a python for my arch" heuristic therefore cannot distinguish an x64 tree from an arm64 one. On the mac leg, which packages `mac` and `mac-arm64` in one job, that heuristic was already selecting whichever tree `readdirSync` returned first. `universal` is accepted for either concrete arch, and an UNRECOGNIZED dir name is still searched, so a future electron-builder naming change degrades to the old hunt instead of to a hard stop.
+
+**Consequences.** `desktop/build/packaged_tree.test.ts` (19 tests) fabricates real directory trees under `mkdtempSync` rather than mocking `fs`, because the resolver's entire job is answering questions about what is on disk and a mocked fs would readmit this exact bug class. Two of those tests caught defects during the change, which is the evidence they are not vacuous. The first is the regression itself: the arm64 layout now resolves where the literal found nothing. The second was mine: `exact` was computed with a plain `dir.startsWith(expectedPath)`, and since the expected mac x64 name is literally `mac`, both `mac-arm64` and `mac-universal` passed that prefix test and were reported as the exact tree; it is now anchored on a path separator. The rewired `airgap-smoke.ts` was additionally run end to end against a fabricated tree on this Windows box, where it selected `win-unpacked`, refused the `win-arm64-unpacked` sibling, and proceeded to the interpreter check, which proves the script wiring and not just the module. What this does NOT prove is the arm64 leg itself; that requires the CI run this change exists to unblock, and the AppImage remains built-but-never-executed on real hardware until it runs on a Spark. The stale comment in `build-desktop.yml` is corrected in place rather than deleted, since the claim it made is exactly the kind a future reader would otherwise trust.
+
+## ADR-0364 -- P-ARM64.D: the arm64 package shipped an x86-64 bun (2026-09-17)
+
+**Context.** With the ADR-0363 resolver in place the arm64 air-gap gate finally ran, and it immediately found a second, unrelated defect that the first failure had been masking. Keystone 2 passed on aarch64 for the first time (`scanner OK offline - 2 findings on the dirty sample, 0 on clean`), then the omp check died with a shell parse error: `runtimes/bun: 1: Syntax error: ")" unexpected`. That message is what `/bin/sh` prints when `exec` returns ENOEXEC and sh falls back to interpreting the file as a script, i.e. the binary is for a foreign architecture. The plain `bun` alias in the arm64 package was an x86-64 binary. Root cause is one `.find()` in `desktop/build/fetch-runtimes.ts:306`: `SPECS.find((s) => s.platform === TARGET && s.name.startsWith("bun-"))`. `TARGET` is a PLATFORM with no arch notion, and a linux build deliberately fetches both arches into one `runtimes/` dir, so the predicate matched `bun-linux-x64` (declared at line 124) before `bun-linux-arm64` (line 145) and copied the wrong one. The consequence is severe and quiet: omp's `.bunx` shim shells out to a bare `bun` on PATH, so an arm64 user would have gotten no model list and no OAuth, with nothing on screen to suggest the cause. The same hazard was latent on macOS and survived only by declaration order, `bun-darwin-arm64` being listed before the x64 spec while the runner happens to be arm64.
+
+**Decision.** Select the alias by platform AND arch (`bun-${TARGET}-${TARGET_ARCH}`, with `RUNTIME_ARCH` overridable for pre-staging, mirroring the existing `RUNTIME_OS`), and THROW when no such spec exists rather than aliasing whatever else matched. Copy unconditionally: the old `!existsSync(plain)` guard meant a stale alias from an earlier build of a different arch was preserved, so the bug could not be repaired by rebuilding. The air-gap gate additionally gained a direct assertion that the alias is byte-identical to `bun-${PLAT}-${ARCH}` (size, then a 64-byte header read through `openSync`/`readSync` rather than loading 98 MB to look at 64 bytes). The gate DID already fail on this, which is the fail-closed posture working, but it failed with a shell syntax error four steps from the cause; naming the fault directly is the difference between a five-minute diagnosis and a round trip through CI.
+
+**Consequences.** The fail-closed throw paid for itself on its first execution by catching MY error, not the original one: the win32 specs carry the extension in the NAME (`bun-win32-x64.exe`), which the old `startsWith` match tolerated and an exact match does not, so the first local run stopped with `no bun spec named "bun-win32-x64"` instead of quietly shipping a Windows build with no alias at all. Verified locally in both directions rather than by inspection: the alias is now emitted as a byte-size-identical copy naming its source (`bun (plain alias for the omp shim -> bun-win32-x64.exe)`, 98480216 bytes both), and the new gate assertion was proven non-vacuous by replacing the alias with a 20-byte file, which produced `plain bun alias is not a copy of bun-win32-x64.exe: 20 bytes vs 98480216`. The positive run also reached the whisper stage, meaning the omp shim genuinely launched with only the bundled bun on PATH. One incidental fix rides along because it blocked that verification: `fetch-runtimes.ts` did `mkdirSync(OUT, { recursive: true })`, which throws EEXIST on a OneDrive-backed Windows path, the identical quirk already documented at `build/copy-natives.ts:82`; every local `runtimes:*` run aborted before reaching any of this. That class of bug only ever breaks a developer machine, never CI, which is precisely where local reproducibility matters most. Still NOT proven: that the arm64 AppImage runs on real hardware. `tools/arm64_field_proof.ts` exists to answer that on a Spark, and it checks the ELF `e_machine` of every bundled runtime INCLUDING the plain alias, because this defect proved that presence, size and the exec bit are all satisfiable by a binary that cannot run.
+
+## ADR-0365 -- P-ARM64.E: four arch assumptions, each hiding the next (2026-09-17)
+
+**Context.** With ADR-0363 and ADR-0364 in, the arm64 leg got one step further and failed a third time, on the release identity gate: `unrecognized artifact in the release dir: "latest-linux-arm64.yml" is not a known LucidAgent target`. The AppImage beside it had just PASSED (`PASS appimage LucidAgent-arm64.AppImage`), and the air-gap gate before it had passed outright, including keystone 2 on aarch64. The gate is correctly all-or-nothing, so one unidentifiable file blocked the upload of a good artifact. Cause: `classifyArtifact` matches the updater feed by name SHAPE, `/^latest(-[a-z0-9]+)?\.ya?ml$/`, and its own comment says the shape is used "rather than an exhaustive list so a new platform channel is covered on arrival". The shape permitted exactly ONE hyphen segment, which covers `latest.yml`, `latest-mac.yml` and `latest-linux.yml` and excludes every arch-suffixed name electron-builder emits for a non-default arch. Notably the P-ARM64.B audit had already gone through this gate and concluded no change was needed, because it checked the AppImage, deb and rpm names, which classify on EXTENSION and did pass. The updater feed is the one artifact classified by name, and it was the one the audit did not test.
+
+**Decision.** `?` becomes `*`. The number of channel segments is electron-builder's business, and the feed's real check is downstream anyway: `checkArtifact` validates the artifact PATH the feed declares, which is what actually separates the Agent and Creator flavors (both emit a file named exactly `latest.yml`). Widening the NAME shape therefore does not weaken what the gate proves about the bytes. Three latent arm64 defects in a row, each masked by the previous failure, is itself the finding worth recording: a build leg that has never completed has not been "mostly verified", and every arch-keyed assumption on the path stays unproven until artifacts actually upload. The AppImage had been BUILT on an arm runner since the first attempt, which is exactly what made "arm64 works" feel already established.
+
+**Consequences.** Two positive cases (`latest-linux-arm64.yml`, `latest-mac-arm64.yml`) and four negatives (`latest-linux-arm64.yml.blockmap`, `latestfoo.yml`, `latest-.yml`, `notlatest-linux-arm64.yml`) are pinned in `release_identity.test.ts`. The negatives are the load-bearing half: `*` could have been written as `.*` and quietly turned the gate into "any yml is fine", which would look identical to fixed while destroying the property the gate exists for. The change was verified as a differential rather than by assertion alone: run against both patterns, exactly the two arm64 feed names flip from unknown to updater-feed and all six other names are unchanged. 96 tests across the two build-gate files pass. The `latest*.yml` upload glob in build-desktop.yml already matched the arch-suffixed name, so no workflow change was needed; the file was always going to be uploaded, only the gate refused to recognize it.
+
+**Addendum, the fourth assumption.** With all three fixed, the arm64 leg completed for the first time: installer built, air-gap gate passed, identity gate passed, artifact uploaded. The upload then revealed one more, found only because the leg finally got far enough to upload anything. The step is `name: LucidAgentIDE-${{ runner.os }}`, and `runner.os` is `Linux` for BOTH `ubuntu-latest` and `ubuntu-24.04-arm`, so the two Linux legs upload under the SAME artifact name. upload-artifact v7 PERMITS that rather than erroring, so run 35178241843 finished with two artifacts both named `LucidAgentIDE-Linux` (693 MB arm64 at 03:29, 1.94 GB x64 at 03:47). No bytes are lost, since the files inside are arch-named, but the artifacts become unaddressable: `gh run download --pattern '*arm64*'` matches NEITHER (which is how this was found, while trying to fetch the AppImage for a hardware test), and a download by name chooses between them nondeterministically. Fixed by putting the arch in the name, `LucidAgentIDE-${{ runner.os }}-${{ runner.arch }}`. Verified safe rather than assumed: no consumer names these artifacts, because both the Creator build and the rolling-latest publish use `download-artifact` with `merge-multiple: true` and no `name:` filter, and the tag path is unaffected in any case since `action-gh-release` attaches FILES, not artifacts. Four assumptions, all the same shape: a name or path that is correct only for the default arch, each one invisible until the one before it was fixed.
+
+## ADR-0366 -- P-SCANPY.1: the launcher could not find the interpreter it shipped with (2026-09-17)
+
+**Context.** First run of a packaged LUCID on real arm64 hardware (a DGX Spark, aarch64, Ubuntu 24.04, glibc 2.39, reached over a VPN tunnel through a jump host). The AppImage from run 35178241843 was byte-verified after transfer (sha256 `4ffed562...0040`, identical to the CI artifact) and extracted. Almost everything worked: all three bundled runtimes are aarch64 ELF and execute, the plain `bun` alias is correct (proving the ADR-0364 fix on hardware), keystone 2 produced 2 findings on the dirty sample and 0 on clean under the bundled interpreter, the `pi_natives.linux-arm64.node` addon loads, the compiled engine answered `/api/health` with `{"ok":true}` and served 9.18 MB of prebuilt renderer from `/app.js`. Then `lucid check` failed: `FAIL-CLOSED: scanner sidecar unreachable: scanner stdin not writable`, meaning the scanner child was spawned and died immediately. The scanner itself was fine, verified by hand: `python3 -c "import scanner; print(scanner.inspect_text(chr(0x200b)))"` under the BUNDLED interpreter returned the expected zero-width finding. The fault is interpreter RESOLUTION. `harness/security/scanner_client.ts:resolvePython()` tries `SCANNER_PYTHON`, then a `.venv` under the sidecar dir, then falls back to the bare name `python`. A packaged tree has no `.venv` by construction (`!scanner-sidecar/.venv/**` in extraResources), and `harness/launcher/lucid_acp.ts:resolveScannerEnv()` only ever looked for venvs, so it left `SCANNER_PYTHON` unset. On this host `command -v python` finds NOTHING: Ubuntu 24.04 ships `python3` and does not install `python-is-python3`. So the spawn failed instantly.
+
+**Decision.** Teach the standalone launcher about the bundled interpreter, and put it FIRST. `desktop/runtime.ts` already resolves in exactly that order (`findScannerPython() = bundledPython() ?? venvs`), but it reads Electron's `process.resourcesPath`, which does not exist in a `bun build --compile` launcher, so this path had no bundled branch at all. The new `scannerPythonCandidates(repo)` probes both real layouts, because the launcher runs from both: a packaged tree has `repo` and `runtimes` as SIBLINGS under `resources/`, while a dev checkout has `desktop/runtimes/` (where `build/fetch-runtimes.ts` writes). POSIX prefers `bin/python3` then the versioned `bin/python3.12`, matching `bundledPython()`. Separately, `resolvePython()`'s last resort becomes `python3` on POSIX: asking for `python` on a modern Linux is asking for a name the distribution does not provide. Both changes are hardening of the same failure, and neither weakens fail-closed, since an unresolvable interpreter still yields `ScanUnavailableError` and a refusal.
+
+**Consequences.** This is NOT arm64-specific, which is the important part: `bin/lucid` is the binary the marketplace IDE extensions spawn (P-EXT.1 / ADR-0038), so on ANY packaged platform where the user has no global `python` and no previously provisioned scanner venv, `lucid check` and `lucid acp` could not start. It defeats the ADR-0225 air-gap promise specifically for the launcher path: we bundle a relocatable CPython so the scanner is provisioned offline, and the one component that most needs it never looked. Proven in effect on the Spark before the code was trusted: with `SCANNER_PYTHON` set to exactly the path the new resolver computes, the same shipped binary reports `[lucid check] OK: gate + scanner ready` and exits 0. Three tests pin it (`lucid_acp.test.ts`): a fabricated packaged layout resolves the bundled interpreter, the bundled interpreter WINS over a project venv (order is load-bearing, or an install with a stale venv would disagree with `runtime.ts`), and a dev checkout with only a venv still resolves it. The coverage gap that let this ship is worth naming: `airgap-smoke.ts` runs `bin/lucid --version` and asserts only that no native-addon load error appears. It never ran `lucid check`, so it proved the launcher STARTS but never that the launcher can reach its scanner. The air-gap gate tests that the bundled runtimes work; it did not test that the product can FIND them. `tools/arm64_field_proof.ts` does, and that is how this was found. Its own first run also produced two self-inflicted failures worth recording, since both are the tool lying rather than the product breaking: `elfMachine` used `Bun.file(p).slice(0, 20).arrayBuffer()`, which returns a PROMISE, so every binary reported "unreadable/not ELF" while executing fine one line later; and passing a RELATIVE resources path then spawning with a different `cwd` produced ENOENT on a file that was demonstrably present. A check that cannot fail for the right reason is worse than no check.
+
+## ADR-0367 -- P-LOCAL.7: the context window nobody could measure, measured (2026-09-17)
+
+**Context.** P-LOCAL.5 (ADR-0354) shipped a GLM-5.3-Flash preset carrying `contextWindow: 131072`, and its own stubbed note was honest that the number was invented: "GLM's 131072 context window is editorial, not measured: the box answers `401 {"error":"Unauthorized"}` from `server: uvicorn` (vLLM's own `--api-key` middleware), so `/v1/models` could not be read for the real `max_model_len`." P-LOCAL.6 (ADR-0355) then built the machinery to ask the server and recorded as its named next step exactly this: "save the DGX Spark provider with its vLLM token, restart so the engine gets the secret, press Discover, and confirm the served id and `max_model_len` that come back match what `vllm serve` was started with. That also replaces GLM's editorial 131072 with a measured number." Two increments had therefore been blocked on one authenticated HTTP GET. It has now been made, over the VPN tunnel, against the live head. The API key was read out of the running vllm process's own argv ON the box, used in process, and never moved off it or into a transcript.
+
+**Decision.** The preset seed becomes **524288**, four times the editorial value, and it is labelled as measured with its evidence in the comment. Three independent facts support it: `GET /v1/models` on the authenticated head returns `max_model_len=524288` and that is the ONLY window key the server publishes, which is also the key omp's `openai-models-list` discovery prefers; the operator's serve command carries `--max-model-len 524288`; and vLLM refuses to start above the model's own derived maximum, so a server running at 512K is evidence the weights support it. This remains a SEED and is deliberately not treated as authority: the P-LOCAL.6 Discover path re-reads the endpoint and the server always wins, which is what stops a deployment served at a smaller window from being over-promised by the catalog. The compat block is left byte-identical, because the same probe confirmed two thirds of it directly: a baseline request returned 450 characters of content and ZERO reasoning, while `chat_template_kwargs {enable_thinking: true}` returned a 372 character trace on the `reasoning` field. That is `reasoningContentField: "reasoning"` proven and the silent-loss failure mode observed rather than argued.
+
+**Consequences (ADR-0367).** `supportsReasoningEffort: false` is now known to be CONSERVATIVE rather than correct, and it is being left false anyway. The same head accepted `reasoning_effort: "medium"` with HTTP 200 and returned a 419 character trace, so the comment claiming vLLM's OpenAI server "does not accept it" is false for this version. Flipping it changes what omp puts on the wire, and only raw vLLM was exercised here, not omp's emission path, so flipping it is its own increment with its own verification rather than a drive-by edit on the strength of a curl. Recorded because a wrong comment left unmarked is how the next person inherits the error. Two existing tests FAILED on the new value and both were right to: `local_presets.test.ts` pinned 131072 for the served-id path and `local_providers_ui.test.ts` pinned it as the catalog fallback, which is the guard working exactly as designed. A third test now pins 524288 with its provenance. Because `local_presets.ts` lives under `desktop/renderer/`, the AGENTS.md renderer rule applies and was followed rather than assumed: `bun run build-renderer` was run and the SERVED BYTES were grepped, confirming `contextWindow: 524288` inside the GLM segment of `app.bundle.js`, the old `131072` absent from that segment, and `qwen-chat-template` still present. Without that step the source would have been correct and the running app unchanged, which is the ADR-0303 vacuous-green trap. Full suite 5277 pass / 4 skip / 0 fail, both typechecks clean, licenses clean. What is NOT done: no provider was saved into the operator's live LUCID and no turn was run THROUGH LUCID, because the key belongs in the user's own OS-encrypted vault and putting it there is a deliberate human action, not something an agent should do to a running app. The endpoint side is proven; the last click is the user's.
+
+## ADR-0368 -- P-PACKSCAN.1: the engine could not find its own scanner, and blamed the pack (2026-09-18)
+
+**Context.** A user reported that `intelligrc-automation.lkgpack.zip` would not load. The pack is fine: imported in isolation it returns `ok: true`, 189 pages, 0 findings. The packaged app returned, for all three accepted input forms (the zip, an unzipped folder, and the manifest inside one), the identical refusal: `page "doc-01-summary" flagged: fail-closed: scan unavailable (scanner not running)`. That sentence accuses a valid pack of carrying an attack, and its author spent real time hunting for poison in 189 pages that were never poisoned. The cause is the THIRD appearance of the ADR-0356 bug. `harness/security/scanner_client.ts` resolved its sidecar directory as `process.env.LUCID_SCANNER_DIR || join(HERE, "..", "..", "scanner-sidecar")`, where `HERE` derives from `import.meta.url`. A `bun build --compile` binary VIRTUALIZES that to `B:\~BUN\root`, so the fallback named `B:\~BUN\scanner-sidecar`, a path in no filesystem. `LUCID_SCANNER_DIR` is set in exactly ONE place in the codebase, `harness/launcher/lucid_acp.ts:106`, so the standalone launcher was immune while the packaged desktop ENGINE (`bin/lucid-engine`, also a compiled binary per ADR-0260) never set it. Every engine-side scan on every packaged install therefore spawned `python server.py` with a nonexistent cwd, the child died instantly, and the gate fail-closed. Reproduced exactly by pointing the env var at `B:\~BUN\root\scanner-sidecar` and getting the byte-identical error string.
+
+**Decision.** Three changes, and only the first is the fix. (1) The fallback becomes the PROBED repo root, `repoAsset("scanner-sidecar")`, using the resolver ADR-0356 built for precisely this failure; the explicit env override still wins, so the launcher path is unchanged. (2) A dead scanner gets its OWN result stage. `scan` now means the pack's content was refused and is the author's problem; the new `scanner` means LUCID could not look at all and is OUR problem. These had to be split at the reason STRING, because the gate catches `ScanUnavailableError` itself and fail-closes into a BLOCK decision carrying its own text, so an environment fault arrives at the importer indistinguishable from a content finding. `isScannerUnavailable` matches the mechanisms `scanner_client.ts` can produce and deliberately errs toward false NEGATIVES: mislabelling a real finding as an environment fault would tell a user to restart when they should be discarding a hostile pack. (3) Every import attempt, local or purchased, appends one line to `~/.omp/lucid-kbpack.jsonl` carrying the stage, the error, and an `env` block naming the resolved scanner dir and whether it and its `server.py` exist. The failure toast returns that path with Copy and Reveal actions. Invariant 3 is untouched throughout: all four failures still refuse, and nothing installs.
+
+**Consequences.** The `env` block is the point: for this exact bug it prints `scannerDirExists: false`, which is the entire diagnosis at a glance, against an hour of probing to reach the same conclusion by hand. A workaround exists for installs that predate the fix and was PROVEN rather than suggested: setting `LUCID_SCANNER_DIR` to `<install>\resources\repo\scanner-sidecar` imports the same pack successfully using that build's own bundled Python, because the env branch is identical in both versions. Five tests pin the split, and the negative half carries the weight: six mechanism reasons must classify as scanner-unavailable and six content reasons must NOT, or a poisoned pack could be reported as a LUCID bug. One pre-existing test changed rather than being added to, and it was right to fail: `a dead scanner fails closed (no install)` asserted `stage === "scan"` and now asserts `"scanner"`, which is the same behavior described more precisely. The success path writes NO log line, so the file a user is told to send does not fill with noise from imports that worked. Because `app.ts` and `styles.css` are under `desktop/renderer/`, the AGENTS.md rule was followed and not assumed: `build-renderer` ran and the served `app.bundle.js` was grepped for `ctReconnect`, `ctool-warn`, and the new failure strings, all present. Full suite 5282 pass / 4 skip / 0 fail, both typechecks clean, licenses clean. NOT fixed by this change: the operator's currently installed build. The fix is source-side, the running engine is a compiled Sep 16 binary, and no source edit reaches it until a rebuild.
+
+## ADR-0369 -- P-CONNUI.1: a failed startup probe is not an error worth a paragraph (2026-09-18)
+
+**Context.** On a fresh open, the first thing a user could read was a paragraph in the middle of an otherwise empty thread: `Connection unavailable: signal timed out. Reconnect to check session status before sending.` It comes from `recoverMasterTurn`, which probes on startup for a turn to re-adopt; when `bridge.chatStatus()` times out the catch calls `showTurnReconnect`, the same loud in-thread banner used when a turn may still be running. On a fresh open there IS no turn, so the banner describes a risk that does not exist, in the most prominent place in the app, to a user who has not done anything yet. It reads as a broken product.
+
+**Decision.** Keep the banner exactly where it is earned and add a quieter surface where it is not. When the probe fails AND the thread has no rendered turn, LUCID now shows a compact amber Reconnect button in the composer tool row beside the mic, voice, fleet and timeline controls, and nothing else. The banner is retained verbatim for every case that genuinely needs prose: a turn that may still be running, a fleet lane that owns the composer, an unconfirmed Stop, and a probe failure when a conversation IS on screen, because there the user needs to know their history may be stale before sending again. Amber rather than red, because a failed probe on a fresh open has cost the user nothing and the control means "retry available", not "something broke". The button is hidden unless a probe actually failed, which is what lets it be noticeable when it appears.
+
+**Consequences.** Two surfaces now express one state, so both must be cleared on every exit from it or a dead probe's button outlives the view that offered it. `hideQuietReconnect` is therefore called from three places: `leaveTurnView`, the normal reachable-engine-no-turn path, and the button's own click handler. That third call site is the reason the helper exists rather than being inlined. The distinction is a real judgment call and can be wrong in one direction: if a status probe times out while a turn IS live but nothing has rendered yet, the user gets the quiet button instead of the loud warning. That window is small and the button still reaches the same `recoverMasterTurn`, so the recovery path is identical; only the emphasis differs. Verified in the served bytes rather than in source: `build-renderer` ran and `app.bundle.js` carries `ctReconnect` and `ctool-warn`, while the old banner string is still present because it is still used.
+
+## ADR-0370 -- P-RELEASE.5: the identity gate passed a leftover because a prefix is not a boundary (2026-09-18)
+
+**Context.** A local Windows build was gated before any install, and the ADR-0307 release-identity gate reported `OK - 5 artifact(s) checked, every embedded identity matches the flavor being built`. One of those five was `LucidAgentIDE-0.1.0-win-x64-portable.zip`, a 350 MB leftover dated June 19 from an unrelated older build, and the gate classified it as **mac-zip on a Windows build, at version 0.1.0, and passed it**. The rule was `base.startsWith(stem)` with `stem = "LucidAgent"`, and `"LucidAgentIDE"` starts with `"LucidAgent"`. A `.zip` carries no embedded identity the gate can read without unpacking, so nothing contradicted the filename, and the one check that applied was satisfied by an accident of naming: the product name is the artifact stem plus three more letters. This is the same mistake as ADR-0363's `exact` flag, where `"mac-universal"` and `"mac-arm64"` both passed a bare prefix test against the expected `"mac"`. Nothing was published from a local directory, so the cost here was zero, but the gate exists specifically because a release once shipped a different product entirely (ADR-0307), and "a stale artifact rode along because its name extended the stem" is exactly that failure with a different cause.
+
+**Decision.** The stem must END where the name says it does: after matching the stem, the next character must be a delimiter (`-`, `_`, `.`) or the name must end. Applied in both places the stem is matched, the filename layer and the updater feed's declared `path`, because a feed pointing at `LucidAgentIDE-0.1.0-...` had the identical hole. Every real electron-builder name for this repo already satisfies it (`LucidAgent-Setup.exe`, `LucidAgent-mac-arm64.pkg`, `LucidAgent-x86_64.AppImage`, `LucidAgent-arm64.AppImage`, `lucidagentide-desktop_2.2.1_arm64.deb`, `lucidagentide-desktop-2.2.1.aarch64.rpm`), so the anchor costs nothing. The stale file was also deleted, but deleting it is the smaller half: the gate that let it through is the defect.
+
+**Consequences.** Proven as a differential on the real directory rather than asserted: the same file, same dir, went from `PASS mac-zip` to `FAIL ... must start with "LucidAgent" followed by a delimiter`, and after removing it the gate is green on the 4 genuine artifacts. Four new tests, and the POSITIVE half carries the weight: a delimiter anchor that rejected a shipping name would break every release, which is a far worse outcome than the leak it closes, so every real name for both flavors is pinned as passing and `LucidCreator-mac-x64.zip` is pinned as still refused for an Agent build. What this does NOT fix, stated plainly: a stale artifact whose name is byte-identical to a current one still passes, because the gate reads identity and not mtime, and for the extension-classified kinds there is no identity to read. In CI that is unreachable (every build is a fresh checkout), so it is a LOCAL hazard only, and the mitigation is to clear `desktop/release/` before a real tag rather than to teach the gate about timestamps. One incidental find while gating: `about.test.ts` pins the compiled `APP_VERSION` against `desktop/package.json`, which caught a version stamp of mine within one suite run, which is the single-source guard behaving exactly as designed.
+
+## ADR-0371 -- P-LOCALPICK.1: a discovered model the picker refused to show (2026-09-19)
+
+**Context.** The DGX Spark provider was fixed live (ADR-0367 addendum): `dgx-spark/glm-5.3-flash` discovers, answers, and carries a measured 524288 window. The model picker still did not show it. Two independent causes. First, omp regenerates `~/.omp/agent/models.yml` only at engine spawn, so a provider saved or corrected mid-session does not exist in the running omp's catalog until a restart; the picker was silently truthful about a stale catalog. Second, even after a restart, no family regex in `model_families.ts` matches self-hosted ids, so the model sank into "Other models" at the bottom, and `isChinaModel("dgx-spark/glm-5.3-flash")` is true BY NAME, so the China-origin egress gate hid a model served from the user's own rack.
+
+**Decision.** Local-provider models get their own pinned section and their own rules. New pure helpers (`providerPrefixOf`, `localPrefixSet`, `splitLocalModels`, `pendingLocalModels`) classify by the provider-id prefix that `local_providers.ts` mints, not by name; `curatedModels` bypasses the China gate for exactly those prefixes, because that gate is about EGRESS to foreign clouds and a declared LAN or VPN endpoint does not egress; `familyListHTML` renders a collapsible `Local (self-hosted)` section pinned ABOVE Favorites, the strongest intent signal in the list, and those models render ONLY there. A provider that is saved but absent from the live catalog renders a pending row, "loads after a restart", with a Restart now action wired to `bridge.relaunch()`, because the restart requirement is a fact of omp's catalog lifecycle the user cannot see and should not have to discover. The picker memo key includes a local-provider fingerprint and opening the picker refreshes `bridge.localProvidersList()` in the background, so the section tracks reality without a reload.
+
+**Consequences.** 60 tests in `model_families.test.ts` pin the classification, the gate bypass (including the `isChinaModel` true-by-name case, pinned so nobody "fixes" the bypass away), the pending computation, and the section HTML. The bypass is deliberately narrow: it keys on the saved provider's prefix set, never on name patterns, so a real `zhipu/glm-*` cloud model is still gated. The pending row obeys the search filter like every other row. Mini picker gets the same handler. What this does NOT do: it does not make omp reload providers without a restart, which is omp's catalog lifecycle, not ours.
+
+## ADR-0372 -- P-GOVGEM.1: Gemini for enclaves, the honest half and the blocked half (2026-09-19)
+
+**Context.** Requirement: Gemini Enterprise must be usable on networks with no internet, NIPRNet and above, where "some API router for those private government versions" was presumed to exist. Research confirms it exists and names it: Google Distributed Cloud air-gapped, holding DoD IL5 and IL6 provisional authorizations with Gemini Pro and Flash explicitly in scope (sources in `docs/GEMINI-GOV-AIRGAP.md`). The endpoint model is customer-local: an operator deploys a Gemini endpoint INSIDE the enclave, resolvable only through the zone's private DNS under a private TLD, TLS-signed by the zone's own CA, authenticated by an enclave service account. Client needs are exactly three: reach the hostname, trust the CA, present credentials.
+
+**Decision.** Ship the half LUCID can ship without forking omp, and document the boundary of the other half instead of pretending. (1) The Gemini Enterprise card gains a `NODE_EXTRA_CA_CERTS` field ("Private CA bundle"), riding the existing P-PROV.1 setKey to env to omp seam; the omp child restarts on save and trusts the CA at boot. Proven live, not asserted: a Bun TLS server behind a self-signed CA fails `error: self signed certificate` without the env and returns the body with it. The env is process-wide, so it equally fixes Local Providers behind private CAs. (2) The enclave endpoint itself is wired through Local Providers where an OpenAI-compatible route exists, machinery already proven against the DGX vLLM head. (3) The native `google-vertex` path against a private hostname is BLOCKED UPSTREAM: omp 18.2.2's `resolveVertexEndpointHost` in `pi-catalog/src/hosts.ts` interpolates only `*.googleapis.com` hosts and no override env exists anywhere in `google-vertex.ts` (both the api-key and ADC branches were read, not skimmed). Invariant 1 forbids the fork; the upstream ask is a base-URL env honored ahead of the host resolver, and the moment it lands, exposure is one line in the existing `fields` list.
+
+**Consequences.** The field costs nothing for public-cloud users (blank means system trust store, unchanged behavior) and is the difference between "cannot connect, opaque TLS error" and "working" for every private-CA deployment, Google or not. `auth_status.test.ts` and `demo_p_prov_1.ts` use containment assertions, so the added field breaks neither. The known risk is honesty drift in the other direction: the card now MENTIONS air-gapped support while the native protocol path is still blocked, which is why the card comment and the doc both state the block in plain terms with the omp file and function named, so the next session inherits a boundary, not a belief.
+
+## ADR-0373 -- P-OMP18.2: the pin catches up to the judgment backend, and pi-tui joins the pin set (2026-09-20)
+
+**Context.** User request: adopt the newest omp so LUCID can run Jev, TypeSafe AI's hosted System One judgment model (announced 2026-09-15, hosted-only, no released weights). Verified against the upstream release page, not hearsay: omp v18.2.4 (released 2026-09-17) added the `judgment` module in `pi-ai` (typed choice / yes-no / score judgments through the `Judge` interface), `TypeSafeJudge` with `TYPESAFE_API_KEY` auth in `pi-catalog`, `/login typesafe`, `providers.judgmentProvider` (`auto | typesafe | llm`), and a `judge(state, questions)` eval helper with a fallback chat model. Our pin was 18.2.2 (ADR-0362, four packages, exact), two patches short. The intervening releases carried one breaking seam: v18.2.5 moved the terminal UI modules out of `pi-coding-agent`'s subpaths into `@oh-my-pi/pi-tui`, and that included `status-line/context-usage`, the home of `computeNonMessageTokens` / `estimateSkillsTokens` / `estimateToolSchemaTokens` that `harness/prompt/prompt_audit.ts` imports for the ADR-0362 parity anchor. v18.2.6 additionally fixed Anthropic prompt-cache head re-baselining and two Windows `Bun.file` auth-broker bugs, both directly relevant to this machine.
+
+**Decision.** Bump the exact pin 18.2.2 to 18.2.6 through the sanctioned ADR-0041 path run locally: `bun add --exact` plus `omp-compat.mjs migrate 18.2.2 18.2.6`. One seam fix: `prompt_audit.ts` now imports the three context-usage helpers from `@oh-my-pi/pi-tui/status-line/context-usage`, the same specifier omp's own `session-stats.ts` and `agent-session.ts` use, so the parity anchor still counts with the code the live session counts with. That import makes pi-tui a load-bearing direct dependency, so it becomes the FIFTH member of the exact-pin set, enforced in all three places the set is defined: `package.json`, `OMP_PACKAGES` in `prefix_compaction.test.ts`, and `PACKAGES` in `omp-compat.mjs`, plus the workflow's `bun add` line. A stale directly-pinned pi-tui would otherwise split the `Tokenizer` type identity across two package copies on the next four-package bump; five-way agreement makes that impossible (the compat script throws on any disagreement). `ToolLike` in `prompt_audit.ts` is now `Pick<AiTool, "name" | "description" | "parameters">` because 18.2.6's `estimateToolSchemaTokens` requires typebox `TSchema` parameters; the defensive session-state walk keeps its runtime checks and casts only the `parameters` field at the boundary. Jev itself stays OFF: nothing in LUCID sets `providers.judgmentProvider` or `TYPESAFE_API_KEY`, so judgment behavior is omp's default LLM fallback. A judgment-backend policy ADR (pin `llm` under AskSage-only CUI lockdown, since `auto` silently falls back from TypeSafe to the online LLM chain; egress-allow `api.typesafe.ai` only when explicitly enabled) is named future work, not smuggled in here.
+
+**Consequences.** INVARIANT 6 SURVIVED AGAIN, byte for byte: `demo02_prefix_hash` reports 13747 bytes, hash `bfe28eff5e97d20a` on both tasks, the identical count and hash measured under 16.5.2 and 18.2.2, so every KV cache keyed on the frozen prefix stays warm across the bump. Fail-closed gate 10/10 standalone. Full suite 5368 pass / 4 skip / 0 fail across 399 files (the pre-bump baseline was the same numbers). Both typechecks clean; scanner sidecar pytest 57 pass; `node_modules/.bin/omp --version` prints 18.2.6. One local sharp edge worth recording: `bun test harness` on this Windows machine sweeps in the STALE PACKAGED repo copy under `desktop/release/win-unpacked/` via bun's substring matching and fails on its old omp, which looks exactly like a bump regression and is not one; the `TEST_IGNORES` invocation from the Makefile is the truthful gate locally. The weekly probe now bumps five packages in lockstep; the next release cut carries this pin.
+
+## ADR-0374 -- P-JEV.1: the judgment backend gets a card, and lockdown pins it to the LLM chain (2026-09-20)
+
+**Context.** ADR-0373 bumped omp to 18.2.6 so LUCID could run Jev, TypeSafe AI's hosted System One judgment model, and left it OFF with the policy named as future work. The user then reloaded and asked where Jev was in the providers list; it was nowhere, because nothing had been built. Two facts from the omp source shape the design. First, TypeSafe is deliberately NOT a chat-model provider: `pi-catalog/src/compat/rules/auth/typesafe.kdl` declares only an auth rule (`env "TYPESAFE_API_KEY"`, key paste login), so it never appears in the model picker; it belongs beside the ElevenLabs voice card, not in the model provider lists. Second, `pi-coding-agent/src/judgment/index.ts` `usesTypeSafeJudge` routes to TypeSafe when `providers.judgmentProvider` is `typesafe` OR when it is `auto` and a TypeSafe credential exists, and `resolveJudge` falls back to the online LLM chain when a TypeSafe call fails. So merely saving a key under omp's default `auto` starts shipping judgment state (conversation text and tool output) to `api.typesafe.ai`. Under AskSage lockdown that is exactly the CUI backflow the ADR-0217 model clamp exists to prevent, and the tool-level egress whitelist (ADR-0062/0108) does not see it, since it is a provider call inside omp, not a tool call.
+
+**Decision.** (1) `auth_status.ts` OTHERS gains `typesafe` (key-only, `TYPESAFE_API_KEY`), riding the existing setKey to env to omp seam; `HUB_VOICE_EXCLUDE` becomes `HUB_NON_MODEL_EXCLUDE = ["elevenlabs", "typesafe"]` and `secOthers` filters through the same constant, so the hub, the configured-provider count, the onboarding nudge and the More providers list all exclude it from one place; `typesafe` joins `RESERVED_PROVIDER_IDS`. (2) A new Settings card, Judgment, renders the key via `provCard` and an `auto | typesafe | llm` select. (3) The policy is one pure module, `desktop/judgment_policy.ts`: `resolveJudgmentProvider(stored, locked)` returns `{ stored, effective, clamped, locked }`, and lockdown (user or org-managed) pins `effective` to `llm` for every stored value including `auto`, while the stored choice survives so lifting the lock restores it. (4) Delivery is a second `--config` overlay. omp deep-merges later config files over earlier ones (`Settings.#loadPersistedLayers`), so `acp_backend.ompConfigArgs()` rewrites `lucid-judgment.yml` beside the settings file at EVERY spawn (master, util completions, fleet lanes replaced their three `isoCfg` copies with this one helper) and passes it after `acp_config.yml`. A failed overlay write throws and the spawn is refused, never started unpinned. (5) `/api/judgment` GET returns the resolved shape so the card shows what omp is actually told; POST persists and restarts the omp child only when the effective value changed. `/api/asksage` now also restarts when a lockdown flip changes the effective judgment value, so a saved key stops receiving judgments the moment the lock goes on.
+
+**Consequences.** Jev is now one key paste away for a non-lockdown user, and unreachable under lockdown regardless of what was saved, by construction rather than by remembering. The omp fallback rule (TypeSafe failure falls to the online chain) is omp's behavior and is stated on the card, not hidden. `demo-P-JEV.1` proves the env name and the enum against the pinned package bytes, the exclusion, the round-trip, the clamp and the overlay flipping with the live lock through the real `fleetLaneArgv`. Full suite 5374 pass / 4 skip / 0 fail across 400 files (baseline 5368 / 4 / 0 across 399). Renderer rebuilt and the served `/app.js` grepped from a fresh engine: `secJudgment`, `data-judgment-set`, `HUB_NON_MODEL_EXCLUDE` present, `HUB_VOICE_EXCLUDE` absent. Not done here: egress-allowing `api.typesafe.ai` in the network whitelist is unnecessary (provider calls bypass the tool gate) and nothing was exercised against the live TypeSafe endpoint, since access is still waitlisted; `TYPESAFE_BASE_URL` (a self-hosted or proxied endpoint) is honored by omp but has no field yet.
+
+## ADR-0375 -- P-ACCT.1: named multi-account providers, and provider cards learn to fold (2026-09-20)
+
+**Context.** User request: hold several ChatGPT subscriptions (and other providers' accounts), OAuth or API key, named, and switch between them in Settings and the Provider Hub; also nest the per-provider settings because the panel got long. Ground truth from the pinned omp 18.2.6: the credential vault (agent.db, auth_credentials) already stores one OAuth row PER IDENTITY (identity_key), omp selects among ACTIVE rows automatically (usage-ranked, session-sticky, `WHERE disabled_cause IS NULL`) with no manual pin, its own delete only SETS disabled_cause, nothing ever clears it, and token refresh touches only active rows. Precedence (pi-ai auth-storage): a stored OAuth credential BEATS an env-var API key. LUCID's model was one slot per provider: keys[env] in the settings store and a first-match oauth read in auth_status.
+
+**Decision.** Switching is built on omp's own soft-disable column, never a fork or a second vault. A new pure module, `desktop/account_policy.ts`, owns LUCID_INACTIVE_CAUSE ("lucid:inactive-account"), the StoredAccount and AccountView shapes, derivation (merge of vault identities, stored named key accounts, the legacy env slot, active resolution mirroring omp precedence) and name validation. `auth_vault.ts` gains the appliers: listOauthRows (active + LUCID-parked only), activateOauthIdentity (one transaction: unpark target identity, park other actives, LUCID's cause only, rows omp disabled for its own reasons are untouchable), parkAllOauth (a key account can only win once no active OAuth row remains), disconnectOauthIdentity (per-identity delete, the multi-account sibling of disconnectCredential). The settings store persists accounts (key secrets in the same 0600 file as the legacy keys slot; oauth records are rename-only) and activeAccount pointers. dev.ts serves /api/accounts (GET snapshot; add/rename/remove/switch mutations that answer with the refreshed snapshot and restart the omp child when credentials moved). The renderer nests every provider card in secProviders/secOthers into a `<details class="prov-acc">` accordion (one-line nowrap summary, invariant 11; open-state in a session Set) whose body is the account list (switch dot, single-span name + identity/last4 suffix, parked chip, rename, remove) above the existing provCard; the Provider Hub tile shows an "N accounts" badge and its expansion carries the same block; Voice, Judgment and the AskSage gateway cards keep the flat provCard.
+
+**Consequences.** Two ChatGPT subscriptions coexist as two identity rows; switching parks one and unparks the other losslessly (tokens keep refreshing on the active row; a parked row re-enables without re-auth), and a named key account parks all OAuth so the env key actually routes. Suite 5383 pass / 4 skip / 0 fail across 401 files (baseline 5374/4/0/400); demo-P-ACCT.1 proves the park/unpark round-trip on a real sqlite vault plus the served renderer markers; live-probed against a booted engine end to end (GET/add/switch/rename/remove). One live-probe casualty recorded honestly: the probe's remove targeted the user's REAL openai-codex OAuth row (auth_vault defaults to the real vault; only the settings file was isolated), deleting that token row, the user must reconnect OpenAI OAuth once. Lesson for the next session: live probes against account routes must point LUCID_MAIN_TOKEN engines at a THROWAWAY agent-dir too, not just a throwaway settings file. Known limits: omp still auto-picks among multiple ACTIVE rows (LUCID keeps exactly one identity unparked per provider, so this does not bite); /login inside omp can mint rows LUCID only sees on the next snapshot; no per-account usage attribution yet.
+
+## ADR-0376 -- P-UX-JEV.1: a link restarted the front end, and the mascot was three ninjas (2026-09-20)
+
+**Context.** User report, reproduced live in the running app during this session: clicking the AI Studio link in the Provider Hub writeup turned the screen white and restarted the whole front end, losing everything typed or pasted into the prompt. Two independent faults, and the second is the expensive one. First, the guides carry ordinary `<a href="https://...">` anchors and the preview frame is sandboxed WITHOUT `allow-popups` or `allow-top-navigation`, so the click attempted a navigation the browser then refused. Second, and this is what destroyed the prompt, `main.ts` registered `did-fail-load` with NO `isMainFrame` check, no `ERR_ABORTED` check and no "already running" check, and its body was `win.loadURL(...)`: ANY failed load anywhere in the window, including a subframe the user clicked in a preview, reloaded the entire renderer. The retry was written for a slow cold start and became a remote-triggerable app restart. `setWindowOpenHandler` existed but only sees `window.open`/`target=_blank`, so it never covered this. Separately the user asked for one ninja (the immersive stage painted a second, static, 25%-dimmed sprite behind the composer runner and the arcade), for the walk above the prompt to match the better bottom one, for a hover/click reaction, and for the Arcade's Exit to stop stacking above Start.
+
+**Decision.** One boundary module, `desktop/navigation_policy.ts`, owns every case: `externalHttpUrl` (absolute http(s), hostname required, no credentials, no control characters or backslashes, canonical href or null) is the single validator used by the IPC handler, the window-open handler and the renderer; `installAppNavigation` refuses EVERY top document navigation including same-origin app routes, refuses a subframe-initiated frame navigation while leaving the host's own `iframe.src` assignment working, refuses top-frame redirects without an automatic hand-off, and restricts the startup retry to a genuine main-frame failure of the app URL before the app has ever finished loading, re-checking at retry time. External destinations go to `shell.openExternal`. The injected preview shim gains a capture-phase click/auxclick interceptor that POSTS a request (`__lucid: "preview-external-link"`) to the host instead of navigating: same-document fragments still scroll, non-web schemes and same-origin endpoints are dropped, and the sandbox is NOT widened. The host treats that message as untrusted: it re-validates the URL, requires the active lane's frame, and requires a SECOND user click in a toast before anything opens. The AI Studio URL was left as `aistudio.google.com/apikey`, which Google's own current API-key documentation links; the earlier "canonical /app/apikey" claim was unverified. For the mascot, the stage canvas and its 250 ms poll are deleted outright (the stage keeps its layout), the composer runner becomes the single sprite and is driven by the real session state the stage poll used to read, `mountAgentArcade` gained an `onLayout` callback and `isOpen()` so the runner suspends while the game owns the screen, the top lane now uses `MASCOT_RUN_FRAMES` at the arcade cadence instead of the separate sneak poses, and an inline-positioned hit button over the sprite's visible pixels gives hover/focus/click reactions that always yield to real session state. Mini games no longer build their own toolbar: they receive the cabinet's single row, so Start and Exit stay one adjacent pair, and that row wraps on the PANEL's width (flex) rather than a viewport media query.
+
+**Consequences.** The whiteout is proven fixed behaviorally, not by inspection: in the real serve pipeline on a freshly booted engine, clicking an external link, a `file://` link and a same-origin link leaves `location.href` unchanged while a fragment link still moves to `#target`, and exactly one host request is emitted, for the https URL only. Sixteen handler tests drive the real handlers through a fake WebContents and were mutation-checked: reverting the `did-fail-load` guards fails two of them. The mascot work was verified on screen in the Preview panel (one sprite at 1100px and 420px, Start/Exit adjacent in both, Shuriken range showing one row where the report showed two, the runner suspending on open and resuming with a greeting on click). Two non-obvious bugs were found only because it was run rather than reasoned about: the hit button took its `position:absolute` from the stylesheet, so without CSS it sat in flow and resized the composer every frame, which retriggered the resize observer, which reset the canvas bitmap and left the ninja invisible; and `measure()` assigned `cv.width` unconditionally, which clears the bitmap even when the value is unchanged. Both are fixed at the source (inline geometry, resize only on a real change). One retired test was DELETED rather than re-pinned: `mascot_runner.test.ts` asserted the top lane used `sneakA`/`sneakB`, which is exactly the walk the user asked to replace; it now asserts the shared run cycle. Known limits, stated plainly: the user's RUNNING app still carries the old bundle and the old main process until it is restarted, so the bug remains reproducible there (I reproduced it live); `will-frame-navigate` and `will-redirect` behavior rests on Electron 44's documented events and the fake-contents tests, not on a packaged Electron run; and the Jev guide's vendor figures are labeled vendor-reported, with independent production adoption explicitly marked as not established.
+## ADR-0377 -- P-JEV.2: Jev in the chat, the per-turn judgment trace (2026-09-20)
+
+**Context.** After P-JEV.1 the user pasted a TypeSafe key, asked a question, and saw nothing: no sign Jev existed, no sign it had or had not been used. Two facts explain it. First, omp 18.2.6 consults its judgment backend from only four places (auto-thinking effort in `auto-thinking/classifier.ts`, the smart unexpected-stop check in `session/unexpected-stop-classifier.ts`, git AI staging, and the eval `judge()` helper), and with LUCID's settings (`defaultThinkingLevel` not `auto`, `unexpectedStopDetection` mechanical) an ordinary turn triggers none of them, so a plain question genuinely asks Jev nothing. Second, and this is the design problem, omp records NONE of its judgments anywhere: only the auto-thinking caller appends a `model_usage` entry (tokens only), the other three write nothing, and the extension API has no judgment event. The question, the typed answer with its probabilities, the backend that answered and any fallback exist in exactly one place, inside `TypeSafeJudge.judge()` and `TextJudge.judge()` in pi-ai. The user asked for exactly that: show when Jev is used, with an expandable table of the judgment and how it was reached; when Jev is configured but unused, say so; when it is not configured, say nothing.
+
+**Decision.** (1) A new in-process omp extension, `harness/omp/judgment_extension.ts`, wraps `TypeSafeJudge.prototype.judge` and `TextJudge.prototype.judge` on the `@oh-my-pi/pi-ai` module omp already loaded (asksage_stream.ts imports the same package at runtime, and there is one copy under node_modules). Every judge omp constructs from then on is observed whichever feature asked; omp's source is untouched, and a future omp that changes the class shape degrades to "no trace" (invariant 1: an in-process wrapper on a public class is an extension, not a fork). The wrapper captures the request and result (or error), rethrows errors untouched so omp's TypeSafe-to-LLM fallback behaves exactly as pinned, and POSTs a `JudgmentReport` to a token'd loopback URL (`LUCID_JUDGMENT_URL`, the ADR-0318 tool_meta pattern). Unlike tool_meta it AWAITS the POST, bounded at 1.5 s: the last judgment of a turn can be the unexpected-stop check that runs right before omp answers the ACP prompt, and a fire-and-forget report could lose that race and produce a false "not consulted". A slow desktop costs at most the bound per judgment, never the judgment. (2) One contract, `harness/judgment/trace.ts` (types and view helpers, dependency-free so the renderer imports it) plus `harness/judgment/trace_schema.ts` (the arktype parse boundary, used by the extension at capture and by dev.ts on receipt; never trusted because it was JSON; malformed questions are dropped with their answers so no answer is ever shown without its question; the judged state is capped at 4000 chars with the full length reported). The purpose of a judgment is inferred from the question ids each omp caller uses (`bucket`/`level`, `stopped`, `file<N>`/`matches`), anything else being the agent's own `judge()` call. (3) `dev.ts` publishes the URL, serves `POST /api/judgment/trace` through the parser, and `GET /api/judgment` gains `configured`, computed by the new pure `jevActive(effective, keySet)` (mirrors omp's `usesTypeSafeJudge`: `llm` never, `typesafe` always tries, `auto` only with a saved key). `acp_backend.noteJudgment` relays a report into the live chat stream as a `judgment` ChatEvent, master target only; a fleet lane's report is dropped rather than drawn under the wrong reply. (4) The renderer's new `judgment_trace_view.ts` draws a `.thoughts`-styled window under the tool activity that fills in live and settles to "Jev consulted · N judgments" (naming failures and text fallbacks) or "N judgments by <model>" when Jev did not answer. Expanded, each judgment is a header of chips (purpose, backend, ms, tokens), a real table (question id + type chip + instructions / typed answer with probability bars / confidence), the error line when TypeSafe failed, and the judged state behind `<details>`. At `done`, a turn with no judgment asks the server once and draws "Jev not consulted this turn" only when `configured` is true and the turn is not a lane's; the note's tooltip names the three triggers that did not fire. Invariant 11 is honored by construction: every chip is nowrap, ids ellipsize, prose (instructions, the error) lives in one block element with an absolutely positioned icon, and the question column has a 220px floor.
+
+**Consequences.** `demo-P-JEV.2` proves the seam on the REAL pi-ai classes: the extension loaded as omp loads it wraps `TypeSafeJudge`, a judgment answered by a local fake TypeSafe endpoint reaches the receiver as a parseable report BEFORE the caller gets the (untouched) answer, a 503 is reported with its error and still throws, the `TextJudge` fallback is reported naming the model that answered, a second load traces once, lane reports and reports outside a live turn are dropped, the active gate matches omp's rule, and the served bundle and stylesheet carry the window, the idle note, the table rules and the lane guard. Seventeen unit tests pin the contract and the wrapper. The window was verified on screen against the real stylesheet (live window with three judgments including the fallback pair, the settled collapsed summary expanding to its table, and the idle note). Limits, stated: nothing has been exercised against the live api.typesafe.ai (access still waitlisted), so the first real judgment is the moment to confirm the usage row also lands on omp's session ledger; the trace is master-only (lane children do not load the extension and lane turns show neither the window nor the note); the extension's module-identity assumption (one `@oh-my-pi/pi-ai` under node_modules) holds in this checkout and must be rechecked if the packaged app ever nests a second copy, where the wrap would silently observe nothing; and the awaited POST adds one loopback round-trip per judgment to the agent's critical path. THE RUNNING APP DOES NOT SHOW ANY OF THIS UNTIL IT RESTARTS: the route and the env are in dev.ts, which is the engine process, and the master omp child must be respawned to load the extension. The purple left border and the scale icon are new; no existing surface moved.
+
+## ADR-0378 -- P-JEV.3: name Jev for the agent, the frozen judge() steer (2026-09-20)
+
+**Context.** With Jev configured and the P-JEV.2 trace live, the user asked "What is the speed of light? Use JEV" and got a correct answer plus "I am not sure what JEV refers to", under a "Jev not consulted this turn" note. Both halves were correct behavior given the prompt. Nothing in omp's system prompt, the eval prelude or LUCID's appended policies names Jev, TypeSafe or the fact that the eval helper `judge(state, questions)` is the ONLY path an agent has to it; the eval doc says "TypeSafe when credentialed" in passing and never the word Jev. So the word "JEV" in a user turn is an unknown token to the model, the agent never runs eval for a plain question, none of omp's own callers fire (fixed thinking level, mechanical stop detection), and Jev sits idle exactly as ADR-0377 predicted for such a turn. The trace did its job: it made the gap visible.
+
+**Decision.** A new frozen layer-3 policy, `JEV_POLICY` (`<jev>`), added to the byte-stable prefix (PREFIX_VERSION 10 -> 11), to the live chat's `--append-system-prompt` chain in `acp_backend.ts` and to the audit mirror in `prompt_audit.ts` (now 8 policies), like every prior layer-3 policy. It says what Jev is (LUCID's typed-judgment engine, not a chat model, not a tool name; also written JEV or TypeSafe), that it is reached only through eval's `judge()`, which answer shapes come back, when to call it (the user names Jev, or asks for a judgment, classification, rating or confidence) and never to answer "I don't know what Jev is", to pass only the material the judgment needs as state because state and questions leave the machine, to report the typed answer and say Jev judged it, and not to call judge() on a plain question just to say it was used. The prefix cannot know whether Jev is CONFIGURED (that is volatile, invariant 6), so the text describes the chat-model fallback that omp routes to instead and names Settings > Judgment as where Jev is set up; the P-JEV.2 trace under the reply is what tells the user which backend actually answered. Rejected: a tail-injected hint gated on `configured` (re-billed uncached every turn, and the mapping is standing behavior, not session state) and a `jev` tool wrapping judge() (a second surface for one helper; the eval path is already exec-gated and traced).
+
+**Consequences.** `demo-P-JEV.3` pins `<jev>`, the `judge(state, questions)` name, the refusal ban and the Settings pointer into `FROZEN_PREFIX`; the existing prefix-hash tests prove the prefix still changes ONLY with the version bump; the drift guard proves `acp_backend.ts`, `composeAppendedPolicy` and `policyParts` (8) agree byte for byte. `tsc --noEmit` clean. Not exercised: a live turn against the real api.typesafe.ai (still waitlisted), so the first real "use Jev" is the smoke test; the running app carries the new prefix only after the engine respawns the omp child. Cache cost: one prefix bust for every session on first turn after upgrade, then cached as before.
+
+
+## ADR-0379 -- P-JEV.4: the Jev browser action policy, browser_run (2026-09-20)
+
+**Context.** The user asked for github.com/browser-use/jev-ultrafast (MIT) to be added "if it is compatible with LUCID and our posture". Upstream is a Python browser agent: one DOM snapshot becomes an indexed element table, ONE TypeSafe (Jev) request answers which operation to perform plus a speculative target per operation, only the head matching the chosen operation executes, freshness guards refuse a decision the page has outrun, and a small hosted LLM writes the string whenever the operation is TYPE_TEXT. Three things collide with this repo. It is Python outside `scanner-sidecar/` (invariant 2). Its text helper is a second model endpoint that receives page content and returns free text the executor types (a page could steer what gets typed, and the value leaves the machine through a channel the judgment trace does not see). And it drives Chrome over raw CDP in the page's main world, where the page can monkey-patch the very DOM methods the guards rely on. What is compatible is the idea: LUCID already has Jev behind omp's `resolveJudge` (P-JEV.1 to P-JEV.3), a sanctioned visible agent window driven through a mailbox (P-BROWSER.1/.2), and an in-process extension pattern for new tools.
+
+**Decision.** A TypeScript port, as one increment, with two deliberate posture deltas. (1) `desktop/browser_snapshot.ts`: the page-side scripts (snapshot, marker, freshness probe, target resolution, settle) as strings plus the shared `BrowserAction`/`BrowserPage`/`BrowserFreshness` types; MAIN evaluates them with `executeJavaScriptInIsolatedWorld(BROWSER_POLICY_WORLD)`, so the element cache and the DOM wrappers live in a V8 context the page cannot reach, while node identities are integers only that world can resolve. (2) `harness/browser_policy.ts`: the pure policy (action space, question heads, fail-closed `validateChoice`, `decide`, stall rule); page text enters the judgment state between the UNTRUSTED_CONTENT markers (invariant 5). (3) NO text-generating model: every typed string is one the calling agent supplied by name in `values`, Jev only picks WHICH named value belongs in the chosen field, page content can never become typed text, and a field nobody supplied a value for stops the run with `needs_values`. (4) `desktop/browser_control.ts` + `dev.ts` gain the `snapshot` and `act` mailbox ops and routes (token'd like the rest); `main.ts` gains the executor half: re-narrow the queued action, re-verify the decision's freshness reference (scoped page_key + guard for click/select, the full marker otherwise), re-resolve geometry and reject a covered or disabled target, then the SAME `sendInputEvent` path the screenshot tools use (`selectAll` + `insertText` for a fill, the in-world mutation for a native select), then a bounded settle (two frames / 50 ms, or visible options / 200 ms after typing into a combobox). (5) `harness/omp/browser_extension.ts` registers `browser_run` (approval "read": it never navigates and takes no URL; `browser_open` stays the one gated step) whose loop `runBrowserGoal(io, judge, ...)` is bounded by `maxSteps` (default 20, cap 60) executed actions and 2x that many judgments, treats a stale act as a re-decision rather than a step, and ends with no further action on any malformed judgment, stale page, unreachable judge or browser error. The judge is omp's own `resolveJudge` (TypeSafe when configured, the online chat chain otherwise, the AskSage lockdown pin of ADR-0374 included), reached through the three module keys omp's `omp:legacy-pi-shim` serves from the HOST bundle (`config/settings`, `config/model-registry`, `judgment`), so `settings` is the initialized singleton and the registry passes instanceof; a subpath outside that table would have loaded a second source copy with its own worker state, which is why `tiny/models` is not imported and the backend key is spelled locally. Because P-JEV.2 wraps the judge prototypes, every browser_run decision lands in the chat's judgment trace with no extra plumbing. (6) A first-party skill `.agents/skills/jev-browser/SKILL.md` teaches the loop (open, run with goal + values, screenshot to verify, close), the values rule, the stop statuses and the limits (no shadow DOM, frames, canvas, uploads, drag, hover menus).
+
+**Consequences.** Proven offline by `demo-P-JEV.4` and 129 tests across the four touched suites: the heads, the fail-closed validation, the real tool driving a scripted TYPE_TEXT then CLICK then DONE run through /act with the right freshness reference per kind, values reported by name only, stale re-decision without spending a step, needs_values, an unreachable judge stopping before the first snapshot, the routes and executor in the bytes. Proven by hand in a real Chromium during the increment (the page scripts only, through the eval browser): the flights fixture snapshot excluded the password field, told checkbox from button, enumerated the select's options and resolved labels; typing into the combobox tripped the marker, the settle returned in 31 ms once the suggestion was visible, the scoped guard and `targetJs` both refused a button disabled after the decision, and the native select applied inside the world. NOT exercised: the live window path (isolated world + sendInputEvent + settle inside Electron) and a real Jev decision, because the running app carries the old engine, main and omp child until it restarts. `desktop/dist/main.js` is rebuilt with the executor; the engine and the omp child pick up dev.ts and the extension on the next launch. Boundaries inherited from upstream: common HTML/ARIA controls only, at most 250 candidates per snapshot, a DONE choice is Jev's opinion and the skill tells the agent to screenshot before reporting. The full suite is green (5422 before, more after).
+
+## ADR-0380 -- P-SESS.3: past sessions would not load, the omp 18 title slot (2026-09-21)
+
+**Context.** On v2.3.0-beta.1 the user clicked any past session in the sidebar and the chat stayed on the empty "Ask the agent anything" state. The sidebar was right (titles, models, turn counts), so listing worked and loading did not. Reproduced with the reader alone: `sessionMessages("01a0c4e1...")` returned zero messages for a file holding 72. Cause: omp 18 (the 18.2.x pin of P-OMP18.1/.2) writes a fixed-width `{ "type": "title" }` slot as LINE ONE of every session .jsonl, ahead of the `{ "type": "session" }` record. `listSessions` and `deleteSession` scan for the record and kept working; `sessionMessages` read only line one for the id, got no id from the title slot, fell back to the filename, matched nothing and returned an empty page, which the renderer draws as the seed state. v2.2.2 (omp 16.5.2) has no slot and no bug; every session written since the 18.x pin has the slot, so on the beta the failure was total. The existing test passed because its fixture put the session record on line one, the pre-18 layout.
+
+**Decision.** One exported `sessionRecord(content, fallbackId)` in `desktop/sessions.ts` scans for the session record (stopping at it) and is the only way any reader resolves a transcript's id and cwd; `sessionMessages` and `deleteSession` both use it (`parseSessionFile` already scanned). A regression test writes the real omp 18 header (title slot, then the record) and asserts the transcript loads AND that the sidebar hands back the same id; it fails on the old reader and passes on the new one. Shipped as v2.3.0-beta.6 on the same prerelease channel.
+
+**Consequences.** Past sessions load again on the beta. Reading the header by position is now impossible from LUCID's side; a future omp header change that moves or renames the record would fail the new test rather than the user. Not changed: `deleteSession` still removes only the .jsonl, not the sibling per-session tool-log directory omp 18 also writes (a separate, small increment).
+## ADR-0381 -- P-PORTGUARD.2: the engine outlived its window and squatted its own port (2026-09-22)
+
+**Context.** Four launches on this machine died before serving anything, leaving only `[Uncaught Exception] Error: Failed to start server. Is port 5319 in use?` in engine.log (2026-09-21 15:49 and 17:50, 2026-09-22 01:11 on v2.3.0-beta.1, and 2026-09-23 01:33 on v2.3.0-beta.6). ADR-0305 taught us to distrust a listener on 5319, but this one was OURS: an engine child from a previous session. `main.ts` kills it only from `app.on("quit")`, which does not run when the Electron main dies any other way - a crash, Task Manager, `app.exit()` (the foreign-port path in the same file already works around this by killing `dev` by hand), or an updater swapping the binary - and Windows does not reap a spawned child with its parent. The orphan kept the port plus its whisper-server and headroom children, so every later launch lost the bind race to a process with no window. Two defects compounded it: the bind was unguarded, so Bun's throw escaped module evaluation as a bare stack trace, and `classifyEngineFailure` had no port-busy kind, so the protected-location branch could tell a per-user install to reinstall itself over a port an orphan was holding.
+
+**Decision.** Prevention by ownership, not cleanup after the fact. `main.ts` hands the engine `LUCID_MAIN_PID`; the new pure core `desktop/parent_watch.ts` decides whether to watch (never without that variable, so `bun run desktop/dev.ts` and CI are untouched) and whether the parent is gone, and `dev.ts` polls it with `process.kill(pid, 0)` every 2s and exits when it disappears. The probe is deliberately asymmetric: only ESRCH counts as death, while EPERM and any other probe error keep the engine alive, because wrongly exiting kills a live agent turn and wrongly surviving costs one poll. Exiting through `process.exit(0)` also runs the engine's own `exit` handlers, which is what finally stops orphaning the managed whisper-server that SIGTERM/TerminateProcess skipped (the P-STT.5 hazard, same file). Diagnosis was fixed alongside prevention, because pre-fix installs can still meet a busy port: the bind is wrapped, a lost bind exits `ENGINE_EXIT_PORT_BUSY` (48) after one plain-language line, `classifyEngineFailure` gained a `port-busy` kind ranked ABOVE the protected-location heuristic (direct evidence beats a path guess), and `port_guard.ts` exports `formatSquatter` so the port-busy dialog names the owning process with the same probe and renderer as the ADR-0305 incident block. Rejected: rolling to a free port (ADR-0278 makes userData port-keyed identity, so a silent roll appears to lose the user's settings and vault, and ADR-0305 already forbids it) and killing whatever holds the port at startup (the app cannot prove a listener is its own orphan rather than a user's unrelated service).
+
+**Consequences.** The crash class is gone at the root: an engine cannot outlive the window that spawned it, so the port is free by the time the user relaunches. `desktop/scripts/demo_p_portguard_2.ts` proves both halves live - a real engine losing a real bind race exits 48 with no stack, and a booted engine whose parent is killed exits on its own and releases the port - alongside the pure-core tests in `desktop/parent_watch.test.ts` and the new `port-busy` cases in `desktop/engine_boot.test.ts`. A pid that Windows recycles to an unrelated process can only make the watchdog keep running, never exit early. Not changed: the ADR-0305 foreign-listener copy still says "another program", which is correct for a genuine stranger and now rare for our own engine. Also repaired here: `demo_p_winboot_1.ts` still asserted `waitForServer`'s pre-ADR-0305 boolean return, so it had been failing on master.
+
+
+## ADR-0382 -- P-PORTGUARD.3: reap our own orphaned engine, after a warning (2026-09-23)
+
+**Context.** ADR-0381 (PR #367) closes the orphan class going forward: the engine watches its parent and exits when the Electron main dies any way the quit handler cannot see, and a lost bind names the process holding the port. It deliberately does not kill whatever holds the port, because an arbitrary listener cannot be proven to be the app's own orphan rather than a user's unrelated service (the ADR-0305 field incident was a fork's `bun server.ts`). That leaves the population the fix cannot reach by construction: everyone upgrading FROM a build without the parent watch. Their previous session's engine, with the omp child it was running, is still holding 5319, and every launch of the new build dies on the bind until they find and end that process by hand. The user asked for exactly this: reap it, at least with a warning.
+
+**Decision.** A pre-flight step in `main.ts` before `startDevServer()`: a TCP connect tells whether the port accepts at all (milliseconds, no HTTP assumption); if it does, the ADR-0305 owner probe runs and the pure `desktop/orphan_engine.ts` decides. `classifyPortHolder` answers `ours` only when the process NAME is `lucid-engine[.exe]`, the command line's image path ends in `/lucid-engine[.exe]`, or the command is the dev fallback `bun run desktop/dev.ts`; a name that merely contains the string (`lucid-engine-proxy`), a stranger's `bun server.ts`, a null probe, a missing pid, or the caller's own pid are never `ours`. For `ours` the user sees a warning dialog naming pid, start time and command, with **Stop it and continue** (default) or **Quit**. Stop runs `taskkill /PID <pid> /T /F` on Windows (the tree: engine, omp session, whisper) or SIGTERM then SIGKILL after 3 s on POSIX, waits up to 6 s for the socket to close, logs the outcome to engine.log, and proceeds to the normal bind; a port still busy after that lands in ADR-0381's port-busy dialog as before. Quit leaves the process alone and exits. `foreign` and `unknown` skip the pre-flight entirely; ADR-0305 and ADR-0381 still own those.
+
+**Consequences.** The line ADR-0381 declined to draw is drawn on evidence the probe already collects, and the reap is never silent or automatic. Ten pure tests pin both directions (ours by name, by path, by dev fallback; foreign for a stranger's bun/node/python and for name-contains; unknown for null/no pid/self). Proven against a real process: a copy of the compiled engine listening on 5320 was attributed (`process name lucid-engine`), classified `ours`, and after `taskkill /T /F` the port was free within a second. Cost on a healthy launch: one failed TCP connect (under a millisecond). Not exercised: the dialog inside a packaged Electron (the wiring is the same `dialog.showMessageBox` the foreign-listener path uses). A user who deliberately runs a second LUCID dev checkout on the same port will be asked before it is stopped; that is the warning doing its job.
+
+## ADR-0383 -- P-MODEL.4: GPT-6 Sol and Luna, on omp 18.2.10 (2026-09-23)
+
+**Context.** OpenAI's GPT-6 line now ships three tier codenames, Astra (flagship), Sol (mid) and Luna (fast), and the user asked for Sol and Luna in the picker. The picker lists what omp's catalog exposes per signed-in provider, so the first question was whether a newer omp carries them: 18.2.10 does (`gpt-6-sol`, `gpt-6-luna` under openai, openai-codex, azure, github-copilot and more, 1.05M context, 128K output, the same effort levels as Astra, priced $2/$10 and $0.10/$0.50 per Mtok), where the pinned 18.2.7 knows only Astra.
+
+**Decision.** Pin 18.2.7 -> 18.2.10 across the five-package set (R-02 test and omp-compat agree), which puts both ids in the picker with no LUCID catalog code. LUCID's own layers that key on ids are then extended, never restated: `model_pricing.ts` gains three GPT-6 rows ahead of the generic GPT estimate (Astra $10/$50, Sol $2/$10, Luna $0.10/$0.50); the renderer declares 1M context for both and adds their cost + intelligence cards; `DEFAULT_MODEL_PREFERENCE` splits its single GPT-6 catch-all into Astra, then Sol, then any other GPT-6 tier, then Luna, because one entry put Sol and Luna on one rank and left a provider without Astra to open on the fast tier; `resolveAgentTierModel` needed no change (Regular already prefers Luna and Max already prefers Astra 6+), and a test now pins the walk Sol -> Luna -> Astra. The AskSage extension is untouched: its ids are only ever added after a live gateway confirmation (ADR-0215), which has not happened for GPT-6 Sol/Luna.
+
+**Consequences.** Full suite green on 18.2.10 (the only red was the stale packaged copy under desktop/release/, which the test gate ignores). Astra's list price moves from the $1.25 family placeholder to its cataloged $10/$50, so cost estimates for Astra users go up to the truth; metered usage still supersedes list. Fresh-install order is now a deliberate three-line decision per ADR-0317's rule. Not verified live: a real openai-codex sign-in showing the two ids (the catalog is the evidence; the picker only filters it).
+## ADR-0386 -- P-SANDBOX.9: a green AppContainer pill must mean a working chat (2026-09-24)
+
+**Context.** On a Windows 11 host running beta.7, once the loopback exemption was registered, the Security panel showed "Windows AppContainer, isolated" and every turn failed with `acp: agent process exited (code 1) - last stderr: [lucid-appcontainer] acl grant ...\resources\repo\node_modules\.bin rx`. A Windows 10 host showed the same green pill and a dead chat earlier. That stderr line is the helper's own success log, the last thing it printed before starting the child, so the child died without saying anything. Four causes were stacked: (1) `runInAppContainer` called `CreateProcessW` with `bInheritHandles=FALSE` and no `STARTF_USESTDHANDLES`, so the helper's std handles (pipes, not console handles) never reached the child. omp speaks ACP over stdio, so it saw EOF, exited 1, and wrote its stderr nowhere. (2) An AppContainer can read only what its SID is granted. The helper granted the workspace and the exe's directory (`node_modules\.bin`), but the omp shim there execs the bun runtime and loads the `@oh-my-pi` package and our `-e` extensions from the repo tree, and omp plus our extensions keep all their state under `~/.omp`. (3) omp 18 installs its proxied global `fetch` and provider transports from `PI_PROXY` only. The mediated wrap set only `HTTP(S)_PROXY`, so under the capability-less container inference dialed out directly and was dropped. (4) `--register-loopback` called `CheckNetIsolation` before the AppContainer profile existed. Windows then stored a nameless SID ("AppContainer NOT FOUND"), and the engine's by-name check reported "not registered" even though register exited 0. The probe that lights the pill ran `cmd /c exit 0`, which exits 0 without stdio, so none of this could stop the pill turning green.
+
+**Decision.** One fix per cause, plus a probe that tests what chat actually depends on. (1) The helper marks exactly its three std handles inheritable, passes them in `STARTUPINFOEXW` with `STARTF_USESTDHANDLES`, and limits inheritance to them with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, so no other handle it holds leaks into the container. It adds `CREATE_NO_WINDOW` only when it has no console. The struct layout, handle dedupe and flags are pure and unit-tested. (2) `appContainerRuntimeGrants` (pure, `path.win32`) gives the contained omp rx on the repo root, the bun runtime's directory and an omp installed outside the repo (by its install root), rw on `~/.omp`, and `TEMP`/`TMP` at `~/.omp/lucid-sandbox-tmp`. The engine passes these through new `SandboxCtx` fields (`grantRx`, `grantRw`, `tmpDir`), which only the AppContainer backend uses. (3) `proxyChildEnv` sets `PI_PROXY` and `ALL_PROXY` alongside `HTTP(S)_PROXY` on every mediated wrap (bwrap, Seatbelt, AppContainer), with loopback excluded through `NO_PROXY`. (4) `--register-loopback` creates or derives the profile before calling `CheckNetIsolation`. The default AppContainer probe is now a stdio round trip: a contained `cmd /c echo <marker>` must return the marker through our pipe. A helper that exits 0 with no stdout (any beta.7 helper) is never used, so an old helper next to a new engine falls back to the disclosed passthrough instead of a dead chat.
+
+**Consequences.** Granting rw on `~/.omp` gives the contained agent write access to LUCID's own policy files kept there (`lucid-egress.json`, `lucid-exec.json`, `lucid-sandbox-grants.json`). That is strictly narrower than the passthrough, where omp had the user's full rights, but a contained agent should not be able to edit its own policy. Moving those files out of the granted tree, or granting them read-only, is follow-up work. The repo root and bun directory become persistent rx grants, which are logged and can be undone with `--revoke-acl`, like every other grant. The proxy probe is still only a stdio probe: whether a contained provider request actually gets through the proxy is proven by the first turn, not before the pill turns green. Stale demos 6 and 7 (a non-hermetic probe, and the plan shape before `grantRx`/`grantRw`) were fixed so the baseline is green. Not verified live in this session: the Windows stdio round trip and a real contained turn. `demo-P-SANDBOX.9` runs the live probe when it is run on Windows.
+
+## ADR-0387 -- P-SANDBOX.10: the AppContainer pill needs the real runtime to boot; bundle bun 1.4.2 (2026-09-24)
+
+**Context.** P-SANDBOX.9 gave the contained omp its stdio, and the field install proved it: the error changed from the helper's own `acl grant` line to omp's real stderr, `error: An internal error occurred (CouldntReadCurrentDirectory)`. The pill was green, and every turn still died. A Windows-runner lab (a temporary workflow, run four times) measured the cause instead of guessing. With the bundled bun 1.3.14, `bun -e` runs inside the AppContainer, but running any script file fails with `CouldntReadCurrentDirectory`, and that includes the real `omp --version`. Granting the container list-only or RX access, this folder only, on every ancestor of the cwd, the script and the repo, and on the `C:\` and `D:\` roots too, did not fix it: with RX, 1.3.14 fails with `EPERM reading` the script instead. Bun 1.4.2 runs the script and boots the contained omp (`omp/18.2.10`) with no ancestor grants at all. The upstream bug (oven-sh/bun#28220) is still open for the old code path. The stdio probe could not catch any of this, because `cmd /c echo` never starts bun.
+
+**Decision.** (1) Bundle bun 1.4.2 in `desktop/build/fetch-runtimes.ts`. All five archives were downloaded and their hashes cross-checked against the vendor's `SHASUMS256.txt`. omp 18.2.10 needs bun 1.3.14 or later, and CI, the engine build and the harness tests already run on the latest release (1.4.2), so only the bundled runtime lagged. (2) Before the engine commits a session to the AppContainer, it runs `<omp> --version` through the same wrap (flags, grants, env, workspace), with a 60-second limit and one result cached per engine process. It commits only on a clean exit with output (`runtimeProbeVerdict`). Otherwise chat stays on the disclosed passthrough, and the log names the reason. Under managed require-isolation, exec is blocked instead. (3) A Windows CI job, `appcontainer-smoke.yml`, runs on every PR that touches the sandbox or the runtime pin. It builds the helper, installs the bun version read from `fetch-runtimes.ts`, and fails unless a contained child's stdout comes back and the real contained omp prints its version. No ancestor ACLs are added: the lab showed they don't help, and they would have been persistent grants on the user's profile folders for nothing.
+
+**Consequences.** This is the first check that runs the real AppContainer path, on the real runtime, before a user does. The three failures in a row (no stdio, no grants, bun's cwd walk) all passed every unit test, because none of those tests started a container. Moving the bundled runtime to 1.4.2 affects every packaged platform. It is covered by the build workflow's air-gap and Program Files boot smokes, and by the fact that CI already runs on 1.4.2. The runtime probe adds one `omp --version` (a few seconds) to the first spawn of an engine process that has the AppContainer in play. Not verified yet: a real contained chat turn on the Windows 11 host with a build that carries this. The smoke proves boot and `--version`, not provider traffic through the proxy.
+
+## ADR-0388 -- P-NORESP.2: an agent error reaches the chat as words, never "[object Object]" (2026-09-24)
+
+**Context.** Testing the P-SANDBOX.10 build, the contained omp booted (the pill was green, and the egress panel showed its traffic going through the loopback proxy), but the first turn failed after one second with `didn't respond ([object Object])`. `ACPClient.handle` rejected a pending request with the raw JSON-RPC error object (`{code, message, data}`). Every consumer then called `String(e)`, which turned the provider's actual failure into `[object Object]`, the one piece of information needed to diagnose it.
+
+**Decision.** `desktop/acp.ts` now rejects with `rpcError(msg.error)`. This is a real `Error` whose message is the agent's `message`, plus `data` when it adds detail (that is where omp puts the provider's response), plus the code. It is clamped to 500 characters, and `code` and `data` are kept as properties for any caller that branches on them. The function is pure and unit-tested.
+
+**Consequences.** Every ACP request failure (turns, session loads, config calls) now shows the agent's own words in the no-response card and the turn diagnostics. No behavior changes apart from the text. The underlying sandboxed-turn failure is diagnosed separately, using that text.
+
+## ADR-0389 -- P-SANDBOX.11: a shellPath pinned in omp's config is reachable in the AppContainer (2026-09-24)
+
+**Context.** With P-SANDBOX.10 and P-NORESP.2 installed, the contained omp booted and its error finally read as words: `Custom shell path not found: C:\Users\User\AppData\Local\Programs\MinGit\usr\bin\sh.exe. Please update shellPath in ~/.omp/agent/config.yml`. The user pinned `shellPath` to a per-user MinGit. omp validates an explicit `shellPath` with `existsSync` and throws when the check fails (`pi-utils/src/procmgr.ts`), and inside the AppContainer an ungranted path does not exist. A shell that omp discovers on its own (Git for Windows, scoop, `PATH`) degrades to `cmd.exe` when it is unreadable. Only the pinned one is fatal.
+
+**Decision.** The engine reads a top-level `shellPath` from `~/.omp/agent/config.yml` (`parseOmpShellPath`: plain, single-quoted and double-quoted scalars, with YAML backslash unescaping and trailing comments). It grants the container rx on that shell's install root (`shellInstallRoot` strips a trailing `bin` and then `usr`, so MinGit's `git.exe` and coreutils come along). `appContainerRuntimeGrants` also stops emitting grants under `C:\Windows` and `C:\Program Files`: every AppContainer can already read those, and a standard user cannot write their DACLs, so such a grant could only fail closed.
+
+**Consequences.** One more persistent, logged and revocable rx grant, on the user's own shell install. The CI smoke does not yet cover a pinned `shellPath`. The runtime probe (`omp --version`) does not resolve the shell either, so a shell problem still surfaces on the first turn rather than at probe time. It now does so with a readable message (ADR-0388).
+
+## ADR-0390 -- P-SANDBOX.12: the Windows sandbox switch in the Security panel (2026-09-24)
+
+**Context.** Turning the Windows AppContainer on or off needed an elevated command line (`lucid-appcontainer --register-loopback` or `--unregister-loopback`) and a restart. While the contained path was being debugged, that left the user unable to get chat back without a terminal, and it gave an organization no clear line between the user's choice and policy.
+
+**Decision.** The Security panel's Runtime sandbox section gets a switch, decided by the pure `desktop/sandbox_control.ts`:
+- **Turn off** is a per-user LUCID setting (`sandboxWindowsMode: "off"`). It needs no administrator rights and takes effect when the agent restarts, which the engine does right away. The session then runs as the disclosed passthrough, and the panel says it is off by the user's choice.
+- **Turn on** clears the setting. When the one-time loopback exemption is missing, the engine first registers it behind a UAC prompt, the same `Start-Process -Verb RunAs` path the directory grants already use, and reports success only after `CheckNetIsolation` lists it.
+- **Remove from Windows**, offered only while the sandbox is off and registered, runs the elevated `--unregister-loopback`, for users who want the host change gone.
+- **Managed require-isolation wins.** The user's Off is ignored at spawn, the request is refused, and the panel shows a policy note instead of a button.
+
+Every request is audited as a `sandbox_mode` security event. The endpoint is `POST /api/security/sandbox/mode` behind the existing loopback token.
+
+**Consequences.** Getting chat back no longer needs a terminal. The enterprise hook is the existing `ExecRequireIsolation` policy; finer policy (allow or deny the switch, pre-approved folders) is P-SANDBOX.14. Turning on still lands on whatever the host can run: the engine's runtime probe (ADR-0387) keeps a runtime that won't boot on the passthrough. Folder add and list with the native picker is P-SANDBOX.13.
+
+## ADR-0391 -- P-SANDBOX.13: add folders to the Windows sandbox with the native picker, and see all of them (2026-09-24)
+
+**Context.** The contained agent could reach only the folders LUCID grants it at spawn, plus folders it asked for through `sandbox_grant_dir` (P-SANDBOX.8, approved per request). The user had no way to give the sandbox a folder up front, such as `C:\Users\User\Pictures\Screenshots`, and no single place listing everything the sandbox can reach. Any "add this path" endpoint also had a trap: the omp child is handed the engine's loopback token (for its query-token routes), and header-only routes accept the same token. So an endpoint that took a path from the request would let the agent grant itself folders.
+
+**Decision.** The panel gets **Add folder (read-only)** and **Add folder (read-write)** buttons. `POST /api/security/sandbox-grant/add` reads only the mode. The engine then opens the native Explorer folder dialog itself (`pickFolderNative`, P-FS.2) and grants only the folder a person picks there. A cancel does nothing. `refuseGrantPath` refuses a whole drive, the whole user profile, Windows and Program Files (already readable by every AppContainer, and not a standard user's to re-ACL), and network or relative paths, each with a sentence the panel shows. A pick is applied through the same `applyGrantAce` path as P-SANDBOX.8 (UAC retry when the user lacks WRITE_DAC), recorded in the grants store, and audited as a `sandbox_grant` event from `sandbox_panel`. The list then shows the user's folders with Revoke, plus, read-only, the folders LUCID always allows so the agent can run (workspace, `~/.omp`, the app, bun, a pinned shell). It is computed from the same `appContainerRuntimeGrants` inputs the engine spawns with, so the list is the full answer to "what can the sandbox reach".
+
+**Consequences.** Something holding the token can still make the dialog appear, but only a person clicking in an OS dialog can choose what is granted. The underlying token exposure (the child receives the same token that header-only routes accept, so it could call routes like `/api/security/approve`) predates this increment and is a follow-up of its own. Folder grants apply at the ACL level immediately, and the running contained agent sees them without a restart. Enterprise control of these folders (pre-approved lists, locking user grants) is P-SANDBOX.14.
+
+## ADR-0392 -- P-MODEL.5: Grok 4.7 in the model picker, and xAI Grok as its own family (2026-09-24)
+
+**Context.** The user asked for Grok 4.7 in the model picker. omp 18.2.10's catalog already carries `grok-4.7` (and `grok-4.6`) for the `xai` and `xai-oauth` providers: $2/$6 per Mtok (cache read $0.50), $4/$12 past 200K input tokens, a 500K context window, reasoning, and text + image input. So the picker already listed it, and no omp bump was needed. LUCID's own layers knew no Grok at all:
+- no context window: the status bar and Memory panel fell back to omp's reported size;
+- no price row: cost estimates used the Sonnet-ish default of $3/$15;
+- no curated card;
+- no family: every Grok landed in "Other models" at the bottom of the picker, and the no-response card's "lower model, same family" paired a failing Grok with whatever else was in "Other".
+
+Separately, `modelCtx` looked up only the AskSage/Anthropic-stripped id, so any other provider-prefixed id (`xai-oauth/grok-4.7`, `openai-codex/gpt-6-sol`) never matched its context row. The hover cards already fell back to the bare id.
+
+**Decision.** Extend LUCID's layers, never restate the catalog:
+- a `grok-4.6` / `grok-4.7` pricing row at $2/$6 (older Grok ids are left to their own estimate);
+- `MODEL_CTX` 500K for both;
+- curated cards for both;
+- a new `xai Grok` family (`/grok/i`, after Gemini, also placed in the AskSage family order);
+- `modelCtx` falls back to the provider-stripped id, like the cards.
+
+**Consequences.** Grok 4.7 now appears in its own "xAI Grok" group with a correct 500K window, a $2/$6 estimate (metered usage still supersedes it) and a card. A failing Grok now falls back to another Grok, and a failing Claude or GPT is never paired with a Grok as "same family". The `modelCtx` fix also corrects the context denominator for GPT-6 on `openai-codex`. Not verified live: a signed-in xAI account showing Grok 4.7 in the group (the catalog is the evidence; the picker only filters it).
+
+## ADR-0393 -- P-SANDBOX.13b: the folder dialog opens under Smart App Control (2026-09-24)
+
+**Context.** On the Windows 11 host, the new **Add folder** buttons (P-SANDBOX.13) answered "no native folder dialog is available on this host". The engine's picker (`desktop/native_dialog.ts`, P-FS.2) is a PowerShell script that compiles a small C# shim with `Add-Type` to drive `IFileOpenDialog`. That host enforces Smart App Control, which runs PowerShell in Constrained Language Mode, and that mode refuses `Add-Type`. The script failed, `parseWinPick` saw no marker, and the result read as "unsupported" with no reason given. The sandbox helper `lucid-appcontainer.exe` does run on that host (it is what isolates the agent).
+
+**Decision.** `lucid-appcontainer --pick-folder <title>` opens the shell's Browse For Folder dialog through plain `bun:ffi` calls (`CoInitializeEx`, `SHBrowseForFolderW` with `BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE`, `SHGetPathFromIDListW`, `CoTaskMemFree`): no COM vtables and no script host. It is owned by the foreground window and prints the same `LUCID_PICKED::` / `LUCID_CANCELLED::` markers the engine already parses. Its first `ShowWindow` call goes to its own console window, because the engine spawns it with `windowsHide` and Windows applies that flag to a process's first `ShowWindow`. `pickFolderNative` gains an optional `helperFallback`: when the PowerShell run yields no marker, it runs the helper. Both `/api/security/sandbox-grant/add` and the workspace picker (`/api/fs/pickfolder`) pass it. A failure now carries a reason (`winPickFailureReason` names Constrained Language Mode), and the panel shows it. `BROWSEINFOW`'s layout is unit-tested.
+
+**Consequences.** Hosts under Smart App Control or WDAC get a working folder dialog, the older resizable Browse For Folder tree, instead of none. Hosts where PowerShell is unrestricted keep the modern Explorer dialog. The path still comes only from a person's pick in a dialog the engine opened. Not verified live: the dialog itself only runs on a Windows desktop session.
+
+## ADR-0394 -- P-SANDBOX.14: enterprise policy for the Windows sandbox switch and folders (2026-09-24)
+
+**Context.** P-SANDBOX.12 (ADR-0390) gave users an On/Off switch for the Windows AppContainer and P-SANDBOX.13 (ADR-0391) let them add folders from the Security panel. The only enterprise control was `ExecRequireIsolation` (ADR-0157), which locks the switch but also blocks exec outright on a host where the contained runtime cannot boot. Administrators also had no way to pre-approve the folders their teams need, or to stop users (and the agent's `sandbox_grant_dir` tool) from widening the container's reach.
+
+**Decision.** A new `security.sandbox` policy block, readable from the policy file or from Group Policy under `HKLM\Software\Policies\LucidAgentIDE`:
+- `SandboxAllowUserOff` (REG_DWORD, `allowUserOff`): 0 keeps the switch on. Unlike `ExecRequireIsolation` it does not block exec when the container is unavailable. `managedSandboxLocksOn` ORs the two, and every place that honored require-isolation for the switch (the spawn, the panel view, the mode route) now uses it.
+- `SandboxReadFolders` / `SandboxReadWriteFolders` (REG_MULTI_SZ or a CSV REG_SZ, `readFolders` / `readWriteFolders`): folders granted at every contained spawn. `%NAME%` expands from the user's environment (case-insensitive) and a leading `~` is the profile. Each entry goes through the same `refuseGrantPath` bounds as a user's pick (no drive root, whole profile, OS dirs or network path), an entry naming an unset variable or a missing folder is skipped, and every skip is logged with its reason. A folder in both lists is granted read-write once. The folders are listed in the panel as "allowed by your organization's policy", without a Revoke button.
+- `SandboxLockFolders` (REG_DWORD, `lockUserFolders`): the panel shows a note in place of the Add folder buttons, the add route refuses before any dialog opens, and the agent's `sandbox_grant_dir` is cancelled without asking and audited. Revoking an existing user grant stays allowed because it only narrows access.
+- `mergeManaged` deep-merges `security.sandbox` like the other security sub-objects, so a policy file can set one knob without wiping the registry's others.
+
+**Consequences.** Pre-approved folders are the first managed knob that widens access rather than only tightening it (ADR-0068). This is deliberate: an administrator is granting their own users' agent access to folders the organization owns, the grant is bounded exactly like a user's pick, it applies only inside the container (the passthrough already reaches everything the user can), and the panel shows it. The runtime probe uses the same grants, so a folder the helper cannot ACL keeps the session off the container (or blocks exec under require-isolation) rather than half-applying. ADMX/ADML templates for the new values belong in the private add-on repository beside the existing ones. The same increment removes em dashes from every string the Security panel's Runtime sandbox section renders, including the engine's sandbox reasons it displays, and a test keeps them out.
+
+## ADR-0395 -- P-REL.1: cut a beta prerelease from a workflow dispatch (2026-09-24)
+
+**Context.** A beta release has meant pushing a `v*` tag (ADR for the beta channel, v2.3.0-beta.1), and `build-desktop.yml` turns that tag into a GitHub prerelease with the installers attached. v2.3.0-beta.8 was merged to master with its committed version, but the tag could not be pushed from the agent session that prepared it (its git proxy only allows pushes to the session branch), so the release did not exist and the Releases page did not list it.
+
+**Decision.** `build-desktop.yml` gains a `beta_release` dispatch input. On master, it builds the version committed in `desktop/package.json` verbatim, and the existing attach step runs with `tag_name: v<version>` and `target_commitish: <this commit>`, so `softprops/action-gh-release` creates the tag and the prerelease through the API. Fail-closed guards in the version step: the version must be a prerelease (`x.y.z-<pre>`), the run must be on master, and `publish_latest` must be off. The release is always a prerelease and never marked latest, and the Homebrew cask job stays tag-push-only, so stable users and `brew upgrade` never see a beta. Pushing a tag keeps working exactly as before.
+
+**Consequences.** A beta can be cut by anyone who can run the workflow, without local git access. The tag is created with `GITHUB_TOKEN`, which by design does not start another workflow run, so the release is built once (by the dispatch), not twice.
+
+## ADR-0396 -- P-SANDBOX.15: the agent gets its own, narrower loopback token (2026-09-24)
+
+**Context.** ADR-0024 protects the engine's `/api` surface with a per-launch token: the renderer sends it in `x-lucid-token`, and a few routes also accept it as `?t=` because the omp child (or an iframe) cannot set a header. Three paths gave that same UI token to the agent:
+1. Every `LUCID_*_URL` handed to the omp child and the fleet lanes carried `?t=<TOKEN>`. The engine accepts that token in a header on every route, so the agent could call human-only routes such as `/api/security/approve`, the sandbox switch, or Add folder.
+2. Under Electron the engine adopts the token from `LUCID_MAIN_TOKEN`, and the children inherit `process.env`, so they held that variable too.
+3. `GET /` needs no token, and the served HTML carried it in `<meta name="lucid-token">`. Any local process, including the agent's own `curl` from inside the AppContainer (whose loopback exemption reaches the engine), could read it.
+
+P-SANDBOX.13 designed around this (the Add folder route never accepts a path from the caller); this increment removes the exposure.
+
+**Decision.**
+- **A second token.** dev.ts mints `AGENT_TOKEN` per launch. Every child URL carries it, never the UI token. `apiAuthorized` (`desktop/origin_guard.ts`, pure) accepts it by header or `?t=` only on `AGENT_ROUTES`: the child-called routes, which are every `?t=` route except the renderer iframe's `/api/preview/serve`. The UI token keeps its old reach. Anything else, including an empty or unset token, is refused.
+- **No inherited main token.** dev.ts records whether a main launched it (`HAS_MAIN`), then deletes `LUCID_MAIN_TOKEN` from `process.env` before the server starts or any child spawns.
+- **No token in the HTML under Electron.**
+  - The engine skips the meta injection when `HAS_MAIN`.
+  - The preload exposes `lucid.token()`, a synchronous IPC to main.
+  - Main answers only when the caller is its app window's webContents and the frame is this engine's loopback document (`isEngineDocument`); anything else gets an empty string.
+  - `bridge.ts` reads `lucid.token()` first, then the parent window's (for the same-origin `trainer.html` iframe), and falls back to the meta tag. Only a standalone browser dev run (`bun run web`) still injects it.
+
+**Consequences.**
+- An agent holds a token that opens only its own tool routes. In the AppContainer that is a real boundary, because the container cannot read other processes' memory or the user's files.
+- Without the AppContainer (the disclosed passthrough) the agent runs as the user and could still reach the token by other means, such as reading the engine's memory. This increment narrows what is handed out; it does not claim isolation where there is none.
+- The opaque-origin, `connect-src 'none'` preview iframe still receives the UI token in its `/api/preview/serve` URL. It cannot send it anywhere, and the header-only routes cannot be reached by navigation, so it is left as is.
+- Local scripts that expected to copy the token off the page (the optional `--register` step of `tools/creator-backend/setup-backend.ts`) now work only against a standalone dev engine; a supported way to export a scoped token is future work if that step is needed against the packaged app.
+
+## ADR-0397 -- P-SANDBOX.16: the agent finds git wherever it was installed (2026-09-25)
+
+**Context.** Inside the Windows AppContainer the agent answered "command not found: git" on a machine where MinGit is installed at `%LOCALAPPDATA%\Programs\MinGit`. Two gaps: the host PATH the agent inherits never listed it (MinGit and several vendor layouts do not touch PATH), and the container can read nothing it was not granted. The only git root LUCID granted was the one implied by a `shellPath` pinned in omp's config (ADR-0389).
+
+**Decision.**
+- `gitRootCandidates` (pure, `harness/runs/sandbox_exec.ts`) lists install roots in order: every host PATH entry ending in `cmd`, `bin` or `mingw64\bin` (the user's own choice wins), then `%ProgramFiles%\Git`, `%ProgramFiles(x86)%\Git`, `%LOCALAPPDATA%\Programs\Git` and `\MinGit`, scoop `git` and `mingit`, Chocolatey `git.portable` and `mingit`, winget `Git.MinGit_*`, and GitHub Desktop's `app-*\resources\app\git`. `discoverGitRoot` returns the first root holding `cmd\git.exe`, expanding a `*` version dir newest first; its filesystem access is injectable like `which`.
+- The discovered root is granted read+execute to the container through `appContainerRuntimeGrants` (Program Files is skipped: already readable by every AppContainer, and a standard user cannot write that DACL). The Security panel's runtime list shows it, labelled.
+- `gitPathOverlay` puts `<root>\cmd` first on the agent's PATH, keyed by the environment's own spelling of PATH so no second `PATH` beside `Path` reaches the spawn. It applies to the master session and the fleet lanes, contained or not.
+- Discovery runs in the engine (the host), where `%LOCALAPPDATA%` is real; inside the container it is redirected to the package's `AC` folder.
+
+**Consequences.**
+- With the sandbox Off (disclosed passthrough), git now works for the agent on any of these layouts.
+- Inside the AppContainer, git is found and readable but still exits with "Unable to read current working directory: Permission denied". Git for Windows' `mingw_getcwd` calls `GetFinalPathNameByHandleW(VOLUME_NAME_DOS)`, which the mount manager denies to AppContainers (measured: DOS and GUID forms fail with error 5, NT form succeeds), then falls back to `GetLongPathNameW`, which needs list rights on every ancestor of the workspace up to `C:\` (all denied). No grant on git's own folder can fix that. Making git run contained is a separate decision: ancestor list grants (C:\ and C:\Users need elevation, and expose directory names), a host-side git broker (host execution, so repo config needs an allowlist), or an upstream Git for Windows fallback to the plain current directory.
+- Bundling MinGit in the installer as a fallback when none is found is deferred to that decision, since a bundled git hits the same getcwd wall inside the container.
+
+## ADR-0398 -- P-TASK.6: the delegation card for omp 18's task tool (2026-09-25)
+
+**Context.** The subagent delegation card (P-TASK.1, ADR-0028; live runs P-TASK.5, ADR-0180) stopped appearing. omp 18's `task` input moved `agent` into each item and renamed the fields: batch `{ context, tasks: [{ name?, agent = "task", task }] }`, single `{ name?, agent, task }`. The ACP backend required a top-level `agent` plus `tasks[]` or `assignment`, so it never emitted the `subagent` event. Verified against a real session transcript: the old detector returned false on the live call, the new one returns both items and the card's runs map by name. omp 18 also runs subagents as background jobs: the task call returns at once and the parent turn usually ends first, so the card, which settled when the turn ended, stopped polling and animating while its subagents were still working.
+
+**Decision.**
+- `parseTaskCall` (pure, `desktop/turn_pending.ts`) is the one reader of the task input shape, used by the card event and by the slow-turn pending label. ACP sends no tool name, so the shape identifies the call. The single form needs an `agent` or the absence of `op`, because the todo tool also sends a `task` string (always with an `op`).
+- The card's `agent` lists the distinct item agents; `names` are the item names, which are also each run's transcript stem, so `filterRunsForBatch` scopes by name.
+- `delegationSettled` (pure, `desktop/renderer/subagent_filter.ts`): the turn ending only arms the check. The card settles once every run has written its output or has been quiet for 10 minutes, or 15 seconds after the turn when no run ever appeared. A detached card stops polling.
+- The job-coordination filter now matches omp 18's `hub` ops (`wait`, `jobs`, `inbox`, `cancel` with ids) instead of the task tool's retired `poll`/`list`/`cancel`/`wait` fields.
+- The live icon is now a green-neon clipboard whose three task lines write in and out, staggered (`cbWrite`), replacing the stick man with a looking glass. Reduced motion stops the lines.
+
+**Consequences.** Delegations show a card again, keep animating while their background subagents run, and settle when those runs finish. The renderer bundle was rebuilt; a fresh engine serves `cb-line` and `delegationSettled` and no longer serves the looker.
+
+## ADR-0399 -- P-SANDBOX.17: the contained agent's git runs on the host, through a broker (2026-09-25)
+
+**Context.** ADR-0397 found git and put it on the agent's PATH, but Git for Windows cannot start inside the AppContainer: its `getcwd` needs `GetFinalPathNameByHandleW`'s DOS form, which the mount manager denies to AppContainers. The owner chose to run git outside the sandbox. Host git runs as the user with full file, network and credential reach, so the broker is a confused-deputy boundary: the agent controls git's arguments, the working directory, and every file in the repository, including `.git/config`.
+
+**Decision.**
+- **Shim.** The contained agent's PATH starts with `tools/git-broker`, whose `git.cmd` runs `git_shim.ts` with the agent's bun. The shim POSTs `{args, cwd}` to `/api/git/exec` (`LUCID_GIT_URL`, agent token, an `AGENT_ROUTES` member) and replays stdout, stderr and the exit code. There is no stdin. Unsandboxed sessions and fleet lanes keep the real git (ADR-0397).
+- **Arguments** (`planGitCall`, pure). Only an allowlist of built-in subcommands runs, so aliases and external `git-*` commands never do, and no global options are accepted. Options that run a program or recurse into unvalidated repos are refused, including inside short-flag clusters: `rebase -x/--exec`, `grep -O`, `clone -c/-u/--config/--template`, `--upload-pack`, `--receive-pack`, `--recurse-submodules`, `--unsafe-paths`. Every path-like argument and option value must resolve inside the workspace, lexically and then through real paths (junctions); commit messages and search strings are exempt. `config` refuses `--global`, `--system`, `--file`, `--blob` and `--edit`.
+- **Repo config.** For every call that can execute anything, the broker opens `.git` (list, no delete sharing) and `.git/config` (read, read-only sharing), then lists the config keys with `git config --file ... --name-only` and requires each to match an allowlist (core basics, remote/branch tracking, user, pull/push/fetch/merge/rebase preferences, colors, and the like). Hooks paths, fsmonitor, pagers, editors, credential helpers, ssh commands, filter/diff/merge drivers, includes, aliases, submodules, `http.*` and `core.worktree` refuse the call, with a message naming the key. Because both handles stay open until git exits, the agent cannot append to the config, replace it, or rename `.git` between the check and git's own read. `objects/info/alternates` must point inside the workspace; when absent, the broker reserves it empty for the call. `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` are set explicitly, so a planted `commondir` is ignored. Gitfiles (linked worktrees, submodule checkouts) and a linked `.git` are refused.
+- **Forced overrides** (command line, so they beat every config file): `core.hooksPath` is an empty directory in the engine's temp folder, which the container cannot reach; `core.fsmonitor=false`; `protocol.allow=never` with `https` allowed; submodule recursion off; `gc.autoDetach=false` and `maintenance.autoDetach=false`, so no background git outlives the held window; `branch.autoSetupMerge=false`. The environment drops every `GIT_*` and proxy variable from the engine, sets the editors to `:`, sets the pagers to `cat`, and turns terminal prompts off.
+- **Unheld writers.** `config`, `branch`, and `remote add|rename|remove|set-url|set-branches|get-url` rewrite `.git/config` but execute nothing, so they run without the hold. That also lets the agent remove a refused key. `remote add -f`, `fetch/pull --set-upstream` and flag clusters containing `-u` are refused with the two-step alternative. `push -u <remote>` and tracking `checkout`/`switch` run held with tracking off, then set the upstream with an unheld `branch --set-upstream-to`.
+- **Network.** fetch, pull, push, clone, ls-remote and network `remote` verbs require the sandbox's running egress proxy (`runningEgressProxyUrl`) and pass it as `http.proxy`, so the agent's egress policy still decides each host. Otherwise the call is refused.
+- Calls on one repository are serialized. Output is capped (16 MiB stdout); network calls time out after 10 minutes, others after 3. Every call emits an `exec`/`git_broker` security event.
+
+**Measured on the target host.**
+- The AppContainer cannot create a junction or hard link to anything it cannot already write (EPERM), so host git cannot be steered into the user's files through links.
+- It cannot write `~/.gitconfig` or create `~/.config/git`, so the global config host git reads is the user's.
+- The hold semantics were exercised on NTFS: while held, the config reads but refuses append (EBUSY) and replace (EPERM), and `.git` refuses rename (EBUSY).
+
+**Consequences.**
+- The agent can commit, branch, rebase, fetch and push from inside the sandbox, using the user's own credential manager (its prompts appear on the host).
+- Residual limits:
+  - Only https remotes are supported; ssh and file transports are refused.
+  - There is no stdin (`commit -F -`).
+  - Linked worktrees and submodules are unsupported.
+  - A repo whose config holds an unlisted key refuses until the key is removed or the list is extended.
+  - `cmd.exe` expands `%VAR%` inside arguments before the shim sees them.
+  - The broker serves the workspace only, not user-granted folders.
+- Not yet exercised: a real host run from a contained session. The agent session that built this is itself inside the AppContainer, so its test engine hit the same getcwd wall at the validation step. The shim round trip and the live route's refusals were verified.
+
+## ADR-0385 -- P-RECOVER.1: LUCID recovers itself, and says so with an incident report (2026-09-23)
+
+**Context.** Beta users reported three symptoms: the IDE fails to connect to an agent or loses it mid-session; a prompt shows "reconnecting" and nothing happens; closing and reopening the IDE does not help until the user kills the LucidAgentIDE or omp process. The field logs (engine.log, ~/.omp/logs/omp.*.log, lucid-acp.log) and the source gave five causes. (1) `Backend.prompt()` refused with `A chat turn is already running` 22 times while `/api/chat/status` said idle: `loadSession()`/`newSession()` cleared the turn record but left its listener installed and its `session/prompt` pending, so every later prompt was refused until the health ladder respawned the child about 7 minutes later (reproduced against the real Backend and a hanging fake agent). (2) The MASTER omp connection had no death handling: `start()` returned early on a dead `this.acp`, so after an omp crash every prompt failed with "agent process exited" until the 30 s health tick, and after two recoveries in one episode the ladder pinned at "needs a manual restart" with nothing on screen. (3) Closing the main window did not quit the app while the agent browser window was open (`window-all-closed` needs every window closed), and `second-instance` only focused an existing `win`, so a relaunch silently did nothing while the headless app held the single-instance lock. (4) An engine orphaned by a crashed main squatted 5319 (ADR-0381/0382 cover the engine; nothing covered its children or the omp grandchild, which on Windows is a `bun.exe cli.js` behind the `node_modules/.bin/omp.exe` shim that `proc.kill()` does not reach). (5) omp died with an uncaught `EPIPE: broken pipe, write` from the security gate's stderr notice after the engine holding the read end exited (omp fails closed on a handler throw, so no bypass, but the agent process was lost).
+
+**Decision.** Recover in place wherever ownership is provable, and leave a redacted incident report every time. Startup: a run ledger (`<userData>/run-state.json`) marks a clean exit; after an unclean one, main enumerates processes once and stops ONLY what the ledger proves is ours (the recorded engine pid with the same image path and a start time within 5 s, its descendants by creation-ordered parent edges, and orphans whose parent is the dead recorded engine), never by name, never the current main; one `taskkill /F` names every proven pid (no `/T`, whose parent walk has no creation-order check). The engine persists the master session id (`~/.omp/lucid-last-session-<PORT>.json`), snapshots the previous one at start, and the window resumes it with a VERIFIED `session/load` (failure is reported, a fresh session starts, and the user is told "Your previous session could not be recovered. A new session was started."). Runtime: a cleared turn releases its own listener and cancels its session; a dead master child is revived on demand with the same session id; `ACPClient.stop()` tree-kills on Windows so tool processes the agent started do not outlive it, and resolves true only once that is confirmed (taskkill exits 0 and the child's own exit is observed; POSIX: the child exits after SIGTERM, then SIGKILL); a replacement master is never spawned while the child `restart()` retired is unconfirmed, so a watchdog or window recovery that cannot confirm it fails with nothing spawned and nothing re-sent; a deliberate exit (quit, the settings relaunch, the GPU relaunch, the foreign-port quit) marks the run ledger clean only after the engine and everything under it, the omp tree included, are verified stopped (bounded at 20 s), and otherwise leaves it unclean for the next launch's reaper; the renderer runs a bounded supervisor on "reconnecting" or a refused send (probe, reattach, recover the agent once, restart the engine once through a main-process IPC that refuses while the engine's nonce health still answers and is rate-limited, then give up with a plain message). Incidents live in `<userData>/incidents/<id>.md|.json` (main writes there directly and hands the engine the same folder as `LUCID_DATA_ROOT`), outside the `~/.omp` tree the contained agent may write; with no data root outside it, nothing is recorded. Every text is redacted on the way in (the support-bundle rules plus e-mail, long hex, and profile paths), the home path itself is never stored, developer `[ASKSAGE_DIAG]` records (whose `raw` field quotes provider output) are stripped from every log tail, which is read from a line boundary, and incidents never contain prompts, transcripts, settings or credential stores. Every read validates the stored record field by field and rebuilds the title, the public issue body and the report from it, so nothing shown or prefilled is read back from disk as text. Submitting is always the user's action: the prefilled GitHub issue carries the summary only, because the repository is public; the full report stays local for the user to review and attach.
+
+**Consequences.** The logged wedge and dead-child paths self-heal in seconds instead of minutes or never, a relaunch always yields a window, and every recovery leaves evidence a maintainer can act on. Automatic stopping of leftovers is new policy: it is limited to ledger-proven processes, and anything the ledger cannot prove still goes through the ADR-0382 warning dialog. If a retired agent's tree cannot be confirmed stopped, that engine refuses to start another agent (each attempt retries the stop while the old root still runs) and says to quit and reopen LUCID: availability is traded for never running two agents in one workspace. Quitting waits for the engine tree to be stopped and verified. A standalone engine without `LUCID_DATA_ROOT` records no incidents. Open for maintainers: whether the public issue tracker is the right destination for incident summaries or a private channel (support@) should be offered instead; and the Agent Builder / scheduled agent path still runs `omp -p` through `Bun.spawnSync`, which blocks the engine event loop for up to 120 s per segment and, on timeout, kills only the shim (the real omp keeps working): a separate increment.
+
+## ADR-0384 -- P-LEGIBLE.1: legible to Defender and Agent 365 without a content path (2026-09-23, issue #302)
+
+**Context.** Microsoft Defender for Endpoint now inventories local AI agents (portal: Assets > AI agents > Local agents; advanced hunting: `AgentsInfo | where Platform == "LocalAgents"`) and, in preview, protects them at runtime. In an M365 E7 / Agent 365 shop an agent that is not in that inventory reads as shadow AI and risks an endpoint block regardless of merit. The issue asked what "legible" concretely requires, whether it fits our invariants, and for the minimal increment. Findings from Microsoft's primary docs (discover-local-ai-agents, local-agent-discovery-overview, ai-agent-runtime-protection-overview, all dated 2026-09-16): (1) Discovery is a Microsoft-maintained list of supported agents (Claude Code, Codex CLI, Cursor, Copilot and roughly 30 more); there is no public manifest or registration API a third party can use to enroll. The profile Defender builds is `Name`, `Version`, `McpServers`, `DeclaredTools` and `RawAgentInfo.localAgentMetadata` = `vendor`, `relatedProcess`, `trustedProcess`, `autoApprove` (both reported as the strings "true"/"false"), device, account, `localMcps`. (2) Entra Agent ID does not apply: local agents resolve to the OS user through a `used by` edge; `can authenticate as` is for cloud agents. (3) Runtime protection hooks three checkpoints (user prompt, pre-tool call, post-tool response) through each vendor's own hook interface (Claude Code, Codex CLI, Copilot CLI hooks). The fallback, network inspection, does not support certificate pinning or HTTP/3 and by construction cannot see loopback traffic, so for this IDE it observes essentially nothing. (4) In audit or block mode, detections forward to Defender XDR in the cloud, and Defender discovery requires the commercial cloud (sovereign and national clouds are not supported), which matters for CUI deployments. (5) `trustedProcess` describes the host binary; `build-desktop.yml` documents our installers as unsigned (it signs only when the `WIN_CSC_LINK` / `MAC_CSC_LINK` secrets exist, and macOS otherwise builds with `identity: null`), so a future profile would likely report "false".
+
+**Decision.** Ship the metadata half now, and refuse the content half until it can be gated. `desktop/local_agent_manifest.ts` builds an ADVISORY, LUCID-defined manifest (schema `lucid.local-agent-manifest/1`). Microsoft publishes no vendor-writable manifest format and no enrollment API, and nothing documents Defender reading this file; only its field names are borrowed from the profile Defender builds for supported agents (`vendor`, `version`, `relatedProcess`, `processes`, `autoApprove`, `mcpServers`, `localMcps`), plus our posture (`controlPlane` loopback + ADR-0024 token, `runtimeProtection.agentNativeHooks: "none"`, `networkInspection: "not-effective"`, `content: "metadata-only"`). The engine writes it at boot to `<userData>/local-agent-manifest.json` (temp file + rename, advisory: a failed write logs and never blocks), only when Electron launched it, and `main.ts` passes `LUCID_HOST_EXE` so `relatedProcess` is the real host binary rather than a guess. `<userData>` is Electron's app-name directory: the standard build never calls `app.setName`, so it is the package name (`%APPDATA%\lucidagentide-desktop`, `~/Library/Application Support/lucidagentide-desktop`, `~/.config/lucidagentide-desktop`), Creator's is `LucidCreator`, and a non-default port appends `-<port>`. Because userData deliberately survives an uninstall, the file must not outlive the app: `desktop/build/installer.nsh` (wired as `build.nsis.include`, inherited by the Creator overlay) deletes ONLY `local-agent-manifest.json` and its crash-leftover temp file from those directories on a real NSIS uninstall (not on an auto-update), with both directory names taken from electron-builder's own `APP_PACKAGE_NAME` / `PRODUCT_FILENAME` defines. Portable, macOS and Linux installs have no uninstall hook, so the documented detection check validates the installed executable (on Windows, the NSIS uninstall entry's install location plus `LucidAgentIDE.exe`) before it trusts the file. The content rule is structural, not a filter: remote MCP entries keep only name, type and URL origin (no userinfo, path, query, headers), local MCP entries only name and command basename (no args, no env), and nothing from a prompt or tool call is in scope. `autoApprove` is "true" because Agent mode answers omp's per-tool asks itself (the in-process gate and exec/egress tier prompts still apply), or fleet full-auto is on. No hook seam ships in this increment. Gov/CUI posture, stated explicitly: no agent-native hook exists, so nothing reaches Defender beyond what an endpoint agent already observes (process, file and network telemetry); the honest answer for a CUI tenant is "network inspection only", which here means discovery-grade visibility and no content inspection.
+
+**Consequences.** An admin can identify the IDE today (collect the file via Intune remediation or live response, gated on the executable still being installed; hunt `DeviceProcessEvents` for the listed processes); the file does not by itself make the app appear in Defender's inventory, and any future Microsoft use of it would be Microsoft's decision, not something this file enables. `docs/DEFENDER-AGENT365-COEXISTENCE.md` is the runbook. Loopback-only (ADR-0022), the per-launch token (ADR-0024) and the fail-closed gate are untouched: no listener, route, event name or gate path changed. Not done, each its own increment: (a) a `UserPromptSubmit` / `PreToolUse` / `PostToolUse` hook seam compatible with the peer-CLI contract, which must sit behind a managed tighten-only knob, run after our own gate (it may add a block, never remove one), and default off whenever the AskSage lockdown or a CUI session is active, with a metadata-only payload mode; (b) Authenticode and Developer ID signing, the prerequisite for `trustedProcess: "true"`; (c) a vendor submission to Microsoft for inclusion in the supported list. Needs a real tenant to verify: whether discovery can key on this manifest at all, payload retention for XDR-forwarded hook events, and whether the Agent 365 Registry accepts a local agent without an M365 app package.

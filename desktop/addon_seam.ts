@@ -19,12 +19,13 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { repoAsset } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): never import.meta.dir
 
-const REPO = join(import.meta.dir, "..");
-
-/** The add-on checkout root: env override first, else the documented sibling folder. */
+/** The add-on checkout root: env override first, else the documented sibling folder.
+ *  P-GATE-PATH.1: resolved through repo_root.ts, because `join(import.meta.dir, "..")` in a compiled
+ *  engine is Bun's virtual root, which put the sibling lookup somewhere no add-on could ever be. */
 export function addonDir(): string {
-  return process.env.LUCID_ADDON_DIR || join(REPO, "..", "lucidagentIDEaddon");
+  return process.env.LUCID_ADDON_DIR || repoAsset("..", "lucidagentIDEaddon");
 }
 
 export interface ConnectorStatus {

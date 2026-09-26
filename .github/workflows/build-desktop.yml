@@ -23,6 +23,20 @@ name: Build desktop installers
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_latest:
+        description: 'Publish to the rolling "latest" release (pushes to EXISTING users via auto-update). Leave OFF for test builds.'
+        type: boolean
+        default: false
+      # ADR-0395 (P-REL.1): cut a beta without a local tag push. Builds the version COMMITTED in
+      # desktop/package.json (must be a prerelease like 2.3.0-beta.8) and the attach step creates the
+      # tag v<version> on this commit plus a GitHub PRERELEASE through the API. Never marks latest, never
+      # moves the cask. Run it on master. The tag it creates is made with GITHUB_TOKEN, which does not
+      # start another workflow run, so the release is built exactly once.
+      beta_release:
+        description: 'Cut a beta PRERELEASE: tag v<desktop/package.json version> on this commit and attach the installers (version must contain a dash, e.g. 2.3.0-beta.8). Never marks latest.'
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
@@ -45,6 +59,31 @@ jobs:
           - os: ubuntu-latest
             label: Linux (AppImage + deb + rpm, x64)
             script: dist:linux
+          # P-ARM64.B: GitHub's native arm64 Linux runner, so no cross-build and no QEMU. Everything
+          # downstream is already arch-keyed: fetch-runtimes.ts resolves each spec by `platform` +
+          # process.arch, runtime.ts bundled() looks for `bun-${platform}-${arch}`, and airgap-smoke.ts
+          # asserts `python-${PLAT}-${ARCH}`, `bun-${PLAT}-${ARCH}` and `pi_natives.${PLAT}-${ARCH}*.node`.
+          #
+          # CORRECTED (ADR-0363): this comment used to claim that gate "is the real proof this leg
+          # works", and it needed one edit to become true. The gate located its input by a hardcoded
+          # `linux-unpacked`, which is only the x64 name; electron-builder wrote `linux-arm64-unpacked`,
+          # so the gate died with "found no packaged resources dir" AFTER building a good AppImage, and
+          # since it gates every upload, the artifact was discarded. The output dir name is now DERIVED
+          # from plat+arch in build/packaged_tree.ts. The arch-keyed asserts above were always right;
+          # nothing was ever reaching them.
+          #
+          # APPIMAGE ONLY, and that is a MEASURED limit, not a preference. The first real arm64 run
+          # (35143077151) proved the whole chain: all three linux-arm64 runtime pins verified by sha256,
+          # the arm64 pi_natives addon linked, both binaries compiled, and LucidAgent-arm64.AppImage
+          # BUILT. deb then died because electron-builder 25.1.8 vendors an x86-only fpm and runs it
+          # through its Go app-builder helper:
+          #   fpm-1.9.3-2.3.1-linux-x86/lib/ruby/bin.real/ruby: cannot execute binary file: Exec format error
+          # So arm64 ships the target that demonstrably works. arm64 deb/rpm needs either USE_SYSTEM_FPM
+          # with a gem-installed fpm, or a newer electron-builder. NEITHER is verified here, so it stays
+          # a named follow-up rather than a guess baked into a release.
+          - os: ubuntu-24.04-arm
+            label: Linux (AppImage, arm64)
+            script: dist:linux:arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -73,8 +112,11 @@ jobs:
       # code is in the installer, but auto-update refuses to fetch it). Stamp a MONOTONIC version per
       # build: the git tag for tagged releases, else 0.1.<run number>. Build-time only (not committed).
       - name: Set build version (so auto-update sees a newer release)
+        id: stamp
         shell: bash
         working-directory: desktop
+        env:
+          GH_TOKEN: ${{ github.token }} # read-only: look up the newest PUBLISHED release for the test stamp
         run: |
           # Derive a CLEAN semver from the tag, tolerant of a mistyped `v` prefix. A malformed tag must never
           # brick the release build: electron-builder rejects e.g. ".1.11.3" ("Invalid version"), which is
@@ -88,11 +130,51 @@ jobs:
               echo "::warning::tag '${GITHUB_REF#refs/tags/}' is not a clean semver — using package.json version"
               V="$(node -p "require('./package.json').version")"
             fi
+          elif [ "${{ inputs.beta_release }}" = "true" ]; then
+            # BETA RELEASE dispatch (ADR-0395): the committed version IS the release version. Fail-closed on
+            # anything that is not a prerelease, or on a run that also asks to publish the rolling latest.
+            V="$(node -p "require('./package.json').version")"
+            if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
+              echo "::error::beta_release needs a prerelease version (x.y.z-beta.N) in desktop/package.json, found '$V'"; exit 1
+            fi
+            if [ "${{ inputs.publish_latest }}" = "true" ]; then
+              echo "::error::beta_release and publish_latest are exclusive: a beta never touches the rolling latest"; exit 1
+            fi
+            if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
+              echo "::error::beta_release runs on master only (got ${GITHUB_REF})"; exit 1
+            fi
+            echo "beta release stamp: committed prerelease version -> $V (tag v$V)"
+          elif [ "${{ inputs.publish_latest }}" = "true" ]; then
+            # PUBLISHING dispatch: this is a RELEASE, not a test. It refreshes the rolling `latest`
+            # release, whose artifacts the website's version-pinned .deb/.rpm links resolve through
+            # (/releases/latest/download/...) and whose latest*.yml the in-app updater reads. A
+            # -test.<run> stamp here does two bad things at once: it puts a test-versioned build in
+            # front of every existing user via auto-update, and it leaves the site's pinned filenames
+            # 404ing because they name the real version. Both happened on the first publish that ever
+            # completed (it shipped 2.1.1-test.102). So a publish carries the COMMITTED release version
+            # verbatim, which is the same string the matching tag build used.
+            V="$(node -p "require('./package.json').version")"
+            echo "publish stamp: refreshing the rolling latest at the committed release version -> $V"
           else
-            V="0.1.${GITHUB_RUN_NUMBER}"
+            # TEST BUILD (manual dispatch, publish OFF): not a release. The stamp must sort ABOVE every PUBLISHED
+            # release, or the installed test build auto-updates itself back to the live version and wipes
+            # out what you are testing. The old 0.1.<run#> failed that outright, and package.json can LAG
+            # the real releases (it said 1.11.10 while v1.11.11 was live), so the committed version alone
+            # is not a safe base. Take the HIGHER of package.json and the newest published release, then
+            # patch+1 with a -test.<run#> prerelease. Build-time only: package.json in git is untouched and
+            # nothing is published here, so no existing user is affected. A later real release of that
+            # patch still supersedes the test build (a prerelease sorts before its release).
+            BASE="$(node -p "require('./package.json').version")"
+            LATEST="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null | sed 's/^v//' || true)"
+            # Values go through the ENV, not argv: `node -e` consumes a positional itself, which silently
+            # shifted the indices and produced a bogus "42.undefined.1-test.undefined" that electron-builder
+            # rejects as an invalid version (it would fail all three builds).
+            V="$(BASE="$BASE" LATEST="$LATEST" RUN="$GITHUB_RUN_NUMBER" node -e 'const c=(a,b)=>{const A=a.split("-")[0].split(".").map(Number),B=b.split("-")[0].split(".").map(Number);for(let i=0;i<3;i++){const d=(A[i]||0)-(B[i]||0);if(d)return d}return 0};const base=process.env.BASE||"0.0.0",latest=process.env.LATEST||"0.0.0",run=process.env.RUN||"0";const hi=c(base,latest)>=0?base:latest;const p=hi.split("-")[0].split(".").map(Number);console.log((p[0]||0)+"."+(p[1]||0)+"."+((p[2]||0)+1)+"-test."+run)')"
+            echo "test stamp: package.json=$BASE published=${LATEST:-none} -> $V"
           fi
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "build version = $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
 
       # electron-builder's deb/rpm targets shell out to fpm; building an .rpm on the Ubuntu runner needs
       # the `rpm` toolchain (rpmbuild), which isn't installed by default. (.deb needs only fpm + dpkg,
@@ -100,6 +182,14 @@ jobs:
       - name: Install rpm tooling (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm
+
+      # macOS builds whisper.cpp from source (upstream publishes no prebuilt server binary, only an
+      # xcframework), so the runner needs cmake. GitHub's macOS image ships it; make it explicit + resilient
+      # so an image change can't silently drop the bundled offline-STT binary. Win/Linux fetch a pinned,
+      # SHA-256-verified prebuilt release instead (no toolchain needed) - see desktop/build/fetch-whisper.ts.
+      - name: Ensure cmake (macOS, for the whisper.cpp source build)
+        if: runner.os == 'macOS'
+        run: cmake --version || brew install cmake
 
       # electron-builder's pkg target resolves the signing cert even for an unsigned (identity:null)
       # build. An EMPTY CSC_LINK is NOT the same as unset: '' != null in JS, so electron-builder treats
@@ -143,10 +233,52 @@ jobs:
         run: bun run build/airgap-smoke.ts
         working-directory: desktop
 
+      # Program Files boot gate (ADR-0261): the gap that shipped the v1.12.0 brick - nothing ever
+      # booted the app from an ACL-protected install tree (packaged_boot.test.ts boots from a writable
+      # temp dir). Stages the PACKAGED repo into C:\Program Files\..., denies the runner user write on
+      # the whole tree (runners are admins, so inherited Program Files ACLs alone would not constrain
+      # them the way they constrain a real standard user), proves the denial took, then requires the
+      # compiled bin/lucid-engine to answer /api/health + serve the prebuilt renderer from there.
+      # STRICT: a missing packaged engine or an unwritable Program Files fails the build - never a
+      # silent downgrade to a temp dir (that downgrade is how the gap survived). Windows-only: the
+      # brick class is a Windows ACL/loader behavior.
+      - name: Program Files boot smoke (engine boots from a protected install)
+        if: runner.os == 'Windows'
+        run: bun run build/pf-boot-smoke.ts
+        working-directory: desktop
+        env:
+          LUCID_PF_SMOKE_STRICT: "1"
+
+      # Release identity gate (ADR-0307): make flavor identity a machine-checked precondition of the
+      # upload instead of something a human confirms after the fact. A user reported that v1.14.1
+      # installed a different product entirely ("Tactical GenAI Trainer") rather than LUCID. The
+      # release turned out to be genuine, but proving that cost a full forensic session of
+      # hand-parsing xar/ar/rpm headers out of the published assets, because no gate had ever looked
+      # INSIDE an artifact - CI only ever checked that files with the right NAMES existed.
+      # So this reads each artifact's EMBEDDED identity: the .pkg's bundle id, payload .app path and
+      # version from Distribution/PackageInfo, the .deb package name from its ar control member, the
+      # .rpm name from the lead, and the filename stem for the formats that carry no readable identity
+      # (.zip, NSIS/portable .exe, .AppImage, latest*.yml). Fail-closed: any mismatch against the
+      # flavor being built, or any unrecognized file sitting in the release dir, fails the build.
+      # Placement is load-bearing - after the air-gap and Program Files gates, before every upload -
+      # so a mis-flavored or mis-versioned artifact can never reach an artifact bundle or a Release.
+      - name: Release identity gate (embedded identity matches the flavor)
+        run: bun run build/release-identity-gate.ts --flavor agent
+        working-directory: desktop
+
+      # Name carries the ARCH, not just the OS. `runner.os` is "Linux" for BOTH ubuntu-latest and
+      # ubuntu-24.04-arm, so the two Linux legs uploaded artifacts with the SAME name, and v7 permits
+      # that rather than erroring: run 35178241843 ended up with two `LucidAgentIDE-Linux` artifacts
+      # (693 MB arm64, 1.94 GB x64). Nothing is lost, because the FILES inside are arch-named, but the
+      # artifacts become unaddressable: `gh run download --pattern '*arm64*'` matches neither, and a
+      # download by name picks between them nondeterministically. Safe to rename because no consumer
+      # names them: both the Creator build and the rolling-latest publish use download-artifact with
+      # `merge-multiple: true` and no `name:` filter. The tag path is unaffected either way, since
+      # action-gh-release attaches FILES rather than artifacts.
       - name: Upload installers as artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: LucidAgentIDE-${{ runner.os }}
+          name: LucidAgentIDE-${{ runner.os }}-${{ runner.arch }}
           if-no-files-found: warn
           path: |
             desktop/release/*.dmg
@@ -162,10 +294,22 @@ jobs:
             desktop/release/*.blockmap
             desktop/release/latest*.yml
 
-      - name: Attach installers to the Release (tag builds only)
-        if: startsWith(github.ref, 'refs/tags/')
+      # BETA CHANNEL (v2.3.0-beta.1): a tag whose name carries a prerelease dash (`v2.3.0-beta.1`) lands
+      # as a GitHub PRERELEASE and is never marked the repository's latest release. That is what keeps it
+      # away from everyone who is not in the beta group: the in-app updater on a stable install resolves
+      # /releases/latest (the rolling "latest" release, which only the publish_latest dispatch touches),
+      # and electron-updater skips prerelease versions unless the installed version is itself a prerelease.
+      # So a beta build updates itself to the next beta, and a stable install never sees one.
+      # ADR-0395: a beta_release dispatch attaches here too, naming the tag itself (v<committed version>)
+      # and pinning it to this commit; softprops creates the tag and the prerelease through the API.
+      - name: Attach installers to the Release (tag builds and beta_release dispatches)
+        if: startsWith(github.ref, 'refs/tags/') || inputs.beta_release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.stamp.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ (inputs.beta_release || contains(github.ref_name, '-')) && 'true' || 'false' }}
+          make_latest: ${{ (inputs.beta_release || contains(github.ref_name, '-')) && 'false' || 'true' }}
           # Installers + the electron-updater feed (latest*.yml + .blockmap) so
           # in-app auto-update can find new versions.
           files: |
@@ -182,6 +326,75 @@ jobs:
             desktop/release/*.blockmap
             desktop/release/latest*.yml
 
+  # Homebrew ships from THIS repo's Casks/lucidagentide.rb (the repo doubles as the tap:
+  # `brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide`). The cask is PINNED
+  # per release (version + per-arch sha256) because the in-app updater cannot install updates
+  # on the unsigned mac build (ADR-0246), which makes `brew upgrade` the working macOS update
+  # channel - so the pin must move with every release, automatically. This job rewrites the
+  # pin from the tag's uploaded release assets and pushes it to master, so `brew update` sees
+  # the new version the moment the release is live. Fail-closed: a missing asset or checksum
+  # fails the job loudly instead of leaving the cask silently stale (the pre-fix failure mode:
+  # the cask tracked the rolling "latest" release, which tag builds never refresh, so
+  # `brew install` served a weeks-old build - see ADR-0258).
+  # Stable tags only: a beta tag (`v2.3.0-beta.1`) must not move every `brew upgrade` user onto the beta.
+  update-cask:
+    name: Pin the Homebrew cask to this release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+
+      - name: Rewrite Casks/lucidagentide.rb from the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Same tolerant semver derivation as the version-stamp step (ADR-0213).
+          V="${TAG#v}"; V="${V#.}"
+          if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::tag '${TAG}' is not a clean semver; refusing to pin the cask"; exit 1
+          fi
+          # sha256 of a release asset: prefer the API's server-computed digest, else
+          # download the asset and hash it. Empty result = hard failure (fail-closed).
+          sha() {
+            local d
+            d=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+                  --jq ".assets[] | select(.name==\"$1\") | .digest" | sed 's/^sha256://')
+            if [ -z "$d" ]; then
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$1" --output "/tmp/$1"
+              d=$(sha256sum "/tmp/$1" | cut -d' ' -f1)
+            fi
+            [ -n "$d" ] || { echo "::error::no sha256 for release asset $1"; exit 1; }
+            echo "$d"
+          }
+          ARM=$(sha "LucidAgent-mac-arm64.pkg")
+          X64=$(sha "LucidAgent-mac-x64.pkg")
+          sed -i -E \
+            -e "s|^  version \".*\"$|  version \"${V}\"|" \
+            -e "s|^  sha256 arm:   \".*\",$|  sha256 arm:   \"${ARM}\",|" \
+            -e "s|^         intel: \".*\"$|         intel: \"${X64}\"|" \
+            Casks/lucidagentide.rb
+          if git diff --exit-code --quiet Casks/lucidagentide.rb; then
+            echo "cask already pinned to ${V}"; exit 0
+          fi
+          # The sed must have landed all three fields; a drifted cask format must fail
+          # loudly, never half-pin (version bumped but checksums stale).
+          grep -q "version \"${V}\"" Casks/lucidagentide.rb
+          grep -q "${ARM}" Casks/lucidagentide.rb
+          grep -q "${X64}" Casks/lucidagentide.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/lucidagentide.rb
+          git commit -m "chore(brew): pin cask to ${TAG} (auto, update-cask job)"
+          git pull --rebase origin master
+          git push origin master
+
   # Rolling "latest" release — every successful build (both platforms) publishes the newest
   # installers to a single `latest`-tagged release, so the README download buttons
   # (releases/latest/download/...) always point at the most recent build. Tag pushes still
@@ -190,7 +403,12 @@ jobs:
   publish-latest:
     name: Publish rolling "latest" release
     needs: build
-    if: github.event_name == 'workflow_dispatch'
+    # OPT-IN ONLY. This job updates the rolling `latest` release AND the electron-updater feed
+    # (latest*.yml), i.e. it pushes the build at everyone who already has the app installed. A plain
+    # manual dispatch must therefore publish NOTHING - it just uploads the per-OS artifacts for testing.
+    # Double-gated: the toggle must be ON *and* the run must be from the default branch, so a test build
+    # off a feature branch can never reach existing users even if the toggle is flipped by mistake.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_latest && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

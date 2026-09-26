@@ -21,6 +21,10 @@ import {
   newLocalProviderId,
   slugify,
   RESERVED_PROVIDER_IDS,
+  sanitizeModelCompat,
+  parseDiscoveredModels,
+  discoveryHeaders,
+  MAX_DISCOVERY_BYTES,
   type LocalProviderDef,
 } from "./local_providers.ts";
 
@@ -199,5 +203,161 @@ describe("settings persistence (secret never on disk)", () => {
     store.removeLocalProvider("lp_dgx_x");
     expect(store.listLocalProviders()).toEqual([]);
     expect(existsSync(file)).toBe(true);
+  });
+
+  // P-LOCAL.5: the stored declaration is what the runtime overlay re-reads at every omp launch, and
+  // upsert rebuilds a CLEAN copy field by field (so no pasted secret can ride along). Any declaration
+  // field missing from that copy is therefore lost on save, which is how `compat` would have gone:
+  // enriched in the add form, correct in the preview overlay, silently absent after a restart.
+  test("compat survives the clean copy, and a bad value is stripped on the way to disk", async () => {
+    dir = mkdtempSync(join(tmpdir(), "lp-"));
+    const file = join(dir, "gui.json");
+    process.env.LUCID_GUI_SETTINGS_FILE = file;
+    const store = await import("./settings_store.ts");
+    store.upsertLocalProvider(def({
+      models: [
+        { id: "glm-5.3-flash", reasoning: true, contextWindow: 131072, compat: { thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: false } },
+        { id: "junk", compat: { thinkingFormat: "glm-native" } as never },
+        { id: "plain" },
+      ],
+    }));
+    const [glm, junk, plain] = store.listLocalProviders()[0]!.models;
+    expect(glm!.compat).toEqual({ thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: false });
+    expect(glm!.contextWindow).toBe(131072);
+    expect(junk!.compat).toBeUndefined(); // out-of-enum value never reaches disk
+    expect(plain!).not.toHaveProperty("compat");
+    // and it is really on disk, not just in the returned object
+    expect(readFileSync(file, "utf8")).toContain("qwen-chat-template");
+  });
+});
+
+// ── P-LOCAL.5: per-model compat ──────────────────────────────────────────────────────────────────
+// omp validates models.yml as a whole and DROPS THE ENTIRE FILE on any schema violation, taking
+// every other local provider with it. So the emitter's job is not just to pass compat through, it is
+// to guarantee that nothing it emits can be rejected. Hence a closed value set, checked on the way out.
+
+describe("model compat sanitation", () => {
+  test("keeps the values omp's OpenAICompatSchema accepts", () => {
+    expect(sanitizeModelCompat({ thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: false }))
+      .toEqual({ thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: false });
+  });
+
+  test("drops a value outside the schema's enum rather than letting it invalidate models.yml", () => {
+    const dirty = { thinkingFormat: "glm-native", reasoningContentField: "reasoning", supportsReasoningEffort: "yes" } as never;
+    expect(sanitizeModelCompat(dirty)).toEqual({ reasoningContentField: "reasoning" });
+  });
+
+  test("collapses to undefined when nothing survives, so no empty compat is emitted", () => {
+    expect(sanitizeModelCompat({})).toBeUndefined();
+    expect(sanitizeModelCompat(undefined)).toBeUndefined();
+    expect(sanitizeModelCompat({ thinkingFormat: "nope" } as never)).toBeUndefined();
+  });
+
+  test("the overlay omits compat on models that have none, and carries it on models that do", () => {
+    const entry = toOmpProviderEntry(def({
+      authKind: "none",
+      models: [
+        { id: "plain" },
+        { id: "glm-5.3-flash", reasoning: true, compat: { thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: false } },
+      ],
+    }));
+    expect(entry.models[0]!).not.toHaveProperty("compat");
+    expect(entry.models[1]!.compat).toEqual({ thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: false });
+    // and the emitted JSON stays parseable as the models.yml body LUCID writes
+    expect(JSON.parse(JSON.stringify({ providers: { spark: entry } })).providers.spark.models[1].compat.thinkingFormat).toBe("qwen-chat-template");
+  });
+});
+
+// ── P-LOCAL.6: endpoint model discovery ──────────────────────────────────────────────────────────
+// The body comes off a box on the LAN and lands in a config file omp parses plus a comma-separated
+// form field, so this parser is the trust boundary. It is tested for what a HOSTILE or broken
+// endpoint returns, not just for the happy vLLM payload.
+
+describe("parseDiscoveredModels", () => {
+  test("reads a real vLLM payload, taking the window from max_model_len", () => {
+    const body = {
+      object: "list",
+      data: [
+        { id: "glm-5.3-flash", object: "model", owned_by: "vllm", root: "zai-org/GLM-5.3-Flash", parent: null, max_model_len: 131072, permission: [] },
+        { id: "qwen3-coder-30b", object: "model", owned_by: "vllm", max_model_len: 262144 },
+      ],
+    };
+    const { models, dropped } = parseDiscoveredModels(body);
+    expect(models).toEqual([
+      { id: "glm-5.3-flash", contextWindow: 131072 },
+      { id: "qwen3-coder-30b", contextWindow: 262144 },
+    ]);
+    expect(dropped).toBe(0);
+  });
+
+  test("falls back to context_length, and leaves the window unset when neither is usable", () => {
+    const { models } = parseDiscoveredModels({ data: [
+      { id: "a", context_length: 8000 },
+      { id: "b", max_model_len: 4096, context_length: 999 }, // max_model_len wins (omp's own precedence)
+      { id: "c" },
+      { id: "d", max_model_len: 0 },
+      { id: "e", max_model_len: -1 },
+      { id: "f", max_model_len: 1.5 },
+      { id: "g", max_model_len: "131072" }, // a string is not a number
+    ] });
+    expect(models).toEqual([
+      { id: "a", contextWindow: 8000 },
+      { id: "b", contextWindow: 4096 },
+      { id: "c" }, { id: "d" }, { id: "e" }, { id: "f" }, { id: "g" },
+    ]);
+  });
+
+  test("drops ids that would corrupt the form field or the config, and reports how many", () => {
+    const { models, dropped } = parseDiscoveredModels({ data: [
+      { id: "good" },
+      { id: "has,comma" },        // would split into two ids in the comma-separated field
+      { id: "has\nnewline" },
+      { id: "zero\u200bwidth" },  // the injection class the scanner sidecar exists to catch
+      { id: "bidi\u202eoverride" },
+      { id: "x".repeat(201) },
+      { id: "  " },
+      { id: 42 },
+      { id: "good" },             // duplicate
+      null,
+      "not-an-object",
+    ] });
+    expect(models).toEqual([{ id: "good" }]);
+    expect(dropped).toBe(10);
+  });
+
+  test("trims ids and preserves the server's order", () => {
+    expect(parseDiscoveredModels({ data: [{ id: " b " }, { id: "a" }] }).models.map((m) => m.id)).toEqual(["b", "a"]);
+  });
+
+  test("caps a runaway list rather than filling the form with 5000 entries", () => {
+    const { models, dropped } = parseDiscoveredModels({ data: Array.from({ length: 150 }, (_, i) => ({ id: `m${i}` })) });
+    expect(models.length).toBe(100);
+    expect(dropped).toBe(50);
+  });
+
+  test("a body that is not an OpenAI model list yields nothing, never a throw", () => {
+    for (const junk of [null, undefined, 0, "", "list", [], { data: null }, { data: {} }, { models: [{ id: "x" }] }]) {
+      expect(parseDiscoveredModels(junk), JSON.stringify(junk ?? null)).toEqual({ models: [], dropped: 0 });
+    }
+  });
+
+  test("the byte cap is a real bound the route can enforce", () => {
+    expect(MAX_DISCOVERY_BYTES).toBeGreaterThan(10_000); // a real list must fit
+    expect(MAX_DISCOVERY_BYTES).toBeLessThanOrEqual(5_000_000); // but not unbounded
+  });
+});
+
+describe("discoveryHeaders", () => {
+  test("authenticates the way omp will, so a 200 here predicts a working model", () => {
+    expect(discoveryHeaders({ authKind: "bearer" }, "tok")).toEqual({ authorization: "Bearer tok" });
+    expect(discoveryHeaders({ authKind: "apikey", headerName: "X-Api-Key" }, "tok")).toEqual({ "X-Api-Key": "tok" });
+    expect(discoveryHeaders({ authKind: "apikey", headerName: "Authorization" }, "tok")).toEqual({ authorization: "Bearer tok" });
+    expect(discoveryHeaders({ authKind: "apikey" }, "tok")).toEqual({ authorization: "Bearer tok" });
+  });
+
+  test("sends nothing when there is no secret or the endpoint is open", () => {
+    expect(discoveryHeaders({ authKind: "bearer" })).toEqual({});
+    expect(discoveryHeaders({ authKind: "bearer" }, "")).toEqual({});
+    expect(discoveryHeaders({ authKind: "none" }, "tok")).toEqual({});
   });
 });

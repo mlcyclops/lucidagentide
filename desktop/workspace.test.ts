@@ -9,7 +9,8 @@
 // is exercised by hand, matching how cred_vault.ts keeps its side-effecting edges out of the unit tests.
 
 import { describe, expect, test } from "bun:test";
-import { cloneArgv, cloneErrorHint, hostTokenForUrl, repoNameFromUrl, resolveCloneToken } from "./workspace.ts";
+import { CLONE_ROOT, cloneArgv, cloneErrorHint, hostTokenForUrl, repoNameFromUrl, resolveCloneToken } from "./workspace.ts";
+import { gitTokenEnvName } from "./git_url.ts";
 
 describe("repoNameFromUrl", () => {
   test("strips .git and path", () => {
@@ -54,6 +55,25 @@ describe("hostTokenForUrl", () => {
     // a workflow's own GITHUB_TOKEN still wins over the vault PAT
     expect(hostTokenForUrl("https://github.com/a/b", { GITHUB_TOKEN: "ci", LUCID_GIT_PAT: "vault" })).toBe("ci");
   });
+  // P-FLEET.L2: the host-scoped vault token. This is what makes "save this PAT for dev.azure.com" work,
+  // and what stops a generic PAT being handed to a host it was never meant for.
+  test("P-FLEET.L2: the HOST-SCOPED vault token wins over every CI-style var", () => {
+    const scoped = { [gitTokenEnvName("github.com")]: "scoped", GITHUB_TOKEN: "ci", LUCID_GIT_PAT: "vault" };
+    expect(hostTokenForUrl("https://github.com/a/b", scoped)).toBe("scoped");
+    // ...and it is scoped: the github token is not offered to gitlab
+    expect(hostTokenForUrl("https://gitlab.com/a/b", { [gitTokenEnvName("github.com")]: "scoped" })).toBeNull();
+  });
+  test("P-FLEET.L2: a self-hosted / unknown host gets ONLY its own scoped token, never the generic PAT", () => {
+    expect(hostTokenForUrl("https://git.internal.example/a/b", { LUCID_GIT_PAT: "vault" })).toBeNull();
+    expect(hostTokenForUrl("https://git.internal.example/a/b", { [gitTokenEnvName("git.internal.example")]: "mine" })).toBe("mine");
+  });
+  test("P-FLEET.L2: Azure DevOps hosts authenticate with a PAT on the same Basic header", () => {
+    expect(hostTokenForUrl("https://dev.azure.com/org/proj/_git/repo", { AZURE_DEVOPS_EXT_PAT: "az" })).toBe("az");
+    expect(hostTokenForUrl("https://dev.azure.com/org/proj/_git/repo", { SYSTEM_ACCESSTOKEN: "pipe" })).toBe("pipe");
+    expect(hostTokenForUrl("https://acme.visualstudio.com/p/_git/r", { LUCID_GIT_PAT: "vault" })).toBe("vault");
+    // a Pipelines-style var still loses to the token the user saved for this host
+    expect(hostTokenForUrl("https://dev.azure.com/o/p/_git/r", { SYSTEM_ACCESSTOKEN: "pipe", [gitTokenEnvName("dev.azure.com")]: "saved" })).toBe("saved");
+  });
 });
 
 describe("resolveCloneToken (ADR-0216)", () => {
@@ -85,17 +105,33 @@ describe("cloneArgv", () => {
 });
 
 describe("cloneErrorHint", () => {
-  test("auth failure with no token → tells the user to set a token or use the agent", () => {
+  test("auth failure with no token → names the token the user can actually paste in the form", () => {
     const h = cloneErrorHint("fatal: Authentication failed for 'https://github.com/x/y.git'", false);
     expect(h).toMatch(/private repo/i);
-    expect(h).toMatch(/GITHUB_TOKEN/);
+    expect(h).toMatch(/personal access token/i);
   });
   test("auth failure with a token → says the token was rejected", () => {
     const h = cloneErrorHint("remote: Repository not found", true);
     expect(h).toMatch(/token was rejected|rejected/i);
   });
+  // P-FLEET.L2: an ssh remote has a DIFFERENT fix. Telling someone to set a PAT for a `git@` URL sends
+  // them to configure something git will never read.
+  test("an ssh failure points at keys, never at a token", () => {
+    const h = cloneErrorHint("git@github.com: Permission denied (publickey).", false, true);
+    expect(h).toMatch(/ssh key/i);
+    expect(h).not.toMatch(/personal access token for/i);
+    expect(cloneErrorHint("Host key verification failed.", false, true)).toMatch(/ssh/i);
+    // BatchMode turns a passphrase prompt into a fast failure; that must read as a key problem too
+    expect(cloneErrorHint("Permission denied, please try again. (batch mode)", false, true)).toMatch(/ssh/i);
+  });
   test("non-auth error passes through, capped", () => {
     expect(cloneErrorHint("fatal: unable to access: could not resolve host", false)).toMatch(/could not resolve host/);
     expect(cloneErrorHint("", false)).toBe("git clone failed");
+  });
+});
+
+describe("CLONE_ROOT (P-FLEET.L2)", () => {
+  test("is the shared workspaces folder - the fallback when a lane names no parent", () => {
+    expect(CLONE_ROOT().replace(/\\/g, "/")).toMatch(/\.omp\/lucid-workspaces$/);
   });
 });

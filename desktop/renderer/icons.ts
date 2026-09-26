@@ -12,6 +12,8 @@ const RAW: Record<string, string> = {
   chat: P("M4 5.5h16v10a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.2V17H5.5A1.5 1.5 0 0 1 4 15.5z"),
   // shield (security)
   shield: P("M12 3 5 5.6v5c0 4.3 3 7.6 7 9.4 4-1.8 7-5.1 7-9.4v-5z") + P("M9 11.6l2.1 2.1L15 9.8"),
+  // P-JEV.2: a balance scale for typed judgments (Jev) - beam, post, two pans
+  scale: P("M12 4.5v15") + P("M9 19.5h6") + P("M5 7.5h14") + P("M7 7.5 4 13.5a3 3 0 0 0 6 0z") + P("M17 7.5 14 13.5a3 3 0 0 0 6 0z"),
   // memory / context (concentric synapse)
   brain:
     P("M12 4.5a3 3 0 0 0-3 3 2.6 2.6 0 0 0-1.6 4.6A2.7 2.7 0 0 0 9 16.8 2.4 2.4 0 0 0 12 19a2.4 2.4 0 0 0 3-2.2 2.7 2.7 0 0 0 1.6-4.7A2.6 2.6 0 0 0 15 7.5a3 3 0 0 0-3-3z") +
@@ -42,6 +44,9 @@ const RAW: Record<string, string> = {
   bolt: P("M12 3 6 13h5l-1 8 6-11h-5z"),
   // clock (scheduled automations) - ring + hands
   clock: P("M12 5a7 7 0 1 0 0 14 7 7 0 0 0 0-14z") + P("M12 8.5V12l2.5 1.6"),
+  // P-MEET.1: calendar (Meetings) - frame, two hangers, the header rule, one marked day
+  calendar: P("M4.5 6.5h15v12a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z") + P("M8 4.5v4") + P("M16 4.5v4")
+    + P("M4.5 10.5h15") + "<circle cx='9' cy='14.5' r='1.2' fill='currentColor' stroke='none'/>",
   // close
   close: P("M6 6l12 12") + P("M18 6 6 18"),
   // trash / delete
@@ -98,6 +103,9 @@ const RAW: Record<string, string> = {
     + P("M10.4 18.6h3.2") + P("M10.9 20.6h2.2") + P("M12 9.2v2.4") + P("M10.7 10.4h2.6"),
   // double chevron down (jump-to-latest) - two stacked downward carets
   chevronsDown: P("M6.5 7.5 12 13l5.5-5.5") + P("M6.5 13 12 18.5 17.5 13"),
+  // single chevron down (advance ONE page) - same span/centering as chevronsDown so the two stacked
+  // scroll buttons read as a set: one caret steps a page, two carets run to the end.
+  chevronDown: P("M6.5 10 12 15.5 17.5 10"),
   // center / re-fit the graph (crosshair) — P-KG-CODE.1b
   center: P("M12 3.5v3.2") + P("M12 17.3v3.2") + P("M3.5 12h3.2") + P("M17.3 12h3.2")
     + "<circle cx='12' cy='12' r='4.3' fill='none'/>" + "<circle cx='12' cy='12' r='1' fill='currentColor' stroke='none'/>",

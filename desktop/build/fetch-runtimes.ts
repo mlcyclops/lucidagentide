@@ -36,7 +36,12 @@ function findMember(root: string, member: string): string | null {
 }
 
 // Pinned upstream versions — bump deliberately, then REFRESH the hashes below.
-const BUN_VERSION = "1.3.14"; // github.com/oven-sh/bun -> release tag bun-v<ver>
+// P-SANDBOX.10 (ADR-0387): 1.3.14 -> 1.4.2. Under the Windows AppContainer, bun 1.3.14 cannot run a
+// script at all ("CouldntReadCurrentDirectory" while walking the cwd's ancestors, oven-sh/bun#28220),
+// and no ACL on the ancestors fixed it; 1.4.2 boots the contained omp with no extra grants (measured
+// on a windows-latest runner by .github/workflows/sandbox-lab.yml). All five hashes below were
+// downloaded AND cross-checked against …/bun-v1.4.2/SHASUMS256.txt.
+const BUN_VERSION = "1.4.2"; // github.com/oven-sh/bun -> release tag bun-v<ver>
 const UV_VERSION = "0.11.23"; // github.com/astral-sh/uv -> release tag <ver>
 // python-build-standalone (astral-sh): a RELOCATABLE CPython we bundle so the scanner
 // interpreter is provisioned OFFLINE (air-gap, ADR-0225 / add-on ADR-A009). Without it,
@@ -75,7 +80,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("darwin-aarch64"),
-		sha256: "d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620",
+		sha256: "90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f",
 	},
 	{
 		platform: "darwin",
@@ -83,7 +88,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("darwin-x64"),
-		sha256: "4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633",
+		sha256: "80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012",
 	},
 	{
 		platform: "darwin",
@@ -108,7 +113,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun.exe",
 		url: bunUrl("windows-x64"),
-		sha256: "0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922",
+		sha256: "ce4c17497b2f29712a99d3d53f028de28cd42e3bacb8589599e7f000e49b6405",
 	},
 	{
 		platform: "win32",
@@ -125,7 +130,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("linux-x64"),
-		sha256: "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f",
+		sha256: "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913",
 	},
 	{
 		platform: "linux",
@@ -134,6 +139,27 @@ const SPECS: readonly RuntimeSpec[] = [
 		member: "uv",
 		url: uvUrl("x86_64-unknown-linux-gnu"),
 		sha256: "e12c4cda2fe8c305510a78380a88f2c32a27e90cdcd123cefd2873388f0ebb5f",
+	},
+	// Linux arm64 (P-ARM64.B). Every hash below was downloaded and then CROSS-CHECKED against the
+	// vendor's own published manifest, never just self-hashed: bun against
+	// …/bun-v1.4.2/SHASUMS256.txt, uv against its per-asset …tar.gz.sha256 sidecar, and CPython
+	// against …/releases/download/20260623/SHA256SUMS. The method was validated by reproducing the
+	// ALREADY-COMMITTED python-linux-x64 hash below (9fa869d6…) from that same SHA256SUMS file.
+	{
+		platform: "linux",
+		name: "bun-linux-arm64",
+		kind: "zip",
+		member: "bun",
+		url: bunUrl("linux-aarch64"),
+		sha256: "54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7",
+	},
+	{
+		platform: "linux",
+		name: "uv-linux-arm64",
+		kind: "tgz",
+		member: "uv",
+		url: uvUrl("aarch64-unknown-linux-gnu"),
+		sha256: "1873a77350f6621279ae1a0d2227f2bd8b67131598f14a7eb0ba2215d3da2c98",
 	},
 	// Relocatable CPython for the scanner (air-gap) — copy the whole extracted `python/` tree.
 	// Hashes below were cross-checked against python-build-standalone's published SHA256SUMS
@@ -153,6 +179,14 @@ const SPECS: readonly RuntimeSpec[] = [
 		tree: "python",
 		url: pyUrl("x86_64-unknown-linux-gnu"),
 		sha256: "9fa869d69be54f6b8eeae64272fbd9bb0646e0e1a8da9d80e51ba5a3bee48930",
+	},
+	{
+		platform: "linux",
+		name: "python-linux-arm64",
+		kind: "tgz",
+		tree: "python",
+		url: pyUrl("aarch64-unknown-linux-gnu"),
+		sha256: "b14d074c43fdf03f01822fd07a15b3039eb0558503d1cb791791602cbe32908b",
 	},
 	{
 		platform: "darwin",
@@ -177,7 +211,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, "..", "runtimes");
 const hashOf = (file: string): string => createHash("sha256").update(readFileSync(file)).digest("hex");
 
-mkdirSync(OUT, { recursive: true });
+// Same OneDrive reparse-point quirk documented in build/copy-natives.ts: `recursive: true` is supposed
+// to be a no-op on an existing dir, and on a OneDrive-backed Windows path it throws EEXIST instead.
+// That aborted every local `runtimes:*` run, which is the shape of build bug that only ever breaks a
+// developer machine. An already-present runtimes/ is the success condition, so swallow only EEXIST.
+try {
+	mkdirSync(OUT, { recursive: true });
+} catch (e) {
+	if ((e as { code?: string }).code !== "EEXIST") throw e;
+}
 
 // electron-builder packages on the matching OS, so by default we fetch only the current platform's
 // runtimes (RUNTIME_OS overrides — e.g. to pre-stage another OS's binaries). Filtering keeps a Windows
@@ -272,13 +314,41 @@ for (const spec of specs) {
 // bundled binary is name-suffixed (`bun-<plat>-<arch>`). On a machine with no global bun (the whole point
 // of an air-gap bundle) the shim can't find it → "bun is not installed in %PATH%" → omp never starts, so
 // there's no model list AND no OAuth. Emit a plain `bun[.exe]` alongside the suffixed one (same dir →
-// runtime.ts puts it on PATH). Runs even when the suffixed bun was cached, so a rebuild self-heals.
+// runtime.ts puts it on PATH).
+//
+// The alias MUST match the arch this package targets, and picking it used to be
+// `SPECS.find((s) => s.platform === TARGET && s.name.startsWith("bun-"))`. A linux build fetches BOTH
+// arches into one runtimes/ dir, so `.find()` returned whichever is listed first — `bun-linux-x64` —
+// and the arm64 AppImage shipped an x86-64 binary as its plain `bun`. The failure is not a missing
+// file, which is why nothing spotted it by inspection: the alias exists, is executable, is ~60 MB of
+// real bun. It just cannot run. exec() returns ENOEXEC, /bin/sh falls back to parsing the ELF as a
+// shell script, and the whole thing surfaces as `runtimes/bun: 1: Syntax error: ")" unexpected`.
+// The same hazard was latent on macOS, where it only worked because `bun-darwin-arm64` happens to be
+// listed before the x64 spec and the runner is arm64.
 if (!REFRESH) {
-	const suffixedBun = SPECS.find((s) => s.platform === TARGET && s.name.startsWith("bun-"));
-	if (suffixedBun) {
-		const src = join(OUT, suffixedBun.name);
-		const plain = join(OUT, `bun${TARGET === "win32" ? ".exe" : ""}`);
-		if (existsSync(src) && !existsSync(plain)) { cpSync(src, plain); chmodSync(plain, 0o755); console.log(`runtimes: bun (plain alias for the omp shim)`); }
+	const TARGET_ARCH = process.env.RUNTIME_ARCH ?? process.arch;
+	// The win32 specs carry the extension IN the name (`bun-win32-x64.exe`), which the old
+	// `startsWith("bun-")` match tolerated and an exact match does not. Caught on the first local run
+	// by the fail-closed throw below, which is the entire argument for having it.
+	const wanted = `bun-${TARGET}-${TARGET_ARCH}${TARGET === "win32" ? ".exe" : ""}`;
+	const suffixedBun = SPECS.find((s) => s.platform === TARGET && s.name === wanted);
+	if (!suffixedBun) {
+		// Fail closed rather than aliasing a foreign arch: a package whose omp cannot start has no
+		// models and no OAuth, and that is worse than a build that stops here and says why.
+		throw new Error(
+			`fetch-runtimes: no bun spec named "${wanted}" for ${TARGET}-${TARGET_ARCH}; ` +
+				`cannot emit the plain bun alias omp's shim needs (have: ` +
+				`${SPECS.filter((s) => s.platform === TARGET && s.name.startsWith("bun-")).map((s) => s.name).join(", ")})`,
+		);
+	}
+	const src = join(OUT, suffixedBun.name);
+	const plain = join(OUT, `bun${TARGET === "win32" ? ".exe" : ""}`);
+	// Copy UNCONDITIONALLY. The old `!existsSync(plain)` guard meant a stale alias from an earlier
+	// build of a DIFFERENT arch was kept, so the wrong-arch bug could not be fixed by rebuilding.
+	if (existsSync(src)) {
+		cpSync(src, plain);
+		chmodSync(plain, 0o755);
+		console.log(`runtimes: bun (plain alias for the omp shim -> ${suffixedBun.name})`);
 	}
 }
 

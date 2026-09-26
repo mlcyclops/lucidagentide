@@ -12,7 +12,18 @@ import { expect, test } from "bun:test";
 import {
   appContainerArgs,
   AppContainerBackend,
+  appContainerProbeArgv,
+  appContainerProbePassed,
+  appContainerRuntimeGrants,
+  APPCONTAINER_PROBE_MARKER,
+  discoverGitRoot,
+  parseOmpShellPath,
+  prependPathOverlay,
+  proxyChildEnv,
+  shellInstallRoot,
+  runtimeProbeVerdict,
   BwrapBackend,
+  listingExemptsMoniker,
   NoopBackend,
   resolveBackend,
   sandboxDisclosure,
@@ -26,8 +37,24 @@ import { managedRequireIsolation, parseRegistryPolicy } from "../../desktop/mana
 
 const hasBwrap = () => true;
 const noBwrap = () => false;
+// Functional probes. bwrap being ON PATH and bwrap WORKING are different facts (Ubuntu 24.04+ blocks
+// unprivileged user namespaces), so every linux resolveBackend call injects both — otherwise the
+// default probe shells out to the host's real bwrap and these stop being hermetic.
+const bwrapWorks = () => true;
+const bwrapBlocked = () => false;
 const has = (bin: string) => (b: string) => b === bin; // only `bin` is on PATH
 const none = () => false;
+// Seatbelt functional probes: sandbox-exec being ON PATH and sandbox-exec WORKING are different facts
+// (a sandboxed parent cannot nest a profile), so every darwin resolveBackend call injects both -
+// otherwise the default probe shells out to the host's real sandbox-exec and these stop being hermetic.
+const seatbeltWorks = () => true;
+const seatbeltBlocked = () => false;
+// AppContainer functional probes: the helper being present and the helper being ABLE to contain are
+// different facts (profile creation or the workspace ACL grant can be refused on a host), so every
+// win32 resolveBackend call injects both - otherwise the default probe shells out to the host's real
+// helper and these stop being hermetic.
+const acWorks = () => true;
+const acBroken = () => false;
 const ARGV = ["/opt/omp", "acp", "-e", "/repo/gate.ts"];
 const CTX = { workspace: "/work/ws", home: "/home/u" };
 const PROXY = { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0.1:8888" };
@@ -35,7 +62,7 @@ const PROXY = { host: "127.0.0.1", httpPort: 8888, httpProxyUrl: "http://127.0.0
 // ── backend resolution ────────────────────────────────────────────────────────
 
 test("linux with bwrap on PATH resolves the ISOLATING backend (no disclosure)", () => {
-  const r = resolveBackend({ platform: "linux", which: hasBwrap });
+  const r = resolveBackend({ platform: "linux", which: hasBwrap, probe: bwrapWorks });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.backend.name).toBe("bwrap");
@@ -45,7 +72,7 @@ test("linux with bwrap on PATH resolves the ISOLATING backend (no disclosure)", 
 });
 
 test("linux WITHOUT bwrap falls back to the disclosed passthrough (personal default)", () => {
-  const r = resolveBackend({ platform: "linux", which: noBwrap });
+  const r = resolveBackend({ platform: "linux", which: noBwrap, probe: bwrapBlocked });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.backend.name).toBe("noop");
@@ -53,8 +80,39 @@ test("linux WITHOUT bwrap falls back to the disclosed passthrough (personal defa
   }
 });
 
+// ── regression: bwrap present but NON-FUNCTIONAL (Ubuntu/Debian 24.04+) ──────────────────────────
+// Shipped bug: `available()` probed PATH only. On 24.04 bwrap exists but AppArmor blocks unprivileged
+// user namespaces, so it was chosen as the backend and then died with "setting up uid map: Permission
+// denied" at every spawn — taking `omp acp` with it. No ACP session ⇒ empty configOptions ⇒ the picker
+// showed only its hardcoded Anthropic fallback, so a correctly-OAuth'd OpenAI/xAI vanished silently.
+test("linux with bwrap on PATH but BLOCKED userns does NOT resolve bwrap - it discloses instead", () => {
+  const r = resolveBackend({ platform: "linux", which: hasBwrap, probe: bwrapBlocked });
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    expect(r.backend.name).toBe("noop"); // never "bwrap" — a backend that cannot spawn is not a backend
+    expect(r.backend.isolates).toBe(false);
+    expect(r.disclosed).toBe(true); // degraded, but DISCLOSED and the agent still runs
+  }
+});
+
+test("BwrapBackend.available() requires presence AND capability", () => {
+  expect(new BwrapBackend(hasBwrap, bwrapWorks).available()).toBe(true);
+  expect(new BwrapBackend(hasBwrap, bwrapBlocked).available()).toBe(false); // the shipped bug
+  expect(new BwrapBackend(noBwrap, bwrapWorks).available()).toBe(false);
+});
+
+test("managed require-isolation on a BLOCKED-userns host refuses with the actionable apparmor reason", () => {
+  const r = resolveBackend({ platform: "linux", requireIsolation: true, which: hasBwrap, probe: bwrapBlocked });
+  expect(r.ok).toBe(false); // gov/managed still fails CLOSED — degrading to passthrough is not an option
+  if (!r.ok) {
+    expect(r.reason).toMatch(/user namespace/);
+    expect(r.reason).toMatch(/apparmor_restrict_unprivileged_userns/); // tells the admin what to actually do
+    expect(r.reason).not.toMatch(/not installed/); // the old, misleading message
+  }
+});
+
 test("darwin with sandbox-exec resolves the Seatbelt ISOLATING backend (P-SANDBOX.4)", () => {
-  const r = resolveBackend({ platform: "darwin", which: has("sandbox-exec") });
+  const r = resolveBackend({ platform: "darwin", which: has("sandbox-exec"), probe: seatbeltWorks });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.backend.name).toBe("seatbelt");
@@ -64,7 +122,7 @@ test("darwin with sandbox-exec resolves the Seatbelt ISOLATING backend (P-SANDBO
 });
 
 test("win32 WITH the lucid-appcontainer helper resolves the ISOLATING AppContainer backend (P-SANDBOX.6)", () => {
-  const r = resolveBackend({ platform: "win32", which: has("lucid-appcontainer") });
+  const r = resolveBackend({ platform: "win32", which: has("lucid-appcontainer"), probe: acWorks });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.backend.name).toBe("appcontainer");
@@ -81,7 +139,7 @@ test("win32 WITHOUT the helper still discloses (helper ships in P-SANDBOX.7); da
 });
 
 test("managed require-isolation with NO isolating backend REFUSES (fail-closed, never a passthrough)", () => {
-  const linux = resolveBackend({ platform: "linux", requireIsolation: true, which: noBwrap });
+  const linux = resolveBackend({ platform: "linux", requireIsolation: true, which: noBwrap, probe: bwrapBlocked });
   expect(linux.ok).toBe(false);
   if (!linux.ok) expect(linux.reason).toMatch(/bubblewrap/);
   const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: none });
@@ -93,18 +151,50 @@ test("managed require-isolation with NO isolating backend REFUSES (fail-closed, 
 });
 
 test("managed require-isolation is SATISFIED by an available sandbox-exec on macOS + lucid-appcontainer on Windows", () => {
-  const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec") });
+  const mac = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec"), probe: seatbeltWorks });
   expect(mac.ok).toBe(true);
   if (mac.ok) expect(mac.backend.name).toBe("seatbelt");
-  const win = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer") });
+  const win = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer"), probe: acWorks });
   expect(win.ok).toBe(true);
   if (win.ok) expect(win.backend.name).toBe("appcontainer");
 });
 
 test("managed require-isolation is SATISFIED by an available bwrap", () => {
-  const r = resolveBackend({ platform: "linux", requireIsolation: true, which: hasBwrap });
+  const r = resolveBackend({ platform: "linux", requireIsolation: true, which: hasBwrap, probe: bwrapWorks });
   expect(r.ok).toBe(true);
   if (r.ok) expect(r.backend.name).toBe("bwrap");
+});
+
+// ── regression: sandbox-exec present but NON-FUNCTIONAL (sandboxed parent, P-SANDBOX.4) ──────────
+// The bwrap-on-Ubuntu-24.04 silent-kill bug on macOS: sandbox-exec ships on EVERY macOS so presence
+// always passes, but a LUCID itself running under a sandbox (CI runner, MDM wrapper, a dev build
+// launched from another agent's gated shell) cannot NEST a Seatbelt profile - the wrapped child dies
+// at spawn with "sandbox_apply: Operation not permitted", `omp acp` never comes up, and the model
+// picker sits empty on a correctly-authed box.
+test("darwin with sandbox-exec on PATH but BLOCKED sandbox_apply does NOT resolve seatbelt - it discloses instead", () => {
+  const r = resolveBackend({ platform: "darwin", which: has("sandbox-exec"), probe: seatbeltBlocked });
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    expect(r.backend.name).toBe("noop"); // never "seatbelt" - a backend that cannot spawn is not a backend
+    expect(r.backend.isolates).toBe(false);
+    expect(r.disclosed).toBe(true); // degraded, but DISCLOSED and the agent still runs
+  }
+});
+
+test("SeatbeltBackend.available() requires presence AND capability", () => {
+  expect(new SeatbeltBackend(has("sandbox-exec"), seatbeltWorks).available()).toBe(true);
+  expect(new SeatbeltBackend(has("sandbox-exec"), seatbeltBlocked).available()).toBe(false); // the silent-kill bug
+  expect(new SeatbeltBackend(none, seatbeltWorks).available()).toBe(false);
+});
+
+test("managed require-isolation on a nested-sandbox mac refuses with the actionable nested-sandbox reason", () => {
+  const r = resolveBackend({ platform: "darwin", requireIsolation: true, which: has("sandbox-exec"), probe: seatbeltBlocked });
+  expect(r.ok).toBe(false); // gov/managed still fails CLOSED - degrading to passthrough is not an option
+  if (!r.ok) {
+    expect(r.reason).toMatch(/nested profiles are not permitted/);
+    expect(r.reason).toMatch(/unsandboxed shell/); // tells the operator what to actually do
+    expect(r.reason).not.toMatch(/not available/); // the old, misleading message
+  }
 });
 
 // ── cap → flag mapping ────────────────────────────────────────────────────────
@@ -185,7 +275,7 @@ test("seatbelt through wrapForProfile: a network-off downgrade profile yields a 
 
 // ── Windows AppContainer (P-SANDBOX.6) ────────────────────────────────────────
 
-const AC = new AppContainerBackend(has("lucid-appcontainer"));
+const AC = new AppContainerBackend(has("lucid-appcontainer"), "lucid-appcontainer", acWorks);
 
 test("appContainerArgs canNetwork:false → --deny-network (total deny), binds the workspace", () => {
   const a = appContainerArgs(caps("container-local"), CTX);
@@ -216,10 +306,40 @@ test("appContainer preserves the wrapped argv verbatim after the -- separator", 
   expect(plan.args.slice(sep + 1)).toEqual(ARGV);
 });
 
-test("appContainer available() only when the helper is on PATH (absent ⇒ false ⇒ disclosed passthrough)", () => {
-  expect(new AppContainerBackend(has("lucid-appcontainer")).available()).toBe(true);
-  expect(new AppContainerBackend(none).available()).toBe(false);
-  expect(new AppContainerBackend(has("bwrap")).available()).toBe(false); // a different tool doesn't count
+test("appContainer available() needs presence AND a passing containment probe (P-SANDBOX.7)", () => {
+  expect(new AppContainerBackend(has("lucid-appcontainer"), "lucid-appcontainer", acWorks).available()).toBe(true);
+  expect(new AppContainerBackend(none, "lucid-appcontainer", acWorks).available()).toBe(false);
+  expect(new AppContainerBackend(has("bwrap"), "lucid-appcontainer", acWorks).available()).toBe(false); // a different tool doesn't count
+  // present but INCAPABLE (profile creation / ACL grant refused) ⇒ unavailable, same bwrap doctrine
+  expect(new AppContainerBackend(has("lucid-appcontainer"), "lucid-appcontainer", acBroken).available()).toBe(false);
+});
+
+test("win32 with a present-but-incapable helper DISCLOSES rather than committing to a dead backend", () => {
+  const r = resolveBackend({ platform: "win32", which: has("lucid-appcontainer"), probe: acBroken });
+  expect(r.ok && r.backend.name === "noop" && r.disclosed).toBe(true);
+});
+
+test("win32 require-isolation with a present-but-incapable helper REFUSES and names the probe failure", () => {
+  const r = resolveBackend({ platform: "win32", requireIsolation: true, which: has("lucid-appcontainer"), probe: acBroken });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.reason).toMatch(/containment probe/);
+});
+
+test("listingExemptsMoniker: only a listing carrying OUR moniker counts, case-insensitively (P-SANDBOX.7b)", () => {
+  expect(listingExemptsMoniker("\nList Loopback Exempted AppContainers \n\nOK.\n")).toBe(false); // no exemptions (live -s shape)
+  expect(listingExemptsMoniker("[1] -----\n    Name: lucidagentide.sandbox.v1\n    SID: S-1-15-2-1\nOK.")).toBe(true); // CheckNetIsolation lowercases
+  expect(listingExemptsMoniker("[1] -----\n    Name: microsoft.windows.authhost.a\nOK.")).toBe(false); // someone else's exemption
+});
+
+test("the packaged helper path (P-SANDBOX.7) becomes the plan's cmd verbatim", () => {
+  const packaged = "C:\\app\\resources\\repo\\bin\\lucid-appcontainer.exe";
+  const r = resolveBackend({ platform: "win32", which: has(packaged), appContainerHelper: packaged, probe: acWorks });
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    expect(r.backend.name).toBe("appcontainer");
+    const plan = r.backend.wrap(ARGV, caps("container-local"), CTX);
+    expect(plan.cmd).toBe(packaged);
+  }
 });
 
 test("appContainer through wrapForProfile: a network-off downgrade yields a --deny-network isolated plan", () => {
@@ -325,4 +445,143 @@ test("managedRequireIsolation is tighten-only: absent/false/unmanaged means no r
   expect(managedRequireIsolation({})).toBe(false);
   expect(managedRequireIsolation({ security: { exec: { requireIsolation: false } } })).toBe(false);
   expect(managedRequireIsolation({ security: { exec: { requireIsolation: true } } })).toBe(true);
+});
+
+// ── P-SANDBOX.9 (ADR-0386): contained chat actually works ─────────────────────
+
+test("proxyChildEnv steers omp too: PI_PROXY + ALL_PROXY ride with HTTP(S)_PROXY, loopback bypasses", () => {
+  const env = proxyChildEnv("http://127.0.0.1:8888");
+  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "PI_PROXY", "ALL_PROXY", "all_proxy"]) expect(env[k]).toBe("http://127.0.0.1:8888");
+  expect(env.NO_PROXY).toBe("localhost,127.0.0.1,::1");
+});
+
+test("every isolating backend sets PI_PROXY on a mediated wrap (omp 18 reads only PI_PROXY for inference)", () => {
+  expect(AC.wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY }).env.PI_PROXY).toBe("http://127.0.0.1:8888");
+  expect(new SeatbeltBackend(has("sandbox-exec"), seatbeltWorks).wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY }).env.PI_PROXY).toBe("http://127.0.0.1:8888");
+  expect(new BwrapBackend(hasBwrap, bwrapWorks).wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY }).env.PI_PROXY).toBe("http://127.0.0.1:8888");
+  // network-off never gets a proxy (there is nothing to steer at)
+  expect(AC.wrap(ARGV, caps("container-local"), CTX).env.PI_PROXY).toBeUndefined();
+});
+
+test("appContainerArgs passes the runtime grants and the temp dir as --grant-rx / --grant-rw", () => {
+  const a = appContainerArgs(caps("trusted-local"), { ...CTX, proxy: PROXY, grantRx: ["C:\\repo"], grantRw: ["C:\\Users\\u\\.omp"], tmpDir: "C:\\Users\\u\\.omp\\lucid-sandbox-tmp" });
+  expect(a.join(" ")).toContain("--grant-rx C:\\repo");
+  expect(a.join(" ")).toContain("--grant-rw C:\\Users\\u\\.omp");
+  expect(a.join(" ")).toContain("--grant-rw C:\\Users\\u\\.omp\\lucid-sandbox-tmp");
+  expect(a).toContain("--loopback-only");
+});
+
+test("appContainer wrap points TEMP/TMP at the granted temp dir (the user's %TEMP% is not granted)", () => {
+  const plan = AC.wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY, tmpDir: "C:\\t" });
+  expect(plan.env.TEMP).toBe("C:\\t");
+  expect(plan.env.TMP).toBe("C:\\t");
+  expect(AC.wrap(ARGV, caps("trusted-local"), { ...CTX, proxy: PROXY }).env.TEMP).toBeUndefined();
+});
+
+test("appContainerRuntimeGrants: bundled omp -> repo + bun dir rx, ~/.omp rw, temp inside it", () => {
+  const g = appContainerRuntimeGrants({
+    repoRoot: "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo",
+    home: "C:\\Users\\u",
+    bunBin: "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\runtimes\\bun-win32-x64.exe",
+    ompBin: "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo\\node_modules\\.bin\\omp.exe",
+  });
+  expect(g.grantRx).toEqual([
+    "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\repo",
+    "C:\\Users\\u\\AppData\\Local\\Programs\\LucidAgentIDE\\resources\\runtimes",
+  ]); // omp under the repo adds nothing
+  expect(g.grantRw).toEqual(["C:\\Users\\u\\.omp"]);
+  expect(g.tmpDir).toBe("C:\\Users\\u\\.omp\\lucid-sandbox-tmp");
+});
+
+test("appContainerRuntimeGrants: an omp outside the repo is granted by its install root; bare names are skipped", () => {
+  const g = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\u", bunBin: "bun", ompBin: "C:\\Users\\u\\.bun\\bin\\omp.exe" });
+  expect(g.grantRx).toEqual(["C:\\r", "C:\\Users\\u\\.bun"]);
+  // same dir twice (case differs) is granted once
+  const d = appContainerRuntimeGrants({ repoRoot: "C:\\R", home: "C:\\h", bunBin: "c:\\r\\bun.exe", ompBin: null });
+  expect(d.grantRx).toEqual(["C:\\R"]);
+});
+
+test("the AppContainer probe is a stdio round trip: exit 0 WITHOUT the echoed marker does not pass", () => {
+  const argv = appContainerProbeArgv("lucid-appcontainer", "C:\\tmp");
+  expect(argv.slice(0, 4)).toEqual(["lucid-appcontainer", "--workspace", "C:\\tmp", "--deny-network"]);
+  expect(argv.join(" ")).toContain(`echo ${APPCONTAINER_PROBE_MARKER}`);
+  expect(appContainerProbePassed({ exitCode: 0, stdout: `${APPCONTAINER_PROBE_MARKER}\r\n` })).toBe(true);
+  expect(appContainerProbePassed({ exitCode: 0, stdout: "" })).toBe(false); // the beta.7 helper: runs, but no stdio
+  expect(appContainerProbePassed({ exitCode: 3, stdout: APPCONTAINER_PROBE_MARKER })).toBe(false);
+});
+
+// ── P-SANDBOX.10 (ADR-0387): the pill needs the REAL runtime to boot in the container ──
+test("runtimeProbeVerdict: only a clean exit WITH output commits the session to the AppContainer", () => {
+  expect(runtimeProbeVerdict({ exitCode: 0, stdout: "omp 18.2.10\n", stderr: "" })).toEqual({ ok: true });
+  // the field failure: bun cannot open a cwd ancestor inside the container
+  const bunDied = runtimeProbeVerdict({ exitCode: 1, stdout: "", stderr: "error: An internal error occurred (CouldntReadCurrentDirectory)\n" });
+  expect(bunDied.ok).toBe(false);
+  if (!bunDied.ok) expect(bunDied.reason).toContain("CouldntReadCurrentDirectory");
+  expect(runtimeProbeVerdict({ exitCode: 0, stdout: "  ", stderr: "" }).ok).toBe(false); // no stdio carried
+  expect(runtimeProbeVerdict({ exitCode: null, stdout: "", stderr: "", timedOut: true }).ok).toBe(false);
+  expect(runtimeProbeVerdict({ exitCode: 3, stdout: "", stderr: "" }).ok).toBe(false); // helper fail-closed
+});
+
+// ── P-SANDBOX.11 (ADR-0389): a shellPath pinned in omp's config is reachable in the container ──
+test("parseOmpShellPath reads plain, single- and double-quoted scalars (unescaping YAML backslashes)", () => {
+  expect(parseOmpShellPath("theme: dark\nshellPath: C:\\Users\\User\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe\n")).toBe("C:\\Users\\User\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe");
+  expect(parseOmpShellPath('shellPath: "C:\\\\Tools\\\\Git\\\\bin\\\\bash.exe"')).toBe("C:\\Tools\\Git\\bin\\bash.exe");
+  expect(parseOmpShellPath("shellPath: 'D:\\git\\bin\\bash.exe'")).toBe("D:\\git\\bin\\bash.exe");
+  expect(parseOmpShellPath("shellPath: C:\\g\\bin\\bash.exe  # pinned")).toBe("C:\\g\\bin\\bash.exe");
+  expect(parseOmpShellPath("model: x\n  shellPath: nested-is-not-top-level\n")).toBeNull();
+  expect(parseOmpShellPath("theme: dark\n")).toBeNull();
+});
+
+test("shellInstallRoot climbs out of bin and usr\\bin so the sibling tools come with the shell", () => {
+  expect(shellInstallRoot("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe")).toBe("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit");
+  expect(shellInstallRoot("C:\\Users\\U\\scoop\\apps\\git\\current\\bin\\bash.exe")).toBe("C:\\Users\\U\\scoop\\apps\\git\\current");
+  expect(shellInstallRoot("C:\\tools\\busybox.exe")).toBe("C:\\tools");
+});
+
+test("appContainerRuntimeGrants adds the pinned shell's root, and never re-ACLs Program Files / Windows", () => {
+  const g = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", shellPath: "C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe" });
+  expect(g.grantRx).toEqual(["C:\\r", "C:\\Users\\U\\AppData\\Local\\Programs\\MinGit"]);
+  const pf = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", shellPath: "C:\\Program Files\\Git\\bin\\bash.exe", bunBin: "C:\\Windows\\bun.exe" });
+  expect(pf.grantRx).toEqual(["C:\\r"]); // already readable by every AppContainer; a standard user cannot write those DACLs
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\h", shellPath: "bash" }).grantRx).toEqual(["C:\\r"]); // a bare name is not a path
+});
+
+// P-SANDBOX.16 (ADR-0397): git discovery. A fake filesystem keyed by lowercase path.
+const fakeFs = (files: string[], dirs: Record<string, string[]> = {}) => ({
+  exists: (p: string) => files.some((f) => f.toLowerCase() === p.toLowerCase()),
+  list: (d: string) => { const k = Object.keys(dirs).find((x) => x.toLowerCase() === d.toLowerCase()); if (!k) throw new Error("ENOENT"); return dirs[k]!; },
+});
+const WIN_ENV = { LOCALAPPDATA: "C:\\Users\\U\\AppData\\Local", USERPROFILE: "C:\\Users\\U", ProgramFiles: "C:\\Program Files", ProgramW6432: "C:\\Program Files" };
+
+test("discoverGitRoot finds a MinGit the host never put on PATH", () => {
+  const fs = fakeFs(["C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\cmd\\git.exe"]);
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "C:\\Windows\\system32" }, fs)).toBe("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit");
+});
+
+test("discoverGitRoot prefers the git on the host PATH over a vendor default, from cmd, bin or mingw64\\bin", () => {
+  const fs = fakeFs(["C:\\Program Files\\Git\\cmd\\git.exe", "D:\\tools\\git\\cmd\\git.exe"]);
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "C:\\Windows;D:\\tools\\git\\mingw64\\bin" }, fs)).toBe("D:\\tools\\git");
+  expect(discoverGitRoot({ ...WIN_ENV, Path: "D:\\tools\\git\\cmd\\" }, fs)).toBe("D:\\tools\\git");
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "" }, fs)).toBe("C:\\Program Files\\Git");
+});
+
+test("discoverGitRoot picks the NEWEST GitHub Desktop version dir, and skips a root with no cmd\\git.exe", () => {
+  const gd = "C:\\Users\\U\\AppData\\Local\\GitHubDesktop";
+  const fs = fakeFs(
+    [`${gd}\\app-3.9.2\\resources\\app\\git\\cmd\\git.exe`, `${gd}\\app-3.10.1\\resources\\app\\git\\cmd\\git.exe`, "C:\\Users\\U\\AppData\\Local\\Programs\\Git\\bin\\bash.exe"],
+    { [gd]: ["app-3.9.2", "app-3.10.1", "packages"] },
+  );
+  expect(discoverGitRoot(WIN_ENV, fs)).toBe(`${gd}\\app-3.10.1\\resources\\app\\git`);
+  expect(discoverGitRoot(WIN_ENV, fakeFs([]))).toBeNull();
+});
+
+test("prependPathOverlay puts a dir first under the env's own PATH spelling, once", () => {
+  expect(prependPathOverlay({ Path: "C:\\Windows" }, "C:\\g\\cmd")).toEqual({ Path: "C:\\g\\cmd;C:\\Windows" });
+  expect(prependPathOverlay({ PATH: "c:\\G\\CMD\\;C:\\Windows" }, "C:\\g\\cmd")).toEqual({});
+  expect(prependPathOverlay({ PATH: "C:\\Windows" }, null)).toEqual({});
+});
+
+test("appContainerRuntimeGrants grants a discovered git root outside Program Files", () => {
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", gitRoot: "C:\\Users\\U\\scoop\\apps\\git\\current" }).grantRx).toEqual(["C:\\r", "C:\\Users\\U\\scoop\\apps\\git\\current"]);
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", gitRoot: "C:\\Program Files\\Git" }).grantRx).toEqual(["C:\\r"]);
 });

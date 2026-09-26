@@ -23,11 +23,40 @@ const TABLE: [RegExp, Price][] = [
   [/flash/, { inPerM: 0.30, outPerM: 2.50 }],
   [/oss/, { inPerM: 0.10, outPerM: 0.40 }],
   [/spark/, { inPerM: 0.25, outPerM: 2.00 }],
+  // P-MODEL.2: three corrections, all ORDER-SENSITIVE (first match wins, so these must precede the
+  // broader family rows below).
+  // Fable / Mythos list at $10/$50 per Mtok. Without a row they fell through to DEFAULT_PRICE
+  // (sonnet-ish $3/$15), understating the priciest models in the catalog by more than 3x. These are also
+  // the models that bill as pay-as-you-go credits outside a plan's included usage, so a low estimate is
+  // exactly the wrong direction to be wrong in.
+  [/fable|mythos/, { inPerM: 10.0, outPerM: 50.0 }],
+  // Opus 5.5 (2026-09-22) cut the flagship rate again to $4/$20 (cache read $0.20 / write $5 per Mtok on
+  // the API; Price carries no cache fields, so those live in this comment). Must be matched BEFORE the
+  // Opus 5 row, whose `[-.]` tail would otherwise eat the second "5" and price 5.5 at the 5 rate.
+  [/opus-?5[-.]5(\b|[-.])/, { inPerM: 4.0, outPerM: 20.0 }],
+  // Opus 5 halved the Opus price to $5/$25. It must be matched BEFORE the generic /opus/ row, which
+  // still correctly prices 4.6/4.7/4.8 at $15/$75.
+  [/opus-?5(\b|[-.])/, { inPerM: 5.0, outPerM: 25.0 }],
   [/opus/, { inPerM: 15.0, outPerM: 75.0 }],
   [/sonnet/, { inPerM: 3.00, outPerM: 15.0 }],
   [/\bpro\b/, { inPerM: 1.25, outPerM: 10.0 }],
   [/\bo[34]\b|o3|o4/, { inPerM: 2.00, outPerM: 8.00 }],
-  [/gpt-?5|gpt-?4|codex/, { inPerM: 1.25, outPerM: 10.0 }],
+  // Widened from `gpt-?5|gpt-?4` to any numbered GPT generation, so GPT-6 (and 7, and 8) lands on the
+  // GPT family estimate instead of silently falling through to the sonnet-ish default. The figure is the
+  // known GPT-5 tier price used as a placeholder: OpenAI has not published GPT-6 rates, and an
+  // in-family estimate is a better-informed guess than an unrelated default. The user's own metered
+  // usage supersedes this the moment they run the model once (priceFor prefers "actual").
+  // GPT-6 tiers (2026-09-23, from omp 18.2.10's catalog, provider openai): Astra $10/$50, Sol $2/$10,
+  // Luna $0.10/$0.50 per Mtok. Ordered before the generic GPT row, which stays the estimate for ids the
+  // catalog has not priced (a bare `gpt-6`, GPT-7). `[-.]?` tolerates `gpt-6.1-sol` style revisions.
+  [/gpt-?6(?:\.\d+)?-astra/, { inPerM: 10.0, outPerM: 50.0 }],
+  [/gpt-?6(?:\.\d+)?-sol/, { inPerM: 2.0, outPerM: 10.0 }],
+  [/gpt-?6(?:\.\d+)?-luna/, { inPerM: 0.10, outPerM: 0.50 }],
+  [/gpt-?\d|codex/, { inPerM: 1.25, outPerM: 10.0 }],
+  // Grok 4.6 / 4.7 (2026-09-24, from omp 18.2.10's catalog, providers xai + xai-oauth): $2/$6 per Mtok
+  // (cache read $0.50), rising to $4/$12 once a prompt exceeds 200K input tokens. Price has no tier
+  // fields, so the base rate is the estimate; metered usage supersedes it as with every row here.
+  [/grok-?4[.-][67](\b|[-.])/, { inPerM: 2.0, outPerM: 6.0 }],
   [/gemini/, { inPerM: 1.25, outPerM: 10.0 }],
 ];
 const DEFAULT_PRICE: Price = { inPerM: 3.00, outPerM: 15.0 }; // sonnet-ish, when nothing matches

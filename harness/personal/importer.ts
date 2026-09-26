@@ -56,14 +56,19 @@ export async function importConversations(
   const tick = () => opts.onProgress?.({ conversations: idx, totalConversations: conversations.length, messages, totalMessages, learned, blocked });
   tick(); // emit an initial 0/total so the UI can render immediately
   for (const convo of conversations) {
-    if (opts.signal?.aborted) { cancelled = true; break; } // cancel at a conversation boundary — fail-safe
+    if (opts.signal?.aborted) { cancelled = true; break; }
     const runId = `${sessionId}:${idx}`;
     for (const m of convo.messages) {
+      // P-KG-INGEST.5 (ADR-0264): check EVERY message, not just conversation boundaries. In model mode one
+      // conversation can be hundreds of slow completions, so a boundary-only check made Stop look dead.
+      if (opts.signal?.aborted) { cancelled = true; break; }
       if (m.role !== "user" || !m.text.trim()) continue; // only the user's own words teach
       if (messages >= cap) { skipped++; continue; } // over the cap — count it, never drop silently
       messages++;
       try {
-        const r = await distillTurn(store, scanner, { userText: m.text, scope: opts.scope, sessionId, runId, extract, persist: false });
+        // The signal also reaches the model call itself, so Stop interrupts the in-flight extraction
+        // instead of waiting for it to finish.
+        const r = await distillTurn(store, scanner, { userText: m.text, scope: opts.scope, sessionId, runId, extract, persist: false, signal: opts.signal });
         learned += r.learned;
         if (r.blocked) blocked++;
       } catch { blocked++; } // fail-closed: an unscannable message teaches nothing
@@ -71,6 +76,7 @@ export async function importConversations(
     }
     idx++;
     tick();
+    if (cancelled) break;
   }
   if (learned) store.save(); // one re-encrypt+write for the entire import (incl. a cancelled run's partial facts)
   opts.telemetry?.emit("personal_facts_imported", { vendor: opts.vendor, scope: opts.scope, extractor, conversations: idx, messages, learned, blocked, skipped });

@@ -268,4 +268,255 @@
 //            (P-GOVCUI.1: asks once, prefills the AskSage CIV gov endpoint with token steps; a key turns
 //            lockdown ON, keyless never flips it) + the 11-SKU KG-pack storefront reconcile (SPM flagship
 //            replaces capture) + the Remote PWA /r forwarder and comp-grant entitlement auto-recheck.
-export const APP_VERSION = "1.11.10";
+// v1.11.11 = Session Share + preview polish. Instant Start/Stop for Session Share (P-SHARE.4: a two-line
+//            handshake progress readout under the button + optimistic teardown, so neither action hangs);
+//            readable Thinking on the phone PWA (P-REMOTE.9b: the live reasoning block streams open with a
+//            gist summary and stays open across repaints); reliable preview screenshots/inspection for
+//            tool-conservative models like Fable 5 (P-PREVIEW.9: trigger-prescriptive tool descriptions +
+//            self-correcting fallbacks to preview_inspect); and the Linux air-gap sandbox fix (functional
+//            bwrap probe so Ubuntu 24.04's blocked user namespaces no longer kill the model picker, plus
+//            shipping omp's native addon next to the compiled launcher).
+// v1.11.12 = reliable OFFLINE VOICE + bundled Whisper installers. Fixes dictation showing "heard you, but
+//            nothing transcribed": the mic recorded WebM/Opus but whisper.cpp's /inference decodes WAV/PCM
+//            only, so every clip 400d; the composer now transcodes each utterance to 16 kHz mono 16-bit WAV
+//            before upload. Also strips whisper's non-speech tokens ("[BLANK_AUDIO]", music notes) so a silent
+//            tail merges nothing, and only falls back to the OpenAI /v1 shape on a real transport failure, so a
+//            healthy whisper.cpp that heard silence is never mislabeled "no STT server answered". Ships the
+//            zero-prereq BUNDLED offline Whisper installers on all 3 OSes (P-STT.2c/.2d), the mic waveform
+//            (P-STT.4) + orphan whisper-server reaper (P-STT.5), the Provider Hub + one-click local-model
+//            presets (P-PROV.2 / P-LOCAL.4), and the model-picker cold-start warm-poll.
+// v1.12.0 = Voice mode. Hands-free conversation (Ctrl/Cmd+G: streaming read-aloud that starts after the
+//            first sentence, auto-mic on finish, silence sends the turn), answers shaped for the ear,
+//            the glowing pop-out equalizer, spoken thinking acknowledgements, and the truth-telling
+//            per-engine voice picker (P-VOICE.2-.6, ADR-0246/0247).
+// v1.12.1 = the LUCID Trainer + role-generic training packs + the LUCID Agent immersive role
+//            (scenario-first expert interviews, fail-closed distillation, teach-back promotion,
+//            drills from confirmed knowledge; P-TRAINER.1-.9, ADR-0252..0257).
+// v1.12.2 = the Windows Program Files fix arc + no-cutoff turns: compiled engine (bin/lucid-engine),
+//            the strict CI boot gate from a real write-denied Program Files tree, per-machine installs
+//            re-enabled, event-driven transport-death rejection + pending-task visibility
+//            (P-WINBOOT.2C/.3 + P-STALL.2, ADR-0259..0263).
+// v1.13.0 = the Fleet Manager: async job handles through the Agent Firewall (dispatch/status/cancel
+//            over one fail-closed path), local lanes streaming into the movable fleet-grid dock with
+//            fail-closed approval glows, Fleet Profiles, spoken thinking snapshots, an ingest that
+//            cannot hang, real OS folder dialogs from the browser build, and no turn clock
+//            (P-FLEET.1/.L1/.P*, ADR-0264..0272).
+// v1.13.1 = unlimited fleet lanes under the sustained-pressure guard (90% held 30s; the cap deleted),
+//            lanes spawned straight from GitHub/GitLab/Azure DevOps remotes with per-host tokens in the
+//            OS-encrypted vault, the real OS folder dialog in the lane form, and the truthful minimized
+//            per-state pill (P-FLEET.L2, ADR-0273).
+// v1.13.2 = the fleet fidelity arc: no lane turn clock + Retry/Respawn recovery spawns with memory
+//            (session/load or transcript replay, approvals re-asked), diff chips + pasted-image
+//            thumbnails + staged prompt queues in lane cards, the durable lane-session ledger, and the
+//            reviewable Timeline dock across every workspace (P-FLEET.L3/.L4/.L5, ADR-0274..0277).
+// v1.14.0 = the control + reach arc: fleet approval SCOPES (Allow / Allow-for-session / Deny) and a
+//            full auto-mode behind an explicit risk acceptance; MID-TURN interjection (the security
+//            gate's tool-result seam carries a typed note to the model at its next tool boundary),
+//            stacked hold-or-push prompt queues, check-in cards, and a running-processes popover; an
+//            agent-controlled VISIBLE browser window (open / screenshot / scroll / click / type / drag /
+//            keys, egress-gated, breathing glow, close-X kill switch); per-lane Preview tabs plus auto
+//            send-to-phone; workspace INIT offers that scaffold the .agents framework; the phone PWA
+//            gains fleet control (name filter, prompt / stop / approve) and OPTIONAL device-native STT
+//            that is refused unless the audio can be PROVEN to stay on the device; the Timeline hides
+//            its own self-test throwaways and becomes a two-pane inspector; ACP child stderr persists
+//            to ~/.omp/lucid-acp.log and a code-1 exit quotes its last line (the "no response from the
+//            provider" support ticket); and on Windows every port-keyed instance now shares ONE
+//            safeStorage os_crypt key, so a vault credential written by one instance is readable by the
+//            next and the Local Provider stops vanishing from the picker; and the site + About link move
+//            to the canonical lucid-agents.com (the PWA and sign-in origin stay on lucid-agent.web.app,
+//            where the OAuth authDomain is registered) (P-FLEET.L6, P-WSSETUP,
+//            P-INTERJECT.1, P-BROWSER.1..3, P-REMOTE.14, P-TL.2/.3, ADR-0278).
+// v1.14.1 = the phone follow-through + the honest gate: the PWA composer collapses to ONE row (same-family
+//            controls fold into menus, Queue and Send merge, the voice caution moves behind an amber-aware ?),
+//            the fleet strip costs 33px collapsed (double-decker with the desktop pill's own count pips,
+//            per-lane composers, desktop-matched lane colours), a lane's CONVERSATION reaches the phone
+//            (subscribe-only watch frames unicast to peers that asked, bounded lane-sync replay, a distinct
+//            lane-error chip), per-target seen counters draw a "new since you looked away" boundary that
+//            Sync scrolls to, and no phone panel ever opens itself (P-REMOTE.15, P-PWA-FLEET.2,
+//            P-PWA-FOCUS.1/.2, ADR-0298..0302). The Preview panel gains deterministic CAPTURE (a scene
+//            defining lucidRenderAt is stepped on LUCID's clock, fingerprinted against a measured readback
+//            noise floor, and compared to its baseline with the method named; ADR-0297). The test gate now
+//            measures what it claims (scope by exclusion, ADR-0303). And the Creator flavor lands on trunk
+//            behind build_flavor gates with its own creator-v* release channel that can never cross-install
+//            with Agent (ADR-0279..0296, 0304).
+// v1.14.2 = the trust-boundary pass, all four increments traced back to ONE field report ("v1.14.1 installed
+//            a different product"): the window can no longer render a STRANGER - main mints a per-launch
+//            nonce, the engine echoes it on /api/health, and a foreign process squatting the engine port
+//            fails LOUDLY with a pasteable incident report naming the process, pid, start time and command
+//            line, never a silent roll onto someone else's UI (P-PORTGUARD.1, ADR-0305); CI now reads each
+//            artifact's EMBEDDED identity before upload (pkg bundle id + payload .app path, deb package
+//            name, rpm lead, the updater feed's declared path) so a mis-flavored or mis-versioned build
+//            fails the build instead of reaching a Release (P-RELEASE.4, ADR-0307); agents get real
+//            Word/Excel/PowerPoint through a pinned, digest-verified OfficeCLI as a GATED skill with the
+//            render-look-fix loop on the existing Preview tools, graded per subcommand by exec_policy
+//            (P-OFFICE.1, ADR-0306); and the Preview panel obeys the agent again - preview_open reports
+//            itself over its own channel instead of relying on an ACP call title that omp's intent tracing
+//            rewrites to the model's prose, which had also left every preview activity pill dark
+//            (P-PREVIEW.11/.11b, ADR-0308). Plus two stacked chat scroll helpers for long sessions (step a
+//            page, or run to the end) and paste-safe Homebrew docs (stock zsh does not strip # comments).
+// v2.0.0 = the major, and the reason it is a MAJOR rather than a 1.15: this batch changes defaults users
+//            were relying on and REMOVES models from the catalog, which is what a major version exists to
+//            announce. Eighteen increments (ADR-0309..0326), the largest batch in the project's history.
+//            MODELS: the catalog moves to the current generation and stops going stale - Claude Opus 5 as
+//            the house default (1M ctx), GPT-6 Astra (1M, the first OpenAI generation to match Claude's
+//            window), the Gemini 3 / 3.1 Pro + 3.5 Flash family, Fable/Mythos 5.1, with the picker default
+//            following the USER instead of a hardcoded id, capability tiers derived from one source of
+//            truth (a hand-copied third regex had never learned GPT-6 and mis-ranked a flagship as a
+//            workhorse), and a deprecation floor that DROPS superseded ids (GPT below 5.4) - the breaking
+//            half of the model story (P-MODEL.2, ADR-0317).
+//            LOOK: light mode arrives with SEVEN themes and a picker, after a dark-only lifetime; every
+//            palette is token-complete by test, because a light theme that forgets one token inherits the
+//            dark base and ships unreadable (P-THEME.1, ADR-0320). P-THEME.2 then makes the DEFAULT honest:
+//            "never chosen" used to mean "follow the OS", so shipping light mode moved long-time users off
+//            the dark UI they already had; unset now means Lucid Dark and following the OS is an explicit
+//            choice (ADR-0326).
+//            SESSIONS THAT FINISH: the harness watches its own sessions and recovers a wedged one in place
+//            (ADR-0311), and now RESUMES the run that recovery interrupted, with a short operator note and
+//            a plain notice that it is picking up where it left off - bounded per run, never after a user
+//            Stop (P-HEALTH.2, ADR-0324). A dropped engine stream no longer freezes the composer in
+//            silence while the turn keeps working.
+//            THE FLEET GROWS UP: lane tool-call fidelity and the repaint that was eating transcripts
+//            (ADR-0309), promote a lane into the main composer as an ATTACH rather than a handoff
+//            (ADR-0310/0314), dismiss a lane (ADR-0313), a spend meter that refuses to invent numbers
+//            (ADR-0312/0315), and cards you can actually size and drag: pixel widths tracking the pointer
+//            1:1, headers that wrap instead of clipping, a real grab grip (P-FLEET.L12, ADR-0325).
+//            THE AGENT WRITES TO MEMORY: it can finally write to the knowledge graph, and a locked vault
+//            stops lying about what it holds (P-KG.3, ADR-0319).
+//            PREVIEW BECOMES A SURFACE: twelve renderable kinds, rendered markdown, working PDFs, and an
+//            auto-open trigger narrowed back to html/svg/pdf after it started hijacking the screen for
+//            every .md and .json an agent writes (ADR-0321/0322/0323, P-PREVIEW.15..18).
+//            Plus: tools that name themselves so evaluation can attribute them (P-EVAL.4, ADR-0318), a
+//            login confirmed by the VAULT rather than an exit code (ADR-0316), one-gesture bulk dismissal
+//            of a 100-row security queue, and the test suite no longer appending its fixture blocks into
+//            the operator's real security ledger (P-SEC.4).
+// v2.1.0 = the OAuth fix users actually needed, plus lane scroll affordances.
+//            AUTH: "Connect via OAuth" failed on packaged Windows installs with Bun's own
+//            `EPERM reading ...pi-coding-agent\dist\cli.js`. The resolver accepted LUCID_OMP_BIN because
+//            the path EXISTED, so the broker spawned a file it could not read inside the ACL-protected
+//            app directory. NOT a 2.0.0 regression: the offending resolver landed in c2d8cf9 (2026-07-15)
+//            and shipped in every tag from v1.11.8 onward, so this had been broken for anyone whose
+//            install directory denied the read. Existence was never the question; runnability is, so the
+//            resolver now PROBES each candidate by running `--version` and falls through to one that
+//            works, logging every path it tried when none do. Three files had grown private copies of
+//            that resolver and had already drifted once (c2d8cf9 exists only because the broker picked a
+//            different omp than the model list); they now share desktop/omp_bin.ts, so the class cannot
+//            recur (11 tests).
+//            FLEET: a lane transcript scrollbar you can actually grab (the global thumb is 5px of
+//            pointer target once its 3px transparent border is accounted for, fine on a full-height chat
+//            and unusable in a 300px card), plus the main composer's two catch-up buttons per lane (step
+//            a page keeping a line of overlap, or run to the newest line). The arithmetic moved to
+//            renderer/scroll_jump.ts and BOTH the chat and the lanes read it, so the chat can never get a
+//            tuning pass the lanes miss (11 tests, aimed at the NaN scroll target that fails invisibly).
+// v2.2.0 = the reported fixes, plus the two surfaces that had no way in.
+//            FLEET: a lane could not run bash or eval AT ALL. There are TWO approval gates in front of a
+//            tool call: ours (ACP `session/request_permission`, which lane auto-approve resolves with no
+//            human) and omp's own per-tool gate, which it raises as an `elicitation/create` request. The
+//            lane had a handler for that request and had never ADVERTISED the capability, so omp never
+//            sent it and denied every bash and eval regardless of what the user had configured
+//            (ADR-0337). Fixing the advertisement exposed the second half: the handler read the offered
+//            options from the wrong path and answered in the wrong shape, so waking it up still resolved
+//            to nothing (ADR-0338). Both halves now live in exec_policy.ts and BOTH interactive clients
+//            import them, so a third client gets it right by construction. Confirmed on a live DGX lane.
+//            PREVIEW: a FAILED preview was photographed and published to a phone guest, toast baked into
+//            the shot and captioned with a file from an unrelated session, because /api/preview/serve
+//            answers a failure with HTTP 200 and an HTML body that says so, so every guard read it as a
+//            working page. The gate now PROBES the target, hides the toast for the capture, and claims
+//            the rate-limit slot only once a send is authorized (ADR-0335). Separately, the panel no
+//            longer follows the user into the next conversation: an unresolvable target was remembered
+//            exactly like a success and outlived the session boundary (ADR-0339). A file the user opened
+//            by hand is still left alone, broken or not.
+//            KG + MARKET: the Role KG Packs storefront gets a button in the KG header (until now the only
+//            way in was typing its name into the command palette), a purchase RESUMES the exact pack after
+//            the sign-in detour under a 15-minute one-shot intent (the deep link is shared with LUCID
+//            Remote and Drive, so it must not turn every future sign-in into a payment page), and the
+//            Personalization card is rebuilt for a user with MANY named KGs: a hero row opening the
+//            existing picker plus a two-row stat strip (ADR-0333, ADR-0336).
+//            RELEASE: the rolling `latest` channel can publish at all. The identity gate compared deb and
+//            rpm versions literally, so every prerelease failed it (`~` is the only legal separator in
+//            those formats), and a publishing dispatch stamped itself as a test build (ADR-0332).
+// v2.2.1 = the release that makes models work again on a slow machine, and restores the security gate.
+//            OMP: on a cold first launch, models could simply never run. The capability probe that
+//            decides which omp to spawn had a 6 SECOND budget, and the bundled omp is a shim over a
+//            98 MB bun that loads a large cli.js, so on a laptop with a real-time virus scanner reading
+//            both files for the first time it can take longer than that. The resolver counted the
+//            timeout as a REJECTION and fell through to a bare `omp`, which a packaged install does not
+//            have, and cached that verdict for the whole session. A reported log shows 10 of 21 boots
+//            from ONE install deciding omp was unrunnable while the other 11 ran it fine. A timeout is
+//            now its own verdict: the slow candidate is used anyway, the budget is 30 s, and a genuinely
+//            missing omp gets one loud dialog naming every path tried instead of a stack trace per UI
+//            poll (ADR-0357, ADR-0358).
+//            SECURITY: the packaged engine loaded NO security gate. It built omp's `-e` extension paths
+//            from `import.meta.dir`, which inside a compiled binary is Bun's virtual root, so it handed
+//            omp `B:\~BUN\harness\omp\security_extension.ts`: a path in no filesystem. omp logged
+//            "Cannot find module" to its own log and ran ungated while every surface reported healthy.
+//            One probed resolver now answers for every cross-process path, and a gate that cannot be
+//            found REFUSES the spawn rather than proceeding without it (ADR-0356).
+// v2.2.2 = v2.2.1's payload, in a build that can actually be built.
+//            BUILD: v2.2.1 was tagged on 5249 green tests, two clean typechecks and a green
+//            prompt-prefix keystone, and all three release legs died in seconds on
+//            `bun build --compile dev.ts`: omp 16.5.2 added a legacy-pi-compat plugin whose dynamic
+//            `import("omp-legacy-pi-modules")` is meant to be resolved by omp's OWN Bun build plugin,
+//            and the plain CLI chases the literal. It is now `--external`, exactly like `*.node`. The
+//            real fix is structural: CI now COMPILES the shipped binaries on every push, because
+//            nothing in the suite or either typecheck had ever built the thing being released
+//            (ADR-0359). Everything v2.2.1 promised is in here unchanged.
+// v2.3.0-beta.1 = Jev end to end, the Jev browser policy, named accounts, the Agent Mode pass. A
+//            PRERELEASE: tagged with a dash, so it lands as a GitHub prerelease that is never marked
+//            latest, the Homebrew cask job skips it, and the rolling `latest` channel is untouched;
+//            stable installs are not offered it and a beta install updates itself to the next beta.
+//            JEV: the Judgment card (TypeSafe key + auto|typesafe|llm, pinned to llm under AskSage
+//            lockdown, ADR-0374), the per-turn judgment trace under every reply (ADR-0377), the frozen
+//            judge() steer so "use Jev" is understood (ADR-0378), and browser_run, a TypeScript port of
+//            browser-use/jev-ultrafast where one typed judgment picks each operation and target from an
+//            isolated-world element table and every typed string is a caller-supplied named value
+//            (ADR-0379). ACCOUNTS: several OAuth identities or named keys per provider (ADR-0375).
+//            AGENT MODE: the Regular/Max tier select (and the drag region that ate its clicks), the
+//            preview-link whiteout fixed by one navigation policy (ADR-0376), the game cabinet, omp
+//            18.2.6 (ADR-0373).
+// v2.3.0-beta.6 = beta.1 plus omp 18.2.7: the harness bump lands via the #357 rebase-merge, and the
+//            browser_run judge seam is adapted to 18.2.7's judgment API so the Jev browser policy keeps
+//            answering typed judgments instead of falling back to the chat model. Also in the window:
+//            the engine_launch test fixtures build their paths with the host path module (green on
+//            Windows), and the README banner picks up Gemini 3.8 Flash with the Jev / TypeSafe call-out.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.3 = beta.2 plus the Windows AppContainer runtime sandbox (P-SANDBOX.7): the engine runs
+//            inside an AppContainer with filesystem ACLs granted to its SID (ADR-0173), the backend is
+//            wired end-to-end with the packaged lucid-appcontainer helper, a functional probe, and a
+//            compile-appcontainer step in dist:win, and network-on isolation is gated on the loopback
+//            exemption so a fresh install never cuts chat traffic between the UI and the engine.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.4 = beta.3 plus user-approved standing directory grants for the AppContainer sandbox
+//            (P-SANDBOX.8): the agent can request access to a directory outside the granted set via
+//            sandbox_grant_dir, nothing mutates the host without an explicit user yes in the grant
+//            dialog, approvals ride a one-shot pending slot so the endpoint honors only a fresh
+//            matching approval, ACLs are applied/revoked through the bundled helper's --apply-acl /
+//            --revoke-acl, and every grant is listed and revocable in the Security panel.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.5 = beta.4 plus Claude Opus 5.5 (claude-opus-5-5, 2026-09-22) as the curated default:
+//            top of DEFAULT_MODEL_PREFERENCE above Opus 5, $4/$20 per Mtok pricing (cache read $0.20 /
+//            write $5), 1M context and 128K max output wired through MODEL_CTX / session_metrics,
+//            intelligence card and README flagship banner updated; the id arrives dynamically via the
+//            signed-in Anthropic plan until omp catalogs it. Ships the AppContainer sandbox package
+//            unchanged (helper binary + sandbox_grant_extension).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.6 = beta.5 plus the session-load fix. omp 18 prepends a fixed-width title slot as line one of
+//            every session file; the transcript reader trusted line one for the session id, so the sidebar
+//            listed every session and the chat could load none of them (P-SESS.3, ADR-0380).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.7 = beta.6 plus the orphan reaper and GPT-6 Sol / Luna. PORT: PR #367 (P-PORTGUARD.2,
+//            ADR-0381) keeps the engine from outliving the app from now on; beta.7 reaps the orphan that
+//            upgraders ALREADY have, after a warning that names it, and only when the owner probe says it is
+//            a LUCID engine (P-PORTGUARD.3, ADR-0382). MODELS: omp pinned 18.2.7 -> 18.2.10, whose catalog
+//            carries gpt-6-sol and gpt-6-luna natively; LUCID adds the cost cards, the 1M windows, the
+//            Astra > Sol > Luna default order and the Regular/Max walk (P-MODEL.4, ADR-0383).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.8 = beta.7 plus a Windows AppContainer sandbox that chat actually works inside. The contained
+//            omp owns its stdio, reads its runtime and writes its state, proxies inference via PI_PROXY, and
+//            the pill lights only after the real runtime boots through the same wrap (bundled bun 1.3.14 ->
+//            1.4.2) (P-SANDBOX.9/.10/.11, ADR-0386/0387/0389). The Security panel gains the sandbox switch,
+//            Add folder with the native picker (a helper dialog under Smart App Control) and the full list of
+//            what the sandbox can reach (P-SANDBOX.12/.13/.13b, ADR-0390/0391/0393), plus enterprise policy
+//            for the switch and folders (P-SANDBOX.14, ADR-0394). Agent errors reach the chat as words
+//            (P-NORESP.2, ADR-0388); Grok 4.7 and an xAI Grok picker family (P-MODEL.5, ADR-0392).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.8";

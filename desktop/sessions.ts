@@ -32,6 +32,11 @@ const PREAMBLE_BLOCKS: RegExp[] = [
   /^\s*<user-profile\b[^>]*>[\s\S]*?<\/user-profile>/,
   /^\s*<recalled-memory\b[^>]*>[\s\S]*?<\/recalled-memory>/,
   /^\s*<encrypted-vault\b[^>]*>[\s\S]*?<\/encrypted-vault>/, // P-VAULT-HINT.1: the locked-vault hint
+  // Every block that rides the user-turn tail has to be listed here or it shows up in the transcript as if
+  // the user had typed it. These three were injected without a matching stripper:
+  /^\s*<design-invariants\b[^>]*>[\s\S]*?<\/design-invariants>/, // P-DESIGN.1 (ADR-0154)
+  /^\s*<session-share\b[^>]*>[\s\S]*?<\/session-share>/,         // P-PREVIEW-PWA.3 (ADR-0240)
+  /^\s*<spoken-reply\b[^>]*>[\s\S]*?<\/spoken-reply>/,           // P-VOICE.5 (ADR-0248)
 ];
 
 /** Remove the leading injected-context block(s) from a user message so only what the
@@ -157,6 +162,43 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
   };
 }
 
+/** P-FLEET.L5 (ADR-0274): one session row for the TIMELINE - a SessionInfo plus the cwd it belongs to,
+ *  because the timeline spans EVERY workspace (master chats, lane folders, clones) instead of filtering
+ *  to the current one like the sidebar. */
+export interface SessionRow extends SessionInfo { cwd: string }
+
+/** Every parseable session on disk, across ALL workspaces, newest first, uncapped. Rides the SAME
+ *  mtime+size index as listSessions (P-PERF.4), so a timeline poll re-parses only what changed. */
+export function listAllSessions(root: string = join(homedir(), ".omp", "agent", "sessions")): SessionRow[] {
+  if (!existsSync(root)) return [];
+  const all: SessionRow[] = [];
+  const seen = new Set<string>();
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const p = join(dir, f);
+        try {
+          const st = statSync(p);
+          seen.add(p);
+          let e = sessionIndex.get(p);
+          if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
+            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionFile(p, f) };
+            sessionIndex.set(p, e);
+          }
+          if (!e.meta) continue; // empty/probe session
+          all.push({ ...e.meta, updatedAt: st.mtimeMs, cwd: e.scwd });
+        } catch { /* skip unreadable file */ }
+      }
+    } catch { /* skip dir */ }
+  }
+  for (const k of sessionIndex.keys()) if (k.startsWith(root) && !seen.has(k)) sessionIndex.delete(k);
+  all.sort((a, b) => b.updatedAt - a.updatedAt);
+  return all;
+}
+
 /** P-KG-INGEST.2 (ADR-0079): delete ALL kg-ingest throwaway sessions for one workspace. Defense in depth:
  *  only removes files that BOTH (a) belong to the current workspace AND (b) are extractor throwaways
  *  (`isIngestPrompt` on the first user message) — a real chat is never touched. Returns the count removed. */
@@ -203,6 +245,25 @@ function msgText(message: any): string {
 // tail-limited page; `userTotal` re-syncs the recorder's turn counter on every resume read.
 export interface TranscriptPage { messages: { role: string; text: string; turn?: number }[]; total: number; userTotal: number }
 
+/** The `{ type: "session" }` record of a transcript: its id and cwd. Found by SCANNING for the record,
+ *  never by reading line one: omp 18 prepends a fixed-width `{ type: "title" }` slot as the first line of
+ *  every session file, so "line one is the session record" stopped being true for every session written
+ *  since the 18.x pin, and a reader built on it matched no file at all (the sidebar listed sessions the
+ *  chat could not load). The scan stops at the record; on a file with none, the filename stands in. */
+export function sessionRecord(content: string, fallbackId: string): { id: string; cwd: string } {
+  for (const ln of content.split("\n")) {
+    if (!ln) continue;
+    let o: unknown;
+    try { o = JSON.parse(ln); } catch { continue; }
+    if (o && typeof o === "object" && "type" in o && o.type === "session") {
+      const id = "id" in o && typeof o.id === "string" && o.id ? o.id : fallbackId;
+      const cwd = "cwd" in o && typeof o.cwd === "string" ? o.cwd : "";
+      return { id, cwd };
+    }
+  }
+  return { id: fallbackId, cwd: "" };
+}
+
 /** Read a session's user/assistant transcript (for resuming into the chat), tail-first when limited. */
 export function sessionMessages(id: string, limit = 0, root: string = join(homedir(), ".omp", "agent", "sessions")): TranscriptPage {
   if (!existsSync(root)) return { messages: [], total: 0, userTotal: 0 };
@@ -213,9 +274,7 @@ export function sessionMessages(id: string, limit = 0, root: string = join(homed
       for (const f of readdirSync(dir)) {
         if (!f.endsWith(".jsonl")) continue;
         const content = readFileSync(join(dir, f), "utf8");
-        let sid = f;
-        try { sid = JSON.parse(content.split("\n", 1)[0] ?? "")?.id ?? f; } catch { /* keep f */ }
-        if (sid !== id && f !== id) continue;
+        if (sessionRecord(content, f).id !== id && f !== id) continue;
         const out: { role: string; text: string; turn?: number }[] = [];
         let users = 0;
         for (const ln of content.split("\n")) {
@@ -254,15 +313,9 @@ export function deleteSession(id: string, cwd: string = currentWorkspace(), root
       for (const f of readdirSync(dir)) {
         if (!f.endsWith(".jsonl")) continue;
         const p = join(dir, f);
-        // Resolve id + cwd from the session record (first matching line), like listSessions.
+        // Resolve id + cwd from the session record, wherever it sits in the header (see sessionRecord).
         let sid = f, scwd = "";
-        try {
-          for (const ln of readFileSync(p, "utf8").split("\n")) {
-            if (!ln) continue;
-            let o: any; try { o = JSON.parse(ln); } catch { continue; }
-            if (o.type === "session") { sid = o.id ?? f; scwd = o.cwd ?? ""; break; }
-          }
-        } catch { /* keep filename fallback */ }
+        try { ({ id: sid, cwd: scwd } = sessionRecord(readFileSync(p, "utf8"), f)); } catch { /* keep filename fallback */ }
         if (sid !== id && f !== id) continue;
         if (scwd && norm(scwd) !== want) return { ok: false, error: "session belongs to another workspace" };
         try { rmSync(p, { force: true }); return { ok: true }; }

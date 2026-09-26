@@ -11,7 +11,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatStats, sessionStats } from "../../tools/session_metrics.ts";
+import { formatStats, liveBudgets, sessionStats } from "../../tools/session_metrics.ts";
 
 const tmps: string[] = [];
 afterAll(() => {
@@ -67,4 +67,40 @@ test("formatStats includes rate-limit budgets when provided", () => {
   const out = formatStats(sessionStats(twoTurn()), [{ label: "Claude 5 Hour", used: 0.17, status: "ok", resetsAt: null }]);
   expect(out).toContain("budgets");
   expect(out).toContain("Claude 5 Hour 17%");
+});
+
+// ── liveBudgets (fix 2026-08-25): the "always at 100%" stale-quota bug ────────────────────────────
+// usage_history's newest row per label can be arbitrarily old; a row whose window already reset is
+// history, not status - and omp stores resets_at in SECONDS while the renderer compares ms.
+const NOW = 1_787_600_000_000; // ms epoch
+
+test("liveBudgets drops a row whose window already reset (the false always-100% toast)", () => {
+  const stale = { label: "7 days", used: 1, status: "exhausted", resetsAt: 1_785_961_000 }; // seconds, weeks past
+  expect(liveBudgets([stale], NOW)).toEqual([]);
+});
+
+test("liveBudgets keeps a live window and normalizes seconds-epoch resetsAt to ms", () => {
+  const live = { label: "5 hours", used: 0.93, status: "ok", resetsAt: (NOW + 3_600_000) / 1000 };
+  const out = liveBudgets([live], NOW);
+  expect(out).toHaveLength(1);
+  expect(out[0]!.resetsAt).toBe(NOW + 3_600_000); // ms now - ageStr math stops saying "resets now"
+});
+
+test("liveBudgets keeps a null-reset row for display (the toast layer skips it as unverifiable)", () => {
+  const out = liveBudgets([{ label: "7 days", used: 0.95, status: "ok", resetsAt: null }], NOW);
+  expect(out).toHaveLength(1);
+  expect(out[0]!.resetsAt).toBeNull();
+});
+
+test("liveBudgets dedupes label ties, keeping the hottest (rows arrive used-desc)", () => {
+  const a = { label: "7 days", used: 0.9, status: "ok", resetsAt: (NOW + 1000) / 1000 };
+  const b = { label: "7 days", used: 0.4, status: "ok", resetsAt: (NOW + 1000) / 1000 };
+  const out = liveBudgets([a, b], NOW);
+  expect(out).toHaveLength(1);
+  expect(out[0]!.used).toBe(0.9);
+});
+
+test("liveBudgets passes an already-ms resetsAt through untouched", () => {
+  const out = liveBudgets([{ label: "x", used: 0.5, status: "ok", resetsAt: NOW + 5000 }], NOW);
+  expect(out[0]!.resetsAt).toBe(NOW + 5000);
 });

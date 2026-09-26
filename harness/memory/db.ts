@@ -12,8 +12,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
+import { resolveMigrationsDir } from "../migrations_dir.ts";
 
-export const MIGRATIONS_DIR = join(import.meta.dir, "migrations");
+export const MIGRATIONS_DIR = resolveMigrationsDir("harness/memory", import.meta.dir);
 
 export type Row = Record<string, unknown>;
 export type Params = unknown[] | Record<string, unknown>;

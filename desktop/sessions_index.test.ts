@@ -99,6 +99,22 @@ test("sessionMessages: limit=0 returns everything; a limit returns the TAIL plus
   }
 });
 
+// omp 18 writes a fixed-width `{ type: "title" }` slot as LINE ONE of every session file, ahead of the
+// session record. The sidebar (which scans for the record) kept listing sessions while the transcript
+// reader (which trusted line one) matched none of them: every click landed on the empty state.
+test("sessionMessages: finds the transcript when an omp 18 title slot precedes the session record", () => {
+  const titled = [ln({ type: "title", v: 1, title: "", updatedAt: "2026-09-21T00:00:00.000Z", pad: " ".repeat(180) }), chat("real-id", ["hello"])].join("\n");
+  const root = freshRoot({ "2026-09-21T00-00-00-000Z_real-id.jsonl": titled });
+  try {
+    const page = sessionMessages("real-id", 10, root);
+    expect(page.total).toBe(2);
+    expect(page.messages[0]).toEqual({ role: "user", text: "hello q0", turn: 1 });
+    expect(listSessions(CWD, root).sessions.map((s) => s.id)).toEqual(["real-id"]); // the same id the sidebar hands back
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("sessionMessages: unknown id is an empty page, not an error", () => {
   const root = freshRoot({ "a.jsonl": chat("a", ["one"]) });
   try {

@@ -39,8 +39,41 @@ export const LOCAL_AUTH_KINDS: LocalAuthKind[] = ["none", "bearer", "apikey", "b
 export const RESERVED_PROVIDER_IDS: readonly string[] = [
   "anthropic", "openai", "openai-codex", "google", "gemini", "azure", "azure-openai", "xai", "grok",
   "perplexity", "groq", "cerebras", "mistral", "openrouter", "deepseek", "moonshot", "kimi", "zai",
-  "minimax", "asksage", "elevenlabs", "ollama-cloud", "vertex",
+  "minimax", "asksage", "elevenlabs", "typesafe", "ollama-cloud", "vertex",
 ];
+
+/** The wire-shape knobs a self-hosted reasoning model needs, as a CLOSED subset of omp's `compat`
+ *  block (`OpenAICompatSchema` in models-config-schema.ts, which also accepts `compat` on a full
+ *  model definition, not just on `modelOverrides`). Deliberately narrow: omp drops the ENTIRE
+ *  models.yml when any value fails its schema, so LUCID only emits fields whose legal values it can
+ *  enumerate and re-check here. Everything else is left to omp's auto-detection.
+ *
+ *  Why this exists at all: omp infers these from the base URL (`buildOpenAICompat`), and a model
+ *  served off a LAN box never matches its vendor's hostname. GLM behind vLLM on a 10.x address is
+ *  the case in point - auto-detect sees an unknown host, assumes plain OpenAI-style thinking, and
+ *  the reasoning stream is silently lost. */
+export interface LocalModelCompat {
+  /** How "think" is put on the wire. vLLM chat-template models (GLM, Qwen) need "qwen-chat-template". */
+  thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+  /** Assistant field carrying chain-of-thought. vLLM's OpenAI server emits "reasoning". */
+  reasoningContentField?: "reasoning_content" | "reasoning" | "reasoning_text";
+  /** Whether the endpoint accepts a `reasoning_effort` request param. vLLM's OpenAI server does not. */
+  supportsReasoningEffort?: boolean;
+}
+
+const THINKING_FORMATS: readonly string[] = ["openai", "openrouter", "zai", "qwen", "qwen-chat-template"];
+const REASONING_CONTENT_FIELDS: readonly string[] = ["reasoning_content", "reasoning", "reasoning_text"];
+
+/** Keep only the values omp's schema accepts and drop the rest. Returns undefined when nothing
+ *  survives, so a typo can never emit an empty `compat: {}` nor a value that invalidates the file. */
+export function sanitizeModelCompat(c: LocalModelCompat | undefined): LocalModelCompat | undefined {
+  if (!c || typeof c !== "object") return undefined;
+  const out: LocalModelCompat = {};
+  if (typeof c.thinkingFormat === "string" && THINKING_FORMATS.includes(c.thinkingFormat)) out.thinkingFormat = c.thinkingFormat;
+  if (typeof c.reasoningContentField === "string" && REASONING_CONTENT_FIELDS.includes(c.reasoningContentField)) out.reasoningContentField = c.reasoningContentField;
+  if (typeof c.supportsReasoningEffort === "boolean") out.supportsReasoningEffort = c.supportsReasoningEffort;
+  return Object.keys(out).length ? out : undefined;
+}
 
 export interface LocalModelDef {
   id: string; // the model id the endpoint expects (e.g. "llama-3.1-70b-instruct")
@@ -50,6 +83,7 @@ export interface LocalModelDef {
   reasoning?: boolean; // the model emits reasoning/thinking
   vision?: boolean; // accepts image input
   supportsTools?: boolean; // OpenAI-style tool calling; default true (agents need tools)
+  compat?: LocalModelCompat; // wire-shape overrides for reasoning models omp cannot auto-detect by host
 }
 
 export interface LocalProviderDef {
@@ -86,6 +120,60 @@ export function newLocalProviderId(name: string, now: number): string {
 export function providerModelsUrl(baseUrl: string): string | null {
   if (!hostFromBaseUrl(baseUrl)) return null;
   return `${baseUrl.trim().replace(/\/+$/, "")}/models`;
+}
+
+// ── endpoint model discovery (P-LOCAL.6) ─────────────────────────────────────────────────────────
+// `GET <baseUrl>/models` is an OpenAI-shaped list every local server answers (vLLM, Ollama,
+// llama.cpp, LM Studio), and vLLM puts the REAL window in `max_model_len`. Asking the server beats
+// the curated catalog's editorial guesses, so this is what fills the add form.
+//
+// The body is UNTRUSTED input on its way into a config file omp parses and a comma-separated form
+// field, so parsing is defensive rather than trusting: the caps and the id filter below exist
+// because a hostile or broken endpoint must not be able to corrupt either one.
+
+/** Offering more than this many models in one form is a broken endpoint, not a useful list. */
+const MAX_DISCOVERED_MODELS = 100;
+/** Longest model id accepted. Real ids are short; a huge one only ever bloats models.yml. */
+const MAX_MODEL_ID_LEN = 200;
+/** Largest `/models` body the caller will read. A real list is a few KB; this only exists so a broken
+ *  or hostile endpoint cannot make the engine buffer an unbounded response. */
+export const MAX_DISCOVERY_BYTES = 1_000_000;
+
+export interface DiscoveryResult {
+  models: LocalModelDef[];
+  /** Entries the server returned that were NOT offered (malformed, duplicate, or over a cap).
+   *  Surfaced to the user rather than hidden, so a partial list never looks like a complete one. */
+  dropped: number;
+}
+
+function positiveInt(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v > 0 && v <= 100_000_000 ? v : undefined;
+}
+
+/** Parse an OpenAI-compatible `/models` body into model declarations. Context window follows omp's
+ *  own precedence (`max_model_len`, then `context_length`) so LUCID and omp never disagree about a
+ *  discovered model; absent both, it is left unset and the caller's default applies. */
+export function parseDiscoveredModels(body: unknown): DiscoveryResult {
+  const data = (body as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) return { models: [], dropped: 0 };
+  const models: LocalModelDef[] = [];
+  const seen = new Set<string>(); // dynamic membership over a runtime list, not a static table
+  let dropped = 0;
+  for (const raw of data) {
+    const e = raw as Record<string, unknown> | null;
+    const id = typeof e?.id === "string" ? e.id.trim() : "";
+    // `\p{C}` is every control/format/unassigned code point, which is deliberately wider than
+    // "no newlines": it also catches the zero-width and bidi characters the scanner sidecar exists
+    // to find. A comma would split one id into two in the add form's field.
+    const unusable = !id || id.length > MAX_MODEL_ID_LEN || /[\p{C},]/u.test(id) || seen.has(id);
+    if (unusable || models.length >= MAX_DISCOVERED_MODELS) { dropped++; continue; }
+    seen.add(id);
+    const m: LocalModelDef = { id };
+    const ctx = positiveInt(e?.max_model_len) ?? positiveInt(e?.context_length);
+    if (ctx) m.contextWindow = ctx;
+    models.push(m);
+  }
+  return { models, dropped };
 }
 
 /** Parse the host out of a base URL. Returns null for a non-http(s) or unparseable URL. */
@@ -170,6 +258,7 @@ export interface OmpModelEntry {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  compat?: LocalModelCompat; // omitted entirely unless a sanitized value survives
 }
 export interface OmpProviderEntry {
   baseUrl: string;
@@ -182,7 +271,7 @@ export interface OmpProviderEntry {
 export interface OmpConfigOverlay { providers: Record<string, OmpProviderEntry> }
 
 function toModelEntry(m: LocalModelDef): OmpModelEntry {
-  return {
+  const entry: OmpModelEntry = {
     id: m.id,
     name: m.name?.trim() || m.id,
     reasoning: !!m.reasoning,
@@ -192,6 +281,9 @@ function toModelEntry(m: LocalModelDef): OmpModelEntry {
     contextWindow: m.contextWindow ?? 8192,
     maxTokens: m.maxTokens ?? 4096,
   };
+  const compat = sanitizeModelCompat(m.compat);
+  if (compat) entry.compat = compat;
+  return entry;
 }
 
 /** Build the single-provider overlay entry. `secret` (from the vault, main-process only) is placed
@@ -243,6 +335,17 @@ export function toOmpConfigOverlay(defs: LocalProviderDef[], secretFor: (ref: st
 /** The env var a provider's secret is injected under (referenced from models.yml, resolved by omp). */
 export function providerEnvVar(def: Pick<LocalProviderDef, "ompProvider" | "id">): string {
   return `LUCID_LP_${(def.ompProvider || def.id).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_KEY`;
+}
+
+/** The headers a discovery probe sends for a SAVED provider. Deliberately mirrors
+ *  `toOmpProviderEntry`'s placement, so the probe authenticates exactly the way omp will at run time
+ *  and a 200 here really does predict a working model. `{}` without a secret: the caller then reports
+ *  `authRequired` instead of guessing, and NEVER takes a key from a request body (ADR-0135). */
+export function discoveryHeaders(def: Pick<LocalProviderDef, "authKind" | "headerName">, secret?: string): Record<string, string> {
+  if (!secret || def.authKind === "none") return {};
+  const header = def.headerName?.trim();
+  if (def.authKind === "apikey" && header && header.toLowerCase() !== "authorization") return { [header]: secret };
+  return { authorization: `Bearer ${secret}` };
 }
 
 export interface RuntimeOverlayResult {

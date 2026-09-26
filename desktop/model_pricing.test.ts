@@ -24,6 +24,31 @@ describe("listPrice tiers", () => {
     expect(listPrice("google/gemini-3-pro").inPerM).toBe(1.25);
     expect(listPrice("openai-codex/gpt-5.5").inPerM).toBe(1.25);
   });
+  // P-MODEL.2: the three rows added for the current catalog. Each is order-sensitive, so these assertions
+  // are really guarding TABLE's ordering: a future insert above them silently re-prices the flagships.
+  test("Opus 5 is priced at its own halved rate, NOT the generic Opus row", () => {
+    expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 });
+    expect(listPrice("anthropic/claude-opus-4-8")).toEqual({ inPerM: 15, outPerM: 75 }); // older Opus unchanged
+  });
+  test("Opus 5.5 is priced at its own $4/$20 rate, NOT the Opus 5 row whose `[-.]` tail would eat it", () => {
+    expect(listPrice("anthropic/claude-opus-5-5")).toEqual({ inPerM: 4, outPerM: 20 });
+    expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 }); // Opus 5 unchanged
+  });
+  test("Fable / Mythos are priced at the frontier rate, not the sonnet-ish default", () => {
+    for (const m of ["anthropic/claude-fable-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1"]) {
+      expect(listPrice(m)).toEqual({ inPerM: 10, outPerM: 50 });
+    }
+  });
+  test("the GPT-6 tiers carry their cataloged rates: Astra, Sol, Luna are three different prices", () => {
+    expect(listPrice("openai-codex/gpt-6-astra")).toEqual({ inPerM: 10, outPerM: 50 });
+    expect(listPrice("openai/gpt-6-sol")).toEqual({ inPerM: 2, outPerM: 10 });
+    expect(listPrice("openai/gpt-6-luna")).toEqual({ inPerM: 0.10, outPerM: 0.50 });
+    expect(listPrice("openai-codex/gpt-6-mini").inPerM).toBe(0.25); // small-tier markers still win
+  });
+  test("an unpriced GPT generation still falls into the GPT family estimate, not the unknown default", () => {
+    expect(listPrice("openai/gpt-6").inPerM).toBe(1.25);
+    expect(listPrice("openai/gpt-7-astra").inPerM).toBe(1.25);
+  });
   test("unknown ⇒ a sane default", () => {
     expect(listPrice("acme/whatever-7")).toEqual({ inPerM: 3, outPerM: 15 });
   });
@@ -52,5 +77,16 @@ describe("assumedCacheRate", () => {
     expect(assumedCacheRate({ totals: { cacheHitRate: 0.7 } })).toBe(0.7);
     expect(assumedCacheRate(null)).toBe(0.35);
     expect(assumedCacheRate({ totals: { cacheHitRate: 2 } })).toBe(0.35); // out of range ⇒ default
+  });
+});
+
+describe("Grok 4.6 / 4.7 (omp 18.2.10 catalog)", () => {
+  test("price at the cataloged $2/$6 per Mtok, with or without a provider prefix", () => {
+    for (const id of ["xai-oauth/grok-4.7", "xai/grok-4.7", "grok-4.7", "xai/grok-4.6", "github-copilot/grok-4.7"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 2.0, outPerM: 6.0 });
+    }
+  });
+  test("older Grok ids the catalog prices differently are not swept into the 4.6/4.7 row", () => {
+    expect(listPrice("xai/grok-4.20-0309-reasoning")).not.toEqual({ inPerM: 2.0, outPerM: 6.0 });
   });
 });

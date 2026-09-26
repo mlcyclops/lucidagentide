@@ -113,6 +113,7 @@ echo    provider : %PROVIDER%        model : %MODEL%
 echo  ---------------------------------------------------------------------
 echo     1^)  Launch / relaunch omp   ^(terminal, with the security gate^)
 echo     G^)  Desktop GUI             ^(chat + dashboards in a window^)
+echo     F^)  Fleet GUI               ^(project-bound window: own workspace + Knowledge^)
 echo     2^)  Switch model
 echo     3^)  Switch provider
 echo     4^)  Dashboards  ^(security  /  memory ^& context^)
@@ -126,6 +127,7 @@ echo.
 set /p "CH=    select: "
 if "%CH%"=="1" goto :launch
 if /i "%CH%"=="G" ( call :gui & goto :menu )
+if /i "%CH%"=="F" ( call :fleetgui & goto :menu )
 if "%CH%"=="2" goto :pickmodel
 if "%CH%"=="3" goto :pickprovider
 if "%CH%"=="4" ( call :dashboardmenu & goto :menu )
@@ -160,7 +162,20 @@ rem  server) already holds 5319, we roll a free high port and use THAT - we neve
 rem  The chosen port flows into the app: Electron (main.ts) reads LUCID_PORT and passes it
 rem  to dev.ts; the browser fallback sets PORT for dev.ts and opens the matching URL.
 call :pickport
-if exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" (
+rem  OneDrive sync can strip node_modules\.bin (the tiny shim launchers) while leaving the
+rem  package dirs intact. Then "bun run start" dies with "command not found: electron" even
+rem  though electron\dist\electron.exe is right there. Detect the stripped state and relink
+rem  the shims with a quick bun install before deciding native vs web.
+if exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" if not exist "%REPO%\desktop\node_modules\.bin\electron.exe" (
+  echo    Electron is installed but node_modules\.bin lost its shims - relinking with bun install...
+  pushd "%REPO%\desktop"
+  bun install
+  popd
+)
+set "NATIVEOK=1"
+if not exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" set "NATIVEOK="
+if not exist "%REPO%\desktop\node_modules\.bin\electron.exe" set "NATIVEOK="
+if defined NATIVEOK (
   echo    Launching the native Electron app on port !GUIPORT! in a new window...
   start "LucidAgentIDE GUI" cmd /k "chcp 65001>nul & cd /d "%REPO%\desktop" & set "LUCID_PORT=!GUIPORT!" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run start"
 ) else (
@@ -172,6 +187,106 @@ if exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" (
 )
 echo    Done.
 echo.
+goto :eof
+
+rem ===========================================================================
+rem  Fleet GUI: launch a PROJECT-BOUND Lucid window (Fleet Profile prototype for
+rem  the Fleet Management feature request / ADR-0272). Each profile gets its own
+rem  lucid-gui.json (workspace + recents), its own Personal Knowledge dir, and
+rem  its own port. NEVER 5319: the default port keeps the canonical Electron
+rem  userData identity + the lucid:// OAuth deep-link (desktop/main.ts), so the
+rem  primary instance owns it. Isolation comes from three env vars the app
+rem  already honors: LUCID_PORT, LUCID_GUI_SETTINGS_FILE, LUCID_PERSONAL_DIR.
+rem  Profile home: %%LOCALAPPDATA%%\LucidFleet\profiles\<NAME>\
+:fleetgui
+echo.
+echo    [ Lucid Fleet GUI - project-bound profile window ]
+where bun >nul 2>&1 || ( echo    bun not found - cannot start the GUI. & goto :eof )
+set "FLEETROOT=%LOCALAPPDATA%\LucidFleet\profiles"
+if exist "%FLEETROOT%" (
+  echo    Existing profiles ^(type a name to relaunch it^):
+  for /d %%D in ("%FLEETROOT%\*") do echo       - %%~nxD
+) else (
+  echo    No profiles yet - the first one is created below.
+)
+set "FLNAME="
+set /p "FLNAME=    profile name (e.g. INTELLIGRC, Enter to cancel): "
+if not defined FLNAME ( echo    ^(no name - cancelled^) & goto :eof )
+set "FLNAME=!FLNAME:"=!"
+set "FLNAME=!FLNAME: =-!"
+set "PROFDIR=%FLEETROOT%\!FLNAME!"
+if exist "!PROFDIR!\lucid-gui.json" (
+  echo    Reusing profile "!FLNAME!".
+  goto :fl_launch
+)
+set "WSPATH="
+set /p "WSPATH=    workspace folder to bind (e.g. C:\Source\MyRepo): "
+if not defined WSPATH ( echo    ^(no folder - cancelled^) & goto :eof )
+set "WSPATH=!WSPATH:"=!"
+if "!WSPATH:~-1!"=="\" set "WSPATH=!WSPATH:~0,-1!"
+if not exist "!WSPATH!\" ( echo    Folder not found: !WSPATH! & goto :eof )
+mkdir "!PROFDIR!\personal" >nul 2>&1
+rem  Seed the profile's OWN GUI settings with the bound workspace. JSON wants
+rem  doubled backslashes; every other setting stays default. Never reseeded on
+rem  relaunch, so an in-app workspace change sticks to THIS profile only.
+set "WSJSON=!WSPATH:\=\\!"
+> "!PROFDIR!\lucid-gui.json" echo {"workspace":"!WSJSON!","recentWorkspaces":["!WSJSON!"]}
+echo    Created profile "!FLNAME!" bound to !WSPATH!
+:fl_launch
+call :fleetport
+if not defined FLPORT goto :eof
+rem  Same OneDrive shim-relink + native detection as :gui.
+if exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" if not exist "%REPO%\desktop\node_modules\.bin\electron.exe" (
+  echo    Electron is installed but node_modules\.bin lost its shims - relinking with bun install...
+  pushd "%REPO%\desktop"
+  bun install
+  popd
+)
+set "NATIVEOK=1"
+if not exist "%REPO%\desktop\node_modules\electron\dist\electron.exe" set "NATIVEOK="
+if not exist "%REPO%\desktop\node_modules\.bin\electron.exe" set "NATIVEOK="
+if defined NATIVEOK (
+  echo    Launching Fleet profile "!FLNAME!" on port !FLPORT! in a new window...
+  start "LucidAgentIDE Fleet !FLNAME!" cmd /k "chcp 65001>nul & cd /d "%REPO%\desktop" & set "LUCID_PORT=!FLPORT!" & set "LUCID_GUI_SETTINGS_FILE=!PROFDIR!\lucid-gui.json" & set "LUCID_PERSONAL_DIR=!PROFDIR!\personal" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run start"
+) else (
+  echo    Electron isn't installed yet - opening the browser GUI instead.
+  start "LucidAgentIDE Fleet !FLNAME! (web)" cmd /k "chcp 65001>nul & cd /d "%REPO%" & set "PORT=!FLPORT!" & set "LUCID_GUI_SETTINGS_FILE=!PROFDIR!\lucid-gui.json" & set "LUCID_PERSONAL_DIR=!PROFDIR!\personal" & set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" & bun run desktop:web"
+  timeout /t 3 >nul
+  start "" "http://localhost:!FLPORT!"
+)
+echo    Health:  http://127.0.0.1:!FLPORT!/api/health
+echo    Profile: !PROFDIR!
+echo.
+goto :eof
+
+rem  Pick this profile's port: prefer its saved last port so the profile keeps a
+rem  stable-ish address across restarts, else roll a free dynamic port. A busy
+rem  saved port usually means the profile is ALREADY running - cheap duplicate
+rem  protection, so we ask before opening a second window on the same profile.
+:fleetport
+set "FLPORT="
+set "FLSAVED="
+if exist "!PROFDIR!\port.txt" set /p FLSAVED=<"!PROFDIR!\port.txt"
+if "!FLSAVED!"=="5319" set "FLSAVED="
+if not defined FLSAVED goto :flp_roll_init
+call :portfree !FLSAVED!
+if not errorlevel 1 ( set "FLPORT=!FLSAVED!" & goto :flp_done )
+echo    Port !FLSAVED! is busy - profile "!FLNAME!" may ALREADY be running.
+echo    Check http://127.0.0.1:!FLSAVED!/api/health before duplicating.
+set /p "DUP=    Launch a SECOND window for this profile anyway? (Y/N): "
+if /i not "!DUP!"=="Y" goto :eof
+:flp_roll_init
+set /a _fp=0
+:flp_roll
+set /a _fp+=1
+set /a FLPORT=49152 + ^(!RANDOM! %% 16000^)
+call :portfree !FLPORT!
+if not errorlevel 1 goto :flp_done
+if !_fp! lss 50 goto :flp_roll
+echo    ^(could not find a free port after 50 tries - trying !FLPORT! anyway^)
+:flp_done
+> "!PROFDIR!\port.txt" echo !FLPORT!
+echo    Fleet port: !FLPORT!
 goto :eof
 
 rem ===========================================================================
@@ -289,7 +404,7 @@ echo       !bun run memory:tui      instant memory ^& context dashboard
 echo       Ctrl+P               switch model live      /usage   token usage
 echo.
 echo    In THIS control panel:
-echo       1 launch omp   G desktop GUI    2 switch model   3 switch provider
+echo       1 launch omp   G desktop GUI   F fleet GUI   2 switch model   3 switch provider
 echo       4 dashboards   5 status         6 demo   7 doctor   9 install
 echo.
 echo    Models (current):  claude-opus-4-8 . claude-sonnet-4-6 . claude-haiku-4-5

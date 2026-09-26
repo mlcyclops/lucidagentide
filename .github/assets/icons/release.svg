@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <!-- Static twin of release-animated.svg (table-of-contents / no-motion contexts). -->
+  <defs>
+    <linearGradient id="rg" x1="4" y1="3" x2="27" y2="28" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f7ccff"/><stop offset="0.42" stop-color="#e07bf0"/><stop offset="1" stop-color="#e8b23c"/>
+    </linearGradient>
+    <radialGradient id="rc" cx="0.5" cy="0.42" r="0.5">
+      <stop stop-color="#ffffff" stop-opacity="0.95"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M14.6 1.8 C15.3 8.9 20.6 14.2 27.7 14.9 C20.6 15.6 15.3 20.9 14.6 28 C13.9 20.9 8.6 15.6 1.5 14.9 C8.6 14.2 13.9 8.9 14.6 1.8 Z" fill="url(#rg)"/>
+  <ellipse cx="14.6" cy="14.9" rx="4.6" ry="4.6" fill="url(#rc)" opacity="0.45"/>
+  <path d="M25.4 20.4 C25.7 23.2 27.9 25.4 30.7 25.7 C27.9 26 25.7 28.2 25.4 31 C25.1 28.2 22.9 26 20.1 25.7 C22.9 25.4 25.1 23.2 25.4 20.4 Z" fill="#7ef0a8"/>
+  <path d="M26.2 2.4 C26.4 4.1 27.7 5.4 29.4 5.6 C27.7 5.8 26.4 7.1 26.2 8.8 C26 7.1 24.7 5.8 23 5.6 C24.7 5.4 26 4.1 26.2 2.4 Z" fill="#f7ccff" opacity="0.85"/>
+</svg>

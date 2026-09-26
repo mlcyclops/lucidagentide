@@ -15,6 +15,69 @@ import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-A
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13: run traces
 import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1: resource guard view (types owned there - layering rule)
+import { isCreatorResources, type CreatorResourcesView } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): odometer view types live there
+import { isCreatorStudio, type CreatorStudioView } from "./creator_studio.ts"; // CREATOR-0 (ADR-0282): Studio view types live there
+import { isEditorSession, type EditorSession } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): editor session view type lives there
+import { isPipelineRunView, type PipelineRunView } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the render run view + its fail-closed shape gate
+import { isMixerTracksPayload, isRenderMixReport, type MixerTracksPayload, type RenderMixResult } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): mixer view types live there
+import type { TimelineDoc } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline document, edited in the renderer
+// P-RECOVER.1 (ADR-0385): the recovery/incident view shapes + their fail-closed gates live in the pure supervisor module.
+import {
+  incidentList, isIncidentId, isIncidentView, probeFrom, recoveryStateFrom,
+  type EngineProbe, type EngineRestartView, type IncidentOutcome, type IncidentView, type RecoveryRecoverView, type RecoveryResumeView, type RecoveryStateView,
+} from "./recovery_supervisor.ts";
+export type { EngineProbe, EngineRestartView, IncidentOutcome, IncidentView, RecoveryRecoverView, RecoveryResumeView, RecoveryStateView };
+import type { MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix graph, edited in the renderer
+
+/** CREATOR-0 (ADR-0279): what `GET /api/build-info` returns. `creatorBuild` is the ONLY thing that may
+ *  reveal a Creator surface - never a persisted setting, never a role. */
+export interface BuildInfoView {
+  flavor: "agent" | "creator";
+  creatorBuild: boolean;
+  appId: string;
+  productName: string;
+  displayName: string;
+  version: string;
+  defaultPort: number;
+  port: number;
+  authProtocol: string;
+  dataRoot: string;
+  settingsFile: string;
+  personalDir: string;
+  vaultScope: string;
+  features: { creatorMode: boolean; integrationRegistry: boolean; localMonitoring: boolean; cpuGpuOdometer: boolean; creatorLibrary: boolean };
+}
+
+/** CREATOR-IMG (ADR-0291): one model a live probe found on the configured image server. */
+export interface CreatorModelView { id: string; kind: string; node: string }
+/** CREATOR-IMG: a stored image artifact with the provenance that produced it. */
+export interface CreatorArtifactView {
+  id: string; kind: string; file: string; mime: string; bytes: number; sha256: string;
+  createdAt: number; width: number; height: number; source: string; prompt: string; model: string;
+  sidecars: string[];
+}
+/** CREATOR-IMG: raw RGBA on the wire, straight out of a canvas `getImageData()`. */
+export interface WireFrameView { width: number; height: number; rgbaB64: string }
+/** CREATOR-IMG: a generation request - the prompt pair, the model, the size, and named input images. */
+export interface CreatorGenerateInput {
+  prompt: string; negative?: string; model?: string; width?: number; height?: number; seed?: number;
+  inputs?: { role: string; dataUrl: string }[];
+}
+
+/** CREATOR-0: one library mutation. `add` imports a picked file; `remix`/`reprompt` do the same and record
+ *  lineage from `id`; `update` edits title/prompt/tags/rating/review; `remove` drops the track. */
+export interface CreatorLibraryOp {
+  op: "add" | "update" | "remix" | "reprompt" | "remove";
+  id?: string;
+  sourcePath?: string;
+  title?: string;
+  origin?: string;
+  prompt?: string;
+  lyrics?: string;
+  tags?: string[];
+  rating?: number | null;
+  review?: string;
+}
 
 /** P-AGENT.12: an MCP-discovered catalog entry (name is the omp runtime name: mcp__<server>_<tool>). */
 export interface McpCatalogTool {
@@ -39,9 +102,12 @@ export interface AgentTemplateInfo {
   steps: number;
   tools: string[];
 }
-import type { LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3: self-hosted/custom LLM providers
+import type { LocalModelDef, LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3/.6: self-hosted/custom LLM providers
+import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 export type { RestoredTurn };
+import type { ProcessView } from "../process_view.ts"; // P-INTERJECT.1: the unified Processes list rows (canonical shape - imported, never mirrored, so it cannot drift)
+export type { ProcessView };
 import type { SkillRoot } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097): skill source roots
 import type { TrustLabel } from "../../harness/contracts.ts"; // invariant #7: closed-set trust labels
 
@@ -76,7 +142,13 @@ export interface SandboxStateView {
   execBlocked: string | null; proxied: boolean; at: string;
 }
 export interface SandboxBlockView { host: string; channel: string; type: string; reason: string; at: string }
-export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[] }
+// P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
+export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: string; reason: string }
+// P-SANDBOX.12 (ADR-0390): what the panel's sandbox switch may offer (see desktop/sandbox_control.ts).
+export interface SandboxControlView { available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean }
+// P-SANDBOX.13 (ADR-0391): a folder LUCID itself grants the contained agent (listed read-only in the panel).
+export interface RuntimeFolderView { path: string; mode: "rx" | "rw"; why: string }
+export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[]; grants?: SandboxGrantView[]; control?: SandboxControlView; runtimeFolders?: RuntimeFolderView[] }
 export interface MemorySnapshot {
   session: null | {
     path: string; model: string; turns: number; window: number;
@@ -167,14 +239,170 @@ export interface ConfigOption {
   id: string; name: string; category: string; type: string;
   currentValue: string; options: { value: string; name: string }[];
 }
-// P-VOICE.1 (ADR-0115): voice config + ElevenLabs voice for the pickers.
+
+// P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
+// at this one boundary, like ChatEvent).
+export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
+/** Approval scope: "once" answers only the pending ask; "session" also allows every same-kind ask for
+ *  the rest of the lane's session (mirrors desktop/fleet_lanes.ts). */
+export type ApprovalScope = "once" | "session";
+export interface LaneView {
+  id: string; name: string; cwd: string; model: string; status: LaneStatus;
+  createdAt: number; lastActivityAt: number; turns: number;
+  /** P-FLEET.L4: Retry is offered only when a last prompt exists; respawns counts in-place revivals. */
+  canRetry: boolean; respawns: number;
+  /** P-FLEET.L5: the omp session id behind this lane - the key into its on-disk history. */
+  sessionId: string | null;
+  pendingApproval?: { summary: string; kind: string };
+  /** Full auto-mode: every ask is approved automatically (the security gate still scans every call). */
+  autoApprove: boolean;
+  /** Ask kinds the user allowed for the rest of this lane's session ("allow for session"). */
+  sessionAllow: string[];
+  /** P-FLEET.L3: staged-prompt previews (clamped text + image count), drained FIFO when idle. */
+  queued: { text: string; images: number }[];
+  /** P-FLEET.L8: the MAIN composer is attached to this lane right now (exactly one lane can be). */
+  promoted: boolean;
+  /** P-HEALTH.1: tool calls awaiting a result - the reason a long-silent lane is `quiet` and not probed. */
+  openCalls: number;
+  /** P-HEALTH.1: the harness's last self-action on this lane, so the card can show it was handled. */
+  lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
+  /** P-FLEET.L19: the lane's last MEASURED context fill, window and cost; absent until omp reports once. */
+  usage?: { used: number; size: number; cost: number };
+}
+// P-FLEET.L5 (ADR-0274): the reviewable timeline - one row per session on this machine, every workspace,
+// lanes labeled through the durable lane-session ledger.
+export type TimelineKind = "chat" | "lane" | "ingest";
+export interface TimelineEntry {
+  sessionId: string; kind: TimelineKind; title: string; cwd: string; wsName: string;
+  model: string; turns: number; updatedAt: number;
+  laneId?: string; laneName?: string; laneEvents?: number;
+  /** Present only when true: a throwaway from the repo's own echo/demo self-test scripts. */
+  selfTest?: true;
+}
+/** `total` = pageable rows; `selfTest` = how many throwaways the engine held back (or marked). */
+export interface TimelinePage { entries: TimelineEntry[]; total: number; selfTest: number }
+/** P-FLEET.L3: a pasted image on a lane prompt - the P-VISION.1 shape the master chat uses. */
+export interface LaneImage { data: string; mimeType: string }
+/** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
+export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
+export type LaneEvent =
+  | { type: "token" | "thinking"; text: string }
+  /** P-FLEET.L7: `input` is the bounded, code-stripped rawInput - the command a code-less tool ran. */
+  | { type: "tool"; name: string; detail: string; code?: LaneToolCode; input?: string }
+  | { type: "permission"; summary: string; kind: string }
+  | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
+  /** P-FLEET.L7: this lane's OWN measured context fill, window, and cost. */
+  | { type: "usage"; used: number; size: number; cost: number }
+  /** P-HEALTH.1: the harness probed or recovered this lane by itself. */
+  | { type: "health"; action: "probe" | "recover"; reason: string }
+  | { type: "status"; status: LaneStatus }
+  | { type: "done" }
+  | { type: "error"; message: string }
+  /** P-FLEET.L8: only on /api/fleet/watch - the lane's bounded history, so a composer attaching mid-turn
+   *  renders the conversation instead of an empty pane. Never emitted on a prompt stream. */
+  | { type: "watch-seed"; turns: { role: "user" | "assistant"; text: string }[] };
+export interface FleetStatusView {
+  lanes: LaneView[];
+  /** P-FLEET.L2: sustained-pressure evidence. No lane cap - the fleet is unlimited; only CPU or memory
+   *  held at/above `pressurePct` for `sustainMs` refuses a new lane. `*HotMs` = unbroken ms above the
+   *  line right now (0 = clear, or still just a burst). */
+  resources: {
+    cpuPct: number | null;
+    memPct: number | null;
+    pressurePct: number;
+    sustainMs: number;
+    cpuHotMs: number;
+    memHotMs: number;
+  };
+  masterModel: string;
+}
+// P-ACCT.1 (ADR-0375): the account list per provider. AccountView is single-sourced from the pure
+// policy module (never a secret in it - keys are last4-masked server-side).
+import type { AccountView } from "../account_policy.ts";
+export type { AccountView } from "../account_policy.ts";
+export type AccountsSnapshot = Record<string, AccountView[]>;
+/** P-JEV.1 (ADR-0374): mirrors judgment_policy.ResolvedJudgmentProvider. `stored` is the user's choice;
+ *  `effective` is what omp is told (lockdown pins "llm"); `clamped` says they differ because of the lock. */
+export interface JudgmentView {
+  stored: "auto" | "typesafe" | "llm";
+  effective: "auto" | "typesafe" | "llm";
+  clamped: boolean;
+  locked: boolean;
+  /** P-JEV.2 (ADR-0377): can Jev answer a judgment in the running child (effective mode + a saved key).
+   *  Gates the per-turn "Jev not consulted" note. */
+  configured: boolean;
+}
+// P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
 export interface VoiceSettingsView {
   sttProvider: "elevenlabs" | "whisper";
   sttUrl: string;
-  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts";
+  /** P-VOICE.6: base URL of the self-hosted dots.tts service (SSH forward / proxy of the DGX's :8084). */
+  dotsTtsUrl?: string;
+  /** P-VOICE.6: speak a short model-written digest instead of the verbatim reply (slow-engine mode). */
+  ttsDigest?: boolean;
+  ttsProvider: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
+  /** The voice chosen for `ttsProvider` — the store remembers one per engine (P-VOICE.2, ADR-0247). */
   ttsVoice: string;
   ttsVoiceFavorites: string[];
+  /** P-VOICE.2 (ADR-0247): read every assistant reply aloud as it streams. Opt-in; off by default. */
+  ttsAutoSpeak: boolean;
+  /** P-VOICE.3: hands-free turn-taking - the reply ends, the mic opens, a silence sends. Needs ttsAutoSpeak. */
+  ttsConversation: boolean;
 }
+// P-VOICE.2 (ADR-0247): what /api/voices returns for ONE engine — the list plus the picker's context.
+export interface VoiceListView {
+  provider: "elevenlabs" | "openai-tts" | "local-tts";
+  /** Every engine with LIVE readiness \u2014 `ready:false` carries the specific reason it cannot speak. */
+  engines: TtsEngineView[];
+  voices: ElevenVoiceView[];
+  favorites: string[];
+  selected: string;
+  autoSpeak: boolean;
+  conversation: boolean;
+  note?: string;
+}
+/** P-VOICE.7: one imported portable endpoint (the lucid-voice-endpoint contract, post-validation). */
+export interface VoiceEndpointView {
+  id: string; label: string; url: string; model?: string;
+  transport?: { kind: string; command?: string; note?: string };
+  exportedAt?: number; source?: string;
+}
+export interface VoiceEndpointListView {
+  endpoints: VoiceEndpointView[];
+  active: string;
+  handoffDir: string;
+  imported: number;
+  rejects: { file: string; reason: string }[];
+}
+
+export interface TtsEngineView {
+  id: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
+  label: string;
+  blurb: string;
+  cloud: boolean;
+  keyEnv: string | null;
+  liveList: boolean;
+  ready: boolean;
+  /** Empty when ready; otherwise what the user has to do about it. */
+  reason: string;
+}
+// P-STT.2b: managed on-device Whisper status for the no-code Voice card.
+// P-STT.6 (ADR-0267): `offered` = installable through the picker (tiny/base/small; medium/large are
+// remove-only), `reason` explains a grayed-out (non-runnable) tier, `diskMB` = real installed size.
+export interface WhisperTierView {
+  tier: string; label: string; runnable: boolean; installed: boolean;
+  offered: boolean; reason: string; approxMB: number; diskMB: number | null;
+}
+export interface WhisperStatusView {
+  capable: boolean; recommended: string | null; summary: string;
+  /** The tier used when nothing is picked (tiny); the picker preselects it when no server runs. */
+  defaultTier?: string | null;
+  binAvailable: boolean; binHint: string;
+  running: boolean; port: number; activeTier: string | null; serveUrl: string | null;
+  tiers: WhisperTierView[];
+  install: { active: boolean; tier: string | null; fraction: number; phase: "idle" | "downloading" | "starting" | "done" | "error"; reason?: string };
+}
+export interface WhisperActionView { ok: boolean; tier?: string; reason?: string }
 export interface ElevenVoiceView { voiceId: string; name: string; category?: string; description?: string; labels?: Record<string, string> }
 // P-REPORT.1 (ADR-0116): a unified Reports-list row - a loop AAR or a saved Engineering Update brief.
 export interface ReportEntry { kind: "aar" | "brief"; id: string; title: string; outcome: string; role: string; updatedAt: number; rel: string }
@@ -186,13 +414,19 @@ export interface ReportRepoSelection { path: string; fetch?: boolean; prs?: bool
 export interface EvalReportTurn {
   runId: string; model: string;
   ctxTokens: number; outputTokens: number; totalTokens: number; costUsd: number;
-  tools: { name: string; path?: string; add?: number; del?: number }[];
+  // P-EVAL.4 (ADR-0318): per-tool detail the report groups by. `name` is the REAL tool name when the
+  // tool_meta extension reported one (omp's ACP update cannot carry it), otherwise it degrades to the
+  // coarse ACP class. `kind` is ALWAYS that coarse class, so the server can group by name and fall back
+  // to kind without guessing which one it received. `ok` is present only when genuinely observed: absent
+  // means "not known", never "passed", because the report renders measured vs unmeasured from exactly
+  // this distinction.
+  tools: { name: string; path?: string; add?: number; del?: number; kind?: string; detail?: string; ok?: boolean }[];
   failures?: { tool: string; reason: string; cmd?: string }[];
   subagents?: number; when?: string;
 }
 export interface EvalReportResult { kind: string; id: string; rel: string | null; title: string }
 export interface ModeOption { id: string; name: string; description?: string }
-export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
+export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "creator" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest" }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
@@ -213,14 +447,21 @@ export interface SkillRemoveView { ok: boolean; name: string; removed?: boolean;
 export interface SkillCandidateView { name: string; description: string; body: string; rationale?: string }
 export interface SkillStudioAnalyzeView { window: "today" | "week"; model: string; candidates: SkillCandidateView[] }
 
+// P-MEET.1: the Meetings panel's payloads. The engine module is the single definition (it does the
+// normalization), so these are aliases rather than a second, drifting copy of the same shapes.
+export type { MeetingRow, MeetingsView, UpcomingEvent } from "../meetings_hub.ts";
+export type { MeetingDetail as MeetingDetailView, TodoRow as MeetingTodoView } from "../meetings_hub.ts";
+import type { MeetingsView, MeetingDetail as MeetingDetailView, TodoRow as MeetingTodoView } from "../meetings_hub.ts";
+
 // P-KB.2b (ADR-0099/0100): the compiled knowledge base + the page-graph view.
 export interface KbBlockedView { stage: "source" | "page"; slug?: string; reason: string; trustLabel: string; findings: number }
 export interface KbIngestResultView { documentId: string; status: "compiled" | "quarantined"; pagesCompiled: number; pagesQuarantined: number; links: number; pageIds: string[]; blocked: KbBlockedView[] }
 export interface KbRetrievedItemView { store: "vector" | "compiled"; citation: string; title: string; text: string; score: number; trustLabel: string }
 export interface KbRetrieveResultView { mode: "vector" | "compiled" | "hybrid"; items: KbRetrievedItemView[]; wrapped: string }
-export interface KbPageView { page_id: string; kind: string; slug: string; title: string; body_md: string; trust_label: string }
+export interface KbPageView { page_id: string; kind: string; slug: string; title: string; body_md: string; trust_label: string; classification: string; created_at: string; updated_at: string }
+export type KbPageMetadataView = Omit<KbPageView, "body_md">;
 export interface KbLinkView { link_id: string; from_page_id: string; to_page_id: string; relation: string }
-export interface KbGraphView { pages: KbPageView[]; links: KbLinkView[] }
+export interface KbGraphView { kgId: string; pages: KbPageMetadataView[]; links: KbLinkView[]; totalPages: number; totalLinks: number }
 // P-KGPACK.2 (ADR-0205): the named-KG picker. `activeId` is the KG a no-arg store lookup resolves to; a
 // mutation returns the refreshed list plus an optional `error` (validation failures don't null the list).
 export interface KgListItemView { kg_id: string; name: string; read_only: boolean; source_kind: string }
@@ -246,6 +487,9 @@ export interface KbPackExportView { ok: boolean; error?: string; path?: string; 
 export interface KbPackImportView {
   ok: boolean; error?: string; stage?: string;
   kgId?: string; kgName?: string; signed?: boolean; keyId?: string; pages?: number; findings?: number;
+  /** P-PACKSCAN.1 (ADR-0368): the diagnostic file for a FAILED import, so the refusal can name one
+   *  file the user sends for support instead of asking them to reproduce a stage name from memory. */
+  logPath?: string;
 }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
@@ -254,6 +498,9 @@ export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
   fields?: ProviderFieldAuth[];
+  /** Why the LAST OAuth attempt died after the browser said "success" (server-side broker exited
+   *  without persisting a credential). Present only while the provider is NOT connected. */
+  oauthError?: { message: string; at: number };
 }
 export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
 export interface HeadroomStatus {
@@ -295,11 +542,14 @@ export interface PersonalGraphData { nodes: GraphNode[]; edges: GraphEdge[]; fac
 export interface CodeGraphView { level: "file" | "symbol"; ingested: boolean; root: string; fileCount: number; symbolCount: number; edgeCount: number; updatedAt: number; nodes: GraphNode[]; edges: GraphEdge[] }
 export interface PersonalImportResult { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; messages?: number; learned?: number; blocked?: number; skipped?: number; extractor?: "heuristic" | "model"; cancelled?: boolean }
 // P-KG-INGEST.1 (ADR-0076): the background import job - start returns a jobId; status is polled for a live countdown.
+/** Options for the native folder dialog (P-KG-INGEST.5, ADR-0264). */
+export interface PickFolderOpts { title?: string; defaultPath?: string; buttonLabel?: string }
 export interface PersonalImportStart { ok: boolean; jobId?: string; error?: string }
 export interface PersonalImportJob {
   jobId: string; state: "running" | "done" | "failed" | "cancelled"; vendor?: string;
   messages: number; totalMessages: number; conversations: number; totalConversations: number;
   learned: number; blocked: number; startedAt: number; updatedAt: number;
+  cancelRequestedAt?: number; // P-KG-INGEST.5: Stop pressed, run unwinding
   result?: PersonalImportResult; error?: string;
 }
 export interface PersonalImportEstimate { ok: boolean; error?: string; vendor?: "openai" | "anthropic" | "gemini"; conversations?: number; userMessages?: number; userChars?: number }
@@ -315,11 +565,21 @@ export interface WorkspaceInfo {
   recent: { path: string; name: string; isGit: boolean }[];
   cloned?: boolean; error?: string;
 }
+// P-WSSETUP: the workspace-initialization offer. Mirrors desktop/workspace_setup.ts, plus the
+// server-side `asked` flag (this folder was already offered setup, never re-ask).
+export type WorkspacePurpose = "app" | "docs" | "analysis" | "other";
+export interface WorkspaceProfile {
+  path: string; isGit: boolean; isEmpty: boolean; hasAgentsFramework: boolean; hasCode: boolean;
+  stack: string[]; fileCount: number; asked: boolean;
+}
+export interface AgentsInitResult { ok: boolean; created: string[]; skipped: string[]; error?: string }
 
 // The LUCID session event union now lives in a DOM-free module (chat_events.ts) so node-side code that only
 // needs the shape doesn't drag bridge.ts (a DOM file) into the non-DOM root typecheck. Re-exported here so
 // every existing `import { type ChatEvent } from "./bridge.ts"` keeps working unchanged.
 import type { ChatEvent } from "./chat_events.ts";
+import type { TurnStatus } from "./chat_events.ts";
+import { streamNdjson as streamNdjsonCore } from "./ndjson_stream.ts"; // reader + drop classification + P-REATTACH.1 recovery
 export type { ChatEvent };
 /** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial - each type's max auto-run tier (T0-T3). */
 export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3">>;
@@ -368,8 +628,9 @@ export interface Attribution {
   // Enterprise-managed policy view (ADR-0030): drives the prompt + "Managed by …" UI.
   managed: boolean; orgName: string; requireEmail: boolean; allowSkip: boolean; allowedDomains: string[];
 }
-// ADR-0088 (P-ROLE.1): the four onboarding roles (renderer-side mirror of settings_store's UserRole).
-export type UserRole = "developer" | "security" | "manager" | "executive";
+// ADR-0088 (P-ROLE.1): the onboarding roles (renderer-side mirror of settings_store's UserRole).
+// P-AVATAR.1 (ADR-0251): + "lucid-agent", the one behavioral role (immersive stage).
+export type UserRole = "developer" | "security" | "manager" | "executive" | "lucid-agent";
 export interface ProfileSettings {
   username: string;
   email: string;
@@ -382,6 +643,9 @@ export interface ProfileSettings {
   // P-GOVCUI.1: the first-run Government/CUI answer. `null` = not asked yet (drives the gov onboarding step);
   // true = on the CUI (gov gateway) path; false = standard use. Cosmetic onboarding state, never gates.
   govconCui?: boolean | null;
+  // P-THEME.1: the chosen app theme id, or "" when never chosen (then the OS light/dark preference
+  // decides). An opaque string on purpose: theme.ts's THEMES registry is the only place ids are defined.
+  theme?: string;
 }
 export interface ManagedPolicy {
   managed: boolean; orgName: string;
@@ -442,12 +706,22 @@ export interface CollabShareStatus {
 /** P-COLLAB.17 (ADR-0202): the "prefer direct P2P" preference + STUN/TURN servers (stun:/turn: URLs). */
 export interface CollabP2PConfig { preferDirect: boolean; iceUrls: string[]; turnUsername?: string; turnCredential?: string }
 
+/** P-BROWSER.1 (wave 2): the agent-controlled visible browser window's live status (mirrors
+ *  desktop/browser_control.ts BrowserStatus - the shared cross-agent contract shape). */
+export interface BrowserStatusView { active: boolean; title: string; url: string; startedAt: number | null; shots: number }
+
 export interface LucidBridge {
   isElectron: boolean;
   security(): Promise<SecuritySnapshot | null>;
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
+  /** P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal). */
+  sandboxGrantRevoke(path: string): Promise<{ revoked: boolean; detail: string } | null>;
+  sandboxMode(mode: "off" | "auto" | "unregister"): Promise<{ changed: boolean; detail: string; control?: SandboxControlView } | null>;
+  sandboxGrantAdd(mode: "rx" | "rw"): Promise<{ added: boolean; cancelled?: boolean; path?: string; detail: string } | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
+  /** Bulk-acknowledge every active gate block. Releases NOTHING: each call stays blocked, audit kept. */
+  securityDismissAll(): Promise<{ dismissed: number } | null>;
   /** P-SECACK.1 (ADR-0170): mark DB-backed security rows reviewed (GUI ack ledger; releases nothing). */
   securityAck(input: { ids?: string[]; findings?: boolean }): Promise<{ acked: number; findingsSeen: number | null } | null>;
   /** P-BRIEF.3 (ADR-0072) / P-REPORT.1 (ADR-0116): the Engineering Update from the repo's own logs,
@@ -518,6 +792,14 @@ export interface LucidBridge {
   localProviderEnable(id: string, enabled: boolean): Promise<{ ok: boolean } | null>;
   /** Reachability/TLS probe of a base URL's /models endpoint (no key sent). */
   localProviderTest(baseUrl: string): Promise<{ reachable: boolean; status?: number; authed?: boolean; error?: string } | null>;
+  /** P-LOCAL.6: ask the endpoint what it actually serves (`GET <baseUrl>/models`). Pass `id` for a SAVED
+   *  provider, which authenticates from the vault-injected env; pass `baseUrl` for the add form, which
+   *  probes unauthenticated and reports `authRequired` when the endpoint needs a key. A key is NEVER
+   *  sent through this call: ADR-0135 keeps provider secrets off the engine's HTTP surface. */
+  localProviderDiscover(input: { baseUrl?: string; id?: string }): Promise<{
+    reachable: boolean; status?: number; authRequired?: boolean;
+    models?: LocalModelDef[]; dropped?: number; error?: string;
+  } | null>;
   /** Restart the desktop app so a spawned omp picks up new local providers (Electron only; no-op in browser). */
   relaunch(): Promise<void>;
   /** P-FIGMA.1 (ADR-0154): import a Figma file's frames as a design board → returns the local HTML path to
@@ -537,8 +819,36 @@ export interface LucidBridge {
   // mic transcription, and read-aloud TTS.
   voiceSettings(): Promise<VoiceSettingsView | null>;
   setVoiceSettings(patch: Partial<VoiceSettingsView>): Promise<VoiceSettingsView | null>;
-  voices(): Promise<{ voices: ElevenVoiceView[]; favorites: string[]; selected: string; note?: string } | null>;
+  /** P-JEV.1 (ADR-0374): the judgment backend (omp `providers.judgmentProvider`), stored vs effective. */
+  judgment(): Promise<JudgmentView | null>;
+  setJudgment(mode: JudgmentView["stored"]): Promise<JudgmentView | null>;
+  // P-ACCT.1 (ADR-0375): named multi-account per provider. Every mutation returns the refreshed
+  // snapshot (providerId -> accounts) so the UI repaints from the server's truth, never a client guess.
+  accounts(): Promise<AccountsSnapshot | null>;
+  /** Add a named API-key account (OAuth accounts are added via the normal Connect flow). */
+  accountAdd(providerId: string, name: string, key: string): Promise<AccountsSnapshot | null>;
+  accountRename(providerId: string, accountId: string, name: string): Promise<AccountsSnapshot | null>;
+  accountRemove(providerId: string, accountId: string): Promise<AccountsSnapshot | null>;
+  /** Make this account the one omp uses; the server parks/unparks OAuth rows, swaps the env key, and restarts omp. */
+  accountSwitch(providerId: string, accountId: string): Promise<AccountsSnapshot | null>;
+  /** Voices for `provider`, or for the engine currently selected in settings when omitted. */
+  voices(provider?: string): Promise<VoiceListView | null>;
   transcribe(audioB64: string, mime: string, language?: string): Promise<{ text: string; note: string } | null>;
+  /** P-VOICE.6: compress a settled reply into a short spoken digest (empty digest = speak verbatim). */
+  voiceDigest(text: string): Promise<{ digest: string } | null>;
+  /** P-VOICE.7: list imported endpoints (auto-scans the handoff mailbox first). */
+  voiceEndpoints(): Promise<VoiceEndpointListView | null>;
+  /** P-VOICE.7: manual-upload fallback - the raw text of an exported .json. */
+  voiceEndpointImport(json: string): Promise<{ endpoints: VoiceEndpointView[]; active: string; imported?: string } | null>;
+  voiceEndpointActivate(id: string): Promise<{ endpoints: VoiceEndpointView[]; active: string; url?: string } | null>;
+  voiceEndpointRemove(id: string): Promise<{ endpoints: VoiceEndpointView[]; active: string } | null>;
+  // P-STT.2b: managed on-device Whisper - hardware-gated install / start / stop / status (no-code).
+  whisperStatus(): Promise<WhisperStatusView | null>;
+  whisperInstall(tier?: string): Promise<WhisperActionView | null>;
+  whisperStart(tier?: string): Promise<WhisperActionView | null>;
+  whisperStop(): Promise<{ ok: boolean } | null>;
+  /** P-STT.6 (ADR-0267): delete a downloaded model's weights (never the running tier - stop first). */
+  whisperRemove(tier: string): Promise<WhisperActionView | null>;
   speak(text: string, voiceId?: string, provider?: string): Promise<{ audioB64: string | null; mime: string; note: string } | null>;
   /** P-GOAL.14 (ADR-0112): list past After-Action Reports, and read one by its workspace-relative path. */
   pastReports(): Promise<{ rel: string; id: string; goal: string; outcome: string; updatedAt: number }[] | null>;
@@ -606,6 +916,9 @@ export interface LucidBridge {
   /** `share` (P-PREVIEW-PWA.3, ADR-0240): roster COUNTS for a renderer-hosted direct-P2P share, so the
    *  backend can build the trusted agent-awareness preamble (a relay share is computed backend-side). */
   sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }): Promise<void>;
+  chatStatus(): Promise<TurnStatus | null>;
+  attachChat(turnId: string | undefined, onEvent: (e: ChatEvent) => void): Promise<void>;
+  detachChat(): void;
   // P-GOAL.1 (ADR-0046): run a /goal loop - streams the same events plus goal-iter/check/done/stop.
   runGoal(opts: GoalOpts, onEvent: (e: ChatEvent) => void): Promise<void>;
   resumableLoops(): Promise<ResumableLoop[] | null>; // P-GOAL.4: loops that stopped without meeting their condition
@@ -625,15 +938,77 @@ export interface LucidBridge {
   /** Respawn omp + re-read its model list (after connecting a provider via OAuth or key). */
   refreshConfig(): Promise<ConfigOption[]>;
   setConfig(configId: string, value: string): Promise<ConfigOption[]>;
+  // P-MODELDEF: the user's explicitly-chosen model ("" if never chosen). getChosenModel reads it;
+  // setChosenModel persists it on a genuine user pick, so it survives across launches.
+  chosenModel(): Promise<string>;
+  setChosenModel(value: string): Promise<string | null>;
+  // P-MODEL.2: the model the composer LAST ran on (backend-written from omp's reported active model).
+  // Distinct from chosenModel: a user who switches models in the composer without ever opening the
+  // picker has no chosenModel, and the boot default must still land on what they were last using.
+  lastModel(): Promise<string>;
   // P-ACP.2 (ADR-0027): ACP session modes (Plan / Agent), switched via session/set_mode.
   modes(): Promise<ModeState | null>;
   setMode(modeId: string): Promise<ModeState | null>;
-  // P-ACP.3: the composer's 3-way Plan/Ask/Agent + answering a forwarded permission request.
-  setUiMode(uiMode: "agent" | "ask" | "plan"): Promise<ModeState | null>;
+  // P-ACP.3: the composer's Plan/Ask/Agent + answering a forwarded permission request.
+  // CREATOR-0: `creator` is offered only in a Creator build; the backend folds it to `agent` elsewhere.
+  setUiMode(uiMode: "agent" | "creator" | "ask" | "plan"): Promise<ModeState | null>;
   respondPermission(id: string, optionId: string | null): Promise<unknown>;
   // P-ACP.4: Stop the in-flight turn (interrupt reply + tool calls).
   cancelChat(): Promise<unknown>;
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
+  // P-FLEET.L1/L2: local lanes - concurrent headless LUCID agents in the fleet grid dashboard.
+  fleetStatus(): Promise<FleetStatusView | null>;
+  /** `repoUrl` (P-FLEET.L2) clones a GitHub/GitLab/Azure DevOps remote into `cwd` (or the shared
+   *  workspaces root when cwd is blank) and runs the lane there; an existing clone is reused. `pat` is a
+   *  freshly-typed token used ONLY to spawn that git process - it is redacted from errors and never
+   *  persisted by the server (the encrypted copy is written separately through the OS vault). */
+  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
+  /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat. */
+  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[]): Promise<void>;
+  /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
+  fleetQueueAdd(laneId: string, text: string, images?: LaneImage[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
+  fleetQueueRemove(laneId: string, index: number): Promise<{ ok: boolean } | null>;
+  fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
+  fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
+  // P-FLEET.L5: the reviewable timeline (list + open-a-point). Transcript reads are tail-limited.
+  // `includeSelfTest` opts the repo's own echo/demo throwaways back in; they are hidden by default.
+  timelineList(limit?: number, offset?: number, includeSelfTest?: boolean): Promise<TimelinePage | null>;
+  timelineSession(id: string, limit?: number): Promise<{ messages: { role: string; text: string; turn?: number }[]; total: number; userTotal: number } | null>;
+  /** P-FLEET.L4: re-send the lane's last prompt, streaming like fleetPrompt (recovers an error lane first). */
+  fleetRetry(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
+  /** P-FLEET.L4: revive an error/stopped lane in place - same id, transcript memory carried. */
+  fleetRespawn(laneId: string): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
+  fleetAnswer(laneId: string, allow: boolean, scope?: ApprovalScope): Promise<{ ok: boolean } | null>;
+  /** Full auto-mode. laneId omitted = ALL lanes + persisted default for new ones. The server refuses
+   *  on=true unless the risk was accepted before or acceptRisk is true (which persists the acceptance). */
+  fleetAuto(opts: { laneId?: string; on: boolean; acceptRisk?: boolean }): Promise<{ ok: boolean } | null>;
+  fleetCancel(laneId: string): Promise<{ ok: boolean } | null>;
+  fleetStop(laneId: string): Promise<{ ok: boolean } | null>;
+  /** P-FLEET.L10: DISMISS a lane - stop parks it (reviewable, respawnable), this forgets it so the card
+   *  leaves the grid. Refused while a turn is in flight unless `force`, so one click cannot destroy work.
+   *  The lane's on-disk session log and ledger line survive, so it stays reviewable on the timeline. */
+  fleetRemove(laneId: string, force?: boolean): Promise<{ ok: boolean; reason?: string } | null>;
+  fleetSetModel(laneId: string, model: string): Promise<{ ok: boolean; model?: string; reason?: string } | null>;
+  // -- P-FLEET.L8: promote a lane into the MAIN composer, and pull it back --------------------------
+  /** Attach the main composer to this lane. The lane's omp child, session, cwd, and model are untouched,
+   *  so this works MID-TURN. Returns the lane plus its bounded transcript to seed the thread with. */
+  fleetPromote(laneId: string): Promise<{ ok: boolean; lane?: LaneView; transcript?: { role: "user" | "assistant"; text: string }[]; reason?: string } | null>;
+  /** Release the composer back to the master session. Idempotent; laneId omitted demotes whichever lane
+   *  currently holds it. */
+  fleetDemote(laneId?: string): Promise<{ ok: boolean; lane?: LaneView } | null>;
+  fleetPromoted(): Promise<{ lane: LaneView | null } | null>;
+  /** FOLLOW a lane's live events WITHOUT owning a turn. Resolves when the stream ends; call the returned
+   *  aborter to leave. This is what lets a promote join a turn that is already running. */
+  fleetWatch(laneId: string, onEvent: (e: LaneEvent) => void): { done: Promise<void>; stop: () => void };
+  fleetTranscript(laneId: string): Promise<{ turns: { role: "user" | "assistant"; text: string }[] } | null>;
+  // -- P-HEALTH.1: the harness's self-watch ---------------------------------------------------------
+  /** Read-only: where the stall ladder stands for the master session and every lane. Takes no action. */
+  health(): Promise<{
+    master: { action: string; silentMs: number; reason: string; pending: { label: string; elapsedMs: number }[]; last: { action: string; reason: string; at: number } | null };
+    lanes: { laneId: string; action: string; silentMs: number; reason: string; openCalls: { label: string; elapsedMs: number }[] }[];
+  } | null>;
+  /** Force one ladder step now instead of waiting for the next tick. */
+  healthTick(): Promise<{ master: { action: string; reason: string } | null; lanes: { laneId: string; action: string; reason: string }[] } | null>;
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<SkillView[] | null>;
   // P-SKILL.4 (ADR-0097): the directory's per-skill management menu (all confined, all additive).
@@ -646,11 +1021,17 @@ export interface LucidBridge {
   // P-KB.2b (ADR-0099/0100): compiled-KB ingest / retrieve / page-graph.
   kbIngest(doc: { sourcePath: string; title: string; text: string }): Promise<KbIngestResultView | null>;
   kbRetrieve(query: string, mode: "vector" | "compiled" | "hybrid"): Promise<KbRetrieveResultView | null>;
-  kbGraph(): Promise<KbGraphView | null>;
+  kbGraph(kgId?: string): Promise<KbGraphView | null>;
+  kbPage(kgId: string, pageId: string): Promise<KbPageView | null>;
   // P-KGPACK.2 (ADR-0205): the named-KG picker. list = all KGs + active; create/rename/activate return the
-  // refreshed list (with an optional `error` on validation failure). The graph view (kbGraph) reads the
-  // ACTIVE KG, so activate + re-fetch shows a different graph.
+  // refreshed list (with an optional `error` on validation failure). A no-arg kbGraph reads the active
+  // KG; explicit graph/detail reads stay bound to their requested KG even if the picker changes.
   kbList(): Promise<KgListView | null>;
+  // P-KGUI.3 (ADR-0336): page count per KG, for the Personalization stat tiles. Its own call rather than a
+  // field on kbList, because each KG is a separate DuckDB file: this costs one open per KG the first time,
+  // so the card paints from kbList and fills these in afterwards. An ABSENT key means "not known", which
+  // the tiles render as a dash; a fabricated 0 would read as "this graph is empty".
+  kbCounts(): Promise<Record<string, number> | null>;
   kbCreate(name: string): Promise<KgListView | null>;
   kbRename(kgId: string, name: string): Promise<KgListView | null>;
   kbActivate(kgId: string): Promise<KgListView | null>;
@@ -700,6 +1081,8 @@ export interface LucidBridge {
   setTourSeen(seen: boolean): Promise<ProfileSettings | null>;
   // P-GOVCUI.1: persist the first-run Government/CUI answer (so the gov onboarding step asks exactly once).
   setGovconCui(govconCui: boolean): Promise<ProfileSettings | null>;
+  // P-THEME.1: persist the chosen app theme id ("" clears it back to following the OS preference).
+  setTheme(theme: string): Promise<ProfileSettings | null>;
   // Enterprise-managed policy (read-only; placed by admins via GPO/MDM).
   managed(): Promise<ManagedPolicy | null>;
   // P-IDE.1c: China-origin model data-sovereignty acknowledgement gate.
@@ -716,7 +1099,17 @@ export interface LucidBridge {
   setEmbeddingsConfig(config: EmbeddingsConfigView | null): Promise<{ config: EmbeddingsConfigView | null; active: boolean; error?: string } | null>;
   embeddingsTest(input: { baseUrl: string; model: string; authKind: string; headerName?: string; secret?: string }): Promise<{ ok: boolean; dim?: number; error?: string } | null>;
   embeddingsReindex(): Promise<{ ok: boolean; kgs?: number; pages?: number; stored?: number; error?: string } | null>;
+  // P-MEET.1: the Meetings panel's view of the loopback Lucid Meeting Hub (reads, plus marking an action item
+  // done). The engine holds the pairing bearer; the renderer only ever sees rows. `meetingsPair` is the one call that
+  // returns a secret, and ONLY so the renderer can hand it to the OS vault (credStore is main-only).
+  meetings(query?: { limit?: number; offset?: number; q?: string }): Promise<MeetingsView | null>;
+  meetingDetail(file: string): Promise<{ ok: boolean; locked: boolean; meeting: MeetingDetailView | null; error: string | null } | null>;
+  meetingTodoMark(id: string, done: boolean): Promise<{ ok: boolean; todo: MeetingTodoView | null; error: string | null } | null>;
+  meetingsPair(code: string): Promise<{ ok: boolean; error: string | null; token: string; vaultRef: string } | null>;
   auth(): Promise<AuthStatus | null>;
+  /** P-GUIDE.1/.2: guide id (provider id or "choosing") -> absolute path of the bundled advisor guide
+   *  (served into the Preview panel by path). Missing files are omitted server-side. */
+  guides(): Promise<Record<string, string> | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
@@ -775,7 +1168,22 @@ export interface LucidBridge {
   workspace(): Promise<WorkspaceInfo | null>;
   setWorkspace(path: string): Promise<WorkspaceInfo | null>;
   cloneWorkspace(url: string, pat?: string): Promise<WorkspaceInfo | null>; // pat: optional inline git token (ADR-0216)
-  pickFolder(): Promise<string | null>; // native dialog in Electron; null in browser
+  /** Remove one folder from the recents list (does NOT change the active workspace, so no respawn). */
+  removeRecentWorkspace(path: string): Promise<WorkspaceInfo | null>;
+  // P-WSSETUP: the workspace-initialization offer - profile the current folder, scaffold the
+  // .agents framework, or record a dismissal so the popup never re-asks for this folder.
+  workspaceSetupProfile(): Promise<WorkspaceProfile | null>;
+  agentsInit(purpose: WorkspacePurpose, scan: boolean): Promise<AgentsInitResult | null>;
+  workspaceSetupDismiss(): Promise<{ asked: boolean } | null>;
+  /** Native OS folder dialog in Electron (null in a plain browser). `title`/`buttonLabel` let each
+   *  caller label its own dialog, so every folder pick is the real Explorer/Finder window. */
+  pickFolder(opts?: PickFolderOpts): Promise<string | null>;
+  /** P-FS.2 (ADR-0265): native OS folder dialog via the LOCAL backend when the GUI runs in a plain
+   *  browser (LucidAgentIDE.bat / lucid.exe + default browser). The server runs on the same machine
+   *  (loopback bind), so it opens the real Explorer / Finder / zenity dialog itself. `supported:false`
+   *  (or null: request failed) = fall back to the in-app browser; `supported:true, path:null` = the
+   *  user CANCELLED, never re-prompt. */
+  pickFolderNative(opts?: PickFolderOpts): Promise<NativePickResult | null>;
   // P-NETWL.1 (ADR-0106): native FILE picker + OS-encrypted credential vault. All Electron-only; in a plain
   // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
   pickFile(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -806,6 +1214,10 @@ export interface LucidBridge {
   // P-PREVIEW.4 (ADR-0096): a local file's content for the iframe's srcdoc (file:// can't load from an http
   // origin). Returns the HTML, or null if the path isn't a readable local previewable file.
   previewFile(path: string): Promise<string | null>;
+  // P-PREVIEW-PWA.4 (ADR-0335): true when `path` would actually render. The /serve route answers a failed
+  // preview with HTTP 200 and a human-readable HTML body, so the client cannot tell a rendered app from a
+  // rendered failure; this is that missing signal, and it costs one `stat` (no read, no asset inlining).
+  previewProbe(path: string): Promise<boolean>;
   // P-PREVIEW.4b (ADR-0096): the same-origin URL that SERVES a local file as a document with its own
   // per-frame CSP, for the iframe's `src`. Carries the transport token as a query param (an iframe src GET
   // can't set a header). Used instead of srcdoc so the previewed app's inline scripts actually run.
@@ -821,16 +1233,96 @@ export interface LucidBridge {
   // P-PREVIEW.7 (ADR-0179): Electron-app detection + USER-initiated external launch
   previewElectronDetect(path: string): Promise<{ electron: boolean; reasons: string[]; appDir: string; launchable: boolean; via: string | null } | null>;
   previewElectronLaunch(path: string): Promise<{ launched: boolean; via?: string; appDir?: string; reason?: string } | null>;
+  // ── P-BROWSER.1 (wave 2): the agent-controlled visible browser window (BrowserFeature section) ──
+  // Status feeds the floating browser pill; close is shared with the Processes popover's Close action.
+  browserStatus(): Promise<BrowserStatusView | null>;
+  // Latest capture as a data:image/png;base64 URL (null before the first shot) - the pill's auto
+  // send-to-phone fetches it here rather than re-driving a capture.
+  browserShot(): Promise<string | null>;
+  browserClose(): Promise<void>;
+  // Same close POST; the stop-the-turn half happens renderer-side (the pill calls stopTurn itself).
+  browserStop(): Promise<void>;
   // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
   subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
   systemStatus(fresh?: boolean): Promise<SystemStatusView | null>;
+  // CREATOR-0 (ADR-0279): this build's identity + which Creator surfaces exist. Null in an old backend.
+  buildInfo(): Promise<BuildInfoView | null>;
+  // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail (Creator build only).
+  creatorResources(fresh?: boolean): Promise<CreatorResourcesView | null>;
+  // CREATOR-0 (ADR-0282/0281): the integration registry + the local track library, in one payload.
+  creatorStudio(): Promise<CreatorStudioView | null>;
+  // CREATOR-0: mutate the library (import, review, remix, re-prompt, remove) and get the fresh view back.
+  creatorLibrary(op: CreatorLibraryOp): Promise<{ ok: boolean; error?: string; view: CreatorStudioView | null }>;
+  // CREATOR-0: playable bytes for one track (base64 + mime, like the TTS path).
+  creatorTrackAudio(id: string): Promise<{ audioB64: string; mime: string; title: string } | null>;
+  // CREATOR-0: save or remove one endpoint declaration. Refused server-side when it is not well formed.
+  creatorEndpoint(input: { endpoint?: Record<string, unknown>; remove?: string }): Promise<{ ok: boolean; error?: string }>;
+  // CREATOR-0: save or remove a remote monitoring target (a DGX Spark, a GPU VM).
+  creatorTarget(input: { target?: Record<string, unknown>; remove?: string }): Promise<{ ok: boolean; error?: string }>;
+  // CREATOR-1 (ADR-0292): probe one provider (or all) and get the refreshed registry + job list back.
+  creatorProbe(providerId?: string): Promise<{ ok: boolean; error?: string; registry: CreatorStudioView | null }>;
+  // CREATOR-1: request a stop. The job settles only when its runner confirms.
+  creatorCancelJob(id: string): Promise<{ ok: boolean; error?: string }>;
+  // CREATOR-IMG (ADR-0291): the model dropdown - a LIVE probe of the configured image server.
+  creatorModels(): Promise<{ models: CreatorModelView[]; endpoint: string; note: string } | null>;
+  // CREATOR-IMG: generate through the user's own workflow template, mixing prompt + named input images.
+  creatorGenerateImage(input: CreatorGenerateInput): Promise<{ ok: boolean; error?: string; produced?: CreatorArtifactView[] }>;
+  // CREATOR-IMG: the artifact grid, and one artifact's bytes as a data URL (inline display + preview).
+  creatorArtifacts(): Promise<CreatorArtifactView[] | null>;
+  creatorArtifactData(id: string): Promise<{ artifact: CreatorArtifactView; dataUrl: string } | null>;
+  // CREATOR-IMG: store a renderer-encoded PNG (a meme, a markup export) with its provenance.
+  creatorStoreArtifact(input: { kind: string; dataUrl: string; width: number; height: number; source: string; prompt?: string; model?: string }): Promise<{ ok: boolean; error?: string; artifact?: CreatorArtifactView }>;
+  // CREATOR-IMG: the provider-free builders - a sprite sheet PNG plus sidecars, and an animated GIF.
+  creatorBuildSheet(input: { frames: WireFrameView[]; name?: string; columns?: number; durationMs?: number }): Promise<{ ok: boolean; error?: string; artifact?: CreatorArtifactView; css?: string; manifest?: string }>;
+  creatorBuildGif(input: { frames: WireFrameView[]; delayMs?: number | number[]; loop?: number }): Promise<{ ok: boolean; error?: string; artifact?: CreatorArtifactView }>;
+  // CREATOR-2 (ADR-0286): open ONE track as an editable timeline (document + audio + waveform + the
+  // alignment provenance note), and save the rendered edit back as a new library track. Everything
+  // between those two calls happens in the renderer against the pure core - the server never sees a
+  // half-finished edit.
+  creatorEditorOpen(opts: { trackId: string; text?: string; buckets?: number }): Promise<{ ok: boolean; error?: string; session?: EditorSession } | null>;
+  creatorEditorSave(opts: { trackId: string; doc: TimelineDoc; title: string; prompt?: string }): Promise<{ ok: boolean; error?: string; trackId?: string } | null>;
+  // CREATOR-5 (ADR-0289): the mixer touches the server exactly twice - once to LIST which library tracks
+  // can play together (plus the format the mix will run at, which the pane never guesses), once to
+  // RENDER. Every level, pan, fade, and ramp in between is applied in the renderer against the same pure
+  // core the render uses, so a control move is instant and no half-built graph ever crosses the wire.
+  creatorMixerTracks(): Promise<MixerTracksPayload | null>;
+  creatorMixerRender(opts: { graph: MixGraph; title: string; prompt?: string; primaryTrackId: string; applyHeadroom?: boolean }): Promise<RenderMixResult | null>;
+  // CREATOR-3 (ADR-0287): a video or 3D render. Fail-closed at the boundary as well as at the server: a run
+  // payload this build cannot read becomes a named refusal rather than a half-painted report, because the
+  // pane's whole job is to say what was PROVEN and a malformed run proves nothing.
+  creatorRender(opts: { kind: string; prompt: string; model?: string; negative?: string; seed?: number; width?: number; height?: number; workflow?: string; maxArtifacts?: number }):
+    Promise<{ ok: boolean; error?: string; run?: PipelineRunView } | null>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
   showInFolder(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a FILE highlighted in its parent folder (Electron only; false in browser)
   canShowInFolder(): boolean; // whether the native shell can reveal a file in its folder (Electron only)
   openExternal(url: string): Promise<boolean>; // open an http(s) URL in the OS browser (OAuth); false in browser → caller falls back to window.open
+  // P-INTERJECT.1/.2 (wave 2): mid-turn operator interjection - queue a note the running turn's agent
+  // reads at its next tool boundary (target "master" or a laneId; the server enforces trim, the 4000-char
+  // limit, and the 8-note-per-target cap). Resolves the pending count, or null on refusal/transport failure.
+  interject(target: string, text: string): Promise<{ pending: number } | null>;
+  // P-INTERJECT.1: everything running right now - master turn, live lanes, import job, agent browsers.
+  processes(): Promise<ProcessView[] | null>;
+  // -- P-RECOVER.1 (ADR-0385): self-recovery + incident reports ---------------------------------------
+  /** The previous engine's master session, the current one, and the UNSEEN incidents. Null = unreachable. */
+  recoveryState(): Promise<RecoveryStateView | null>;
+  /** VERIFIED resume of `sessionId` (session/load must succeed). Null = no answer. */
+  recoveryResume(sessionId: string): Promise<RecoveryResumeView | null>;
+  /** In-place recovery of the master agent child (cancel, drop, respawn, reload the same session). */
+  recoveryRecover(): Promise<RecoveryRecoverView | null>;
+  /** One look at the engine for the recovery supervisor: never throws, bounded by a timeout. */
+  engineProbe(): Promise<EngineProbe>;
+  /** Every incident, newest first (malformed rows dropped). */
+  incidents(): Promise<IncidentView[]>;
+  /** The full redacted report markdown, or null. */
+  incidentReport(id: string): Promise<string | null>;
+  incidentSeen(id: string): Promise<boolean>;
+  /** Settle an incident; `note` (<=300 chars) becomes one timeline event, redacted by the store. */
+  incidentUpdate(id: string, outcome: IncidentOutcome, note?: string): Promise<IncidentView | null>;
+  /** Electron main restarts the engine (refused while it answers, rate-limited). Null outside Electron. */
+  restartEngine(): Promise<EngineRestartView | null>;
 }
 
 /** Non-secret metadata about a vault credential (P-NETWL.1, ADR-0106). No plaintext ever crosses this line;
@@ -859,13 +1351,16 @@ export interface WhitelistEntryView {
 /** Native shell injected by the Electron preload (window controls + crisp zoom). */
 interface NativeShell {
   isElectron?: boolean;
+  /** P-SANDBOX.15 (ADR-0396): the per-launch UI token from main over IPC ("" when refused). */
+  token?(): string;
   setZoom?(factor: number): void;
-  pickFolder?(): Promise<string | null>;
+  pickFolder?(opts?: PickFolderOpts): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   openExternal?(url: string): Promise<boolean>;
   revealPath?(path: string): Promise<boolean>;
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
+  restartEngine?(): Promise<EngineRestartView>; // P-RECOVER.1 (ADR-0385): main restarts an unreachable engine
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -880,12 +1375,18 @@ interface NativeShell {
 declare global { interface Window { lucid?: NativeShell } }
 const shell: NativeShell | undefined = typeof window !== "undefined" ? window.lucid : undefined;
 
-// ADR-0024: the per-launch capability token, injected into the served HTML by dev.ts. We echo it
-// on every /api call so the server can tell the real renderer from a forged request. Read once at
-// load; absent in a stray non-injected page (then calls are simply rejected, fail-closed).
-const TOKEN = typeof document !== "undefined"
-  ? (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? ""
-  : "";
+// ADR-0024: the per-launch capability token. We echo it on every /api call so the server can tell the real
+// renderer from a forged request. Read once at load; absent in a stray page (then calls are rejected,
+// fail-closed). P-SANDBOX.15 (ADR-0396): under Electron it comes from the preload (main, over IPC), and a
+// same-origin child frame (trainer.html) reads its parent's; only a standalone browser dev run still finds
+// it in a <meta> tag the engine injects.
+function readToken(): string {
+  if (typeof document === "undefined") return "";
+  try { const t = window.lucid?.token?.(); if (t) return t; } catch { /* no preload */ }
+  try { if (window.parent !== window) { const t = (window.parent as Window).lucid?.token?.(); if (t) return t; } } catch { /* cross-origin parent */ }
+  return (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? "";
+}
+const TOKEN = readToken();
 const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
   ({ ...(TOKEN ? { "x-lucid-token": TOKEN } : {}), ...extra });
 
@@ -895,11 +1396,36 @@ async function getData(path: string): Promise<any> {
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
 }
+// P-RECOVER.1 (ADR-0385): recovery calls run exactly when the engine may be wedged, so each one is bounded;
+// a hung request must end as "no answer", never as a supervisor that waits forever.
+async function postTimed(path: string, body: unknown, ms: number): Promise<unknown> {
+  try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body), signal: AbortSignal.timeout(ms) })).json())?.data ?? null; } catch { return null; }
+}
+async function getTimed(path: string, ms: number): Promise<unknown> {
+  try { return (await (await fetch(path, { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(ms) })).json())?.data ?? null; } catch { return null; }
+}
+const PROBE_TIMEOUT_MS = 5_000;
+/** One recovery probe read: `reached` = the engine answered at all (any HTTP status). */
+async function probeRead(path: string): Promise<{ reached: boolean; ok: boolean; data: unknown }> {
+  try {
+    const r = await fetch(path, { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    if (!r.ok) return { reached: true, ok: false, data: null };
+    return { reached: true, ok: true, data: (await r.json())?.data ?? null };
+  } catch { return { reached: false, ok: false, data: null }; }
+}
 
 // Mock config only as a last resort if the backend can't be reached (no omp).
+//
+// P-MODEL.2: this list is what the picker shows during a cold boot, BEFORE the live config lands, so it
+// is the "default model" the user actually sees and reports. It went stale at Opus 4.8 / Sonnet 4.6 /
+// Haiku 4.5, which is precisely the "why does it keep defaulting to Claude 4.8 Opus" complaint: the real
+// resolver (startup_model.ts) was already picking correctly, but this placeholder was painted first and
+// often outlived the wait. It is deliberately a SHORT, current, ANTHROPIC-only list: the fallback exists
+// for the offline case, and a long speculative catalog here would show models the user may not have.
+// Keep the head in sync with model_families.DEFAULT_MODEL_PREFERENCE when a new flagship ships.
 const FALLBACK_CONFIG: ConfigOption[] = [
-  { id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-opus-4-8", options: [
-    { value: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" }, { value: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, { value: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
+  { id: "model", name: "Model", category: "model", type: "select", currentValue: "anthropic/claude-opus-5-5", options: [
+    { value: "anthropic/claude-opus-5-5", name: "Claude Opus 5.5" }, { value: "anthropic/claude-opus-5", name: "Claude Opus 5" }, { value: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, { value: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
   ] },
   { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", options: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }] },
   { id: "thinking", name: "Thinking", category: "thought_level", type: "select", currentValue: "high", options: [
@@ -907,45 +1433,37 @@ const FALLBACK_CONFIG: ConfigOption[] = [
   ] },
 ];
 
-// Generic NDJSON event stream (used by both /api/chat and the /api/goal loop). `signal` lets Stop abort
-// the CLIENT read so the turn settles even if the server/omp never closes the stream (a wedged turn).
-async function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body), signal });
-  } catch {
-    if (signal?.aborted) return; // Stop pressed - the caller's finally settles the UI; no error line
-    onEvent({ type: "token", text: "[backend unreachable - is the GUI server running?]" });
-    onEvent({ type: "done" });
-    return;
-  }
-  if (res.status === 404) { onEvent({ type: "token", text: "[backend is out of date - close the GUI server window and relaunch (launcher → G)]" }); onEvent({ type: "done" }); return; }
-  if (!res.ok || !res.body) { onEvent({ type: "token", text: `[backend error ${res.status}]` }); onEvent({ type: "done" }); return; }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  // Drop server heartbeats ({type:"ping"}) - they only keep the socket alive through long tool calls.
-  const flush = (line: string) => { const s = line.trim(); if (!s) return; try { const ev = JSON.parse(s); if (ev && ev.type === "ping") return; onEvent(ev); } catch { /* skip */ } };
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
-    }
-    flush(buf);
-  } catch { /* Stop aborted the read, or the stream errored - return so the caller's finally settles. */ }
+// Generic NDJSON event stream (used by /api/chat, /api/goal, and the fleet lanes). The reader,
+// end-classification, and P-REATTACH.1 recovery loop live in ndjson_stream.ts (extracted so a real
+// Bun.serve exercises them in tests); this wrapper only injects the auth headers every request needs.
+function streamNdjson(path: string, body: unknown, onEvent: (e: ChatEvent) => void, signal?: AbortSignal, opts?: { tail?: boolean; reattach?: string; reattachBody?: () => unknown; onRecovery?: (state: "reconnecting" | "failed", message: string) => void }): Promise<void> {
+  return streamNdjsonCore(path, body, onEvent, signal, { ...opts, headers: () => authHeaders({}) });
 }
 // Stop must always recover the UI: aborting this controller ends the client read immediately, so the
 // turn's finally runs even when omp is wedged. cancelChat() aborts it AND posts the server cancel.
 let chatAbort: AbortController | null = null;
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }) => {
+let chatRequestId: string | undefined;
+let chatIdentity: { turnId?: string; requestId?: string } | null = null;
+// P-TURN-RECOVERY-BRIDGE: a detached reader never cancels the engine or clears its successor.
+function readChat(path: string, body: unknown, onEvent: (e: ChatEvent) => void, initialTurnId?: string): Promise<void> {
   chatAbort?.abort();
-  chatAbort = new AbortController();
-  // P-COLLAB.15: `from` attributes a guest-driven turn in the live collab broadcast (omitted for host turns).
-  // P-PREVIEW-PWA.3: `share` carries direct-P2P roster COUNTS for the agent-awareness preamble.
-  return streamNdjson("/api/chat", { text, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}) }, onEvent, chatAbort.signal).finally(() => { chatAbort = null; });
+  const controller = new AbortController();
+  chatAbort = controller;
+  let turnId = initialTurnId;
+  const requestId = chatRequestId;
+  chatIdentity = turnId ? { turnId } : { requestId };
+  return streamNdjson(path, body, (event) => {
+    if (event.type === "turn-snapshot") {
+      turnId = event.snapshot.turnId;
+      if (chatAbort === controller) chatIdentity = { turnId };
+    }
+    onEvent(event);
+  }, controller.signal, { reattach: "/api/chat/attach", reattachBody: () => turnId ? { turnId } : { requestId }, onRecovery: (state, message) => onEvent({ type: "connection", state, message }) })
+    .finally(() => { if (chatAbort === controller) chatAbort = null; });
+}
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }) => {
+  chatRequestId = crypto.randomUUID();
+  return readChat("/api/chat", { text, requestId: chatRequestId, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}) }, onEvent);
 };
 
 // P-COLLAB.10: JOIN a shared session. /api/collab/join returns EITHER a JSON error envelope (malformed link /
@@ -990,7 +1508,11 @@ export const bridge: LucidBridge = {
   isElectron: !!shell?.isElectron,
   security: () => getData("/api/security"),
   securityApprove: (id) => post("/api/security/approve", { id }),
+  sandboxGrantRevoke: (path) => post("/api/security/sandbox-grant/revoke", { path }),
+  sandboxMode: (mode) => post("/api/security/sandbox/mode", { mode }),
+  sandboxGrantAdd: (mode) => post("/api/security/sandbox-grant/add", { mode }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
+  securityDismissAll: () => post("/api/security/dismiss-all", {}),
   securityAck: (input) => post("/api/security/ack", input),
   engineeringBrief: (role, save, repos, window) => (repos && repos.length
     ? post("/api/brief", { role, save, repos, window }) // P-REPORT.9: multi-repo path POSTs the selection
@@ -1036,6 +1558,7 @@ export const bridge: LucidBridge = {
   localProviderDelete: (id) => post("/api/local-providers/delete", { id }), // P-LOCAL.3
   localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
   localProviderTest: (baseUrl) => post("/api/local-providers/test", { baseUrl }), // P-LOCAL.3 polish
+  localProviderDiscover: (input) => post("/api/local-providers/discover", input), // P-LOCAL.6 (no key in the body)
   relaunch: () => (shell?.relaunch ? shell.relaunch() : Promise.resolve()), // P-LOCAL.3 polish (Electron only)
   figmaImport: (fileUrl, pat) => post("/api/figma/import", { fileUrl, ...(pat ? { pat } : {}) }), // P-FIGMA.1
   designDoc: () => getData("/api/design"), // P-FIGMA.2
@@ -1045,8 +1568,27 @@ export const bridge: LucidBridge = {
   engineeringBriefAudio: (provider, voiceId) => post("/api/brief/audio", { provider, voiceId }),
   voiceSettings: () => getData("/api/voice-settings"),
   setVoiceSettings: (patch) => post("/api/voice-settings", patch),
-  voices: () => getData("/api/voices"),
+  judgment: () => getData("/api/judgment"), // P-JEV.1 (ADR-0374)
+  setJudgment: (mode) => post("/api/judgment", { mode }), // P-JEV.1: server clamps + restarts omp when the pin changes
+  // P-ACCT.1 (ADR-0375): named provider accounts. Mutations answer with the refreshed snapshot.
+  accounts: () => getData("/api/accounts"),
+  accountAdd: (providerId, name, key) => post("/api/accounts/add", { providerId, name, key }),
+  accountRename: (providerId, accountId, name) => post("/api/accounts/rename", { providerId, accountId, name }),
+  accountRemove: (providerId, accountId) => post("/api/accounts/remove", { providerId, accountId }),
+  accountSwitch: (providerId, accountId) => post("/api/accounts/switch", { providerId, accountId }),
+  voices: (provider) => getData(provider ? `/api/voices?provider=${encodeURIComponent(provider)}` : "/api/voices"),
   transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
+  voiceDigest: (text) => post("/api/voice/digest", { text }), // P-VOICE.6: slow-engine spoken digest
+  // P-VOICE.7: portable voice endpoints (DGX Loader handoff + manual upload fallback)
+  voiceEndpoints: () => getData("/api/voice/endpoints"),
+  voiceEndpointImport: (json) => post("/api/voice/endpoints/import", { json }),
+  voiceEndpointActivate: (id) => post("/api/voice/endpoints/activate", { id }),
+  voiceEndpointRemove: (id) => post("/api/voice/endpoints/remove", { id }),
+  whisperStatus: () => getData("/api/whisper/status"),
+  whisperInstall: (tier) => post("/api/whisper/install", { tier }),
+  whisperStart: (tier) => post("/api/whisper/start", { tier }),
+  whisperStop: () => post("/api/whisper/stop", {}),
+  whisperRemove: (tier) => post("/api/whisper/remove", { tier }), // P-STT.6 (ADR-0267)
   speak: (text, voiceId, provider) => post("/api/tts/speak", { text, voiceId, provider }),
   pastReports: () => getData("/api/goal/reports"),
   pastReport: (rel) => getData(`/api/goal/reports?rel=${encodeURIComponent(rel)}`),
@@ -1067,6 +1609,20 @@ export const bridge: LucidBridge = {
   usage: () => getData("/api/usage"),
   codeActivity: () => getData("/api/code-activity"),
   sendPrompt: streamChat,
+  chatStatus: async () => {
+    const response = await fetch("/api/chat/status", { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Turn status unavailable (HTTP ${response.status})`);
+    const payload = await response.json();
+    const status = payload?.data;
+    if (status === null) return null;
+    if (!status || typeof status.turnId !== "string" || typeof status.running !== "boolean" || typeof status.startedAt !== "number" || !(status.sessionId === null || typeof status.sessionId === "string")) throw new Error("Turn status response was invalid");
+    return status as TurnStatus;
+  },
+  attachChat: (turnId, onEvent) => {
+    if (!turnId && !chatRequestId) return Promise.reject(new Error("The original request identity is unavailable"));
+    return readChat("/api/chat/attach", turnId ? { turnId } : { requestId: chatRequestId }, onEvent, turnId);
+  },
+  detachChat: () => { const controller = chatAbort; chatAbort = null; chatIdentity = null; controller?.abort(); },
   runGoal: (opts, onEvent) => streamNdjson("/api/goal", opts, onEvent),
   resumableLoops: () => getData("/api/goal/resumable"),
   loopRunStats: () => getData("/api/goal/stats"),
@@ -1082,12 +1638,70 @@ export const bridge: LucidBridge = {
   config: async () => (await getData("/api/config")) ?? FALLBACK_CONFIG,
   refreshConfig: async () => (await post("/api/config/refresh", {})) ?? FALLBACK_CONFIG,
   setConfig: async (id, value) => (await post("/api/setConfig", { configId: id, value })) ?? FALLBACK_CONFIG,
+  chosenModel: async () => (await getData("/api/model/chosen")) ?? "",
+  setChosenModel: (value) => post("/api/model/chosen", { value }),
+  lastModel: async () => (await getData("/api/model/last")) ?? "", // P-MODEL.2
   modes: () => getData("/api/modes"),
   setMode: (modeId) => post("/api/modes", { modeId }),
   setUiMode: (uiMode) => post("/api/uimode", { uiMode }),
   respondPermission: (id, optionId) => post("/api/chat/permission", { id, optionId }),
-  cancelChat: () => { chatAbort?.abort(); return post("/api/chat/cancel", {}); },
+  cancelChat: async () => {
+    chatAbort?.abort();
+    const response = await fetch("/api/chat/cancel", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(chatIdentity ?? {}), signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Stop was not confirmed (HTTP ${response.status})`);
+    return (await response.json())?.data;
+  },
   cancelGoal: () => post("/api/goal/cancel", {}),
+  // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
+  fleetStatus: () => getData("/api/fleet/status"),
+  fleetSpawn: (opts) => post("/api/fleet/spawn", opts),
+  timelineList: (limit = 100, offset = 0, includeSelfTest = false) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}`), // P-FLEET.L5
+  timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5
+  fleetPrompt: (laneId, text, onEvent, images) => {
+    // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are
+    // structurally valid LaneEvents too, so the sink types unify at this one boundary. Named cast per
+    // house rule: structurally-compatible tagged unions the reader's ChatEvent signature can't express.
+    const sink = onEvent as (e: ChatEvent) => void;
+    return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}) }, sink);
+  },
+  fleetQueueAdd: (laneId, text, images) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}) }),
+  fleetQueueRemove: (laneId, index) => post("/api/fleet/queue/remove", { laneId, index }),
+  fleetQueueMove: (laneId, index, dir) => post("/api/fleet/queue/move", { laneId, index, dir }),
+  fleetDrain: (laneId, onEvent) => {
+    const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
+    return streamNdjson("/api/fleet/drain", { laneId }, sink);
+  },
+  fleetRetry: (laneId, onEvent) => {
+    const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
+    return streamNdjson("/api/fleet/retry", { laneId }, sink);
+  },
+  fleetRespawn: (laneId) => post("/api/fleet/respawn", { laneId }),
+  fleetAnswer: (laneId, allow, scope) => post("/api/fleet/answer", { laneId, allow, ...(scope ? { scope } : {}) }),
+  fleetAuto: (opts) => post("/api/fleet/auto", opts),
+  fleetCancel: (laneId) => post("/api/fleet/cancel", { laneId }),
+  fleetStop: (laneId) => post("/api/fleet/stop", { laneId }),
+  fleetRemove: (laneId, force) => post("/api/fleet/remove", { laneId, ...(force ? { force: true } : {}) }),
+  fleetSetModel: (laneId, model) => post("/api/fleet/model", { laneId, model }),
+  // P-FLEET.L8: promote/demote is a pure ATTACH: no process churn, so it is safe mid-turn.
+  fleetPromote: (laneId) => post("/api/fleet/promote", { laneId }),
+  fleetDemote: (laneId) => post("/api/fleet/demote", laneId ? { laneId } : {}),
+  fleetPromoted: () => getData("/api/fleet/promoted"),
+  fleetWatch: (laneId, onEvent) => {
+    // A watcher owns NO turn, so it gets its own AbortController rather than sharing the chat one:
+    // aborting the chat stream must never silently unsubscribe the composer from the lane it is
+    // attached to, and leaving a lane must never abort a running turn.
+    const ac = new AbortController();
+    const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
+    // `tail`: a lane WATCH is a live tail the server closes on release with no terminal `done` - a clean
+    // close is its normal end, so it must not synthesize the dropped-turn notice into every lane.
+    const done = streamNdjson("/api/fleet/watch", { laneId }, sink, ac.signal, { tail: true });
+    return { done, stop: () => ac.abort() };
+  },
+  fleetTranscript: (laneId) => getData(`/api/fleet/transcript?laneId=${encodeURIComponent(laneId)}`),
+  // P-HEALTH.1. NOT `/api/health`: that path is the ADR-0305 port-guard nonce probe, deliberately
+  // unauthenticated and registered first, so it would shadow this and leak session telemetry ungated.
+  health: () => getData("/api/session-health"),
+  healthTick: () => post("/api/session-health/tick", {}),
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
   userCommands: async () => (await getData("/api/usercommand")) ?? [], // P-CMD.1
@@ -1101,8 +1715,19 @@ export const bridge: LucidBridge = {
   skillStudioDraft: (candidate) => post("/api/skill-studio/draft", { candidate }),
   kbIngest: (doc) => post("/api/kb/ingest", doc),
   kbRetrieve: (query, mode) => post("/api/kb/retrieve", { query, mode }),
-  kbGraph: () => getData("/api/kb/graph"),
+  kbGraph: (kgId) => getData(kgId === undefined ? "/api/kb/graph" : `/api/kb/graph?kgId=${encodeURIComponent(kgId)}`),
+  kbPage: (kgId, pageId) => getData(`/api/kb/page?kgId=${encodeURIComponent(kgId)}&pageId=${encodeURIComponent(pageId)}`),
   kbList: () => getData("/api/kb/list"),
+  // P-KGUI.3 (ADR-0336): only finite numbers survive. A malformed entry is DROPPED rather than coerced, so a
+  // bad payload leaves a dash on the tile instead of painting "NaN" or a misleading 0.
+  kbCounts: async () => {
+    const d = await getData("/api/kb/counts");
+    const raw = (d as { pages?: unknown } | null)?.pages;
+    if (!raw || typeof raw !== "object") return null;
+    const out: Record<string, number> = {};
+    for (const [id, n] of Object.entries(raw)) if (typeof n === "number" && Number.isFinite(n)) out[id] = n;
+    return out;
+  },
   kbCreate: (name) => post("/api/kb/create", { name }),
   kbRename: (kgId, name) => post("/api/kb/rename", { kgId, name }),
   kbActivate: (kgId) => post("/api/kb/activate", { kgId }),
@@ -1202,6 +1827,7 @@ export const bridge: LucidBridge = {
   saveRole: (role) => post("/api/settings", { role }),
   setTourSeen: (seen) => post("/api/settings", { tourSeen: seen }),
   setGovconCui: (govconCui) => post("/api/settings", { govconCui }),
+  setTheme: (theme) => post("/api/settings", { theme }), // P-THEME.1
   managed: () => getData("/api/managed"),
   chinaAck: () => getData("/api/china-ack"),
   setChinaAck: (acknowledge) => post("/api/china-ack", { acknowledge }),
@@ -1213,7 +1839,21 @@ export const bridge: LucidBridge = {
   setEmbeddingsConfig: (config) => post("/api/embeddings-config", { config }),
   embeddingsTest: (input) => post("/api/embeddings/test", input),
   embeddingsReindex: () => post("/api/embeddings/reindex", {}),
+  // P-MEET.1
+  meetings: (query) => {
+    const p = new URLSearchParams();
+    if (query?.limit !== undefined) p.set("limit", String(query.limit));
+    if (query?.offset !== undefined) p.set("offset", String(query.offset));
+    if (query?.q) p.set("q", query.q);
+    const qs = p.toString();
+    return getData(qs ? `/api/meetings?${qs}` : "/api/meetings");
+  },
+  meetingDetail: (file) => getData(`/api/meetings/detail?file=${encodeURIComponent(file)}`),
+  meetingTodoMark: (id, done) => post("/api/meetings/todo", { id, done }),
+  meetingsPair: (code) => post("/api/meetings/pair", { code }),
   auth: () => getData("/api/auth"),
+  guides: () => getData("/api/guides"), // P-GUIDE.1: absolute paths of bundled advisor guides
+
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId, promptAnswer?: string) => post("/api/auth/oauth", { oauthId, promptAnswer }),
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
@@ -1256,7 +1896,12 @@ export const bridge: LucidBridge = {
   workspace: () => getData("/api/workspace"),
   setWorkspace: (path) => post("/api/workspace", { path }),
   cloneWorkspace: (url, pat) => post("/api/workspace/clone", { url, ...(pat ? { pat } : {}) }),
-  pickFolder: () => (shell?.pickFolder ? shell.pickFolder() : Promise.resolve(null)),
+  removeRecentWorkspace: (path) => post("/api/workspace/recent-remove", { path }),
+  workspaceSetupProfile: () => getData("/api/workspace/setup-profile"), // P-WSSETUP
+  agentsInit: (purpose, scan) => post("/api/workspace/agents-init", { purpose, scan }), // P-WSSETUP
+  workspaceSetupDismiss: () => post("/api/workspace/setup-dismiss", {}), // P-WSSETUP
+  pickFolder: (opts) => (shell?.pickFolder ? shell.pickFolder(opts) : Promise.resolve(null)),
+  pickFolderNative: (opts) => post("/api/fs/pickfolder", opts ?? {}), // P-FS.2 (ADR-0265)
   pickFile: (opts) => (shell?.pickFile ? shell.pickFile(opts) : Promise.resolve(null)), // P-NETWL.1
   credStore: (input) => (shell?.credStore ? shell.credStore(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.1 (fail-closed in browser)
   credStoreFile: (input) => (shell?.credStoreFile ? shell.credStoreFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.2
@@ -1273,26 +1918,246 @@ export const bridge: LucidBridge = {
   capturePreview: (rect) => (shell?.capturePreview ? shell.capturePreview(rect) : Promise.resolve(null)), // P-PREVIEW.1
   previewEgressAllows: async (url) => { const d = await getData(`/api/preview/egress-check?url=${encodeURIComponent(url)}`); return !!(d as { allow?: boolean } | null)?.allow; }, // P-PREVIEW.3b
   previewFile: async (path) => { const d = await getData(`/api/preview/file?path=${encodeURIComponent(path)}`); const h = (d as { html?: unknown } | null)?.html; return typeof h === "string" ? h : null; }, // P-PREVIEW.4
-  previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`, // P-PREVIEW.4b
+  // P-PREVIEW-PWA.4 (ADR-0335): does the target resolve, without reading it? One `stat` server-side. Needed
+  // because /api/preview/serve reports a FAILURE with HTTP 200 and an HTML body, so a rendered error page is
+  // indistinguishable from a rendered app on this side of the wire. Fail-closed: any doubt reads as false.
+  previewProbe: async (path) => {
+    const d = await getData(`/api/preview/probe?path=${encodeURIComponent(path)}`);
+    const r = d as { resolves?: unknown } | null;
+    return r?.resolves === true;
+  },
+  // P-PREVIEW.4b. The `v` nonce makes every deliberate load a FRESH navigation: assigning an iframe src
+  // its current value does not renavigate in Chromium, so without it a re-open (or a re-edit of the same
+  // file) kept showing the previously served document forever, no matter what was on disk. The server
+  // ignores `v`; the response is already no-store, the nonce only defeats the same-URL no-op.
+  previewServeUrl: (path) => `/api/preview/serve?path=${encodeURIComponent(path)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}&v=${Date.now().toString(36)}`,
   previewImage: (dataUrl) => post("/api/preview/image", { dataUrl }) as Promise<{ path: string } | null>, // P-IMG.1 (ADR-0208)
   cachePreviewShot: async (png) => { await post("/api/preview/shot-cache", { png }); }, // P-PREVIEW.3a-shot
   previewInspectNext: () => getData("/api/preview/inspect/next"), // P-PREVIEW.6b
   previewInspectResult: async (id, result) => { await post("/api/preview/inspect/result", { id, result }); }, // P-PREVIEW.6b
   previewElectronDetect: (path) => getData(`/api/preview/electron-detect?path=${encodeURIComponent(path)}`), // P-PREVIEW.7
   previewElectronLaunch: (path) => post("/api/preview/electron-launch", { path }), // P-PREVIEW.7
+  // ── P-BROWSER.1 (wave 2): the agent-controlled visible browser window (BrowserFeature section) ──
+  browserStatus: async () => { // fail-open null: a malformed/missing status just hides the pill
+    const v: unknown = await getData("/api/browser/status");
+    if (!v || typeof v !== "object" || !("active" in v)) return null;
+    const s = v as Partial<BrowserStatusView>; // safe view: presence-checked object; fields re-defaulted below
+    return { active: s.active === true, title: typeof s.title === "string" ? s.title : "", url: typeof s.url === "string" ? s.url : "", startedAt: typeof s.startedAt === "number" ? s.startedAt : null, shots: typeof s.shots === "number" ? s.shots : 0 };
+  },
+  browserShot: async () => { const d: unknown = await getData("/api/browser/shot"); return d && typeof d === "object" && "png" in d && typeof d.png === "string" ? d.png : null; },
+  browserClose: async () => { await post("/api/browser/close", {}); },
+  browserStop: async () => { await post("/api/browser/close", {}); }, // the turn-stop half is renderer-side
   subagents: () => getData("/api/subagents"), // P-TASK.5
   systemStatus: async (fresh) => { // P-SYSRES.1: fail-open - malformed/missing reads as null (never blocks)
     const v: unknown = await getData(`/api/system${fresh ? "?fresh=1" : ""}`).catch(() => null);
     return isSystemStatus(v) ? v : null;
   },
-
-
+  // CREATOR-0 (ADR-0279): identity + feature reveal. A null (old backend, failed call) means NO Creator
+  // surface renders - absent, never a greyed hint.
+  buildInfo: async () => {
+    const v: unknown = await getData("/api/build-info").catch(() => null);
+    const o = v as BuildInfoView | null;
+    return o && typeof o.creatorBuild === "boolean" && !!o.features ? o : null;
+  },
+  creatorResources: async (fresh) => {
+    const v: unknown = await getData(`/api/creator/resources${fresh ? "?fresh=1" : ""}`).catch(() => null);
+    return isCreatorResources(v) ? v : null;
+  },
+  creatorStudio: async () => {
+    const v: unknown = await getData("/api/creator/registry").catch(() => null);
+    return isCreatorStudio(v) ? v : null;
+  },
+  creatorLibrary: async (op) => {
+    try {
+      const res = await fetch("/api/creator/library", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(op) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: unknown };
+      return { ok: !!body.ok, error: body.error, view: isCreatorStudio(body.data) ? body.data : null };
+    } catch { return { ok: false, error: "The Creator library did not answer.", view: null }; }
+  },
+  creatorTrackAudio: async (id) => {
+    const v = await getData(`/api/creator/track?id=${encodeURIComponent(id)}`).catch(() => null) as { audioB64?: unknown; mime?: unknown; title?: unknown } | null;
+    return v && typeof v.audioB64 === "string" && typeof v.mime === "string"
+      ? { audioB64: v.audioB64, mime: v.mime, title: typeof v.title === "string" ? v.title : "" }
+      : null;
+  },
+  creatorEndpoint: async (input) => {
+    try {
+      const res = await fetch("/api/creator/endpoint", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      return { ok: !!body.ok, error: body.error };
+    } catch { return { ok: false, error: "The Creator registry did not answer." }; }
+  },
+  creatorTarget: async (input) => {
+    try {
+      const res = await fetch("/api/creator/target", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      return { ok: !!body.ok, error: body.error };
+    } catch { return { ok: false, error: "The Creator monitor did not answer." }; }
+  },
+  // CREATOR-1 (ADR-0292): capability probes + job control.
+  creatorProbe: async (providerId) => {
+    try {
+      const res = await fetch("/api/creator/probe", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(providerId ? { providerId } : {}) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { registry?: unknown } };
+      const registry = body.data?.registry;
+      return { ok: !!body.ok, error: body.error, registry: isCreatorStudio(registry) ? registry : null };
+    } catch { return { ok: false, error: "The probe service did not answer.", registry: null }; }
+  },
+  creatorCancelJob: async (id) => {
+    try {
+      const res = await fetch("/api/creator/jobs", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ cancel: id }) });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      return { ok: !!body.ok, error: body.error };
+    } catch { return { ok: false, error: "The job service did not answer." }; }
+  },
+  // CREATOR-IMG (ADR-0291): image generation, artifacts, and the provider-free builders.
+  creatorModels: async () => {
+    const v = await getData("/api/creator/models").catch(() => null) as { models?: unknown; endpoint?: unknown; note?: unknown } | null;
+    return v && Array.isArray(v.models)
+      ? { models: v.models as CreatorModelView[], endpoint: typeof v.endpoint === "string" ? v.endpoint : "", note: typeof v.note === "string" ? v.note : "" }
+      : null;
+  },
+  creatorGenerateImage: async (input) => {
+    try {
+      const res = await fetch("/api/creator/image", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { produced?: CreatorArtifactView[] } };
+      return { ok: !!body.ok, error: body.error, produced: body.data?.produced };
+    } catch { return { ok: false, error: "The image service did not answer." }; }
+  },
+  creatorArtifacts: async () => {
+    const v = await getData("/api/creator/artifacts").catch(() => null) as { artifacts?: unknown } | null;
+    return v && Array.isArray(v.artifacts) ? v.artifacts as CreatorArtifactView[] : null;
+  },
+  creatorArtifactData: async (id) => {
+    const v = await getData(`/api/creator/artifacts?id=${encodeURIComponent(id)}`).catch(() => null) as { artifact?: unknown; dataUrl?: unknown } | null;
+    return v && typeof v.dataUrl === "string" && v.artifact ? { artifact: v.artifact as CreatorArtifactView, dataUrl: v.dataUrl } : null;
+  },
+  creatorStoreArtifact: async (input) => {
+    try {
+      const res = await fetch("/api/creator/artifact", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { artifact?: CreatorArtifactView } };
+      return { ok: !!body.ok, error: body.error, artifact: body.data?.artifact };
+    } catch { return { ok: false, error: "The image service did not answer." }; }
+  },
+  creatorBuildSheet: async (input) => {
+    try {
+      const res = await fetch("/api/creator/sheet", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { artifact?: CreatorArtifactView; css?: string; manifest?: string } };
+      return { ok: !!body.ok, error: body.error, artifact: body.data?.artifact, css: body.data?.css, manifest: body.data?.manifest };
+    } catch { return { ok: false, error: "The image service did not answer." }; }
+  },
+  creatorBuildGif: async (input) => {
+    try {
+      const res = await fetch("/api/creator/gif", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(input) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { artifact?: CreatorArtifactView } };
+      return { ok: !!body.ok, error: body.error, artifact: body.data?.artifact };
+    } catch { return { ok: false, error: "The image service did not answer." }; }
+  },
+  // CREATOR-2 (ADR-0286): the session payload carries audio bytes + peaks, so it is returned TOP-LEVEL
+  // (never mirrored under `data` as well - that would double a multi-MB body). The shape gate keeps a
+  // malformed answer from opening a half-document.
+  creatorEditorOpen: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/editor/open", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string; session?: unknown };
+      if (!body.ok) return { ok: false, error: body.error };
+      return isEditorSession(body.session)
+        ? { ok: true, session: body.session }
+        : { ok: false, error: "The editor answered with a session this build cannot read." };
+    } catch { return { ok: false, error: "The audio editor did not answer." }; }
+  },
+  creatorEditorSave: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/editor/save", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string; trackId?: string };
+      return { ok: !!body.ok, error: body.error, trackId: body.trackId };
+    } catch { return { ok: false, error: "The audio editor did not answer." }; }
+  },
+  // CREATOR-5 (ADR-0289): both gates are fail-closed. A tracks payload this build cannot read paints
+  // NOTHING (null), rather than a mixer sitting on a format nobody reported; a report missing its own
+  // measurements becomes a named refusal, rather than blanks where a peak and a clip count belong.
+  creatorMixerTracks: async () => {
+    const v: unknown = await getData("/api/creator/mixer/tracks").catch(() => null);
+    return isMixerTracksPayload(v) ? v : null;
+  },
+  creatorMixerRender: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/mixer/render", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string };
+      if (!body.ok) return { ok: false, error: body.error ?? "The mixer refused the render and did not say why." };
+      return isRenderMixReport(body) ? body : { ok: false, error: "The mixer answered with a report this build cannot read." };
+    } catch { return { ok: false, error: "The mixer did not answer." }; }
+  },
+  creatorRender: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/render", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: { run?: unknown } };
+      // A refusal that never reached the pipeline (no endpoint, no template) carries no run object at all,
+      // so the error stands on its own; a run that came back malformed is refused rather than painted.
+      if (!isPipelineRunView(body.data?.run)) return { ok: false, error: body.error ?? "The render service answered with a run this build cannot read." };
+      return { ok: !!body.ok, error: body.error, run: body.data.run };
+    } catch { return { ok: false, error: "The render service did not answer." }; }
+  },
+  // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects + the unified Processes list.
+  interject: (target, text) => post("/api/interject", { target, text }),
+  processes: async () => { const d = await getData("/api/processes"); return Array.isArray((d as { processes?: unknown } | null)?.processes) ? (d as { processes: ProcessView[] }).processes : null; },
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,
   openExternal: (url) => (shell?.openExternal ? shell.openExternal(url) : Promise.resolve(false)),
   showInFolder: (path) => (shell?.showInFolder ? shell.showInFolder(path) : Promise.resolve(false)), // P-FSREVEAL.1 (ADR-0212)
   canShowInFolder: () => !!shell?.showInFolder,
+  // P-RECOVER.1 (ADR-0385): every answer is shape-checked here, so app.ts only ever sees the contract types.
+  recoveryState: async () => recoveryStateFrom(await getTimed("/api/recovery/state", 10_000)),
+  recoveryResume: async (sessionId) => {
+    const d = await postTimed("/api/recovery/resume", { sessionId }, 60_000);
+    if (!d || typeof d !== "object" || !("ok" in d) || typeof d.ok !== "boolean") return null;
+    const sid = "sessionId" in d && typeof d.sessionId === "string" ? d.sessionId : undefined;
+    const error = "error" in d && typeof d.error === "string" ? d.error : undefined;
+    const incidentId = "incidentId" in d && isIncidentId(d.incidentId) ? d.incidentId : undefined;
+    return { ok: d.ok, ...(sid ? { sessionId: sid } : {}), ...(error ? { error } : {}), ...(incidentId ? { incidentId } : {}) };
+  },
+  recoveryRecover: async () => {
+    const d = await postTimed("/api/recovery/recover", {}, 90_000);
+    if (!d || typeof d !== "object" || !("ok" in d) || typeof d.ok !== "boolean") return null;
+    const incidentId = "incidentId" in d && isIncidentId(d.incidentId) ? d.incidentId : undefined;
+    return {
+      ok: d.ok,
+      sessionId: "sessionId" in d && typeof d.sessionId === "string" ? d.sessionId : null,
+      reason: "reason" in d && typeof d.reason === "string" ? d.reason : "",
+      ...(incidentId ? { incidentId } : {}),
+    };
+  },
+  engineProbe: async () => {
+    const [health, status] = await Promise.all([probeRead("/api/session-health"), probeRead("/api/chat/status")]);
+    return probeFrom(health, status);
+  },
+  incidents: async () => incidentList(await getTimed("/api/incidents", 10_000)),
+  incidentReport: async (id) => {
+    if (!isIncidentId(id)) return null;
+    const d = await getTimed(`/api/incidents/report?id=${encodeURIComponent(id)}`, 10_000);
+    return d && typeof d === "object" && "markdown" in d && typeof d.markdown === "string" ? d.markdown : null;
+  },
+  incidentSeen: async (id) => {
+    if (!isIncidentId(id)) return false;
+    const d = await postTimed("/api/incidents/seen", { id }, 10_000);
+    return !!d && typeof d === "object" && "ok" in d && d.ok === true;
+  },
+  incidentUpdate: async (id, outcome, note) => {
+    if (!isIncidentId(id)) return null;
+    const d = await postTimed("/api/incidents/update", { id, outcome, ...(note ? { note: note.slice(0, 300) } : {}) }, 10_000);
+    return isIncidentView(d) ? d : null;
+  },
+  restartEngine: async () => {
+    if (!shell?.restartEngine) return null;
+    // Main waits for the new engine's nonce health; bound the wait so a stuck restart still ends.
+    const expired = Promise.withResolvers<null>();
+    const timer = setTimeout(() => expired.resolve(null), 120_000);
+    const answer = await Promise.race([shell.restartEngine().catch(() => null), expired.promise]);
+    clearTimeout(timer);
+    if (!answer || typeof answer.ok !== "boolean") return null;
+    return { ok: answer.ok, reason: typeof answer.reason === "string" ? answer.reason : "", ...(isIncidentId(answer.incidentId) ? { incidentId: answer.incidentId } : {}) };
+  },
   setZoom: (f) => {
     if (shell?.setZoom) { shell.setZoom(f); return; } // Electron: crisp native zoom
     // Browser: zoom #app and counter-scale its height so it still fills the viewport

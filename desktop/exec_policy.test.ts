@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, elicitationApproval, execVerdict,
+  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, elicitationAnswer, elicitationApproval, elicitationOptions, execVerdict,
   loopVerdict, type ExecStore, type RiskTier,
 } from "./exec_policy.ts";
 
@@ -199,6 +199,87 @@ describe("classifyCommand — graded tier ladder", () => {
   test("eval is T3", () => { expect(classifyEval().tier).toBe("T3"); });
 });
 
+// ── P-OFFICE.1 (ADR-0306, decision 3): officecli is tiered by SUBCOMMAND ─────────────────────────────
+// officecli is an external binary, so before this it fail-closed to T3 for EVERY call - a document read
+// weighed the same as `rm`. The table splits it: read (view/get) T0, workspace document write T1,
+// escapes-the-workspace (install/watch) T2, anything unrecognized STILL T3.
+describe("classifyCommand: officecli subcommand tiers (ADR-0306)", () => {
+  test("view / get are read-only (safe, T0) like cat", () => {
+    for (const cmd of [
+      "officecli view report.docx",
+      "officecli view deck.pptx outline",
+      "officecli view report.docx html",
+      "officecli get deck.pptx /slide[1]/shape[1]",
+    ]) {
+      const c = classifyCommand(cmd);
+      expect(c).toMatchObject({ risk: "safe", tier: "T0", key: "officecli", alwaysPrompt: false });
+    }
+    expect(classifyCommand("officecli view report.docx").tier).toBe(classifyCommand("cat report.docx").tier);
+  });
+
+  test("create / add / set / remove / close are local-mutate (risky, T1) like cp", () => {
+    for (const cmd of [
+      "officecli create report.docx",
+      "officecli add deck.pptx / --type slide",
+      "officecli set book.xlsx /sheet[1]/A1 42",
+      "officecli remove deck.pptx /slide[2]",
+      "officecli close report.docx",
+    ]) {
+      const c = classifyCommand(cmd);
+      expect(c).toMatchObject({ risk: "risky", tier: "T1", key: "officecli", alwaysPrompt: false });
+      expect(c.tier).toBe(classifyCommand("cp a b").tier); // same weight as the LOCAL_MUTATE set
+    }
+  });
+
+  test("install / watch escape the workspace, so T2 (not T1)", () => {
+    for (const cmd of ["officecli install", "officecli install --agent claude", "officecli watch report.docx"]) {
+      const c = classifyCommand(cmd);
+      expect(c).toMatchObject({ risk: "risky", tier: "T2", key: "officecli", alwaysPrompt: false });
+    }
+    // T2 means a T1 loop dial will NOT auto-run them, which is the whole point of not calling them T1.
+    expect(loopVerdict("T1", classifyCommand("officecli install").tier)).toBe("block");
+    expect(loopVerdict("T1", classifyCommand("officecli add deck.pptx / --type slide").tier)).toBe("auto");
+  });
+
+  test("an unrecognized subcommand keeps the fail-closed T3 default", () => {
+    for (const cmd of ["officecli frobnicate report.docx", "officecli exec ./x.sh", "officecli", "officecli --help"]) {
+      const c = classifyCommand(cmd);
+      expect(c).toMatchObject({ risk: "risky", tier: "T3", key: "officecli", alwaysPrompt: false });
+    }
+    // unchanged: an unknown PROGRAM is still T3 too (the table must not have widened the safe set)
+    expect(classifyCommand("unknownbinary --flag").tier).toBe("T3");
+  });
+
+  test("a leading flag before the subcommand still resolves it", () => {
+    expect(classifyCommand("officecli --json view report.docx").tier).toBe("T0");
+  });
+
+  test("argv0 path + case are normalized, as for every other program", () => {
+    expect(classifyCommand("/usr/local/bin/OfficeCLI view report.docx").risk).toBe("safe");
+  });
+
+  test("regression: a COMPOUND command containing officecli is still compound/T3, un-pinnable", () => {
+    for (const cmd of [
+      "officecli view report.docx | grep Heading",
+      "officecli create a.docx && officecli add a.docx / --type paragraph",
+      "officecli view report.docx > out.html",
+      "officecli view report.docx; rm report.docx",
+    ]) {
+      const c = classifyCommand(cmd);
+      expect(c.risk).toBe("risky");
+      expect(c.tier).toBe("T3");
+      expect(c.key).toBeNull();
+      expect(c.alwaysPrompt).toBe(false);
+      expect(c.reason).toBe("compound or redirecting command");
+    }
+  });
+
+  test("regression: a CATASTROPHIC pattern still wins over the officecli table", () => {
+    const c = classifyCommand("sudo officecli install");
+    expect(c).toMatchObject({ risk: "risky", tier: "T4", alwaysPrompt: true });
+  });
+});
+
 describe("loopVerdict — every tier × every dial (T4 always blocks)", () => {
   const tiers: RiskTier[] = ["T0", "T1", "T2", "T3", "T4"];
   const order: Record<RiskTier, number> = { T0: 0, T1: 1, T2: 2, T3: 3, T4: 4 };
@@ -261,5 +342,79 @@ describe("elicitationApproval (omp form-elicitation approve/deny)", () => {
   test("fail-safe on junk input (non-strings, non-array)", () => {
     expect(elicitationApproval([1, null, {}, "Deny"] as unknown[])).toBeNull();
     expect(elicitationApproval([1, "Approve"] as unknown[])).toBe("Approve");
+  });
+});
+
+// P-FLEET.L15 (ADR-0338): the WIRE SHAPE, pinned. A fleet lane hand-rolled this and guessed both halves
+// wrong, which denied every bash and eval call for as long as it shipped, with no prompt shown to anyone.
+// These tests exist so the shape is documented by assertion rather than by whoever reads omp's source next.
+describe("elicitationOptions (where omp actually puts the choices)", () => {
+  const real = (...vals: string[]) => ({ requestedSchema: { properties: { value: { enum: vals } } } });
+
+  test("reads the JSON-Schema enum, which is the ONE place omp puts them", () => {
+    expect(elicitationOptions(real("Approve", "Deny"))).toEqual(["Approve", "Deny"]);
+  });
+
+  test("THE BUG: the two shapes the lane guessed yield NOTHING", () => {
+    // `params.options` is the shape of the OUTER session/request_permission request, a different message
+    // with a different schema. `params.schema.options` does not exist anywhere. Reading either gave [],
+    // which silently became a decline.
+    expect(elicitationOptions({ options: ["Approve", "Deny"] })).toEqual([]);
+    expect(elicitationOptions({ schema: { options: ["Approve", "Deny"] } })).toEqual([]);
+    expect(elicitationOptions({ options: [{ value: "approve", label: "Approve" }] })).toEqual([]);
+  });
+
+  test("non-string entries are dropped, not coerced", () => {
+    expect(elicitationOptions(real())).toEqual([]);
+    expect(elicitationOptions({ requestedSchema: { properties: { value: { enum: [1, "Approve", null] } } } })).toEqual(["Approve"]);
+  });
+
+  test("every missing link in the path refuses instead of throwing", () => {
+    for (const bad of [
+      null, undefined, 0, "", [], true,
+      {}, { requestedSchema: null }, { requestedSchema: {} },
+      { requestedSchema: { properties: null } }, { requestedSchema: { properties: {} } },
+      { requestedSchema: { properties: { value: null } } },
+      { requestedSchema: { properties: { value: {} } } },
+      { requestedSchema: { properties: { value: { enum: "Approve" } } } },
+    ]) {
+      expect(elicitationOptions(bad)).toEqual([]);
+    }
+  });
+});
+
+describe("elicitationAnswer (the response shape omp requires)", () => {
+  const real = (...vals: string[]) => ({ requestedSchema: { properties: { value: { enum: vals } } } });
+
+  test("an approval form is ACCEPTED with the chosen value nested under content", () => {
+    // A bare `{ value }` or a `{}` is read by omp as "denied by user" with no prompt anywhere. The nesting
+    // is the difference between a lane that runs commands and a lane that cannot.
+    expect(elicitationAnswer(real("Approve", "Deny"))).toEqual({ action: "accept", content: { value: "Approve" } });
+  });
+
+  test("a form with no affirmative option DECLINES rather than synthesizing an answer", () => {
+    // A custom question is not an approval, so we do not invent a choice for the user.
+    expect(elicitationAnswer(real("Red", "Green"))).toEqual({ action: "decline" });
+    expect(elicitationAnswer(real("Deny"))).toEqual({ action: "decline" });
+  });
+
+  test("THE BUG, end to end: the shape the lane used to receive now still declines cleanly", () => {
+    // Proves the failure was in the READ, not in omp: fed the lane's guessed shape, the shared answerer
+    // declines explicitly (a valid ACP response) rather than returning `{}` (which omp treats as denial
+    // but which is also not a well-formed answer).
+    expect(elicitationAnswer({ options: ["Approve", "Deny"] })).toEqual({ action: "decline" });
+  });
+
+  test("garbage declines, never throws and never accepts", () => {
+    for (const bad of [null, undefined, 0, "", [], true, {}]) {
+      expect(elicitationAnswer(bad)).toEqual({ action: "decline" });
+    }
+  });
+
+  test("the accepted value is one of the offered options, never a fabricated string", () => {
+    const offered = ["Approve and run", "Deny"];
+    const a = elicitationAnswer(real(...offered));
+    expect(a.action).toBe("accept");
+    expect(offered).toContain(a.content?.value);
   });
 });

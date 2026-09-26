@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/guest.ts — P-COLLAB.4 (ADR-0192): the read-only GUEST.
+// desktop/collab/guest.ts - P-COLLAB.4 (ADR-0192): the read-only GUEST.
 //
 // The guest joins a shared room and renders the host's live session. It is the mirror of CollabHost and, like
 // it, transport-agnostic: it drives a `GuestTransport` (the real `CollabSocket`, or a mock in tests), so the
@@ -25,7 +25,12 @@ import type {
   LucidCollabFrame,
   WelcomeFrame,
 } from "./frames.ts";
-import { COLLAB_PROTOCOL_VERSION, isHostFrame } from "./frames.ts";
+import { COLLAB_PROTOCOL_VERSION, isHostFrame, validPromptAudio, validSttSource } from "./frames.ts";
+import type { PromptAudio, SttSource } from "./frames.ts";
+
+/** P-REMOTE.14: the strictest posture, and the DEFAULT until a host frame says otherwise. Shared + frozen:
+ *  every fail-closed path returns this exact object, so no caller can loosen it by mutation. */
+const STRICT_POSTURE: { cui: boolean; lockdown: boolean } = Object.freeze({ cui: true, lockdown: true });
 
 /** The slice of {@link CollabSocket} the guest needs - so a mock transport can stand in for tests. */
 export interface GuestTransport {
@@ -59,6 +64,13 @@ export interface GuestCallbacks {
   onWelcome?: (w: WelcomeFrame) => void;
   /** A live session event to render read-only, in order. */
   onEvent?: (e: ChatEvent) => void;
+  /** P-PWA-FOCUS.1: a live event belonging to a FLEET LANE's conversation, arriving only for the lane this
+   *  guest asked to watch. Separate from `onEvent` so an app cannot accidentally fold a lane's tokens into
+   *  the master transcript: the lane id is not optional here. */
+  onLaneEvent?: (laneId: string, e: ChatEvent) => void;
+  /** P-PWA-FOCUS.1: the replay for a lane the guest just started watching, so switching to a lane that has
+   *  been working for a while shows what it already said rather than an empty conversation. */
+  onLaneSync?: (laneId: string, transcript: CollabTranscriptTurn[]) => void;
   /** Roster / model / context changed. */
   onState?: (participants: CollabParticipant[], model: string, contextPct: number | null) => void;
   /** The share ended (host stopped, room closed, or a fatal socket close). */
@@ -92,10 +104,16 @@ export class CollabGuest {
   #model = "";
   #contextPct: number | null = null;
   #readOnly = true;
+  // P-REMOTE.14: the host's CUI + lockdown stance, learned from `welcome`/`state`. Starts STRICT so a phone
+  // never offers cloud speech-to-text in the window before the first frame lands (fail-closed).
+  #posture: { cui: boolean; lockdown: boolean } = STRICT_POSTURE;
   #options: CollabOptions | null = null;
   #note: string | null = null;
   #reconnecting = false; // P-REMOTE.8: a transient "connection lost - retrying" note is in #note; cleared on recovery
   #ended = false;
+  // P-PWA-FOCUS.1: the conversation this guest is looking at. "master" is the default and the pre-focus
+  // behaviour; a lane id means the host is also streaming that lane to us.
+  #watching = "master";
 
   constructor(transport: GuestTransport, opts: GuestStartOpts, cb: GuestCallbacks = {}) {
     this.#transport = transport;
@@ -122,14 +140,36 @@ export class CollabGuest {
   /** P-COLLAB.12: drive the host's session (EDIT access only - the host still gates every tool call). Returns
    *  false without sending when read-only or ended. The prompt runs on the HOST through its fail-closed gate.
    *  P-REMOTE.8: `images` (validated image data URLs) ride along as vision input; an image-only message (empty
-   *  text) is allowed when at least one image is attached. */
-  sendPrompt(text: string, images?: string[]): boolean {
+   *  text) is allowed when at least one image is attached.
+   *  P-REMOTE.12: `audio` is a push-to-talk clip the HOST transcribes; an audio-only message is allowed.
+   *  Invalid/oversized audio is dropped HERE (fail-closed) - it never leaves the phone.
+   *  P-REMOTE.14: `sttSource` declares where the text was transcribed (device_stt_policy.ts decides which).
+   *  An unrecognized value is DROPPED rather than forwarded, so the host only ever sees a known claim. */
+  sendPrompt(text: string, images?: string[], audio?: PromptAudio, sttSource?: SttSource): boolean {
     if (this.#ended || this.#readOnly) return false;
     const imgs = Array.isArray(images) ? images.filter((s) => typeof s === "string" && s) : [];
-    if (!text.trim() && imgs.length === 0) return false;
-    this.#transport.send({ t: "prompt", text, ...(imgs.length ? { images: imgs } : {}) }, 0); // 0 = the host
+    const clip = validPromptAudio(audio) ? audio : undefined;
+    const src = validSttSource(sttSource) ? sttSource : undefined;
+    if (!text.trim() && imgs.length === 0 && !clip) return false;
+    this.#transport.send({ t: "prompt", text, ...(imgs.length ? { images: imgs } : {}), ...(clip ? { audio: clip } : {}), ...(src ? { sttSource: src } : {}) }, 0); // 0 = the host
     return true;
   }
+
+  /** P-PWA-FOCUS.1: declare which conversation this guest is LOOKING at, so the host streams that one and no
+   *  other. `target` is "master" (or "") for the master session, else a lane id. Watching is READ-ONLY, so
+   *  unlike every other method here it is NOT gated on edit access: a view guest may look at a lane, it just
+   *  cannot drive it. Idempotent-safe to call on every focus change; the host answers a lane watch with a
+   *  `lane-sync` replay. Returns false only when the session has ended. */
+  watch(target: string): boolean {
+    if (this.#ended) return false;
+    this.#watching = target && target !== "master" ? target : "master";
+    this.#transport.send({ t: "watch", target: this.#watching }, 0);
+    return true;
+  }
+
+  /** P-PWA-FOCUS.1: the conversation this guest last asked to watch ("master" until it asks otherwise).
+   *  Re-sent after a reconnect, because the host's per-peer subscription does not survive a new peer id. */
+  watching(): string { return this.#watching; }
 
   /** P-COLLAB.12: stop the host's in-flight turn (EDIT access only). */
   abort(): boolean {
@@ -158,7 +198,42 @@ export class CollabGuest {
     return true;
   }
 
+  /** P-PWA-FLEET.1: prompt a fleet LANE on the host (EDIT access only - a view guest cannot steer). The
+   *  host wiring runs it through the lane's own gate and queues it when the lane is mid-turn. */
+  fleetPrompt(laneId: string, text: string): boolean {
+    if (this.#ended || this.#readOnly || !laneId || !text.trim()) return false;
+    this.#transport.send({ t: "fleet-prompt", laneId, text }, 0);
+    return true;
+  }
+
+  /** P-PWA-FLEET.1: stop a fleet lane (EDIT access only). */
+  fleetStop(laneId: string): boolean {
+    if (this.#ended || this.#readOnly || !laneId) return false;
+    this.#transport.send({ t: "fleet-stop", laneId }, 0);
+    return true;
+  }
+
+  /** P-PWA-FLEET.1: answer a lane's pending approval (EDIT access only). `scope` "session" also remembers
+   *  the ask's kind for the lane's lifetime; the host re-validates scope + edit rights fail-closed. */
+  fleetAnswer(laneId: string, allow: boolean, scope?: "once" | "session"): boolean {
+    if (this.#ended || this.#readOnly || !laneId) return false;
+    this.#transport.send({ t: "fleet-answer", laneId, allow, ...(scope ? { scope } : {}) }, 0);
+    return true;
+  }
+
+  /** P-PWA-FLEET.1: inject a mid-turn operator note into "master" or a laneId (EDIT access only - steering
+   *  the agent is a write, so a view-only guest is refused here AND host-side). */
+  interject(target: string, text: string): boolean {
+    if (this.#ended || this.#readOnly || !target || !text.trim()) return false;
+    this.#transport.send({ t: "interject", target, text }, 0);
+    return true;
+  }
+
   get readOnly(): boolean { return this.#readOnly; }
+
+  /** P-REMOTE.14: the host's CUI + lockdown stance, for `decideSttMode`. Strict until a host frame proves
+   *  otherwise, so the phone's first decision is always the safe one. */
+  posture(): { cui: boolean; lockdown: boolean } { return this.#posture; }
 
   view(): GuestView {
     return {
@@ -183,6 +258,10 @@ export class CollabGuest {
       { t: "hello", protocol: COLLAB_PROTOCOL_VERSION, name: this.#name, ...(this.#writeTokenB64 ? { writeToken: this.#writeTokenB64 } : {}) },
       0, // to the host
     );
+    // P-PWA-FOCUS.1: the host keys its watch subscriptions by PEER ID, and a reconnect earns a new one, so a
+    // lane the user was watching before the drop must be re-declared or the phone would sit on a silent lane
+    // that looks alive. Cheap and idempotent, so it rides every hello rather than only the reconnecting ones.
+    if (this.#watching !== "master") this.#transport.send({ t: "watch", target: this.#watching }, 0);
   }
 
   #onFrame(frame: LucidCollabFrame): void {
@@ -196,6 +275,7 @@ export class CollabGuest {
         this.#participants = f.participants;
         this.#model = f.header.model;
         this.#readOnly = f.readOnly;
+        this.#posture = readPosture(f.posture); // P-REMOTE.14: strict unless the host says otherwise
         this.#phase = "live";
         this.#reconnecting = false; // P-REMOTE.8: a fresh sync means we recovered - drop any stale retry note
         this.#note = null;
@@ -205,6 +285,11 @@ export class CollabGuest {
       case "event":
         // P-REMOTE.8: live traffic proves the socket recovered - clear the stale "reconnecting" banner.
         if (this.#clearReconnectNote()) this.#emit();
+        // P-PWA-FOCUS.1: a LANE-scoped event belongs to that lane's conversation, so it is handed over with
+        // its lane id and NEVER folded into the master transcript or the master's context gauge. The host
+        // only sends these to a guest that asked to watch the lane, so an unrequested one is a host bug: it
+        // is still routed by lane rather than silently absorbed into the master stream.
+        if (f.lane) { this.#cb.onLaneEvent?.(f.lane, f.event); break; }
         this.#cb.onEvent?.(f.event);
         // fold done/usage so a late view() reflects the current state, mirroring the host
         if (f.event.type === "done" && typeof f.event.text === "string" && f.event.text.trim()) {
@@ -215,11 +300,17 @@ export class CollabGuest {
           this.#emit();
         }
         break;
+      case "lane-sync":
+        // P-PWA-FOCUS.1: the replay for a lane we just started watching. Kept OUT of #transcript (that is the
+        // master's) and handed to the app, which owns the per-target item lists.
+        this.#cb.onLaneSync?.(f.lane, Array.isArray(f.transcript) ? f.transcript : []);
+        break;
       case "state":
         this.#clearReconnectNote(); // P-REMOTE.8: recovered - the emit below repaints the status
         this.#participants = f.participants;
         this.#model = f.model;
         this.#contextPct = f.contextPct;
+        this.#posture = readPosture(f.posture); // P-REMOTE.14: a mode flip re-decides device STT on the next record
         this.#cb.onState?.(f.participants, f.model, f.contextPct);
         this.#emit();
         break;
@@ -285,4 +376,14 @@ function b64url(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** P-REMOTE.14 fail-closed posture read: only an EXPLICIT `false` relaxes a half of the guarantee, so a
+ *  missing field, a malformed frame, or an older host that knows nothing about posture all resolve to the
+ *  strictest stance rather than to a cloud transcriber. */
+function readPosture(p: unknown): { cui: boolean; lockdown: boolean } {
+  if (!p || typeof p !== "object") return STRICT_POSTURE;
+  const { cui, lockdown } = p as { cui?: unknown; lockdown?: unknown };
+  if (cui !== false && lockdown !== false) return STRICT_POSTURE;
+  return { cui: cui !== false, lockdown: lockdown !== false };
 }

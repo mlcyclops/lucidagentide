@@ -1,10 +1,11 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/local_providers_ui.test.ts — P-LOCAL.3 (ADR-0135): the Settings → Local Providers card.
+// desktop/renderer/local_providers_ui.test.ts - P-LOCAL.3 (ADR-0135): the Settings Local Providers card.
 
 import { test, expect, describe } from "bun:test";
-import { localProvidersCardBody, providerStatus, draftFromForm } from "./local_providers_ui.ts";
+import { localProvidersCardBody, providerStatus, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts";
+import { enrichModelFromCatalog } from "./local_presets.ts";
 import type { LocalProviderDef } from "../local_providers.ts";
 
 function def(over: Partial<LocalProviderDef> = {}): LocalProviderDef {
@@ -26,7 +27,7 @@ describe("card body", () => {
     expect(h).toContain('id="lpAuth"');
     expect(h).toContain('id="lpKey"');
     expect(h).toContain("data-lp-add");
-    // the add form is its own accordion (collapsed by default — no `open` class on .lp-add)
+    // the add form is its own accordion (collapsed by default, so no `open` class on .lp-add)
     expect(h).toContain("data-lp-addtoggle");
     expect(h).toContain("lp-add-body");
     expect(h).not.toContain('class="lp-add open"');
@@ -103,4 +104,76 @@ describe("draftFromForm", () => {
   test("a name that would shadow a built-in vendor is refused (validation)", () => {
     expect(draftFromForm({ name: "OpenAI", baseUrl: "http://h/v1", auth: "none", models: "m" }, now).errors.join()).toContain("reserved");
   });
+});
+
+// ── P-LOCAL.6: endpoint discovery ────────────────────────────────────────────────────────────────
+
+describe("enrichModelFromCatalog", () => {
+  test("the SERVER wins on context window; the catalog supplies what /models cannot say", () => {
+    // The endpoint reported 65536 for a model the catalog seeds at 524288. The server is right:
+    // it is the one that loaded the weights, and a too-large window silently truncates at run time.
+    const m = enrichModelFromCatalog({ id: "zai-org/GLM-5.3-Flash-FP8", contextWindow: 65536 });
+    expect(m.contextWindow).toBe(65536);
+    expect(m.reasoning).toBe(true);
+    expect(m.compat?.thinkingFormat).toBe("qwen-chat-template");
+    expect(m.id).toBe("zai-org/GLM-5.3-Flash-FP8"); // the WIRE id is never rewritten
+  });
+
+  test("falls back to the catalog's window only when the server reported none", () => {
+    // 524288 since P-LOCAL.7, which replaced P-LOCAL.5's editorial 131072 with the value read
+    // authenticated off the live head (`max_model_len=524288`). The fallback exists precisely for
+    // the case that blocked that measurement for a whole increment: a keyed endpoint whose
+    // unauthenticated /v1/models answers 401, so the server reports no window at all.
+    expect(enrichModelFromCatalog({ id: "glm-5.3-flash" }).contextWindow).toBe(524288);
+  });
+
+  test("an id matching no preset gets only its own facts", () => {
+    expect(enrichModelFromCatalog({ id: "bespoke-merge-v9", contextWindow: 4096 }))
+      .toEqual({ id: "bespoke-merge-v9", name: "bespoke-merge-v9", contextWindow: 4096 });
+    expect(enrichModelFromCatalog({ id: "bespoke-merge-v9" }).reasoning).toBeUndefined();
+  });
+});
+
+describe("providerWithDiscovered", () => {
+  const now = 1_800_000_000_000;
+
+  test("replaces the saved list with what the endpoint serves, reporting both directions", () => {
+    const r = providerWithDiscovered(def(), [{ id: "glm-5.3-flash", contextWindow: 131072 }, { id: "gemma-4" }], now);
+    expect(r.def.models.map((m) => m.id)).toEqual(["glm-5.3-flash", "gemma-4"]);
+    expect(r.added).toEqual(["glm-5.3-flash", "gemma-4"]);
+    expect(r.removed).toEqual(["llama-3.1-70b"]); // the endpoint no longer serves it
+    expect(r.def.updatedAt).toBe(now);
+  });
+
+  test("enriches each discovered model on the way in, so compat reaches the saved def", () => {
+    const r = providerWithDiscovered(def(), [{ id: "glm-5.3-flash", contextWindow: 65536 }], now);
+    expect(r.def.models[0]!.compat?.reasoningContentField).toBe("reasoning");
+    expect(r.def.models[0]!.contextWindow).toBe(65536);
+  });
+
+  test("an empty answer leaves the provider EXACTLY as it was, never wiping it", () => {
+    const original = def();
+    const r = providerWithDiscovered(original, [], now);
+    expect(r.def).toBe(original); // same object: nothing to save, nothing to lose
+    expect(r.added).toEqual([]);
+    expect(r.removed).toEqual([]);
+  });
+
+  test("re-discovering an unchanged endpoint reports no additions or removals", () => {
+    const r = providerWithDiscovered(def(), [{ id: "llama-3.1-70b" }], now);
+    expect(r.added).toEqual([]);
+    expect(r.removed).toEqual([]);
+  });
+});
+
+test("modelsFieldValue writes the ids back in the form's own format", () => {
+  expect(modelsFieldValue([{ id: "a" }, { id: "b", contextWindow: 9 }])).toBe("a, b");
+  expect(modelsFieldValue([])).toBe("");
+});
+
+test("the card offers discovery in the add form and on every saved row", () => {
+  const h = localProvidersCardBody([def()], new Set(["lpkey_lp_dgx"]), true);
+  expect(h).toContain("data-lp-discover-form");
+  expect(h).toContain("data-lp-discover");
+  expect(localProvidersCardBody([], new Set(), true)).toContain("data-lp-discover-form");
 });

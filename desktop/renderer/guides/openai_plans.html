@@ -1,0 +1,257 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC
+     SPDX-License-Identifier: BUSL-1.1 -->
+<!-- desktop/renderer/guides/openai_plans.html - the in-app OpenAI plan advisor. Opened from the
+     OpenAI - ChatGPT provider card in Settings into the Preview panel (Yours lane). Fully self-contained:
+     the preview frame is sandboxed with NO network and NO app stylesheet, so every byte lives inline.
+     House rules apply: lucid-dark palette, block-paragraph prose (never prose inside flex), one-line
+     ellipsizing labels, and no em dashes anywhere. Prices verified September 2026; the sources section
+     at the bottom names where each number came from. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenAI and ChatGPT plans: a LUCID field guide</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-elev:#12151f;
+    --line:#252a3a; --line-soft:#1a1e2a;
+    --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90;
+    --accent:#c64bd6; --accent-2:#e07bf0; --cyan:#46c8dc; --green:#46d27e; --amber:#e8b23c;
+    --red:#ef5f5f; --violet:#8b5cf6;
+    --green-txt:#8ee8ad; --amber-txt:#f3cf7a; --red-txt:#ffb0b0; --cyan-txt:#8fe0ee; --violet-txt:#e9ddff;
+    --r-lg:12px; --r-md:9px; --r-sm:6px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg-0);color:var(--txt);
+    font:14px/1.55 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 22px 64px}
+  header{padding:26px 0 18px;border-bottom:1px solid var(--line)}
+  .brand{font-size:11px;letter-spacing:.22em;color:var(--accent-2);text-transform:uppercase;font-weight:700}
+  h1{margin:8px 0 6px;font-size:26px;line-height:1.25;letter-spacing:-.01em}
+  .sub{color:var(--txt-2);margin:0;max-width:64ch}
+  .stamp{margin-top:10px;color:var(--txt-3);font-size:12px}
+  h2{font-size:18px;margin:40px 0 4px;letter-spacing:-.01em}
+  h2 .no{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  h3{font-size:14.5px;margin:20px 0 6px;color:var(--accent-2)}
+  p{margin:8px 0;color:var(--txt-2);max-width:72ch}
+  p b,li b{color:var(--txt)}
+  a{color:var(--cyan);text-decoration:none;word-break:break-all}
+  ul{margin:6px 0 10px;padding-left:20px;color:var(--txt-2)}
+  li{margin:4px 0}
+  code{background:var(--bg-2);border:1px solid var(--line-soft);border-radius:4px;
+    padding:1px 5px;font:12px ui-monospace,Consolas,monospace;color:var(--cyan-txt);white-space:nowrap}
+  /* callouts: block paragraphs with a colored spine, NEVER flex around prose */
+  .note{border-left:3px solid var(--cyan);background:var(--bg-1);border-radius:0 var(--r-md) var(--r-md) 0;
+    padding:10px 14px;margin:14px 0}
+  .note.good{border-left-color:var(--green)}
+  .note.warn{border-left-color:var(--amber)}
+  .note.bad{border-left-color:var(--red)}
+  .note p{margin:4px 0}
+  .note .t{font-weight:700;color:var(--txt);font-size:13px;letter-spacing:.02em}
+  .note.good .t{color:var(--green-txt)} .note.warn .t{color:var(--amber-txt)} .note.bad .t{color:var(--red-txt)}
+  /* tables: generous columns, first column never wraps mid-word */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th{color:var(--txt-3);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em;text-align:left}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px;font-weight:600;color:var(--txt)}
+  td{color:var(--txt-2)}
+  .price{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 18px;margin:14px 0}
+  /* status chips: single-purpose atoms, each chip is one element so flex is safe here */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+  .chip{white-space:nowrap;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2)}
+  .chip.ok{color:var(--green-txt);border-color:rgb(70 210 126 / .35);background:rgb(70 210 126 / .08)}
+  .chip.dead{color:var(--red-txt);border-color:rgb(239 95 95 / .35);background:rgb(239 95 95 / .08);text-decoration:line-through}
+  .chip.warn{color:var(--amber-txt);border-color:rgb(232 178 60 / .35);background:rgb(232 178 60 / .08)}
+  .chip.info{color:var(--cyan-txt);border-color:rgb(70 200 220 / .35);background:rgb(70 200 220 / .08)}
+  /* timeline: spine + block entries */
+  .tl{border-left:2px solid var(--line);margin:16px 0 6px 6px;padding-left:18px}
+  .tl-item{position:relative;margin:0 0 16px}
+  .tl-item::before{content:"";position:absolute;left:-24px;top:5px;width:9px;height:9px;border-radius:50%;
+    background:var(--bg-3);border:2px solid var(--accent)}
+  .tl-item.break::before{border-color:var(--red)}
+  .tl-date{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--txt-3);text-transform:uppercase}
+  .tl-item p{margin:2px 0 0}
+  /* verdict ribbon */
+  .verdict{background:linear-gradient(135deg,rgb(139 92 246 / .12),rgb(198 75 214 / .10));
+    border:1px solid rgb(139 92 246 / .4);border-radius:var(--r-lg);padding:16px 18px;margin:18px 0}
+  .verdict .t{color:var(--violet-txt);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+  .verdict p{color:var(--txt)}
+  .toc{margin:16px 0 0;padding:0;list-style:none;column-count:2;column-gap:24px}
+  .toc li{margin:3px 0;break-inside:avoid}
+  .toc a{color:var(--txt-2)}
+  .toc a:hover{color:var(--accent-2)}
+  .toc .no{color:var(--accent);margin-right:6px;font-variant-numeric:tabular-nums}
+  .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--txt-3);font-size:12px}
+  @media (max-width:640px){ .toc{column-count:1} td:first-child{max-width:160px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">LUCID Agent IDE · Advisor Guide</div>
+  <h1>OpenAI and ChatGPT plans, decoded</h1>
+  <p class="sub">Eight tiers from $0 to custom enterprise contracts, two ways to wire them into LUCID,
+    and a model line that went from GPT-5 to GPT-6 Astra in thirteen months. Here is what each dollar buys.</p>
+  <p class="stamp">Prices and policies verified September 2026. OpenAI reshuffles tiers often; the sources at
+    the bottom are the places to re-check.</p>
+  <ul class="toc">
+    <li><span class="no">1</span><a href="#now">Do this in LUCID right now</a></li>
+    <li><span class="no">2</span><a href="#plans">The plan ladder, all eight rungs</a></li>
+    <li><span class="no">3</span><a href="#models">Model history: GPT-5 to GPT-6 Astra</a></li>
+    <li><span class="no">4</span><a href="#bench">Benchmarks, honestly</a></li>
+    <li><span class="no">5</span><a href="#who">Who each tier is for</a></li>
+    <li><span class="no">6</span><a href="#sources">Sources</a></li>
+  </ul>
+</header>
+
+<h2 id="now"><span class="no">1</span>Do this in LUCID right now</h2>
+<div class="verdict">
+  <div class="t">The short version</div>
+  <p>Two independent doors. The <b>Connect via OAuth</b> button on the OpenAI card signs in your
+     ChatGPT/Codex <b>subscription</b> and surfaces the models that plan covers. Pasting an
+     <b>OPENAI_API_KEY</b> instead unlocks the <b>full commercial catalog</b>, billed per token.
+     For coding agents, the sweet spot is <b>Pro Codex at $100/mo</b>; for a first taste, Plus at $20
+     or a pay-as-you-go key.</p>
+</div>
+
+<h3>Path A: subscription OAuth</h3>
+<p>In <b>Settings &gt; Providers &gt; OpenAI · ChatGPT</b>, click <b>Connect via OAuth</b> and sign in with
+   the account that holds your ChatGPT plan. LUCID then shows the models your subscription entitles you to,
+   the same set the Codex CLI would see. Usage draws down your plan's limits, not a separate API bill.</p>
+
+<h3>Path B: API key, full catalog</h3>
+<p>Create a key at <a href="https://platform.openai.com">platform.openai.com</a>, paste it into the
+   <code>OPENAI_API_KEY</code> box on the same card, and Save. Every commercially available OpenAI model
+   appears in the picker, including ones your ChatGPT tier does not include. Billing is per token against
+   your platform account. Both paths can coexist; the picker labels which door each model came through.</p>
+<div class="chips">
+  <span class="chip ok">OAuth: subscription models</span>
+  <span class="chip ok">API key: full catalog</span>
+  <span class="chip info">Both can be connected at once</span>
+</div>
+
+<h2 id="plans"><span class="no">2</span>The plan ladder, all eight rungs</h2>
+<p>OpenAI now sells five consumer tiers and three team-and-up tiers. The consumer ladder runs on one account;
+   the seat tiers are bought per user by an org admin.</p>
+<table>
+  <tr><th>Plan</th><th>Price (Sep 2026)</th><th>What it buys</th></tr>
+  <tr><td>Free</td><td class="price">$0</td>
+      <td>The entry chat experience with tight usage caps. Enough to evaluate, not enough to work.</td></tr>
+  <tr><td>Go</td><td class="price">$8/mo</td>
+      <td>The budget rung. More usage than Free, but it <b>shows ads</b>.</td></tr>
+  <tr><td>Plus</td><td class="price">$20/mo</td>
+      <td>The first <b>ad-free</b> tier and the classic default: mainstream model access and reasonable
+          daily limits for one person.</td></tr>
+  <tr><td>Pro Codex</td><td class="price">$100/mo</td>
+      <td>The coding-agent tier, restructured Apr 9, 2026: full <b>GPT-5.5 Pro</b>, elevated
+          <b>Codex CLI and Codex Cloud</b> limits, and <b>125 Deep Research runs per month</b>.</td></tr>
+  <tr><td>Pro</td><td class="price">$200/mo</td>
+      <td>Max usage across research and coding. The everything tier for people who hit every other cap.</td></tr>
+  <tr><td>Business</td><td class="price">$20/user annual, $25 monthly</td>
+      <td>Minimum 2 seats, workspace admin, shared billing. Price dropped to these numbers Apr 2, 2026.</td></tr>
+  <tr><td>Business Premium seat</td><td class="price">$100 annual, $125 monthly</td>
+      <td>Added Aug 2026: a per-seat upgrade with <b>5x usage</b> that <b>removes the 5-hour cap</b> for
+          the heaviest users on a Business workspace.</td></tr>
+  <tr><td>Enterprise</td><td class="price">custom</td>
+      <td>Data residency, retention controls, 24/7 support, contract terms. Talk to sales.</td></tr>
+</table>
+<div class="note warn">
+  <p class="t">Go shows ads</p>
+  <p>The $8 Go tier is subsidized by advertising inside the chat experience. If that bothers you or your
+     compliance team, the ad-free ladder starts at Plus, $20/mo.</p>
+</div>
+
+<h2 id="models"><span class="no">3</span>Model history: GPT-5 to GPT-6 Astra</h2>
+<p>Thirteen months, six releases. The pattern: a flagship, then coding and reasoning specialists, then a
+   family split by speed and cost, then the next flagship at a higher price.</p>
+<div class="tl">
+  <div class="tl-item"><div class="tl-date">Aug 2025</div>
+    <p><b>GPT-5</b> launches, posting 74.9% on SWE-bench Verified at release. The baseline the whole
+       5.x line iterates on.</p></div>
+  <div class="tl-item"><div class="tl-date">Feb 5, 2026</div>
+    <p><b>GPT-5.3-Codex</b>: a coding agent specialist tuned for the Codex CLI and long tool-use
+       sessions rather than chat.</p></div>
+  <div class="tl-item"><div class="tl-date">Mar 5, 2026</div>
+    <p><b>GPT-5.4</b>: tops Scale's standardized SWE-bench Pro public set at <b>59.1%</b> (xHigh
+       effort). Still the vendor's best score on that harness as of September 2026.</p></div>
+  <div class="tl-item"><div class="tl-date">Apr 23, 2026</div>
+    <p><b>GPT-5.5</b>: built for long-horizon agentic work. Its Pro variant is the headline model of
+       the $100 Pro Codex tier.</p></div>
+  <div class="tl-item"><div class="tl-date">Jul 9, 2026</div>
+    <p><b>GPT-5.6 family</b>: three models, three jobs. <b>Sol</b> for reasoning at $4/$20 per 1M
+       tokens, <b>Terra</b> balanced, <b>Luna</b> fast and cheap.</p></div>
+  <div class="tl-item break"><div class="tl-date">Sep 3, 2026</div>
+    <p><b>GPT-6 Astra</b>: 1M-token context, API pricing $10 in / $50 out per 1M with cached input at
+       $1, roughly 2.5x the GPT-5.6 Sol price. The launch version is restricted on some cybersecurity
+       prompts, so security tooling workflows should test before committing.</p></div>
+</div>
+
+<h2 id="bench"><span class="no">4</span>Benchmarks, honestly</h2>
+<div class="note warn">
+  <p class="t">Two leaderboards, two very different numbers</p>
+  <p><b>SWE-bench Verified</b> figures (like GPT-5's 74.9% at launch) are largely <b>self-reported</b> by
+     vendors, each running their own scaffolding. Scale's <b>standardized SWE-bench Pro</b> harness runs the
+     same setup for everyone and scores every vendor much lower; on its public set, <b>GPT-5.4 leads at
+     59.1%</b>. Compare models within one harness, never across the two, and treat vendor launch numbers
+     as marketing until a standardized run confirms them.</p>
+</div>
+
+<h2 id="who"><span class="no">5</span>Who each tier is for</h2>
+<table>
+  <tr><th>You are</th><th>Buy</th><th>Why</th></tr>
+  <tr><td>Just evaluating</td><td class="price">Free or Go $8</td>
+      <td>Kick the tires. Move up the day a usage cap interrupts real work; Go's ads make it a poor
+          fit for client-facing screens.</td></tr>
+  <tr><td>Solo, light daily use</td><td class="price">Plus $20</td>
+      <td>Ad-free, mainstream models, and the OAuth door into LUCID. The default first paid rung.</td></tr>
+  <tr><td>Coding agents daily</td><td class="price">Pro Codex $100</td>
+      <td>GPT-5.5 Pro plus elevated Codex CLI/Cloud limits is exactly the workload LUCID drives. 125 Deep
+          Research runs a month covers the research side too.</td></tr>
+  <tr><td>Hitting every cap</td><td class="price">Pro $200</td>
+      <td>Max usage across research and coding. Buy it when Pro Codex limits interrupt you, not before.</td></tr>
+  <tr><td>A team of 2+</td><td class="price">Business $20 to $25/user</td>
+      <td>Shared workspace and billing; add <b>Premium seats</b> ($100 annual, $125 monthly) only for the
+          few people who genuinely need 5x usage with no 5-hour cap.</td></tr>
+  <tr><td>Compliance-bound org</td><td class="price">Enterprise (custom)</td>
+      <td>Data residency and retention terms live here. If Azure is already your house cloud, also read
+          the Azure OpenAI guide: same models, your tenant, per-token billing.</td></tr>
+  <tr><td>Usage too spiky for seats</td><td class="price">API key, per token</td>
+      <td>Skip subscriptions entirely: <code>OPENAI_API_KEY</code> in LUCID, pay for exactly the tokens
+          your agents burn.</td></tr>
+</table>
+<div class="note good">
+  <p class="t">The LUCID rule of thumb</p>
+  <p>Subscription OAuth when your usage is steady and fits one tier's limits; API key when it is spiky,
+     when you need a model your tier lacks, or when you want one bill across several tools.</p>
+</div>
+
+<h2 id="sources"><span class="no">6</span>Sources</h2>
+<ul>
+  <li>Official plan pricing:
+      <a href="https://openai.com/chatgpt/pricing">openai.com/chatgpt/pricing</a></li>
+  <li>Plan-by-plan comparison:
+      <a href="https://intuitionlabs.ai/articles/chatgpt-plans-comparison">intuitionlabs.ai/articles/chatgpt-plans-comparison</a></li>
+  <li>Pricing history and tier changes:
+      <a href="https://gradually.ai/en/chatgpt-pricing">gradually.ai/en/chatgpt-pricing</a></li>
+  <li>GPT-6 Astra release details:
+      <a href="https://en.wikipedia.org/wiki/GPT-6_Astra">en.wikipedia.org/wiki/GPT-6_Astra</a></li>
+  <li>GPT-5 line background:
+      <a href="https://aimultiple.com/gpt-5">aimultiple.com/gpt-5</a></li>
+  <li>Standardized SWE-bench Pro leaderboard:
+      <a href="https://labs.scale.com/leaderboard/swe_bench_pro_public">labs.scale.com/leaderboard/swe_bench_pro_public</a></li>
+</ul>
+
+<div class="foot">
+  Generated for LUCID Agent IDE · TechLead 187 LLC · Prices are point-in-time (September 2026) and change
+  without notice. Links do not open inside this sandboxed preview; copy them into your browser.
+</div>
+
+</div>
+</body>
+</html>

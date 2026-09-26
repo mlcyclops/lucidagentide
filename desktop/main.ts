@@ -10,20 +10,91 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, shell } from "electron";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
-import { ensureRuntimes, findBun, needsBootstrap } from "./runtime.ts";
+import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtime.ts";
+import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
 import { createSplash, setSplashStatus } from "./splash.ts";
 import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: the Meeting Hub pairing bearer's vault ref
+import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDirWritable, type WriteProbe } from "./engine_boot.ts";
+import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
+import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
+import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
+import { classifyPortHolder, orphanDialog, reapSpec } from "./orphan_engine.ts"; // P-PORTGUARD.3 (ADR-0382): reap our own orphan, after a warning
+import { assessPreviousRun, freshLedger, markClean, readLedgerText, runLedgerPath, withEngine, writeLedger, type PreviousRun, type RunLedger } from "./run_ledger.ts"; // P-RECOVER.1 (ADR-0385)
+import { engineRecordFromProbe, listProcesses, planLeftovers, roleOf, stopProcesses, strictDescendants, type EngineVerdict, type ProcRow } from "./leftover_reaper.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import { logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385): one line-aligned tail reader
+import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_report.ts";
+import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
 import type { AuthKind } from "./network_whitelist.ts";
+import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
+import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
+import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrowserPageShape, settleJs, targetJs, type BrowserAction, type BrowserFreshness } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the Jev policy's page scripts
+import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
+import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
+import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
+import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
 
-const PORT = Number(process.env.LUCID_PORT ?? 5319);
+// CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
+// Order: an explicit env var (launcher / dev run), then the packaged package.json's `lucidBuildFlavor`
+// (electron-builder extraMetadata), then the standard Agent build. Renaming the app is what actually
+// separates the two products on disk (userData, the single-instance lock, and the Windows os_crypt key
+// all key on the app name), so it happens FIRST and only for the Creator flavor - the standard build's
+// paths must not move by a single byte.
+const packagedBuildFlavor = ((): string => {
+  try {
+    const meta = JSON.parse(readFileSync(join(app.getAppPath(), "package.json"), "utf8")) as { lucidBuildFlavor?: unknown };
+    return typeof meta.lucidBuildFlavor === "string" ? meta.lucidBuildFlavor : "";
+  } catch { return ""; }
+})();
+const BUILD = flavorInfo(resolveBuildFlavor(process.env, packagedBuildFlavor));
+if (BUILD.creatorBuild) {
+  app.setName(BUILD.productName);
+  if (process.platform === "win32") { try { app.setAppUserModelId(BUILD.appId); } catch { /* taskbar grouping only */ } }
+}
+
+const DEFAULT_PORT = BUILD.defaultPort;
+const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
+// A LUCID on a NON-DEFAULT port is a deliberately separate instance: LucidAgentIDE.bat rolls a free port
+// when 5319 is taken, precisely so a dev build can run beside an installed one. Electron's single-instance
+// lock (below, ADR-0206) is keyed on the userData directory and knows nothing about the port, so without
+// this the second launch hit the guard, quit, and merely FOCUSED the first window - making the control
+// panel's port-picking dead effort. Two instances can never share a port, so keying identity on the port
+// makes them never share a lock. The default-port instance keeps the canonical identity, so the lucid://
+// OAuth deep-link still re-focuses the primary app rather than spawning an engine.
+// Must run before requestSingleInstanceLock() and before anything resolves a userData path.
+const CANONICAL_USER_DATA = app.getPath("userData"); // the unsuffixed install identity - owns the one true safeStorage key
+if (PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${PORT}`);
+// safeStorage on Windows is Chromium os_crypt: its AES key lives in `<userData>/Local State`, so the
+// per-port userData above silently gave EVERY instance its own encryption key while the credential vault
+// (~/.omp/lucid-cred-vault) is global. A key stored on port A was undecryptable on port B: readCredential
+// failed closed, the Local Provider was skipped at engine spawn, and the model vanished from the picker
+// with the UI still saying "key in vault". Seed this instance's Local State from the canonical dir NOW -
+// before Chromium reads it at app-ready - so every instance shares the canonical key. macOS (Keychain)
+// and Linux (libsecret) key by app NAME and already share; this is win32-only. Best-effort: a failed
+// seed just means this instance mints its own key (the pre-fix behavior).
+const localStatePath = (dir: string): string => join(dir, "Local State");
+function readTextBestEffort(p: string): string { try { return readFileSync(p, "utf8"); } catch { return ""; } }
+if (process.platform === "win32" && PORT !== DEFAULT_PORT) {
+  try {
+    const instPath = localStatePath(app.getPath("userData"));
+    const seed = seedInstanceFromCanonical(readTextBestEffort(localStatePath(CANONICAL_USER_DATA)), readTextBestEffort(instPath));
+    if (seed.changed && seed.content !== undefined) {
+      mkdirSync(app.getPath("userData"), { recursive: true });
+      writeFileSync(instPath, seed.content);
+    }
+  } catch (err) { console.error("[main] os_crypt seed failed (instance will mint its own key):", err); }
+}
 let REPO = "";
 const preloadPath = () => join(app.getAppPath(), "dist", "preload.js");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -31,13 +102,22 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let win: BrowserWindow | null = null;
 let dev: ChildProcess | null = null;
 let runtimeEnv: Record<string, string> = {};
+// P-WINBOOT.1 (ADR-0259): the engine child's exit + a bounded tail of its output, so a boot failure is
+// diagnosed the instant it dies (see classifyEngineFailure) rather than after the full 30s health timeout.
+let engineExit: { code: number | null } | null = null;
+let engineTail = "";
+// P-PORTGUARD.1 (ADR-0305): what startDevServer actually spawned, so the foreign-port incident block
+// can name the EXPECTED engine next to the observed squatter.
+let engineDesc = "";
 
 // ── P-KGMARKET.4 (ADR-0206): lucid://auth deep link for hosted marketplace sign-in ──────────────────
 // After the user signs in on the hosted page, the browser redirects to lucid://auth?token=...; the OS hands
 // that URL to this app, which forwards it to the renderer (market_boot.handleAuthCallback). On Windows/Linux a
 // cold or second launch delivers it as an argv entry (caught by the single-instance handler); on macOS it
 // arrives via "open-url". A URL that lands before the window is ready is queued and flushed on did-finish-load.
-const AUTH_PROTOCOL = "lucid";
+// CREATOR-0: Creator claims `lucid-creator://`, NEVER `lucid://` - stealing the standard build's scheme
+// would hand it the OAuth callback for a sign-in the user started in the other app.
+const AUTH_PROTOCOL = BUILD.authProtocol;
 let pendingAuthUrl: string | null = null;
 const firstAuthUrl = (argv: string[]): string | null => argv.find((a) => a.startsWith(`${AUTH_PROTOCOL}://`)) ?? null;
 function forwardAuthUrl(url: string | null): void {
@@ -58,6 +138,279 @@ function openEngineLog(): ((d: unknown) => void) {
     return (d) => { try { s.write(d as Buffer); } catch { /* never block the engine */ } };
   } catch { return () => { }; }
 }
+const appendEngineLog = (line: string): void => { try { appendFileSync(engineLogPath(), line); } catch { /* best-effort */ } };
+
+// ── P-RECOVER.1 (ADR-0385): run ledger, startup leftovers, engine restart ────────────────────────────
+// run_ledger.ts decides whether the previous run died; leftover_reaper.ts decides what it provably left
+// running and stops exactly that. This is only the wiring. Every recovery writes ONE incident report
+// (incident_store.ts); the window offers it to the user, and submitting is always the user's choice.
+let runLedger: RunLedger | null = null; // null until this process owns the single-instance lock
+let previousRun: PreviousRun = { verdict: "none" };
+function saveRunLedger(next: RunLedger): void {
+  runLedger = next;
+  writeLedger(runLedgerPath(app.getPath("userData")), next);
+}
+/** A deliberate exit (normal quit, a Quit chosen on a startup dialog, the GPU relaunch, OS shutdown) is
+ *  not a crash, so the next launch must not treat it as one. Only once nothing this run started is left
+ *  running: exits that still own an engine go through endRun(). */
+function markRunClean(): void {
+  if (runLedger && !runLedger.clean) saveRunLedger(markClean(runLedger));
+}
+/** Upper bound on stopping and verifying the engine tree at exit, so a quit never hangs on it. */
+const END_RUN_MS = 20_000;
+let runEnding: Promise<void> | null = null;
+/** End this run deliberately: stop the engine and everything under it (the omp agent tree included, which
+ *  killing the engine alone does not reach), and mark the run clean only when that is VERIFIED. Otherwise
+ *  the ledger stays unclean, so the next launch's reaper still looks for what this run left. Shared by
+ *  every exit path that still owns an engine. */
+function endRun(): Promise<void> {
+  runEnding ??= (async () => {
+    appendEngineLog(`\n--- ${new Date().toISOString()} P-RECOVER.1 exit: stopping the engine ---\n`);
+    const timedOut = sleep(END_RUN_MS).then(() => false);
+    const verified = await Promise.race([stopCurrentEngine([]).then((r) => r.verified, () => false), timedOut]);
+    if (verified) markRunClean();
+    else appendEngineLog("- The engine and its processes could not be verified stopped; the run stays unclean so the next launch checks for leftovers.\n");
+  })();
+  return runEnding;
+}
+/** Record the engine the moment it spawns (spawn time + spawned command), then refine with the OS's own
+ *  creation time and image path: that is what the next launch's ownership proof compares against. */
+function recordEngineInLedger(child: ChildProcess, cmd: string): void {
+  const pid = child.pid;
+  if (!runLedger || !pid) return;
+  const spawnedAt = Date.now();
+  saveRunLedger(withEngine(runLedger, engineRecordFromProbe(process.platform, pid, null, cmd, spawnedAt)));
+  listProcesses(process.platform, pid).then((rows) => {
+    const row = rows.find((r) => r.pid === pid);
+    if (row && runLedger && dev === child) saveRunLedger(withEngine(runLedger, engineRecordFromProbe(process.platform, pid, row, cmd, spawnedAt)));
+  }, () => { /* the provisional record stands */ });
+}
+function incidentIdentity(): Pick<IncidentInput, "product" | "version" | "platform" | "arch" | "home"> {
+  return { product: BUILD.productName, version: app.getVersion(), platform: process.platform, arch: process.arch, home: homedir() };
+}
+const isoOrUndefined = (ms: number | null): string | undefined => (ms ? new Date(ms).toISOString() : undefined);
+const ENGINE_VERDICT_TEXT: Record<EngineVerdict, string> = {
+  "no-record": "The previous run recorded no engine process",
+  "alive-ours": "The previous run's engine was still running (its pid, image path and start time match the run ledger)",
+  gone: "The previous run's engine had already exited",
+  "pid-reused": "The previous run's engine had exited and its process id now belongs to an unrelated program, which was left alone",
+};
+
+/** Wait (up to `ms`) for nothing to be listening on the engine port. True when it is free. */
+async function waitPortFree(ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline && (await portAccepting())) await sleep(200);
+  return !(await portAccepting());
+}
+
+/**
+ * The previous run did not record a clean exit. Stop what it provably left running (the ownership rules
+ * live in leftover_reaper.ts: recorded engine by pid + image + start time, its descendants, and orphans
+ * still naming its pid; never this process or its children, never anything else), log it, and write ONE
+ * incident with outcome "pending". The window settles it after it tries to resume the previous session.
+ * Runs before the engine spawns and before P-PORTGUARD.3, whose dialog still covers what this cannot prove.
+ */
+async function recoverFromUncleanExit(prev: RunLedger): Promise<void> {
+  const events: IncidentEvent[] = [{
+    at: prev.mainStartedAt,
+    what: `The previous run (version ${prev.appVersion || "unknown"}, main process ${prev.mainPid}) started and never recorded a clean exit.`,
+  }];
+  const lines = [
+    `- Previous run: main pid ${prev.mainPid}, started ${new Date(prev.mainStartedAt).toISOString()}, version ${prev.appVersion || "unknown"}`,
+    `- Recorded engine: ${prev.engine ? `pid ${prev.engine.pid}, started ${new Date(prev.engine.startedAt).toISOString()}, ${prev.engine.exe}` : "none"}`,
+  ];
+  let processes: IncidentProcess[] = [];
+  if (prev.engine) {
+    try {
+      const plan = planLeftovers(await listProcesses(process.platform), prev.engine, { selfPid: process.pid, platform: process.platform });
+      events.push({ at: Date.now(), what: `${ENGINE_VERDICT_TEXT[plan.engineVerdict]}. ${plan.targets.length} leftover process(es) were proven to belong to it.` });
+      lines.push(`- Engine: ${plan.engineVerdict}`);
+      if (plan.targets.length) {
+        const fate = await stopProcesses(plan.targets);
+        processes = plan.targets.map((t) => ({ pid: t.pid, name: t.name, role: t.role, startedAt: isoOrUndefined(t.startedAt), action: fate.get(t.pid) ?? "stop-failed" }));
+        for (const t of plan.targets) lines.push(`- ${fate.get(t.pid) ?? "stop-failed"}: pid ${t.pid} ${t.name} (${t.role}), ${t.why}`);
+        const stopped = processes.filter((p) => p.action === "stopped").length;
+        events.push({ at: Date.now(), what: `Stopped ${stopped} of ${processes.length} leftover process(es).` });
+        const free = await waitPortFree(6000);
+        lines.push(`- Port ${PORT}: ${free ? "free" : "still in use"}`);
+        events.push({ at: Date.now(), what: free ? `Port ${PORT} is free.` : `Port ${PORT} is still in use; startup continues and reports it if the engine cannot bind.` });
+      }
+    } catch (e) {
+      lines.push(`- The process list could not be read (${e instanceof Error ? e.message : String(e)}); nothing was stopped.`);
+      events.push({ at: Date.now(), what: "The process list could not be read, so nothing was stopped." });
+    }
+  } else {
+    events.push({ at: Date.now(), what: "The previous run recorded no engine process, so there was nothing to stop." });
+  }
+  if (!processes.length) lines.push("- Nothing was stopped.");
+  appendEngineLog(`\n--- ${new Date().toISOString()} P-RECOVER.1 startup recovery ---\n${lines.join("\n")}\n`);
+  const stoppedAny = processes.some((p) => p.action === "stopped");
+  const summary = stoppedAny
+    ? `${BUILD.productName} did not shut down cleanly last time and left processes running. They were identified from the run ledger and stopped before the new engine started. The window will try to resume the previous chat session.`
+    : `${BUILD.productName} did not shut down cleanly last time (a crash, a forced close, or a power loss). No leftover processes needed stopping. The window will try to resume the previous chat session.`;
+  // Incidents live in userData, which the engine gets as LUCID_DATA_ROOT: never in ~/.omp, which the
+  // contained agent may write (incident_store.ts).
+  const meta = recordIncident({
+    ...incidentIdentity(),
+    kind: stoppedAny ? "leftover-processes" : "unclean-shutdown",
+    outcome: "pending",
+    summary,
+    events,
+    processes,
+    logs: [{ name: "engine.log (tail)", text: logTail(engineLogPath()) }],
+  }, incidentDir(app.getPath("userData")));
+  appendEngineLog(meta ? `- Incident ${meta.id} recorded.\n` : "- The incident report could not be written.\n");
+}
+
+// Engine restart (window-requested via lucid:engineRestart, or a relaunch that finds no window and no
+// engine). Refused while the engine answers health with this launch's nonce, and at most once a minute,
+// so neither a buggy renderer nor repeated relaunches can turn into a kill loop.
+type EngineRestartResult = { ok: boolean; reason: string; incidentId?: string };
+const ENGINE_RESTART_MIN_INTERVAL_MS = 60_000;
+let lastEngineRestartAt = 0;
+let engineRestartInFlight: Promise<EngineRestartResult> | null = null;
+
+/** One nonce-checked health probe: true only when OUR engine answers (a squatter never counts). */
+async function engineAnswersHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(`http://localhost:${PORT}/api/health`, { signal: AbortSignal.timeout(3000) });
+    const text = await res.text();
+    let body: unknown = text;
+    try { body = JSON.parse(text); } catch { /* healthVerdict fails closed on the raw text */ }
+    return healthVerdict(ENGINE_NONCE, res.ok, body) === "ours";
+  } catch { return false; }
+}
+
+/** Stop the CURRENT engine and everything under it, and say whether that is VERIFIED. The root is our own
+ *  live child handle, so its pid cannot have been recycled; descendants are walked with the creation-order
+ *  check, and every pid is killed by name (never taskkill /T). An engine that already exited is checked for
+ *  what it left running (its orphans, by this run's ledger record and the same rules the next launch's
+ *  reaper uses), and those are stopped. Verified means the process table was read, the engine is gone, and
+ *  every process found was confirmed stopped. If the table cannot be read, only the child handle is killed
+ *  (its omp child exits on stdin EOF) and nothing is verified. */
+async function stopCurrentEngine(events: IncidentEvent[]): Promise<{ processes: IncidentProcess[]; verified: boolean }> {
+  const child = dev;
+  if (!child?.pid) return { processes: [], verified: true }; // this run never started an engine
+  const running = (): boolean => child.exitCode === null && child.signalCode === null;
+  const wasRunning = running();
+  const exited = Promise.withResolvers<void>();
+  child.once("exit", () => exited.resolve());
+  let targets: Array<ProcRow & { role: string }> = [];
+  let walked = false;
+  try {
+    const rows = await listProcesses(process.platform);
+    if (wasRunning) {
+      const root = rows.find((r) => r.pid === child.pid);
+      if (root) {
+        targets = [{ ...root, role: "engine" }, ...strictDescendants(rows, root, process.platform).map((d) => ({ ...d, role: roleOf(d.name) }))];
+        walked = true;
+      }
+    } else {
+      targets = runLedger?.engine ? planLeftovers(rows, runLedger.engine, { selfPid: process.pid, platform: process.platform }).targets : [];
+      walked = true;
+    }
+  } catch { /* fall through to the handle kill; nothing is verified */ }
+  let processes: IncidentProcess[] = [];
+  if (targets.length) {
+    const fate = await stopProcesses(targets);
+    processes = targets.map((t) => ({ pid: t.pid, name: t.name, role: t.role, startedAt: isoOrUndefined(t.startedAt), action: fate.get(t.pid) ?? "stop-failed" }));
+  }
+  if (running()) { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
+  if (running()) await Promise.race([exited.promise, sleep(5000)]);
+  const stopped = processes.filter((p) => p.action === "stopped").length;
+  events.push({
+    at: Date.now(),
+    what: !wasRunning
+      ? `The engine process had already exited.${processes.length ? ` Stopped ${stopped} of ${processes.length} process(es) it left running.` : ""}`
+      : running() ? "The engine process did not exit when stopped." : `Stopped the engine and ${Math.max(0, stopped - 1)} process(es) under it.`,
+  });
+  appendEngineLog(processes.map((p) => `- ${p.action}: pid ${p.pid} ${p.name} (${p.role})\n`).join("")
+    || (wasRunning ? `- Stopped engine pid ${child.pid} by its process handle.\n` : `- Engine pid ${child.pid} had already exited; nothing it started was found running.\n`));
+  return { processes, verified: walked && !running() && processes.every((p) => p.action === "stopped") };
+}
+
+async function restartEngineNow(trigger: string): Promise<EngineRestartResult> {
+  if (runEnding) return { ok: false, reason: "exiting" }; // the app is quitting: never spawn an engine it would orphan
+  if (await engineAnswersHealth()) return { ok: false, reason: "engine-healthy" };
+  const startedAt = Date.now();
+  if (startedAt - lastEngineRestartAt < ENGINE_RESTART_MIN_INTERVAL_MS) return { ok: false, reason: "rate-limited" };
+  lastEngineRestartAt = startedAt;
+  appendEngineLog(`\n--- ${new Date(startedAt).toISOString()} P-RECOVER.1 engine restart (${trigger}) ---\n`);
+  const events: IncidentEvent[] = [{ at: startedAt, what: `The engine stopped answering status checks and a restart was ${trigger}.` }];
+  const { processes } = await stopCurrentEngine(events);
+  const free = await waitPortFree(6000);
+  if (!free) events.push({ at: Date.now(), what: `Port ${PORT} was still in use after the engine stopped.` });
+  startDevServer();
+  const up = await waitForServer();
+  const ok = up.status === "ready";
+  const reason = ok ? "restarted" : up.status === "foreign" ? "port-foreign" : "engine-down";
+  events.push({ at: Date.now(), what: ok ? "The new engine answered its health check." : up.status === "foreign" ? `Another program answered on port ${PORT}; it is not ${BUILD.productName}'s engine and was not shown.` : "The new engine did not answer its health check in time." });
+  appendEngineLog(`- Restart ${ok ? "succeeded" : `failed (${reason})`}.\n`);
+  const meta = recordIncident({
+    ...incidentIdentity(),
+    kind: "engine-unreachable",
+    outcome: ok ? "recovered" : "not-recovered",
+    summary: ok
+      ? `The window lost contact with ${BUILD.productName}'s engine, so the engine was stopped and started again. The new engine is answering.`
+      : `The window lost contact with ${BUILD.productName}'s engine. It was stopped and started again, but the new engine is not answering (${reason}).`,
+    events,
+    processes,
+    logs: [{ name: "engine.log (tail)", text: logTail(engineLogPath()) }],
+  }, incidentDir(app.getPath("userData")));
+  if (meta) appendEngineLog(`- Incident ${meta.id} recorded.\n`);
+  return { ok, reason, ...(meta ? { incidentId: meta.id } : {}) };
+}
+
+/** Concurrent callers share one restart (and its result) instead of racing two kills. */
+function restartEngine(trigger: string): Promise<EngineRestartResult> {
+  engineRestartInFlight ??= restartEngineNow(trigger).finally(() => { engineRestartInFlight = null; });
+  return engineRestartInFlight;
+}
+
+// Relaunching LUCID while it still runs must give the user a working window, never a silent no-op.
+let bootComplete = false; // the whenReady path has created the first window (or decided not to)
+let reopeningWindow = false;
+async function reopenMainWindow(): Promise<void> {
+  if (!bootComplete || reopeningWindow) return; // still booting: the boot path creates the window
+  reopeningWindow = true;
+  try {
+    if (!(await engineAnswersHealth())) await restartEngine("triggered by relaunching the app while its window was gone");
+    if (!win || win.isDestroyed()) createWindow();
+  } finally { reopeningWindow = false; }
+}
+
+// ADR-0246 (P-GPUFIX.1): zombie-SID GPU-sandbox self-heal (electron/electron#51761). On machines
+// where an unresolvable AppContainer SID in the install dir's DACL kills every sandboxed GPU child
+// with 0xC0000022, the app used to die (FATAL after 9 retries) before the window showed. The
+// watchdog (pure core: gpu_watchdog.ts) relaunches with --disable-gpu-sandbox on the 2nd
+// pre-render fatal GPU death and persists a flag file in userData (which survives the NSIS
+// reinstall that re-inherits the zombie SID). ONLY the GPU sandbox is dropped; the renderer
+// sandbox is untouched. The switch must be appended at module load, before Chromium spawns the
+// GPU process at the first window.
+const gpuFlagPath = (): string => join(app.getPath("userData"), GPU_SANDBOX_FLAG_FILE);
+let gpuSandboxOff = app.commandLine.hasSwitch(GPU_SANDBOX_SWITCH); // the relaunch carries it in argv
+try {
+  if (!gpuSandboxOff && existsSync(gpuFlagPath())) { app.commandLine.appendSwitch(GPU_SANDBOX_SWITCH); gpuSandboxOff = true; }
+} catch { /* unreadable flag: sandbox stays on; the watchdog below re-heals if it bricks */ }
+let gpuDeaths = 0;
+let firstWindowRendered = false; // set in createWindow's ready-to-show
+let gpuRelaunching = false;
+app.on("child-process-gone", (_e, details) => {
+  const r = decideGpuAction(details, { deathsBefore: gpuDeaths, windowRendered: firstWindowRendered, sandboxOff: gpuSandboxOff });
+  gpuDeaths = r.deaths;
+  if (r.action === "ignore") return;
+  appendEngineLog(gpuDeathLogLine(details, r.deaths, r.action, new Date().toISOString()));
+  if (r.action !== "relaunch" || gpuRelaunching) return;
+  gpuRelaunching = true;
+  try { writeFileSync(gpuFlagPath(), `GPU sandbox disabled ${new Date().toISOString()} after ${r.deaths} GPU child deaths (zombie-SID mitigation, electron/electron#51761). Delete this file to re-enable the GPU sandbox.\n`); }
+  catch { /* the relaunch argv still carries the switch for this recovery */ }
+  // P-RECOVER.1: a deliberate relaunch, not a crash. app.exit skips will-quit, so the run is ended here: the
+  // engine tree is stopped first, and the run is marked clean only if that is verified.
+  void endRun().then(() => {
+    app.relaunch({ args: relaunchArgs(process.argv.slice(1)) });
+    app.exit(0);
+  });
+});
 
 function startDevServer(): void {
   // findBun() prefers the bundled runtime in packaged builds, falling back to the
@@ -77,9 +430,43 @@ function startDevServer(): void {
   // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
   const gitEnv = prepareGitToken();
   const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
-  dev = spawn(findBun(), ["run", "desktop/dev.ts"], {
+  // P-MEET.1: the Meetings panel's Hub pairing bearer (ref "meeting_hub_token"), same vault→env-into-dev-child
+  // path. A token claimed DURING this session is held in the engine's memory; this covers every later launch.
+  const meetingsEnv = prepareMeetingHubToken();
+  // CREATOR-0 (ADR-0279): the engine child learns its own identity and its own data roots. The standard
+  // build gets ONLY the descriptive vars (no path relocation), so its on-disk layout is untouched; the
+  // Creator build additionally isolates GUI settings, Personal Knowledge, the creator data root, and the
+  // auxiliary ports (relay + managed whisper both bind, so two flavors cannot share them).
+  const flavorEnv: Record<string, string> = {
+    LUCID_BUILD_FLAVOR: BUILD.flavor,
+    LUCID_APP_ID: BUILD.appId,
+    LUCID_PRODUCT_NAME: BUILD.productName,
+    LUCID_DISPLAY_NAME: BUILD.displayName,
+    LUCID_AUTH_PROTOCOL: BUILD.authProtocol,
+    LUCID_DATA_ROOT: app.getPath("userData"),
+    LUCID_CRED_VAULT_DIR: CRED_DIR(),
+    ...(BUILD.creatorBuild ? {
+      LUCID_GUI_SETTINGS_FILE: process.env.LUCID_GUI_SETTINGS_FILE || join(app.getPath("userData"), "lucid-gui.json"),
+      LUCID_PERSONAL_DIR: process.env.LUCID_PERSONAL_DIR || join(app.getPath("userData"), "personal"),
+      LUCID_CREATOR_DIR: process.env.LUCID_CREATOR_DIR || join(app.getPath("userData"), "creator"),
+      LUCID_RELAY_PORT: process.env.LUCID_RELAY_PORT || String(BUILD.defaultRelayPort),
+      LUCID_WHISPER_PORT: process.env.LUCID_WHISPER_PORT || String(BUILD.defaultWhisperPort),
+    } : {}),
+  };
+  // P-WINBOOT.2 (ADR-0260): packaged builds spawn the COMPILED engine (bin/lucid-engine) - it embeds
+  // dev.ts so Bun never module-loads a .ts from a protected install dir (the P-WINBOOT.1 EPERM brick).
+  // Dev runs, and any package cut before compile-engine existed, fall back to `bun run desktop/dev.ts`.
+  const engineSpec = resolveEngineSpawn({ packaged: app.isPackaged, repoRoot: REPO, bun: findBun(), exists: existsSync, platform: process.platform });
+  engineDesc = engineSpec.compiled ? "compiled bin/lucid-engine" : "bun run desktop/dev.ts"; // ADR-0305: the incident block's "expected engine"
+  console.log(`[main] engine: ${engineDesc}`);
+  dev = spawn(engineSpec.cmd, engineSpec.args, {
     cwd: REPO,
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, PORT: String(PORT) },
+    // LUCID_RESOURCES lets the dev child resolve the bundled whisper.cpp binary under <resources>/whisper
+    // (P-STT.2c); process.resourcesPath is an Electron property, not an env var, so it must be threaded here.
+    // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
+    // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
+    // its agent-browser poll loop against the child's /api/browser routes.
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...meetingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid), LUCID_HOST_EXE: basename(process.execPath) /* P-LEGIBLE.1: the manifest's relatedProcess */ },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -87,19 +474,112 @@ function startDevServer(): void {
     windowsHide: true,
   });
   const tee = openEngineLog();
-  dev.stdout?.on("data", (d) => { process.stdout.write(d); tee(d); });
-  dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); });
+  engineExit = null;
+  engineTail = "";
+  // P-WINBOOT.1 (ADR-0259): keep a bounded tail of engine output + watch for an early exit, so a boot
+  // failure (e.g. Bun's EPERM loading dev.ts from a Program Files install) is diagnosed the instant it
+  // dies rather than after the full 30s health timeout.
+  const child = dev;
+  dev.stdout?.on("data", (d) => { process.stdout.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
+  dev.stderr?.on("data", (d) => { process.stderr.write(d); tee(d); engineTail = (engineTail + d.toString()).slice(-4000); });
+  // P-RECOVER.1: after an engine restart the OLD child's late exit must not mark the NEW engine as dead.
+  dev.on("exit", (code) => { if (dev === child) engineExit = { code: code ?? null }; });
+  recordEngineInLedger(child, engineSpec.cmd); // P-RECOVER.1 (ADR-0385): the next launch's ownership proof
+  // ADR-0246: a spawn failure (missing/blocked bun exe) used to vanish - no "error" listener, so
+  // engine.log showed only the banner and the app just waited out the 30s health timeout. Tee it (and
+  // feed the ADR-0259 tail + exit flag, so waitForServer bails at once and the dialog names the cause).
+  dev.on("error", (err) => {
+    const line = `[engine] dev-server spawn failed: ${(err as Error)?.message ?? String(err)}\n`;
+    process.stderr.write(line);
+    tee(line);
+    engineTail = (engineTail + line).slice(-4000);
+    engineExit = { code: null };
+  });
 }
-// Returns true once the dev server answers /api/health, false if it never does within the window.
+// Resolves "ready" once the dev server answers /api/health WITH this launch's nonce, "down" if it never
+// does within the window, "foreign" the instant something else answers.
 // 30s headroom: the server's own init (DuckDB open + omp acp spawn) can outlast a slow first launch;
 // the splash already covered the longer omp/scanner provisioning before we got here.
-async function waitForServer(timeoutMs = 30000): Promise<boolean> {
+// P-PORTGUARD.1 (ADR-0305): "someone answered health" is not "my engine is up" - the field incident was a
+// stranger's server squatting the port and getting rendered. A foreign verdict returns IMMEDIATELY: the
+// squatter holds the bind, so our engine can never become the answerer within this launch; polling on
+// would only delay the diagnosis by the full timeout.
+type ServerWait = { status: "ready" } | { status: "foreign"; verdict: HealthVerdict } | { status: "down" };
+async function waitForServer(timeoutMs = 30000): Promise<ServerWait> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try { if ((await fetch(`http://localhost:${PORT}/api/health`)).ok) return true; } catch { /* retry */ }
+    try {
+      const res = await fetch(`http://localhost:${PORT}/api/health`);
+      const text = await res.text();
+      let body: unknown = text;
+      try { body = JSON.parse(text); } catch { /* healthVerdict fails closed on the raw text */ }
+      const verdict = healthVerdict(ENGINE_NONCE, res.ok, body);
+      if (verdict === "ours") return { status: "ready" };
+      if (verdict !== "not-ready") return { status: "foreign", verdict };
+    } catch { /* retry: nothing listening yet */ }
+    // P-WINBOOT.1 (ADR-0259): a dead engine will never answer - stop waiting the moment it exits.
+    if (engineExit) return { status: "down" };
     await sleep(180);
   }
-  return false;
+  return { status: "down" };
+}
+
+// P-PORTGUARD.1 (ADR-0305): best-effort attribution of the process squatting the port - the incident
+// block must name the process (name, pid, start time, command), not just a verdict. A failed probe
+// degrades to null and formatPortIncident says attribution failed explicitly.
+async function probePortOwner(): Promise<SquatterInfo | null> {
+  const spec = ownerProbeSpec(process.platform, PORT);
+  if (!spec) return null;
+  try {
+    const stdout = await new Promise<string>((res, rej) => {
+      execFile(spec.cmd, spec.args, { timeout: 3000 }, (err, out) => (err ? rej(err) : res(out)));
+    });
+    return parseOwnerProbe(process.platform, stdout);
+  } catch { return null; }
+}
+
+// P-PORTGUARD.3 (ADR-0382): is anything accepting connections on the engine port right now? A TCP
+// connect, not an HTTP fetch: it answers in milliseconds, and a non-HTTP listener still counts as busy.
+function portAccepting(): Promise<boolean> {
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  const sock = connect({ host: "127.0.0.1", port: PORT });
+  const done = (v: boolean): void => { resolve(v); sock.destroy(); };
+  sock.once("connect", () => done(true));
+  sock.once("error", () => done(false));
+  sock.setTimeout(500, () => done(false));
+  return promise;
+}
+
+/** Reap OUR OWN orphaned engine before spawning a new one, after the user agrees (P-PORTGUARD.3).
+ *  Upgraders from a build without ADR-0381's parent watch arrive with the previous session's engine (and
+ *  its omp child) still holding the port; the parent watch cannot help them because the orphan predates
+ *  it. Only a listener the owner probe attributes to a LUCID engine is offered for reaping (see
+ *  orphan_engine.classifyPortHolder); anything else is left to the ADR-0305 / ADR-0381 dialogs. Returns
+ *  false when the user chose Quit. */
+async function reapOrphanedEngine(): Promise<boolean> {
+  if (!(await portAccepting())) return true;
+  const observed = await probePortOwner();
+  const holder = classifyPortHolder(observed, process.pid);
+  if (holder.kind !== "ours" || !observed) return true;
+  const d = orphanDialog({ port: PORT, productName: BUILD.productName, observed, evidence: holder.evidence });
+  appendEngineLog(`\n--- ${new Date().toISOString()} orphaned engine on port ${PORT} (P-PORTGUARD.3) ---\n${d.detail}\n`);
+  const { response } = await dialog.showMessageBox({ type: "warning", title: d.title, message: d.message, detail: d.detail, buttons: [...d.buttons], defaultId: d.defaultId, cancelId: d.cancelId });
+  if (response !== 0) { appendEngineLog(`- User chose Quit; the orphan (pid ${holder.pid}) was left running.\n`); return false; }
+  const spec = reapSpec(process.platform, holder.pid);
+  try {
+    if (spec) { const done = Promise.withResolvers<void>(); execFile(spec.cmd, spec.args, { timeout: 5000 }, () => done.resolve()); await done.promise; }
+    else process.kill(holder.pid, "SIGTERM");
+  } catch (e) { appendEngineLog(`- Reap failed: ${e instanceof Error ? e.message : String(e)}\n`); }
+  // Wait for the socket to close; a POSIX orphan that ignored SIGTERM gets SIGKILL after 3s.
+  const deadline = Date.now() + 6000;
+  let escalated = false;
+  while (Date.now() < deadline && (await portAccepting())) {
+    if (!spec && !escalated && Date.now() > deadline - 3000) { escalated = true; try { process.kill(holder.pid, "SIGKILL"); } catch { /* already gone */ } }
+    const tick = Promise.withResolvers<void>(); setTimeout(tick.resolve, 200); await tick.promise;
+  }
+  const freed = !(await portAccepting());
+  appendEngineLog(`- User chose Stop; pid ${holder.pid} ${freed ? "ended and the port is free" : "did not release the port in time (the bind will report it)"}.\n`);
+  return true;
 }
 
 function createWindow(): void {
@@ -110,9 +590,14 @@ function createWindow(): void {
     width: 1320, height: 860, minWidth: 940, minHeight: 600,
     frame: false, backgroundColor: "#0a0b0f", show: false, title: "Lucid Agent",
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
-    webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false },
+    // `plugins` enables Chromium's BUILT-IN PDF viewer, and nothing else: NPAPI and PPAPI are long gone
+    // from Chromium, so the internal PDF reader is the only "plugin" this flag can still turn on. It
+    // defaults to FALSE, which is why a .pdf opened in the Preview panel rendered as a blank white frame
+    // even though the bytes were served correctly with the right MIME (P-PREVIEW.17). The previewed
+    // document stays inside the same opaque-origin, egress-blocked sandbox as every other preview kind.
+    webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false, plugins: true },
   });
-  win.once("ready-to-show", () => win!.show());
+  win.once("ready-to-show", () => { firstWindowRendered = true; win!.show(); }); // ADR-0246: past here a GPU death is not the boot brick
   // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
   // correction menu itself. Only intercept when there's a misspelled word (so we don't fight Monaco's own
   // context menu elsewhere); offer the dictionary suggestions + "Add to dictionary".
@@ -128,28 +613,40 @@ function createWindow(): void {
     );
     Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
   });
-  // external links (e.g. duckdb.org) open in the OS browser, not a new Electron window
-  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
-  // If the dev server isn't answering yet (slow first launch), the load fails — retry a bounded number
-  // of times so a late-ready server self-heals into a rendered window instead of a permanent black one.
-  let reloadTries = 0;
-  win.webContents.on("did-fail-load", () => {
-    if (reloadTries++ < 30) setTimeout(() => win?.loadURL(`http://localhost:${PORT}`), 1000);
-  });
+  installAppNavigation(win.webContents, `http://localhost:${PORT}/`, (url) => shell.openExternal(url));
   // P-KGMARKET.4: once the renderer is up, flush any lucid://auth URL that arrived during a cold launch.
   win.webContents.on("did-finish-load", () => {
     if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
   });
   win.loadURL(`http://localhost:${PORT}`);
-  win.on("closed", () => (win = null));
+  // P-RECOVER.1 (ADR-0385): a Windows log off or shutdown arrives as session-end; it is a deliberate
+  // exit, so it must not surface as an unclean-shutdown incident on the next launch.
+  win.on("session-end", () => markRunClean());
+  win.on("closed", () => {
+    win = null;
+    // P-RECOVER.1 (ADR-0385): closing the MAIN window ends the app on win32/linux, even with the agent
+    // browser window open. Otherwise that window kept a process with no main window alive, it held the
+    // single-instance lock, and every relaunch just focused nothing until the user killed LUCID by hand.
+    if (process.platform === "darwin") return;
+    if (agentWin && !agentWin.isDestroyed()) { agentCloseByCommand = true; agentWin.destroy(); }
+    app.quit();
+  });
 }
 
-ipcMain.handle("lucid:pickFolder", async (e) => {
+ipcMain.handle("lucid:pickFolder", async (e, opts: unknown) => {
   const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
   // Native OS folder dialog: browse anywhere on the machine and CREATE a new folder from within the dialog.
   // `createDirectory` enables the New Folder button on macOS (Windows always offers it); the whole tree is
   // reachable (no home confinement).
-  const r = await dialog.showOpenDialog(w!, { properties: ["openDirectory", "createDirectory"], title: "Choose or create a workspace folder" });
+  // P-KG-INGEST.5 (ADR-0252): title/defaultPath/buttonLabel come from the renderer so EVERY folder picker
+  // (workspace, chat-history import, pack export) is this real Explorer dialog, not the in-app browser.
+  const o = (opts ?? {}) as { title?: unknown; defaultPath?: unknown; buttonLabel?: unknown };
+  const r = await dialog.showOpenDialog(w!, {
+    properties: ["openDirectory", "createDirectory"],
+    title: typeof o.title === "string" ? o.title : "Choose or create a workspace folder",
+    ...(typeof o.defaultPath === "string" && o.defaultPath ? { defaultPath: o.defaultPath } : {}),
+    ...(typeof o.buttonLabel === "string" && o.buttonLabel ? { buttonLabel: o.buttonLabel } : {}),
+  });
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 
@@ -172,7 +669,12 @@ ipcMain.handle("lucid:pickFile", async (e, opts: unknown) => {
 // Electron's safeStorage is main-only. The renderer can STORE, LIST, and DELETE secrets; it can never READ a
 // plaintext back (decrypt stays here, for future request injection). storeCredential FAIL-CLOSES if OS
 // encryption is unavailable - the handler surfaces { error } rather than ever writing plaintext.
-const CRED_DIR = () => join(homedir(), ".omp", "lucid-cred-vault");
+// CREATOR-0 (ADR-0279): the Creator flavor gets its OWN vault root inside its userData. Two reasons:
+// a standard-build provider key must not silently become creative-media egress credit, and on Windows
+// the safeStorage key lives per profile directory, so a shared vault path across two app identities
+// would fail closed on every read anyway (the ADR-0278 lesson).
+const CRED_DIR = () => process.env.LUCID_CRED_VAULT_DIR
+  || (BUILD.creatorBuild ? join(app.getPath("userData"), "lucid-cred-vault") : join(homedir(), ".omp", "lucid-cred-vault"));
 const ELECTRON_SAFE_STORAGE: SafeStorageLike = {
   isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
   encryptString: (s) => safeStorage.encryptString(s),
@@ -200,8 +702,14 @@ function prepareLocalProviders(): Record<string, string> {
       readSecret: (ref) => { try { return readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), ref); } catch { return null; } },
     });
     try { registerLocalProviderEgress(defs, Date.now()); } catch { /* egress registration is best-effort */ }
-    if (r.wrote) console.error(`[LOCAL_PROVIDERS] ${r.included.length} provider(s) → ~/.omp/agent/models.yml${r.skipped.length ? `; skipped ${r.skipped.map((s) => s.id).join(", ")}` : ""}`);
-    else if (r.writeReason) console.error(`[LOCAL_PROVIDERS] models.yml not written: ${r.writeReason}`);
+    // Tee the outcome into engine.log too: main's console is invisible in a packaged GUI app, and a
+    // silently-skipped provider (vault miss) is exactly the failure that needs a trail to diagnose.
+    const skippedNote = r.skipped.length ? `; skipped ${r.skipped.map((s) => `${s.id} (${s.reason})`).join(", ")}` : "";
+    const line = r.wrote
+      ? `[LOCAL_PROVIDERS] ${r.included.length} provider(s) → ~/.omp/agent/models.yml${skippedNote}`
+      : `[LOCAL_PROVIDERS] models.yml not written: ${r.writeReason ?? "unknown"}${skippedNote}`;
+    console.error(line);
+    appendEngineLog(line + "\n");
     return r.childEnv;
   } catch (err) { console.error("[LOCAL_PROVIDERS] prepare failed:", err); return {}; }
 }
@@ -218,12 +726,28 @@ function prepareFigmaToken(): Record<string, string> {
 // LUCID_GIT_PAT, so cloneRepo can clone a PRIVATE repo from the Settings "Clone" button without an interactive
 // credential prompt. The secret never reaches the renderer or the agent. (A freshly-entered PAT is also passed
 // inline on the first clone request; this covers subsequent sessions.) Best-effort — never blocks server start.
+//
+// P-FLEET.L2: the fleet's repo field saves a token PER HOST (vault ref `git_pat_<host_slug>`, minted by
+// git_url.gitCredRef). Every such ref is injected under its own name - `LUCID_GIT_PAT_GITHUB_COM`,
+// `LUCID_GIT_PAT_DEV_AZURE_COM`, `LUCID_GIT_PAT_GITLAB_MYCORP_COM` - which is what lets workspace.ts hand a
+// token ONLY to the host it was saved for, self-hosted GitLab/Azure DevOps Server included. Enumerating the
+// vault costs one directory read at launch; a ref we cannot decrypt is simply skipped.
 const GIT_PAT_REF = "git_pat";
 function prepareGitToken(): Record<string, string> {
+  const env: Record<string, string> = {};
   try {
-    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), GIT_PAT_REF);
-    return tok ? { LUCID_GIT_PAT: tok } : {};
-  } catch { return {}; }
+    const legacy = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), GIT_PAT_REF);
+    if (legacy) env.LUCID_GIT_PAT = legacy;
+  } catch { /* best-effort */ }
+  try {
+    for (const meta of listCredentials(VAULT_IO, CRED_DIR())) {
+      const name = gitEnvNameFromRef(meta.ref);
+      if (!name) continue;
+      const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), meta.ref);
+      if (tok) env[name] = tok;
+    }
+  } catch { /* best-effort */ }
+  return env;
 }
 // ADR-0221: read the embeddings endpoint's API key from the vault (ref = settings.embeddings.vaultRef) and expose
 // it to the dev child as LUCID_EMBEDDINGS_KEY, so the ApiEmbedder can authenticate a cloud endpoint (OpenAI/Azure)
@@ -234,6 +758,18 @@ function prepareEmbeddingsToken(): Record<string, string> {
     if (!cfg?.enabled || !cfg.vaultRef || (cfg.authKind !== "bearer" && cfg.authKind !== "apikey")) return {};
     const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), cfg.vaultRef);
     return tok ? { LUCID_EMBEDDINGS_KEY: tok } : {};
+  } catch { return {}; }
+}
+// P-MEET.1: read the Meeting Hub pairing bearer from the vault and expose it to the dev child as
+// LUCID_MEETING_HUB_TOKEN, so the Meetings panel's calls to the loopback Hub are authenticated
+// server-side. Same shape as the Figma PAT: the renderer only ever sees rendered meeting rows. The
+// engine's meetings_hub.ts moves it into module state and deletes it from process.env on load, so
+// the engine's own omp/fleet/scanner children never inherit it.
+// Best-effort - a missing/unpairable token just leaves the panel in its "pair with the Hub" state.
+function prepareMeetingHubToken(): Record<string, string> {
+  try {
+    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), MEETING_HUB_CRED_REF);
+    return tok ? { LUCID_MEETING_HUB_TOKEN: tok } : {};
   } catch { return {}; }
 }
 ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
@@ -285,26 +821,390 @@ ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?:
 // P-PREVIEW.1 (ADR-0096): capture the preview region of the window into a PNG data URL. Crops the live
 // window capture to the iframe's rect (sent by the renderer), so the agent/user gets just the previewed
 // page. Metadata-safe (shows only what is already on screen); returns null on any failure, never throws.
+//
+// The renderer measures that rect in CSS pixels (`getBoundingClientRect`), but `capturePage` crops in DIP,
+// and the two only coincide at zoom 1.0. Unscaled, a zoomed window (LUCID's zoom control, 118% here) cropped
+// at 1/zoom of the box: the origin sat LEFT of the preview so the snip bled into the chat/composer column,
+// and the box was short so the right/bottom of the previewed app was sliced off. captureCropFromCssRect does
+// the conversion; the zoom is read HERE because this process owns the authoritative value.
 ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (!w) return null;
-  const r = (rect ?? {}) as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
-  const n = (v: unknown) => (typeof v === "number" && isFinite(v) && v >= 0 ? Math.round(v) : 0);
-  const crop = { x: n(r.x), y: n(r.y), width: n(r.width), height: n(r.height) };
+  let zoomFactor = 1;
+  try { zoomFactor = e.sender.getZoomFactor(); } catch { /* destroyed/detached contents: capture unscaled */ }
+  const crop = captureCropFromCssRect(rect, zoomFactor);
   try {
     const img = crop.width > 0 && crop.height > 0 ? await w.webContents.capturePage(crop) : await w.webContents.capturePage();
     return img.isEmpty() ? null : img.toDataURL();
   } catch { return null; }
 });
 
+// ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ────────────────────────────────
+// A real Chromium BrowserWindow the AGENT drives through the dev server's command mailbox
+// (desktop/browser_control.ts): agent tools enqueue on /api/browser/*, this loop drains
+// GET /api/browser/commands every 500ms, executes on the window, and POSTs /api/browser/result.
+// Deliberately VISIBLE: the user watches every step, can log in on real pages, and closing the window
+// is a hard kill switch. capturePage reads compositor pixels, so DOM-locking/anti-agent pages cannot
+// blind the agent (and a prior ADR rejects puppeteering the user's OWN browser - this sanctioned window
+// is the alternative). Everything here is fail-quiet: the poll loop must never throw.
+// AUTH: this parent cannot read the child's token, so it MINTS the per-launch token itself and hands it
+// down via the spawn env (LUCID_MAIN_TOKEN, adopted by dev.ts as TOKEN); every call sends x-lucid-token.
+const MAIN_TOKEN = randomBytes(32).toString("hex");
+// P-SANDBOX.15 (ADR-0396): the renderer gets MAIN_TOKEN over this synchronous IPC (preload `lucid.token()`),
+// no longer from a <meta> tag in the served HTML, which any local process could fetch with no token at all.
+// Answered only for the app window's own engine document; anything else (the agent browser window, a page the
+// window was somehow navigated to) gets "" and its /api calls are refused (fail-closed).
+ipcMain.on("lucid:token", (e) => {
+  const ours = !!win && !win.isDestroyed() && e.sender === win.webContents && isEngineDocument(e.senderFrame?.url, PORT);
+  e.returnValue = ours ? MAIN_TOKEN : "";
+});
+// P-PORTGUARD.1 (ADR-0305): per-launch engine identity. Handed to the spawned engine via env; the engine
+// echoes it in /api/health, and waitForServer only trusts a health answer carrying THIS value. A squatter
+// that won the port bind race cannot know it, so the window never renders a stranger.
+const ENGINE_NONCE = randomBytes(16).toString("hex");
+let agentWin: BrowserWindow | null = null;
+let agentCloseByCommand = false; // distinguishes the agent's own close from the user's X (kill switch)
+let agentPollBusy = false;
+// Width (px) of the newest snapshot handed to the agent. Click coordinates are expressed in THAT image's
+// space, so this is the only number needed to map them back onto the live window. Null until a capture.
+let agentLastShotWidth: number | null = null;
+// Injected into every page the agent visits: a breathing accent glow on the html element (the user can
+// tell at a glance which window the agent is driving) + the .lucid-snap-flash pulse replayed per shot.
+const AGENT_FX_CSS = `
+@keyframes lucidAgentBreathe {
+  0%, 100% { box-shadow: inset 0 0 0 3px rgba(198, 75, 214, .55), inset 0 0 44px rgba(198, 75, 214, .16); }
+  50% { box-shadow: inset 0 0 0 3px rgba(70, 200, 220, .70), inset 0 0 72px rgba(70, 200, 220, .28); }
+}
+@keyframes lucidSnapFlash {
+  0% { filter: brightness(1.85) saturate(1.25); }
+  100% { filter: none; }
+}
+html { animation: lucidAgentBreathe 3.2s ease-in-out infinite; }
+html.lucid-snap-flash { animation: lucidAgentBreathe 3.2s ease-in-out infinite, lucidSnapFlash .45s ease-out 1; }
+`;
+async function browserApiPost(path: string, body: unknown): Promise<void> {
+  try {
+    await fetch(`http://localhost:${PORT}${path}`, {
+      method: "POST",
+      headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch { /* fail-quiet: the dev server may be restarting */ }
+}
+/** The live agent window's contents, or null once destroyed/never opened. */
+function agentPage(): Electron.WebContents | null {
+  return agentWin && !agentWin.isDestroyed() ? agentWin.webContents : null;
+}
+async function agentBrowserOpen(id: string, url: string): Promise<void> {
+  if (!/^https?:\/\//i.test(url)) { await browserApiPost("/api/browser/result", { id, ok: false, error: "only http(s) URLs can be opened" }); return; }
+  try {
+    if (!agentWin || agentWin.isDestroyed()) {
+      agentCloseByCommand = false;
+      agentWin = new BrowserWindow({
+        width: 1180, height: 800, show: true, autoHideMenuBar: true, title: "LUCID agent browser",
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      // target=_blank / window.open stays in THIS window - the agent never fans out into new windows.
+      agentWin.webContents.setWindowOpenHandler(({ url: u }) => {
+        if (/^https?:\/\//i.test(u)) void agentWin?.loadURL(u).catch(() => {});
+        return { action: "deny" };
+      });
+      agentWin.webContents.on("did-finish-load", () => { void agentPage()?.insertCSS(AGENT_FX_CSS).catch(() => {}); });
+      agentWin.webContents.on("page-title-updated", () => {
+        const wc = agentPage();
+        if (wc) void browserApiPost("/api/browser/status", { active: true, title: wc.getTitle(), url: wc.getURL() });
+      });
+      agentWin.webContents.on("did-navigate", () => {
+        const wc = agentPage();
+        if (wc) void browserApiPost("/api/browser/status", { active: true, title: wc.getTitle(), url: wc.getURL() });
+      });
+      agentWin.on("closed", () => {
+        agentWin = null;
+        const byUser = !agentCloseByCommand;
+        agentCloseByCommand = false;
+        // User-X = KILL SWITCH: the server fails every queued/pending command with "browser closed by
+        // user" and keeps failing browser calls until a fresh browser_open. Agent closes just go inactive.
+        void browserApiPost("/api/browser/status", { active: false, closedByUser: byUser });
+      });
+    }
+    await agentWin.loadURL(url);
+    const wc = agentPage();
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc?.getTitle() ?? "", url: wc?.getURL() ?? url });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `could not load ${url}: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+async function agentBrowserCapture(id: string): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const img = await wc.capturePage();
+    const scaled = img.getSize().width > 1100 ? img.resize({ width: 1100 }) : img;
+    // Remember what the AGENT saw: click coordinates arrive in this image's pixel space, and mapping
+    // them back needs the width that actually went out (never the raw capture, never the display ratio).
+    agentLastShotWidth = scaled.getSize().width || null;
+    // Pulse AFTER the pixels are read, so the flash marks the shot without contaminating it.
+    void wc.executeJavaScript(
+      `(() => { const h = document.documentElement; h.classList.remove("lucid-snap-flash"); void h.offsetWidth; h.classList.add("lucid-snap-flash"); setTimeout(() => h.classList.remove("lucid-snap-flash"), 500); })();`,
+      true,
+    ).catch(() => {});
+    await browserApiPost("/api/browser/result", { id, ok: true, png: scaled.toDataURL(), title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `capture failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+/** Snapshot pixels -> window content coordinates. The agent aims at the downscaled image it was shown;
+ *  contentBounds is in DIP, which is also what sendInputEvent expects, so one ratio covers both the
+ *  downscale and the display's pixel ratio. No shot yet = treat the coordinates as already-live. */
+function agentMapPoint(x: number, y: number): { x: number; y: number } | null {
+  if (!agentWin || agentWin.isDestroyed()) return null;
+  const b = agentWin.getContentBounds();
+  const ratio = agentLastShotWidth && agentLastShotWidth > 0 ? b.width / agentLastShotWidth : 1;
+  const clamp = (v: number, hi: number) => Math.max(0, Math.min(Math.max(hi - 1, 0), Math.round(v)));
+  return { x: clamp(x * ratio, b.width), y: clamp(y * ratio, b.height) };
+}
+async function agentBrowserClick(id: string, x: number, y: number, button: "left" | "right"): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const pt = agentMapPoint(x, y);
+    if (!pt) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+    // Move first: hover-gated controls (menus, custom dropdowns) need the pointer to arrive before the
+    // press, exactly as it would for the user's own mouse.
+    wc.sendInputEvent({ type: "mouseMove", x: pt.x, y: pt.y });
+    wc.sendInputEvent({ type: "mouseDown", x: pt.x, y: pt.y, button, clickCount: 1 });
+    wc.sendInputEvent({ type: "mouseUp", x: pt.x, y: pt.y, button, clickCount: 1 });
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `click failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+/** Press at one point, travel, release at another. The intermediate moves are the point: HTML5
+ *  drag-and-drop, range sliders and canvas handles all read the move stream, and a bare down-then-up
+ *  is indistinguishable from a click. Ten steps is enough for every such listener to see motion. */
+async function agentBrowserDrag(id: string, x: number, y: number, toX: number, toY: number): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const from = agentMapPoint(x, y), to = agentMapPoint(toX, toY);
+    if (!from || !to) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+    const STEPS = 10;
+    wc.sendInputEvent({ type: "mouseMove", x: from.x, y: from.y });
+    wc.sendInputEvent({ type: "mouseDown", x: from.x, y: from.y, button: "left", clickCount: 1 });
+    for (let i = 1; i <= STEPS; i++) {
+      const px = Math.round(from.x + ((to.x - from.x) * i) / STEPS);
+      const py = Math.round(from.y + ((to.y - from.y) * i) / STEPS);
+      wc.sendInputEvent({ type: "mouseMove", x: px, y: py });
+      await new Promise((r) => setTimeout(r, 16)); // ~one frame between moves, so listeners actually run
+    }
+    wc.sendInputEvent({ type: "mouseUp", x: to.x, y: to.y, button: "left", clickCount: 1 });
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `drag failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+/** One key combo, modifiers held for the press. Re-parsed here (not trusted from the queue) so main is
+ *  the authority on what actually reaches Chromium. */
+async function agentBrowserKeys(id: string, keys: string): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  const parsed = parseKeyCombo(keys);
+  if ("error" in parsed) { await browserApiPost("/api/browser/result", { id, ok: false, error: parsed.error }); return; }
+  try {
+    const { keyCode, modifiers } = parsed;
+    wc.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+    // A char event is what puts a printable key into a field; a named key (Escape, Tab) must NOT get one,
+    // or Chromium inserts a stray control character alongside the keydown the page is listening for.
+    if ([...keyCode].length === 1 && !modifiers.includes("control") && !modifiers.includes("meta")) {
+      wc.sendInputEvent({ type: "char", keyCode, modifiers });
+    }
+    wc.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `key press failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+async function agentBrowserType(id: string, text: string, pressEnter: boolean): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const enter = (): void => {
+      wc.sendInputEvent({ type: "keyDown", keyCode: "Return" });
+      wc.sendInputEvent({ type: "char", keyCode: "Return" });
+      wc.sendInputEvent({ type: "keyUp", keyCode: "Return" });
+    };
+    for (const ch of text) {
+      if (ch === "\n" || ch === "\r") { enter(); continue; }
+      wc.sendInputEvent({ type: "char", keyCode: ch });
+    }
+    if (pressEnter) enter();
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `type failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+async function agentBrowserScroll(id: string, dy: number): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const step = Number.isFinite(dy) ? Math.max(-20_000, Math.min(20_000, Math.round(dy))) : 800;
+    await wc.executeJavaScript(`window.scrollBy(0, ${step});`, true);
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `scroll failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+// ── P-JEV.4 (ADR-0379): the Jev browser policy's executor half ───────────────────────────────────────
+// Both ops run the page scripts of desktop/browser_snapshot.ts in an ISOLATED world: the element cache
+// and the freshness guards live in a V8 context the page's own scripts cannot reach or monkey-patch,
+// while the DOM itself is shared. MAIN is the authority on what executes - it re-narrows the queued
+// action, re-verifies the decision's freshness reference against the live page, and re-reads geometry
+// right before input. Anything off -> NOTHING touches the page and the route learns why (stale).
+const agentSleep = (ms: number): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+};
+function policyEval(wc: Electron.WebContents, code: string): Promise<unknown> {
+  return wc.executeJavaScriptInIsolatedWorld(BROWSER_POLICY_WORLD, [{ code }]);
+}
+/** One indexed observation of the page. SNAPSHOT_JS answers null mid-navigation, so it is retried
+ *  briefly; the fingerprint keys every decision the policy makes to exactly this observation. */
+async function agentBrowserSnapshot(id: string): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    let raw: unknown = await policyEval(wc, SNAPSHOT_JS);
+    for (let retry = 0; retry < 10 && raw === null; retry++) {
+      await agentSleep(20);
+      raw = await policyEval(wc, SNAPSHOT_JS);
+    }
+    if (!isBrowserPageShape(raw)) { await browserApiPost("/api/browser/result", { id, ok: false, error: "snapshot unavailable: the page is still loading" }); return; }
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify({ url: raw.url, text: raw.text, actions: raw.actions, scroll: raw.scroll }))
+      .digest("hex");
+    await browserApiPost("/api/browser/result", { id, ok: true, page: { ...raw, fingerprint }, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `snapshot failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+/** Execute ONE chosen candidate: freshness check, then live target resolution, then real input events
+ *  (the page sees ordinary user interaction), then a short settle so the next snapshot sees the result.
+ *  Either check failing is reported as `stale` with nothing executed - the policy re-snapshots. */
+async function agentBrowserAct(id: string, action: BrowserAction, fresh: BrowserFreshness, text: string): Promise<void> {
+  const wc = agentPage();
+  if (!wc) { await browserApiPost("/api/browser/result", { id, ok: false, error: "browser closed by user" }); return; }
+  try {
+    const scoped = action.kind === "click" || action.kind === "select";
+    const reference: unknown = scoped ? [fresh.page_key, fresh.guard] : fresh.marker;
+    const live = await policyEval(wc, freshnessJs(action));
+    if (live === null || JSON.stringify(live) !== JSON.stringify(reference)) {
+      await browserApiPost("/api/browser/result", { id, ok: false, stale: true, error: "page changed since this decision" });
+      return;
+    }
+    if (action.kind === "wait") {
+      await agentSleep(100);
+      await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+      return;
+    }
+    if (action.kind === "scroll") {
+      const step = Number.isFinite(action.delta) ? Math.max(-20_000, Math.min(20_000, Math.round(action.delta ?? 0))) : 0;
+      await wc.executeJavaScript(`window.scrollBy(0, ${step});`, true);
+    } else {
+      const target = await policyEval(wc, targetJs(action));
+      const pt = target && typeof target === "object" && "x" in target && "y" in target &&
+        typeof target.x === "number" && typeof target.y === "number" && Number.isFinite(target.x) && Number.isFinite(target.y)
+        ? { x: target.x, y: target.y } : null;
+      if (!pt) {
+        await browserApiPost("/api/browser/result", { id, ok: false, stale: true, error: "target changed or is covered" });
+        return;
+      }
+      // A select was fully applied inside targetJs (value + input/change); click and fill go through the
+      // window's own input path. CSS px -> DIP is the page zoom, since the rect is viewport-relative.
+      if (action.kind !== "select") {
+        const zoom = wc.getZoomFactor();
+        const x = Math.round(pt.x * zoom), y = Math.round(pt.y * zoom);
+        wc.sendInputEvent({ type: "mouseMove", x, y });
+        wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+        wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+        if (action.kind === "fill") {
+          wc.selectAll();
+          await wc.insertText(text);
+        }
+      }
+    }
+    await policyEval(wc, settleJs(action));
+    await browserApiPost("/api/browser/result", { id, ok: true, title: wc.getTitle(), url: wc.getURL() });
+  } catch (e) {
+    await browserApiPost("/api/browser/result", { id, ok: false, error: `act failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
+async function agentBrowserClose(id: string): Promise<void> {
+  if (agentWin && !agentWin.isDestroyed()) {
+    agentCloseByCommand = true;
+    try { agentWin.destroy(); } catch { /* already gone */ }
+  }
+  agentWin = null;
+  await browserApiPost("/api/browser/result", { id, ok: true });
+}
+/** Drain + execute the agent's queued browser commands. Sequential: order matters (open -> capture). */
+async function agentBrowserTick(): Promise<void> {
+  if (agentPollBusy) return;
+  agentPollBusy = true;
+  try {
+    const res = await fetch(`http://localhost:${PORT}/api/browser/commands`, { headers: { "x-lucid-token": MAIN_TOKEN } });
+    if (!res.ok) return;
+    const parsed: unknown = await res.json().catch(() => null);
+    const data = parsed && typeof parsed === "object" && "data" in parsed ? parsed.data : null;
+    const cmds = data && typeof data === "object" && "commands" in data && Array.isArray(data.commands) ? data.commands : [];
+    for (const raw of cmds) {
+      if (!raw || typeof raw !== "object") continue;
+      const id = "id" in raw && typeof raw.id === "string" ? raw.id : "";
+      if (!id) continue;
+      const op = "op" in raw && typeof raw.op === "string" ? raw.op : "";
+      if (op === "open") await agentBrowserOpen(id, "url" in raw && typeof raw.url === "string" ? raw.url : "");
+      else if (op === "capture") await agentBrowserCapture(id);
+      else if (op === "scroll") await agentBrowserScroll(id, "dy" in raw && typeof raw.dy === "number" ? raw.dy : 800);
+      else if (op === "click") await agentBrowserClick(id, "x" in raw && typeof raw.x === "number" ? raw.x : 0, "y" in raw && typeof raw.y === "number" ? raw.y : 0, "button" in raw && raw.button === "right" ? "right" : "left");
+      else if (op === "drag") await agentBrowserDrag(id, "x" in raw && typeof raw.x === "number" ? raw.x : 0, "y" in raw && typeof raw.y === "number" ? raw.y : 0, "toX" in raw && typeof raw.toX === "number" ? raw.toX : 0, "toY" in raw && typeof raw.toY === "number" ? raw.toY : 0);
+      else if (op === "keys") await agentBrowserKeys(id, "keys" in raw && typeof raw.keys === "string" ? raw.keys : "");
+      else if (op === "type") await agentBrowserType(id, "text" in raw && typeof raw.text === "string" ? raw.text : "", "pressEnter" in raw && raw.pressEnter === true);
+      else if (op === "snapshot") await agentBrowserSnapshot(id);
+      else if (op === "act") {
+        // P-JEV.4: the action is re-narrowed HERE (main is the authority); a malformed one never executes.
+        const action = "action" in raw ? raw.action : null;
+        if (!isBrowserAction(action)) await browserApiPost("/api/browser/result", { id, ok: false, error: "act failed: malformed action" });
+        else await agentBrowserAct(id, action, "fresh" in raw && raw.fresh && typeof raw.fresh === "object" ? raw.fresh : {}, "text" in raw && typeof raw.text === "string" ? raw.text : "");
+      }
+      else if (op === "close") await agentBrowserClose(id);
+      else await browserApiPost("/api/browser/result", { id, ok: false, error: "unknown browser command" });
+    }
+  } catch { /* fail-quiet: never let the poll loop throw */
+  } finally { agentPollBusy = false; }
+}
+function startAgentBrowserLoop(): void {
+  setInterval(() => { void agentBrowserTick(); }, 500);
+}
+
 // Open an EXTERNAL http(s) URL in the user's default browser via the OS — a reliable path for the OAuth
 // sign-in page that doesn't depend on the renderer's window.open reaching setWindowOpenHandler (which can
 // silently no-op in some contexts, leaving "Connect via OAuth" with a toast but no browser). Strictly
 // http/https only, so a forged request can't launch file:// or a custom-scheme handler. Returns success.
-ipcMain.handle("lucid:openExternal", async (_e, u: unknown) => {
-  const url = typeof u === "string" ? u : "";
-  if (!/^https?:\/\//i.test(url)) return false;
-  try { await shell.openExternal(url); return true; } catch { return false; }
+ipcMain.handle("lucid:openExternal", async (e, u: unknown) => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents || e.senderFrame !== win.webContents.mainFrame) return false;
+  return openExternalHttp(u, (url) => shell.openExternal(url));
+});
+
+// P-RECOVER.1 (ADR-0385): the window lost the engine ("reconnecting" and nothing happens). Same sender
+// check as openExternal: only the main window's main frame, never the agent browser or a preview frame.
+// restartEngine refuses while the engine answers the nonce health probe and runs at most once a minute.
+ipcMain.handle("lucid:engineRestart", async (e): Promise<EngineRestartResult> => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents || e.senderFrame !== win.webContents.mainFrame) return { ok: false, reason: "forbidden" };
+  try { return await restartEngine("requested by the window"); }
+  catch (err) {
+    appendEngineLog(`- Engine restart failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    return { ok: false, reason: "error" };
+  }
 });
 
 // Reveal an export location in the OS file manager (#115). Only opens a path that actually exists, so a
@@ -329,7 +1229,7 @@ ipcMain.handle("lucid:showInFolder", async (_e, p: unknown) => {
 // P-LOCAL.3 polish: restart the app so the freshly-spawned dev server + omp pick up the current Local
 // Providers (their secrets are injected into the dev child env at spawn — a restart is the clean apply).
 ipcMain.handle("lucid:relaunch", () => {
-  try { dev?.kill(); } catch { /* best-effort */ }
+  // The quit stops the engine tree (endRun in will-quit) before the relaunched app binds its port.
   app.relaunch();
   app.quit();
 });
@@ -344,18 +1244,40 @@ ipcMain.on("lucid:win", (e, action: string) => {
 
 // P-KGMARKET.4 (ADR-0206): claim the lucid:// scheme and enforce a single instance so a deep-link launch
 // re-focuses the running app and hands it the URL (rather than spawning a second engine).
-if (process.defaultApp && process.argv.length >= 2) {
-  app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [resolve(process.argv[1]!)]); // dev
-} else {
-  app.setAsDefaultProtocolClient(AUTH_PROTOCOL); // packaged
+// Only the DEFAULT-port instance claims the lucid:// scheme. A side-by-side test instance registering it
+// would silently steal the OAuth callback from the app the user actually signed in from.
+if (PORT === DEFAULT_PORT) {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [resolve(process.argv[1]!)]); // dev
+  } else {
+    app.setAsDefaultProtocolClient(AUTH_PROTOCOL); // packaged
+  }
 }
 pendingAuthUrl = firstAuthUrl(process.argv); // a cold launch may already carry the URL
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
+  // P-RECOVER.1 (ADR-0385): read what the previous run left BEFORE this run overwrites it, then claim the
+  // ledger for this run (clean:false until a deliberate exit marks it). A second instance never gets here,
+  // so it can never touch the ledger of the run that owns the lock.
+  const ledgerPath = runLedgerPath(app.getPath("userData"));
+  previousRun = assessPreviousRun(readLedgerText(ledgerPath), process.pid);
+  try { mkdirSync(app.getPath("userData"), { recursive: true }); } catch { /* writeLedger reports its own failure */ }
+  saveRunLedger(freshLedger({ mainPid: process.pid, mainStartedAt: Date.now() - Math.round(process.uptime() * 1000), port: PORT, appVersion: app.getVersion() }));
+  // P-RECOVER.1: the run is marked clean only after the engine and its omp tree are verified stopped
+  // (endRun). The first will-quit defers the quit; quit() runs again once endRun settles, clean or not.
+  let runEnded = false;
+  app.on("will-quit", (e) => {
+    if (runEnded) return;
+    e.preventDefault();
+    void endRun().then(() => { runEnded = true; app.quit(); });
+  });
   app.on("second-instance", (_e, argv) => {
-    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    // P-RECOVER.1: a relaunch must always end in a usable window. If the main window is gone, reopen it
+    // (restarting the engine first when it no longer answers).
+    if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.focus(); }
+    else void reopenMainWindow();
     forwardAuthUrl(firstAuthUrl(argv));
   });
   app.on("open-url", (_e, url) => forwardAuthUrl(url)); // macOS delivers the deep link here
@@ -374,22 +1296,117 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn("[main] runtime bootstrap failed (continuing):", (e as Error).message);
   }
+  // P-OMP-BOOT.1 (ADR-0357): say it ONCE, HERE, where a human is looking. If provisioning could not
+  // produce a runnable omp then no model can run at all, and the reported v2.2.0 outage proved what
+  // happens when we stay quiet: dead turns on about half of all launches, 192 identical stack traces
+  // buried in engine.log, and nothing on screen. This fires only when NOTHING is runnable; a merely
+  // SLOW probe is indeterminate, not missing, so findOmp still returns a bin and this stays silent
+  // (ADR-0358, which is also where the earlier "ten days" phrasing here was corrected).
+  // The launch continues on purpose: the workspace, editor, settings and Providers UI are all still
+  // useful, and the remedy is often entered there. It continues with the user INFORMED.
+  // `ompResolution()` is memoized from the bootstrap probe, so this costs nothing extra and still names
+  // every path that was tried, which is exactly what the earlier field report lacked.
+  if (!runtimeEnv.LUCID_OMP_BIN) {
+    const report = ompUnavailableReport(ompResolution());
+    console.error(`[main] ${report.title}\n${report.detail}`);
+    dialog.showErrorBox(report.title, report.detail);
+  }
 
+  // os_crypt convergence, backfill direction: on a machine that only ever ran port-suffixed instances
+  // the canonical dir has no key, so adopt the key Chromium just minted for THIS instance as the
+  // canonical one - every later instance then seeds from it (module-load seed above). Never overwrites
+  // an existing canonical key. Best-effort: a miss self-heals on a later launch.
+  if (process.platform === "win32" && PORT !== DEFAULT_PORT) {
+    try {
+      const canonPath = localStatePath(CANONICAL_USER_DATA);
+      const fill = backfillCanonicalFromInstance(readTextBestEffort(canonPath), readTextBestEffort(localStatePath(app.getPath("userData"))));
+      if (fill.changed && fill.content !== undefined) {
+        mkdirSync(CANONICAL_USER_DATA, { recursive: true });
+        writeFileSync(canonPath, fill.content);
+      }
+    } catch (err) { console.error("[main] os_crypt canonical backfill failed:", err); }
+  }
+  // P-RECOVER.1 (ADR-0385): the previous run died. Stop what the run ledger PROVES it left running, and
+  // write the startup incident, before anything binds. What the ledger cannot prove still goes through
+  // the P-PORTGUARD.3 dialog below. A clean previous run skips this entirely.
+  if (previousRun.verdict === "unclean") await recoverFromUncleanExit(previousRun.ledger);
+  // Linux/macOS shutdown: a deliberate exit, like will-quit (Windows uses the window's session-end).
+  powerMonitor.on("shutdown", () => markRunClean());
+  // P-PORTGUARD.3 (ADR-0382): an engine WE left behind (a build before the parent watch, or a crash it
+  // could not observe) is offered for reaping before the bind is even attempted. Quit = leave it alone.
+  if (!(await reapOrphanedEngine())) { splash?.close(); markRunClean(); app.exit(0); return; }
   startDevServer();
   const serverUp = await waitForServer();
+  // P-PORTGUARD.1 (ADR-0305): a FOREIGN process answered the engine port. Never render it - the window
+  // would paint a stranger's UI (in the field incident, another app's sign-in page) inside LUCID's
+  // trusted chrome. And never roll to a free port silently: userData is port-keyed identity (ADR-0278),
+  // so a silent roll would move the user onto a suffixed profile and "lose" their settings and vault.
+  // Fail loudly with forensics instead; the user quits the squatter or deliberately picks another port.
+  if (serverUp.status === "foreign") {
+    const observed = await probePortOwner();
+    const block = formatPortIncident({
+      port: PORT,
+      productName: BUILD.productName,
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      engineDescription: engineDesc,
+      verdict: serverUp.verdict,
+      observed,
+    });
+    appendEngineLog(`\n--- ${new Date().toISOString()} foreign port incident (ADR-0305) ---\n${block}\n`);
+    splash?.close();
+    const { response } = await dialog.showMessageBox({
+      type: "error",
+      title: "Another program is using LUCID's port",
+      message: `Another program on this computer is already listening on port ${PORT}, the port ${BUILD.productName}'s engine uses. ${BUILD.productName} refuses to display a foreign program and never renders it. To fix this, quit that program and relaunch ${BUILD.productName}, or launch a separate ${BUILD.productName} instance on another port.`,
+      detail: block,
+      buttons: ["Copy report and quit", "Quit"],
+      defaultId: 0,
+    });
+    if (response === 0) clipboard.writeText(block);
+    // P-RECOVER.1: the user quit on purpose. app.exit skips will-quit (and the "quit" handler that normally
+    // kills the engine), so the run is ended here: engine tree stopped, clean only if that is verified.
+    await endRun();
+    app.exit(1);
+    return;
+  }
   createWindow();
+  bootComplete = true; // P-RECOVER.1: from here a relaunch with no window reopens one (reopenMainWindow)
+  // P-BROWSER.1 (wave 2): start the agent-browser command poll once the server answered /api/health.
+  // Started even on a timeout - the loop is fail-quiet and a late-starting server self-heals into it.
+  startAgentBrowserLoop();
   splash?.close();
   // Don't leave the user staring at a black window with no explanation: if the local engine never
   // came up (e.g. no usable bun runtime), say so. The window keeps retrying via did-fail-load, so a
   // late start still recovers; this only fires when it genuinely failed to answer in time.
-  if (!serverUp) {
-    dialog.showErrorBox(
-      "Lucid Agent could not start its local engine",
-      `The bundled background service did not respond on port ${PORT} within 30 seconds, so the window ` +
-        `may stay blank.\n\nThe engine's own startup output (including any crash message) is in:\n` +
-        `${engineLogPath()}\n\nThe app will keep retrying — if it stays blank, send that log file to ` +
-        `support or reinstall the latest release.`,
-    );
+  if (serverUp.status === "down") {
+    // P-WINBOOT.1 (ADR-0259): classify the failure into an ACTIONABLE dialog. The dominant field case is
+    // a Program Files install where Bun's loader EPERMs on dev.ts; waitForServer already returned early on
+    // the child's exit, so this fires immediately (not 30s later) and tells the user how to recover.
+    const probe: WriteProbe = { write: (p, data) => writeFileSync(p, data), remove: (p) => rmSync(p, { force: true }) };
+    const report = classifyEngineFailure({
+      packaged: app.isPackaged,
+      repoRoot: REPO,
+      repoWritable: probeDirWritable(REPO, probe),
+      protectedRoot: isProtectedInstallRoot(REPO),
+      exited: !!engineExit,
+      exitCode: engineExit?.code ?? null,
+      lastLogLine: bestEngineLine(engineTail),
+      port: PORT,
+      logPath: engineLogPath(),
+      platform: process.platform,
+    });
+    // P-PORTGUARD.2: when the engine lost the BIND there is no health verdict to classify (nothing of
+    // ours ever listened), but the user still needs to know WHICH process to end - "port 5319 is busy"
+    // without a pid is the same dead end the ADR-0305 incident block exists to prevent. Attribute it
+    // with the same probe and the same renderer, and put it in engine.log too.
+    let detail = report.detail;
+    if (report.kind === "port-busy") {
+      const owner = formatSquatter(await probePortOwner()).join("\n");
+      detail = `${detail}\n\nWhat is holding port ${PORT}:\n${owner}`;
+      appendEngineLog(`\n--- ${new Date().toISOString()} port-busy incident (P-PORTGUARD.2) ---\n- Port: ${PORT}\n${owner}\n`);
+    }
+    dialog.showErrorBox(report.title, detail);
   }
   initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

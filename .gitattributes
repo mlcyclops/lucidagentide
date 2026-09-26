@@ -5,3 +5,7 @@
 # The Windows control-panel banner is streamed by cmd's TYPE under chcp 65001 —
 # it MUST keep its CRLF line endings + UTF-8 bytes exactly (LF would staircase).
 .github/assets/cli-banner.txt -text
+# test/integration only: append-only logs union-merge so cross-branch entries never
+# conflict (order is irrelevant on this throwaway test branch; code is what's tested).
+PROGRESS.md merge=union
+DECISIONS.md merge=union

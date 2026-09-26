@@ -16,6 +16,7 @@
 
 import type { PodcastBackend, PodcastScript, PodcastResult } from "../brief/engineering_update.ts";
 import { buildWav, concatWav } from "../brief/tts_backend.ts";
+import { stripNonSpeech } from "./transcription.ts";
 import type { TranscriptionBackend, TranscriptionResult, TranscribeOptions } from "./transcription.ts";
 
 const ELEVEN_BASE = "https://api.elevenlabs.io";
@@ -176,7 +177,7 @@ export class ElevenLabsSttBackend implements TranscriptionBackend {
       const res = await f(`${ELEVEN_BASE}/v1/speech-to-text`, { method: "POST", headers: { "xi-api-key": this.opts.apiKey }, body: form });
       if (!res.ok) throw await elevenErr(res, "STT");
       const data = (await res.json()) as { text?: string };
-      const text = typeof data.text === "string" ? data.text.trim() : "";
+      const text = stripNonSpeech(typeof data.text === "string" ? data.text : "");
       return { backendId: this.id, text, note: `transcribed ${audio.length} bytes via ElevenLabs Scribe` };
     } catch (e) {
       return { backendId: this.id, text: "", note: `ElevenLabs STT unavailable (${(e as Error)?.message ?? e}); no transcript` };

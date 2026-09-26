@@ -15,9 +15,22 @@
 import { $, el } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { bridge } from "./bridge.ts";
+import { monacoThemeFor } from "./theme.ts";
 
 const MONACO_BASE = "/vendor/monaco";
-const LUCID_THEME = { base: "vs-dark", inherit: true, rules: [], colors: { "editor.background": "#0b0e14", "editorGutter.background": "#0b0e14" } };
+// P-THEME.1: Monaco is a separate rendering engine with its own theme registry, so it cannot read
+// our CSS custom properties. We therefore register exactly TWO themes and let theme.ts collapse the
+// seven app themes onto them (monacoThemeFor), rather than minting a Monaco theme per app theme:
+// the editor only needs to agree with the surrounding panel on light-vs-dark, and `inherit:true`
+// pulls the whole token palette off Monaco's own `vs`/`vs-dark` base. The backgrounds match the
+// --bg-editor token of the corresponding palettes, so the panel and the editor share one ground.
+const MONACO_THEMES: Record<"lucid-dark" | "lucid-light", unknown> = {
+  "lucid-dark":  { base: "vs-dark", inherit: true, rules: [], colors: { "editor.background": "#0b0e14", "editorGutter.background": "#0b0e14" } },
+  "lucid-light": { base: "vs",      inherit: true, rules: [], colors: { "editor.background": "#ffffff", "editorGutter.background": "#ffffff" } },
+};
+// The app theme currently in force. Kept as a module var because Monaco loads LAZILY: a theme
+// change can land long before (or long after) the editor exists, and both orders must work.
+let editorTheme: "lucid-dark" | "lucid-light" = "lucid-dark";
 
 let monaco: any = null;
 let monacoLoading: Promise<any> | null = null;
@@ -37,6 +50,18 @@ export function setIdeHooks(h: { sendToChat?: (text: string) => void; pickSavePa
 
 export function setIdeExclusivity(cb: () => void): void { onBeforeOpen = cb; }
 export function isIdeOpen(): boolean { return !!panel?.classList.contains("open"); }
+
+/** P-THEME.1: re-theme the live Monaco instance (no reload). Safe to call before Monaco loads. */
+export function applyEditorTheme(themeId: string): void {
+  // Record first, apply second. If Monaco has not loaded, the recorded value is what loadMonaco()
+  // and editor.create() pick up, so a theme picked while the IDE was never opened is still correct
+  // the first time it opens. monacoThemeFor never throws on an unknown id (it resolves first).
+  editorTheme = monacoThemeFor(themeId);
+  if (!monaco) return; // not loaded: nothing to re-theme, and setTheme would throw
+  // setTheme is GLOBAL in Monaco (one theme stylesheet for the editor and for colorize), so this
+  // one call also re-paints every chat snippet; keep the colorize latch in step with it.
+  try { monaco.editor.setTheme(editorTheme); colorizedWith = editorTheme; } catch { /* a theme swap is never worth a crash */ }
+}
 
 /** Lazily load the vendored Monaco (AMD loader → editor.main), WITH semantic IntelliSense.
  *  P-IDE.6 (supersedes the ADR-0036 deferral): the TypeScript/JSON language services run in SAME-ORIGIN
@@ -72,7 +97,9 @@ function loadMonaco(): Promise<any> {
           monaco.languages.typescript?.typescriptDefaults?.setDiagnosticsOptions?.({ noSemanticValidation: false, noSyntaxValidation: false });
           monaco.languages.typescript?.javascriptDefaults?.setDiagnosticsOptions?.({ noSemanticValidation: false, noSyntaxValidation: false });
           monaco.languages.json?.jsonDefaults?.setDiagnosticsOptions?.({ validate: true });
-          monaco.editor.defineTheme("lucid-dark", LUCID_THEME);
+          for (const [name, def] of Object.entries(MONACO_THEMES)) monaco.editor.defineTheme(name, def);
+          // Apply the theme the app is ALREADY on: the user may have switched before the first open.
+          monaco.editor.setTheme(editorTheme);
         } catch { /* best-effort: theme/diagnostics tuning is non-essential */ }
         resolve(monaco);
       }, (err: unknown) => fail(err instanceof Error ? err : new Error("Monaco core failed to load")));
@@ -87,13 +114,16 @@ function loadMonaco(): Promise<any> {
 // editor instance. Reuses the same lazily-loaded, vendored Monaco (no new dep) and its `colorize` tokenizer
 // (main-thread; no language-service worker needed). Returns Monaco-generated HTML (its own text is escaped,
 // so it's safe to assign), or null on any failure so the caller can fall back to plain escaped text.
-let colorizeThemeReady = false;
+// Tracks WHICH theme was last pushed to Monaco (not merely "one was"): a boolean latch would freeze
+// chat snippets on the boot theme forever, because colorize paints from the global theme stylesheet.
+let colorizedWith: string | null = null;
 export async function colorizeCode(code: string, langHint: string): Promise<string | null> {
   try {
     const m = await loadMonaco();
     // colorize paints via `.mtkN` classes whose colors live in the theme stylesheet Monaco injects on
-    // setTheme; ensure it's applied once (no editor may have been created yet).
-    if (!colorizeThemeReady) { try { m.editor.setTheme("lucid-dark"); } catch { /* default theme */ } colorizeThemeReady = true; }
+    // setTheme, so push the CURRENT app theme (no editor may have been created yet) and skip the
+    // call when it is already in force - re-setting the same theme rebuilds that stylesheet.
+    if (colorizedWith !== editorTheme) { try { m.editor.setTheme(editorTheme); colorizedWith = editorTheme; } catch { /* default theme */ } }
     const lang = guessLanguage(langHint);
     return await m.editor.colorize(code, lang === "plaintext" ? "" : lang, { tabSize: 2 });
   } catch { return null; }
@@ -218,7 +248,7 @@ export async function openIde(opts: { title?: string; code: string; language?: s
   const body = $("#ideBody", p)!;
   if (!editor) {
     editor = m.editor.create(body, {
-      value: opts.code, language: lang, readOnly: true, theme: "lucid-dark",
+      value: opts.code, language: lang, readOnly: true, theme: editorTheme,
       automaticLayout: true, minimap: { enabled: false }, fontSize: 13, lineHeight: 19,
       scrollBeyondLastLine: false, wordWrap: "off", renderWhitespace: "none", smoothScrolling: true,
       fontFamily: "var(--mono, ui-monospace, monospace)",

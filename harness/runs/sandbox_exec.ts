@@ -35,13 +35,142 @@
 // `lucid-appcontainer` helper land here; the native helper itself + Linux slirp raw-socket forwarding are
 // follow-ups. Pure + hermetic: `which` is injectable and `ctx.proxy` is a plain path/URL record.
 
-import { homedir } from "node:os";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { win32 as win32Path } from "node:path";
 import type { ProfileCaps } from "./profiles.ts";
 
 /** Presence probe for a binary on PATH. Injectable so tests never depend on the host. */
 export type WhichFn = (bin: string) => boolean;
 
 const defaultWhich: WhichFn = (bin) => Bun.which(bin) != null;
+
+/** FUNCTIONAL probe: presence on PATH is not capability. Injectable so tests never depend on the
+ *  host kernel. See `defaultProbe` for why this exists at all. */
+export type ProbeFn = (bin: string) => boolean;
+
+/** Cache the functional probe per binary: resolveBackend runs at every omp spawn and the probe
+ *  costs a process. Host capability does not change within a run. */
+const probeCache = new Map<string, boolean>();
+
+/** Does `bwrap` actually WORK here, not merely exist?
+ *
+ *  Ubuntu/Debian 24.04+ ship bubblewrap on PATH but restrict unprivileged user namespaces via
+ *  AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`). bwrap then fails at startup with
+ *  "setting up uid map: Permission denied" — AFTER we've committed to it as the backend. A
+ *  presence-only probe therefore selected a backend that killed every wrapped child: `omp acp`
+ *  never came up, the ACP session never opened, `configOptions` stayed empty and the picker fell
+ *  back to its hardcoded Anthropic list — OpenAI/xAI models silently absent on a correctly
+ *  OAuth'd box. Run the smallest real sandbox to find out, once. */
+const defaultProbe: ProbeFn = (bin) => {
+  const cached = probeCache.get(bin);
+  if (cached !== undefined) return cached;
+  let ok = false;
+  try {
+    ok = Bun.spawnSync({ cmd: [bin, "--ro-bind", "/", "/", "true"], stdout: "ignore", stderr: "ignore", stdin: "ignore" }).exitCode === 0;
+  } catch {
+    ok = false; // binary vanished between which() and here, or is not executable
+  }
+  probeCache.set(bin, ok);
+  return ok;
+};
+
+/** Does `sandbox-exec` actually WORK here, not merely exist?
+ *
+ *  sandbox-exec ships on every macOS, so a presence-only check always selects Seatbelt. But a
+ *  LUCID that is itself running under a sandbox (a sandboxed parent process: CI runners, MDM
+ *  wrappers, a LUCID dev build launched from inside another agent's gated shell) cannot NEST a
+ *  Seatbelt profile: the wrapped child dies instantly with "sandbox_apply: Operation not
+ *  permitted" (exit 71). That is the exact bwrap failure mode above wearing macOS clothes:
+ *  `omp acp` never comes up, the ACP session never opens, configOptions stays empty and the
+ *  model picker sits blank on a correctly-authed box. Run the smallest real profile once to
+ *  find out; cached per run (host capability does not change within a run). */
+const seatbeltDefaultProbe: ProbeFn = (bin) => {
+  const cached = probeCache.get(bin);
+  if (cached !== undefined) return cached;
+  let ok = false;
+  try {
+    ok = Bun.spawnSync({ cmd: [bin, "-p", "(version 1)(allow default)", "/usr/bin/true"], stdout: "ignore", stderr: "ignore", stdin: "ignore" }).exitCode === 0;
+  } catch {
+    ok = false; // binary vanished between which() and here, or is not executable
+  }
+  probeCache.set(bin, ok);
+  return ok;
+};
+
+/** Does `lucid-appcontainer` actually WORK here, not merely exist?
+ *
+ *  Same doctrine as bwrap/Seatbelt above: presence is not capability. The helper can exist yet be
+ *  unable to contain — `CreateAppContainerProfile` denied (mandatory-profile policy), a blocked
+ *  DLL load, or a filesystem-ACL grant refused on this host. The helper is FAIL-CLOSED (a child
+ *  it cannot contain never runs), so committing to it without a probe reproduces the exact
+ *  bwrap-on-Ubuntu-24.04 failure: every wrapped spawn dies and the session never opens. Run the
+ *  smallest real container once inside a throwaway workspace, cached per run.
+ *
+ *  P-SANDBOX.9 (ADR-0386): the probe is a STDIO ROUND TRIP, not `cmd /c exit 0`. The omp child speaks
+ *  ACP over stdin/stdout, and a helper that never wired its std handles into the container still exits
+ *  0 on `exit 0`: that is how beta.7 lit the green pill and then every turn died with "agent process
+ *  exited (code 1)" and no stderr. A contained child must ECHO a marker back through our pipe. A helper
+ *  that cannot (a stale build, a host that refuses the handle list) is not committed to. */
+export const APPCONTAINER_PROBE_MARKER = "lucid-appcontainer-stdio-ok";
+export function appContainerProbeArgv(bin: string, workspace: string): string[] {
+  return [bin, "--workspace", workspace, "--deny-network", "--", "cmd", "/c", `echo ${APPCONTAINER_PROBE_MARKER}`];
+}
+/** PURE: did the probe run AND carry the child's stdout back to us? */
+export function appContainerProbePassed(r: { exitCode: number | null; stdout: string }): boolean {
+  return r.exitCode === 0 && r.stdout.includes(APPCONTAINER_PROBE_MARKER);
+}
+const appContainerDefaultProbe: ProbeFn = (bin) => {
+  const cached = probeCache.get(bin);
+  if (cached !== undefined) return cached;
+  let ok = false;
+  try {
+    const r = Bun.spawnSync({ cmd: appContainerProbeArgv(bin, tmpdir()), stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    ok = appContainerProbePassed({ exitCode: r.exitCode, stdout: r.stdout.toString() });
+  } catch {
+    ok = false; // binary vanished between which() and here, or is not executable
+  }
+  probeCache.set(bin, ok);
+  return ok;
+};
+
+/** The stable AppContainer moniker every LUCID-contained child runs under (mirrors the helper's
+ *  APPCONTAINER_NAME — one name so ACL grants, WFP state and the loopback exemption all attribute
+ *  to the same SID). */
+export const APPCONTAINER_MONIKER = "LucidAgentIDE.Sandbox.v1";
+
+/** PURE: does a `CheckNetIsolation LoopbackExempt -s` listing exempt our AppContainer?
+ *  AppContainers are denied loopback BY DEFAULT, and mediated (network-on) profiles reach the egress
+ *  proxy ONLY over loopback — so without this exemption an isolated network-on child has no route to
+ *  ANYTHING (provider APIs included). Listing needs no elevation; REGISTERING does
+ *  (`lucid-appcontainer --register-loopback`, ADR-0174, one-time per host). Matching is
+ *  case-insensitive: CheckNetIsolation prints monikers lowercased. */
+export function listingExemptsMoniker(listing: string, moniker: string = APPCONTAINER_MONIKER): boolean {
+  return listing.toLowerCase().includes(moniker.toLowerCase());
+}
+
+let loopbackExemptCache: boolean | undefined;
+
+/** Is the exemption registered on THIS host? Cached per run (a WFP config change mid-run is not a
+ *  supported flow — restart the app after `--register-loopback`). Never throws: an unreadable
+ *  listing means "not exempt", which degrades to the disclosed passthrough, never to a dead child. */
+/** P-SANDBOX.12 (ADR-0390): forget the cached answer after LUCID itself (un)registers the exemption. */
+export function resetLoopbackExemptCache(): void {
+  loopbackExemptCache = undefined;
+}
+
+export function loopbackExempted(): boolean {
+  if (loopbackExemptCache !== undefined) return loopbackExemptCache;
+  let ok = false;
+  try {
+    const r = Bun.spawnSync({ cmd: ["CheckNetIsolation.exe", "LoopbackExempt", "-s"], stdin: "ignore", stderr: "ignore" });
+    ok = r.exitCode === 0 && listingExemptsMoniker(r.stdout.toString());
+  } catch {
+    ok = false;
+  }
+  loopbackExemptCache = ok;
+  return ok;
+}
 
 export interface SandboxCtx {
   /** The workspace the agent works in — bound read-write inside the sandbox. */
@@ -55,6 +184,15 @@ export interface SandboxCtx {
    *  no mediator ⇒ no network, never raw unmediated egress (fail-closed, invariant #3). Only meaningful
    *  on an isolating backend; the passthrough discloses and ignores it. */
   proxy?: SandboxProxy;
+  /** P-SANDBOX.9 (ADR-0386): extra dirs the contained child must READ+EXECUTE (the app's own repo tree,
+   *  the bun runtime the omp shim launches). Only the AppContainer backend consumes these: an
+   *  AppContainer can read NOTHING its SID was not granted, unlike bwrap/Seatbelt's read-only host view. */
+  grantRx?: string[];
+  /** P-SANDBOX.9: extra dirs the contained child must READ+WRITE (omp's own state dir, ~/.omp). */
+  grantRw?: string[];
+  /** P-SANDBOX.9: TEMP/TMP for the contained child. The user's %TEMP% is not granted to the container,
+   *  so bun and omp need a temp dir inside a granted rw tree. AppContainer only. */
+  tmpDir?: string;
 }
 
 /** The subset of the egress proxy's endpoint the sandbox needs to steer a child at it. Mirrors
@@ -69,6 +207,183 @@ export interface SandboxProxy {
    *  privileged :53 — DNS then stays with the host resolver and we mediate HTTP(S) only, with full
    *  in-namespace DNS steering completed in P-SANDBOX.4. When present, DNS is mediated too. */
   resolvConfPath?: string;
+}
+
+/** PURE: the env that steers a contained child's egress at the mediating proxy. P-SANDBOX.9 (ADR-0386):
+ *  HTTP(S)_PROXY alone is NOT enough for omp. omp 18 installs its process-wide proxied `fetch` (and the
+ *  per-provider inference transport) from PI_PROXY / PI_PROXY_<PROVIDER> only, and never consults
+ *  HTTP(S)_PROXY there. Under bwrap/Seatbelt that was invisible (a direct dial still had a route); under
+ *  a capability-less AppContainer a direct dial is kernel-dropped, so the chat died with a green pill.
+ *  ALL_PROXY covers the remaining clients that read only that. Loopback always bypasses the proxy. */
+export function proxyChildEnv(httpProxyUrl: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = httpProxyUrl;
+  env.PI_PROXY = env.ALL_PROXY = env.all_proxy = httpProxyUrl;
+  env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+  return env;
+}
+
+/** PURE: the dirs a contained omp needs beyond its workspace, for the AppContainer backend (P-SANDBOX.9,
+ *  ADR-0386). An AppContainer child can read NOTHING its SID was not granted, and the helper only granted
+ *  the workspace plus the directory of the exe it launches (`node_modules\.bin`). The omp shim there then
+ *  needs the bun runtime it execs, the `@oh-my-pi` package and our `-e` extensions (the repo tree), and
+ *  omp + our extensions keep ALL their state under ~/.omp (sessions, agent.db, auth, audit logs).
+ *    rx: the repo root; the bun runtime's dir; an omp installed OUTSIDE the repo (the managed
+ *        `bun add -g` tree or ~/.bun) by its install root, two levels above `bin\omp.exe`.
+ *    rw: ~/.omp. tmp: ~/.omp/lucid-sandbox-tmp (the user's %TEMP% is not granted).
+ *  Windows paths via path.win32, so the rule is testable on any host. Deduped case-insensitively. */
+/** PURE: the `shellPath` the user pinned in omp's config.yml, or null. P-SANDBOX.11 (ADR-0389): omp
+ *  THROWS when an explicit shellPath does not exist ("Custom shell path not found"), and inside the
+ *  AppContainer an ungranted path does not exist, so the first contained turn died on the user's own
+ *  `...\AppData\Local\Programs\MinGit\usr\bin\sh.exe`. A top-level scalar only; quotes stripped. */
+export function parseOmpShellPath(yml: string): string | null {
+  const m = /^shellPath:[ \t]*(.+?)[ \t]*$/m.exec(yml);
+  if (!m) return null;
+  let v = m[1]!;
+  if (/^".*"$/.test(v)) v = v.slice(1, -1).replace(/\\\\/g, "\\"); // YAML double quotes escape backslashes
+  else if (/^'.*'$/.test(v)) v = v.slice(1, -1).replace(/''/g, "'");
+  else v = v.replace(/\s+#.*$/, ""); // a plain scalar may carry a trailing comment
+  v = v.trim();
+  return v && !v.startsWith("#") ? v : null;
+}
+
+/** PURE: the install root of a shell exe, so its sibling tools (MinGit's git.exe, coreutils) come with
+ *  it: strip a trailing `bin`, then a trailing `usr` (`<root>\usr\bin\sh.exe`, `<root>\bin\bash.exe`). */
+export function shellInstallRoot(shell: string): string {
+  const w = win32Path;
+  let d = w.dirname(shell);
+  if (w.basename(d).toLowerCase() === "bin") d = w.dirname(d);
+  if (w.basename(d).toLowerCase() === "usr") d = w.dirname(d);
+  return d;
+}
+
+/** PURE: the install ROOTS where git commonly lives on Windows, in lookup order. P-SANDBOX.16 (ADR-0397):
+ *  a git the host never put on PATH (MinGit, a per-user install, scoop, GitHub Desktop's embedded copy)
+ *  was invisible to the agent, and inside the AppContainer an ungranted one does not exist at all. The
+ *  host PATH comes first (the user's own choice wins), then the vendor defaults. Every root's launcher is
+ *  `<root>\cmd\git.exe`. A `*` segment is a version dir the caller expands, newest first. */
+export function gitRootCandidates(env: Record<string, string | undefined>): string[] {
+  const w = win32Path;
+  const out: string[] = [];
+  for (const dir of (env.PATH ?? env.Path ?? "").split(";")) {
+    if (!dir || !w.isAbsolute(dir)) continue;
+    // `<root>\cmd`, `<root>\bin`, `<root>\mingw64\bin` are the three dirs git's installers put on PATH.
+    let d = w.normalize(dir).replace(/\\+$/, "");
+    const leaf = w.basename(d).toLowerCase();
+    if (leaf !== "cmd" && leaf !== "bin") continue;
+    d = w.dirname(d);
+    if (w.basename(d).toLowerCase() === "mingw64") d = w.dirname(d);
+    out.push(d);
+  }
+  const pf = env.ProgramW6432 ?? env.ProgramFiles;
+  if (pf) out.push(w.join(pf, "Git"));
+  if (env["ProgramFiles(x86)"]) out.push(w.join(env["ProgramFiles(x86)"]!, "Git"));
+  const local = env.LOCALAPPDATA ?? (env.USERPROFILE ? w.join(env.USERPROFILE, "AppData", "Local") : "");
+  if (local) out.push(w.join(local, "Programs", "Git"), w.join(local, "Programs", "MinGit"));
+  const scoop = env.SCOOP ?? (env.USERPROFILE ? w.join(env.USERPROFILE, "scoop") : "");
+  if (scoop) out.push(w.join(scoop, "apps", "git", "current"), w.join(scoop, "apps", "mingit", "current"));
+  const choco = env.ChocolateyInstall ?? (env.ProgramData ? w.join(env.ProgramData, "chocolatey") : "");
+  if (choco) out.push(w.join(choco, "lib", "git.portable", "tools"), w.join(choco, "lib", "mingit", "tools"));
+  if (local) {
+    out.push(w.join(local, "Microsoft", "WinGet", "Packages", "Git.MinGit_*"));
+    out.push(w.join(local, "GitHubDesktop", "app-*", "resources", "app", "git"));
+  }
+  return out;
+}
+
+/** The first candidate root that really holds `cmd\git.exe`, or null. `io` is injectable (like `which`)
+ *  so the lookup order and wildcard expansion are testable on any host. */
+export function discoverGitRoot(
+  env: Record<string, string | undefined>,
+  io: { exists(p: string): boolean; list(dir: string): string[] } = { exists: existsSync, list: (d) => readdirSync(d) },
+): string | null {
+  const w = win32Path;
+  const newestFirst = (a: string, b: string) => b.localeCompare(a, undefined, { numeric: true });
+  for (const cand of gitRootCandidates(env)) {
+    let roots = [cand];
+    const star = cand.split("\\").findIndex((seg) => seg.includes("*"));
+    if (star >= 0) {
+      const segs = cand.split("\\");
+      const parent = segs.slice(0, star).join("\\");
+      const prefix = segs[star]!.slice(0, segs[star]!.indexOf("*"));
+      let names: string[] = [];
+      try { names = io.list(parent); } catch { /* vendor dir absent */ }
+      roots = names.filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase())).sort(newestFirst).map((n) => w.join(parent, n, ...segs.slice(star + 1)));
+    }
+    const hit = roots.find((r) => io.exists(w.join(r, "cmd", "git.exe")));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** The discovered git's launcher dir (`<root>\cmd`, holding git.exe), or null when no git is installed. */
+export function gitCmdDir(env: Record<string, string | undefined> = process.env): string | null {
+  const root = discoverGitRoot(env);
+  return root ? win32Path.join(root, "cmd") : null;
+}
+
+/** PURE: the PATH overlay that puts `dir` first (a discovered git's `cmd` dir, or the contained agent's git
+ *  broker shim, P-SANDBOX.17), keyed by the env's OWN spelling of PATH (Windows env names are
+ *  case-insensitive, so a second `PATH` beside `Path` is ambiguous at spawn). Empty when there is no dir or
+ *  it is already on PATH. */
+export function prependPathOverlay(env: Record<string, string | undefined>, dir: string | null): Record<string, string> {
+  if (!dir) return {};
+  const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  const cur = env[key] ?? "";
+  const norm = (p: string) => win32Path.normalize(p).replace(/\\+$/, "").toLowerCase();
+  if (cur.split(";").some((p) => p && norm(p) === norm(dir))) return {};
+  return { [key]: cur ? `${dir};${cur}` : dir };
+}
+
+/** PURE: already readable by every AppContainer ("ALL APPLICATION PACKAGES" on the OS dirs), and not
+ *  ours to re-ACL: a standard user cannot write their DACLs, so granting there would fail closed. */
+function osReadable(p: string): boolean {
+  const n = p.replace(/\//g, "\\").toLowerCase();
+  return /^[a-z]:\\windows(\\|$)/.test(n) || /^[a-z]:\\program files( \(x86\))?(\\|$)/.test(n);
+}
+
+export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; bunBin?: string | null; ompBin?: string | null; shellPath?: string | null; gitRoot?: string | null }): {
+  grantRx: string[];
+  grantRw: string[];
+  tmpDir: string;
+} {
+  const w = win32Path;
+  const under = (child: string, parent: string) => {
+    const rel = w.relative(parent, child);
+    return !!rel && !rel.startsWith("..") && !w.isAbsolute(rel);
+  };
+  const rx = [i.repoRoot];
+  if (i.bunBin && w.isAbsolute(i.bunBin)) rx.push(w.dirname(i.bunBin));
+  if (i.ompBin && w.isAbsolute(i.ompBin) && !under(i.ompBin, i.repoRoot)) rx.push(w.dirname(w.dirname(i.ompBin)));
+  // P-SANDBOX.11 (ADR-0389): the shell the user pinned in omp's config, by its install root.
+  if (i.shellPath && w.isAbsolute(i.shellPath)) rx.push(shellInstallRoot(i.shellPath));
+  // P-SANDBOX.16 (ADR-0397): the discovered git install (discoverGitRoot), so the agent can exec it.
+  if (i.gitRoot && w.isAbsolute(i.gitRoot)) rx.push(i.gitRoot);
+  const seen = new Set<string>();
+  const grantRx = rx.filter((d) => {
+    if (osReadable(d)) return false;
+    const k = w.normalize(d).replace(/\\+$/, "").toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  const ompHome = w.join(i.home, ".omp");
+  return { grantRx, grantRw: [ompHome], tmpDir: w.join(ompHome, "lucid-sandbox-tmp") };
+}
+
+/** PURE: did the REAL agent runtime start inside the container? P-SANDBOX.10 (ADR-0387). The stdio
+ *  probe (P-SANDBOX.9) proves the helper wires a pipe; it does not prove that omp's bun can boot under
+ *  the grants. beta.7+.9 lit the pill and then every turn died with bun's `CouldntReadCurrentDirectory`
+ *  (bun walks every ancestor of its cwd at startup and treats an unopenable one as fatal,
+ *  oven-sh/bun#28220). So before committing a session to the AppContainer, the engine runs
+ *  `<omp> --version` through the SAME wrap (flags, grants, env, workspace) and requires a clean exit
+ *  with output. Anything else keeps the disclosed passthrough, with the reason, so chat stays up. */
+export function runtimeProbeVerdict(r: { exitCode: number | null; stdout: string; stderr: string; timedOut?: boolean }): { ok: true } | { ok: false; reason: string } {
+  const tail = (t: string) => t.trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" | ").slice(0, 300);
+  if (r.timedOut) return { ok: false, reason: "the contained agent runtime did not answer --version in time" };
+  if (r.exitCode !== 0) return { ok: false, reason: `the contained agent runtime exited ${r.exitCode ?? "abnormally"}${tail(r.stderr) ? `: ${tail(r.stderr)}` : ""}` };
+  if (!r.stdout.trim()) return { ok: false, reason: "the contained agent runtime printed no version (stdio not carried)" };
+  return { ok: true };
 }
 
 /** A concrete spawn plan: what to ACTUALLY exec. `env` entries are ADDED to the child env. */
@@ -94,9 +409,10 @@ export interface SandboxBackend {
 export class BwrapBackend implements SandboxBackend {
   readonly name = "bwrap" as const;
   readonly isolates = true;
-  constructor(private readonly which: WhichFn = defaultWhich) {}
+  constructor(private readonly which: WhichFn = defaultWhich, private readonly probe: ProbeFn = defaultProbe) {}
+  /** Presence AND capability — a bwrap that cannot unshare a user namespace is not a backend. */
   available(): boolean {
-    return this.which("bwrap");
+    return this.which("bwrap") && this.probe("bwrap");
   }
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const home = ctx.home ?? homedir();
@@ -126,9 +442,8 @@ export class BwrapBackend implements SandboxBackend {
     if (!caps.canNetwork) {
       args.push("--unshare-net");
     } else if (ctx.proxy) {
-      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
-      // Loopback + our own hosts must bypass the HTTP proxy so the proxy's own upstream isn't self-tunnelled.
-      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+      // Loopback + our own hosts bypass the HTTP proxy so the proxy's own upstream isn't self-tunnelled.
+      Object.assign(env, proxyChildEnv(ctx.proxy.httpProxyUrl));
       // Steer the stub resolver at us too WHEN we hold a privileged :53 (resolvConfPath present). The bind
       // is last-writer-wins over the /etc mount above (bwrap applies binds in order).
       if (ctx.proxy.resolvConfPath) args.push("--ro-bind", ctx.proxy.resolvConfPath, "/etc/resolv.conf");
@@ -169,19 +484,20 @@ export function seatbeltProfile(caps: ProfileCaps, ctx: SandboxCtx): string {
 /** macOS Seatbelt backend (P-SANDBOX.4, ADR-0168): wrap the spawn in `sandbox-exec -p <profile>`. Real
  *  OS-level containment (the App Sandbox / TrustedBSD MAC layer), so `isolates` is true and a network-off
  *  profile genuinely cuts the network on macOS. `available()` = `sandbox-exec` on PATH (present on every
- *  supported macOS). Pure: `which` injectable, profile is a pure function of caps/ctx. */
+ *  supported macOS) AND functionally able to apply a profile (a sandboxed parent cannot nest Seatbelt,
+ *  see seatbeltDefaultProbe). Pure: `which`/`probe` injectable, profile is a pure function of caps/ctx. */
 export class SeatbeltBackend implements SandboxBackend {
   readonly name = "seatbelt" as const;
   readonly isolates = true;
-  constructor(private readonly which: WhichFn = defaultWhich) {}
+  constructor(private readonly which: WhichFn = defaultWhich, private readonly probe: ProbeFn = seatbeltDefaultProbe) {}
+  /** Presence AND capability - a sandbox-exec that cannot apply a profile is not a backend. */
   available(): boolean {
-    return this.which("sandbox-exec");
+    return this.which("sandbox-exec") && this.probe("sandbox-exec");
   }
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const env: Record<string, string> = {};
     if (caps.canNetwork && ctx.proxy) {
-      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
-      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+      Object.assign(env, proxyChildEnv(ctx.proxy.httpProxyUrl));
     }
     // `sandbox-exec -p <profile> <cmd> <args...>` — the wrapped argv is preserved verbatim as the tail.
     return { cmd: "sandbox-exec", args: ["-p", seatbeltProfile(caps, ctx), ...argv], env };
@@ -199,6 +515,9 @@ export class SeatbeltBackend implements SandboxBackend {
 export function appContainerArgs(caps: ProfileCaps, ctx: SandboxCtx): string[] {
   const args = ["--workspace", ctx.workspace]; // bound read-write inside the container (fs stays omp --isolate's job)
   if (ctx.home) args.push("--home", ctx.home);
+  for (const d of ctx.grantRx ?? []) args.push("--grant-rx", d);
+  for (const d of ctx.grantRw ?? []) args.push("--grant-rw", d);
+  if (ctx.tmpDir) args.push("--grant-rw", ctx.tmpDir);
   if (!caps.canNetwork) {
     args.push("--deny-network"); // total deny (WFP blocks all outbound for the container SID)
   } else if (ctx.proxy) {
@@ -212,22 +531,29 @@ export function appContainerArgs(caps: ProfileCaps, ctx: SandboxCtx): string[] {
 }
 
 /** Windows AppContainer backend (P-SANDBOX.6, ADR-0172) via the first-party `lucid-appcontainer` helper.
- *  Real OS-level containment (AppContainer SID + WFP egress). `isolates` is true; `available()` = the
- *  helper is on PATH (bundled by P-SANDBOX.7). Until the helper ships this is never selected, so Windows
- *  stays the disclosed passthrough exactly as in .1-.5. Pure: `which` injectable, flags a pure function. */
+ *  Real OS-level containment (AppContainer SID + workspace/tool-dir ACL grants + capability-less network).
+ *  `isolates` is true; `helper` is either the bare name (PATH lookup, the dev loop after
+ *  `make build-appcontainer`) or the ABSOLUTE packaged path (`<repo>/bin/lucid-appcontainer.exe`, shipped
+ *  by P-SANDBOX.7 inside the `repo` extraResources — the caller resolves it via repo_root, ADR-0356).
+ *  `available()` = presence AND a functional probe (the smallest real container), same
+ *  presence-is-not-capability doctrine as bwrap/Seatbelt. Pure: `which`/`probe` injectable. */
 export class AppContainerBackend implements SandboxBackend {
   readonly name = "appcontainer" as const;
   readonly isolates = true;
-  constructor(private readonly which: WhichFn = defaultWhich, private readonly helper = "lucid-appcontainer") {}
+  constructor(
+    private readonly which: WhichFn = defaultWhich,
+    private readonly helper = "lucid-appcontainer",
+    private readonly probe: ProbeFn = appContainerDefaultProbe,
+  ) {}
   available(): boolean {
-    return this.which(this.helper);
+    return this.which(this.helper) && this.probe(this.helper);
   }
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const env: Record<string, string> = {};
     if (caps.canNetwork && ctx.proxy) {
-      env.HTTP_PROXY = env.HTTPS_PROXY = env.http_proxy = env.https_proxy = ctx.proxy.httpProxyUrl;
-      env.NO_PROXY = env.no_proxy = "localhost,127.0.0.1,::1";
+      Object.assign(env, proxyChildEnv(ctx.proxy.httpProxyUrl));
     }
+    if (ctx.tmpDir) env.TEMP = env.TMP = ctx.tmpDir;
     // `lucid-appcontainer <flags> -- <cmd> <args...>` — the wrapped argv is preserved verbatim after `--`.
     return { cmd: this.helper, args: [...appContainerArgs(caps, ctx), "--", ...argv], env };
   }
@@ -250,8 +576,8 @@ export class NoopBackend implements SandboxBackend {
  *  audit trail is greppable (mirrors the ext_parity discipline for the gate's block line). */
 export function sandboxDisclosure(platform: NodeJS.Platform = process.platform): string {
   return (
-    `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) — no sandbox backend available. ` +
-    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs the lucid-appcontainer helper, P-SANDBOX.7).`
+    `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) - no sandbox backend available. ` +
+    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs a WORKING lucid-appcontainer helper - missing here, or it failed its containment probe).`
   );
 }
 
@@ -270,25 +596,35 @@ export interface ResolveBackendOpts {
    *  unavailable isolating backend is a REFUSAL, never a disclosed passthrough. */
   requireIsolation?: boolean;
   which?: WhichFn;
+  probe?: ProbeFn;
+  /** P-SANDBOX.7: absolute path to the packaged `lucid-appcontainer.exe` when the caller has one
+   *  (desktop resolves `<repo>/bin/lucid-appcontainer.exe` via repo_root and passes it ONLY when it
+   *  exists on disk). Absent ⇒ bare-name PATH lookup, which is the dev loop. */
+  appContainerHelper?: string;
 }
 
-/** Pick the backend for this platform. PURE given its inputs (platform/which injectable). */
+/** Pick the backend for this platform. PURE given its inputs (platform/which/probe injectable). */
 export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution {
   const platform = opts.platform ?? process.platform;
   const which = opts.which ?? defaultWhich;
+  const probe = opts.probe ?? defaultProbe;
   if (platform === "linux") {
-    const bwrap = new BwrapBackend(which);
+    const bwrap = new BwrapBackend(which, probe);
     if (bwrap.available()) return { ok: true, backend: bwrap, disclosed: false };
   }
   if (platform === "darwin") {
     // P-SANDBOX.4 (ADR-0168): macOS gets real containment via Seatbelt (sandbox-exec ships with macOS).
-    const seatbelt = new SeatbeltBackend(which);
+    // Presence AND capability: a sandboxed parent (CI runner, MDM wrapper, a dev build launched from
+    // another agent's gated shell) cannot nest a profile - sandbox_apply fails and the wrapped child
+    // dies at spawn, which is the bwrap-on-Ubuntu-24.04 silent-kill bug on macOS (see seatbeltDefaultProbe).
+    const seatbelt = new SeatbeltBackend(which, opts.probe ?? seatbeltDefaultProbe);
     if (seatbelt.available()) return { ok: true, backend: seatbelt, disclosed: false };
   }
   if (platform === "win32") {
-    // P-SANDBOX.6 (ADR-0172): Windows gets containment via the first-party `lucid-appcontainer` helper.
-    // Until the helper is bundled (P-SANDBOX.7) this is unavailable ⇒ disclosed passthrough, as in .1-.5.
-    const ac = new AppContainerBackend(which);
+    // P-SANDBOX.6/.7 (ADR-0172/0173): Windows gets containment via the first-party `lucid-appcontainer`
+    // helper — the packaged absolute path when the caller resolved one, else PATH (dev loop). The
+    // functional probe keeps a present-but-incapable helper from being committed to (bwrap doctrine).
+    const ac = new AppContainerBackend(which, opts.appContainerHelper ?? "lucid-appcontainer", opts.probe ?? appContainerDefaultProbe);
     if (ac.available()) return { ok: true, backend: ac, disclosed: false };
   }
   if (opts.requireIsolation) {
@@ -296,11 +632,17 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
       ok: false,
       reason:
         platform === "linux"
-          ? "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
+          ? which("bwrap")
+            ? "managed policy requires runtime isolation, but bwrap cannot create a user namespace on this host - Ubuntu/Debian 24.04+ block unprivileged user namespaces via AppArmor (allow with `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or ship an AppArmor profile for bwrap)"
+            : "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
           : platform === "darwin"
-            ? "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
+            ? which("sandbox-exec")
+              ? "managed policy requires runtime isolation, but sandbox-exec cannot apply a Seatbelt profile in this environment - this process is itself running under a sandbox (nested profiles are not permitted); launch LUCID from Finder or an unsandboxed shell"
+              : "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
             : platform === "win32"
-              ? "managed policy requires runtime isolation, but the lucid-appcontainer helper is not installed (Windows AppContainer; ships in P-SANDBOX.7)"
+              ? which(opts.appContainerHelper ?? "lucid-appcontainer")
+                ? "managed policy requires runtime isolation, but the lucid-appcontainer helper failed its containment probe on this host - the smallest real AppContainer could not be established (profile creation or the workspace ACL grant refused); exec would be fail-closed blocked by the helper anyway"
+                : "managed policy requires runtime isolation, but the lucid-appcontainer helper is not installed (Windows AppContainer; `<repo>/bin/lucid-appcontainer.exe`, built by `make build-appcontainer`)"
               : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet`,
     };
   }
@@ -323,14 +665,14 @@ export function wrapForProfile(o: {
 }): SandboxDecision {
   if (!o.resolution.ok) return { action: "refuse", reason: o.resolution.reason };
   if (!o.caps.canExec) {
-    return { action: "refuse", reason: "profile forbids exec (canExec=false) — refusing to spawn an exec-capable agent process" };
+    return { action: "refuse", reason: "profile forbids exec (canExec=false) - refusing to spawn an exec-capable agent process" };
   }
   const { backend, disclosed } = o.resolution;
   if (!o.caps.canNetwork && !backend.isolates) {
     return {
       action: "refuse",
       reason:
-        "profile requires network isolation (canNetwork=false) but no isolating backend is available — " +
+        "profile requires network isolation (canNetwork=false) but no isolating backend is available - " +
         "refusing rather than running networked (fail-closed)",
     };
   }

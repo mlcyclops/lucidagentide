@@ -72,6 +72,23 @@ export interface AcpAgentClientOptions {
   onLog?: (line: string) => void;
   /** How to answer the remote's session/request_permission: "deny" (default, fail-closed) or "allow". */
   permissionPolicy?: "deny" | "allow";
+  /** P-FLEET.1 (ADR-0268): counts-only live progress. The struct has NO text field ON PURPOSE - remote
+   *  text is scanned once, whole-turn; a per-chunk hand-off would let an adversary split a hidden vector
+   *  across two notifications so each chunk scans clean. Counts cannot carry a vector. */
+  onProgress?: (p: AcpProgress) => void;
+}
+
+/** Counts and nothing else. Adding a text field here would defeat the whole-turn scan - do not. */
+export interface AcpProgress {
+  textChars: number;
+  toolLines: number;
+  permissionAsks: number;
+}
+
+/** A prompt turn that exceeded its deadline - distinguishable from the remote's own failure so the
+ *  firewall can land `timeout` (not `error`) and clean up the wedged turn. */
+export class AcpTimeoutError extends Error {
+  constructor(msg: string) { super(msg); this.name = "AcpTimeoutError"; }
 }
 
 interface PendingRpc {
@@ -91,19 +108,23 @@ export class AcpAgentClient implements RemoteAgent {
 
   // Per-turn collectors, reset at the start of each prompt.
   #textChunks: string[] = [];
+  #textChars = 0; // running total, so progress is O(1) per chunk
   #toolActivity: string[] = [];
   #permissionRequests: string[] = [];
   #permissionPolicy: "deny" | "allow";
+  #onProgress: (p: AcpProgress) => void;
 
   constructor(private readonly conn: RemoteAgentConn, opts: AcpAgentClientOptions = {}) {
     this.#promptTimeoutMs = opts.promptTimeoutMs ?? 120_000;
     this.#onLog = opts.onLog ?? (() => {});
     this.#permissionPolicy = opts.permissionPolicy ?? "deny";
+    this.#onProgress = opts.onProgress ?? (() => {});
   }
 
   async prompt(text: string): Promise<AcpPromptResult> {
     await this.#ensureSession();
     this.#textChunks = [];
+    this.#textChars = 0;
     this.#toolActivity = [];
     this.#permissionRequests = [];
     const result = await this.#requestWithTimeout("session/prompt", {
@@ -231,12 +252,14 @@ export class AcpAgentClient implements RemoteAgent {
       if (this.#permissionPolicy === "allow") {
         const optionId = pickApproveOption(params);
         if (optionId) {
-          this.#permissionRequests.push(`[remote-permission] ${desc} → ALLOWED (policy=allow)`);
+          this.#permissionRequests.push(`[remote-permission] ${desc} \u2192 ALLOWED (policy=allow)`);
+          this.#emitProgress();
           this.#write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "selected", optionId } } });
           return;
         }
       }
-      this.#permissionRequests.push(`[remote-permission] ${desc} → DENIED`);
+      this.#permissionRequests.push(`[remote-permission] ${desc} \u2192 DENIED`);
+      this.#emitProgress();
       this.#write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
       return;
     }
@@ -251,15 +274,20 @@ export class AcpAgentClient implements RemoteAgent {
     const kind = typeof update.sessionUpdate === "string" ? update.sessionUpdate : "";
     if (kind === "agent_message_chunk") {
       const content = typeof update.content === "object" && update.content !== null ? (update.content as Record<string, unknown>) : null;
-      if (content && content.type === "text" && typeof content.text === "string") this.#textChunks.push(content.text);
+      if (content && content.type === "text" && typeof content.text === "string") {
+        this.#textChunks.push(content.text);
+        this.#textChars += content.text.length;
+        this.#emitProgress();
+      }
       return;
     }
     if (kind === "tool_call" || kind === "tool_call_update") {
       const title = typeof update.title === "string" ? update.title : typeof update.kind === "string" ? update.kind : "tool";
       const status = typeof update.status === "string" ? ` (${update.status})` : "";
       this.#toolActivity.push(`[remote-tool] ${title}${status}`);
+      this.#emitProgress();
     }
-    if (kind === "plan") this.#toolActivity.push("[remote-plan] the remote agent updated its plan");
+    if (kind === "plan") { this.#toolActivity.push("[remote-plan] the remote agent updated its plan"); this.#emitProgress(); }
   }
 
   #request(method: string, params: unknown): Promise<unknown> {
@@ -271,7 +299,7 @@ export class AcpAgentClient implements RemoteAgent {
 
   #requestWithTimeout(method: string, params: unknown): Promise<unknown> {
     return new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`remote ACP ${method} timed out after ${this.#promptTimeoutMs}ms`)), this.#promptTimeoutMs);
+      const timer = setTimeout(() => reject(new AcpTimeoutError(`remote ACP ${method} timed out after ${this.#promptTimeoutMs}ms`)), this.#promptTimeoutMs);
       this.#request(method, params).then(
         (v) => { clearTimeout(timer); resolve(v); },
         (e) => { clearTimeout(timer); reject(e); },
@@ -281,6 +309,11 @@ export class AcpAgentClient implements RemoteAgent {
 
   #notify(method: string, params: unknown): void {
     this.#write({ jsonrpc: "2.0", method, params });
+  }
+
+  /** Counts-only, by construction: reads collector SIZES, never their content. */
+  #emitProgress(): void {
+    this.#onProgress({ textChars: this.#textChars, toolLines: this.#toolActivity.length, permissionAsks: this.#permissionRequests.length });
   }
 
   #write(o: unknown): void {

@@ -84,6 +84,21 @@ describe("builtin commands (P-CMD.2) — shipped like user commands, shadowable"
       expect(r.command!.name).toBe(b.name);
     }
   });
+  // P-CMD.3: /providers ships builtin - the guided plan chooser wired to the advisor guides + preview.
+  test("/providers is a guided send-mode walkthrough: plan question, guides in preview, voice upsell", () => {
+    const prov = BUILTIN_COMMANDS.find((b) => b.name === "providers")!;
+    expect(prov.mode).toBe("send");
+    expect(prov.body).toContain("$ARGS");                                    // a seed like "/providers video work" flows in
+    expect(prov.body).toContain("already pay for an AI plan");               // asks about existing plans FIRST
+    expect(prov.body).toContain("/api/guides");                              // reads the bundled advisor guides
+    expect(prov.body).toContain("Preview panel");                            // opens them for the user to read along
+    expect(prov.body).toContain("try.elevenlabs.io/nru4d3mgw8b5");           // partner signup link (browser)
+    expect(prov.body).toContain("elevenlabs.io/app/settings/api-keys");      // the key page stays separate
+    expect(prov.body).toContain("Conversation");                             // the interactive spoken-status mode
+    expect(prov.body).toContain("NEVER ask me to paste a secret");           // vault discipline
+    expect(prov.body.includes("\u2014")).toBe(false);                        // house writing rule: no em dashes
+  });
+
   test("/licensing is a guided, approval-gated send-mode walkthrough that never relicenses vendored code", () => {
     const lic = BUILTIN_COMMANDS.find((b) => b.name === "licensing")!;
     expect(lic.mode).toBe("send");

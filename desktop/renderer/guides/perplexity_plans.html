@@ -1,0 +1,199 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC
+     SPDX-License-Identifier: BUSL-1.1 -->
+<!-- desktop/renderer/guides/perplexity_plans.html - the in-app Perplexity plan advisor. Opened from the
+     Perplexity provider card in Settings into the Preview panel (Yours lane). Fully self-contained: the
+     preview frame is sandboxed with NO network and NO app stylesheet, so every byte lives inline.
+     House rules apply: lucid-dark palette, block-paragraph prose (never prose inside flex), one-line
+     ellipsizing labels, and no em dashes anywhere. Prices verified September 2026; the sources section
+     at the bottom names where each number came from. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Perplexity plans: a LUCID field guide</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-elev:#12151f;
+    --line:#252a3a; --line-soft:#1a1e2a;
+    --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90;
+    --accent:#c64bd6; --accent-2:#e07bf0; --cyan:#46c8dc; --green:#46d27e; --amber:#e8b23c;
+    --red:#ef5f5f; --violet:#8b5cf6;
+    --green-txt:#8ee8ad; --amber-txt:#f3cf7a; --red-txt:#ffb0b0; --cyan-txt:#8fe0ee; --violet-txt:#e9ddff;
+    --r-lg:12px; --r-md:9px; --r-sm:6px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg-0);color:var(--txt);
+    font:14px/1.55 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 22px 64px}
+  header{padding:26px 0 18px;border-bottom:1px solid var(--line)}
+  .brand{font-size:11px;letter-spacing:.22em;color:var(--accent-2);text-transform:uppercase;font-weight:700}
+  h1{margin:8px 0 6px;font-size:26px;line-height:1.25;letter-spacing:-.01em}
+  .sub{color:var(--txt-2);margin:0;max-width:64ch}
+  .stamp{margin-top:10px;color:var(--txt-3);font-size:12px}
+  h2{font-size:18px;margin:40px 0 4px;letter-spacing:-.01em}
+  h2 .no{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  h3{font-size:14.5px;margin:20px 0 6px;color:var(--accent-2)}
+  p{margin:8px 0;color:var(--txt-2);max-width:72ch}
+  p b,li b{color:var(--txt)}
+  a{color:var(--cyan);text-decoration:none;word-break:break-all}
+  ul{margin:6px 0 10px;padding-left:20px;color:var(--txt-2)}
+  li{margin:4px 0}
+  code{background:var(--bg-2);border:1px solid var(--line-soft);border-radius:4px;
+    padding:1px 5px;font:12px ui-monospace,Consolas,monospace;color:var(--cyan-txt);white-space:nowrap}
+  /* callouts: block paragraphs with a colored spine, NEVER flex around prose */
+  .note{border-left:3px solid var(--cyan);background:var(--bg-1);border-radius:0 var(--r-md) var(--r-md) 0;
+    padding:10px 14px;margin:14px 0}
+  .note.good{border-left-color:var(--green)}
+  .note.warn{border-left-color:var(--amber)}
+  .note.bad{border-left-color:var(--red)}
+  .note p{margin:4px 0}
+  .note .t{font-weight:700;color:var(--txt);font-size:13px;letter-spacing:.02em}
+  .note.good .t{color:var(--green-txt)} .note.warn .t{color:var(--amber-txt)} .note.bad .t{color:var(--red-txt)}
+  /* tables: generous columns, first column never wraps mid-word */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th{color:var(--txt-3);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em;text-align:left}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px;font-weight:600;color:var(--txt)}
+  td{color:var(--txt-2)}
+  .price{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 18px;margin:14px 0}
+  /* status chips: single-purpose atoms, each chip is one element so flex is safe here */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+  .chip{white-space:nowrap;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2)}
+  .chip.ok{color:var(--green-txt);border-color:rgb(70 210 126 / .35);background:rgb(70 210 126 / .08)}
+  .chip.dead{color:var(--red-txt);border-color:rgb(239 95 95 / .35);background:rgb(239 95 95 / .08);text-decoration:line-through}
+  .chip.warn{color:var(--amber-txt);border-color:rgb(232 178 60 / .35);background:rgb(232 178 60 / .08)}
+  .chip.info{color:var(--cyan-txt);border-color:rgb(70 200 220 / .35);background:rgb(70 200 220 / .08)}
+  /* timeline: spine + block entries */
+  .tl{border-left:2px solid var(--line);margin:16px 0 6px 6px;padding-left:18px}
+  .tl-item{position:relative;margin:0 0 16px}
+  .tl-item::before{content:"";position:absolute;left:-24px;top:5px;width:9px;height:9px;border-radius:50%;
+    background:var(--bg-3);border:2px solid var(--accent)}
+  .tl-item.break::before{border-color:var(--red)}
+  .tl-date{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--txt-3);text-transform:uppercase}
+  .tl-item p{margin:2px 0 0}
+  /* verdict ribbon */
+  .verdict{background:linear-gradient(135deg,rgb(139 92 246 / .12),rgb(198 75 214 / .10));
+    border:1px solid rgb(139 92 246 / .4);border-radius:var(--r-lg);padding:16px 18px;margin:18px 0}
+  .verdict .t{color:var(--violet-txt);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+  .verdict p{color:var(--txt)}
+  .toc{margin:16px 0 0;padding:0;list-style:none;column-count:2;column-gap:24px}
+  .toc li{margin:3px 0;break-inside:avoid}
+  .toc a{color:var(--txt-2)}
+  .toc a:hover{color:var(--accent-2)}
+  .toc .no{color:var(--accent);margin-right:6px;font-variant-numeric:tabular-nums}
+  .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--txt-3);font-size:12px}
+  @media (max-width:640px){ .toc{column-count:1} td:first-child{max-width:160px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">LUCID Agent IDE · Advisor Guide</div>
+  <h1>Perplexity plans: a LUCID field guide</h1>
+  <p class="sub">The research specialist: what each subscription buys, what the Sonar API costs per token,
+    why the Perplexity card in LUCID has no OAuth button, and what this provider is genuinely good at.</p>
+  <p class="stamp">Prices and policies verified September 2026. The sources at the bottom are the places
+    to re-check.</p>
+  <ul class="toc">
+    <li><span class="no">1</span><a href="#now">Do this in LUCID right now</a></li>
+    <li><span class="no">2</span><a href="#plans">Subscription plans</a></li>
+    <li><span class="no">3</span><a href="#api">Sonar API pricing</a></li>
+    <li><span class="no">4</span><a href="#fit">What Perplexity is good for (and not)</a></li>
+    <li><span class="no">5</span><a href="#sources">Sources</a></li>
+  </ul>
+</header>
+
+<h2 id="now"><span class="no">1</span>Do this in LUCID right now</h2>
+<div class="verdict">
+  <div class="t">The short version</div>
+  <p>Perplexity in LUCID is <b>API key only</b>. Get a key from your Perplexity account (API settings),
+     paste it into the <code>PERPLEXITY_API_KEY</code> box on the Perplexity card in
+     <b>Settings &gt; Providers</b>, Save, and the Sonar models appear in the picker. There is no
+     Connect button to look for; that is by design, not an omission.</p>
+</div>
+<div class="note">
+  <p class="t">Why there is no OAuth button on this card</p>
+  <p>Perplexity's sign-in is an interactive flow: it emails you a one-time passcode and expects a human
+     to type it into a live page. LUCID's OAuth broker automates standard redirect-and-token flows; it
+     cannot sit in your inbox and forward an OTP. Rather than show a button that would always fail,
+     the card hides it and asks for the API key directly.</p>
+</div>
+<div class="chips">
+  <span class="chip ok">Works with LUCID: PERPLEXITY_API_KEY</span>
+  <span class="chip dead">OAuth sign-in</span>
+  <span class="chip info">Sonar models, web-grounded</span>
+</div>
+
+<h2 id="plans"><span class="no">2</span>Subscription plans</h2>
+<p>Subscriptions cover the Perplexity apps and site. The API in section 3 bills separately, per token;
+   a subscription is not required to use the API key in LUCID.</p>
+<table>
+  <tr><th>Plan</th><th>Price (Sep 2026)</th><th>Who it is for</th></tr>
+  <tr><td>Free</td><td class="price">$0</td>
+      <td>Everyday web-grounded answers with citations; capped access to the stronger models.</td></tr>
+  <tr><td>Pro</td><td class="price">$20/mo</td>
+      <td>The mainstream research tier: more Pro searches and stronger models. The plan most
+          individuals should pick.</td></tr>
+  <tr><td>Max</td><td class="price">$200/mo</td>
+      <td>The heavy-usage tier for people who live in Perplexity all day.</td></tr>
+  <tr><td>Enterprise</td><td class="price">$40/seat/mo</td>
+      <td>Team management and admin controls, billed per seat.</td></tr>
+</table>
+
+<h2 id="api"><span class="no">3</span>Sonar API pricing</h2>
+<p>The Sonar family is what your <code>PERPLEXITY_API_KEY</code> unlocks in LUCID. Prices per 1M tokens:</p>
+<table>
+  <tr><th>Model</th><th>Input</th><th>Output</th><th>Notes</th></tr>
+  <tr><td>Sonar Small Online</td><td class="price">$0.20</td><td class="price">$0.20</td>
+      <td>The budget web-grounded model; cheap enough for bulk lookups.</td></tr>
+  <tr><td>Sonar Large</td><td class="price">$1</td><td class="price">$1</td>
+      <td>The balanced middle: better synthesis, still symmetric pricing.</td></tr>
+  <tr><td>Sonar Huge</td><td class="price">$5</td><td class="price">$5</td>
+      <td>The largest grounded model for hard research questions.</td></tr>
+  <tr><td>Sonar Pro</td><td class="price">$3</td><td class="price">$15</td>
+      <td>The premium tier with the deepest answers; note the asymmetric output rate.</td></tr>
+</table>
+<div class="note">
+  <p class="t">Agentic Pro Search is metered per query, not per token</p>
+  <p>Perplexity's agentic Pro Search runs at roughly <b>$14 to $22 per 1,000 queries</b> on top of token
+     costs, depending on configuration. Budget for it separately if your workflows fire many searches.</p>
+</div>
+
+<h2 id="fit"><span class="no">4</span>What Perplexity is good for (and not)</h2>
+<p><b>Good for:</b> web-grounded answers with citations. Sonar models search the live web and return
+   sourced answers, which makes them the right pick in LUCID for research questions, current-events
+   lookups, fact-checking with references, and competitive or market scans where "says who?" matters.</p>
+<p><b>Not for:</b> coding. Perplexity is not a general coding model family; do not route agentic coding
+   work at it. Keep a coding provider (Anthropic, OpenAI, Copilot, or similar) as your main lane and
+   treat Perplexity as the research sidearm.</p>
+<div class="note good">
+  <p class="t">A useful pairing</p>
+  <p>A common LUCID setup: a coding model as the default, with a Sonar model selected just for research
+     tasks. At $0.20 to $5 per 1M tokens the grounded lookups cost pennies, and each answer arrives with
+     citations you can verify.</p>
+</div>
+
+<h2 id="sources"><span class="no">5</span>Sources</h2>
+<ul>
+  <li>Official plan pricing:
+      <a href="https://www.perplexity.ai/pricing">perplexity.ai/pricing</a></li>
+  <li>Sonar API pricing breakdown:
+      <a href="https://www.cloudzero.com/blog/perplexity-api-pricing">cloudzero.com/blog/perplexity-api-pricing</a></li>
+  <li>Plan comparison:
+      <a href="https://aipricing.guru/perplexity-pricing">aipricing.guru/perplexity-pricing</a></li>
+</ul>
+
+<div class="foot">
+  Generated for LUCID Agent IDE · TechLead 187 LLC · Prices are point-in-time (September 2026) and change
+  without notice. Links do not open inside this sandboxed preview; copy them into your browser.
+</div>
+
+</div>
+</body>
+</html>

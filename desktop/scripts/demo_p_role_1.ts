@@ -18,7 +18,7 @@ const ok = (msg: string): void => console.log(`   ${msg} ✓`);
 console.log("== P-ROLE.1 — role onboarding + opinionated default views ==");
 
 // 1. Closed, ordered set; the renderer mirror and the settings source agree.
-const EXPECT = ["developer", "security", "manager", "executive"];
+const EXPECT = ["developer", "security", "manager", "executive", "lucid-agent"]; // + P-AVATAR.1 (ADR-0251)
 if (JSON.stringify(USER_ROLE_LIST) !== JSON.stringify(EXPECT)) fail(`role set/order drifted: ${USER_ROLE_LIST.join(",")}`);
 if (JSON.stringify([...USER_ROLES]) !== JSON.stringify(EXPECT)) fail("settings_store USER_ROLES disagrees with the renderer list");
 ok(`roles are a closed, ordered set: ${EXPECT.join(" · ")}`);

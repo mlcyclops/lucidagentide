@@ -1,0 +1,317 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC
+     SPDX-License-Identifier: BUSL-1.1 -->
+<!-- desktop/renderer/guides/gemini_plans.html - the in-app Google Gemini plan advisor. Opened from the
+     Gemini provider card in Settings into the Preview panel (Yours lane). Fully self-contained: the
+     preview frame is sandboxed with NO network and NO app stylesheet, so every byte lives inline.
+     House rules apply: lucid-dark palette, block-paragraph prose (never prose inside flex), one-line
+     ellipsizing labels, and no em dashes anywhere. Prices verified September 2026; the sources section
+     at the bottom names where each number came from. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Google Gemini plans: a LUCID field guide</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-elev:#12151f;
+    --line:#252a3a; --line-soft:#1a1e2a;
+    --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90;
+    --accent:#c64bd6; --accent-2:#e07bf0; --cyan:#46c8dc; --green:#46d27e; --amber:#e8b23c;
+    --red:#ef5f5f; --violet:#8b5cf6;
+    --green-txt:#8ee8ad; --amber-txt:#f3cf7a; --red-txt:#ffb0b0; --cyan-txt:#8fe0ee; --violet-txt:#e9ddff;
+    --r-lg:12px; --r-md:9px; --r-sm:6px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg-0);color:var(--txt);
+    font:14px/1.55 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 22px 64px}
+  header{padding:26px 0 18px;border-bottom:1px solid var(--line)}
+  .brand{font-size:11px;letter-spacing:.22em;color:var(--accent-2);text-transform:uppercase;font-weight:700}
+  h1{margin:8px 0 6px;font-size:26px;line-height:1.25;letter-spacing:-.01em}
+  .sub{color:var(--txt-2);margin:0;max-width:64ch}
+  .stamp{margin-top:10px;color:var(--txt-3);font-size:12px}
+  h2{font-size:18px;margin:40px 0 4px;letter-spacing:-.01em}
+  h2 .no{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  h3{font-size:14.5px;margin:20px 0 6px;color:var(--accent-2)}
+  p{margin:8px 0;color:var(--txt-2);max-width:72ch}
+  p b,li b{color:var(--txt)}
+  a{color:var(--cyan);text-decoration:none;word-break:break-all}
+  ul{margin:6px 0 10px;padding-left:20px;color:var(--txt-2)}
+  li{margin:4px 0}
+  code{background:var(--bg-2);border:1px solid var(--line-soft);border-radius:4px;
+    padding:1px 5px;font:12px ui-monospace,Consolas,monospace;color:var(--cyan-txt);white-space:nowrap}
+  /* callouts: block paragraphs with a colored spine, NEVER flex around prose */
+  .note{border-left:3px solid var(--cyan);background:var(--bg-1);border-radius:0 var(--r-md) var(--r-md) 0;
+    padding:10px 14px;margin:14px 0}
+  .note.good{border-left-color:var(--green)}
+  .note.warn{border-left-color:var(--amber)}
+  .note.bad{border-left-color:var(--red)}
+  .note p{margin:4px 0}
+  .note .t{font-weight:700;color:var(--txt);font-size:13px;letter-spacing:.02em}
+  .note.good .t{color:var(--green-txt)} .note.warn .t{color:var(--amber-txt)} .note.bad .t{color:var(--red-txt)}
+  /* tables: generous columns, first column never wraps mid-word */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+  th{color:var(--txt-3);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em;text-align:left}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px;font-weight:600;color:var(--txt)}
+  td{color:var(--txt-2)}
+  .price{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 18px;margin:14px 0}
+  /* status chips: single-purpose atoms, each chip is one element so flex is safe here */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+  .chip{white-space:nowrap;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line);background:var(--bg-2);color:var(--txt-2)}
+  .chip.ok{color:var(--green-txt);border-color:rgb(70 210 126 / .35);background:rgb(70 210 126 / .08)}
+  .chip.dead{color:var(--red-txt);border-color:rgb(239 95 95 / .35);background:rgb(239 95 95 / .08);text-decoration:line-through}
+  .chip.warn{color:var(--amber-txt);border-color:rgb(232 178 60 / .35);background:rgb(232 178 60 / .08)}
+  .chip.info{color:var(--cyan-txt);border-color:rgb(70 200 220 / .35);background:rgb(70 200 220 / .08)}
+  /* timeline: spine + block entries */
+  .tl{border-left:2px solid var(--line);margin:16px 0 6px 6px;padding-left:18px}
+  .tl-item{position:relative;margin:0 0 16px}
+  .tl-item::before{content:"";position:absolute;left:-24px;top:5px;width:9px;height:9px;border-radius:50%;
+    background:var(--bg-3);border:2px solid var(--accent)}
+  .tl-item.break::before{border-color:var(--red)}
+  .tl-date{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--txt-3);text-transform:uppercase}
+  .tl-item p{margin:2px 0 0}
+  /* verdict ribbon */
+  .verdict{background:linear-gradient(135deg,rgb(139 92 246 / .12),rgb(198 75 214 / .10));
+    border:1px solid rgb(139 92 246 / .4);border-radius:var(--r-lg);padding:16px 18px;margin:18px 0}
+  .verdict .t{color:var(--violet-txt);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+  .verdict p{color:var(--txt)}
+  .toc{margin:16px 0 0;padding:0;list-style:none;column-count:2;column-gap:24px}
+  .toc li{margin:3px 0;break-inside:avoid}
+  .toc a{color:var(--txt-2)}
+  .toc a:hover{color:var(--accent-2)}
+  .toc .no{color:var(--accent);margin-right:6px;font-variant-numeric:tabular-nums}
+  .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);color:var(--txt-3);font-size:12px}
+  @media (max-width:640px){ .toc{column-count:1} td:first-child{max-width:160px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">LUCID Agent IDE · Advisor Guide</div>
+  <h1>Google Gemini plans for small businesses</h1>
+  <p class="sub">What still works, what Google quietly killed, when Gemini Enterprise is worth it, and exactly
+    which boxes to fill in LUCID's Settings to get Gemini models into your picker today.</p>
+  <p class="stamp">Prices and policies verified September 2026. Google changes these often; the sources at the
+    bottom are the places to re-check.</p>
+  <ul class="toc">
+    <li><span class="no">1</span><a href="#now">Do this in LUCID right now</a></li>
+    <li><span class="no">2</span><a href="#map">Google's Gemini products, untangled</a></li>
+    <li><span class="no">3</span><a href="#history">How the pricing got this confusing</a></li>
+    <li><span class="no">4</span><a href="#models">Model history and what each is good for</a></li>
+    <li><span class="no">5</span><a href="#smallbiz">The small-business decision</a></li>
+    <li><span class="no">6</span><a href="#enterprise">When Gemini Enterprise earns its seats</a></li>
+    <li><span class="no">7</span><a href="#sources">Sources</a></li>
+  </ul>
+</header>
+
+<h2 id="now"><span class="no">1</span>Do this in LUCID right now</h2>
+<div class="verdict">
+  <div class="t">The short version</div>
+  <p>Paste a free <b>AI Studio API key</b> into the Gemini card today (zero dollars, full model catalog,
+     rate-limited). If you want a subscription sign-in on your Workspace account, buy
+     <b>Gemini Code Assist Standard</b> (about $19 per user per month, annual) and fill the GCP project ID
+     field. Do not buy Google AI Pro expecting the OAuth button to work, and do not buy Gemini Enterprise
+     for IDE access at all.</p>
+</div>
+
+<h3>Path A: free, working in five minutes (recommended start)</h3>
+<p>Get an API key at <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a> with any
+   Google account. In LUCID: <b>Settings &gt; Providers &gt; Google · Gemini</b>, paste it into the
+   <code>GEMINI_API_KEY</code> box and Save. The full commercial Gemini catalog appears in the model picker.
+   The free tier has daily rate limits; add billing to the same key later and it becomes pay-as-you-go with
+   no subscription.</p>
+
+<h3>Path B: subscription OAuth that still works in 2026</h3>
+<p>Since June 18, 2026 the <b>Connect via OAuth</b> button (the Gemini CLI / Code Assist flow) only accepts
+   accounts holding <b>Gemini Code Assist Standard or Enterprise</b> licenses, or the Workspace
+   <b>AI Ultra Access</b> add-on. To use it: buy Code Assist Standard for your Workspace user in Google
+   Cloud, enable the <b>Gemini for Google Cloud API</b> on a project, put that project's ID in the
+   <b>GCP project ID</b> field on the Gemini card, Save, then Connect via OAuth with your Workspace account.</p>
+<div class="note warn">
+  <p class="t">Why your sign-in "succeeded" but nothing appeared</p>
+  <p>Google's consent page says Authentication Successful before it checks your entitlement. The rejection
+     happens one step later, during Code Assist onboarding. LUCID now surfaces that rejection as a red toast
+     and a note on the Gemini card, so a failed connect tells you which of these paths you are missing.</p>
+</div>
+
+<h3>Path C: pay-per-token under your own GCP governance</h3>
+<p>The <b>Google Cloud · Gemini Enterprise</b> card (the backend formerly called Vertex AI) needs no
+   subscription at all: run <code>gcloud auth application-default login</code>, set project + location, and
+   you get every Gemini model billed per token against your GCP project. Best when you already live in
+   Google Cloud and want invoices, quotas, and IAM instead of a consumer plan.</p>
+
+<h2 id="map"><span class="no">2</span>Google's Gemini products, untangled</h2>
+<p>Five different products sell "Gemini". They do not overlap, and buying the wrong one is the single most
+   common mistake:</p>
+<table>
+  <tr><th>Product</th><th>What it actually is</th><th>Price (Sep 2026)</th><th>Gets models into LUCID?</th></tr>
+  <tr><td>AI Studio API key</td>
+      <td>Developer API access to the full Gemini catalog. Free tier, then pay-as-you-go per token.</td>
+      <td class="price">$0 + usage</td>
+      <td>Yes: paste into the Gemini card</td></tr>
+  <tr><td>Google AI Plus / Pro / Ultra</td>
+      <td>Consumer subscriptions (the Google One family): the Gemini app, NotebookLM, Flow, storage, and
+          Antigravity IDE quota. Since June 2026 they no longer unlock the Gemini CLI flow LUCID's OAuth uses.</td>
+      <td class="price">$4.99 / $19.99 / $99.99+</td>
+      <td>No (Antigravity only)</td></tr>
+  <tr><td>Workspace Business / Enterprise</td>
+      <td>Your ntcgeo-style domain plans. Since January 2025 they bundle the Gemini app, Gems, and NotebookLM
+          in the sidebar at no add-on cost. No IDE / CLI entitlement except the AI Ultra Access add-on.</td>
+      <td class="price">$7 to $26+ /seat</td>
+      <td>No (app only)</td></tr>
+  <tr><td>Gemini Code Assist Std / Ent</td>
+      <td>Per-seat developer licenses in Google Cloud. The ONLY affordable tier that still authorizes the
+          Gemini CLI / Code Assist OAuth that LUCID's Connect button drives.</td>
+      <td class="price">$19 or $45 /seat/mo annual</td>
+      <td>Yes: OAuth + GCP project ID</td></tr>
+  <tr><td>Gemini Enterprise</td>
+      <td>An org-wide agent platform (chat, agent builder, data governance, connectors) sold per seat. It is
+          not an IDE entitlement and not an API plan.</td>
+      <td class="price">~$21 to $30 /seat/mo</td>
+      <td>No (different product)</td></tr>
+</table>
+<div class="chips">
+  <span class="chip ok">Works with LUCID: AI Studio key</span>
+  <span class="chip ok">Works: Code Assist Std/Ent OAuth</span>
+  <span class="chip ok">Works: Vertex ADC, pay per token</span>
+  <span class="chip dead">Gemini CLI free tier</span>
+  <span class="chip dead">Google AI Pro via OAuth</span>
+  <span class="chip warn">Antigravity: separate app</span>
+</div>
+
+<h2 id="history"><span class="no">3</span>How the pricing got this confusing</h2>
+<p>Google has restructured Gemini's packaging roughly every six months. The pattern worth internalizing:
+   generous free launch, consumer tier shuffle, then consolidation behind paid or enterprise SKUs.</p>
+<div class="tl">
+  <div class="tl-item"><div class="tl-date">Feb 2024</div>
+    <p>Bard becomes Gemini. Workspace gets paid add-ons: Gemini Business ($20/seat) and Gemini Enterprise
+       ($30/seat). Consumers get Google One AI Premium at $19.99.</p></div>
+  <div class="tl-item"><div class="tl-date">Jan 2025</div>
+    <p>Add-ons discontinued. Gemini features fold INTO Workspace Business/Enterprise plans with a roughly
+       $2/seat price bump. Good deal if you wanted the sidebar; irrelevant for IDE use.</p></div>
+  <div class="tl-item"><div class="tl-date">Jun 2025</div>
+    <p>Gemini CLI launches with a famously generous free tier (about 1,000 requests/day on a personal
+       Gmail). This is the tier LUCID's OAuth button was built on.</p></div>
+  <div class="tl-item"><div class="tl-date">2025</div>
+    <p>Google One AI Premium is rebranded Google AI Pro; AI Ultra appears at $249.99, later restructured.
+       A $4.99 AI Plus tier arrives for light users.</p></div>
+  <div class="tl-item"><div class="tl-date">Oct 2025</div>
+    <p>Gemini Enterprise launches as the org agent platform (about $21/seat Business, $30/seat Enterprise),
+       replacing the Agentspace branding.</p></div>
+  <div class="tl-item"><div class="tl-date">Nov 2025</div>
+    <p>Antigravity IDE ships free in public preview with multi-model access. Honeymoon quotas: about 250
+       free requests/day.</p></div>
+  <div class="tl-item"><div class="tl-date">Mar 2026</div>
+    <p>Antigravity quota crunch: free tier cut to about 20 requests/day, refresh cycles move from 5 hours
+       to weekly. Hitting a cap can lock a tier for up to 7 days.</p></div>
+  <div class="tl-item break"><div class="tl-date">Jun 18, 2026</div>
+    <p><b>The big cutoff.</b> Gemini CLI and the Code Assist IDE extensions stop serving the free individual
+       tier AND Google AI Pro/Ultra subscribers. Login with Google is removed for consumer accounts. Only
+       Code Assist Standard/Enterprise seats and Workspace AI Ultra Access continue. Google's stated
+       migration path for consumers is Antigravity.</p></div>
+</div>
+<div class="note bad">
+  <p class="t">The lesson for a small business</p>
+  <p>Do not build a workflow on a Google free tier's continued existence. Anchor on the two things Google
+     has never clawed back: the pay-as-you-go API (AI Studio / Vertex) and per-seat developer licenses
+     with contracts behind them (Code Assist).</p>
+</div>
+
+<h2 id="models"><span class="no">4</span>Model history and what each is good for</h2>
+<table>
+  <tr><th>Model</th><th>Released</th><th>Standing (Sep 2026)</th><th>Good for</th></tr>
+  <tr><td>Gemini 1.0 Pro / Ultra</td><td>Dec 2023</td><td>Retired</td>
+      <td>Historical: the Bard-era launch models.</td></tr>
+  <tr><td>Gemini 1.5 Pro / Flash</td><td>Feb to May 2024</td><td>Deprecated for new work</td>
+      <td>Introduced the 1M to 2M token context window; long-document work before 2.5 superseded it.</td></tr>
+  <tr><td>Gemini 2.0 Flash</td><td>Dec 2024 to Feb 2025</td><td>Legacy workhorse</td>
+      <td>Cheap, fast multimodal; still fine for bulk extraction and classification.</td></tr>
+  <tr><td>Gemini 2.5 Pro</td><td>Mar 2025</td><td>Strong, one generation back</td>
+      <td>First "thinking" Pro; topped LMArena at launch. Deep reasoning, coding, 1M context.</td></tr>
+  <tr><td>Gemini 2.5 Flash / Flash-Lite</td><td>Jun 2025</td><td>Cost king of its generation</td>
+      <td>High-volume agent steps, summarization, tool-calling on a budget.</td></tr>
+  <tr><td>Gemini 3 Pro</td><td>Nov 2025</td><td>Frontier tier</td>
+      <td>LMArena leader at launch; benchmark jumps in math, agentic coding, and multimodal reasoning.
+          The default choice for hard reasoning and IDE agent work.</td></tr>
+  <tr><td>Gemini 3 Flash / 3.1 Pro</td><td>2026</td><td>Current line</td>
+      <td>3 Flash: frontier-adjacent speed at commodity prices. 3.1 Pro: the current top Pro on consumer
+          and API tiers, 1M context.</td></tr>
+</table>
+<p><b>Rule of thumb:</b> Pro models for reasoning, architecture, and gnarly code; Flash models for volume,
+   speed, and cost; Nano runs on-device in Pixel/Chrome and is not something you rent. Rankings shift with
+   every release wave: check <a href="https://lmarena.ai">lmarena.ai</a> before betting a workflow on a
+   specific model.</p>
+
+<h2 id="smallbiz"><span class="no">5</span>The small-business decision</h2>
+<p>For a 1 to 10 person shop that wants Gemini in an IDE and a sane bill:</p>
+<table>
+  <tr><th>Option</th><th>Monthly cost</th><th>Verdict</th></tr>
+  <tr><td>AI Studio key (free tier)</td><td class="price">$0</td>
+      <td>Start here. Real usage caps, but zero risk and instant.</td></tr>
+  <tr><td>AI Studio key + billing</td><td class="price">usage, often $5 to $40</td>
+      <td>Best value for solo/light agent use. Costs scale with actual work.</td></tr>
+  <tr><td>Code Assist Standard</td><td class="price">$19/seat (annual)</td>
+      <td>The predictable-bill option, and the only cheap OAuth that survived June 2026. Buy per developer,
+          cancel annually.</td></tr>
+  <tr><td>Google AI Pro</td><td class="price">$19.99</td>
+      <td>Fine for the Gemini app and Antigravity. Useless for LUCID's OAuth; do not buy it for that.</td></tr>
+  <tr><td>Workspace AI Ultra Access</td><td class="price">premium add-on</td>
+      <td>Works but priced for enterprises; Code Assist Standard does the same IDE job for less.</td></tr>
+  <tr><td>Vertex / GCP pay-as-you-go</td><td class="price">usage</td>
+      <td>Pick when you want IAM, quotas, and invoices under your GCP org. Same models, more governance.</td></tr>
+</table>
+
+<h2 id="enterprise"><span class="no">6</span>When Gemini Enterprise earns its seats</h2>
+<p>Gemini Enterprise (about $30/seat/month, Business tier around $21) is a different product category: a
+   governed agent workspace for a whole company. It makes sense when most of these are true:</p>
+<ul>
+  <li>You are rolling out agents to <b>non-developers</b> (ops, contracts, logistics analysts) who need a
+      chat/agent UI, not an IDE.</li>
+  <li>You need <b>central governance</b>: audit trails, data-source connectors with permissions, and
+      admin-controlled model access across the org.</li>
+  <li>You want agents grounded in <b>company data</b> (Drive, SharePoint, Salesforce connectors) with
+      access control enforced by the platform rather than by you.</li>
+  <li>Seat math beats usage math: heavy daily use by 10+ people can make flat seats cheaper than per-token.</li>
+</ul>
+<div class="note good">
+  <p class="t">For your situation</p>
+  <p>A solo or few-person shop doing development work gets nothing from Gemini Enterprise that an AI Studio
+     key, a Code Assist seat, or Vertex pay-as-you-go does not already provide cheaper. Revisit it the day
+     you have a team of non-developer users who need governed agents over shared company data. For defense
+     or CUI-adjacent work, note that your existing gov-gateway route (AskSage) already covers the
+     compliance-governed path in LUCID.</p>
+</div>
+
+<h2 id="sources"><span class="no">7</span>Sources</h2>
+<ul>
+  <li>Code Assist deprecation of consumer tiers (Jun 18, 2026):
+      <a href="https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals">developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals</a></li>
+  <li>Code Assist Standard/Enterprise overview and setup:
+      <a href="https://docs.cloud.google.com/gemini/docs/codeassist/overview">docs.cloud.google.com/gemini/docs/codeassist/overview</a></li>
+  <li>Gemini CLI quotas and supported tiers:
+      <a href="https://geminicli.com/docs/resources/quota-and-pricing/">geminicli.com/docs/resources/quota-and-pricing</a></li>
+  <li>Google AI consumer plans:
+      <a href="https://one.google.com/about/google-ai-plans/">one.google.com/about/google-ai-plans</a></li>
+  <li>Gemini Enterprise:
+      <a href="https://cloud.google.com/gemini-enterprise">cloud.google.com/gemini-enterprise</a></li>
+  <li>Workspace Gemini inclusion (Jan 2025):
+      <a href="https://knowledge.workspace.google.com/admin/generative-ai/workspace-with-gemini/gemini-ai-features-now-included-in-google-workspace-subscriptions">knowledge.workspace.google.com (Gemini AI features now included)</a></li>
+  <li>AI Studio API keys: <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a></li>
+  <li>Model leaderboard: <a href="https://lmarena.ai">lmarena.ai</a></li>
+</ul>
+
+<div class="foot">
+  Generated for LUCID Agent IDE · TechLead 187 LLC · Prices are point-in-time (September 2026) and change
+  without notice. Links do not open inside this sandboxed preview; copy them into your browser.
+</div>
+
+</div>
+</body>
+</html>

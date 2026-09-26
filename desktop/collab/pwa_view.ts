@@ -1,11 +1,11 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/pwa_view.ts — P-REMOTE.3 (ADR-0226/0227): the phone guest's PURE, DOM-free viewer core.
+// desktop/collab/pwa_view.ts - P-REMOTE.3 (ADR-0226/0227): the phone guest's PURE, DOM-free viewer core.
 //
 // The phone PWA (tools/remote-pwa/) drives CollabGuest exactly like the desktop, but renders on a small
 // screen without the desktop renderer. This is the compact viewer: a PURE reducer that folds the host's
-// ChatEvent stream into a list of view items, plus HTML renderers for each. No DOM, no globals — so the phone
+// ChatEvent stream into a list of view items, plus HTML renderers for each. No DOM, no globals, so the phone
 // UI stays testable headless and the same logic the desktop guest shows (thinking + tool chips + subagents,
 // ADR-0222) renders faithfully on mobile.
 //
@@ -13,10 +13,11 @@
 // before it becomes HTML. The frames are E2E from the host, but the host's session can echo untrusted content,
 // so the phone treats all of it as text, never markup.
 
-import type { ChatEvent } from "../renderer/chat_events.ts";
+import type { ChatEvent, FleetLaneStatus } from "../renderer/chat_events.ts";
 import { toolChip } from "../renderer/answer_chips.ts"; // P-REMOTE.9: reuse the desktop's +/- diffstat convention
 import type { CollabSessionHeader, CollabTranscriptTurn } from "./frames.ts";
 import type { GuestPhase, GuestView } from "./guest.ts";
+import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (type-only)
 
 /** Escape the five HTML-significant characters. The only text→markup boundary in the PWA. */
 export function escapeHtml(s: string): string {
@@ -36,9 +37,18 @@ export type ViewItem =
   // P-PREVIEW-PWA.1: a preview snapshot the host sent. `image` is a data URL, hydrated as an <img> property by
   // the PWA (never inlined into the transcript HTML); `id` is stable across re-renders for that hydration.
   | { kind: "preview"; image: string; label?: string; id: string }
+  // P-PWA-FLEET.1: the LATEST fleet + process snapshots. REPLACE-in-place fold semantics: at most ONE of
+  // each ever exists in the list (a poll updates it in position, never appends), so the transcript cannot
+  // fill up with stale status blocks.
+  | { kind: "fleet-lanes"; lanes: FleetLaneStatus[] }
+  | { kind: "processes"; processes: ProcessView[] }
+  // P-PWA-FOCUS.1: a fleet lane's turn failed. Its own kind, NOT `block`: `block` means the security gate
+  // refused something, and a lane crash wearing the gate's clothing would teach the user to misread the one
+  // signal that must stay unambiguous. Rendered red, but visibly a different thing.
+  | { kind: "lane-error"; message: string }
   | { kind: "note"; text: string };
 
-/** Fold one host ChatEvent into the item list (PURE — returns a new list). Token/thinking deltas coalesce
+/** Fold one host ChatEvent into the item list (PURE - returns a new list). Token/thinking deltas coalesce
  *  into the trailing item of their kind; `done` finalizes the streaming answer with its authoritative text. */
 export function foldEvent(items: ViewItem[], e: ChatEvent): ViewItem[] {
   const out = items.slice();
@@ -88,10 +98,34 @@ export function foldEvent(items: ViewItem[], e: ChatEvent): ViewItem[] {
       out.push({ kind: "preview", image: e.image, ...(e.label ? { label: e.label } : {}), id: `shot-${n}` });
       return out;
     }
+    // P-PWA-FLEET.1: fleet/process snapshots REPLACE the prior one in place (stable position, never one
+    // item per poll) - the transcript keeps only the LATEST of each. A FIRST insert lands BEFORE a
+    // trailing live stream (streaming answer / thinking), so the next token delta still coalesces into
+    // its bubble instead of starting a new one every broadcast tick.
+    case "fleet-status":
+      return upsertSnapshot(out, "fleet-lanes", { kind: "fleet-lanes", lanes: e.lanes });
+    case "process-list":
+      return upsertSnapshot(out, "processes", { kind: "processes", processes: e.processes });
+    // P-PWA-FOCUS.1: a watched lane's turn failed. Appended like any other block so it lands in the lane's
+    // conversation in order, at the point the failure happened.
+    case "lane-error":
+      out.push({ kind: "lane-error", message: e.message });
+      return out;
     // Desktop-only / non-viewer events (preview, design, goal, usage, slow, …) are ignored on the phone.
     default:
       return out;
   }
+}
+
+/** Replace-in-place upsert for the fleet/process snapshot items (at most ONE of `kind` ever exists).
+ *  A first insert slips in BEFORE a trailing live stream so token/thinking deltas keep coalescing. */
+function upsertSnapshot(out: ViewItem[], kind: "fleet-lanes" | "processes", item: ViewItem): ViewItem[] {
+  const i = out.findIndex((it) => it.kind === kind);
+  if (i !== -1) { out[i] = item; return out; }
+  const last = out[out.length - 1];
+  if (last && ((last.kind === "answer" && last.streaming) || last.kind === "thinking")) out.splice(out.length - 1, 0, item);
+  else out.push(item);
+  return out;
 }
 
 const SEV_CLASS: Record<string, string> = { high: "sev-high", medium: "sev-med", low: "sev-low" };
@@ -102,6 +136,79 @@ export function thinkingGist(text: string, max = 64): string {
   const lines = text.split(/\n+/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
   const last = lines[lines.length - 1] ?? "";
   return last.length > max ? `${last.slice(0, max - 1).trimEnd()}…` : last;
+}
+
+/** The last path segment of a lane cwd. The broadcaster already sends a basename (the "no file paths"
+ *  wire invariant); this is belt-and-braces for any slash that slips through. Pure. */
+export function laneCwdName(cwd: string): string {
+  const trimmed = cwd.replace(/[\\/]+$/, "");
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || trimmed;
+}
+
+/**
+ * P-PWA-FLEET.2: one fleet lane card - a lane you can actually DRIVE, in its own lane rather than through
+ * the master composer. All host strings escaped, including data attributes.
+ *
+ * The card carries `lane-<status>` so the phone's CSS can reuse the DESKTOP fleet colour mapping verbatim
+ * (cyan working, amber waiting, red needs-approval, green done, dim starting/stopped) instead of inventing
+ * a second palette; `data-status` stays for the dot.
+ *
+ * Its composer offers EXACTLY what `CollabGuest` can do for a lane and nothing more (a dead control is
+ * worse than no control): Send/Queue (`fleetPrompt`, text only - images stay master-bound because the
+ * lane wire has no image field), Push now + Check in (`interject` with the lane id), Stop (`fleetStop`),
+ * and the three approval answers (`fleetAnswer`). No spawn, no model picker, no queue reorder: the guest
+ * protocol has none of those, so the phone must not pretend.
+ *
+ * The whole `.lane-drive` block is hidden for view guests by CSS (`#fleet[data-readonly]`); guest.ts
+ * refuses their sends anyway and the host re-refuses, fail-closed.
+ * Invariant #11: every flex row holds controls or spans-with-one-text-child; labels nowrap+ellipsis.
+ */
+export function renderLaneCard(lane: FleetLaneStatus): string {
+  const id = escapeHtml(lane.id);
+  const status = escapeHtml(lane.status);
+  const pend = lane.pendingApproval
+    ? `<div class="lane-pend"><span class="lane-pend-sum">${escapeHtml(lane.pendingApproval.kind)}: ${escapeHtml(lane.pendingApproval.summary)}</span></div>` +
+      `<div class="lane-approve">` +
+      `<button type="button" class="lane-btn allow" data-lane="${id}" data-fleet-answer="once">Allow once</button>` +
+      `<button type="button" class="lane-btn allow" data-lane="${id}" data-fleet-answer="session">Allow session</button>` +
+      `<button type="button" class="lane-btn deny" data-lane="${id}" data-fleet-answer="deny">Deny</button>` +
+      `</div>`
+    : "";
+  // The lane's own composer, mirroring the master composer's shipped shape: one input, small icon controls,
+  // and a single send button whose label flips while the lane is busy (the host stages a mid-turn prompt).
+  const busy = lane.status === "working" || lane.status === "starting";
+  const drive = `<div class="lane-drive">` +
+    `<textarea class="lane-input" rows="1" data-lane-input="${id}" placeholder="Message ${escapeHtml(lane.name)}\u2026" aria-label="Message lane ${escapeHtml(lane.name)}"></textarea>` +
+    `<div class="lane-acts">` +
+    `<button type="button" class="lane-btn" data-lane="${id}" data-fleet-act="checkin" aria-label="Ask lane ${escapeHtml(lane.name)} for a brief status">Check in</button>` +
+    `<span class="lane-spacer"></span>` +
+    `<button type="button" class="lane-ico stop" data-lane="${id}" data-fleet-act="stop" title="Stop this lane" aria-label="Stop lane ${escapeHtml(lane.name)}">\u25a0</button>` +
+    `<button type="button" class="lane-send" data-lane="${id}" data-fleet-act="send">${busy ? "Queue" : "Send"}</button>` +
+    `<button type="button" class="lane-send push" data-lane="${id}" data-fleet-act="push" title="Interject the running turn"${busy ? "" : " hidden"}>Push</button>` +
+    `</div></div>`;
+  return `<div class="lane-card lane-${status}" data-lane="${id}">` +
+    // P-PWA-FOCUS.1: the header row IS the focus control - tap the lane's name to watch its conversation.
+    // role/tabindex ship in the markup rather than being hydrated afterwards, so the row is reachable by
+    // keyboard on the very first paint.
+    `<div class="lane-row" role="button" tabindex="0" data-focus-lane="${id}" aria-label="Watch lane ${escapeHtml(lane.name)}"><span class="lane-dot" data-status="${status}"></span><span class="lane-name">${escapeHtml(lane.name)}</span><span class="lane-status">${status}</span></div>` +
+    `<div class="lane-meta"><span class="lane-cwd">${escapeHtml(laneCwdName(lane.cwd))}</span><span class="lane-turns">${lane.turns} turn${lane.turns === 1 ? "" : "s"}</span></div>` +
+    pend +
+    drive +
+    `</div>`;
+}
+
+/** P-PWA-FLEET.1: one process row (kind badge + label + status; the detail rides as a title tooltip).
+ *  All host strings escaped. Invariant #11: three label spans, each a single text child. */
+export function renderProcessRow(p: ProcessView): string {
+  // P-PWA-FOCUS.1: `data-proc-id`/`data-proc-kind` let the PWA turn a row into a focus target WITHOUT
+  // index-matching it back against the snapshot array. A kind of "lane" means the id IS a lane id; the PWA
+  // decides what is focusable, so this renderer stays presentation-only.
+  return `<div class="proc-row" data-proc-id="${escapeHtml(p.id)}" data-proc-kind="${escapeHtml(p.kind)}" title="${escapeHtml(p.detail)}">` +
+    `<span class="proc-kind">${escapeHtml(p.kind)}</span>` +
+    `<span class="proc-label">${escapeHtml(p.label)}</span>` +
+    `<span class="proc-status">${escapeHtml(p.status)}</span>` +
+    `</div>`;
 }
 
 /** Render one view item to a mobile HTML fragment (all host text escaped).
@@ -142,22 +249,49 @@ export function renderItem(item: ViewItem, i = 0, activeThinking = false): strin
       const cap = item.label ? `<div class="cu-shot-cap">${escapeHtml(item.label)}</div>` : "";
       return `<div class="msg shot"><button class="cu-shot-btn" type="button" data-shot="${escapeHtml(item.id)}" aria-label="Open preview snapshot"><img class="cu-shot-img" alt="preview snapshot" /></button>${cap}</div>`;
     }
+    case "fleet-lanes":
+      // P-PWA-FLEET.1: the fleet snapshot. The PWA renders this item into its FLEET section (filtered out
+      // of the transcript flow); inline rendering here keeps the item printable + fully escape-tested.
+      return `<div class="fleet-lanes">${item.lanes.map(renderLaneCard).join("")}</div>`;
+    case "processes":
+      return `<div class="proc-list">${item.processes.map(renderProcessRow).join("")}</div>`;
+    case "lane-error":
+      // Its own class, never `.chip.block`: the phone must not show a lane crash in the security gate's
+      // clothing. Labelled in words too, so the distinction survives someone restyling the CSS.
+      return `<div class="chip lane-fail"><span class="chip-name">lane failed</span><span class="chip-detail">${escapeHtml(item.message)}</span></div>`;
     case "note":
       return `<div class="msg note">${escapeHtml(item.text)}</div>`;
   }
 }
 
-/** Render the whole transcript (prior turns from `welcome`, then the folded live items). */
-export function renderTranscript(prior: CollabTranscriptTurn[], items: ViewItem[]): string {
+// P-PWA-FOCUS.2: the "you were away" divider. Not styled here (that is the PWA's index.html); `data-sync-mark`
+// is the hook the phone scrolls to after a cross-screen-lock sync.
+const SYNC_MARK = `<div class="sync-mark" data-sync-mark><span class="sync-mark-l">new since you looked away</span></div>`;
+
+/** Render the whole transcript (prior turns from `welcome`, then the folded live items).
+ *  P-PWA-FOCUS.2: `newFrom` is a position in the COMBINED stream (`prior` entries first, then `items`) - the
+ *  first entry the user had not seen when the screen locked. When it lands strictly inside that stream, ONE
+ *  divider is drawn immediately before that entry. */
+export function renderTranscript(prior: CollabTranscriptTurn[], items: ViewItem[], newFrom?: number): string {
+  const total = prior.length + items.length;
+  // Only an in-range INTEGER boundary draws a divider, because out of range there is no boundary to draw:
+  // `<= 0` means everything is new, which reads exactly like arriving fresh, and a rule above the very first
+  // line is noise; `>= total` means the user is already caught up. A non-integer or non-finite value is
+  // rejected outright rather than rounded or clamped, because the phone SCROLLS to this element - a divider
+  // in the WRONG place is worse than no divider at all. `mark` stays -1 (matching no index) otherwise, which
+  // is also what guarantees at most ONE marker per render: it is a single position, not a predicate.
+  const mark = typeof newFrom === "number" && Number.isInteger(newFrom) && newFrom > 0 && newFrom < total ? newFrom : -1;
   const priorHtml = prior
-    .map((t) => `<div class="msg ${t.role === "user" ? "user" : "answer"}">${escapeHtml(t.text)}</div>`)
+    .map((t, i) => (i === mark ? SYNC_MARK : "") + `<div class="msg ${t.role === "user" ? "user" : "answer"}">${escapeHtml(t.text)}</div>`)
     .join("");
   // A thinking block that is still the TRAILING item is the live reasoning - render it open (it collapses
   // naturally when the first answer token / tool chip lands after it). data-think = the item index.
-  return priorHtml + items.map((it, i) => renderItem(it, i, it.kind === "thinking" && i === items.length - 1)).join("");
+  return priorHtml + items
+    .map((it, i) => (prior.length + i === mark ? SYNC_MARK : "") + renderItem(it, i, it.kind === "thinking" && i === items.length - 1))
+    .join("");
 }
 
-/** The header line (title + model + host) for the top bar. Metadata only — no credentials, no paths. */
+/** The header line (title + model + host) for the top bar. Metadata only: no credentials, no paths. */
 export function renderHeader(header: CollabSessionHeader | null): string {
   if (!header) return `<span class="hdr-title">Connecting…</span>`;
   return `<span class="hdr-title">${escapeHtml(header.title || "LUCID session")}</span>` +
@@ -185,6 +319,23 @@ export function renderControls(view: GuestView): string {
     ? `<label class="ctl"><span class="ctl-l">Folder</span><select class="ctl-sel" data-role="workspace" aria-label="Folder">${wsOpts}</select></label>`
     : "";
   return model + workspace;
+}
+
+// ---- P-REMOTE.13 (ADR-0251): the INVISIBLE hourly reconnect ----
+// Cloud Run hard-caps a WebSocket at 60 minutes; the hourly flap is a security FEATURE (every reconnect
+// re-presents a fresh identity token - ADR-0227) and the socket already buffers outbound frames across
+// it. What the user saw was the presentation: an instant amber "Reconnecting" the moment the cap hit.
+// The fix is a GRACE WINDOW: while a transient drop is younger than RECONNECT_GRACE_MS the banner keeps
+// saying Live - the flap is invisible unless it turns into a real outage. Fatal states are NEVER masked.
+export const RECONNECT_GRACE_MS = 7000;
+
+/** The status to PRESENT: masks a young transient reconnect as Live; everything else is statusLabel.
+ *  `flapAt` = when the current reconnecting phase began (0 = not flapping). Pure. */
+export function presentedStatus(view: GuestView, flapAt: number, now: number): { text: string; tone: "live" | "wait" | "ended" } {
+  if (view.phase === "reconnecting" && flapAt > 0 && now - flapAt < RECONNECT_GRACE_MS) {
+    return { text: view.readOnly ? "Live \u00b7 view only" : "Live \u00b7 you can drive", tone: "live" };
+  }
+  return statusLabel(view);
 }
 
 /** A short connection-status label + tone for the banner. */

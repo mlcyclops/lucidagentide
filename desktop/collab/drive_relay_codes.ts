@@ -1,19 +1,19 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/drive_relay_codes.ts — P-REMOTE.10 (ADR-0233): the SECURE core of out-of-band reconnect.
+// desktop/collab/drive_relay_codes.ts - P-REMOTE.10 (ADR-0233): the SECURE core of out-of-band reconnect.
 //
 // When a Session Share drops (app closed, or the relay room torn down past the 30s re-claim grace) the live
 // invite link is gone. This lets LUCID append the CURRENT reconnect link to a single file in the user's own
 // Google Drive (`lucid_relay_codes`, scoped `drive.file` so LUCID can touch ONLY that file). A disconnected
-// user — or a teammate the file is shared with — reads the latest code to rejoin.
+// user - or a teammate the file is shared with - reads the latest code to rejoin.
 //
 // This module is PURE + DOM-free (WebCrypto only) so the file format, the optional PIN encryption, and the
 // view-vs-edit link selection are unit-tested headless. The Drive REST calls live in drive_file.ts; the OAuth
 // token acquisition is a separate seam (the app supplies a `drive.file` access token).
 //
 // SECURITY: a reconnect code carries the room's E2E secret (in the link), so the file IS a credential store.
-// Hardening: (1) `drive.file` scope — LUCID cannot read the user's other Drive files; (2) OPTIONAL PIN
+// Hardening: (1) `drive.file` scope - LUCID cannot read the user's other Drive files; (2) OPTIONAL PIN
 // encryption at rest (AES-256-GCM, key derived by PBKDF2-SHA256) so even someone who over-shares the file
 // can't use a code without the PIN; (3) codes expire; (4) sharing is Drive-native, per-file, revocable.
 
@@ -45,7 +45,7 @@ export function buildCode(link: string, edit: boolean, roomId: string, now: numb
   return { ts: now, roomId, expiryMs: now + ttlMs, link, edit };
 }
 
-/** Append a code, keeping at most `cap` (oldest dropped) — the file stays bounded. */
+/** Append a code, keeping at most `cap` (oldest dropped) - the file stays bounded. */
 export function appendCode(codes: RelayCode[], code: RelayCode, cap: number = MAX_CODES): RelayCode[] {
   const next = [...codes, code];
   return next.length > cap ? next.slice(next.length - cap) : next;
@@ -91,7 +91,7 @@ async function encryptString(plain: string, pin: string): Promise<string> {
   return bytesToB64(env);
 }
 
-/** Decrypt; returns null on a wrong PIN, tamper, or malformed blob (fail-closed — never throws). */
+/** Decrypt; returns null on a wrong PIN, tamper, or malformed blob (fail-closed - never throws). */
 async function decryptString(blob: string, pin: string): Promise<string | null> {
   try {
     const env = b64ToBytes(blob);
@@ -135,7 +135,7 @@ export function fileIsEncrypted(text: string): boolean {
 
 // -- P-REMOTE.10c (ADR-0235): the READER state machine --
 
-/** The outcome of resolving a Drive relay-codes file to a reconnect link \u2014 the exact set of states a reader
+/** The outcome of resolving a Drive relay-codes file to a reconnect link - the exact set of states a reader
  *  UI (desktop or PWA) branches on. Fail-closed: an encrypted file with no/wrong PIN NEVER yields a link. */
 export type ReconnectResolution =
   | { status: "ok"; link: string; edit: boolean } // the freshest non-expired code

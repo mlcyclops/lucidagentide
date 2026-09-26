@@ -1,41 +1,95 @@
 <!doctype html>
 <!-- Copyright (c) 2026 TechLead 187 LLC / SPDX-License-Identifier: BUSL-1.1 -->
-<!-- P-REMOTE.11: a STATIC visual harness for the redesigned phone PWA session view - transcript maximized,
-     two-row composer (full-width input over an auto-collapsed actions row, shown expanded here for display),
-     the condensed double-decker status/account strip UNDER the composer (with the MODEL + FOLDER pickers in
-     its expanded panel), and the auto-collapsed reconnect catch-up card. Mirrors tools/remote-pwa/index.html. -->
-<html lang="en"><head><meta charset="utf-8" /><title>PWA session preview</title>
+<!-- P-REMOTE.15: a STATIC visual harness for the phone PWA session view at MOBILE PORTRAIT size.
+     What it proves: the composer is ONE tidy row - [+] [hold-to-talk] [more] [?] ... [Stop] [Send|caret] -
+     with the same-family extras folded into menus (Dictate + Check in under "more", Push now under the Send
+     caret), and the long voice disclaimer replaced by the "?" sheet, which has room to be read.
+
+     Every composer / menu / sheet rule below is COPIED VERBATIM from tools/remote-pwa/index.html - a mockup
+     with its own divergent styles is a design bug wearing a costume (AGENTS.md #11). The only deliberate
+     adaptations: the sheet is absolute inside the phone frame instead of fixed to the window, and the frame
+     collapses to the viewport so this renders identically in the Preview panel's phone-portrait mode. -->
+<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWA session preview</title>
 <style>
   :root { --bg:#0a0b0f; --bg1:#12141c; --bg2:#1a1d28; --line:#272b39; --txt:#f8fafc; --txt2:#94a3b8; --txt3:#64748b;
     --accent:#0ea5e9; --accent2:#2dd4bf; --cyan:#2dd4bf; --green:#10b981; --amber:#f59e0b; --red:#ef4444; }
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   [hidden] { display: none !important; }
-  body { background:#000; display:flex; justify-content:center; padding:16px; font:15px/1.5 system-ui,-apple-system,sans-serif; }
-  /* a phone-sized frame */
-  .phone { width:390px; height:780px; background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:22px; overflow:hidden; display:flex; flex-direction:column; }
+  html, body { height: 100%; }
+  body { background:#000; display:flex; justify-content:center; align-items:flex-start; font:15px/1.5 system-ui,-apple-system,sans-serif; overflow:hidden; }
+  /* the phone: exactly the viewport in the Preview panel's phone-portrait mode, a framed 390x844 elsewhere */
+  .phone { position:relative; width:min(390px,100vw); height:min(844px,100dvh); background:var(--bg); color:var(--txt); border:1px solid var(--line); overflow:hidden; display:flex; flex-direction:column; }
   button { font:inherit; cursor:pointer; border:none; border-radius:12px; display:inline-flex; align-items:center; justify-content:center; gap:8px; }
-  .btn-primary { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#0a0b0f; min-height:44px; padding:0 22px; font-weight:600; }
-  .btn-ghost { background:var(--bg2); color:var(--txt); border:1px solid var(--line); min-height:36px; padding:0 16px; font-size:13px; max-width:max-content; }
+  button:active { transform:scale(0.98); }
+  .btn-primary { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#0a0b0f; min-height:48px; padding:0 24px; font-weight:600; font-size:16px; width:100%; max-width:340px; }
+  .btn-ghost { background:var(--bg2); color:var(--txt); border:1px solid var(--line); min-height:48px; padding:0 16px; font-size:15px; font-weight:500; width:100%; max-width:340px; }
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 
   #session-view { flex:1; display:flex; flex-direction:column; min-height:0; background:var(--bg); }
   #transcript { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
   .msg { padding:12px 16px; border-radius:16px; white-space:pre-wrap; word-break:break-word; font-size:15px; line-height:1.5; }
   .msg.user { align-self:flex-end; background:var(--bg2); color:var(--txt); max-width:85%; border-bottom-right-radius:4px; border:1px solid var(--line); }
   .msg.answer { align-self:flex-start; background:linear-gradient(135deg,rgba(14,165,233,.08),rgba(45,212,191,.08)); border:1px solid rgba(45,212,191,.15); color:var(--txt); max-width:90%; border-bottom-left-radius:4px; }
+  .msg.thinking { align-self:flex-start; background:var(--bg); border:1px dashed var(--line); color:var(--txt2); font-size:14px; max-width:90%; padding:10px 14px; border-radius:12px; }
 
-  /* two-row composer: row 1 = the full-width input; row 2 = the actions row (auto-collapsed in the app,
-     visible here for display) */
-  #composer { display:flex; flex-direction:column; gap:8px; padding:10px 12px; border-top:1px solid var(--line); background:var(--bg1); flex-shrink:0; }
-  #composer-actions { display:flex; align-items:center; gap:10px; }
-  .composer-spacer { flex:1; }
-  #prompt-input { display:block; width:100%; resize:none; background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:12px; padding:11px 14px; font:inherit; min-height:44px; }
-  #attach-btn { display:inline-flex; align-items:center; justify-content:center; width:44px; height:44px; flex-shrink:0; font-size:26px; background:var(--bg); color:var(--txt2); border:1px solid var(--line); border-radius:12px; }
-  #abort-btn { background:rgba(239,68,68,.05); color:var(--red); border:1px solid rgba(239,68,68,.2); height:44px; padding:0 18px; font-weight:600; }
-  #composer button[type=submit] { height:44px; padding:0 22px; }
+  /* ---- verbatim from tools/remote-pwa/index.html: the composer, its menus, and the voice line ---- */
+  #composer { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
+  #composer-actions { position: relative; display: flex; align-items: center; gap: 7px; flex-wrap: nowrap; }
+  #ptt-btn { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--txt); user-select: none; touch-action: none; }
+  #ptt-btn.rec, #more-btn.rec { color: #ff5f5f; border-color: #ff5f5f; box-shadow: 0 0 0 3px rgba(255,95,95,.25); animation: pttpulse 1.2s ease-in-out infinite; }
+  @keyframes pttpulse { 0%,100% { box-shadow: 0 0 0 3px rgba(255,95,95,.25); } 50% { box-shadow: 0 0 0 6px rgba(255,95,95,.12); } }
+  #more-btn, #help-btn { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--txt2); font-size: 15px; font-weight: 700; line-height: 1; padding: 0; }
+  #more-btn[data-stt=cloud] { color: var(--amber); border-color: rgba(245, 158, 11, 0.45); }
+  #help-btn[data-tone=warn] { color: var(--amber); border-color: rgba(245, 158, 11, 0.45); }
+  .cx-wrap { position: relative; flex: none; display: flex; align-items: center; }
+  .cx-wrap.row-anchor { position: static; }
+  .cx-menu { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40; width: max-content; min-width: 216px; max-width: min(264px, calc(100vw - 28px)); background: var(--bg2); border: 1px solid var(--line); border-radius: 14px; padding: 6px; box-shadow: 0 14px 34px rgba(0,0,0,.6); display: flex; flex-direction: column; gap: 2px; }
+  .cx-menu.right { left: auto; right: 0; }
+  .cx-mi { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 46px; padding: 8px 12px; border-radius: 10px; background: transparent; color: var(--txt); text-align: left; }
+  .cx-mi:active { background: var(--bg1); }
+  .cx-mi-l { display: block; max-width: 100%; font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cx-mi-d { display: block; max-width: 100%; font-size: 12px; line-height: 1.35; font-weight: 400; color: var(--txt3); }
+  .cx-mi[data-stt=offer] .cx-mi-l { color: var(--cyan); }
+  .cx-mi[data-stt=cloud] .cx-mi-l { color: var(--amber); }
+  #voice-status { font-size: 12.5px; line-height: 1.4; color: var(--cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #voice-status[data-tone=warn] { color: var(--amber); }
+  .composer-spacer { flex: 1 1 0; min-width: 0; }
+  #attach-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: none; background: var(--bg); color: var(--txt2); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; user-select: none; }
+  #prompt-input { display: block; width: 100%; resize: none; background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font: inherit; min-height: 44px; max-height: 160px; line-height: 1.4; }
+  #prompt-input::placeholder { color: var(--txt3); }
+  #abort-btn { display: grid; place-items: center; width: 38px; height: 38px; min-height: 0; flex: none; padding: 0; background: rgba(239, 68, 68, 0.06); color: var(--red); border: 1px solid rgba(239, 68, 68, 0.28); border-radius: 12px; }
+  #composer button[type="submit"] { height: 40px; min-height: 0; padding: 0 14px; width: auto; max-width: none; font-size: 14.5px; box-shadow: none; }
+  #send-group[data-split] #send-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 10px; }
+  #send-more { width: 28px; height: 40px; flex: none; padding: 0; border-radius: 0 12px 12px 0; border: none; border-left: 1px solid rgba(10, 11, 15, 0.28); background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #0a0b0f; }
+  @media (max-width: 374px) {
+    #composer-actions { gap: 6px; }
+    #more-btn, #help-btn { width: 30px; height: 30px; }
+    #composer button[type="submit"] { padding: 0 12px; }
+    #send-group[data-split] #send-btn { padding-right: 9px; }
+    #send-more { width: 26px; }
+  }
+  @media (max-width: 344px) {
+    #composer-actions { gap: 5px; }
+    #send-label { display: none; }
+  }
+  #mi-push .cx-mi-l { color: var(--amber); }
+  #mi-checkin .cx-mi-l { color: var(--cyan); }
 
-  /* double-decker status/account strip UNDER the composer */
+  /* ---- verbatim: the voice sheet (fixed -> absolute, so it stays inside the mockup's phone frame) ---- */
+  #stt-sheet { position: absolute; inset: 0; z-index: 55; background: var(--bg); display: flex; flex-direction: column; }
+  .stt-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
+  .stt-title { flex: 1; font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stt-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .stt-p { font-size: 14.5px; line-height: 1.55; color: var(--txt); }
+  .stt-acts { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; }
+  .stt-acts button { height: 44px; min-height: 44px; padding: 0 18px; width: auto; max-width: max-content; font-size: 14px; }
+  .rp-x { width: 40px; height: 40px; font-size: 22px; background: var(--bg2); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; flex-shrink: 0; padding: 0; }
+
+  /* ---- verbatim: the double-decker status/account strip UNDER the composer ---- */
   #botstrip { flex-shrink:0; background:var(--bg1); border-top:1px solid var(--line); }
-  #botstrip-bar { width:100%; display:flex; align-items:center; gap:8px; padding:8px 14px; min-height:34px; background:transparent; border:none; color:var(--txt2); font-size:12px; text-align:left; }
+  #botstrip-bar { width:100%; display:flex; align-items:center; gap:8px; padding:8px 14px; min-height:34px; background:transparent; border:none; color:var(--txt2); font-size:12px; text-align:left; border-radius:0; }
+  #botstrip-bar:active { transform:none; }
   .bs-dot { width:8px; height:8px; border-radius:50%; background:var(--txt3); flex:none; }
   .bs-dot[data-tone=live] { background:var(--green); box-shadow:0 0 7px var(--green); }
   .bs-summary { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -45,55 +99,163 @@
   .bs-pick { display:flex; align-items:center; gap:10px; font-size:11px; font-weight:700; letter-spacing:.04em; color:var(--txt3); }
   .bs-pick select { flex:1; background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:10px; padding:8px 10px; font:inherit; font-size:13px; font-weight:400; letter-spacing:normal; }
   .hdr { display:flex; flex-direction:column; min-width:0; }
-  .hdr-title { font-weight:600; font-size:15px; }
-  .hdr-sub { font-size:12px; color:var(--txt3); }
+  .hdr-title { font-weight:600; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .hdr-sub { font-size:12px; color:var(--txt3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .bs-account { display:flex; align-items:center; gap:12px; font-size:13px; color:var(--txt2); }
   .bs-account #account-email { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bs-account button { min-height:36px; padding:0 16px; font-size:13px; width:auto; max-width:max-content; }
 
-  /* reconnect catch-up */
-  #catchup { flex-shrink:0; border-bottom:1px solid var(--line); background:rgba(45,212,191,.06); }
-  #catchup-bar { width:100%; display:flex; align-items:center; gap:8px; padding:8px 14px; background:transparent; border:none; color:var(--cyan); font-size:12.5px; font-weight:600; text-align:left; }
-  #catchup-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .cu-chev { flex:none; transition:transform .15s ease; }
-  #catchup[data-open] .cu-chev { transform:rotate(180deg); }
-  #catchup-body { max-height:40vh; overflow-y:auto; padding:4px 14px 12px; display:flex; flex-direction:column; gap:8px; }
-  .cu-turn { font-size:13px; line-height:1.45; color:var(--txt2); white-space:pre-wrap; }
-  .cu-role { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--txt3); margin-right:6px; }
+  /* ---- verbatim from tools/remote-pwa/index.html: the FLEET strip, its pips, and the lane cards ----
+     COLOUR PARITY WITH THE DESKTOP IS THE POINT. The five lane colours, the two animations, and the rule
+     that ONLY the two action-needed states animate are lifted from desktop/renderer/styles.css
+     (.fleet-card.lane-*), keyed off the SAME `lane-<status>` class, so a lane that is red in the desktop
+     dock is red here. */
+  #fleet { flex-shrink: 0; border-bottom: 1px solid var(--line); background: var(--bg1); }
+  #fleet-bar { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 14px; background: transparent; border: none; color: var(--txt2); font-size: 12px; text-align: left; border-radius: 0; }
+  #fleet-bar:active { transform: none; }
+  .fleet-title { flex: none; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--txt3); white-space: nowrap; }
+  .fleet-sum { flex: 1; min-width: 0; font-size: 12px; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fl-chev { flex: none; color: var(--txt3); transition: transform 0.15s ease; }
+  #fleet[data-open] .fl-chev { transform: rotate(180deg); }
+  #fleet[data-attn] .fleet-title { color: var(--red); }
+  #fleet[data-attn] .fleet-sum { color: var(--txt); }
+  .fleet-pips { display: inline-flex; align-items: center; gap: 7px; flex: none; white-space: nowrap; }
+  .fleet-pip { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+  .fleet-pip i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--lane, var(--txt3)); box-shadow: 0 0 6px var(--lane-dim, transparent); }
+  .fleet-pip b { font-size: 10.5px; font-weight: 700; color: var(--txt2); font-variant-numeric: tabular-nums; }
+  .fleet-pip.lane-needs-approval b, .fleet-pip.lane-awaiting-input b { color: var(--txt); }
+  .fleet-pip.lane-needs-approval i { animation: fleetGlowRed 1.6s ease-in-out infinite; }
+  .fleet-pip.lane-working i { animation: lanePulse 2.2s ease-in-out infinite; }
+  .fleet-pip.lane-stopped, .fleet-pip.lane-idle { opacity: .55; }
+  #fleet-panel { border-top: 1px solid var(--line); }
+  .fleet-head { display: flex; align-items: center; padding: 8px 14px 0; }
+  #fleet-filter { flex: 1; min-width: 0; background: var(--bg); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; font-size: 13px; min-height: 34px; -webkit-appearance: none; }
+  #fleet-filter:focus { outline: none; border-color: var(--cyan); }
+  #fleet-body { display: flex; flex-direction: column; gap: 8px; max-height: 44vh; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 14px 10px; }
+  .fleet-lanes { display: contents; }
+  .fleet-empty { font-size: 12.5px; color: var(--txt3); padding: 4px 0; }
+  .lane-card { --lane: var(--txt3); --lane-dim: transparent; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; }
+  .lane-card.lane-starting { --lane: #64748b; }
+  .lane-card.lane-working { --lane: #46c8dc; --lane-dim: rgba(70,200,220,.35); border-color: rgba(70,200,220,.5); }
+  .lane-card.lane-awaiting-input { --lane: #e8b23c; --lane-dim: rgba(232,178,60,.4); border-color: #e8b23c; animation: fleetGlowAmber 2.6s ease-in-out infinite; }
+  .lane-card.lane-needs-approval { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.5); border-color: #ef5f5f; animation: fleetGlowRed 1.6s ease-in-out infinite; }
+  .lane-card.lane-done { --lane: #46d27e; --lane-dim: rgba(70,210,126,.35); border-color: rgba(70,210,126,.55); }
+  .lane-card.lane-error { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.4); border-color: #ef5f5f; }
+  .lane-card.lane-stopped { --lane: #525a70; opacity: .55; }
+  .fleet-pip.lane-starting { --lane: #64748b; }
+  .fleet-pip.lane-working { --lane: #46c8dc; --lane-dim: rgba(70,200,220,.45); }
+  .fleet-pip.lane-awaiting-input { --lane: #e8b23c; --lane-dim: rgba(232,178,60,.5); }
+  .fleet-pip.lane-needs-approval { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.6); }
+  .fleet-pip.lane-done { --lane: #46d27e; --lane-dim: rgba(70,210,126,.45); }
+  .fleet-pip.lane-error { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.4); }
+  @keyframes fleetGlowAmber { 0%,100% { box-shadow: 0 0 0 0 rgba(232,178,60,0); } 50% { box-shadow: 0 0 14px 2px rgba(232,178,60,.4); } }
+  @keyframes fleetGlowRed { 0%,100% { box-shadow: 0 0 2px 0 rgba(239,95,95,.3); } 50% { box-shadow: 0 0 18px 3px rgba(239,95,95,.6); } }
+  @keyframes lanePulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .lane-card.lane-awaiting-input, .lane-card.lane-needs-approval,
+    .fleet-pip.lane-needs-approval i, .fleet-pip.lane-working i { animation: none; }
+  }
+  .lane-row { display: flex; align-items: center; gap: 8px; }
+  .lane-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--lane); box-shadow: 0 0 7px var(--lane-dim); }
+  .lane-card.lane-working .lane-dot { animation: lanePulse 2.2s ease-in-out infinite; }
+  .lane-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lane-status { flex: none; font-size: 11px; font-weight: 600; color: var(--lane); white-space: nowrap; }
+  .lane-meta { display: flex; align-items: center; gap: 8px; }
+  .lane-cwd { flex: 1; min-width: 0; font-size: 12px; color: var(--txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lane-turns { flex: none; font-size: 11px; color: var(--txt3); white-space: nowrap; }
+  .lane-pend { display: flex; background: rgba(239, 95, 95, 0.08); border: 1px solid rgba(239, 95, 95, 0.28); border-radius: 8px; padding: 6px 8px; }
+  .lane-pend-sum { flex: 1; min-width: 0; font-size: 12px; color: #ef5f5f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lane-approve { display: flex; gap: 6px; }
+  .lane-btn { min-height: 34px; padding: 0 10px; font-size: 12.5px; font-weight: 600; border-radius: 8px; background: var(--bg2); color: var(--txt); border: 1px solid var(--line); white-space: nowrap; }
+  .lane-approve .lane-btn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .lane-btn.allow { color: var(--green); border-color: rgba(16, 185, 129, 0.3); }
+  .lane-btn.deny { color: var(--red); border-color: rgba(239, 68, 68, 0.3); }
+  .lane-drive { display: flex; flex-direction: column; gap: 7px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .lane-input { display: block; width: 100%; resize: none; background: var(--bg1); color: var(--txt); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13.5px; line-height: 1.4; min-height: 38px; max-height: 96px; overflow-y: auto; -webkit-appearance: none; }
+  .lane-input:focus { outline: none; border-color: var(--lane); }
+  .lane-input::placeholder { color: var(--txt3); }
+  .lane-acts { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+  .lane-spacer { flex: 1 1 0; min-width: 0; }
+  .lane-ico { display: grid; place-items: center; width: 34px; height: 34px; flex: none; padding: 0; font-size: 12px; border-radius: 8px; background: var(--bg2); color: var(--txt2); border: 1px solid var(--line); }
+  .lane-ico.stop { background: rgba(239, 68, 68, 0.06); color: var(--red); border-color: rgba(239, 68, 68, 0.28); }
+  .lane-send { height: 34px; flex: none; padding: 0 14px; font-size: 13px; font-weight: 600; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #0a0b0f; border: none; white-space: nowrap; }
+  .lane-send.push { background: rgba(245, 158, 11, 0.1); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.35); }
+  #fleet[data-readonly] .lane-drive, #fleet[data-readonly] .lane-approve { display: none; }
+
+  /* MOCKUP-ONLY: flips the harness between the idle and mid-turn composer. Not part of the app. */
+  #state-pill { position:absolute; bottom:158px; right:8px; z-index:50; height:26px; padding:0 10px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; background:rgba(45,212,191,.1); color:var(--cyan); border:1px solid rgba(45,212,191,.35); border-radius:99px; white-space:nowrap; }
 </style></head>
 <body>
   <div class="phone">
+    <button id="state-pill" type="button">idle &rarr; mid-turn</button>
     <section id="session-view">
-      <div id="catchup">
-        <button id="catchup-bar" type="button" aria-expanded="false">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg>
-          <span id="catchup-label">3 updates while you were away</span>
-          <svg class="cu-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+      <!-- P-PWA-FLEET.2: the FLEET strip, auto-collapsed. The bar carries the desktop dock pill's own count
+           pips; tapping it opens full-width lane cards, each drivable in its own lane. -->
+      <div id="fleet">
+        <button id="fleet-bar" type="button" aria-expanded="false" aria-controls="fleet-panel">
+          <span class="fleet-title">Fleet</span>
+          <span id="fleet-pips" class="fleet-pips"></span>
+          <span id="fleet-sum" class="fleet-sum"></span>
+          <svg class="fl-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
         </button>
-        <div id="catchup-body" hidden></div>
+        <div id="fleet-panel" hidden>
+          <div class="fleet-head">
+            <input id="fleet-filter" type="search" placeholder="Filter lanes" autocomplete="off" aria-label="Filter lanes by name" />
+          </div>
+          <div id="fleet-body"></div>
+        </div>
       </div>
       <div id="transcript">
-        <div class="msg user">refactor the share dock address ordering</div>
-        <div class="msg answer">Done. LAN IPv4 is the default now; loopback sinks to the bottom. Tests + demo green.</div>
-        <div class="msg user">now the PWA screen real estate</div>
-        <div class="msg answer">Moved the header + account into a condensed strip under the composer, maximized the transcript, and made it a double-decker that is auto-collapsed by default.</div>
+        <div class="msg user">now the PWA composer</div>
+        <div class="msg thinking">Thinking &nbsp;<i>folding the same-family controls into menus&hellip;</i></div>
+        <div class="msg answer">One row now: attach, hold-to-talk, a menu for dictate + check in, and a "?" that opens the whole voice explanation with room to read it. Stop and the Push now caret appear only while a turn is running.</div>
+        <div class="msg user">does it still fit on a 360px phone?</div>
+        <div class="msg answer">Measured mid-turn at 320 / 344 / 360 / 375 / 390 / 414 CSS px: no overflow, no wrap. Below 344px the send label drops to its icon and the aria-label carries the words.</div>
       </div>
       <form id="composer" onsubmit="return false">
         <textarea id="prompt-input" rows="1" placeholder="Message your agent&hellip;"></textarea>
-        <!-- auto-collapsed in the app; VISIBLE here so the mockup shows the expanded state -->
         <div id="composer-actions">
-          <label id="attach-btn" for="file-input">+</label>
-          <input type="file" id="file-input" style="display:none" />
+          <label id="attach-btn" for="file-input" role="button" tabindex="0" aria-label="Attach image"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></label>
+          <input type="file" id="file-input" class="sr-only" />
+          <button type="button" id="ptt-btn" aria-label="Hold to talk"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+          <div class="cx-wrap row-anchor">
+            <button type="button" id="more-btn" aria-haspopup="true" aria-expanded="false" aria-label="More composer options"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+            <div class="cx-menu" id="more-menu" role="menu" hidden>
+              <button type="button" class="cx-mi" id="mi-dictate" role="menuitem" data-stt="cloud">
+                <span class="cx-mi-l" id="mi-dictate-l">Dictate on this phone</span>
+                <span class="cx-mi-d" id="mi-dictate-d">caution: transcribed in the vendor's cloud</span>
+              </button>
+              <button type="button" class="cx-mi" id="mi-checkin" role="menuitem" hidden>
+                <span class="cx-mi-l">Check in</span>
+                <span class="cx-mi-d">ask for a brief status, then it carries on</span>
+              </button>
+            </div>
+          </div>
+          <button type="button" id="help-btn" data-tone="warn" aria-haspopup="dialog" aria-label="How your voice is handled">?</button>
           <span class="composer-spacer"></span>
-          <button type="button" id="abort-btn">Stop</button>
-          <button type="submit" class="btn-primary">Send</button>
+          <button type="button" id="abort-btn" hidden aria-label="Stop the current turn"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg></button>
+          <div class="cx-wrap" id="send-group">
+            <button type="submit" id="send-btn" class="btn-primary" aria-label="Send message">
+              <svg id="send-icon-send" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4a1 1 0 0 0 1.4 1.1l16.4-8a1 1 0 0 0 0-1.8L4.8 3.6a1 1 0 0 0-1.4 1.1L5 12z"/></svg>
+              <svg id="send-icon-queue" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" hidden><path d="M4 6h11M4 12h7M4 18h7M17 12v8M13 16h8"/></svg>
+              <span id="send-label">Send</span>
+            </button>
+            <button type="button" id="send-more" hidden aria-haspopup="true" aria-expanded="false" aria-label="Other ways to send"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button>
+            <div class="cx-menu right" id="send-menu" role="menu" hidden>
+              <button type="button" class="cx-mi" id="mi-push" role="menuitem">
+                <span class="cx-mi-l">Push now</span>
+                <span class="cx-mi-d">interject the running turn</span>
+              </button>
+            </div>
+          </div>
         </div>
+        <p id="voice-status" role="status" hidden></p>
       </form>
-      <div id="botstrip" data-open>
-        <!-- expanded by default here so the mockup proves the MODEL + FOLDER pickers live in the strip -->
-        <div id="botstrip-panel">
-          <div class="hdr"><span class="hdr-title">LUCID session</span><span class="hdr-sub">anthropic/claude-opus-4-8 &middot; Nick</span></div>
+      <div id="botstrip">
+        <div id="botstrip-panel" hidden>
+          <div class="hdr"><span class="hdr-title">LUCID session</span><span class="hdr-sub">anthropic/claude-opus-5 &middot; Nick</span></div>
           <label class="bs-pick">MODEL
-            <select><option selected>Claude Opus 4.8</option><option>Claude Sonnet 4.5</option><option>GPT-5.2 Codex</option></select>
+            <select><option selected>Claude Opus 5</option><option>Claude Sonnet 4.5</option></select>
           </label>
           <label class="bs-pick">FOLDER
             <select><option selected>LucidAgentIDE - git</option><option>Apps AI Vibe</option></select>
@@ -103,28 +265,171 @@
             <button class="btn-ghost">Sign out</button>
           </div>
         </div>
-        <button id="botstrip-bar" type="button" aria-expanded="true">
+        <button id="botstrip-bar" type="button" aria-expanded="false">
           <span class="bs-dot" data-tone="live"></span>
           <span class="bs-summary">Live &middot; you can drive</span>
-          <svg class="bs-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 15l6-6 6 6"/></svg>
+          <svg class="bs-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
         </button>
       </div>
     </section>
+
+    <!-- the "?" sheet: the voice explanation that used to be crammed under the composer -->
+    <div id="stt-sheet" hidden>
+      <div class="stt-head">
+        <span class="stt-title" id="stt-sheet-title">Your voice on this phone</span>
+        <button type="button" id="stt-sheet-x" class="rp-x" aria-label="Close">&times;</button>
+      </div>
+      <div class="stt-body" id="stt-sheet-body"></div>
+      <div class="stt-acts">
+        <button type="button" id="stt-sheet-go" class="btn-primary">Got it</button>
+        <button type="button" id="stt-sheet-alt" class="btn-ghost" hidden>Use hold-to-talk instead</button>
+      </div>
+    </div>
   </div>
   <script>
-    document.getElementById("botstrip-bar").addEventListener("click", () => {
-      const b = document.getElementById("botstrip"); const open = !b.hasAttribute("data-open");
-      b.toggleAttribute("data-open", open); document.getElementById("botstrip-panel").hidden = !open;
+    const $ = (id) => document.getElementById(id);
+    // the app's own menu behavior: one menu at a time, dismissed by a tap outside or Escape
+    let openMenuId = "";
+    const MENUS = [{ menu: "more-menu", trigger: "more-btn" }, { menu: "send-menu", trigger: "send-more" }];
+    const closeMenu = () => {
+      if (!openMenuId) return;
+      const m = MENUS.find((x) => x.menu === openMenuId);
+      openMenuId = "";
+      if (m) { $(m.menu).hidden = true; $(m.trigger).setAttribute("aria-expanded", "false"); }
+    };
+    const toggleMenu = (id) => {
+      const reopen = openMenuId !== id;
+      closeMenu();
+      const m = MENUS.find((x) => x.menu === id);
+      if (!reopen || !m) return;
+      openMenuId = id;
+      $(m.menu).hidden = false;
+      $(m.trigger).setAttribute("aria-expanded", "true");
+    };
+    for (const m of MENUS) $(m.trigger).addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); toggleMenu(m.menu); });
+    document.addEventListener("pointerdown", (ev) => { if (openMenuId && !ev.target.closest(".cx-wrap")) closeMenu(); }, true);
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeMenu(); });
+
+    // the "?" sheet, filled with whole <p> blocks exactly as app.ts does
+    const VOICE_BODY = [
+      "Your browser vendor transcribes this audio on its own servers, so your voice leaves the phone: hold the mic button instead and your desktop will transcribe the recording offline to keep it between your devices.",
+      "Hold the mic button to talk. This phone records the clip, your own desktop turns it into text offline with its own engine, and the audio never goes anywhere else.",
+      "The composer's menu can also let this phone type for you: its own recognizer puts the words straight into the message box, so you read them over first. A transcript is never sent on its own - you always tap Send.",
+      "Either way the words reach your desktop labelled with where they were transcribed, so the shared transcript and its audit trail show whether the phone or the desktop did the work.",
+    ];
+    $("help-btn").addEventListener("click", () => {
+      closeMenu();
+      const body = $("stt-sheet-body");
+      body.textContent = "";
+      for (const para of VOICE_BODY) { const p = document.createElement("p"); p.className = "stt-p"; p.textContent = para; body.append(p); }
+      $("stt-sheet").hidden = false;
     });
-    document.getElementById("catchup-bar").addEventListener("click", () => {
-      const c = document.getElementById("catchup"); const open = !c.hasAttribute("data-open");
-      c.toggleAttribute("data-open", open); document.getElementById("catchup-body").hidden = !open;
-      if (open && !document.getElementById("catchup-body").dataset.filled) {
-        const rows = [["host","now the PWA screen real estate"],["agent","Moved the header + account into a condensed strip under the composer."],["agent","Two-row composer: the actions row auto-collapses while reading."]];
-        const body = document.getElementById("catchup-body");
-        for (const [role,text] of rows) { const d=document.createElement("div"); d.className="cu-turn"; const s=document.createElement("span"); s.className="cu-role"; s.textContent=role; d.append(s, document.createTextNode(text)); body.append(d); }
-        body.dataset.filled = "1";
+    for (const id of ["stt-sheet-x", "stt-sheet-go"]) $(id).addEventListener("click", () => { $("stt-sheet").hidden = true; });
+
+    // MOCKUP-ONLY: flip between the idle row and the mid-turn row (Stop + Queue + the Push now caret)
+    let streaming = false;
+    const pill = $("state-pill");
+    const applyState = () => {
+      $("send-label").textContent = streaming ? "Queue" : "Send";
+      // an SVG element has no `.hidden` property - toggle the real attribute so [hidden] matches
+      $("send-icon-send").toggleAttribute("hidden", streaming);
+      $("send-icon-queue").toggleAttribute("hidden", !streaming);
+      $("send-group").toggleAttribute("data-split", streaming);
+      $("send-more").hidden = !streaming;
+      $("abort-btn").hidden = !streaming;
+      $("mi-checkin").hidden = !streaming;
+      pill.textContent = streaming ? "mid-turn \u2192 idle" : "idle \u2192 mid-turn";
+      if (!streaming) closeMenu();
+    };
+    pill.addEventListener("click", () => { streaming = !streaming; applyState(); });
+    applyState();
+
+    // ---- P-PWA-FLEET.2: the fleet strip. The lane markup + the roll-up mirror what
+    // desktop/collab/pwa_view.ts renderLaneCard and desktop/collab/fleet_status.ts laneRollup produce, so
+    // this harness exercises the real shape. One lane per status, so every colour is on screen at once.
+    const LANES = [
+      { id: "l1", name: "api-refactor", status: "needs-approval", cwd: "api", turns: 7, pend: { kind: "bash", summary: "rm -rf dist && bun run build" } },
+      { id: "l2", name: "docs-sweep", status: "awaiting-input", cwd: "docs", turns: 3 },
+      { id: "l3", name: "web-tests", status: "working", cwd: "web", turns: 12 },
+      { id: "l4", name: "scanner-fixtures", status: "starting", cwd: "scanner-sidecar", turns: 0 },
+      { id: "l5", name: "changelog", status: "done", cwd: "LucidAgentIDE", turns: 4 },
+      { id: "l6", name: "electron-smoke", status: "error", cwd: "desktop", turns: 2 },
+      { id: "l7", name: "old-spike", status: "stopped", cwd: "spike", turns: 9 },
+    ];
+    const STATUS_ORDER = ["needs-approval", "awaiting-input", "working", "starting", "done", "error", "stopped"];
+    const STATUS_WORDS = { "needs-approval": "need approval", "awaiting-input": "waiting on you", working: "working", starting: "starting", done: "done", error: "errored", stopped: "stopped" };
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    const laneCard = (l) => {
+      const busy = l.status === "working" || l.status === "starting";
+      const pend = l.pend
+        ? `<div class="lane-pend"><span class="lane-pend-sum">${esc(l.pend.kind)}: ${esc(l.pend.summary)}</span></div>` +
+          `<div class="lane-approve">` +
+          `<button type="button" class="lane-btn allow" data-lane="${l.id}" data-fleet-answer="once">Allow once</button>` +
+          `<button type="button" class="lane-btn allow" data-lane="${l.id}" data-fleet-answer="session">Allow session</button>` +
+          `<button type="button" class="lane-btn deny" data-lane="${l.id}" data-fleet-answer="deny">Deny</button>` +
+          `</div>`
+        : "";
+      return `<div class="lane-card lane-${l.status}" data-lane="${l.id}">` +
+        `<div class="lane-row"><span class="lane-dot" data-status="${l.status}"></span><span class="lane-name">${esc(l.name)}</span><span class="lane-status">${l.status}</span></div>` +
+        `<div class="lane-meta"><span class="lane-cwd">${esc(l.cwd)}</span><span class="lane-turns">${l.turns} turn${l.turns === 1 ? "" : "s"}</span></div>` +
+        pend +
+        `<div class="lane-drive">` +
+        `<textarea class="lane-input" rows="1" data-lane-input="${l.id}" placeholder="Message ${esc(l.name)}\u2026"></textarea>` +
+        `<div class="lane-acts">` +
+        `<button type="button" class="lane-btn" data-lane="${l.id}" data-fleet-act="checkin">Check in</button>` +
+        `<span class="lane-spacer"></span>` +
+        `<button type="button" class="lane-ico stop" data-lane="${l.id}" data-fleet-act="stop" title="Stop this lane">\u25a0</button>` +
+        `<button type="button" class="lane-send" data-lane="${l.id}" data-fleet-act="send">${busy ? "Queue" : "Send"}</button>` +
+        `<button type="button" class="lane-send push" data-lane="${l.id}" data-fleet-act="push" title="Interject the running turn"${busy ? "" : " hidden"}>Push</button>` +
+        `</div></div></div>`;
+    };
+
+    const fleet = $("fleet");
+    const renderFleet = () => {
+      const counts = STATUS_ORDER.map((s) => ({ status: s, lanes: LANES.filter((l) => l.status === s) })).filter((c) => c.lanes.length);
+      fleet.toggleAttribute("data-attn", LANES.some((l) => l.status === "needs-approval" || l.status === "awaiting-input"));
+      $("fleet-pips").innerHTML = counts.map((c) => `<span class="fleet-pip lane-${c.status}"><i aria-hidden="true"></i><b>${c.lanes.length}</b></span>`).join("");
+      $("fleet-sum").textContent = counts.map((c) => `${c.lanes.length} ${STATUS_WORDS[c.status]}`).join(", ");
+      $("fleet-bar").title = counts.map((c) => `${c.lanes.length} ${STATUS_WORDS[c.status]}: ${c.lanes.map((l) => l.name).join(", ")}`).join(" \u00b7 ");
+      if (!fleet.hasAttribute("data-open")) return;
+      const q = $("fleet-filter").value.trim().toLowerCase();
+      const shown = q ? LANES.filter((l) => l.name.toLowerCase().includes(q)) : LANES;
+      $("fleet-body").innerHTML = shown.length ? shown.map(laneCard).join("") : `<div class="fleet-empty">No lanes match</div>`;
+    };
+    $("fleet-bar").addEventListener("click", () => {
+      const open = !fleet.hasAttribute("data-open");
+      fleet.toggleAttribute("data-open", open);
+      $("fleet-panel").hidden = !open;
+      $("fleet-bar").setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) renderFleet();
+    });
+    $("fleet-filter").addEventListener("input", renderFleet);
+    // MOCKUP-ONLY: a lane action writes the note the app would write, so the wiring is visibly real
+    $("fleet-body").addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button[data-lane]");
+      if (!btn) return;
+      const lane = LANES.find((l) => l.id === btn.dataset.lane);
+      const input = $("fleet-body").querySelector(`[data-lane-input="${btn.dataset.lane}"]`);
+      const act = btn.dataset.fleetAnswer ? `answered ${btn.dataset.fleetAnswer}` : btn.dataset.fleetAct;
+      let note = `lane ${lane.name}: ${act}`;
+      if ((act === "send" || act === "push") && input) {
+        if (!input.value.trim()) { input.focus(); return; }
+        note = `[lane: ${lane.name}] ${input.value.trim()}`;
+        input.value = "";
       }
+      const d = document.createElement("div");
+      d.className = "msg user";
+      d.textContent = note;
+      $("transcript").append(d);
+      $("transcript").scrollTop = $("transcript").scrollHeight;
+    });
+    renderFleet();
+
+    $("botstrip-bar").addEventListener("click", () => {
+      const b = $("botstrip"); const open = !b.hasAttribute("data-open");
+      b.toggleAttribute("data-open", open); $("botstrip-panel").hidden = !open;
+      $("botstrip-bar").setAttribute("aria-expanded", open ? "true" : "false");
     });
   </script>
 </body></html>

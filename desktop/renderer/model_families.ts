@@ -18,6 +18,9 @@ export const MODEL_FAMILIES: ModelFamily[] = [
   { id: "gpt-o", label: "OpenAI o-series", icon: "brain", match: /gpt-o\d/i },
   { id: "gpt", label: "OpenAI GPT", icon: "command", match: /gpt/i },
   { id: "gemini", label: "Google Gemini", icon: "graph", match: /gemini/i },
+  // P-MODEL.5 (ADR-0392): xAI Grok gets its own group. Unmatched, every Grok (4.7 included) sank into
+  // "Other models" at the bottom of the picker, and "same family" fallbacks paired it with unrelated models.
+  { id: "grok", label: "xAI Grok", icon: "eye", match: /grok/i },
   { id: "rag", label: "AskSage RAG", icon: "search", match: /(^|[/-])rag$/i },
 ];
 // Catch-all for anything unmatched (e.g. a newly-added open-source provider). `/.^/` never matches,
@@ -28,6 +31,57 @@ export const OTHER_FAMILY: ModelFamily = { id: "other", label: "Other models", i
 export function familyOf(value: string): ModelFamily {
   for (const f of MODEL_FAMILIES) if (f.match.test(value)) return f;
   return OTHER_FAMILY;
+}
+
+// ── P-LOCALPICK.1 (ADR-0371): local/self-hosted providers pin to the TOP of the picker ───────────
+// A user with a box on their own LAN configured it because they intend to USE it, so its models are
+// the likeliest first choice, and they were the least visible: a self-hosted id matches no family
+// regex, so `dgx-spark/glm-5.3-flash` landed in "Other models" at the very bottom. Worse, a freshly
+// DISCOVERED model is absent from omp's report until the app restarts, so the picker showed nothing
+// at all and gave no reason. These helpers are pure so both behaviours are unit-tested.
+
+/** The minimal slice of a LocalProviderDef the picker needs. Kept structural so this module stays
+ *  free of desktop imports and the tests need no fixture heavier than an object literal. */
+export interface LocalProviderRef { ompProvider: string; enabled: boolean; models: readonly { id: string }[] }
+
+/** The provider prefix of a model id ("dgx-spark/glm-5.3-flash" -> "dgx-spark"; bare ids -> ""). */
+export function providerPrefixOf(value: string): string {
+  const i = value.indexOf("/");
+  return i === -1 ? "" : value.slice(0, i);
+}
+
+/** The omp provider prefixes of the ENABLED local providers. */
+export function localPrefixSet(providers: readonly LocalProviderRef[]): Set<string> {
+  return new Set(providers.filter((p) => p.enabled && p.ompProvider).map((p) => p.ompProvider));
+}
+
+/** Split a curated list into local-provider models (pinned first) and everything else. Relative
+ *  order inside each half is preserved: the caller already curated it. */
+export function splitLocalModels(models: readonly ModelOption[], prefixes: ReadonlySet<string>): { local: ModelOption[]; rest: ModelOption[] } {
+  const local: ModelOption[] = [];
+  const rest: ModelOption[] = [];
+  for (const m of models) (prefixes.has(providerPrefixOf(m.value)) ? local : rest).push(m);
+  return { local, rest };
+}
+
+/** Models the user's enabled local providers DECLARE but omp has not reported yet: the exact set a
+ *  restart will load. This is the answer to "I discovered it and the picker does not show it", said
+ *  in the picker itself instead of a Settings banner three surfaces away. Compared on full
+ *  `<ompProvider>/<modelId>` ids, the shape omp reports custom providers under. */
+export function pendingLocalModels(
+  providers: readonly LocalProviderRef[],
+  reported: readonly ModelOption[],
+): { value: string; name: string }[] {
+  const have = new Set(reported.map((m) => m.value));
+  const out: { value: string; name: string }[] = [];
+  for (const p of providers) {
+    if (!p.enabled || !p.ompProvider) continue;
+    for (const m of p.models) {
+      const full = `${p.ompProvider}/${m.id}`;
+      if (!have.has(full)) out.push({ value: full, name: m.id });
+    }
+  }
+  return out;
 }
 
 // ── P-IDE.1c (ADR-0029): catalog curation + data-sovereignty gating ──────────
@@ -81,13 +135,136 @@ export function cmpModelsNewestFirst(a: string, b: string): number {
   }
   return a.localeCompare(b);
 }
+
+/** The model id without its provider prefix, lowercased. Every id heuristic below matches on THIS, so a
+ *  gateway prefix (`asksage-openai/`) can never change a verdict and callers never have to pre-strip. */
+function bareId(value: string): string { return value.replace(/^[^/]*\//, "").toLowerCase(); }
+
+/** Capability tier from the model id (name heuristic): 2 = flagship/frontier, 1 = balanced, 0 = small/
+ *  fast. The SINGLE source of truth for "how capable" a model is: the renderer's inferModelInfo maps these
+ *  to the hover-card Intelligence (iq) stars, and the picker / default-select / fallback all rank by it,
+ *  so "highest level" means the same thing everywhere. `\bmini` (word boundary) so "ge·mini" is not
+ *  mis-read as a small model; "-mini" in gpt-5-mini etc. still matches.
+ *
+ *  P-MODEL.2: GPT tiering is VERSION-AWARE (`gptVersion() >= 5`) instead of a literal `gpt-5` substring.
+ *  The old regex only knew the ids that existed the day it was written, so `gpt-6-astra` scored 1
+ *  (balanced) and every future `gpt-7` would have repeated that. The small-model test stays FIRST, so
+ *  `gpt-6-mini` / `gpt-6-nano` are still 0.
+ *
+ *  INVARIANT: this is the ONE capability heuristic for the chat picker. startup_model.ts carried a private
+ *  1/2/3 copy that had already drifted (it knew `grok` and `spark`, this did not); both tokens are folded
+ *  in here and that copy is deleted. `trainer_model.ts:trainerTier` is the last remaining variant (its own
+ *  1..3 distillation scale); collapse it into this the next time it is touched. Never add a third. */
+export function capabilityTier(value: string): 0 | 1 | 2 {
+  const s = bareId(value);
+  if (/\bmini|nano|lite|flash|haiku|oss|spark|-8b|-7b/.test(s)) return 0; // `spark` folded in from startup_model
+  const gv = gptVersion(s);
+  if (gv !== null && gv >= 5) return 2;                                   // gpt-5/6/7… incl. tier codenames
+  if (/opus|pro|max|fable|mythos|ultra|grok|gpt-o/.test(s)) return 2;     // `grok` folded in from startup_model
+  return 1;
+}
+/** Compare two model ids by LEVEL — highest capability first, then newest version, then alpha. Unlike
+ *  cmpModelsNewestFirst (pure version), this ranks an older Pro ABOVE a newer Flash: "highest level for
+ *  that provider", not "highest version number". The version tiebreak is only meaningful WITHIN a family
+ *  (a GPT "5.6" and a Claude "fable-5" are different scales), so cross-family callers filter by family. */
+export function cmpModelsByLevel(a: string, b: string): number {
+  const d = capabilityTier(b) - capabilityTier(a);
+  if (d) return d;
+  return cmpModelsNewestFirst(a, b);
+}
+/** The single highest-LEVEL model in a list (capability, then newest), or null when empty. Auxiliary
+ *  (tab / auto-review) models are never eligible; pass `accept` to further restrict the pool (e.g. gov-only,
+ *  same-family, or "currently selectable"). Used to pick the default / best model for a provider.
+ *  Generic over the option shape (P-MODEL.2): ranking only ever reads `.value`, so a caller holding a
+ *  richer option type (acp's `{ value; name?; description? }`) ranks in place instead of copying every
+ *  option into a `ModelOption` just to satisfy the signature. */
+export function topModel<T extends { value: string }>(models: readonly T[], accept: (value: string) => boolean = () => true): T | null {
+  const pool = models.filter((m) => !isAuxiliaryModel(m.value) && accept(m.value));
+  if (!pool.length) return null;
+  return pool.slice().sort((a, b) => cmpModelsByLevel(a.value, b.value))[0]!;
+}
+
+// ── P-MODEL.2: the curated fresh-install default ─────────────────────────────
+// WHY a hand-written list instead of "just take the newest/highest": version digits are NOT comparable
+// across families (cmpModelsByLevel says so itself: a GPT "5.6" and a Claude "fable-5" are different
+// scales). The old cross-family sort therefore put `gpt-6-astra` [6] above `claude-opus-5` [5] purely
+// because 6 > 5, which made the first model a new user ever sees an artifact of regex digit racing rather
+// than a decision. Landing a new flagship is now a deliberate one-line edit HERE, reviewed like any other
+// product choice, and can never be an emergent property of a number.
+
+/** P-MODEL.2: the ordered list of ids we deliberately want a FRESH install to open on, best first.
+ *  Matched UNANCHORED against the provider-stripped, lowercased id (`bareId`, hence no `i` flag), so a gov
+ *  copy (`asksage-anthropic/google-claude-fable-5`) hits the same entry as the direct route and the two are
+ *  separated by cmpModelsByLevel. Every entry ends in `(?![\w.-])` = "the id stops here", so
+ *  `claude-opus-5` can never also match `claude-opus-5-mini` at the wrong rank, and each optional
+ *  tier-codename group excludes the small-model tokens so no entry can select a tier-0 model. */
+export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
+  /claude-opus-5[-.]5(?![\w.-])/,                                       // Opus 5.5 (2026-09-22): Fable-5.1-level on most work, 40% cheaper to run than Opus 5
+  /claude-opus-5(?![\w.-])/,                                            // Opus 5: 1M ctx Anthropic flagship, the prior house default
+  // GPT-6 tier codenames (omp 18.2.10, 2026-09-23): Astra is the flagship, Sol the mid tier, Luna the fast
+  // tier. Three entries, not one, so a provider carrying Sol and Luna but not Astra defaults to Sol: a
+  // single catch-all put Luna and Sol on one rank and left the pick to survivor order.
+  /gpt-6(?:\.\d+)?-astra(?![\w.-])/,
+  /gpt-6(?:\.\d+)?-sol(?![\w.-])/,
+  /gpt-6(?:\.\d+)?(?:-(?!mini|nano|lite|flash|oss|luna)[a-z]+)?(?![\w.-])/, // any other GPT-6 tier, and bare gpt-6
+  /gpt-6(?:\.\d+)?-luna(?![\w.-])/,
+  /claude-fable-5[-.]1(?![\w.-])/,                                      // Fable 5.1 (API-credit billed, see isApiOnlyModel)
+  /claude-mythos-5[-.]1(?![\w.-])/,                                     // Mythos 5.1, shipped alongside Fable 5.1
+  /claude-fable-5(?![\w.-])/,
+  /claude-sonnet-5(?![\w.-])/,
+  /gpt-5[-.]6(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/,       // 5.6 + the gov tier codenames (luna/sol/terra)
+  /claude-opus-4[-.]8(?![\w.-])/,
+  /gemini-3[-.]1-pro(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/, // the gov gateway exposes it as …-pro-com
+];
+
+/** The model a fresh session should default to, out of the options omp actually reports. Walks
+ *  DEFAULT_MODEL_PREFERENCE in order and returns the first survivor matching the current entry; when
+ *  several survivors match ONE entry (a direct route and its gov copy) cmpModelsByLevel breaks the tie, so
+ *  the higher tier wins and, on a true tie, `anthropic/…` sorts ahead of `asksage-…`. Survivors exclude
+ *  auxiliary routes, deprecated ids, sovereignty-gated China-origin models and the unusable RAG route;
+ *  `accept` narrows further (e.g. "this provider still holds a credential"). When NOTHING curated is on
+ *  offer the pick degrades to topModel(survivors), so an unknown-but-configured provider still yields a
+ *  sane default rather than null. Null ONLY when nothing survives the filters. */
+export function preferredDefaultModel<T extends { value: string }>(
+  models: readonly T[],
+  accept: (value: string) => boolean = () => true,
+): T | null {
+  const survivors = models.filter((m) =>
+    !isAuxiliaryModel(m.value) && !isDeprecatedModel(m.value) && !isChinaModel(m.value)
+    && !/(^|\/)rag$/i.test(m.value) && accept(m.value));
+  if (!survivors.length) return null;
+  for (const pat of DEFAULT_MODEL_PREFERENCE) {
+    // The capabilityTier guard is belt-and-braces: no curated entry may EVER resolve to a small model, even
+    // if a vendor invents a suffix ("-tiny") that a pattern happens to admit before we notice.
+    let best: T | null = null;
+    for (const m of survivors) {
+      if (!pat.test(bareId(m.value)) || capabilityTier(m.value) === 0) continue;
+      if (!best || cmpModelsByLevel(m.value, best.value) < 0) best = m;
+    }
+    if (best) return best;
+  }
+  return topModel(survivors);
+}
+
+/** P-MODEL.2: a model that bills as pay-as-you-go API credits rather than being included in a
+ *  subscription plan's limits. Anthropic's Fable and Mythos families bill outside Pro and standard
+ *  Team/Enterprise seat limits, so they only work with a connected credential that has credit on it, and
+ *  the UI warns about cost before a session opens on one. A PURE id test with no auth knowledge: pair it
+ *  with `!isGovModel(v)` when the warning is specifically about Anthropic billing, since a gov-routed copy
+ *  is drawn from the AskSage quota instead. */
+export function isApiOnlyModel(value: string): boolean {
+  return /claude-(?:fable|mythos)(?![a-z])/.test(bareId(value));
+}
+
 /** Order a model list so that, WITHIN each family (groupByFamily preserves relative order), gov models
- *  come first and each group is newest→oldest. (ADR-0029 P-IDE.1c.) */
-export function sortGovFirstNewest(models: ModelOption[]): ModelOption[] {
+ *  come first and each group is highest-LEVEL first (capability tier, then newest). Renamed from
+ *  sortGovFirstNewest: the top row of each provider is now its most CAPABLE model, not merely its highest
+ *  version number (a newer Flash no longer outranks an older Pro). (ADR-0029 P-IDE.1c.) */
+export function sortGovFirstByLevel(models: ModelOption[]): ModelOption[] {
   return models.slice().sort((a, b) => {
     const ga = isGovModel(a.value), gb = isGovModel(b.value);
     if (ga !== gb) return ga ? -1 : 1;
-    return cmpModelsNewestFirst(a.value, b.value);
+    return cmpModelsByLevel(a.value, b.value);
   });
 }
 
@@ -121,7 +298,7 @@ export function groupByFamily(models: ModelOption[], order?: string[]): { fam: M
 
 /** Family order when the AskSage gov gateway is configured: GPT + o-series + Gemini ABOVE Claude
  *  (the gov gateway's OpenAI/Google models are the user's primary surface in that mode). */
-export const ASKSAGE_FAMILY_ORDER = ["gpt-o", "gpt", "gemini", "claude", "rag", "other"];
+export const ASKSAGE_FAMILY_ORDER = ["gpt-o", "gpt", "gemini", "claude", "grok", "rag", "other"];
 
 // ── P-NORESP.1: fallback recommendation when a model returns nothing (overloaded) ────────────
 /** A human label for the PROVIDER behind a model id — for a "no response from X" message. */
@@ -138,32 +315,27 @@ export interface FallbackRecs { sameFamily: ModelOption | null; otherProvider: M
 
 /** When `failed` returned nothing (likely overloaded), recommend fallbacks from the user's ACCESSIBLE
  *  list, matching the failed model's gov-ness (so a lockdown session stays gov-routed):
- *   • sameFamily   — a LOWER version in the same family (GPT-5.6 → 5.5), else any sibling; non-deprecated first.
- *   • otherProvider— an equivalent from a DIFFERENT provider (Claude preferred: a separate GPU pool).
- *  Either may be null if nothing suitable is accessible. Pure + unit-tested. */
+ *   / sameFamily   / the HIGHEST-LEVEL sibling (capability tier, then newest), excluding the failed model.
+ *     A failing GPT-5.6 tier now prefers ANOTHER 5.6 tier over dropping to 5.5 (the "falls back to 5.5
+ *     instead of 5.6" complaint); it only reaches a lower version when no equal-or-higher sibling is left.
+ *   / otherProvider/ a DIFFERENT provider's best (Claude preferred: a separate GPU pool), highest-level.
+ *  Non-deprecated is always preferred. Either may be null if nothing suitable is accessible. Pure + tested. */
 export function recommendFallbacks(failed: string, models: ModelOption[]): FallbackRecs {
   const fam = familyOf(failed).id;
   const gov = isGovModel(failed);
-  const fv = gptVersion(failed);
   const pool = models.filter((m) => m.value !== failed && isGovModel(m.value) === gov && !isAuxiliaryModel(m.value));
   const pickPreferFresh = (list: ModelOption[]): ModelOption | null =>
     list.find((m) => !isDeprecatedModel(m.value)) ?? list[0] ?? null;
 
-  const sameFamAll = pool.filter((m) => familyOf(m.value).id === fam);
-  let sameFamily: ModelOption | null = null;
-  if (fv !== null) {
-    const lower = sameFamAll
-      .filter((m) => { const v = gptVersion(m.value); return v !== null && v < fv; })
-      .sort((a, b) => cmpModelsNewestFirst(a.value, b.value)); // highest lower version first
-    sameFamily = pickPreferFresh(lower);
-  }
-  if (!sameFamily) sameFamily = pickPreferFresh(sameFamAll.slice().sort((a, b) => cmpModelsNewestFirst(a.value, b.value)));
+  // Keep the ceiling: the most capable remaining sibling, not a deliberately lower version.
+  const sameFamAll = pool.filter((m) => familyOf(m.value).id === fam).sort((a, b) => cmpModelsByLevel(a.value, b.value));
+  const sameFamily = pickPreferFresh(sameFamAll);
 
   const cross = pool
     .filter((m) => familyOf(m.value).id !== fam)
     .sort((a, b) => {
       const ca = familyOf(a.value).id === "claude" ? 0 : 1, cb = familyOf(b.value).id === "claude" ? 0 : 1;
-      return ca - cb || cmpModelsNewestFirst(a.value, b.value); // Claude first (different pool), then newest
+      return ca - cb || cmpModelsByLevel(a.value, b.value); // Claude first (different pool), then highest level
     });
   const otherProvider = pickPreferFresh(cross);
   return { sameFamily, otherProvider };

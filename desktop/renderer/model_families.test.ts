@@ -7,7 +7,7 @@
 // GPT) and the gateway-prefix robustness are the easy things to break, so they're pinned here.
 
 import { describe, expect, it } from "bun:test";
-import { ASKSAGE_FAMILY_ORDER, cmpModelsNewestFirst, familyOf, filterModels, groupByFamily, gptVersion, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, MODEL_FAMILIES, providerLabelOf, recommendFallbacks, sortGovFirstNewest, type ModelOption } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, localPrefixSet, MODEL_FAMILIES, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, type LocalProviderRef, type ModelOption } from "./model_families.ts";
 
 describe("familyOf", () => {
   it("classifies direct Anthropic models (incl. fable) as Claude", () => {
@@ -105,6 +105,12 @@ describe("P-IDE.1c curation - isDeprecatedModel (moderate policy)", () => {
     expect(isDeprecatedModel("anthropic/claude-opus-4-8")).toBe(false);
     expect(isDeprecatedModel("anthropic/claude-sonnet-4-6")).toBe(false);
     expect(isDeprecatedModel("anthropic/claude-fable-5")).toBe(false);
+    // A brand-new flagship (e.g. Opus 5, released same-day) must NOT be curated out - it surfaces the
+    // moment omp's catalog carries it. It is Claude family, not China-origin, and sorts ahead of 4.8.
+    expect(isDeprecatedModel("anthropic/claude-opus-5")).toBe(false);
+    expect(familyOf("claude-opus-5").id).toBe("claude");
+    expect(isChinaModel("anthropic/claude-opus-5")).toBe(false);
+    expect(cmpModelsNewestFirst("anthropic/claude-opus-5", "anthropic/claude-opus-4-8")).toBeLessThan(0);
   });
   it("drops Gemini 2.0 but keeps 2.5+ / 3.x", () => {
     expect(isDeprecatedModel("google-gemini-cli/gemini-2.0-flash")).toBe(true);
@@ -147,7 +153,7 @@ describe("P-IDE.1c - gov / auxiliary / china detection", () => {
   });
 });
 
-describe("P-IDE.1c - sortGovFirstNewest", () => {
+describe("sortGovFirstByLevel", () => {
   it("gov models first, each group newest→oldest", () => {
     const models: ModelOption[] = [
       { value: "openai-codex/gpt-5.4", name: "5.4" },
@@ -155,14 +161,55 @@ describe("P-IDE.1c - sortGovFirstNewest", () => {
       { value: "openai-codex/gpt-5.5", name: "5.5" },
       { value: "asksage-openai/gpt-5.4", name: "gov 5.4" },
     ];
-    expect(sortGovFirstNewest(models).map((m) => m.value)).toEqual([
+    expect(sortGovFirstByLevel(models).map((m) => m.value)).toEqual([
       "asksage-openai/gpt-5.5", "asksage-openai/gpt-5.4", // gov, newest first
       "openai-codex/gpt-5.5", "openai-codex/gpt-5.4",     // then direct, newest first
+    ]);
+  });
+  it("ranks capability BEFORE version - an older Pro outranks a newer Flash", () => {
+    const gem: ModelOption[] = [
+      { value: "google-antigravity/gemini-3.5-flash", name: "flash" },
+      { value: "google-antigravity/gemini-3.1-pro", name: "pro" },
+    ];
+    expect(sortGovFirstByLevel(gem).map((m) => m.value)).toEqual([
+      "google-antigravity/gemini-3.1-pro", "google-antigravity/gemini-3.5-flash",
     ]);
   });
   it("cmpModelsNewestFirst orders versions descending", () => {
     expect(cmpModelsNewestFirst("x/gpt-5.5", "x/gpt-5.4")).toBeLessThan(0);
     expect(cmpModelsNewestFirst("a/claude-opus-4-6", "a/claude-opus-4-8")).toBeGreaterThan(0);
+  });
+});
+
+describe("capabilityTier / cmpModelsByLevel / topModel (level ranking)", () => {
+  it("flagship=2, balanced=1, small=0; 'gemini' is not mis-read as small", () => {
+    expect(capabilityTier("anthropic/claude-fable-5")).toBe(2);
+    expect(capabilityTier("anthropic/claude-opus-4-8")).toBe(2);
+    expect(capabilityTier("asksage-openai/gpt-5.6-luna")).toBe(2);
+    expect(capabilityTier("google-antigravity/gemini-3.1-pro")).toBe(2);
+    expect(capabilityTier("anthropic/claude-haiku-4-5")).toBe(0);
+    expect(capabilityTier("google-antigravity/gemini-3.5-flash")).toBe(0);
+    expect(capabilityTier("asksage-openai/gpt-5-mini")).toBe(0);
+  });
+  it("cmpModelsByLevel: capability beats version, then newest within a tier", () => {
+    expect(cmpModelsByLevel("x/gemini-3.1-pro", "x/gemini-3.5-flash")).toBeLessThan(0); // Pro over newer Flash
+    expect(cmpModelsByLevel("x/gpt-5.6-luna", "x/gpt-5.5")).toBeLessThan(0);
+    expect(cmpModelsByLevel("a/claude-fable-5", "a/claude-opus-4-8")).toBeLessThan(0);
+  });
+  it("topModel: highest level within the pool; excludes auxiliary; honors an accept predicate", () => {
+    const claude: ModelOption[] = [
+      { value: "anthropic/claude-opus-4-8", name: "opus48" },
+      { value: "anthropic/claude-fable-5", name: "fable" },
+      { value: "anthropic/claude-haiku-4-5", name: "haiku" },
+    ];
+    expect(topModel(claude)?.value).toBe("anthropic/claude-fable-5");
+    const mixed: ModelOption[] = [
+      { value: "openai-codex/gpt-5.5", name: "5.5" },
+      { value: "asksage-openai/gpt-5.6-luna", name: "gov luna" },
+      { value: "openai-codex/codex-auto-review", name: "aux" },
+    ];
+    expect(topModel(mixed, isGovModel)?.value).toBe("asksage-openai/gpt-5.6-luna");
+    expect(topModel([{ value: "openai-codex/codex-auto-review", name: "aux" }])).toBeNull();
   });
 });
 
@@ -201,9 +248,9 @@ describe("recommendFallbacks (P-NORESP.1)", () => {
     { value: "claude-opus-4-8", name: "Claude 4.8 Opus (commercial)" },
   ];
 
-  it("recommends a LOWER version in the same family + a cross-provider equivalent (Claude)", () => {
+  it("recommends the HIGHEST-LEVEL sibling (another 5.6 tier, not 5.5) + a cross-provider equivalent (Claude)", () => {
     const r = recommendFallbacks("asksage-openai/gpt-5.6-luna", models);
-    expect(r.sameFamily?.value).toBe("asksage-openai/gpt-5.5");            // lower GPT version, not a 5.6 sibling
+    expect(r.sameFamily?.value).toBe("asksage-openai/gpt-5.6-sol");        // keep the 5.6 ceiling, don't drop to 5.5
     expect(r.otherProvider?.value).toBe("asksage-anthropic/google-claude-48-opus"); // Claude = different pool
   });
 
@@ -234,5 +281,177 @@ describe("recommendFallbacks (P-NORESP.1)", () => {
     const r = recommendFallbacks("gpt-5.6", [{ value: "gpt-5.6", name: "only me" }]);
     expect(r.sameFamily).toBeNull();
     expect(r.otherProvider).toBeNull();
+  });
+});
+
+// ── P-MODEL.2: version-aware tiering + the curated fresh-install default ─────────────────────
+
+describe("P-MODEL.2 - capabilityTier is version-aware for GPT", () => {
+  it("ranks a brand-new GPT flagship by VERSION, not by a hardcoded `gpt-5` substring", () => {
+    expect(capabilityTier("openai-codex/gpt-6-astra")).toBe(2); // the bug: this used to score 1 (balanced)
+    expect(capabilityTier("openai-codex/gpt-7")).toBe(2);       // and the next one needs no edit here
+    expect(capabilityTier("asksage-openai/gpt-5.6-luna")).toBe(2);
+    expect(capabilityTier("asksage-openai/gpt-4.1")).toBe(1);   // below 5 stays balanced
+  });
+  it("keeps the small-model test FIRST, so the mini/nano tier of a new flagship is still 0", () => {
+    expect(capabilityTier("openai-codex/gpt-6-mini")).toBe(0);
+    expect(capabilityTier("openai-codex/gpt-6-nano")).toBe(0);
+    expect(capabilityTier("google-antigravity/gemini-3.1-pro")).toBe(2); // `\bmini` never eats "ge·mini"
+  });
+  it("absorbs the tokens startup_model's deleted private copy knew: grok flagship, spark small", () => {
+    expect(capabilityTier("xai/grok-4")).toBe(2);
+    expect(capabilityTier("iflytek/spark-4-ultra")).toBe(0); // small test runs first, ultra does not rescue it
+  });
+});
+
+describe("P-MODEL.2 - the 2026 flagships survive curation", () => {
+  it("gpt-6 / opus-5 / fable-5.1 / mythos-5.1 are NOT deprecated", () => {
+    for (const v of ["openai-codex/gpt-6-astra", "anthropic/claude-opus-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1"]) {
+      expect(isDeprecatedModel(v)).toBe(false);
+    }
+  });
+  it("fable-5-1 is not caught by the legacy claude-*-4-[01] rule (the family names differ)", () => {
+    expect(isDeprecatedModel("anthropic/claude-fable-5-1")).toBe(false);
+    expect(isDeprecatedModel("anthropic/claude-opus-4-1")).toBe(true); // the rule still bites where it should
+  });
+  it("gpt-6 lands in the GPT family, never o-series (`gpt-o\\d` must not capture `gpt-6`)", () => {
+    expect(familyOf("gpt-6-astra").id).toBe("gpt");
+    expect(familyOf("openai-codex/gpt-6-astra").id).toBe("gpt");
+    expect(familyOf("gpt-o4-mini").id).toBe("gpt-o"); // the o-series bucket still wins where it should
+  });
+});
+
+describe("P-MODEL.2 - isApiOnlyModel (billed as credits, not plan-included)", () => {
+  it("true for the Fable and Mythos families", () => {
+    expect(isApiOnlyModel("anthropic/claude-fable-5-1")).toBe(true);
+    expect(isApiOnlyModel("anthropic/claude-mythos-5-1")).toBe(true);
+    expect(isApiOnlyModel("claude-fable-5")).toBe(true);
+    // A pure id test: the gov copy matches too, so billing UI pairs it with !isGovModel.
+    expect(isApiOnlyModel("asksage-anthropic/google-claude-fable-5")).toBe(true);
+  });
+  it("false for plan-included models", () => {
+    for (const v of ["anthropic/claude-opus-5", "anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6",
+                     "openai-codex/gpt-6-astra", "google-antigravity/gemini-3.1-pro"]) {
+      expect(isApiOnlyModel(v)).toBe(false);
+    }
+  });
+});
+
+describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)", () => {
+  const mk = (...values: string[]): ModelOption[] => values.map((value) => ({ value, name: value }));
+
+  it("picks Opus 5 out of a mixed Anthropic list", () => {
+    const got = preferredDefaultModel(mk("anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-5"));
+    expect(got?.value).toBe("anthropic/claude-opus-5");
+  });
+  it("Opus 5.5 outranks Opus 5 when both are offered: its entry precedes, and the Opus 5 entry is end-anchored", () => {
+    expect(preferredDefaultModel(mk("anthropic/claude-opus-5", "anthropic/claude-opus-5-5"))?.value).toBe("anthropic/claude-opus-5-5");
+    expect(preferredDefaultModel(mk("anthropic/claude-opus-5"))?.value).toBe("anthropic/claude-opus-5"); // no 5.5 offered -> Opus 5 still hits its own entry
+  });
+  it("a bigger version digit does not win across families: Opus 5 beats gpt-6-astra by LIST ORDER", () => {
+    expect(preferredDefaultModel(mk("openai-codex/gpt-6-astra", "anthropic/claude-opus-5"))?.value).toBe("anthropic/claude-opus-5");
+    expect(preferredDefaultModel(mk("anthropic/claude-opus-5", "openai-codex/gpt-6-astra"))?.value).toBe("anthropic/claude-opus-5"); // input order is irrelevant
+  });
+  it("returns gpt-6-astra when no Claude is offered", () => {
+    const got = preferredDefaultModel(mk("openai-codex/gpt-6-astra", "openai-codex/gpt-5.5", "google-antigravity/gemini-3.1-pro"));
+    expect(got?.value).toBe("openai-codex/gpt-6-astra");
+  });
+  it("GPT-6 tiers rank Astra, then Sol, then Luna: a provider without Astra defaults to Sol, never the fast tier", () => {
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6-astra"))?.value).toBe("openai/gpt-6-astra");
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai/gpt-6-sol"))?.value).toBe("openai/gpt-6-sol");
+    expect(preferredDefaultModel(mk("openai/gpt-6-sol", "openai/gpt-6-luna"))?.value).toBe("openai/gpt-6-sol"); // input order is irrelevant
+    expect(preferredDefaultModel(mk("openai/gpt-6-luna", "openai-codex/gpt-5.5"))?.value).toBe("openai/gpt-6-luna"); // Luna still beats the prior generation
+  });
+  it("respects the accept predicate (an unconfigured provider is invisible)", () => {
+    const got = preferredDefaultModel(mk("anthropic/claude-opus-5", "openai-codex/gpt-6-astra"), (v) => v.startsWith("openai-codex/"));
+    expect(got?.value).toBe("openai-codex/gpt-6-astra");
+  });
+  it("skips deprecated, China-origin, RAG and auxiliary entries", () => {
+    const got = preferredDefaultModel(mk(
+      "openai-codex/gpt-5.1-codex-max", "deepseek/deepseek-v3", "asksage-query/rag",
+      "openai-codex/codex-auto-review", "anthropic/claude-fable-5"));
+    expect(got?.value).toBe("anthropic/claude-fable-5");
+  });
+  it("prefers the direct route over a gov copy of the SAME curated entry", () => {
+    const got = preferredDefaultModel(mk("asksage-anthropic/google-claude-fable-5", "anthropic/claude-fable-5"));
+    expect(got?.value).toBe("anthropic/claude-fable-5");
+  });
+  it("falls back to the highest-LEVEL survivor when nothing curated is on offer", () => {
+    expect(preferredDefaultModel(mk("myserver/llama-3.3-70b", "myserver/llama-3.3-8b"))?.value).toBe("myserver/llama-3.3-70b");
+  });
+  it("returns null on an empty list and when every option is filtered out", () => {
+    expect(preferredDefaultModel([])).toBeNull();
+    expect(preferredDefaultModel(mk("deepseek/deepseek-v3", "asksage-query/rag"))).toBeNull();
+  });
+  it("no curated entry can ever select a small/fast model", () => {
+    for (const pat of DEFAULT_MODEL_PREFERENCE) {
+      for (const small of ["claude-opus-5-mini", "claude-opus-5-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite"]) {
+        expect(pat.test(small)).toBe(false);
+      }
+    }
+    expect(preferredDefaultModel(mk("openai-codex/gpt-6-mini", "openai-codex/gpt-6-astra"))?.value).toBe("openai-codex/gpt-6-astra");
+  });
+});
+
+// P-LOCALPICK.1 (ADR-0371): local providers pin to the top and explain their pending models.
+// The incident: a user Discovered `glm-5.3-flash` on a DGX Spark Local Provider; the picker showed
+// nothing (the model loads at the next restart, and the only explanation was a Settings banner), and
+// even after a restart the id matches no family regex, so it would sink to "Other models" last.
+describe("local provider picker helpers", () => {
+  const DGX: LocalProviderRef = { ompProvider: "dgx-spark", enabled: true, models: [{ id: "glm-5.3-flash" }] };
+  const OFF: LocalProviderRef = { ompProvider: "old-box", enabled: false, models: [{ id: "llama-3.3-70b" }] };
+  const list: ModelOption[] = [
+    { value: "anthropic/claude-fable-5", name: "Claude Fable 5" },
+    { value: "dgx-spark/glm-5.3-flash", name: "GLM-5.3-Flash" },
+    { value: "zai/glm-5", name: "GLM-5" },
+  ];
+
+  it("providerPrefixOf reads the prefix and never invents one for a bare id", () => {
+    expect(providerPrefixOf("dgx-spark/glm-5.3-flash")).toBe("dgx-spark");
+    expect(providerPrefixOf("glm-5.3-flash")).toBe("");
+  });
+
+  it("localPrefixSet holds ENABLED providers only, so a disabled box cannot pin models", () => {
+    const s = localPrefixSet([DGX, OFF]);
+    expect(s.has("dgx-spark")).toBe(true);
+    expect(s.has("old-box")).toBe(false);
+  });
+
+  it("splitLocalModels pins the DGX model and leaves the CLOUD glm in the general list", () => {
+    // The cloud GLM shares the model family but not the hardware; only the self-hosted one pins.
+    const { local, rest } = splitLocalModels(list, localPrefixSet([DGX]));
+    expect(local.map((m) => m.value)).toEqual(["dgx-spark/glm-5.3-flash"]);
+    expect(rest.map((m) => m.value)).toEqual(["anthropic/claude-fable-5", "zai/glm-5"]);
+  });
+
+  it("pendingLocalModels names EXACTLY the declared models omp has not reported", () => {
+    // omp reported nothing local yet (pre-restart): the declared model is pending.
+    const before = pendingLocalModels([DGX], [{ value: "anthropic/claude-fable-5", name: "x" }]);
+    expect(before.map((p) => p.value)).toEqual(["dgx-spark/glm-5.3-flash"]);
+    // After the restart omp reports it: pending must be EMPTY, or the note would nag forever.
+    expect(pendingLocalModels([DGX], list)).toEqual([]);
+    // A disabled provider never nags.
+    expect(pendingLocalModels([OFF], [])).toEqual([]);
+  });
+
+  it("the china gate reasoning holds: the self-hosted GLM matches isChinaModel by NAME", () => {
+    // This is WHY curatedModels needs the local bypass: the id alone cannot tell a LAN deployment
+    // from a Beijing cloud, so provider zone (a configured Local Provider) is the deciding signal.
+    expect(isChinaModel("dgx-spark/glm-5.3-flash")).toBe(true);
+    expect(isChinaModel("zai/glm-5")).toBe(true);
+  });
+});
+
+// ── P-MODEL.5 (ADR-0392): xAI Grok is its own family ──
+describe("Grok family", () => {
+  it("groups Grok 4.7 (any provider prefix) under xAI Grok, not Other", () => {
+    for (const v of ["xai-oauth/grok-4.7", "xai/grok-4.7", "github-copilot/grok-4.7", "xai/grok-4.20-0309-non-reasoning"]) expect(familyOf(v).id).toBe("grok");
+    const g = groupByFamily([{ value: "xai/grok-4.7", name: "Grok 4.7" }, { value: "dgx/glm-5", name: "GLM" }]);
+    expect(g.map((x) => x.fam.id)).toEqual(["grok", "other"]);
+  });
+  it("a failing Grok falls back to another Grok, and a failing Claude never to a Grok as 'same family'", () => {
+    const opts = [{ value: "xai/grok-4.7", name: "Grok 4.7" }, { value: "xai/grok-4.20-0309-non-reasoning", name: "Grok 4.20" }, { value: "anthropic/claude-opus-5-5", name: "Opus 5.5" }];
+    expect(recommendFallbacks("xai/grok-4.7", opts).sameFamily?.value).toBe("xai/grok-4.20-0309-non-reasoning");
+    expect(recommendFallbacks("anthropic/claude-opus-5-5", opts).sameFamily).toBeNull();
   });
 });

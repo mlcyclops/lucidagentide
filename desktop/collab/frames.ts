@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/frames.ts — P-COLLAB.1 (ADR-0192): the LUCID collaboration frame protocol.
+// desktop/collab/frames.ts - P-COLLAB.1 (ADR-0192): the LUCID collaboration frame protocol.
 //
 // These are the payloads sealed into a collab envelope (crypto.ts). Where omp's WireFrame carries omp's
 // internal session entries, LUCID shares its OWN session model - the `ChatEvent` stream the renderer already
@@ -42,11 +42,11 @@ export interface CollabTranscriptTurn {
 }
 
 // ── P-COLLAB.14 (ADR-0228): edit-guest model + already-used-folder selection ───
-/** A model the host can switch to: the omp model-option value + its display name. Catalog metadata only —
+/** A model the host can switch to: the omp model-option value + its display name. Catalog metadata only:
  *  never a credential or a file path. */
 export interface ModelChoice { value: string; name: string }
 /** A folder LUCID has already worked in. The `id` is OPAQUE (a host-minted token, e.g. a hash of the path);
- *  the host resolves it back to a path LOCALLY. A file PATH is NEVER sent to a guest — only the display
+ *  the host resolves it back to a path LOCALLY. A file PATH is NEVER sent to a guest: only the display
  *  `name` (a basename) crosses the wire, preserving the frames.ts/host.ts "no file paths" invariant. */
 export interface WorkspaceOption { id: string; name: string; isGit: boolean }
 /** The allowlists an EDIT guest may pick from: the host's accessible models + the folders it has used, plus
@@ -67,11 +67,21 @@ export interface WelcomeFrame {
   transcript: CollabTranscriptTurn[];
   participants: CollabParticipant[];
   readOnly: boolean; // true when THIS guest joined with a view link
+  /** P-REMOTE.14: the host's CUI + lockdown stance, so a guest can decide LOCALLY whether device
+   *  speech-to-text is allowed before it records anything. Absent = the guest assumes the strictest
+   *  posture (fail-closed), because an older host that cannot answer must never buy a cloud transcriber. */
+  posture?: { cui: boolean; lockdown: boolean };
 }
-/** A single live chat event (token / thinking / tool / subagent / done / ...), rendered by the guest as-is. */
-export interface EventFrame { t: "event"; event: ChatEvent }
-/** Footer refresh: the roster + the model + context fill, so guests mirror the host's status line. */
-export interface StateFrame { t: "state"; participants: CollabParticipant[]; model: string; contextPct: number | null }
+/** A single live chat event (token / thinking / tool / subagent / done / ...), rendered by the guest as-is.
+ *  P-PWA-FOCUS.1: `lane` scopes the event to a FLEET LANE's conversation instead of the master session's.
+ *  Absent = the master session, which is what every pre-focus host and guest means by an event, so the field
+ *  is additive in both directions. A lane-scoped event is only ever sent to a guest that ASKED to watch that
+ *  lane (`WatchFrame`), so N idle lanes never stream tokens at a phone on cellular. */
+export interface EventFrame { t: "event"; event: ChatEvent; lane?: string }
+/** Footer refresh: the roster + the model + context fill, so guests mirror the host's status line.
+ *  P-REMOTE.14: `posture` rides every push, so a guest re-decides whether device speech-to-text is
+ *  allowed the moment the host flips CUI mode or lockdown. Absent = assume the strictest posture. */
+export interface StateFrame { t: "state"; participants: CollabParticipant[]; model: string; contextPct: number | null; posture?: { cui: boolean; lockdown: boolean } }
 /** P-COLLAB.14: the pickable model + already-used-folder allowlists (`CollabOptions`). Unicast to an EDIT
  *  guest on join, and rebroadcast to every edit guest when the host switches either. A view guest never
  *  receives it, so it never learns the host's other project names. */
@@ -94,9 +104,44 @@ export interface HelloFrame { t: "hello"; protocol: number; name: string; writeT
  *  P-REMOTE.8 (ADR-0229): `images` (validated image data URLs, additive/optional) ride along as vision input,
  *  staged into the host's composer + sent to the model exactly like a locally pasted screenshot; the host
  *  re-validates each (type/size/count) fail-closed. Only image/(png|jpeg|webp|gif) base64 - never SVG/script. */
-export interface PromptFrame { t: "prompt"; text: string; images?: string[] }
+/** P-REMOTE.12 (ADR-0251): a push-to-talk clip riding a prompt. The PWA transcodes to 16k mono WAV
+ *  when it can (raw recorder output as fallback); the HOST transcribes it and the transcript becomes
+ *  ordinary guest text - through the same fail-closed scan gate as every typed prompt. */
+export interface PromptAudio { b64: string; mime: string }
+/** P-REMOTE.14: where the words were transcribed. "device-local" = on the phone, so the audio never left it;
+ *  "device-cloud" = the browser VENDOR's servers did it, so the audio already left the phone; "host" = the
+ *  desktop transcribed the attached clip offline. Provenance for the transcript + audit, and the input to the
+ *  host's fail-closed CUI refusal. */
+export type SttSource = "device-local" | "device-cloud" | "host";
+export interface PromptFrame { t: "prompt"; text: string; images?: string[]; audio?: PromptAudio; sttSource?: SttSource }
+
+/** Hard cap for a voice clip (a 30s 16k mono WAV is ~1MB; 4MB is generous, never abusable). */
+export const MAX_PROMPT_AUDIO_BYTES = 4 * 1024 * 1024;
+const AUDIO_MIME = /^audio\/(wav|x-wav|wave|webm|mp4|m4a|mpeg|ogg|aac)(;|$)/i;
+const B64ISH = /^[A-Za-z0-9+/=]+$/;
+
+/** Fail-closed shape/size/mime check, run on BOTH ends (guest before send, host before use). */
+export function validPromptAudio(a: unknown): a is PromptAudio {
+  if (!a || typeof a !== "object") return false;
+  const { b64, mime } = a as { b64?: unknown; mime?: unknown };
+  if (typeof b64 !== "string" || typeof mime !== "string") return false;
+  if (!b64.length || b64.length > (MAX_PROMPT_AUDIO_BYTES * 4) / 3 + 4) return false;
+  if (!B64ISH.test(b64)) return false;
+  return AUDIO_MIME.test(mime);
+}
+/** Fail-closed provenance check, run on BOTH ends (guest before send, host before use): ONLY the three known
+ *  literals survive, so junk or a future value is dropped to `undefined` (no claim) rather than trusted. */
+export function validSttSource(s: unknown): s is SttSource {
+  return s === "device-local" || s === "device-cloud" || s === "host";
+}
 /** P-COLLAB.12: an edit guest stops the in-flight turn (same effect as the host pressing Stop). */
 export interface AbortFrame { t: "abort" }
+/** P-PWA-FOCUS.1: the guest declares which conversation it is LOOKING at, so the host streams that one and
+ *  no other. `target` is "master" (or "") for the master session, else a lane id. This is a SUBSCRIPTION, not
+ *  a permission: watching is read-only and a view guest may do it, while driving whatever is being watched
+ *  still goes through the existing prompt/fleetPrompt/interject paths and their own fail-closed checks.
+ *  The host answers a lane watch with a `lane-sync` replay, then streams that lane's events. */
+export interface WatchFrame { t: "watch"; target: string }
 /** P-COLLAB.14: an EDIT guest asks the host to switch the active model. `value` MUST be one of the models the
  *  host offered in `options`; the host re-validates membership (fail-closed) before applying, so an arbitrary
  *  model id never reaches the host session. A view-only guest's set-model is refused with an `error` frame. */
@@ -107,20 +152,46 @@ export interface SetModelFrame { t: "set-model"; value: string }
  *  is one shared session, so the local host's folder changes too. A view-only guest is refused. */
 export interface SetWorkspaceFrame { t: "set-workspace"; id: string }
 
+// ── P-PWA-FLEET.1: EDIT-guest fleet controls + mid-turn interjection ─────────
+/** An EDIT guest prompts a fleet LANE (not the master session). Runs on the HOST through the lane's own
+ *  fail-closed gate; the wiring queues it when the lane is mid-turn. A view guest is refused. */
+export interface FleetPromptFrame { t: "fleet-prompt"; laneId: string; text: string }
+/** An EDIT guest stops a fleet lane (same effect as the host's lane Stop button). */
+export interface FleetStopFrame { t: "fleet-stop"; laneId: string }
+/** An EDIT guest answers a lane's pending approval. `scope` "session" remembers the ask's kind for the
+ *  lane's lifetime (only on an allow; the lane manager ignores scope on a deny, fail-closed). */
+export interface FleetAnswerFrame { t: "fleet-answer"; laneId: string; allow: boolean; scope?: "once" | "session" }
+/** An EDIT guest injects a mid-turn operator note. `target` is "master" or a laneId; the note is delivered
+ *  OUTSIDE any untrusted-content delimiters, clearly marked operator-origin (AGENTS.md #5). Edit-gated:
+ *  a view-only guest cannot steer the agent, so its interject is refused like any other write. */
+export interface InterjectFrame { t: "interject"; target: string; text: string }
+
 // ── either direction (P-COLLAB.11) ────────────────────────────────────────────
 /** WebRTC signaling carried over the collab transport: the relay brokers the SDP/ICE handshake, then the
  *  peers go DIRECT P2P (ADR-0194). Flows both ways (host<->guest), so it belongs to neither sub-union. */
 export interface SignalFrame { t: "signal"; signal: SignalMessage }
 
-export type HostFrame = WelcomeFrame | EventFrame | StateFrame | OptionsFrame | UserTurnFrame | ByeFrame | ErrorFrame;
-export type GuestFrame = HelloFrame | PromptFrame | AbortFrame | SetModelFrame | SetWorkspaceFrame;
+/** P-PWA-FOCUS.1: the replay a guest gets when it starts watching a LANE - that lane's recent turns, from
+ *  the bounded memory the lane already keeps for its respawn replay. Same shape and same "no file paths"
+ *  discipline as `WelcomeFrame.transcript`, so the phone folds it with the code it already has. */
+export interface LaneSyncFrame { t: "lane-sync"; lane: string; transcript: CollabTranscriptTurn[] }
+
+export type HostFrame = WelcomeFrame | EventFrame | StateFrame | OptionsFrame | UserTurnFrame | ByeFrame | ErrorFrame | LaneSyncFrame;
+export type GuestFrame = HelloFrame | PromptFrame | AbortFrame | SetModelFrame | SetWorkspaceFrame | FleetPromptFrame | FleetStopFrame | FleetAnswerFrame | InterjectFrame | WatchFrame;
 export type LucidCollabFrame = HostFrame | GuestFrame | SignalFrame;
 
 // P-COLLAB.14 additions (`options`, `set-model`, `set-workspace`) are ADDITIVE and backward-compatible, so
 // COLLAB_PROTOCOL_VERSION stays 1: an older peer that lacks a case simply IGNORES the new frame (a host
 // drops an unknown guest frame in #onFrame; a guest ignores an unknown host frame), which is a safe no-op
 // (fail-closed - the action happens ONLY when both ends understand it), never a silent unauthorized action.
-const GUEST_FRAME_TYPES: Record<string, true> = { hello: true, prompt: true, abort: true, "set-model": true, "set-workspace": true };
+// P-PWA-FLEET.1 additions (`fleet-prompt`, `fleet-stop`, `fleet-answer`, `interject`) follow the same
+// additive rule: an older host simply drops them, so the protocol version stays 1.
+// P-PWA-FOCUS.1 additions (`watch`, `lane-sync`, and `EventFrame.lane`) are additive the same way, and the
+// DEFAULT on both ends is the pre-focus behaviour. An older HOST drops `watch` and keeps streaming only the
+// master, so a new guest that asked to watch a lane simply sees nothing arrive for it. An older GUEST never
+// sends `watch` at all, and the host sends a lane-scoped event ONLY to a guest that asked for that lane - so
+// an old guest cannot receive one and cannot mistake it for a master event. Protocol stays 1.
+const GUEST_FRAME_TYPES: Record<string, true> = { hello: true, prompt: true, abort: true, "set-model": true, "set-workspace": true, "fleet-prompt": true, "fleet-stop": true, "fleet-answer": true, interject: true, watch: true };
 /** Narrowing helpers (kept tiny + pure so the host/guest logic in P-COLLAB.2/.3 reads cleanly). A `signal`
  *  frame is neither a host nor a guest session frame - the demux routes it to WebRTC signaling instead. */
 export const isSignalFrame = (f: LucidCollabFrame): f is SignalFrame => f.t === "signal";

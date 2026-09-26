@@ -9,8 +9,9 @@
 // re-validate and skip/return-null on a corrupted file. The command NAME is its filename and is charset-
 // guarded (COMMAND_NAME_RE ⇒ no separators, no `..`) so a write can never escape `.omp/commands/`.
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { ensureDir } from "../fs_dirs.ts"; // tolerates Bun-on-Windows EEXIST when the dir already exists
 import { COMMAND_NAME_RE, validateUserCommand, type UserCommand } from "./spec.ts";
 
 const commandsDir = (root: string): string => join(root, ".omp", "commands");
@@ -27,7 +28,7 @@ export function saveCommandFile(root: string, command: UserCommand): void {
   if (!v.ok) throw new Error(`refusing to save invalid command: ${v.errors.join("; ")}`);
   const name = safeName(v.command!.name);
   if (!name) throw new Error(`invalid command name: ${String(command.name)}`);
-  mkdirSync(commandsDir(root), { recursive: true });
+  ensureDir(commandsDir(root));
   writeFileSync(commandFile(root, name), JSON.stringify(v.command, null, 2));
 }
 

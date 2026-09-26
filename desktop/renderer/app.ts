@@ -8,13 +8,27 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo } from "./bridge.ts";
+import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
+import type { TurnStatus } from "./chat_events.ts";
+import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
+// P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
+import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
+import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
+import { externalHttpUrl } from "../navigation_policy.ts";
+import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
+import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
+import { mountAgentArcade, type AgentArcadeHandle } from "./mascot_game.ts";
+import { nextGap, readinessChecklist, resolveAgentTierModel, restoreModel, type AgentModelTier, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
+import { approvalPrompt, matchApprovalUtterance, pickOption, type ApprovalOption } from "./voice_approval.ts"; // P-AVATAR.5: approve tool calls by voice
+import { mountBootCinematic } from "./boot_cinematic.ts"; // P-AVATAR.6: the hero opening over the config warm
 import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
+import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
+import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
-import { providerHasApiKey, providerKeywords } from "./budget_gate.ts";
+import { budgetWindowState, providerBudgetRows, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
@@ -31,6 +45,14 @@ import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChi
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
+// P-KGMARKET.5 (ADR-0333): the KG-header Packs button, and the pending-checkout policy that lets a purchase
+// survive the browser sign-in detour without turning an unrelated future sign-in into a checkout.
+import { kgPacksBtnHtml, packSignInCopy, shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
+import { enterSubmitTarget } from "./enter_submit.ts"; // P-KGMARKET.5: Enter runs a passphrase field's action
+// P-PREVIEW-PWA.4 (ADR-0335): never publish a FAILED preview to a phone guest as a permanent snapshot.
+import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
+// P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
+import { previewAfterNewSession } from "./preview_session.ts";
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -43,12 +65,20 @@ import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannab
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
-import { TURN_PATIENCE_MS, slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1 (ADR-0186)
+import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
+import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable)
+import { delegationSettled, filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
-import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, PersonalGraphData } from "./bridge.ts";
+import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
+// P-KGUI.3 (ADR-0336): the Personalization card's stat tiles, rebuilt for a user with MANY knowledge graphs.
+import type { PersonalStatus } from "./bridge.ts";
+import { personalStatTiles, personalStatsHtml } from "./personal_stats.ts";
+// P-MEET.1: the Meetings fly-out's pure builders + the Hub payload types the bridge re-exports.
+import { meetingsPanelHtml, meetingDetailHtml, meetingsSig, type MeetingsPanelView } from "./meetings_panel.ts";
+import type { MeetingTodoView } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
-import { localProvidersCardBody, draftFromForm } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135): Settings → Local Providers
+import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
@@ -67,47 +97,152 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 // direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
-import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242): the floating Share + Join docks
+import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
+import { initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
+import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
+import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, familyOf, filterModels, groupByFamily, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, providerLabelOf, recommendFallbacks, sortGovFirstNewest } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, localPrefixSet, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
+import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
+import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
+import { buildHubSections, configuredProviderCount, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
+import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
 import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
 import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPORT.7: make read-aloud text TTS-friendly
+import { TTS_PROVIDERS } from "../../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247): every engine's selectable voices
+import { takeSpeechChunks } from "../../harness/voice/speech_stream.ts"; // P-VOICE.2: sentence-at-a-time live read-aloud
+import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues.ts"; // P-VOICE.6/.7 (ADR-0249/0257): spoken "still working" cues, active-listening openers, thinking snapshots
+import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
+import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
+import type { AuthStatus, ElevenVoiceView, JudgmentView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
-import { closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
+import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
+// P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
+import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
+// P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
+import { JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
 // streaming text/thinking deltas (output only; never the system prompt).
 import { TokenSpeedEngine } from "../../harness/metrics/token_speed.ts";
+// P-JEV.2 (ADR-0377): the per-turn judgment trace (Jev / TypeSafe). Pure view helpers over the report the
+// judgment extension self-reports; the arktype boundary stays in dev.ts (trace_schema.ts), out of the bundle.
+import { createJudgments, judgmentIdleNote, type JudgmentsWin } from "./judgment_trace_view.ts";
+// CREATOR-0 (ADR-0282/0283): the Creator surfaces. Both modules are PURE builders that own their view
+// types (the layering rule), so nothing here drags node-side code into the renderer.
+import { runCapture, type FrameDecoder } from "./capture_driver.ts"; // CREATOR-3b (ADR-0287 item 3): drive a previewed scene through the fixed timestep
+import { framePlan } from "../../harness/creator/frame_capture.ts"; // CREATOR-3: the deterministic plan the capture steps
+import { creatorFlyoutHtml, pressureRailHtml, type CreatorResourcesView } from "./creator_monitor.ts";
+import { creatorStudioHtml, type CreatorStudioView } from "./creator_studio.ts";
+import { creatorImagesHtml, type ArtifactView, type CreatorImagesView, type MixInputView } from "./creator_images.ts";
+import {
+  creatorEditorHtml, dropTargetMs, formatClock, isWavTrack, msAtX, playheadX, selectionRange, waveformBars,
+  type CreatorEditorView, type EditorSession,
+} from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along editor pane + its gesture semantics
+import {
+  addLibraryTrack, creatorMixerHtml, formatGain, panWords, patchTrack, primarySourceId, removeTrack,
+  setMasterGain, setTwoPointEnvelope, type CreatorMixerView, type TrackPatch,
+} from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer pane + its immutable graph edits
+import { emptyMix, soloedTrackIds, validateMix, type MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix core
+import { creatorRenderHtml, type CreatorRenderView } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the video/3D render pane
+import { memeLayout } from "../../harness/creator/meme_layout.ts"; // CREATOR-IMG: node-free meme geometry
+import {
+  canRedo, canUndo, commit, deleteSpan, docDurationMs, itemAt, moveSpan, newHistory, redo, replaceSpan,
+  setItemLock, spanOf, splitItem, undo, type EditHistory, type OpResult,
+} from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline core - every edit is a call into it
+import type { BuildInfoView, CreatorLibraryOp } from "./bridge.ts";
 
-type Tab = "security" | "memory" | "dev";
+// ── P-THEME.1: the theme, applied BEFORE anything renders ──────────────────────────────────────────
+// The registry (ids, labels, swatches, light/dark grouping) is the pure `theme.ts`; the [data-theme]
+// token blocks are in styles.css. This is only the boot + persistence glue.
+//
+// WHY THE localStorage MIRROR. The chosen theme is persisted SERVER-side (~/.omp/lucid-gui.json, read via
+// /api/settings), which is an async fetch, and the renderer CSP is `script-src 'self'` so index.html
+// cannot carry an inline bootstrap script. Without a synchronous source the body would paint in the old
+// theme and then snap, on every launch. So the choice is mirrored into localStorage (same tier as the
+// picker's favorites/collapse state) and applied as the FIRST thing this module does. The server value
+// remains the source of truth and reconciles the mirror once /api/settings lands.
+// A first-EVER launch has no mirror; styles.css answers prefers-color-scheme on `:root:not([data-theme])`
+// so that paint is already correct with no JS at all.
+const THEME_KEY = "lucid.theme";
+/** The raw PREFERENCE: a theme id, or "" meaning "follow the OS". Distinct from the RESOLVED theme. */
+function themePref(): string {
+  try { return localStorage.getItem(THEME_KEY) ?? ""; } catch { return ""; } // storage off => follow the OS
+}
+function osPrefersLight(): boolean {
+  try { return window.matchMedia("(prefers-color-scheme: light)").matches; } catch { return false; }
+}
+/** Resolve `pref` and paint it: the <html> data-theme attribute drives every `:root[data-theme=...]`
+ *  block in styles.css, and Monaco is re-themed to match (a no-op before the editor loads). */
+function applyTheme(pref: string): void {
+  const t = resolveTheme(pref, osPrefersLight());
+  document.documentElement.dataset.theme = themeAttr(t.id);
+  applyEditorTheme(t.id);
+}
+function bootTheme(): void {
+  applyTheme(themePref());
+  // "Match system" has to keep matching it: re-resolve when the system flips, but ONLY for the user who
+  // CHOSE that, so a deliberate theme pick is never overridden by a system setting change. P-THEME.2: an
+  // unset preference no longer follows the OS at all, so it must not re-paint here either.
+  try {
+    window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+      if (themePref() === SYSTEM_THEME_ID) applyTheme(SYSTEM_THEME_ID);
+    });
+  } catch { /* older engine without addEventListener on MediaQueryList: the boot paint still stands */ }
+}
+bootTheme();
+// CREATOR-0: `resources` is the Creator build's third inspector tab (CPU + GPU odometers).
+type Tab = "security" | "memory" | "dev" | "resources";
 const state = {
   inspectorTab: "memory" as Tab, // ADR-0021: default to Memory; overridden to Security when active blocks exist
   lastPreviewablePath: "" as string, // P-PREVIEW.2 (ADR-0096): the agent's most recent browser-previewable write
   sidebarCollapsed: false,
   inspectorRail: false,
-  model: "claude-opus-4-8",
+  immersive: false, // P-AVATAR.1 (ADR-0251): lucid-agent stage - rails hidden, stage layer on
+  // P-MODEL.2: pre-config placeholder for the badge, replaced the moment loadConfig lands. It must be a
+  // CURRENT flagship, not a stale one: this string is painted before any real model is known, so a stale
+  // value here reads to the user as "the app defaults to an old model" (the reported Opus 4.8 bug).
+  model: "claude-opus-5-5",
   security: null as SecuritySnapshot | null,
   memory: null as MemorySnapshot | null,
   ledger: null as import("./bridge.ts").UsageLedger | null, // P10.2 cross-model usage ledger
   codeActivity: null as import("./bridge.ts").CodeActivity | null, // ADR-0030 P-CODE.1 git workspace diffstat
   config: [] as ConfigOption[],
   configCached: false, // P-IDE.1d: current config came from the local cache; live refresh pending
-  uiMode: "agent" as "agent" | "ask" | "plan", // P-ACP.2/3: composer Plan/Ask/Agent (derived from backend)
+  configWarming: false, // P-IDE.1d: a warm cycle is in flight (session still starting); picker shows the spinner
+  uiMode: "agent" as "agent" | "creator" | "ask" | "plan", // P-ACP.2/3 + CREATOR-0: composer mode (derived from backend)
+  // CREATOR-0 (ADR-0279): this build's identity. Null until /api/build-info answers, and the ONLY thing
+  // that may reveal a Creator surface - never a persisted setting, never a role.
+  buildInfo: null as BuildInfoView | null,
+  creatorRes: null as CreatorResourcesView | null, // CREATOR-0 (ADR-0283): live CPU/GPU telemetry
+  creatorStudio: null as CreatorStudioView | null, // CREATOR-0 (ADR-0282/0281): registry + track library
+  creatorDetail: "" as "" | "cpu" | "gpu", // which odometer's detailed flyout is expanded in the rail
+  creatorImages: null as CreatorImagesView | null, // CREATOR-IMG (ADR-0291): generator + builders + artifacts
+  creatorEditor: null as CreatorEditorView | null, // CREATOR-2 (ADR-0286): the follow-along audio editor
+  creatorMixer: null as CreatorMixerView | null, // CREATOR-5 (ADR-0289): the mixer (N takes into one file)
+  creatorRender: null as CreatorRenderView | null, // CREATOR-3 (ADR-0287): the video/3D render pane
+  studioTab: "integrations" as "integrations" | "images" | "editor" | "mixer" | "render", // which Studio pane is showing
   commands: [] as OmpCommand[],
   skills: [] as SkillView[], // P-SKILL.4 (ADR-0097): discovered skills, widened with root/trust/removable/scan verdict
   userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
   activeSkill: null as { command: string; name: string } | null, // P-IDE.2: active bundled skill
   liveUsage: null as { used: number; size: number; cost: number } | null,
+  // P-FLEET.L8: what the composer DRIVES. Promotion attaches the prompt/stream target to a running fleet
+  // lane; it never moves the ACP session, which is exactly why it is legal mid-turn and instant to undo.
+  composerTarget: MASTER_TARGET as ComposerTarget,
   username: "" as string, // the "You" label on your messages (Settings → Profile)
   email: "" as string, // corporate email - attribution identity (ADR-0030); prompted on first open
   attribution: null as import("./bridge.ts").ProfileSettings["attribution"] | null, // identity + source (email|workstation)
@@ -123,6 +258,7 @@ const state = {
   chinaAck: false as boolean, // P-IDE.1c: user acknowledged the China-origin data-sovereignty warning (Settings unlock)
   thirdPartyAck: false as boolean, // user acknowledged the third-party / non-U.S. "More providers" warning
   auth: null as import("./bridge.ts").AuthStatus | null, // full provider-auth status (gateway/majors/others)
+  accounts: null as AccountsSnapshot | null, // P-ACCT.1: named accounts per provider (providerId -> AccountView[]); every mutation repaints from the server's returned snapshot
   persona: null as string | null, // active persona id (AskSage)
   personas: [] as { id: string; description: string }[],
   zoom: 1,
@@ -130,7 +266,7 @@ const state = {
   lastOk: 0,
   streaming: false,
   streamStartedAt: null as number | null, // P-TRIV.1 (ADR-0174): when the current turn began streaming - gates the Trivia Wire
-  queued: null as string | null, // P-ACP.4: a prompt the user pre-staged while a turn was running
+  queuedItems: [] as QueuedItem[], // P-INTERJECT.2 (was P-ACP.4's single slot): prompts staged while a turn runs - "hold" auto-fires when it ends, "push" is the record of a mid-turn interject
   lastPrompt: "" as string, // last user message - re-sent by an Approve & retry (ADR-0019 C)
   probedLimits: [] as import("./bridge.ts").ProbedLimit[], // P10.3 live API-key rate limits
   probeEnabled: false, // P10.3 opt-in state for the live rate-limit probe
@@ -147,6 +283,7 @@ const state = {
   userRole: null as UserRole | null, // ADR-0088 (P-ROLE.1): chosen role; null until onboarding picks one
   tourSeen: false, // ADR-0089 (P-ROLE.1b): first-run walkthrough already shown (finished or skipped)
   govconCui: null as boolean | null, // P-GOVCUI.1: Government/CUI answer; null until the first-run step asks
+  voice: null as VoiceSettingsView | null, // P-VOICE.2 (ADR-0247): cached TTS/STT config - drives the composer voice chip + auto-speak
 };
 const prettyModel = (v: string) => v.replace(/^anthropic\//, "");
 // Strip the redundant "· AskSage Gov" / "· Gov" suffix from a model's display name
@@ -159,9 +296,15 @@ const shortModelId = (v: string) => v.replace(/^anthropic\//, "").replace(/^asks
 // omp's reported usage `size` is unreliable for the AskSage gateway models (it reports
 // 256k for a 1M Gemini), so we prefer this. Keep in sync with tools/memory_data.ts CTX_WINDOW.
 const MODEL_CTX: Record<string, number> = {
-  "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
+  // P-MODEL.2: Fable/Mythos 5.1 and Opus 5.5 / Opus 5 are all 1M-context; GPT-6 (astra) ships at 1M too,
+  // which is the first OpenAI generation to match Claude's window, so it must not inherit the 256K GPT-5 default.
+  "claude-fable-5-1": 1_000_000, "claude-mythos-5-1": 1_000_000,
+  "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
+  "gpt-6-astra": 1_000_000, "gpt-6-sol": 1_000_000, "gpt-6-luna": 1_000_000,
+  // Grok 4.6 / 4.7 (omp 18.2.10 catalog, xai + xai-oauth): 500K context.
+  "grok-4.7": 500_000, "grok-4.6": 500_000,
   "gpt-5.6-luna": 256_000, "gpt-5.6-sol": 256_000, "gpt-5.6-terra": 256_000,
   "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
   "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
@@ -173,7 +316,9 @@ const MODEL_CTX: Record<string, number> = {
   "google-gemini-2.5-pro": 1_000_000, "google-gemini-2.5-flash": 1_000_000,
   "rag": 256_000,
 };
-const modelCtx = (v: string): number | undefined => MODEL_CTX[shortModelId(v)];
+// Provider-prefixed ids (`xai-oauth/grok-4.7`, `openai-codex/gpt-6-sol`) fall back to the bare id, the
+// same fallback the hover cards already use (stripProvider below); without it those windows never matched.
+const modelCtx = (v: string): number | undefined => MODEL_CTX[shortModelId(v)] ?? MODEL_CTX[v.replace(/^[^/]*\//, "")];
 // Friendly label for the CURRENTLY-selected model - resolve its name from config,
 // falling back to the bare value before config has loaded.
 function modelLabel(value: string): string {
@@ -212,6 +357,9 @@ function buildShell(): void {
         <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
         <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
       </div>
+      <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
+      <label class="agent-tier-control" id="agentTierControl" hidden title="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
+      <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
         <button id="winMax" data-tip="Maximise">${icon("square", 13)}</button>
@@ -226,12 +374,16 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="security" data-tip="Security|Findings, quarantine & approvals" data-tip-icon="shield">${icon("shield", 20)}<span class="badge" id="railBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
-        <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}</button>
+        <button class="rail-btn" data-rail="meetings" data-tip="Meetings|What was decided, and what you owe - read live from your Lucid Meeting Hub. Nothing is stored here" data-tip-icon="calendar">${icon("calendar", 20)}</button>
+        <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}<span class="rail-live-dot prev-rail-dot" id="railPreviewDot" hidden></span></button>
+        <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
         <button class="rail-btn" id="railMarket" data-tip="Plugin Marketplace|Curated integrations ordered by community popularity - Excalidraw, Git, Remotely Save & more" data-tip-icon="market">${icon("market", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="share">${icon("share", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
+        <!-- CREATOR-0 (ADR-0282): Creator Studio. Present ONLY in a Creator build (revealed by /api/build-info). -->
+        <button class="rail-btn" id="railStudio" hidden data-tip="Creator Studio|Audio, video, 3D and game integrations, their real capabilities, and your local track library" data-tip-icon="volume">${icon("volume", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
         <div class="spacer"></div>
         <button class="rail-btn rail-about" id="railAbout" data-tip="About LUCID Agent IDE|Version, license & credits" data-tip-icon="info">${readmeMark()}</button>
@@ -252,12 +404,24 @@ function buildShell(): void {
 
       <main class="center">
         <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
+        <!-- P-AVATAR.1 (ADR-0251): the immersive stage layer. A neon ambient backdrop for the lucid-agent
+             role; the three.js face mounts into it in P-AVATAR.2a. Non-interactive, behind the thread. -->
+        <div class="agent-stage" id="agentStage" hidden aria-hidden="true">
+          <div class="agent-stage-glow"></div>
+          <div class="agent-stage-cap">LUCID Agent</div>
+        </div>
         <!-- ADR-0219: violet CUI banner - shown only when this session is in CUI mode under lockdown. -->
         <div class="cui-banner" id="cuiBanner" hidden data-tip="CUI session|Controlled Unclassified Information handling. Web search is disabled to prevent spillage. To search the web, open another chat session and switch it to Search mode." data-tip-side="bottom">
           ${icon("shield", 13)}<span><b>CUI MODE</b> - Controlled Unclassified Information - web search disabled (spillage risk)</span>
         </div>
         <div class="chat" id="chat"><div class="thread" id="thread"></div></div>
-        <button class="jump-down" id="jumpDown" type="button" aria-label="Jump down a page" data-tip="Jump down a page">${icon("chevronsDown", 18)}</button>
+        <!-- Two stacked scroll helpers at the right edge, for catching up on a LONG session. The page
+             stepper sits ON TOP (one caret, one viewport at a time, keeps your place with a line of
+             overlap); the run-to-end button sits BELOW it, nearest the composer since it is the one
+             reached for most (two carets = go all the way). Both share .jump-down styling and both
+             appear only when there is more than a screen below the fold. -->
+        <button class="jump-down" id="jumpDown" type="button" aria-label="Scroll down one page" data-tip="Down one page">${icon("chevronDown", 18)}</button>
+        <button class="jump-down" id="jumpEnd" type="button" aria-label="Scroll to the newest message" data-tip="Jump to the end">${icon("chevronsDown", 18)}</button>
         <div class="composer-wrap">
           <!-- P-VISION.1 (ADR-0136): thumbnails of pasted/dropped images, just above the prompt bar; sent
                with the next message only when the user hits Enter/Send. -->
@@ -271,9 +435,33 @@ function buildShell(): void {
           <div class="composer-tools" id="composerTools">
             <!-- Persona + Skills moved to the titlebar (next to the model picker); the composer keeps only the
                  mic so it never squishes when a right-edge surface (KG / IDE / Agent Builder) narrows the center. -->
-            <button class="ctool ctool-icon" id="ctMic" data-tip="Voice input · ${modCombo("D")}|Click (or press ${modCombo("D")}) to record, again to stop - transcribed into the composer (Settings → Voice sets the engine)">${icon("mic", 15)}</button>
+            <button class="ctool ctool-icon" id="ctMic" data-tip="Dictate \u00b7 ${modCombo("D")}|Click (or ${modCombo("D")}) for hands-free dictation - your words land as you pause, and it stops on a longer silence. Click again to stop early. (Settings \u2192 Voice sets the engine.)">${icon("mic", 15)}</button>
+            <!-- P-STT.4: live mic waveform - scrolling level history (newest at the right) + elapsed clock,
+                 shown only while dictation runs so the user SEES the mic hearing them. -->
+            <div class="ct-wave" id="ctWave" hidden aria-hidden="true"><canvas id="ctWaveCanvas"></canvas><span class="ct-wave-time" id="ctWaveTime">0:00</span></div>
+            <!-- P-VOICE.2 (ADR-0247): the read-aloud control - engine + voice picker and the auto-speak switch.
+                 It sits beside the mic so talking TO the agent and listening TO it are one pair of controls. -->
+            <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
+            <!-- P-FLEET.L1/L17: the fleet - headless local engine lanes. Opens the hub-and-spoke ORBIT map;
+                 the classic grid of mini agent windows is one click away inside it. -->
+            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - hub &amp; spoke|Your lanes as spokes around the Main hub. Click a spoke to drive it from the full composer; the classic grid is one click away.">${icon("bolt", 15)}</button>
+            <!-- P-CONNUI.1 (ADR-0368): the connection affordance for a session with NOTHING at stake.
+                 A failed startup status probe used to paint a paragraph into an empty thread ("Connection
+                 unavailable: signal timed out. Reconnect to check session status before sending."), which
+                 is the first thing a new user reads and reads like a broken app. It is not: there is no
+                 turn to lose on a fresh open, so the honest UI is a quiet, compact retry that appears only
+                 when a probe actually failed. The loud in-thread banner is kept for the case that earns it,
+                 a turn that may still be running. -->
+            <button class="ctool ctool-icon ctool-warn" id="ctReconnect" hidden data-tip="Reconnect|LUCID could not reach its engine to check for an active session. Nothing was lost. Click to retry.">${icon("refresh", 15)}</button>
+            <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
+            <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet lanes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
+            <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
+            <!-- P-VOICE.4 (ADR-0248): a live spectrum analyser of the agent's actual voice - segmented LEDs
+                 with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
+            <div class="ct-speak" id="ctSpeak" hidden><span class="ct-speak-dot"></span><canvas class="ct-eq" id="ctEqCanvas" aria-hidden="true"></canvas><span class="ct-speak-lbl" id="ctSpeakLbl">Speaking</span><button class="ct-speak-stop" id="ctEqPop" aria-label="Pop the voice panel out" data-tip="Pop out|Float the equalizer as a panel you can drag anywhere in LUCID">${icon("expand", 12)}</button><button class="ct-speak-stop" id="ctSpeakStop" aria-label="Stop reading aloud" data-tip="Stop reading">${icon("close", 12)}</button></div>
           </div>
         </div>
+        <div id="agentArcadeHost" hidden></div>
       </main>
 
       <aside class="inspector" id="inspector">
@@ -281,6 +469,8 @@ function buildShell(): void {
         <div class="insp-tabs">
           <button class="insp-tab sec" data-insp="security">${icon("shield", 15)} Security</button>
           <button class="insp-tab mem active" data-insp="memory">${icon("savings", 15)} Memory</button>
+          <!-- CREATOR-0 (ADR-0283): CPU + GPU pressure odometers. Creator build only. -->
+          <button class="insp-tab res" data-insp="resources" id="inspResTab" hidden>${icon("gauge", 15)} Resources</button>
           <button class="insp-collapse" id="inspCollapse" data-tip="Collapse to metrics|Slide into a live quick-metrics rail" data-tip-side="bottom">${icon("collapse", 16)}</button>
         </div>
         <div class="insp-body" id="inspBody"></div>
@@ -306,6 +496,16 @@ function buildShell(): void {
         <div class="set-body" id="skillsBody"></div>
       </aside>
 
+      <!-- CREATOR-0 (ADR-0282/0281): the Creator Studio aside - integrations above, track library below.
+           Mutually exclusive with the other right-edge surfaces, exactly like Settings and Skills. -->
+      <aside class="settings creator-studio" id="creatorStudio" hidden>
+        <div class="set-head">
+          <div class="set-title">${icon("volume", 17)} Creator Studio <span class="set-sub">integrations &amp; library</span></div>
+          <button class="set-close" id="studioClose" data-tip="Close">${icon("close", 16)}</button>
+        </div>
+        <div class="set-body" id="studioBody"></div>
+      </aside>
+
       <aside class="kg" id="knowledge" hidden>
         <div class="resizer resizer-l" data-resize="kg" data-tip="Drag to resize|Collapse toward the chat or widen the graph" data-tip-side="left"></div>
         <div class="set-head">
@@ -319,6 +519,7 @@ function buildShell(): void {
             <button class="btn-mini" id="kgViews" data-tip="Graph views & tools · dropdown|Opens a menu with three options: Relate nodes (author your own relationships), Code graph (this workspace as a file/symbol graph), and Compiled KB (the knowledge base as a page graph). The label shows the graph you're viewing.">${icon("graph", 13)} <span id="kgViewsLbl">Personal</span> <span class="kgv-caret">▾</span></button>
             <button class="btn-mini btn-icon" id="kgCodeUpdate" data-tip="Re-sync the code graph|Re-ingest the workspace to pick up new files + import changes since the last build." hidden>${icon("refresh", 14)}</button>
             <button class="btn-mini" id="kgData" data-tip="Data · dropdown|Opens a menu with: Import chat history (a ChatGPT / Claude / Gemini export - every message scanned before anything is learned), the AI-extraction toggle for imports, Export Obsidian vault (CUI excluded by design), and the CUI archive (records-managed, 32 CFR 2002 · NARA). Everything is audited.">${icon("folder", 13)} Data <span class="kgv-caret">▾</span></button>
+            ${kgPacksBtnHtml()}
             <button class="set-close" id="kgClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
         </div>
@@ -337,39 +538,90 @@ function buildShell(): void {
         </div>
       </aside>
 
+      <!-- P-MEET.1: the Meetings fly-out - a THIN client of the Lucid Meeting Hub on loopback (its only
+           write is marking an action item done). Same right-edge surface as Knowledge/Preview and mutually exclusive with them.
+           No recording controls live here by design; the Hub window owns those. -->
+      <aside class="kg meetings-panel" id="meetings" hidden>
+        <div class="resizer resizer-l" data-resize="meetings" data-tip="Drag to resize|Widen the meetings list or collapse toward the chat" data-tip-side="left"></div>
+        <div class="set-head">
+          <div class="set-title" data-tip="Meetings|Notes, decisions and open action items from your Lucid Meeting Hub. Nothing is stored in the IDE: the Hub's encrypted vault stays the single source of truth, and marking an action item done updates the Hub itself.">${icon("calendar", 17)} Meetings <span class="set-sub" id="meetScopeLbl"></span></div>
+          <div class="kg-tools">
+            <input id="meetSearch" class="kg-search" type="search" placeholder="Search meetings…" spellcheck="false" autocomplete="off" data-tip="Search|Find a meeting by title, person or content. Needs the Hub vault unlocked." />
+            <button class="btn-mini btn-icon" id="meetRefresh" data-tip="Refresh|Re-read the Hub. The panel never polls on a timer.">${icon("refresh", 14)}</button>
+            <button class="set-close" id="meetClose" data-tip="Close">${icon("close", 16)}</button>
+          </div>
+        </div>
+        <div class="meet-main">
+          <div class="meet-body" id="meetBody"></div>
+          <div class="meet-detail" id="meetDetail"></div>
+        </div>
+      </aside>
+
       <aside class="kg preview-panel" id="preview" hidden>
         <div class="resizer resizer-l" data-resize="preview" data-tip="Drag to resize|Widen the preview or collapse toward the chat" data-tip-side="left"></div>
         <div class="set-head">
           <div class="set-title">${icon("eye", 17)} Preview <span class="set-sub" id="prevKind"></span></div>
           <div class="kg-tools">
-            <input id="prevPath" class="kg-search" type="text" placeholder="Open a local file… (path or file://)" spellcheck="false" autocomplete="off" data-tip="Open a local file|Paste a path to an HTML file the agent built, then Open. Local files only in this build; remote URLs are egress-gated (coming next)." />
-            <button class="btn-mini" id="prevOpen">${icon("download", 13)} Open</button>
             <button class="btn-mini" id="prevBrowse" data-tip="Browse your workspace|Open a file from the current working directory to preview it yourself (native file picker).">${icon("folder", 13)} Browse…</button>
             <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)} Reload</button>
             <button class="btn-mini" id="prevDevice" data-tip="Device viewport|Preview at phone or tablet size (portrait / landscape) - for reviewing a PWA or a mobile / responsive layout.">${devSvg("phone-portrait", 14)}${icon("chevron", 10)}</button>
             <button class="btn-mini" id="prevMarkup" data-tip="Markup tools|Draw on the preview - pen, rectangle, text - then send the marked-up screenshot to chat.">${icon("markup", 14)} Markup ${icon("chevron", 10)}</button>
+            <button class="btn-mini" id="prevCapture" data-tip="Capture frames|Step an animated scene through a FIXED timestep and audit it: the same times must paint the same pixels. Needs the scene to define window.lucidRenderAt(tMs); without it LUCID can only sample the page's own clock and says so.">${icon("play", 13)} Capture</button>
             <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview (with your markup) and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot \u2192 chat</button>
             <button class="btn-mini" id="prevToPhone" data-tip="Send to phone|Broadcast this preview to your connected phone guests (Session Share) - they can view + save it. Needs a live share; desktop app only.">${icon("phone", 13)} To phone</button>
             <button class="set-close" id="prevClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
         </div>
-        <div class="preview-tabs" id="prevTabs">
-          <button type="button" class="prev-tab active" data-lane="yours" data-tip="Your preview|Files you open stay here - the agent can't clobber this tab.">Yours</button>
-          <button type="button" class="prev-tab" data-lane="agent" data-tip="The agent's preview|What the agent is building or reviewing. It updates here without stealing your tab.">Agent <span class="prev-tab-dot" id="prevAgentDot" hidden aria-label="new update"></span></button>
+        <!-- P-PREVIEW.14: the path field lives on the TAB ROW, not the toolbar. Up top it was squeezed
+             between seven buttons and showed roughly 18 characters of an absolute Windows path, so the
+             filename you were actually looking at was never visible. Here it gets the whole right side
+             of its own row, and #prevTabs keeps its own element because renderPrevTabs() replaces that
+             element's innerHTML wholesale - anything placed INSIDE it would be wiped on the next lane
+             tab render. -->
+        <div class="preview-tabrow">
+          <div class="preview-tabs" id="prevTabs">
+            <button type="button" class="prev-tab active" data-lane="yours" data-tip="Your preview|Files you open stay here - the agent can't clobber this tab.">Yours</button>
+            <button type="button" class="prev-tab" data-lane="agent" data-tip="The agent's preview|What the agent is building or reviewing. It updates here without stealing your tab.">Agent <span class="prev-tab-dot" id="prevAgentDot" hidden aria-label="new update"></span></button>
+          </div>
+          <div class="preview-pathbar">
+            <input id="prevPath" class="prev-pathin" type="text" placeholder="Open a local file… (path or file://)" spellcheck="false" autocomplete="off" />
+            <button class="btn-mini" id="prevOpen" data-tip="Open|Load the path in the field into this preview tab.">${icon("download", 13)} Open</button>
+            <button class="btn-mini prev-reveal" id="prevReveal" hidden data-tip="Show in folder|Open the containing folder in your file manager with this file selected.">${icon("folder", 13)}</button>
+          </div>
+        </div>
+        <div class="preview-zoomrow">
+          <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" title="Wheel here to zoom any preview, including PDF and remote frames">
+            <button type="button" class="btn-mini" id="prevZoomOut" aria-label="Zoom Preview out">-</button>
+            <button type="button" class="btn-mini" id="prevZoomReset" aria-label="Reset Preview zoom to 100 percent">100%</button>
+            <button type="button" class="btn-mini" id="prevZoomIn" aria-label="Zoom Preview in">+</button>
+          </div>
+          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" title="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">Grab to pan</button>
+          <button type="button" class="btn-mini" id="prevWheelZoom" aria-pressed="false" title="Toggle plain wheel zoom inside local preview documents. Off preserves scrolling; Ctrl/Meta+wheel still zooms.">Wheel zoom</button>
+          <span class="preview-zoom-hint" title="Ctrl/Meta+wheel zooms local content. For native PDFs, remote pages and nested frames, wheel over the percentage controls instead.">Ctrl/Meta+wheel; PDF/remote: wheel here</span>
         </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
           <div class="preview-pill" id="prevPill" hidden aria-live="polite"><span class="preview-pill-dot"></span><span id="prevPillLabel">Reviewing the preview</span></div>
           <!-- P-PREVIEW.7 (ADR-0179): the explain-overlay for pages the sandbox can't run (e.g. Electron renderers). -->
           <div class="preview-notice" id="prevNotice" hidden aria-live="polite"></div>
+          <div class="preview-viewport" id="prevViewport" tabindex="0" aria-label="Preview content, scroll to pan enlarged content">
           <div class="preview-stage" id="prevStage">
             <iframe id="prevFrame" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="Your app preview" hidden></iframe>
             <iframe id="prevFrameA" class="preview-frame" sandbox="${PREVIEW_SANDBOX}" allow="${PREVIEW_ALLOW}" referrerpolicy="no-referrer" title="The agent's app preview" hidden></iframe>
+            <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
           </div>
-          <canvas id="prevCanvas" class="preview-canvas" aria-hidden="true"></canvas>
+          </div>
+          <div id="prevPanSurface" class="preview-pan-surface" hidden aria-hidden="true"></div>
           <div class="empty preview-empty" id="prevEmpty"><span class="preview-empty-msg" id="prevEmptyMsg">Open a local HTML file to preview it here - paste its path above and press <b>Open</b>. (The agent driving this itself is coming next; remote URLs are egress-gated.)</span></div>
         </div>
       </aside>
+
+      <!-- P-TRAINER.7 (ADR-0267): the immersive Trainer stage - a self-contained experience (extraction
+           stage + coverage HUD + lesson-based mini-game flyout) in a sandboxed iframe. Lazy-loaded on
+           first open; covers the main area while the rail + titlebar stay live. -->
+      <section id="trainerPanel" class="trainer-panel" hidden>
+        <iframe id="trainerFrame" class="trainer-frame" title="Lucid Trainer" sandbox="allow-scripts allow-same-origin" allow="autoplay" referrerpolicy="no-referrer"></iframe>
+      </section>
       ${agentBuilderPanelHtml()}
     </div>
 
@@ -526,6 +778,7 @@ function renderComposerThumbs(): void {
 }
 /** Validate + stage a pasted/dropped image (data URL) for the next message. */
 function addPastedImage(dataUrl: string, name?: string): void {
+  // P-FLEET.L19: staged images go to whichever target the composer drives; a spoke's prompt carries them too.
   const r = acceptAttachment(state.attachments, dataUrl, `att_${++attSeq}`, name);
   if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't attach image", desc: r.reason ?? "" }); return; }
   state.attachments.push(r.attachment);
@@ -597,13 +850,24 @@ async function runPersonalImport(folder: string, useModel: boolean): Promise<voi
   const fill = $("#importPillFill", pill) as HTMLElement, text = $("#importPillText", pill) as HTMLElement, ven = $("#importPillVendor", pill) as HTMLElement;
   const cancelBtn = $("#importPillCancel", pill) as HTMLButtonElement;
   cancelBtn.disabled = false; cancelBtn.textContent = "Cancel";
-  cancelBtn.onclick = () => { cancelBtn.disabled = true; cancelBtn.textContent = "Stopping…"; void bridge.personalImportCancel(jobId); };
+  // First press asks the run to unwind; the button stays LIVE as "Force stop" so a wedged import is never
+  // a dead end (the old code disabled it forever, which is what "Stop hangs" looked like).
+  let stopPresses = 0;
+  cancelBtn.onclick = () => {
+    stopPresses++;
+    cancelBtn.textContent = stopPresses === 1 ? "Force stop" : "Stopping\u2026";
+    cancelBtn.disabled = stopPresses > 1;
+    void bridge.personalImportCancel(jobId);
+  };
   const poll = async () => {
     const st = await bridge.personalImportStatus(jobId).catch(() => null);
     if (!st) { hideImportPill(); return; }
-    const { pct, line, done } = formatImportLine(st);
+    const { pct, line, done, stalled } = formatImportLine(st);
     fill.style.width = `${pct}%`; text.textContent = line; ven.textContent = vendorName(st.vendor);
+    pill.classList.toggle("stalled", stalled);
+    if (stalled && stopPresses === 0) cancelBtn.textContent = "Stop";
     if (!done) { importPollTimer = window.setTimeout(() => void poll(), 1200); return; }
+    pill.classList.remove("stalled");
     hideImportPill();
     const r = st.result;
     if (st.state === "failed" || !r?.ok) {
@@ -712,29 +976,60 @@ const scrollChat = (): void => {
 // A double-down-arrow in the LucidAgent accent appears, tucked just inside the scrollbar, whenever
 // there's a screen-plus of content below the fold. Clicking advances ONE viewport but overlaps the
 // last visible line, so a reader resumes exactly where they left off rather than losing their place.
-const JUMP_SHOW_PX = 140; // content below the fold before the catch-up button shows
+// P-FLEET.L13: the arithmetic moved to renderer/scroll_jump.ts so a fleet lane transcript runs the
+// IDENTICAL rule. Two copies of "one viewport minus a line of overlap" is how the chat would get a
+// tuning pass the lanes never saw.
 let jumpRaf = false;
 function lineHeightPx(): number {
   const t = $("#thread")?.querySelector(".msg .text") as Element | null;
   const lh = t ? parseFloat(getComputedStyle(t).lineHeight) : NaN;
   return Number.isFinite(lh) && lh > 0 ? lh : 28;
 }
+const JUMP_BTN_PX = 34;   // .jump-down width/height in styles.css - the stack spacing depends on it
+// Mis-click safety: 8px between two 34px circles meant the bottom edge of "page down" and the top
+// edge of "jump to newest" were one slip apart, and hitting the wrong one throws the reading position
+// to the end of the transcript. 16px is one comfortable pointer correction.
+const JUMP_GAP_PX = 16;   // breathing room between the two stacked buttons
 function updateJump(): void {
-  const c = $("#chat"), b = $("#jumpDown");
-  if (!c || !b) return;
-  const show = c.scrollHeight - c.scrollTop - c.clientHeight > JUMP_SHOW_PX;
+  const c = $("#chat"), page = $("#jumpDown"), end = $("#jumpEnd");
+  if (!c || !page) return;
+  const show = shouldShowJump(c, JUMP_SHOW_PX);
   if (show) {
-    const cw = $(".composer-wrap");
-    b.style.bottom = `${(cw ? cw.getBoundingClientRect().height : 64) + 14}px`;
+    // Both sit just above the composer, whose height changes as the prompt bar grows. The run-to-end
+    // button takes the lower slot (closest to the composer) and the page stepper stacks above it, so
+    // the pair never overlaps the composer or each other at any prompt-bar height.
+    const base = (($(".composer-wrap")?.getBoundingClientRect().height) ?? 64) + ($("#agentArcadeHost")?.getBoundingClientRect().height ?? 0) + 14;
+    if (end) end.style.bottom = `${base}px`;
+    page.style.bottom = `${base + (end ? JUMP_BTN_PX + JUMP_GAP_PX : 0)}px`;
   }
-  b.classList.toggle("show", show);
+  page.classList.toggle("show", show);
+  end?.classList.toggle("show", show);
 }
 const scheduleJump = (): void => { if (jumpRaf) return; jumpRaf = true; requestAnimationFrame(() => { jumpRaf = false; updateJump(); }); };
+/** P-MASCOT.4: the arcade opens BELOW the composer, inside the same <main> the stage covers with
+ *  `inset:0`, so the big ninja was painted straight over the game. Publishing the game's live height
+ *  as --arcade-h lifts the stage's floor above it (and keeps the jump buttons clear of both). */
+function syncArcadeGap(): void {
+  const h = ($("#agentArcadeHost") as HTMLElement | null)?.offsetHeight ?? 0;
+  document.documentElement.style.setProperty("--arcade-h", `${Math.round(h)}px`);
+  scheduleJump();
+}
 function jumpDownOnePage(): void {
   const c = $("#chat");
   if (!c) return;
-  const step = Math.max(c.clientHeight - lineHeightPx() - 8, 80); // one viewport, minus a line of overlap
-  c.scrollTo({ top: Math.min(c.scrollTop + step, c.scrollHeight), behavior: "smooth" });
+  c.scrollTo({ top: pageDownTarget(c, lineHeightPx()), behavior: "smooth" }); // one viewport, minus a line of overlap
+}
+/** Run straight to the newest message. Deliberately INSTANT, not smooth: on a long restored session
+ *  the distance is tens of thousands of pixels, and a smooth glide over that is a slow, janky ride to
+ *  somewhere the reader already asked to be. Clearing lastWroteTop drops the "user scrolled up" memory
+ *  (that baseline described a scroll position we just abandoned), so once we land at the bottom the
+ *  normal stick-to-bottom behaviour re-engages and live tokens keep following. */
+function jumpToEnd(): void {
+  const c = $("#chat");
+  if (!c) return;
+  c.scrollTo({ top: c.scrollHeight, behavior: "auto" });
+  lastWroteTop = -1;
+  updateJump();
 }
 
 // P10.1 (ADR-0011) + UI polish: a friendly, honest "what's happening" label. We classify the user's
@@ -805,7 +1100,11 @@ const fmtClock = (ms: number): string => { const s = Math.max(0, Math.floor(ms /
 // P-CHAT.1 (ADR-0104): the authored code a tool step can expand to preview inline.
 type ToolCode = { path: string; content?: string; oldText?: string; newText?: string; patch?: string };
 // P-CHAT.B (ADR-0189): the opaque payload a tool mark round-trips to fill its chip drilldown (code or detail).
-interface ChipData { code?: ToolCode; detail: string; }
+// P-EVAL.4 (ADR-0318): `id` is omp's toolCallId, kept so the REAL tool name (which arrives separately, via
+// the tool_meta self-report channel, because the ACP update structurally cannot carry it) can be joined
+// onto this call for the chip label and the engineering report. `kind` preserves the coarse ACP class even
+// after the label upgrades, so the report can group by real name and still report the class.
+interface ChipData { code?: ToolCode; detail: string; id?: string; kind?: string; }
 
 /** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
  *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
@@ -1011,7 +1310,7 @@ function createReasoning(): ReasoningWin {
 // event. We render an inline approve/deny card; the choice is POSTed back to resolve the parked
 // request. Unanswered at turn's end ⇒ Denied (the backend already fail-closes server-side).
 const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|accept|yes/i.test(`${kind ?? ""} ${optionId ?? ""}`);
-function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { el: HTMLElement; finalize: () => void } {
+function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void } {
   let win: HTMLElement;
   if (e.egress) {
     // P-EGRESS.1 (ADR-0062): the agent wants to reach the internet. Docked above the composer. Subdued
@@ -1105,6 +1404,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
   const choose = (oid: string | null, label: string, ok: boolean) => {
     if (answered) return;
     answered = true;
+    onAnswered?.(); // P-AVATAR.5: a pending voice approval for this card is now moot
     win.removeAttribute("data-streaming");
     void bridge.respondPermission(e.id, oid);
     if (e.egress || e.exec) {
@@ -1129,7 +1429,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>): { 
     const isDeny = (e.egress || e.exec) ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
     choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
   });
-  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false) };
+  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose };
 }
 /** P-EGRESS.1: the dock above the composer where egress approval cards sit (not inline in the chat). */
 function egressDock(): HTMLElement {
@@ -1145,22 +1445,15 @@ function egressDock(): HTMLElement {
 // ── Subagent delegation card - P-TASK.1 (ADR-0028) ──
 // When the agent hands work to an omp `task` subagent, show a distinct collapsible card (agent type +
 // the assignment[s]) instead of a nameless "other" tool chip - Claude-Code-style Task surfacing.
-// Spawns are background jobs; this card marks "running" and resolves when the turn ends (P-TASK.1
-// surfaces the delegation; live per-subagent progress is a later increment).
-// Animated "stick man peering through a looking glass", green neon - the live indicator on a
-// subagent card (it's exploring/searching). The .look group (head + raised arm + magnifier) bobs
-// slightly up and down while the subagent runs, as if scanning.
-const LOOKER_SVG = `<svg class="looker" viewBox="0 0 26 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-  <path d="M9 9 L9 15"/>
-  <path d="M9 15 L6 21"/>
-  <path d="M9 15 L12.2 21"/>
-  <g class="look">
-    <circle cx="9" cy="5.2" r="2.3"/>
-    <path d="M9 7.5 L9 9"/>
-    <path d="M9 10 L12.8 8.6"/>
-    <path d="M14.4 8.8 L12.8 8.6"/>
-    <circle cx="16.4" cy="6.8" r="2.8"/>
-  </g>
+// Spawns are background jobs; the card stays live until its own runs finish (P-TASK.6, delegationSettled).
+// P-TASK.6 (ADR-0398): a clipboard of assignments, green neon - the live indicator on a subagent card.
+// While the subagents work, its three task lines write themselves in and out, staggered (.cb-line).
+const CLIPBOARD_SVG = `<svg class="clipboard" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <rect x="5" y="4.2" width="14" height="17" rx="2.2"/>
+  <rect x="9" y="2.4" width="6" height="3.6" rx="1.1"/>
+  <path class="cb-line" d="M8.6 10.4 H15.4"/>
+  <path class="cb-line" d="M8.6 13.9 H15.4"/>
+  <path class="cb-line" d="M8.6 17.4 H13"/>
 </svg>`;
 // P-CHAT.A (ADR-0188): the pre-heading intro / a title-less block, rendered inline as markdown.
 function appendIntro(container: HTMLElement, md: string): void {
@@ -1276,13 +1569,13 @@ function renderAnswerBody(container: HTMLElement, md: string, marks?: readonly T
   return false;
 }
 
-function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: HTMLElement; finish: () => void } {
+function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true): { el: HTMLElement; finish: () => void } {
   const n = e.assignments.length;
   const body = (e.assignments.length ? e.assignments : [e.title]).map((a) =>
     `<div class="subagent-task">${icon("chevron", 11)}<span>${esc(a)}</span></div>`).join("");
   const win = el(`<div class="subagent open" data-streaming="1">
     <button class="subagent-head" type="button" aria-expanded="true">
-      <span class="subagent-spin">${LOOKER_SVG}</span>
+      <span class="subagent-spin">${CLIPBOARD_SVG}</span>
       <span class="subagent-cur">Delegated to <b>${esc(e.agent)}</b>${n > 1 ? ` · ${n} subtasks` : ""}</span>
       <span class="subagent-chev">${icon("chevron", 14)}</span>
     </button>
@@ -1301,7 +1594,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
   const runsBox = $(".subagent-runs", win) as HTMLElement;
   const openRuns = new Set<string>(); // user-expanded rows survive re-render
   const stepIcon = (k: string): string => (k === "thinking" ? icon("spark", 11) : k === "tool" ? icon("bolt", 11) : icon("info", 11));
-  const renderRuns = (runs: { name: string; done: boolean; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[]): void => {
+  const renderRuns = (runs: { name: string; done: boolean; lastAt: number; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[]): void => {
     if (!runs.length) return;
     win.querySelectorAll(".subagent-task").forEach((t) => t.remove()); // real runs supersede the static rows
     runsBox.innerHTML = runs.map((r) => {
@@ -1327,23 +1620,38 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>): { el: 
       if (row.classList.contains("open")) openRuns.add(name); else openRuns.delete(name);
     }));
   };
+  // P-TASK.6 (ADR-0398): omp 18 subagents are BACKGROUND jobs that usually outlive the parent turn, so the
+  // turn ending only arms the settle check; the card keeps polling and animating until its own runs are
+  // finished or quiet (delegationSettled), then settles once.
+  let turnEndedAt: number | null = null;
+  let settled = false;
+  let runsTimer = 0;
+  const settle = (): void => {
+    if (settled) return; settled = true;
+    window.clearInterval(runsTimer);
+    // P-CHAT.B.1: keep the delegation card EXPANDED on settle so each subagent's thinking/tools stay
+    // visible after the turn (P-TASK.5 collapsed it, which hid the detail); the user can still fold it.
+    win.removeAttribute("data-streaming"); win.classList.add("done");
+  };
   const refreshRuns = async (): Promise<void> => {
     const v = await bridge.subagents().catch(() => null);
-    if (v?.runs) renderRuns(v.runs as Parameters<typeof renderRuns>[0]);
+    // P-TASK.5a: /api/subagents returns ALL runs in the parent session - scope this card to ITS batch
+    // (task names when the delegation carried them, else assignment-prefix matching; the sole-card
+    // fallback keeps single-batch turns rendering even when neither yields a match).
+    const mine = v?.runs ? filterRunsForBatch(v.runs as Parameters<typeof renderRuns>[0], { names: e.names, assignments: e.assignments, soleCard: isSoleCard() }) : [];
+    if (settled) return;
+    renderRuns(mine);
+    if (delegationSettled(mine, turnEndedAt, Date.now())) settle();
   };
   void refreshRuns();
-  const runsTimer = window.setInterval(() => { if (win.isConnected) void refreshRuns(); }, 2500);
+  runsTimer = window.setInterval(() => { if (win.isConnected) void refreshRuns(); else settle(); }, 2500);
 
-  let done = false;
   return {
     el: win,
     finish() {
-      if (done) return; done = true;
-      window.clearInterval(runsTimer);
-      void refreshRuns(); // one final tail so the card shows each run's ending state
-      // P-CHAT.B.1: keep the delegation card EXPANDED on settle so each subagent's thinking/tools stay
-      // visible after the turn (P-TASK.5 collapsed it, which hid the detail); the user can still fold it.
-      win.removeAttribute("data-streaming"); win.classList.add("done");
+      if (turnEndedAt !== null) return;
+      turnEndedAt = Date.now();
+      void refreshRuns();
     },
   };
 }
@@ -1375,7 +1683,7 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   </div>`;
   container.querySelectorAll("[data-noresp-switch]").forEach((b) => b.addEventListener("click", async () => {
     const v = (b as HTMLElement).dataset.norespSwitch!;
-    await applyConfig("model", v); // switch the active model
+    await applyConfig("model", v, { system: true }); // no-response fallback switch (system, not the user's sticky pick)
     const last = state.lastPrompt;
     const ta = $("#input") as HTMLTextAreaElement | null;
     if (last && ta) { ta.value = last; autosize(ta); setSendEnabled(); void send(); } // re-send the same prompt
@@ -1385,30 +1693,217 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   });
 }
 
+/** P-HEALTH.1: the harness acted on this session by itself. Shown in the transcript as the same quiet
+ *  .evt note chip the other system notices use, so a probe or an in-place recovery reads as visible work
+ *  rather than an unexplained gap. */
+function noteHealth(action: "probe" | "recover", reason: string): void {
+  const what = action === "recover" ? "Recovered this session in place" : "Checked on this session";
+  addNoteChip(reason ? `${what}: ${reason}` : what);
+}
+
+// P-TURN-RECOVERY-OWNER: one renderer owns the composer; leaving only detaches its local reader.
+let turnViewEpoch = 0;
+let activeTurnView: { detach: () => void; stop: () => Promise<void>; reconnect: () => void } | null = null;
+let recoveryChecking: boolean = false;
+// P-RECOVER.1 (ADR-0385): "Checking connection" blocks Send, so it must always end. Every status check
+// clears it on its own paths; this cap clears it when a path forgot to, or when the engine never answered.
+const RECOVERY_CHECK_MAX_MS = 20_000;
+let recoveryCheckTimer = 0;
+function setRecoveryChecking(on: boolean): void {
+  recoveryChecking = on;
+  window.clearTimeout(recoveryCheckTimer);
+  recoveryCheckTimer = on ? window.setTimeout(() => { setRecoveryChecking(false); setSendEnabled(); }, RECOVERY_CHECK_MAX_MS) : 0;
+}
+function leaveTurnView(): number {
+  ++turnViewEpoch;
+  activeTurnView?.detach(); activeTurnView = null;
+  bridge.detachChat();
+  setRecoveryChecking(false);
+  state.streaming = false;
+  goalLoopRunning = false;
+  $("#turnReconnect")?.remove();
+  hideQuietReconnect(); // or a dead probe's button outlives the view that offered it
+  setSendEnabled();
+  return turnViewEpoch;
+}
+function showTurnReconnect(message: string, reconnect: () => void): void {
+  // P-RECOVER.1 (ADR-0385): while the supervisor works on THIS view its notice is the one voice at the
+  // thread tail. The manual banner is held and comes back if the supervisor cannot fix it.
+  if (recoveryActive?.hooks.defers && recoveryActive.hooks.alive()) { recoveryActive.deferred = { message, reconnect }; return; }
+  $("#turnReconnect")?.remove();
+  const notice = el(`<div id="turnReconnect" class="thread-tail-note"><span></span> <button type="button">Reconnect</button></div>`);
+  $("span", notice)!.textContent = message;
+  $("button", notice)!.addEventListener("click", reconnect);
+  $("#thread")!.appendChild(notice);
+}
+
+/** P-CONNUI.1 (ADR-0368): the QUIET form of "could not reach the engine".
+ *
+ *  Used when a status probe fails and there is nothing to lose: no rendered turn, so no risk of a
+ *  running reply going unnoticed. Shows the compact composer button and nothing else. The loud
+ *  `showTurnReconnect` banner stays for the cases that genuinely earn a paragraph (a turn that may
+ *  still be running, a lane that owns the composer, an unconfirmed Stop). */
+function showQuietReconnect(reconnect: () => void): void {
+  $("#turnReconnect")?.remove();
+  const btn = $("#ctReconnect") as HTMLButtonElement | null;
+  if (!btn) { showTurnReconnect("Connection unavailable. Reconnect to check session status before sending.", reconnect); return; }
+  btn.hidden = false;
+  btn.onclick = () => { hideQuietReconnect(); reconnect(); };
+}
+function hideQuietReconnect(): void {
+  const btn = $("#ctReconnect") as HTMLButtonElement | null;
+  if (btn) { btn.hidden = true; btn.onclick = null; }
+}
+
+// ── P-RECOVER.1 (ADR-0385): the recovery supervisor's driver ────────────────────────────────────────
+// recovery_supervisor.ts DECIDES (pure, tested); this performs what it decides and says so at the thread
+// tail. One run at a time, a capped number of automatic runs per window, the engine restart at most
+// once per page (it reloads the window), so a stuck "reconnecting" always ends in an answer.
+interface RecoveryHooks {
+  /** The view (or composer state) the run serves is still the current one. */
+  alive: () => boolean;
+  /** Hold the manual Reconnect banner while the run works (a live turn view). */
+  defers: boolean;
+  /** Follow the running turn again. Resolves whether a reattach started. */
+  reattach: () => Promise<boolean>;
+  /** Stop waiting and reload the thread from the session. */
+  resync: () => Promise<boolean>;
+  /** The run ended well. May return one more sentence for the notice. */
+  onDone?: () => string | undefined;
+  /** Offered as "Try again" when the run gives up. */
+  retry?: () => void;
+}
+interface ActiveRecovery { hooks: RecoveryHooks; startedAt: number; deferred: { message: string; reconnect: () => void } | null }
+let recoveryActive: ActiveRecovery | null = null;
+const recoveryStarts: number[] = [];
+let engineRestartUsed = false;
+
+function superviseRecovery(trigger: RecoveryTrigger, waiting: boolean, hooks: RecoveryHooks): void {
+  if (recoveryActive) return; // the run in flight answers every trigger that arrives meanwhile
+  const now = Date.now();
+  if (!mayStartRun(recoveryStarts, now)) return; // budget spent: the manual Reconnect path stays
+  recoveryStarts.push(now);
+  if (recoveryStarts.length > 16) recoveryStarts.shift();
+  const active: ActiveRecovery = { hooks, startedAt: now, deferred: null };
+  recoveryActive = active;
+  void driveRecovery(active, startRecovery(trigger, { waiting, engineRestartUsed }))
+    .catch((error) => console.error("[P-RECOVER] supervisor failed", error))
+    .finally(() => { if (recoveryActive === active) recoveryActive = null; });
+}
+
+async function driveRecovery(active: ActiveRecovery, first: RecoveryStep): Promise<void> {
+  let s = first;
+  let incidentId: string | undefined;
+  while (s.action.type !== "done" && s.action.type !== "give-up") {
+    const a = s.action;
+    if (!active.hooks.alive()) { clearRecoveryNotice(); return; } // the user moved on: stop quietly
+    showRecoveryNotice(progressText(a));
+    if (a.type === "probe") {
+      if (a.delayMs) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        window.setTimeout(resolve, a.delayMs);
+        await promise;
+      }
+      if (!active.hooks.alive()) { clearRecoveryNotice(); return; }
+      s = afterProbe(s.run, await bridge.engineProbe());
+    } else if (a.type === "reattach" || a.type === "resync") {
+      active.deferred = null; // anything held from before this attempt is stale now
+      const ok = await (a.type === "reattach" ? active.hooks.reattach() : active.hooks.resync()).catch(() => false);
+      s = afterRemedy(s.run, { action: a.type, ok });
+    } else if (a.type === "recover-agent") {
+      const r = await bridge.recoveryRecover();
+      if (r?.incidentId) incidentId = r.incidentId;
+      s = afterRemedy(s.run, { action: "recover-agent", ok: !!r?.ok });
+    } else {
+      engineRestartUsed = true;
+      const r = await bridge.restartEngine();
+      if (r?.incidentId) incidentId = r.incidentId;
+      s = afterRemedy(s.run, { action: "restart-engine", ok: !!r?.ok, reason: r ? r.reason : "unavailable" });
+    }
+  }
+  if (recoveryActive === active) recoveryActive = null; // so a held banner can be shown for real below
+  const end = s.action;
+  if (end.type === "done" && end.how === "engine-restarted") {
+    // The engine behind this window was replaced: the page must load from it again. The new page finds
+    // the engine-unreachable incident unseen and offers the report (startupRecovery).
+    showRecoveryNotice(doneText(end.how));
+    window.setTimeout(() => location.reload(), 1200);
+    return;
+  }
+  const held = active.deferred;
+  if (held && active.hooks.alive()) showTurnReconnect(held.message, held.reconnect);
+  // The report: the one this run's remedy wrote, else one the engine wrote meanwhile (recovery-exhausted).
+  const list = incidentId || end.type === "give-up" ? await bridge.incidents() : [];
+  const inc = incidentId ? list.find((i) => i.id === incidentId) : list.find((i) => !i.seen && i.createdAt >= active.startedAt - 10 * 60_000);
+  if (inc) void bridge.incidentSeen(inc.id);
+  if (end.type === "done") {
+    const extra = active.hooks.onDone?.();
+    const text = extra ? `${doneText(end.how)} ${extra}` : doneText(end.how);
+    if (inc) showIncidentNotice(inc, text, "recoveryNotice");
+    else showRecoveryNotice(text, { autoHideMs: 10_000 });
+    return;
+  }
+  if (end.type !== "give-up") return;
+  const actions: NoticeAction[] = [];
+  if (inc) actions.push({ label: "Submit report", primary: true, run: () => openIncidentSubmit(inc) });
+  const retry = active.hooks.retry;
+  if (retry) actions.push({ label: "Try again", run: () => { clearRecoveryNotice(); retry(); } });
+  const text = giveUpText(end.reason, end.detail);
+  showRecoveryNotice(inc ? `${text} ${REPORT_SAVED}` : text, { actions });
+}
+
+/** Hooks for a run that serves the master composer rather than a live turn view: a refused send, or a
+ *  status check that could not reach the engine. Reattaching means adopting the running turn. */
+function masterRecoveryHooks(owner: number, extra: Partial<RecoveryHooks> = {}): RecoveryHooks {
+  return {
+    alive: () => owner === turnViewEpoch && !isLaneTarget(state.composerTarget),
+    defers: false,
+    reattach: async () => { void recoverMasterTurn(); return true; },
+    resync: async () => false,
+    onDone: () => { void recoverMasterTurn(); return undefined; },
+    retry: () => void recoverMasterTurn(),
+    ...extra,
+  };
+}
+
+/** Resync a stuck turn view: the turn is gone, so show what the session actually holds. */
+async function resyncFromSession(): Promise<boolean> {
+  const st = await bridge.recoveryState();
+  const sid = st?.currentSessionId ?? ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null;
+  if (!sid) return false;
+  return resumeSession(sid, { loaded: true });
+}
+
 async function send(): Promise<void> {
+  if (agentTierApplying) { showToast({ title: "Confirming model change", desc: "Wait a moment for the engine to confirm the model before sending.", timeout: 2500 }); return; }
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
   // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
   const atts = state.attachments.slice();
   const images = promptImageBlocks(atts);
   if (!text && images.length === 0) return;
+  if (recoveryChecking) { showToast({ tone: "warn", title: "Checking connection", desc: "Wait for the status check, or reconnect before sending.", timeout: 4000 }); return; }
+  // P-FLEET.L8: a lane runs its OWN omp child, so the master composer's "/" expansion is meaningless to it
+  // - an expanded body would reach a session that never registered the command. targetCaps says so, and
+  // while attached the text goes to the lane exactly as the user typed it.
+  const caps = targetCaps(state.composerTarget);
   // P-CMD.1: a user-authored SKILL-mode "/" command ACTIVATES its body as a persistent instruction (no turn
   // sent) — same behaviour as a bundled skill. Handle it before we open an assistant node.
-  const cmdTok = /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase();
+  const cmdTok = caps.slashCommands ? /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase() : undefined;
   if (cmdTok && !state.streaming) {
     const uc = state.userCommands.find((c) => c.name === cmdTok);
     if (uc && uc.mode === "skill") { ta.value = ""; autosize(ta); setSendEnabled(); void activateUserCommandSkill(uc); return; }
   }
   // P-FIGMA.1 (ADR-0154): typing `/figma` opens the secure import form (URL + token) rather than sending text.
-  if (/^\/figma\b/i.test(text)) { ta.value = ""; autosize(ta); setSendEnabled(); openFigmaForm(); return; }
+  if (caps.slashCommands && /^\/figma\b/i.test(text)) { ta.value = ""; autosize(ta); setSendEnabled(); openFigmaForm(); return; }
   // What actually goes to the model. `/agent` and `/command` kick off builder interviews (the chat agent,
   // steered by the frozen policies, asks what to build then calls the matching tool); a SEND-mode user
   // command expands its body (+ any typed args). The TRANSCRIPT still shows exactly what the user typed.
-  let sendText = resolveSendText(text, cmdTok);
+  let sendText = caps.slashCommands ? resolveSendText(text, cmdTok) : text;
   // P-CMD.2: "/" commands work ANYWHERE in the body — but only when NO start-anchored command consumed
   // the text above (start-anchored keeps the P-CMD.1 args contract, and never re-scanning an expanded body
   // keeps expansion non-recursive). Embedded skill-mode tokens activate their skills and are stripped.
-  if (sendText === text) {
+  if (caps.slashCommands && sendText === text) {
     const inline = expandInlineCommands(text, state.userCommands);
     for (const name of inline.skillNames) {
       const uc = state.userCommands.find((c) => c.name === name);
@@ -1420,9 +1915,9 @@ async function send(): Promise<void> {
     }
     sendText = inline.text || text;
   }
-  // P-ACP.4: a turn is already running → pre-stage this prompt instead of dropping it. It auto-sends
-  // when the current turn ends (naturally or via Stop). One slot - a newer entry replaces the old.
-  if (state.streaming) { state.queued = text; ta.value = ""; autosize(ta); renderQueued(); setSendEnabled(); return; }
+  // P-INTERJECT.2 (was P-ACP.4's single slot): a turn is already running - the send action becomes an
+  // explicit choice instead of a silent stage: hold it for the next turn, or push it into THIS one.
+  if (state.streaming) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
   // First message of the app session: auto-collapse the sessions panel (Claude-Code style) so the
   // chat takes the focus - the nav hamburger (#sideToggle) reopens history on demand. Done once so
   // we never fight a user who reopens it mid-chat.
@@ -1431,13 +1926,34 @@ async function send(): Promise<void> {
   ta.value = ""; autosize(ta);
   state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
   addMessage("user", text, atts);
+  const turnFrom = nextTurnFrom; nextTurnFrom = null;
+  p2pTeeUserTurn(sendText, turnFrom ?? undefined);
+  const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
+  const lane = isLaneTarget(state.composerTarget) ? state.composerTarget : null;
+  await renderChatTurn(text, (onEvent) => lane
+    // P-FLEET.L19: pasted images ride the lane prompt as ACP image blocks (the lane's P-FLEET.L3 wire).
+    ? bridge.fleetPrompt(lane.laneId, sendText, onEvent as (e: LaneEvent) => void, images.map((b) => ({ data: b.data, mimeType: b.mimeType })))
+    : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId });
+}
+
+// New prompts and read-only attachments share every HUD, voice, activity, and approval handler.
+async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) => void) => Promise<void>, opts: { turnId?: string; laneId?: string; context?: { role: string; text: string; turn?: number }[] } = {}): Promise<void> {
+  const owner = ++turnViewEpoch;
+  activeTurnView?.detach();
+  const owns = () => owner === turnViewEpoch;
+  let turnId = opts.turnId;
+  let terminal = false, stopped = false, settled = false, connecting = false;
+  let adopted = !!opts.turnId;
+  // P-RECOVER.1 (ADR-0385): a real prompt always opens with a turn-snapshot, so a stream error BEFORE one
+  // means the engine refused the send ("A chat turn is already running") and no turn exists.
+  let sawSnapshot = false, refused = false;
   state.streaming = true; state.streamStartedAt = Date.now(); setSendEnabled();
 
   const node = addMessage("assistant", "");
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
-  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-tps"></span><span class="hud-meta"></span></div>`);
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button></div>`);
   const streamEl = el(`<div class="stream"></div>`);
   textEl.append(streamEl, hud); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
@@ -1445,13 +1961,22 @@ async function send(): Promise<void> {
   // on the first tool event so a pure-text turn shows nothing extra.
   let thoughts: ThoughtsWin | null = null;
   let reasoning: ReasoningWin | null = null; // the live "thinking" block (above the answer)
-  const permCards: { el: HTMLElement; finalize: () => void }[] = []; // Ask-mode approval prompts
+  let judgments: JudgmentsWin | null = null; // P-JEV.2: the typed-judgment trace (below the tool activity), created on the first report
+  const permCards = new Map<string, { el: HTMLElement; finalize: () => void }>();
+  const answeredPermissions = new Set<string>();
   const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
   const marks: ToolMark<ChipData>[] = []; // P-CHAT.B (ADR-0189): tool calls anchored by answer-buffer length, interleaved into the answer on settle
   const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
   const failures: { tool: string; reason: string; cmd?: string }[] = []; // P-CHAT.C (ADR-0190): this turn's failed (non-quarantined) tool calls, feed the eval report's fail-rate / wasted-token metrics
+  // P-EVAL.4 (ADR-0318): real tool names + outcomes for THIS turn, keyed by omp's toolCallId. Filled by
+  // the `tool-meta` events the tool_meta omp extension self-reports, which is the only place the real
+  // name exists: omp's ACP tool_call update carries a coarse `kind` ("other" for every custom and MCP
+  // tool) and a title that intent tracing rewrites to model prose (ADR-0308). Per-turn, so it cannot
+  // grow without bound and cannot leak a name from a previous turn onto a reused id.
+  const toolMeta = new Map<string, { name: string; ok?: boolean }>();
   let buf = "";
-  const t0 = Date.now();
+  let thinkBuf = ""; // P-VOICE.7 (ADR-0269): this turn's reasoning stream - raw material for spoken thinking snapshots
+  let t0 = Date.now();
   // Cold start: the timer is already ticking but nothing has arrived - show an intent-aware
   // "warming" line so the user always sees something meaningful before the first token/tool.
   // The think/write lines are picked ONCE per turn (stable, not reshuffling on every token).
@@ -1476,6 +2001,7 @@ async function send(): Promise<void> {
     // Brief crossfade on phase change - GPU-friendly (opacity only), respects reduced-motion via CSS.
     phaseEl.classList.remove("swap"); void phaseEl.offsetWidth; phaseEl.classList.add("swap");
     phaseEl.textContent = p;
+    liveTurn.phase = p; // P-INTERJECT.3: the Check-in card reads the same line the HUD shows
   };
   const paintHud = () => {
     ($(".hud-t", hud) as HTMLElement).textContent = fmtClock(Date.now() - t0);
@@ -1491,6 +2017,9 @@ async function send(): Promise<void> {
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
   };
   phaseEl.textContent = phase;
+  // P-INTERJECT.3: reset the live-turn mirror for this turn and arm the HUD's Check-in button.
+  liveTurn.phase = phase; liveTurn.pending = []; liveTurn.pendingAt = 0;
+  ($(".hud-checkin", hud) as HTMLElement | null)?.addEventListener("click", openCheckinCard);
   paintHud();
   const timer = window.setInterval(paintHud, 1000);
   let finished = false;
@@ -1504,11 +2033,19 @@ async function send(): Promise<void> {
     setPhase("Done"); paintHud();
     reasoning?.finish(Date.now() - t0);
     thoughts?.finish(Date.now() - t0);
+    judgments?.finish(); // P-JEV.2
     subCards.forEach((c) => c.finish());
     permCards.forEach((c) => c.finalize()); // any unanswered prompt = denied (matches server fail-close)
   };
   // P-CHAT.C (ADR-0190): assemble this turn's OBSERVED telemetry (tokens/cost, tool calls + diffstats,
   // failures) into the shape /api/eval/report consumes; the run-footer CTA POSTs it to build the report.
+  //
+  // P-EVAL.4 (ADR-0318): `name` now carries the REAL tool name whenever the tool_meta extension reported
+  // one, so the report's breakdown reads "read x14, edit x6, bash x3 (1 failed)" instead of the
+  // "other x23" it had degraded to. The coarse ACP class rides along as `kind` so the server can group by
+  // name and still fall back to class, and so a turn with no self-reports is honestly coarse rather than
+  // silently mislabelled. `ok` is only set when a report actually arrived: absent stays "not observed",
+  // never an assumed pass.
   const buildEvalTurn = (): EvalReportTurn => ({
     runId: `run-${t0}`,
     model: state.model || "model",
@@ -1516,27 +2053,108 @@ async function send(): Promise<void> {
     outputTokens: tps.tokenCount,
     totalTokens: tok + tps.tokenCount,
     costUsd: cost,
-    tools: marks.map((m) => ({ name: m.chip.k, path: m.data.code?.path, add: m.chip.diffstat?.add, del: m.chip.diffstat?.del })),
+    tools: marks.map((m) => {
+      const meta = m.data.id ? toolMeta.get(m.data.id) : undefined;
+      const kind = m.data.kind ?? m.chip.k;
+      return {
+        name: meta?.name ?? m.chip.k,
+        kind,
+        path: m.data.code?.path,
+        add: m.chip.diffstat?.add,
+        del: m.chip.diffstat?.del,
+        ...(m.data.detail ? { detail: m.data.detail } : {}),
+        ...(m.chip.failed ? { ok: false } : meta?.ok === undefined ? {} : { ok: meta.ok }),
+      };
+    }),
     failures: failures.slice(),
     subagents: subCards.length,
     when: new Date(t0).toISOString().slice(0, 10),
   });
-  // P-CHAT.C.1: the report evaluates WRITTEN work, so only offer it when the turn actually wrote a file /
-  // code (an edit/write with a diffstat). A read/search/bash-only or pure-text turn has nothing to evaluate.
+  // P-EVAL.4 (ADR-0318): offer the report on ANY tool-using turn.
+  //
+  // It previously required a diffstat-bearing write/edit, on the reasoning that "the report evaluates
+  // WRITTEN work". That silently swallowed the report for a large class of real engineering turns:
+  // an investigation that only read and searched, a debugging turn that only ran commands, a review turn.
+  // Those have plenty to evaluate (tool count, failure rate, wasted tokens, context efficiency, latency)
+  // and were exactly the turns the user found had "no report at all". A pure-text answer with no tool
+  // calls still offers nothing, because there genuinely is nothing measured to report.
   const maybeAppendReport = () => {
     const turn = buildEvalTurn();
-    if (turn.tools.some((t) => t.path && (t.add != null || t.del != null))) appendRunReport(textEl, turn);
+    if (turn.tools.length) appendRunReport(textEl, turn);
   };
   let slowNoticed = false; // P-STALL.1: the explanatory toast fires once per turn; the phase line keeps updating
-  let noResponse = false; // P-NORESP.1: the model returned nothing → the notice replaces the empty bubble
+  let noResponse = false; // P-NORESP.1: the model returned nothing \u2192 the notice replaces the empty bubble
+  // P-VOICE.2 (ADR-0247): a new turn - stop anything still being read from the last one and reset the
+  // read-aloud cursor, so auto-speak can never trail one reply behind.
+  speech.stop(); speechCursor = 0; speechFedAt = 0;
+  // P-VOICE.6/.7: hands-free, a long think is DEAD AIR - indistinguishable from a crash. Open with a varied,
+  // active-listening acknowledgement (restating the ask when it can be restated faithfully), then speak
+  // snapshots of the live reasoning while the user waits - until the answer itself starts talking.
+  if (!adopted) startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
   const onEvent = (e: ChatEvent) => {
+    if (!owns() || settled) return;
+    if (e.type === "connection") {
+      setPhase(e.message); paintHud();
+      // P-RECOVER.1 (ADR-0385): find out WHY instead of reconnecting blind (master turns; a lane owns its child).
+      if (!opts.laneId) superviseRecovery({ kind: "connection", state: e.state }, true, turnHooks);
+      return;
+    }
+    // The engine's stream-failure envelope ({type:"error"}) is outside ChatEvent, so compare the wire string.
+    const wireType: string = e.type;
+    if (wireType === "error" && !sawSnapshot && !adopted && !opts.laneId) { refused = true; return; }
+    if (e.type === "done" && refused) {
+      terminal = true;
+      stopThinkingCues(); finishHud(); setPhase("Not sent"); paintHud();
+      streamEl.textContent = "Not sent: the engine reported that another turn was still running. Checking the engine.";
+      state.streaming = false; setSendEnabled();
+      superviseRecovery({ kind: "send-failed", reason: "already-running" }, false, masterRecoveryHooks(owner, {
+        onDone: () => {
+          const ta = $("#input") as HTMLTextAreaElement | null;
+          if (!ta || ta.value.trim() || !text) return undefined;
+          ta.value = text; autosize(ta); setSendEnabled();
+          return "Your message is back in the composer. Send it again when you are ready.";
+        },
+        retry: undefined, // the user's next send is the retry
+      }));
+      return;
+    }
+    // P-TURN-RECOVERY-SNAPSHOT: canonical state replaces deltas and never becomes speech or P2P input.
+    if (e.type === "turn-snapshot") {
+      sawSnapshot = true;
+      const snapshot = e.snapshot;
+      turnId = snapshot.turnId;
+      if (adopted) {
+        const prior = priorTurnContext(opts.context ?? [], snapshot.prompt);
+        node.remove();
+        renderThread(prior);
+        addMessage("user", snapshot.prompt);
+        $("#thread")!.appendChild(node);
+        // renderThread jumped to the end of the PRIOR turns; the live prompt + reply were appended after
+        // that, so land on them too (otherwise the stick window misses and live tokens stop following).
+        jumpToEnd();
+        text = snapshot.prompt; state.lastPrompt = snapshot.prompt;
+        adopted = false;
+      }
+      buf = snapshot.text; (node as MsgNode)._md = buf;
+      t0 = snapshot.startedAt; state.streamStartedAt = t0;
+      liveTurn.pending = snapshot.pending; liveTurn.pendingAt = Date.now();
+      sawTool = snapshot.pending.length > 0;
+      for (const card of permCards.values()) card.el.remove();
+      permCards.clear(); voiceApproval = null;
+      speechCursor = buf.length; speechFedAt = buf.length;
+      streamEl.innerHTML = renderMarkdown(buf) + (snapshot.running ? `<span class="cursor"></span>` : "");
+      setPhase(snapshot.pending.length ? slowPhaseLabel(Date.now() - t0, snapshot.pending) : snapshot.running ? "Reconnected" : "Finishing reply");
+      paintHud(); scrollChat();
+      return;
+    }
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
-    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); }
+    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
     else if (e.type === "thinking") {
       // First reasoning chunk: spin up the live thinking block above the answer.
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
       if (!sawTool) setPhase(thinkLine);
       countDelta(e.text); // thinking tokens ARE output - count them in the readout
+      thinkBuf += e.text; // P-VOICE.7: feed the spoken snapshot cues
       reasoning.push(e.text); paintHud(); scrollChat();
     }
     else if (e.type === "tool") {
@@ -1545,65 +2163,176 @@ async function send(): Promise<void> {
       thoughts.step(e.name, e.detail, e.code);
       // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it
       // can be threaded back into the settled answer as a chip where it fired (zero visual change to the live window).
-      marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail } });
+      // P-EVAL.4 (ADR-0318): `e.name` here is only omp's coarse ACP `kind`. Keep it as `kind` and keep the
+      // toolCallId, so a `tool-meta` report can upgrade the label to the real tool name.
+      marks.push({ offset: buf.length, chip: toolChip(e.name, e.detail, e.code), data: { code: e.code, detail: e.detail, id: e.id, kind: e.name } });
+      // P-FLEET.L17: a previewable write from an ATTACHED LANE opens/updates that lane's Preview tab,
+      // exactly as the fleet card path (P-PREVIEW.10) does. Lanes never emit "preview-available" - the
+      // write's own path is the signal - so without this the spoke takeover had no preview pane at all.
+      if (opts.laneId && e.code?.path && isAutoPreviewPath(e.code.path)) {
+        const lt = state.composerTarget;
+        previewShowLaneFile(opts.laneId, isLaneTarget(lt) ? lt.name : "lane", e.code.path);
+      }
+      scrollChat();
+    }
+    // P-EVAL.4 (ADR-0318): the real tool name (and later its pass/fail) arrived for a call already
+    // streamed above. Relabel the mark in place so the settled answer's chip reads "knowledge_search"
+    // rather than "other". Display only: a missing report leaves the coarse label and changes nothing else.
+    else if (e.type === "tool-meta") {
+      const prior = toolMeta.get(e.id);
+      toolMeta.set(e.id, { name: e.name, ...(e.ok === undefined ? (prior?.ok === undefined ? {} : { ok: prior.ok }) : { ok: e.ok }) });
+      for (const m of marks) {
+        if (m.data.id !== e.id) continue;
+        m.chip.k = e.name;
+        if (e.ok === false) m.chip.failed = true;
+      }
+    }
+    // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
+    // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
+    else if (e.type === "judgment") {
+      if (!judgments) { judgments = createJudgments(); (thoughts?.el ?? streamEl).after(judgments.el); }
+      judgments.add(e.report);
       scrollChat();
     }
     else if (e.type === "subagent") {
       sawTool = true; setPhase(`Delegating to ${e.agent}…`); paintHud();
-      const card = createSubagentCard(e);
+      const card = createSubagentCard(e, () => subCards.length <= 1);
       subCards.push(card);
       streamEl.after(card.el); // delegation card sits just below the answer
       scrollChat();
     }
-    else if (e.type === "permission") {
+    else if (e.type === "permission" && opts.laneId) {
+      // P-FLEET.L19: a LANE's ask carries {summary, kind} and is answered through fleetAnswer, not the
+      // master's respondPermission; it has no id or options, so the master card cannot render it. The
+      // persistent spoke ask dock above the composer owns it (with the once / session / deny choice).
+      const ask = e as unknown as { summary?: string; kind?: string };
       setPhase("Needs approval"); paintHud();
-      const card = createPermissionCard(e);
-      permCards.push(card);
+      noteSpokeAsk(opts.laneId, { summary: String(ask.summary ?? "a privileged action"), kind: String(ask.kind ?? "action") });
+    }
+    else if (e.type === "permission") {
+      if (answeredPermissions.has(e.id) || permCards.has(e.id)) return;
+      setPhase("Needs approval"); paintHud();
+      const card = createPermissionCard(e, () => { answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null; });
+      permCards.set(e.id, card);
+      armVoiceApproval(e, card.respond); // P-AVATAR.5: hands-free sessions hear the request + can speak the verdict
       // P-EGRESS.1 / P-EXEC.1: egress + exec approvals dock directly above the prompt bar; normal tool
       // prompts stay inline.
       if (e.egress || e.exec) egressDock().appendChild(card.el);
       else { hud.before(card.el); scrollChat(); }
     }
-    else if (e.type === "block") { if (e.quarantined === false) failures.push({ tool: e.tool, reason: e.reason, cmd: e.command }); onBlock(e); } // P-CHAT.C (ADR-0190): a failed (not quarantined) tool call feeds the run's eval metrics
+    // P-CHAT.C (ADR-0190): a failed (not quarantined) tool call feeds the run's eval metrics.
+    else if (e.type === "block") { if (e.quarantined === false) failures.push({ tool: e.tool, reason: e.reason, cmd: e.command }); onBlock(e); }
     else if (e.type === "tool-image") renderToolImages(e.images, e.title); // P-IMG.1 (ADR-0208): a tool produced image(s) → inline + download + push-to-preview
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0153)
     else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants — review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
+    // `used`/`size`/`cost` are the only figures the provider reports over ACP. While attached to a lane
+    // these are that lane's own samples, which is why the ring and the rail both follow the attachment.
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
     // P-STALL.1 (ADR-0186): the provider is SILENT (overload/rate-limit) - keep the wait visible. The
     // phase line updates each notice; the next real token/tool event replaces it naturally.
     else if (e.type === "slow") {
-      setPhase(slowPhaseLabel(e.waitedMs)); paintHud();
-      if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, TURN_PATIENCE_MS); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
+      // P-STALL.2 (ADR-0263): no cutoff to warn about - the phase line counts the quiet and names how
+      // many tasks the turn is waiting on; the once-per-turn toast lists the longest-running ones.
+      setPhase(slowPhaseLabel(e.waitedMs, e.pending)); paintHud();
+      liveTurn.pending = e.pending ?? []; liveTurn.pendingAt = Date.now(); // P-INTERJECT.3: the freshest pending-call snapshot, aged locally by the Check-in card
+      if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, e.pending); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
+    // P-HEALTH.1: the harness noticed this session go quiet and acted on it. Same treatment as `slow` - the
+    // phase line names the wait, and the transcript gets a quiet note so the self-heal is visible work.
+    else if (e.type === "health") { setPhase(e.action === "recover" ? "Recovering the session" : "Checking on the session"); paintHud(); noteHealth(e.action, e.reason); }
     // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
     // clear notice + a recommended fallback the user can switch to and retry.
     else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason, e.reason); scrollChat(); }
     else if (e.type === "done") {
-      if (e.text && e.text.length > buf.length) buf = e.text; /* reconcile a lossy stream with the server's full reply */
+      terminal = true;
+      buf = canonicalTurnAnswer(buf, e.text);
       // Don't clobber the no-response notice with an empty answer body.
       if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); }
-      (node as MsgNode)._md = buf; finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
+      (node as MsgNode)._md = buf; stopThinkingCues(); speechFeed(buf, true); /* P-VOICE.2: speak the tail the sentence gate withheld */ finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
+      // P-JEV.2 (ADR-0377): a finished turn with NO judgment while Jev is set up gets the quiet idle note.
+      // The extension awaits the desktop's ack per judgment, so by `done` every report of this turn has
+      // arrived: "none" here is a fact, not a race. Asked of the server so the gate is the live config
+      // (mode + key + lockdown), never a stale client copy.
+      // Lane children carry no trace yet (master-only extension), so a lane turn says nothing either way.
+      if (!judgments && !opts.laneId) void bridge.judgment().then((j) => { if (j?.configured && owns() && !judgments) hud.before(judgmentIdleNote()); });
     }
   };
-  // P-COLLAB.15: attribute a guest-driven turn (runGuestPromptLocally set nextTurnFrom) in the live broadcast;
-  // a host-typed turn leaves it null -> the host authors it. Consume-once so it can't leak into the next turn.
-  const turnFrom = nextTurnFrom; nextTurnFrom = null;
-  p2pTeeUserTurn(sendText, turnFrom ?? undefined); // P-COLLAB.17/.15: record + broadcast the user turn (direct-P2P)
-  // P-PREVIEW-PWA.3 (ADR-0240): a renderer-hosted direct-P2P share sends roster COUNTS so the backend can
-  // build the agent-awareness preamble (a relay share is computed backend-side; counts only, never names).
-  const p2pShare = p2pHostActive() ? accessCounts(p2pHostStatus()?.participants ?? []) : undefined;
-  try { await bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare); }
-  finally {
+  const settle = () => {
+    if (!owns() || settled) return;
+    settled = true;
+    $("#turnReconnect")?.remove();
     (node as MsgNode)._md = buf;
-    if (state.streaming) { if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ } finishHud(); state.streaming = false; setSendEnabled(); } else { finishHud(); }
-    void renderSessions(); void refreshBudget(false); void syncMode(); void refresh(); // P-PERF.3: one dashboard catch-up now the turn (and its stream) is done, since the poll no longer runs the heavy obs-DB read mid-stream
-    scheduleKnowledgeRefresh(); // #54 follow-up: new facts appear in the open KG without close/reopen
-    // P-ACP.4: the turn ended - fire off any pre-staged prompt now (the composer is idle again).
-    if (state.queued) { const q = state.queued; state.queued = null; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; ta2.value = q; setSendEnabled(); void send(); }
-  }
+    stopThinkingCues(); if (!terminal) speechFeed(buf, true);
+    if (!terminal) { if (!(noResponse && !buf.trim())) renderAnswerBody(streamEl, buf, marks); finishHud(); }
+    state.streaming = false; activeTurnView = null; setSendEnabled();
+    void renderSessions(); void refreshBudget(false); void syncMode(); void refresh();
+    scheduleKnowledgeRefresh(); maybeListen();
+    // P-TURN-RECOVERY-DRAIN: only done or deliberate Stop may release a held prompt.
+    const nq = nextHold(state.queuedItems);
+    if ((terminal || stopped) && nq.item) { state.queuedItems = nq.rest; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; if (!ta2.value.trim()) { ta2.value = nq.item.text; setSendEnabled(); void send(); } else { state.queuedItems = [nq.item, ...state.queuedItems]; renderQueued(); } }
+  };
+  const run = async (transport: typeof connect) => {
+    if (!owns() || settled || connecting) return;
+    connecting = true;
+    $("#turnReconnect")?.remove();
+    try { await transport(onEvent); }
+    catch (error) {
+      if (owns() && !stopped && !terminal) setPhase(`Connection interrupted: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      connecting = false;
+      if (owns()) {
+        if (terminal || stopped) settle();
+        else {
+          stopThinkingCues();
+          setPhase("Connection lost; turn status unknown"); paintHud();
+          showTurnReconnect("The turn may still be running. Reconnect to check without sending again, or Stop it.", () => void reconnect());
+        }
+      }
+    }
+  };
+  const reconnect = async () => {
+    if (!owns() || settled || connecting) return;
+    if (opts.laneId) { showTurnReconnect("Reopen this lane from the fleet to follow its current activity.", () => { demoteLane(); void promoteLane(opts.laneId!); }); return; }
+    try {
+      if (turnId) {
+        const status = await bridge.chatStatus();
+        if (!owns()) return;
+        if (!canAdoptTurn(status, turnId)) throw new Error("The original turn is no longer available; Stop to release this composer");
+      }
+      await run((sink) => bridge.attachChat(turnId, sink));
+    } catch (error) { if (owns()) showTurnReconnect(`Unable to reconnect: ${error instanceof Error ? error.message : String(error)}`, () => void reconnect()); }
+  };
+  // P-RECOVER.1 (ADR-0385): what the supervisor may do to THIS view.
+  const turnHooks: RecoveryHooks = {
+    alive: owns,
+    defers: true,
+    reattach: async () => {
+      if (!owns() || settled) return false;
+      if (connecting) return true; // the stream's own reattach loop is already following the turn
+      if (turnId && !canAdoptTurn(await bridge.chatStatus().catch(() => null), turnId)) return false;
+      if (!owns() || settled) return false;
+      void reconnect();
+      return true;
+    },
+    resync: resyncFromSession,
+    retry: () => void reconnect(),
+  };
+  activeTurnView = {
+    reconnect: () => void reconnect(),
+    detach: () => { clearInterval(timer); stopThinkingCues(); permCards.forEach((c) => c.el.remove()); voiceApproval = null; },
+    stop: async () => {
+      if (!owns()) return;
+      try {
+        const result = await (opts.laneId ? bridge.fleetCancel(opts.laneId) : bridge.cancelChat());
+        if (opts.laneId && !(result as { ok?: boolean } | null)?.ok) throw new Error("The lane did not confirm Stop");
+        stopped = true; if (owns()) settle();
+      } catch (error) { if (owns()) showTurnReconnect(`Stop was not confirmed: ${error instanceof Error ? error.message : String(error)}. Reconnect or try Stop again.`, () => void reconnect()); }
+    },
+  };
+  await run(connect);
 }
 
 function onBlock(e: Extract<ChatEvent, { type: "block" }>): void {
@@ -1647,6 +2376,7 @@ function autosize(ta: HTMLTextAreaElement): void {
   ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden";
 }
 function setSendEnabled(): void {
+  syncAgentExtras();
   const ta = $("#input") as HTMLTextAreaElement;
   const btn = $("#send") as HTMLButtonElement;
   // P-ACP.4: while a turn runs the button is a Stop control (always enabled) that interrupts; otherwise
@@ -1657,34 +2387,450 @@ function setSendEnabled(): void {
     btn.innerHTML = icon("square", 16);
     btn.setAttribute("data-tip", "Stop|Interrupt the reply + tool calls");
   } else {
-    btn.disabled = !ta.value.trim() && state.attachments.length === 0; // P-VISION.1: image-only messages can send
+    btn.disabled = recoveryChecking || agentTierApplying || (!ta.value.trim() && state.attachments.length === 0);
     btn.classList.remove("stop");
     btn.innerHTML = icon("send", 18);
-    btn.setAttribute("data-tip", "Send|Enter");
+    btn.setAttribute("data-tip", recoveryChecking ? "Checking connection|Sending is paused until session status is confirmed" : "Send|Enter");
   }
 }
-/** P-ACP.4: show/refresh the pre-staged ("queued") prompt chip above the composer. */
+/** P-INTERJECT.2 (was P-ACP.4): the staged-prompt STACK above the composer - one chip per item, in run
+ *  order. Each chip: a mode badge ("next turn" hold / "mid-turn" push record), the ellipsized text with
+ *  the full prompt in its title, Push now on hold items (interject the running turn instead of waiting),
+ *  and remove. Every label is its own nowrap span (invariant #11). */
 function renderQueued(): void {
-  let chip = $("#queuedChip");
-  if (!state.queued) { chip?.remove(); return; }
-  if (!chip) {
+  let stack = $("#queuedChip");
+  if (!state.queuedItems.length) { stack?.remove(); return; }
+  if (!stack) {
     const row = $("#input")!.closest(".composer-row") ?? $("#input")!.parentElement!;
-    chip = el(`<div id="queuedChip" class="queued-chip"></div>`);
-    row.before(chip); // sits above the composer row, inside .composer-wrap
+    stack = el(`<div id="queuedChip" class="queued-chip queued-stack"></div>`);
+    row.before(stack); // sits above the composer row, inside .composer-wrap
   }
-  // P-IDE.1d: compact, subdued, right-aligned pill - a small "Queued" tag, the prompt preview, and a
-  // delete (✕) that removes the pre-staged prompt before it sends.
-  chip.innerHTML = `<div class="q-pill" data-tip="Sends automatically when the current turn ends"><span class="q-label">Queued</span><span class="q-text"></span><button class="q-cancel" data-tip="Delete queued prompt">${icon("close", 12)}</button></div>`;
-  ($(".q-text", chip) as HTMLElement).textContent = state.queued.slice(0, 90);
-  ($(".q-cancel", chip) as HTMLElement).addEventListener("click", () => { state.queued = null; renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus(); });
+  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? "Sends automatically when the current turn ends" : "Already pushed into the running turn - kept as a record"}">
+      <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
+      <span class="q-text" data-q-i="${i}"></span>
+      ${q.mode === "hold" ? `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>` : ""}
+      <button class="q-cancel" data-q-x="${i}" data-tip="Remove staged prompt">${icon("close", 12)}</button>
+    </div>`).join("");
+  // Prompt text is user content: set it as a DOM property, never interpolated into the HTML string.
+  state.queuedItems.forEach((q, i) => { const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; } });
+  $$("[data-q-x]", stack).forEach((b) => b.addEventListener("click", () => {
+    const i = Number((b as HTMLElement).dataset.qX);
+    state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
+    renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus();
+  }));
+  $$("[data-q-push]", stack).forEach((b) => b.addEventListener("click", () => {
+    const i = Number((b as HTMLElement).dataset.qPush);
+    const item = state.queuedItems[i]; if (!item) return;
+    state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
+    renderQueued();
+    void pushMidTurn(item.text);
+  }));
 }
 /** P-ACP.4: Stop - interrupt the running turn. omp's session/cancel ends the turn, so the streaming
  *  `done`/finally path flips `streaming` off and fires any pre-staged prompt. */
 async function stopTurn(): Promise<void> {
   if (!state.streaming) return;
+  if (activeTurnView) { await activeTurnView.stop(); return; }
   // P-GOAL.2: a running /goal loop is cancelled at the LOOP level (halt iterations + abort the turn);
   // an ordinary turn just cancels the turn.
   try { await (goalLoopRunning ? bridge.cancelGoal() : bridge.cancelChat()); } catch { /* best-effort; it still settles */ }
+}
+
+// ───────────────────────── turn controls - P-INTERJECT.2/.3/.4 (wave 2) ─────────────────────────
+// The composer's hold-or-push chooser, the mid-turn Check-in card, and the status-bar Processes
+// popover. All three ride the wave-1 plumbing: POST /api/interject (notes the running agent reads at
+// its next tool boundary) and GET /api/processes (the unified running list).
+
+const STATUS_ASK = "Please give a brief status update: what is finished, what you are doing now, what remains. Then continue.";
+
+/** P-INTERJECT.3: renderer mirror of the live turn for the Check-in card - the phase line the HUD
+ *  shows, plus the last pending-call snapshot a { type:"slow" } event carried (aged via pendingAt). */
+const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0 };
+
+/** P-INTERJECT.2: interject a note into the RUNNING master turn + leave a transcript record chip. */
+async function pushMidTurn(text: string): Promise<void> {
+  const r = await bridge.interject("master", text);
+  if (r) addNoteChip(`Pushed mid-turn: ${text}`);
+  else showToast({ tone: "warn", title: "Push not delivered", desc: "The note was refused - the per-turn note cap may be full, or the backend is unreachable.", timeout: 6000 });
+}
+
+/** A quiet transcript note (the .evt chip family): one nowrap-ellipsis text span, full text in title. */
+function addNoteChip(text: string): void {
+  const chip = addEvent(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
+  const t = $(".note-chip-txt", chip) as HTMLElement | null;
+  if (t) { t.textContent = text; t.title = text; }
+}
+
+// ───────────────────────── P-FLEET.L8: promote a lane into the composer ─────────────────────────
+// Promotion does NOT move the ACP session. The lane's omp child, its folder and its model keep running
+// exactly as they were; the only thing that moves is the renderer's prompt/stream target. That is why this
+// is legal MID-TURN, why detaching is instant, and why composer_target.ts (not this file) owns the badge
+// wording, the capability mask, the transcript seed and the provenance strings: what the user reads and
+// what the lane-session ledger records are the SAME string, so the two cannot drift.
+
+/** The FOLLOW stream of the attached lane. A watch owns no turn, so it outlives individual turns and is
+ *  the one thing demotion has to tear down. */
+let laneWatch: { done: Promise<void>; stop: () => void } | null = null;
+/** The master transcript, parked as DATA while a lane is attached. Snapshotting the rendered markdown
+ *  rather than the DOM is what lets renderThread rebuild it with its copy / save-as-.md payloads intact. */
+let parkedMasterThread: { role: string; text: string }[] | null = null;
+/** The assistant node the WATCH is filling in, when the lane is streaming a turn this composer did not ask
+ *  for. Null whenever we own the turn - `send()` renders that one. */
+let laneWatchNode: { node: HTMLElement; stream: HTMLElement; buf: string } | null = null;
+
+function snapshotThread(): { role: string; text: string }[] {
+  return $$("#thread .msg").map((n) => ({
+    role: n.classList.contains("user") ? "user" : "assistant",
+    text: (n as MsgNode)._md ?? "",
+  }));
+}
+
+/** P-FLEET.L8: attach the composer to a running lane. */
+async function promoteLane(laneId: string): Promise<void> {
+  // Identity is the laneId alone (a lane may be renamed, cd, or swap models without becoming a different
+  // attachment), so sameTarget answers this with the id and nothing else. Re-promoting the lane we are
+  // already on would re-seed the thread out from under whatever the user is reading.
+  const already: ComposerTarget = { kind: "lane", laneId, name: "", cwd: "", model: "" };
+  if (isLaneTarget(state.composerTarget) && sameTarget(state.composerTarget, already)) return;
+  if (isLaneTarget(state.composerTarget)) demoteLane(); // one composer, one lane: leave the old one first
+  const owner = leaveTurnView();
+  setRecoveryChecking(true); setSendEnabled();
+  const r = await bridge.fleetPromote(laneId).catch(() => null);
+  if (owner !== turnViewEpoch) return;
+  if (!r?.ok || !r.lane) {
+    // The engine refuses through composer_target.promoteRefusal, so its wording is shown verbatim. An
+    // ABSENT reason is the module's own "did not report a status" case, not a sentence invented here;
+    // promoteRefusal returns null only for a status that ALLOWS promotion, which "" is not.
+    showToast({ tone: "warn", title: "Can't attach to this lane", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
+    void recoverMasterTurn();
+    return;
+  }
+  const lane: LaneView = r.lane;
+  setRecoveryChecking(false);
+  const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
+  parkedMasterThread = snapshotThread();
+  state.composerTarget = target;
+  // P-FLEET.L17: the ring, the rail and the spoke banner now speak for the LANE - the master's last
+  // sample would be a lie. P-FLEET.L19: seed from the lane's OWN last measured sample (the engine keeps
+  // it), so an idle spoke shows its real fill at once; unknown only when it has never reported.
+  state.liveUsage = lane.usage ? { ...lane.usage } : null;
+  // Seed from the lane's own history, so the user lands in the conversation rather than an empty pane.
+  const turns = seedTurns(r.transcript ?? []);
+  renderThread(turns);
+  addNoteChip(promoteNotice(target, turns.length));
+  // TELL THE AGENT. Without this the model has no idea which surface is driving it: the session is the
+  // same session either way, so the content is all present, but "restate what was written in the main
+  // composer" is unanswerable when nothing ever said a main composer exists. Observed in use: the agent
+  // guessed. This rides the operator-interject path, so it is operator-origin and outside untrusted
+  // delimiters, and it is fire-and-forget because a failed note must never block the attach.
+  void bridge.interject(laneId, promoteAgentNote(target)).catch(() => { /* the attach still stands */ });
+  renderComposerTarget();
+  renderStatus(); renderMetricsRail(); // P-FLEET.L19: the ring switches to the spoke now, not at the next poll
+  // The FOLLOW: it owns no turn, which is precisely what lets it join one already in flight.
+  laneWatch = bridge.fleetWatch(laneId, onLaneWatchEvent);
+  laneWatch.done.catch(() => { /* the stream ending (or being aborted on demote) is not an error here */ });
+}
+
+/** P-FLEET.L8: release the composer back to the master session. Nothing has to be handed back, so this is
+ *  local and immediate; the engine call is the ledger record, not a precondition. */
+function demoteLane(): void {
+  const was = state.composerTarget;
+  if (!isLaneTarget(was)) return;
+  leaveTurnView();
+  laneWatch?.stop();
+  laneWatch = null;
+  // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
+  // no further event will ever settle.
+  settleLaneWatchNode();
+  // TELL THE AGENT it is back on its fleet card, BEFORE the release call, so the note lands while the
+  // lane target is still known. This is the other half of the confusion fix: on release the model was
+  // left believing nothing had changed, so it could not answer questions about "the main composer" and
+  // did not know its own next turn would arrive from the card instead.
+  void bridge.interject(was.laneId, demoteAgentNote(was)).catch(() => { /* the release still stands */ });
+  void bridge.fleetDemote().then((r) => {
+    if (r?.ok) return;
+    // The composer has already detached; the fleet card may still paint as attached until it reconciles.
+    showToast({ tone: "warn", title: "The lane still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
+  }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
+  state.composerTarget = MASTER_TARGET;
+  state.liveUsage = null; // P-FLEET.L17: the lane's samples leave with it; the master's next turn refills.
+  // Restore BEFORE the notice: renderThread clears the thread, so a notice appended first would be wiped.
+  renderThread(parkedMasterThread);
+  parkedMasterThread = null;
+  addNoteChip(demoteNotice(was));
+  renderComposerTarget();
+  renderStatus(); renderMetricsRail(); // P-FLEET.L19: back to the master's own figures immediately
+  void recoverMasterTurn();
+}
+
+/** P-FLEET.L8: events from the FOLLOW stream. While `send()` owns a turn on this lane the same events also
+ *  arrive on the prompt stream, so the watch renders only what this composer did NOT ask for - which is
+ *  exactly the mid-turn case the follow exists for. */
+function onLaneWatchEvent(e: LaneEvent): void {
+  if (e.type === "watch-seed") {
+    // A promote that landed mid-turn already rendered the transcript the promote call returned; re-seeding
+    // would duplicate it. Only a still-EMPTY thread is seeded from the watch.
+    if ($("#thread .msg")) return;
+    renderThread(seedTurns(e.turns));
+    return;
+  }
+  // P-FLEET.L19: an ask surfaces in the spoke ask dock whoever started the turn (this composer, the
+  // lane's grid card, or its queue). The dock dedupes, so the prompt stream reporting it too is harmless.
+  if (e.type === "permission") {
+    if (isLaneTarget(state.composerTarget)) noteSpokeAsk(state.composerTarget.laneId, { summary: e.summary, kind: e.kind });
+    return;
+  }
+  if (state.streaming) return; // our own turn is rendering these already
+  if (e.type === "token" || e.type === "thinking") {
+    const live = laneWatchNode ?? openLaneWatchNode();
+    live.buf += e.text;
+    live.stream.innerHTML = renderMarkdown(live.buf) + `<span class="cursor"></span>`;
+    (live.node as MsgNode)._md = live.buf;
+    scrollChat();
+    return;
+  }
+  if (e.type === "tool") {
+    addNoteChip(e.detail ? `${e.name}: ${e.detail}` : e.name);
+    // P-FLEET.L17: mid-turn watches carry the lane's writes too - same preview routing as the prompt
+    // stream, so WHEN you attached never decides whether the preview pane fills.
+    if (e.code?.path && isAutoPreviewPath(e.code.path) && isLaneTarget(state.composerTarget)) {
+      previewShowLaneFile(state.composerTarget.laneId, state.composerTarget.name, e.code.path);
+    }
+    return;
+  }
+  if (e.type === "usage") {
+    // The attached lane's OWN measured fill: the status ring speaks for the lane the composer is driving,
+    // never for the master session it is not.
+    state.liveUsage = { used: e.used, size: e.size, cost: e.cost };
+    renderStatus(); renderMetricsRail();
+    return;
+  }
+  if (e.type === "health") { noteHealth(e.action, e.reason); return; }
+  if (e.type === "error") {
+    // The turn died, so the half-written bubble has to stop looking live.
+    settleLaneWatchNode();
+    addNoteChip(`The lane reported an error: ${e.message}`);
+    return;
+  }
+  if (e.type === "done") {
+    settleLaneWatchNode();
+  }
+}
+
+/** Freeze the watched bubble: drop the cursor and section the answer, exactly as a settled master turn. */
+function settleLaneWatchNode(): void {
+  const live = laneWatchNode;
+  laneWatchNode = null;
+  if (live) renderAnswerBody(live.stream, live.buf); // P-CHAT.A sections
+}
+
+function openLaneWatchNode(): { node: HTMLElement; stream: HTMLElement; buf: string } {
+  const node = addMessage("assistant", "");
+  const textEl = $(".text", node) as HTMLElement;
+  textEl.innerHTML = "";
+  const stream = el(`<div class="stream"></div>`);
+  textEl.appendChild(stream);
+  laneWatchNode = { node, stream, buf: "" };
+  return laneWatchNode;
+}
+
+/** P-FLEET.L8: the attachment badge above the composer row. Invariant #11: the label is ONE text child in
+ *  its flex row, so the chip never shatters into slivers; the full folder + model live in the hover title.
+ *  A null badge IS the master target - the main composer shows no badge at all. */
+function renderComposerTarget(): void {
+  // P-FLEET.L17: the takeover banner at the TOP of the screen tracks the same target as the chip - it
+  // paints on every attach/detach, before any early return below, so the two can never disagree.
+  renderSpokeBanner(state.composerTarget);
+  const wrap = $(".composer-wrap") as HTMLElement | null;
+  if (!wrap) return;
+  const badge = targetBadge(state.composerTarget);
+  wrap.classList.toggle("on-lane", badge !== null);
+  let bar = $(".composer-target", wrap) as HTMLElement | null;
+  if (!badge) { bar?.remove(); applyTargetCaps(); return; }
+  if (!bar) {
+    bar = el(`<div class="composer-target"><span class="composer-target-label"></span><button class="composer-target-back" type="button"></button></div>`);
+    ($(".composer-row", wrap) ?? wrap.firstElementChild)?.before(bar);
+    ($(".composer-target-back", bar) as HTMLElement).addEventListener("click", () => demoteLane());
+  }
+  bar.title = badge.title;
+  ($(".composer-target-label", bar) as HTMLElement).textContent = badge.label;
+  ($(".composer-target-back", bar) as HTMLElement).textContent = badge.back;
+  applyTargetCaps();
+}
+
+/** P-FLEET.L8: hide what a lane target genuinely CANNOT drive, rather than shipping controls that would
+ *  silently do nothing. targetCaps also carries the one-paragraph why, which is what the refusals quote. */
+function applyTargetCaps(): void {
+  const caps = targetCaps(state.composerTarget);
+  const modes = $("#modeToggle") as HTMLElement | null;
+  if (modes && !caps.modes) modes.hidden = true;
+  else if (modes) renderSessionMode(); // back on master: the toggle's own lockdown rule decides again
+  if (!caps.slashCommands) closeSlashAC();
+}
+
+/** P-INTERJECT.2: the hold-or-push chooser. Sending while a turn streams stages the text here and asks
+ *  which way it should go; X puts it back in the composer. If the turn ended while the chooser sat open,
+ *  both buttons degrade to a plain send - staging for a turn that is over would strand the prompt. */
+function openQueueChooser(text: string): void {
+  closeQueueChooser();
+  const row = $("#input")!.closest(".composer-row") ?? $("#input")!.parentElement!;
+  const ch = el(`<div id="queueChooser" class="queue-chooser">
+      <span class="qc-text"></span>
+      <button class="btn-mini" data-qc-hold data-tip="Runs automatically when the current turn ends">Queue for next turn</button>
+      <button class="btn-mini" data-qc-push data-tip="Interject now - the agent reads it at its next tool boundary">Push mid-turn</button>
+      <button class="q-cancel" data-qc-x aria-label="Cancel" data-tip="Put the text back in the composer">${icon("close", 12)}</button>
+    </div>`);
+  const t = $(".qc-text", ch) as HTMLElement; t.textContent = text; t.title = text;
+  row.before(ch);
+  const resend = () => { const ta = $("#input") as HTMLTextAreaElement; ta.value = text; autosize(ta); setSendEnabled(); void send(); };
+  ($("[data-qc-hold]", ch) as HTMLElement).addEventListener("click", () => {
+    closeQueueChooser();
+    if (!state.streaming) { resend(); return; }
+    const r = addQueued(state.queuedItems, text, "hold");
+    if (r.ok) { state.queuedItems = r.items; renderQueued(); }
+    else showToast({ tone: "warn", title: "Not staged", desc: `${r.reason ?? "refused"}.`, timeout: 5000 });
+  });
+  ($("[data-qc-push]", ch) as HTMLElement).addEventListener("click", () => {
+    closeQueueChooser();
+    if (!state.streaming) { resend(); return; }
+    void pushMidTurn(text);
+  });
+  ($("[data-qc-x]", ch) as HTMLElement).addEventListener("click", () => {
+    closeQueueChooser();
+    const ta = $("#input") as HTMLTextAreaElement; ta.value = text; autosize(ta); setSendEnabled(); ta.focus();
+  });
+}
+function closeQueueChooser(): void { $("#queueChooser")?.remove(); }
+
+// ───── the Check-in card - P-INTERJECT.3 ─────
+let checkinEl: HTMLElement | null = null;
+let checkinTimer: number | null = null;
+function closeCheckin(): void {
+  checkinEl?.remove(); checkinEl = null;
+  if (checkinTimer != null) { window.clearInterval(checkinTimer); checkinTimer = null; }
+  document.removeEventListener("pointerdown", checkinAway, true);
+}
+function checkinAway(e: Event): void { if (checkinEl && !checkinEl.contains(e.target as Node)) closeCheckin(); }
+/** A compact "how is it going" snapshot, inline in the transcript: elapsed, the HUD's phase line, the
+ *  pending calls the last slow notice named (per-call elapsed, aged locally), the staged-prompt count,
+ *  and a one-click canned status ask. Every line is its own block element - never a shattered flex row. */
+function openCheckinCard(): void {
+  closeCheckin();
+  const started = state.streamStartedAt ?? Date.now();
+  const card = addEvent(`<div class="checkin-card">
+      <div class="ck-head"><span class="ck-title">Check-in</span><button class="q-cancel" data-ck-x aria-label="Close">${icon("close", 12)}</button></div>
+      <div class="ck-line" data-ck-elapsed></div>
+      <div class="ck-line" data-ck-phase></div>
+      <div class="ck-pending" data-ck-pending></div>
+      <div class="ck-line" data-ck-queue></div>
+      <div class="ck-acts"><button class="btn-mini" data-ck-ask>${icon("send", 11)} Ask agent for a status update</button></div>
+    </div>`);
+  checkinEl = card;
+  const paint = () => {
+    if (!checkinEl) return;
+    const elapsed = $("[data-ck-elapsed]", card) as HTMLElement | null;
+    if (elapsed) elapsed.textContent = state.streaming ? `Elapsed: ${fmtClock(Date.now() - started)}` : "The turn has ended.";
+    const ph = $("[data-ck-phase]", card) as HTMLElement | null;
+    if (ph) { ph.textContent = liveTurn.phase ? `Now: ${liveTurn.phase}` : "Now: warming up"; ph.title = liveTurn.phase; }
+    const pend = $("[data-ck-pending]", card) as HTMLElement | null;
+    if (pend) {
+      if (!liveTurn.pending.length) pend.innerHTML = `<div class="ck-sub">No slow tool calls reported yet.</div>`;
+      else {
+        const age = liveTurn.pendingAt ? Date.now() - liveTurn.pendingAt : 0;
+        pend.innerHTML = `<div class="ck-sub">Waiting on:</div>` + liveTurn.pending.map((_, i) => `<div class="ck-call" data-ck-call="${i}"></div>`).join("");
+        liveTurn.pending.forEach((p, i) => {
+          const row = $(`[data-ck-call="${i}"]`, pend) as HTMLElement | null;
+          if (row) { const line = `${p.label} · ${fmtClock(p.elapsedMs + age)}`; row.textContent = line; row.title = line; }
+        });
+      }
+    }
+    const q = $("[data-ck-queue]", card) as HTMLElement | null;
+    if (q) q.textContent = `Staged prompts: ${state.queuedItems.length}`;
+  };
+  paint();
+  checkinTimer = window.setInterval(paint, 1000);
+  ($("[data-ck-x]", card) as HTMLElement).addEventListener("click", closeCheckin);
+  ($("[data-ck-ask]", card) as HTMLElement).addEventListener("click", () => {
+    closeCheckin();
+    void bridge.interject("master", STATUS_ASK).then((r) => {
+      if (r) addNoteChip("Check-in sent - the agent will answer at its next tool boundary.");
+      else showToast({ tone: "warn", title: "Check-in not delivered", desc: "The note was refused - the turn may have ended or the note cap is full.", timeout: 6000 });
+    });
+  });
+  // Click-away dismiss - armed a tick later so the opening click cannot instantly close it.
+  window.setTimeout(() => { if (checkinEl) document.addEventListener("pointerdown", checkinAway, true); }, 0);
+}
+
+// ───── the Processes popover - P-INTERJECT.4 ─────
+let procBtnEl: HTMLElement | null = null;
+let procPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
+let procTimer: number | null = null;
+const PROC_ICON: Record<string, string> = { "master-turn": "bolt", lane: "send", import: "download", browser: "eye" };
+
+/** Compact "how long has this run" readout: 42s, 7m 05s, 1h 12m. */
+function fmtProcElapsed(startedAt: number | null): string {
+  if (!startedAt) return "";
+  const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+/** The status-bar Processes button. Created ONCE and re-adopted after every renderStatus innerHTML
+ *  swap (the fleet-pill convention) so the 2.5s repaint never drops it. */
+function mountProcButton(): void {
+  if (!procBtnEl) {
+    procBtnEl = el(`<div class="seg seg-btn proc-seg" data-tip="Processes|Everything running right now: the master turn, fleet lanes, imports, and agent browser windows."><b>Processes</b></div>`);
+    procBtnEl.addEventListener("click", () => { if (procPop) procPop.close(); else void openProcPopover(); });
+  }
+  const sb = document.getElementById("statusbar");
+  if (sb && !sb.contains(procBtnEl)) sb.append(procBtnEl);
+}
+
+async function openProcPopover(): Promise<void> {
+  if (!procBtnEl) return;
+  procPop = popover(procBtnEl, `<div class="proc-pop"><div class="proc-pop-head">Running processes</div><div class="proc-pop-list"><div class="proc-empty">Loading…</div></div></div>`, () => {
+    procPop = null;
+    if (procTimer != null) { window.clearInterval(procTimer); procTimer = null; }
+  });
+  // Row actions, delegated once per open: lane Stop, master-turn Stop, browser Close (the browser
+  // seam lands with the BrowserFeature wave - optional chaining keeps this popover working without it).
+  procPop.node.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const stop = t.closest("[data-proc-stop]") as HTMLElement | null;
+    if (stop) { const id = stop.dataset.procStop ?? ""; void bridge.fleetStop(id.startsWith("lane:") ? id.slice(5) : id); window.setTimeout(() => void refreshProcPopover(), 400); return; }
+    if (t.closest("[data-proc-stopturn]")) { void stopTurn(); window.setTimeout(() => void refreshProcPopover(), 400); return; }
+    if (t.closest("[data-proc-close]")) { void (bridge as { browserClose?: () => Promise<unknown> }).browserClose?.(); window.setTimeout(() => void refreshProcPopover(), 400); return; }
+  });
+  await refreshProcPopover();
+  procTimer = window.setInterval(() => void refreshProcPopover(), 2500);
+}
+
+async function refreshProcPopover(): Promise<void> {
+  if (!procPop) return;
+  const rows = await bridge.processes();
+  if (!procPop) return; // closed while the fetch was in flight
+  const list = $(".proc-pop-list", procPop.node) as HTMLElement | null; if (!list) return;
+  if (!rows?.length) {
+    list.innerHTML = `<div class="proc-empty">${rows ? "Nothing is running right now." : "Process list unavailable - the backend did not answer."}</div>`;
+    procPop.reposition();
+    return;
+  }
+  list.innerHTML = rows.map((r, i) => {
+    const act = r.kind === "lane" ? `<button class="btn-mini danger" data-proc-stop="${esc(r.id)}">Stop</button>`
+      : r.kind === "master-turn" ? `<button class="btn-mini danger" data-proc-stopturn>Stop</button>`
+      : r.kind === "browser" ? `<button class="btn-mini danger" data-proc-close>Close</button>` : "";
+    return `<div class="proc-row"><span class="proc-ic">${icon(PROC_ICON[r.kind] ?? "bolt", 13)}</span><span class="proc-label" data-proc-label="${i}"></span><span class="proc-status" data-proc-status="${i}"></span><span class="proc-elapsed">${esc(fmtProcElapsed(r.startedAt))}</span>${act}</div>`;
+  }).join("");
+  // Labels/status are server-fed strings (lane names come from user folders): DOM properties, not HTML.
+  rows.forEach((r, i) => {
+    const lab = $(`[data-proc-label="${i}"]`, list) as HTMLElement | null;
+    if (lab) { lab.textContent = r.label; lab.title = r.detail ? `${r.label} · ${r.detail}` : r.label; }
+    const st = $(`[data-proc-status="${i}"]`, list) as HTMLElement | null;
+    if (st) st.textContent = r.status;
+  });
+  procPop.reposition();
 }
 
 // ───────────────────────── inspector ─────────────────────────
@@ -1716,7 +2862,32 @@ function inspSkeleton(): string {
   return `<div class="skel-chips">${Array.from({ length: 4 }, () => `<div class="skel skel-chip"></div>`).join("")}</div>`
     + `<div class="skel-group">${Array.from({ length: 5 }, () => `<div class="skel skel-row"></div>`).join("")}</div>`;
 }
+// ── CREATOR-0 (ADR-0283): the Resources tab - two odometer chips, one expandable detail flyout ──
+// The chips are always visible; clicking one expands the DETAILED panel (per-core bars, per-GPU load and
+// VRAM, thermals, power, processes, and the pressure trend) in place, the same in-rail disclosure the
+// context-window and prompt-cache cards use. Null readings render as "no signal", never as 0%.
+function creatorResourcesHtml(): string {
+  const rail = pressureRailHtml(state.creatorRes);
+  const detail = state.creatorDetail ? creatorFlyoutHtml(state.creatorRes) : "";
+  return `<div class="cod-wrap" data-cod-open="${state.creatorDetail}">${rail}${detail}</div>`;
+}
+async function refreshCreatorResources(fresh = false): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const v = await bridge.creatorResources(fresh).catch(() => null);
+  state.creatorRes = v;
+  if (state.inspectorTab === "resources" && !state.inspectorRail) { lastInspHash = ""; renderInspector(); }
+}
 function renderInspector(): void {
+  // CREATOR-0: the Resources tab paints from the telemetry poll (its own hash, so an unchanged reading
+  // does not thrash the DOM while the odometer animates).
+  if (state.inspectorTab === "resources") {
+    const html = creatorResourcesHtml();
+    const hash = "res" + html.length + state.creatorDetail + html.slice(0, 96);
+    if (hash === lastInspHash) return;
+    lastInspHash = hash;
+    const body = $("#inspBody")!; const top = body.scrollTop; body.innerHTML = html; body.scrollTop = top;
+    return;
+  }
   if (state.inspectorTab === "dev") {
     const html = devHtml(state.dev);
     const hash = "dev" + html.length + html.slice(0, 80);
@@ -1760,7 +2931,7 @@ function renderMetricsRail(): void {
   const tiles = $("#railTiles");
   if (!tiles) return;
   const s = state.memory?.session, lu = state.liveUsage, sec = state.security;
-  const cur = lu ? lu.used : (s?.current ?? 0);
+  const cur = lu ? lu.used : isLaneTarget(state.composerTarget) ? 0 : (s?.current ?? 0); // P-FLEET.L19: never the master's fill on a spoke
   const turns = s?.turns ?? 0;
   const hit = s?.cache.hit ?? 0;
   const avg = turns ? Math.round(cur / turns) : 0;
@@ -1783,12 +2954,12 @@ function renderMetricsRail(): void {
     ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
     { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
     { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
-    // P-TRIV.1 (ADR-0174): lifetime Trivia Wire score - the LAST tile, so it sits just above the
-    // gate-active corner. Only appears once the user has actually played (no dead zero tile).
+    // Shared lifetime points remain visible even when the Trivia Wire ticker is disabled.
+    // Only appears once the user has actually played (no dead zero tile).
     ...((): T[] => {
-      const tv = triviaEnabled() && triviaGame ? triviaGame.state() : null;
-      return tv && tv.answered > 0
-        ? [{ n: fmtNum(tv.score), label: "trivia", cls: "c", tip: `Trivia Wire lifetime score: ${fmtNum(tv.correct)}/${fmtNum(tv.answered)} correct. Streaks multiply points up to x3. The ticker appears in the status bar while the agent works.` }]
+      const tv = ensureTriviaGame().state();
+      return tv.score > 0 || tv.answered > 0
+        ? [{ n: fmtNum(tv.score), label: "LUCID points", cls: "c", tip: `LUCID points from arcade games and Trivia Wire. Trivia accuracy: ${fmtNum(tv.correct)}/${fmtNum(tv.answered)} correct. Trivia streaks multiply trivia points up to x3.` }]
         : [];
     })(),
   ];
@@ -1823,33 +2994,82 @@ function setInspectorRail(rail: boolean): void {
 // OAuth here signs in a SUBSCRIPTION/CLI tier; the full commercial catalog comes from an API key.
 // Spell that out where it bites (OpenAI/Gemini), and steer Perplexity to its working key path.
 const PROV_HINTS: Record<string, string> = {
-  elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. Get a key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">elevenlabs.io → API keys ↗</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
+  typesafe: `Jev, TypeSafe AI's hosted System One judgment model (no released weights; API only). Get your key at <a href="https://console.typesafe.ai/" target="_blank" rel="noopener">console.typesafe.ai \u2197</a>. A judgment sends conversation text and tool output to api.typesafe.ai, so under AskSage lockdown LUCID pins judgments to your gov-routed models instead.`,
+  elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. New to ElevenLabs? <a href="https://try.elevenlabs.io/nru4d3mgw8b5" target="_blank" rel="noopener">Create an account \u2197</a>, then get your key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">API keys \u2197</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
   openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
   google: "OAuth uses the Gemini CLI / Code Assist tier. <b>Workspace / Enterprise Google accounts</b> also need a <b>GCP project ID</b> below (personal accounts leave it blank) - without it the sign-in aborts. For the full commercial Gemini catalog, add a GEMINI_API_KEY. For the enterprise-governed backend (Gemini for Google Cloud), use the <b>Gemini Enterprise</b> card below.",
   anthropic: "OAuth signs in your Claude subscription. For pay-as-you-go API access, add an ANTHROPIC_API_KEY below.",
   xai: "OAuth signs in via your X / xAI account. Which Grok models are available depends on your plan (Premium+, SuperGrok, or API). If models appear but return empty replies, check your subscription at <b>console.x.ai</b>.",
   "github-copilot": "OAuth signs in your <b>GitHub Copilot</b> subscription (Individual, or the Business / Enterprise add-on many orgs enable on their plan) and enables its model catalog - GPT, Claude and Gemini families via Copilot. Device-code flow: click Connect, then paste the code shown in the browser. On a self-hosted <b>GitHub Enterprise</b>, enter your GHE domain when prompted (blank = github.com).",
   azure: "<b>Azure OpenAI</b> (your Microsoft tenant's own deployments). Paste the <b>AZURE_OPENAI_API_KEY</b>, then set <b>Resource name</b> (or a full base URL). API version defaults to <b>v1</b>; use the deployment map only if your Azure deployment names differ from the model ids.",
-  "google-vertex": "<b>Gemini Enterprise</b> — Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below — omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
+  "google-vertex": "<b>Gemini Enterprise</b> - Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below - omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
   perplexity: "Paste a Perplexity API key for Sonar models. (Pro/Max OAuth is interactive email-OTP - it can't run through this app, so use a key here.)",
 };
-function provCard(p: ProviderAuth): string {
+
+function providerQuotaNotice(): string {
+  return `<div class="set-note">${icon("info", 12)} <b>Subscriptions are not unlimited agent time.</b>
+    Entry subscriptions around <b>$20-30/month</b> have limited allowances for agentic use. Long-running or parallel jobs can exhaust them quickly; model, context and tool use affect consumption. Prices and limits vary by plan and region.
+    <div>The provider controls subscription allowance. <b>LUCID cannot raise or reset it.</b> Check the provider's usage page before a large job, and wait for a reset or review its upgrade/credit options if needed.</div>
+    <div><b>API keys use separate metered billing and rate limits</b>, not an unlimited extension of your subscription. A failed turn is not automatically a quota issue: check the actual error for authentication, connectivity, LUCID/tool failures or provider limits.</div>
+    <div><a href="https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan" target="_blank" rel="noopener noreferrer">OpenAI plan guidance</a> · <a href="https://chatgpt.com/pricing" target="_blank" rel="noopener noreferrer">ChatGPT plans</a> · <a href="https://chatgpt.com/codex/settings/usage" target="_blank" rel="noopener noreferrer">Codex usage</a></div>
+    <div><a href="https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan" target="_blank" rel="noopener noreferrer">Claude plan guidance</a> · <a href="https://claude.ai/upgrade" target="_blank" rel="noopener noreferrer">Claude plans</a> · <a href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer">Claude usage</a></div>
+  </div>`;
+}
+
+function cachedBudgetRow(b: NonNullable<MemorySnapshot["budgets"]>[number]): string {
+  const window = budgetWindowState(b);
+  const used = Number.isFinite(b.used) && b.used >= 0 && b.used <= 1 ? `${Math.round(b.used * 100)}%` : "unknown";
+  const remaining = window.remainingPercent == null ? "unknown" : `about ${window.remainingPercent}%`;
+  const reset = window.resetsAt == null ? "unknown" : `${esc(new Date(window.resetsAt).toLocaleString())}${window.expired ? " (passed; replenishment not confirmed)" : ` (${ageStr(window.resetsAt)})`}`;
+  return `<div class="set-note"><b>${esc(b.label)}</b>
+    <div>Cached used: <b>${used}</b> · Estimated remaining: <b>${remaining}</b></div>
+    <div>Status: ${esc(b.status || "unknown")}</div><div>Reported reset: ${reset}</div></div>`;
+}
+
+function providerQuotaBody(p: ProviderAuth): string {
+  const rows = providerBudgetRows(state.memory?.budgets ?? [], p.id);
+  return `<div class="set-note">${icon("info", 12)} <b>Subscription plan: unknown</b> (not reported to LUCID).
+    <div>${p.oauthActive ? "OAuth is connected, but this does not identify your plan or guarantee remaining allowance." : "OAuth is not connected. Any cached report below may belong to an earlier connection."}</div>
+    ${p.keySet ? "<div>An API key is also configured. These subscription reports do not measure API spending or establish which credential a request used.</div>" : ""}
+    <div>Cached reports only: the source supplies no sample timestamp or account identity. Freshness and the current account cannot be verified. Refreshing LUCID can return the same cached values; the provider's usage page is authoritative.</div>
+    </div>${rows.length ? rows.map(cachedBudgetRow).join("") : `<div class="set-note">Subscription used, remaining, status and reset: <b>unknown</b>. No matching usage report is available; this does not mean zero usage or unlimited quota.</div>`}`;
+}
+
+// P-ACCT.1: the status badge cluster (OAuth active / key ••last4 / configured / not set), shared by the
+// classic card header and the accordion summary so both always tell the same story. A provider can also be
+// configured purely through its extra fields (e.g. Vertex via ADC project+location, no primary API key) -
+// reflect that so such cards don't misreport as "not set".
+function provStatusBadges(p: ProviderAuth): string {
   const last4 = esc(p.keyLast4 ?? "");
-  // A provider can also be configured purely through its extra fields (e.g. Vertex via ADC project+location,
-  // no primary API key) — reflect that so such cards don't misreport as "not set".
   const fieldsSet = (p.fields ?? []).some((f) => f.set);
-  const status =
-    (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
+  return (p.oauthActive ? `<span class="abadge ok">${icon("check", 11)} OAuth active</span>` : "") +
     (p.keySet ? `<span class="abadge set">key ••${last4}</span>` : "") +
     (!p.keySet && fieldsSet ? `<span class="abadge set">configured</span>` : "") +
     (!p.oauthActive && !p.keySet && !fieldsSet ? `<span class="abadge none">not set</span>` : "");
+}
+
+function provCard(p: ProviderAuth): string {
+  const last4 = esc(p.keyLast4 ?? "");
+  const status = provStatusBadges(p);
   // The hint text goes in ONE <span> so rich markup (<b>/<a>) stays inline instead of becoming separate
   // flex items in the flex `.prov-hint` (that squished multi-tag hints into clipped narrow columns).
   const hint = PROV_HINTS[p.id] ? `<div class="prov-hint">${icon("info", 11)}<span>${PROV_HINTS[p.id]}</span></div>` : "";
+  const quota = p.canOauth ? `<div data-provider-quota="${esc(p.id)}">${providerQuotaBody(p)}</div>` : "";
   const oauthRow = p.canOauth
     ? `<div class="prov-row">${p.oauthActive
         ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
         : `<button class="btn-mini ok" data-oauth="${esc(p.oauthId)}">${icon("expand", 12)} Connect via OAuth</button>`}</div>`
+    : "";
+  // Why the LAST sign-in attempt died (server kept the broker's error; cleared on retry/success).
+  // `.set-note` is the block-paragraph pattern (icon absolutely positioned, text flows) - never flex prose.
+  const oauthErr = !p.oauthActive && p.oauthError && Date.now() - p.oauthError.at < 15 * 60_000
+    ? `<div class="set-note danger">${icon("shield", 12)} <b>Sign-in failed:</b> ${esc(p.oauthError.message)}</div>`
+    : "";
+  // P-GUIDE.1/.2: every provider with an entry in the shared manifest links its plan advisor guide;
+  // it opens in the Preview panel via its engine-resolved path. Vendors change tiers out from under
+  // users (Google killed consumer OAuth in June 2026), so the guides are load-bearing onboarding.
+  const guideRow = GUIDE_FILES[p.id]
+    ? `<div class="prov-row"><button class="btn-link" data-guide="${esc(p.id)}">${icon("info", 12)} ${p.id === "typesafe" ? "Jev explained: uses, settings and data privacy" : "Which plan do I need? Open the guide"}</button></div>`
     : "";
   // OAuth-only providers (e.g. GitHub Copilot) carry no primary key env — omit the key row entirely.
   const keyRow = p.env
@@ -1877,7 +3097,142 @@ function provCard(p: ProviderAuth): string {
   }).join("");
   return `<div class="prov">
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
-    <div class="prov-body">${oauthRow}${keyRow}${fieldsRows}${hint}</div></div>`;
+    <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
+}
+
+// ── P-ACCT.1: named multi-account per provider ─────────────────────────────────────────────────
+// state.accounts is the server's snapshot (providerId -> AccountView[]); every mutation returns the
+// refreshed snapshot, so the UI always repaints from the server's truth, never a client guess.
+
+/** Accordion open-state, persisted across fillSec repaints (session-only, the dockSec pattern - a
+ *  capture-phase toggle listener on #setBody keeps this set in step with the user's clicks). */
+const PROV_ACC_OPEN = new Set<string>();
+
+/** The named-account list for one provider: switch / rename / remove rows, the add-account row (key
+ *  providers), and the OAuth hint. Renders nothing for a provider that can hold no account at all. */
+function accountsBlock(p: ProviderAuth): string {
+  const accts = state.accounts?.[p.id] ?? [];
+  if (!accts.length && !p.env && !p.oauthId) return ""; // no accounts and no way to ever have one
+  // Invariant 11: each row is ONE line with ONE text child - the name and the dim identity/last4 suffix
+  // compose into a single ellipsizing span (the suffix is a nested inline, not a sibling flex item).
+  const rows = accts.map((a) => {
+    const suffix = a.kind === "oauth" ? (a.identity ?? "") : (a.keyLast4 ? `\u2022\u2022${a.keyLast4}` : "");
+    const removeConfirm = a.kind === "oauth"
+      ? `Disconnect this account from omp: remove "${a.name}"?`
+      : `Remove "${a.name}" and its saved key?`;
+    return `<div class="acct-row${a.active ? " active" : ""}">
+      <button class="acct-switch" type="button" data-acct-switch="${esc(a.id)}" data-acct-prov="${esc(p.id)}" title="${a.active ? "Active: omp is using this account" : "Switch to this account"}"><span class="acct-dot${a.active ? " on" : ""}"></span></button>
+      <span class="acct-name">${esc(a.name)}${suffix ? `<i class="acct-suffix"> \u00b7 ${esc(suffix)}</i>` : ""}</span>
+      ${a.parked ? `<span class="abadge none">parked</span>` : ""}
+      <button class="btn-mini acct-ico" type="button" data-acct-rename="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-name="${esc(a.name)}" title="Rename this account">${icon("pen", 12)}</button>
+      ${a.removable ? `<button class="btn-mini danger acct-ico" type="button" data-acct-remove="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-confirm="${esc(removeConfirm)}" title="Remove this account">${icon("trash", 12)}</button>` : ""}
+    </div>`;
+  }).join("");
+  const addRow = p.env
+    ? `<div class="acct-add">
+        <input id="acctName-${esc(p.id)}" class="prov-key acct-add-name" placeholder="Name, e.g. Work" autocomplete="off" spellcheck="false" />
+        <input id="acctKey-${esc(p.id)}" class="prov-key" type="password" placeholder="Paste ${esc(p.env)}\u2026" />
+        <button class="btn-mini ok" type="button" data-acct-add="${esc(p.id)}">${icon("plus", 12)} Add account</button>
+      </div>`
+    : "";
+  const oauthHint = p.canOauth
+    ? `<div class="set-note">${icon("info", 12)} <span>Connect via OAuth below signs in another subscription account; it appears here once the sign-in finishes.</span></div>`
+    : "";
+  return `<div class="acct-block">${rows ? `<div class="acct-list">${rows}</div>` : ""}${addRow}${oauthHint}</div>`;
+}
+
+/** P-ACCT.1: one provider as a collapsible card - a one-line summary (name + status badges + account
+ *  pill) over the account list and the classic config card. Open state survives fillSec repaints. */
+function provAccordion(p: ProviderAuth): string {
+  const accts = state.accounts?.[p.id] ?? [];
+  const active = accts.find((a) => a.active);
+  const acctPill = accts.length
+    ? `<span class="abadge acct">${accts.length} account${accts.length === 1 ? "" : "s"}${active ? ` \u00b7 ${esc(active.name)}` : ""}</span>`
+    : "";
+  return `<details class="prov-acc" data-prov-acc="${esc(p.id)}"${PROV_ACC_OPEN.has(p.id) ? " open" : ""}>
+    <summary>${icon("chevron", 12)}<span class="prov-acc-nm">${esc(p.name)}</span><span class="prov-acc-badges">${provStatusBadges(p)}${acctPill}</span></summary>
+    <div class="prov-acc-b">${accountsBlock(p)}${provCard(p)}</div></details>`;
+}
+
+/** The four account actions (switch / add / rename / remove), shared by the Settings body and the
+ *  Provider Hub delegated click handlers. `scope` roots the add-row input lookups. A mutation adopts the
+ *  snapshot the server returns (falling back to a fresh fetch when it returns none, so the list never
+ *  drifts); the CALLER repaints. Returns false when the click was not an account action. */
+async function handleAccountAction(t: HTMLElement, scope: HTMLElement): Promise<boolean> {
+  const adopt = async (snap: AccountsSnapshot | null): Promise<boolean> => {
+    state.accounts = snap ?? (await bridge.accounts().catch(() => null)) ?? state.accounts;
+    return snap != null;
+  };
+  const sw = t.closest("[data-acct-switch]") as HTMLElement | null;
+  if (sw) {
+    const prov = sw.dataset.acctProv!;
+    const snap = await bridge.accountSwitch(prov, sw.dataset.acctSwitch!).catch(() => null);
+    if (await adopt(snap)) {
+      const name = state.accounts?.[prov]?.find((a) => a.active)?.name ?? "the selected account";
+      showToast({ title: `Switched to ${name}`, desc: "omp restarts with it; the next turn uses it.", timeout: 3600 });
+    } else showToast({ tone: "warn", title: "Couldn't switch", desc: "The server rejected the switch; the account list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  const add = t.closest("[data-acct-add]") as HTMLElement | null;
+  if (add) {
+    const prov = add.dataset.acctAdd!;
+    const nameEl = $(`#acctName-${prov}`, scope) as HTMLInputElement | null;
+    const keyEl = $(`#acctKey-${prov}`, scope) as HTMLInputElement | null;
+    const name = nameEl?.value.trim() ?? "";
+    const key = keyEl?.value.trim() ?? "";
+    if (!name || !key) { showToast({ tone: "warn", title: "Name and key required", desc: "Give the account a name (e.g. Work) and paste its API key.", timeout: 3400 }); return true; }
+    const snap = await bridge.accountAdd(prov, name, key).catch(() => null);
+    if (await adopt(snap)) {
+      if (nameEl) nameEl.value = "";
+      if (keyEl) keyEl.value = "";
+      showToast({ title: "Account added", desc: `${name} is saved on this machine. Switch to it to make omp use it.`, timeout: 3400 });
+    } else showToast({ tone: "warn", title: "Couldn't add the account", desc: "The server rejected it. Check the name and key, then try again.", timeout: 4200 });
+    return true;
+  }
+  const ren = t.closest("[data-acct-rename]") as HTMLElement | null;
+  if (ren) {
+    const cur = ren.dataset.acctName ?? "";
+    const name = (await promptText({ title: "Rename account", label: "Name", value: cur, placeholder: "e.g. Work" }))?.trim();
+    if (!name || name === cur) return true;
+    const snap = await bridge.accountRename(ren.dataset.acctProv!, ren.dataset.acctRename!, name).catch(() => null);
+    if (await adopt(snap)) showToast({ title: "Account renamed", desc: `Now listed as ${name}.`, timeout: 2800 });
+    else showToast({ tone: "warn", title: "Couldn't rename", desc: "The server rejected the rename; the list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  const rm = t.closest("[data-acct-remove]") as HTMLElement | null;
+  if (rm) {
+    if (!confirm(rm.dataset.acctConfirm ?? "Remove this account?")) return true;
+    const snap = await bridge.accountRemove(rm.dataset.acctProv!, rm.dataset.acctRemove!).catch(() => null);
+    if (await adopt(snap)) showToast({ title: "Account removed", desc: "Its credential is gone from this machine.", timeout: 3000 });
+    else showToast({ tone: "warn", title: "Couldn't remove", desc: "The server rejected the removal; the list has been refreshed.", timeout: 4200 });
+    return true;
+  }
+  return false;
+}
+
+/** Repaint the two account-bearing Settings sections from current state (post-mutation refresh).
+ *  A switch also swaps the active env key server-side, so auth refreshes in the background and the
+ *  sections refill once the newer key ••last4 / OAuth badges land. */
+function repaintAccountSections(): void {
+  fillSec("providers", secProviders(state.auth));
+  fillSec("others", secOthers(state.auth));
+  void bridge.auth().then((a) => {
+    if (!a) return;
+    state.auth = a;
+    fillSec("providers", secProviders(a));
+    fillSec("others", secOthers(a));
+    renderStatus();
+  }).catch(() => { /* best-effort */ });
+}
+
+/** P-GUIDE.1/.2: open a bundled advisor guide in the Preview panel (Yours lane). The engine resolves
+ *  the absolute path (dev checkout vs installed resources differ); the preview serve route does the
+ *  rest. Shared by the Settings cards and the Provider Hub, which reuse the same provCard markup. */
+async function openGuide(id: string): Promise<void> {
+  const g = await bridge.guides().catch(() => null);
+  const path = g?.[id];
+  if (path) { openPreviewFile(path); return; }
+  showToast({ tone: "danger", title: "Guide unavailable", desc: "The bundled guide could not be resolved. Reinstall or rebuild the app.", actions: [{ label: "OK" }], timeout: 6000 });
 }
 // AskSage monthly tokens - fully dynamic from the Civ API (no manual limit). `used` is this
 // account's usage; `remaining` is what's left accounting for BOTH your and your org's caps; the
@@ -1926,7 +3281,9 @@ function datasetsSection(list: string[] | null): string {
 // slow omp/AskSage fetch never blocks the whole page (the old renderSettings awaited
 // every fetch + 8s dataset/persona timeouts before painting anything). Heavy/optional
 // sections collapse to keep the panel short.
-const SET_OPEN = new Set<string>(["asksage"]); // collapsible sections open by default
+// Declutter (user call, 2026-08-01): every section starts collapsed; deep links (openSettingsToVoice
+// etc.) add their card id here before opening, so guided fixes still land expanded.
+const SET_OPEN = new Set<string>([]);
 
 function setCard(name: string, title: string, sub: string, body: string, collapsible: boolean): string {
   const subHtml = sub ? ` <span class="set-sub">${sub}</span>` : "";
@@ -2004,10 +3361,39 @@ function promptForEmailIfMissing(onDone?: () => void): void {
 // First-login flow as a chain: pick a role (if unchosen) → email/attribution → the tour. Each step
 // is cosmetic - none gate or weaken the security path (invariant #3).
 function runOnboarding(): void {
-  const afterGov = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
-  const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup, then the tour
+  const afterProv = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
+  const afterGov = () => void promptForProviderIfNeeded(afterProv); // P-PROV.2: connect a provider, then the tour
+  const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup
   if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
   void promptForRole().then(() => promptForEmailIfMissing(afterEmail));
+}
+
+// P-PROV.2: first-run "connect a provider" step.
+// After identity + the gov/CUI question, a user with NO provider configured is nudged to connect one via the
+// Provider Hub. Gov-lockdown users route through the accredited gateway, so we skip the direct-provider nudge.
+// Cosmetic + skippable - never gates or weakens the security path (invariant #3).
+async function promptForProviderIfNeeded(onDone?: () => void): Promise<void> {
+  if (state.managed?.asksageOnly || state.asksage?.only) { onDone?.(); return; } // gateway lockdown: not applicable
+  if (document.getElementById("provChoice")) { onDone?.(); return; }
+  let auth = state.auth;
+  try { const a = await bridge.auth(); if (a) { auth = a; state.auth = a; } } catch { /* offline: still offer */ }
+  if (configuredProviderCount(auth) > 0) { onDone?.(); return; } // already has a provider connected
+  const ov = el(`<div id="provChoice" class="modal-ov">
+    <div class="modal role-modal" role="dialog" aria-modal="true" aria-labelledby="provChoiceTitle">
+      <div class="modal-icon">${icon("spark", 24)}</div>
+      <h2 class="modal-title" id="provChoiceTitle">Connect an AI provider</h2>
+      <p class="modal-desc">LUCID needs at least one model provider to chat. Sign in with a subscription you already have (Claude, ChatGPT, Gemini, Grok, Copilot) or paste an API key - it takes a few seconds and you can add more any time.</p>
+      <div class="gov-choices">
+        <button class="gov-choice ok" type="button" data-prov="yes">${icon("expand", 18)}<span class="gov-choice-tx"><b>Connect a provider</b><span class="gov-choice-sub">Open the provider list - OAuth or API key.</span></span></button>
+        <button class="gov-choice" type="button" data-prov="later">${icon("clock", 18)}<span class="gov-choice-tx"><b>I'll do it later</b><span class="gov-choice-sub">Add one from the model picker or Settings any time.</span></span></button>
+      </div>
+    </div></div>`);
+  document.body.appendChild(ov);
+  $$("[data-prov]", ov).forEach((b) => b.addEventListener("click", () => {
+    const choice = (b as HTMLElement).dataset.prov;
+    ov.remove();
+    if (choice === "yes") openProviderHub(onDone); else onDone?.();
+  }));
 }
 
 // ── P-GOVCUI.1: the Government / GovCon + CUI onboarding step ──────────────────────────────────
@@ -2094,7 +3480,7 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
     await loadConfig(); await loadAsksage(); // surface gov models + reflect lockdown
     // Lockdown must guarantee gateway routing: if we're on a direct model, switch to a gov one.
     const model = state.config.find((c) => c.id === "model");
-    if (model && !isAsksage(model.currentValue)) { const gov = model.options.find((o) => isAsksage(o.value)); if (gov) await applyConfig("model", gov.value); }
+    if (model && !isAsksage(model.currentValue)) { const gov = topModel(model.options, isAsksage)?.value; if (gov) await applyConfig("model", gov, { system: true }); }
     showDodBanner(); // ADR-0224: entering lockdown surfaces the DoD/STIG consent banner
     updateComposerTools(); renderStatus();
     finish({ title: "CUI mode on", desc: "Every turn now routes through the AskSage gov gateway. Direct providers are hidden." });
@@ -2118,6 +3504,33 @@ function openSettingsToAsksage(): void {
   openSettings();
   setTimeout(() => {
     const sec = $('[data-sec="asksage"]') as HTMLElement | null;
+    sec?.classList.add("open");
+    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+    sec?.classList.add("set-flash");
+    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
+  }, 140);
+}
+
+// P-LOCAL.4: jump Settings to the Local Providers card (from the Provider Hub's "Local & self-hosted" tile),
+// scrolled + flashed so the user lands on the add form (with the one-click model presets).
+function openSettingsToLocalProviders(): void {
+  SET_OPEN.add("localProviders");
+  openSettings();
+  setTimeout(() => {
+    const sec = $('[data-sec="localProviders"]') as HTMLElement | null;
+    sec?.classList.add("open");
+    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+    sec?.classList.add("set-flash");
+    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
+  }, 140);
+}
+
+// P-STT.4: jump Settings to the Voice card (from the dictation-failure toast) so the fix is one click away.
+function openSettingsToVoice(): void {
+  SET_OPEN.add("voice");
+  openSettings();
+  setTimeout(() => {
+    const sec = $('[data-sec="voice"]') as HTMLElement | null;
     sec?.classList.add("open");
     sec?.scrollIntoView({ behavior: "smooth", block: "start" });
     sec?.classList.add("set-flash");
@@ -2149,6 +3562,7 @@ function promptForRole(): Promise<void> {
     const finish = async (role: UserRole) => {
       state.userRole = role;
       applyRoleDefault(role);
+      syncImmersiveWithRole(role); // P-AVATAR.1: lucid-agent enters the stage right away
       ov.remove();
       await bridge.saveRole(role).catch(() => null);
       if (state.settingsOpen) fillSec("profile", secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }));
@@ -2164,6 +3578,264 @@ function promptForRole(): Promise<void> {
 }
 
 // Apply a role's CALM default surfacing (ADR-0088): the landing inspector tab. Cosmetic; ADR-0021's
+// ── P-AVATAR.1 (ADR-0251): the immersive lucid-agent stage ─────────────────────────────────────
+// The one BEHAVIORAL role: both rails (activity rail + sessions sidebar) and the inspector step aside
+// and the stage layer lights up behind the thread. Esc steps OUT without changing the role; the
+// titlebar Stage chip (visible only for the role) steps back in. Never touches the security gate.
+function setImmersive(on: boolean): void {
+  if (state.immersive === on) return;
+  state.immersive = on;
+  $("#app-inner")!.classList.toggle("immersive", on);
+  const stage = $("#agentStage") as HTMLElement | null;
+  if (stage) stage.hidden = !on;
+  if (on) document.addEventListener("keydown", immersiveEsc);
+  else document.removeEventListener("keydown", immersiveEsc);
+  // P-AVATAR.1b: the left rail peeks back in when the mouse nears the left edge (hysteresis: engage
+  // within 20px, tuck past 120px - no flicker at the boundary). Everything stays reachable on the stage.
+  if (on) document.addEventListener("mousemove", immersiveRailPeek);
+  else { document.removeEventListener("mousemove", immersiveRailPeek); $("#app-inner")!.classList.remove("rail-peek"); }
+}
+
+// The stage retains its layout, but no longer paints a second background ninja.
+const runnerInputs: MascotInputs = { speaking: false, listening: false, working: false };
+function composerMascotInputs(): MascotInputs {
+  runnerInputs.speaking = !!document.querySelector("#ctSpeak:not([hidden])");
+  runnerInputs.listening = !!dictation;
+  runnerInputs.working = state.streaming;
+  return runnerInputs;
+}
+function immersiveRailPeek(ev: MouseEvent): void {
+  const inner = $("#app-inner");
+  if (!inner) return;
+  if (ev.clientX <= 20) { inner.classList.add("rail-peek"); return; }
+  // Tuck 66px past whatever is out: the rail alone (54px, so the original 120px), or the rail plus
+  // the sessions sidebar once the hamburger opened it, so the drawer stays up while the pointer is
+  // over the chat list. The edge comes from the sidebar's TARGET state, not its measured rect: during
+  // its 240ms width transition the rect is mid-animation, which tucked too early right after opening
+  // and too late right after closing.
+  const sidebar = $("#sidebar");
+  const sidebarW = sidebar && !state.sidebarCollapsed ? parseFloat(getComputedStyle(sidebar).getPropertyValue("--sidebar-w")) || 236 : 0;
+  if (ev.clientX > 54 + sidebarW + 66) inner.classList.remove("rail-peek");
+}
+function immersiveEsc(ev: KeyboardEvent): void {
+  if (ev.key !== "Escape" || ev.defaultPrevented) return; // an overlay already consumed this Esc
+  // Overlays own Esc: while a modal / tour card / palette / Settings is up, Esc closes THAT, not the stage.
+  if (state.settingsOpen || document.querySelector(".modal-ov, .coach-card, .palette")) return;
+  setImmersive(false);
+  showToast({ title: "Stage parked", desc: "Click Stage in the titlebar to step back in.", timeout: 2600 });
+}
+/** The lucid-agent role drives the immersive layout; every other role restores the full IDE. */
+function syncImmersiveWithRole(role: UserRole | null): void {
+  const isAgent = role === "lucid-agent";
+  const chip = $("#tbStage") as HTMLElement | null;
+  if (chip) chip.hidden = !isAgent;
+  setImmersive(isAgent);
+  syncAgentExtras();
+  // The runner owns the mascot until Arcade opens, in either stage or parked layout.
+  if (isAgent && !miniRunner) {
+    const wrap = document.querySelector(".composer-wrap") as HTMLElement | null;
+    if (wrap) {
+      miniRunner = mountComposerRunner(wrap, composerMascotInputs);
+      miniRunner.setSuspended(agentArcade?.isOpen() ?? false);
+    }
+  } else if (!isAgent && miniRunner) { miniRunner.dispose(); miniRunner = null; }
+  // P-AVATAR.4: entering the role starts the hands-free flow; leaving restores the user's world.
+  if (isAgent) void enterAgentFlow();
+  else void exitAgentFlow();
+}
+let miniRunner: RunnerHandle | null = null;
+let agentArcade: AgentArcadeHandle | null = null;
+let agentTier: AgentModelTier = (() => { try { return localStorage.getItem("lucid.agent-tier") === "max" ? "max" : "regular"; } catch { return "regular"; } })();
+let agentTierApplying = false;
+let agentTierPending: Promise<void> | null = null;
+
+function syncAgentExtras(): void {
+  const active = state.userRole === "lucid-agent";
+  const control = $("#agentTierControl") as HTMLElement | null;
+  const select = $("#agentTier") as HTMLSelectElement | null;
+  if (control) control.hidden = !active;
+  if (select) { select.value = agentTier; select.disabled = state.streaming || agentTierApplying || state.configCached || state.configWarming; }
+  if (active && !agentArcade) {
+    const host = $("#agentArcadeHost");
+    if (host) agentArcade = mountAgentArcade(host, arcadeScorePort, {
+      onLayout: (open) => { miniRunner?.setSuspended(open); syncArcadeGap(); },
+    });
+  }
+  agentArcade?.update(active);
+  if (!active && agentArcade) { agentArcade.dispose(); agentArcade = null; }
+}
+
+async function applyAgentTier(): Promise<void> {
+  if (!agentPrior || state.userRole !== "lucid-agent" || state.streaming || agentTierApplying || state.configCached || state.configWarming) return;
+  const model = resolveAgentTierModel(modelOptions(), state.model, agentTier);
+  if (!model) { syncAgentExtras(); return; }
+  agentTierApplying = true;
+  setSendEnabled();
+  const pending = applyConfig("model", model, { system: true, confirm: true });
+  agentTierPending = pending;
+  try { await pending; }
+  finally { agentTierPending = null; agentTierApplying = false; setSendEnabled(); }
+}
+
+// ---- P-AVATAR.5 (ADR-0251): voice tool approval - keyword-strict, fail-closed, card stays boss ----
+// Armed per permission event in hands-free sessions. The matcher lives in voice_approval.ts (pure,
+// heavily tested); this glue only speaks the prompt, opens the mic, and routes ONE matching utterance
+// to the SAME choose() path the card's buttons use. Everything else (silence, sentences, mishears)
+// falls through to ordinary dictation, and the backend's 300s fail-closed timeout is never touched.
+let voiceApproval: { id: string; danger: boolean; options: ApprovalOption[]; respond: (oid: string | null, label: string, ok: boolean) => void; reprompts: number } | null = null;
+function armVoiceApproval(e: Extract<ChatEvent, { type: "permission" }>, respond: (oid: string | null, label: string, ok: boolean) => void): void {
+  if (state.userRole !== "lucid-agent" || !state.voice?.ttsConversation) return;
+  voiceApproval = { id: e.id, danger: !!e.danger, options: e.options, respond, reprompts: 0 };
+  void speakText(approvalPrompt(e));
+  // Open the mic for the verdict if conversation isn't already listening (streaming blocks maybeListen).
+  window.setTimeout(() => { if (voiceApproval?.id === e.id && !dictation) void toggleMicRecording(true); }, 800);
+}
+/** Route a transcript to a pending approval. True = consumed (never reaches the composer). */
+function consumeApprovalUtterance(text: string): boolean {
+  const va = voiceApproval;
+  if (!va) return false;
+  const m = matchApprovalUtterance(text, va.danger);
+  if (m === "none") return false; // ordinary dictation - let it land in the prompt bar
+  if (m === "vague-yes") {
+    if (va.reprompts++ < 2) void speakText("This one is high risk. Say the word approve to run it, or say deny.");
+    return true;
+  }
+  const oid = pickOption(va.options, m === "approve" ? "allow" : "deny");
+  if (!oid) return false; // no safe mapping - the visual card is the only path
+  voiceApproval = null;
+  va.respond(oid, m === "approve" ? "Approved by voice" : "Denied by voice", m === "approve");
+  void speakText(m === "approve" ? "Approved." : "Denied.");
+  return true;
+}
+
+// ---- P-AVATAR.4 (ADR-0251): the enter flow - agent mode + fast model + conversation, gap-guided ----
+let agentPrior: AgentPrior | null = null;
+let agentFlowTimer = 0;
+let vaultAsked = false; // the KG offer fires at most once per app session (never nag)
+// Like the KG offer, Later lasts for this renderer session, including role re-entry. A reload resets
+// it; explicit Voice settings and runtime error notices stay available without reopening the nudge.
+const deferredAgentGaps = new Set<ReadyItem["id"]>();
+let conversationArmed = false;
+let lastSpokenGap = "";
+const modelOptions = (): { value: string; name?: string }[] => {
+  const opt = state.config.find((c) => c.id === "model");
+  const lockdown = !!(state.asksage?.only || state.managed?.asksageOnly); // ADR-0068/0224: either lockdown source clamps tiers to gov routes
+  return (opt ? curatedModels(opt) : []).filter((o) => !unavailableReason(String(o.value)) && (!lockdown || isGovModel(String(o.value)))).map((o) => ({ value: String(o.value), name: o.name }));
+};
+async function enterAgentFlow(): Promise<void> {
+  if (agentPrior) {
+    if (!agentFlowTimer) agentFlowTimer = window.setInterval(() => { void agentFlowStep(); }, 4000);
+    return;
+  }
+  agentPrior = { model: state.model, uiMode: state.uiMode, autoSpeak: !!state.voice?.ttsAutoSpeak, conversation: !!state.voice?.ttsConversation };
+  conversationArmed = false;
+  lastSpokenGap = "";
+  if (state.uiMode !== "agent") void applyConfig("mode", "agent"); // full agent mode for the hands-free session
+  await applyAgentTier().catch(() => {}); // Failed confirmation is surfaced by applyConfig; keep the previous model.
+  if (!agentPrior || state.userRole !== "lucid-agent") return;
+  await agentFlowStep();
+  if (!agentPrior || state.userRole !== "lucid-agent") return;
+  window.clearInterval(agentFlowTimer);
+  agentFlowTimer = window.setInterval(() => { void agentFlowStep(); }, 4000); // self-heals after any fix
+}
+async function exitAgentFlow(): Promise<void> {
+  window.clearInterval(agentFlowTimer); agentFlowTimer = 0;
+  $("#agentSetupCard")?.remove();
+  const prior = agentPrior;
+  if (!prior) return;
+  await agentTierPending?.catch(() => {});
+  if (state.userRole === "lucid-agent") return;
+  agentPrior = null;
+  const back = restoreModel(prior, state.model, modelOptions());
+  // The next Send must run on the RESTORED model: hold the composer until the backend confirms.
+  if (back) {
+    agentTierApplying = true;
+    setSendEnabled();
+    try { await applyConfig("model", back, { system: true, confirm: true }); }
+    catch { /* applyConfig rolled back and told the user; the tier model stays active. */ }
+    finally { agentTierApplying = false; setSendEnabled(); }
+  }
+  if (prior.uiMode !== state.uiMode) void applyConfig("mode", prior.uiMode);
+  // Only unwind what the flow turned ON - a user who had auto-speak before keeps it.
+  if (!prior.conversation && state.voice?.ttsConversation) void applyVoicePatch({ ttsAutoSpeak: prior.autoSpeak, ttsConversation: false });
+}
+/** One readiness pass: gather live signals, surface the FIRST gap (or the one-time KG offer), and arm
+ *  conversation mode the moment the required set is green. Cheap + idempotent; runs every 4s while in. */
+async function agentFlowStep(): Promise<void> {
+  if (!agentPrior) return;
+  const [auth, voicesData, ws, personal] = await Promise.all([
+    state.auth ? Promise.resolve(state.auth) : bridge.auth().catch(() => null),
+    bridge.voices().catch(() => null),
+    state.voice?.sttProvider === "whisper" ? bridge.whisperStatus().catch(() => null) : Promise.resolve(null),
+    bridge.personal().catch(() => null),
+  ]);
+  if (!agentPrior) return; // left the role while we were fetching
+  if (auth) state.auth = auth;
+  const ttsProvider = state.voice?.ttsProvider ?? "elevenlabs";
+  const sttReady = state.voice?.sttProvider === "elevenlabs"
+    ? !!(auth?.others ?? []).find((p) => p.id === "elevenlabs")?.keySet
+    : !!ws && (ws.running || (ws.capable && ws.binAvailable));
+  const items = readinessChecklist({
+    providers: configuredProviderCount(auth),
+    ttsReady: !!voicesData?.engines?.find((e) => e.id === ttsProvider)?.ready,
+    sttReady,
+    vaultConfigured: !!personal?.configured,
+    vaultUnlocked: !!personal?.unlocked,
+  });
+  const gap = nextGap(items, vaultAsked);
+  if (gap?.required && deferredAgentGaps.has(gap.id)) {
+    $("#agentSetupCard")?.remove();
+    return; // Defer only the nudge, never treat a missing prerequisite as ready.
+  }
+  if (gap) {
+    if (gap.id === "vault") vaultAsked = true;
+    renderAgentGap(gap);
+    // Speak a NEW gap once when the voice already works (the tts gap itself stays visual-only).
+    if (gap.id !== lastSpokenGap && gap.id !== "tts" && items.find((i) => i.id === "tts")?.ok) {
+      lastSpokenGap = gap.id;
+      void speakText(`${gap.title}. ${gap.hint}`);
+    }
+    if (gap.required) return; // conversation stays off until the required set is green
+  } else {
+    $("#agentSetupCard")?.remove();
+  }
+  if (!conversationArmed) {
+    conversationArmed = true;
+    if (!state.voice?.ttsConversation) {
+      await applyVoicePatch({ ttsAutoSpeak: true, ttsConversation: true });
+      showToast({ tone: "ok", title: "You're in", desc: `Hands-free with ${modelLabel(state.model)}. Just start talking - Esc parks the stage.`, timeout: 4500 });
+    }
+  }
+}
+/** The one-gap card: block prose (invariant #11 - icon absolutely positioned, text flows), one action,
+ *  one dismiss. Lives over the stage but is an ordinary element in the parked layout too. */
+function renderAgentGap(item: ReadyItem): void {
+  $("#agentSetupCard")?.remove();
+  const card = el(`<div id="agentSetupCard" class="agent-setup-card" role="dialog" aria-label="${esc(item.title)}">
+    <span class="asc-ic">${icon(item.required ? "info" : "graph", 14)}</span>
+    <div class="asc-tx"><b>${esc(item.title)}</b> ${esc(item.hint)}</div>
+    <div class="asc-row"><button class="btn-mini ok" data-agent-fix="${esc(item.action)}" type="button">${esc(item.actionLabel)}</button>
+    <button class="btn-mini" data-agent-dismiss type="button">${item.required ? "Later" : "No thanks"}</button></div>
+  </div>`);
+  card.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-agent-dismiss]")) {
+      if (item.required) deferredAgentGaps.add(item.id);
+      card.remove();
+      return;
+    }
+    const fix = (t.closest("[data-agent-fix]") as HTMLElement | null)?.dataset.agentFix;
+    if (!fix) return;
+    card.remove();
+    // The fix surfaces live in the rails, which the stage hides - park the stage first, then deep-link.
+    if (state.immersive) setImmersive(false);
+    if (fix === "hub") openProviderHub();
+    else if (fix === "voice") openSettingsToVoice();
+    else openKnowledge();
+  });
+  document.querySelector(".center")?.appendChild(card);
+}
+
 // active-block override still wins. The full per-role chrome presets are P-ROLE.2.
 function applyRoleDefault(role: UserRole): void {
   refreshTriviaGame(); // P-TRIV.2 (ADR-0175): the Trivia Wire bank follows the role (idempotent) - BEFORE the surfacing guard
@@ -2260,26 +3932,33 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
     ? `<div class="set-note ${a.source === "email" ? "ok" : ""}">${icon(a.source === "email" ? "check" : "info", 12)} Code activity is attributed to <b>${esc(a.identity)}</b>${a.source === "workstation" ? " (this workstation - add an email above to attribute to you)" : ""}.</div>`
     : `<div class="set-note">${icon("info", 12)} Your email tags how much code each model wrote, per repo (ADR-0030). Stored on this machine only.</div>`;
   const role = state.userRole ?? "developer";
-  const roleSeg = USER_ROLE_LIST.map((id) =>
-    `<button class="role-seg${id === role ? " on" : ""}" type="button" data-role-pick="${esc(id)}" data-tip="${esc(ROLE_META[id].label + " · " + ROLE_META[id].blurb)}">${icon(ROLE_META[id].icon, 13)}<span>${esc(ROLE_META[id].label)}</span></button>`).join("");
+  // Four compact chips + a full-width hero button for the immersive role (user call, 2026-08-01).
+  const chips = USER_ROLE_LIST.filter((id) => id !== "lucid-agent").map((id) =>
+    `<button class="role-seg${id === role ? " on" : ""}" type="button" data-role-pick="${esc(id)}" data-tip="${esc(ROLE_META[id].label + " \u00b7 " + ROLE_META[id].blurb)}">${icon(ROLE_META[id].icon, 13)}<span>${esc(ROLE_META[id].label)}</span></button>`).join("");
+  const hero = `<button class="role-seg role-seg-hero${role === "lucid-agent" ? " on" : ""}" type="button" data-role-pick="lucid-agent" data-tip="${esc(ROLE_META["lucid-agent"].blurb)}">${icon("spark", 14)}<span>LUCID Agent</span><em>immersive stage \u00b7 hands-free</em></button>`;
   const roleRow = `<div class="set-sub">Role</div>
-    <div class="role-seg-row">${roleSeg}</div>
-    <div class="set-note">${icon("info", 12)} Tailors what you see first - cosmetic only; every panel stays reachable. <button class="btn-link" id="replayTour" type="button">Take the tour</button></div>`;
+    <div class="role-seg-row">${chips}</div>
+    ${hero}
+    <div class="set-note">${icon("info", 12)} Shapes what you see first; nothing is ever locked away. <button class="btn-link" id="replayTour" type="button">Take the tour</button></div>`;
   return setCard("profile", "Profile", "", `<div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
     <div class="prov-row"><input id="setEmail" class="prov-key" type="email" inputmode="email" autocomplete="email" placeholder="Corporate email (optional - for code-activity attribution)" value="${esc(s?.email ?? "")}" />
       <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div>
     ${managedLine}${idLine}
-    ${roleRow}`, false);
+    ${roleRow}`, true);
 }
 function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // Collapsible + default-collapsed (not in SET_OPEN): the AskSage gov gateway sits above this and is the
   // foregrounded path; the direct U.S. providers tuck away until needed.
-  const cards = (auth?.majors ?? []).map(provCard).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`;
+  // P-ACCT.1: each provider is a nested collapsible card (accounts list + the classic config body).
+  const cards = (auth?.majors ?? []).map(provAccordion).join("") || `<div class="empty">couldn't read auth - is the server up to date?</div>`;
   // "Sign out of all providers" — ALWAYS available (not gated on a visible active login) so it can also clear
   // ORPHANED OAuth logins that have no card here: a broker id with no descriptor (e.g. google-antigravity) or
   // a key-only provider that still holds an oauth row. The reliable full reset, e.g. after a reinstall.
-  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login — all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
-  return setCard("providers", "Providers", "U.S. frontier · key or OAuth", cards + signoutAll, true);
+  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login - all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
+  // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
+  // discoverable popup) so providers aren't buried in this collapsed card.
+  const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place - native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
+  return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + providerQuotaNotice() + cards + signoutAll, true);
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
 // exposes such a model (else an empty, preserved anchor). Hidden-by-default; the user must type
@@ -2347,9 +4026,9 @@ function secDeveloper(): string {
 // ACKNOWLEDGE gate (mirrors the China-origin unlock) because these route outside U.S. jurisdiction or
 // aggregate many origins. Expanding the section shows the warning first; the list appears once acknowledged.
 function secOthers(auth: import("./bridge.ts").AuthStatus | null): string {
-  // P-VOICE.1: ElevenLabs rides the `others` auth plumbing for keySet/last4, but it's a VOICE provider —
-  // render it in the Voice card, not here.
-  const list = (auth?.others ?? []).filter((p) => p.id !== "elevenlabs").map(provCard).join("") || `<div class="empty">none</div>`;
+  // P-VOICE.1 / P-JEV.1: ElevenLabs and TypeSafe ride the `others` auth plumbing for keySet/last4, but they are
+  // not chat-model providers - the Voice card and the Judgment card render them, not this list.
+  const list = (auth?.others ?? []).filter((p) => !HUB_NON_MODEL_EXCLUDE.includes(p.id)).map(provAccordion).join("") || `<div class="empty">none</div>`; // P-ACCT.1: nested collapsible cards
   if (state.thirdPartyAck) {
     return setCard("others", "More providers", "third-party · non-U.S. / custom",
       `<div class="set-note ok">${icon("check", 12)} You acknowledged the third-party risk. <button class="btn-link" id="thirdPartyRelock">Re-lock</button></div>${list}`, true);
@@ -2366,6 +4045,7 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
   const keyCard = elKey ? provCard(elKey) : "";
   const stt = vset?.sttProvider ?? "whisper";
   const ttsp = vset?.ttsProvider ?? "elevenlabs";
+  state.voice = vset ?? state.voice; // keep the composer chip in step with whatever the card is showing
   const sel = (v: boolean) => (v ? " selected" : "");
   const body = `${keyCard}
     <div class="set-note">${icon("mic", 12)} <b>Speech-to-text</b> powers the mic button by the composer. <b>Offline Whisper</b> keeps audio on-device (air-gap / DoD); <b>ElevenLabs Scribe</b> is cloud (higher accuracy, audio leaves the device).</div>
@@ -2377,33 +4057,154 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
     <div class="voice-row" id="voiceSttUrlRow"${stt === "whisper" ? "" : " hidden"}>
       <label class="voice-lbl" for="voiceSttUrl">Whisper URL</label>
       <input id="voiceSttUrl" class="prov-key" data-voice-set="sttUrl" spellcheck="false" placeholder="http://localhost:9000 (self-hosted whisper.cpp / faster-whisper)" value="${esc(vset?.sttUrl ?? "")}" /></div>
+    <div id="whisperCard" class="voice-whisper"></div>
     <div class="voice-row"><label class="voice-lbl" for="voiceTts">TTS engine</label>
       <select id="voiceTts" class="prov-key" data-voice-set="ttsProvider">
         <option value="elevenlabs"${sel(ttsp === "elevenlabs")}>ElevenLabs - cloud, custom voices</option>
         <option value="openai-tts"${sel(ttsp === "openai-tts")}>ChatGPT / OpenAI - cloud</option>
         <option value="local-tts"${sel(ttsp === "local-tts")}>Kokoro - offline, air-gap</option>
+        <option value="dots-tts"${sel(ttsp === "dots-tts")}>dots.tts - self-hosted DGX, your cloned voices</option>
       </select></div>
+    <div class="voice-row" id="voiceDotsUrlRow"${ttsp === "dots-tts" ? "" : " hidden"}>
+      <label class="voice-lbl" for="voiceDotsUrl">dots.tts URL</label>
+      <input id="voiceDotsUrl" class="prov-key" data-voice-set="dotsTtsUrl" spellcheck="false" placeholder="http://127.0.0.1:8084 (the tunnel or proxy mouth of your box's dots.tts service)" value="${esc(vset?.dotsTtsUrl ?? "")}" /></div>
+    <div id="voiceEndpointsBox"${ttsp === "dots-tts" ? "" : " hidden"}></div>
     <div class="voice-row voice-pick"><label class="voice-lbl" for="voiceSelect">Voice</label>
       <select id="voiceSelect" class="prov-key" data-voice-set="ttsVoice"><option value="">loading voices…</option></select>
       <button class="btn-mini" id="voiceFav" data-tip="Favorite|Star the selected voice - favorites are listed first">${icon("spark", 12)}</button></div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceAutoSpeak">Auto-speak</label>
+      <label class="voice-check"><input type="checkbox" id="voiceAutoSpeak" data-voice-set="ttsAutoSpeak"${vset?.ttsAutoSpeak ? " checked" : ""} />
+        <span>Read every reply aloud as it streams - the composer's voice button toggles this too.</span></label></div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceConversation">Conversation</label>
+      <label class="voice-check"><input type="checkbox" id="voiceConversation" data-voice-set="ttsConversation"${vset?.ttsConversation ? " checked" : ""}${vset?.ttsAutoSpeak ? "" : " disabled"} />
+        <span>Hands-free turn-taking: the mic opens when the reply finishes speaking, and a few seconds of silence sends your turn. Needs auto-speak.</span></label></div>
+    <div class="voice-row"><label class="voice-lbl" for="voiceDigest">Spoken digest</label>
+      <label class="voice-check"><input type="checkbox" id="voiceDigest" data-voice-set="ttsDigest"${vset?.ttsDigest ? " checked" : ""}${vset?.ttsAutoSpeak ? "" : " disabled"} />
+        <span>Speak the first sentence, then a short digest of the reply instead of every word - made for slow self-hosted engines like dots.tts (5-10s a clip over the VPN). The full text stays in the chat. Needs auto-speak.</span></label></div>
     <div class="set-note" id="voiceNote"></div>`;
   return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
 }
-/** Populate the Voice card's voice picker (favorites first) from the ElevenLabs account. Best-effort;
- *  shows a note when no key / no voices. Called after the card renders and after the key changes. */
+// P-JEV.1 (ADR-0374): the Judgment card. Jev (TypeSafe System One) answers omp's typed judgments (choice /
+// yes-no / score) instead of a chat model. The key rides the same provCard plumbing as ElevenLabs; the mode
+// select drives omp's `providers.judgmentProvider`. The SERVER owns the lockdown clamp: under AskSage lockdown
+// `effective` is always "llm" and the select is disabled, with the stored choice shown so lifting the lock
+// visibly restores it. Nothing here ever enters the model picker (TypeSafe has no chat models).
+function secJudgment(auth: AuthStatus | null, j: JudgmentView | null): string {
+  const tsKey = (auth?.others ?? []).find((p) => p.id === "typesafe");
+  const keyCard = tsKey ? provCard(tsKey) : "";
+  const stored = j?.stored ?? "auto";
+  const sel = (v: boolean) => (v ? " selected" : "");
+  const lockNote = j?.locked
+    ? `<div class="set-note danger" id="judgmentLockNote">${icon("shield", 12)} <b>AskSage lockdown is on:</b> judgments are pinned to the <b>LLM chain</b> (your gov-routed models). A judgment carries conversation text and tool output to the judge, so TypeSafe's public endpoint is CUI backflow under lockdown. Your saved choice (<b>${esc(stored)}</b>) is kept and takes effect again when lockdown is turned off.</div>`
+    : "";
+  const body = `${keyCard}
+    <div class="set-note">${icon("info", 12)} <b>Judgments</b> are the small typed questions LUCID's agent loop asks about its own work (yes/no checks, choices, scores). <b>Jev</b> is TypeSafe AI's hosted System One model built for exactly that; without it, omp asks a chat model. In <b>Auto</b>, a saved TypeSafe key routes judgments to Jev; a failed TypeSafe call falls back to the online chat-model chain (omp's rule, not a LUCID choice).</div>
+    <div class="voice-row"><label class="voice-lbl" for="judgmentMode">Judgment backend</label>
+      <select id="judgmentMode" class="prov-key" data-judgment-set="mode"${j?.locked ? " disabled" : ""}>
+        <option value="auto"${sel(stored === "auto")}>Auto - Jev when a TypeSafe key is saved, else chat model</option>
+        <option value="typesafe"${sel(stored === "typesafe")}>Jev (TypeSafe) - always try Jev first</option>
+        <option value="llm"${sel(stored === "llm")}>Chat model only - never TypeSafe</option>
+      </select></div>
+    ${lockNote}
+    <div class="set-note" id="judgmentEffective">${icon("check", 12)} omp is told <b>${esc(j?.effective ?? "auto")}</b>${j?.clamped ? " (clamped by lockdown)" : ""}. Changing the backend restarts the omp child; the next turn uses it.</div>`;
+  return setCard("judgment", "Judgment", "Jev · TypeSafe System One", body, true);
+}
+// P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
+// picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
+function whisperCardHtml(s: WhisperStatusView): string {
+  // P-STT.6 (ADR-0267): the picker OFFERS tiny/base/small only (medium/large proved slow + buggy through
+  // the local server) and GRAYS OUT a tier this hardware can't run instead of hiding it, so the user sees
+  // WHY it's unavailable. Anything already downloaded - offered or not - lists below with a Remove button.
+  // The selection falls back to the tiny DEFAULT (P-STT.6 autostart) before the capability recommendation.
+  const offered = s.tiers.filter((t) => t.offered);
+  const pick = s.activeTier ?? s.defaultTier ?? s.recommended;
+  const opts = offered.map((t) => `<option value="${esc(t.tier)}"${t.tier === pick && t.runnable ? " selected" : ""}${t.runnable ? "" : " disabled"}>${esc(t.label)}${t.installed ? " \u00b7 installed" : ""}${t.runnable ? "" : ` \u00b7 ${esc(t.reason)}`}</option>`).join("");
+  const status = s.running ? `<span class="abadge ok">${icon("check", 11)} running${s.activeTier ? ` \u00b7 ${esc(s.activeTier)}` : ""}</span>` : `<span class="abadge none">stopped</span>`;
+  const binWarn = s.binAvailable ? "" : `<div class="set-note">${icon("info", 12)} <span>${esc(s.binHint)}</span></div>`;
+  const inst = s.install;
+  let controls: string;
+  if (inst && inst.active) {
+    // Live install/start: a real progress bar (download %) instead of a blind spinner.
+    const pct = inst.phase === "starting" ? 100 : Math.round((inst.fraction || 0) * 100);
+    const label = inst.phase === "starting" ? "Starting the server\u2026" : `Downloading model ${pct}%`;
+    controls = `<div class="prov-row whisper-actions"><div class="whisper-bar"><i style="width:${pct}%"></i></div><span class="whisper-status">${label}</span></div>`;
+  } else if (s.capable) {
+    controls = `<div class="voice-row"><label class="voice-lbl" for="whisperTier">Model</label><select id="whisperTier" class="prov-key">${opts}</select></div>
+       <div class="prov-row whisper-actions">${s.running ? `<button class="btn-mini" data-whisper-stop>${icon("close", 12)} Stop</button>` : `<button class="btn-mini ok" data-whisper-start${s.binAvailable ? "" : " disabled"}>${icon("expand", 12)} Install &amp; start</button>`}<span class="whisper-status">${status}</span></div>`;
+  } else controls = "";
+  // P-STT.6: every downloaded model is listed with its real on-disk size and a Remove button - including
+  // (especially) the no-longer-offered medium/large weights from an earlier version. The tier the running
+  // server has loaded shows "in use" instead (stop first). Shown even on an incapable machine: reclaiming
+  // disk is exactly what such a machine wants.
+  const mb = (t: WhisperTierView): string => `${Math.round(t.diskMB ?? t.approxMB)} MB`;
+  const installedRows = s.tiers.filter((t) => t.installed).map((t) => {
+    const inUse = s.running && s.activeTier === t.tier;
+    const legacy = t.offered ? "" : `<span class="abadge warn" title="Slow and unstable through the local whisper server - no longer offered. Remove it to reclaim disk.">not offered</span>`;
+    const act = inUse ? `<span class="abadge ok">${icon("check", 11)} in use</span>` : `<button class="btn-mini danger" data-whisper-remove="${esc(t.tier)}" title="Delete ${mb(t)} of model weights from disk">${icon("close", 12)} Remove</button>`;
+    return `<div class="whisper-model"><span class="whisper-model-name">${esc(t.label)}</span><span class="abadge set">${mb(t)}</span>${legacy}${act}</div>`;
+  }).join("");
+  const installedList = installedRows ? `<div class="whisper-models"><div class="whisper-models-h">Installed models</div>${installedRows}</div>` : "";
+  return `<div class="voice-whisper-inner"><div class="voice-whisper-h"><b>Local Whisper</b><span>offline STT on this machine</span></div>
+    <div class="set-note">${icon("info", 12)} <span>${esc(s.summary)}</span></div>${binWarn}${controls}${installedList}</div>`;
+}
+/** Fill the Local Whisper block from live status (best-effort; empty when unavailable). */
+async function hydrateWhisper(): Promise<void> {
+  const card = $("#whisperCard"); if (!card) return;
+  const s = await bridge.whisperStatus().catch(() => null);
+  card.innerHTML = s ? whisperCardHtml(s) : "";
+}
+
+// P-VOICE.7: the imported-endpoints strip inside the dots.tts section. The GET auto-scans the handoff
+// mailbox (the DGX Loader's "Send to LUCID" drops files there), so freshly sent configs appear on every
+// Settings open with no extra click; the Import button is the portable fallback (a file exported on
+// another machine). Every list row is a real imported config - no box name lives in code.
+async function hydrateVoiceEndpoints(): Promise<void> {
+  const box = $("#voiceEndpointsBox"); if (!box) return;
+  const d = await bridge.voiceEndpoints().catch(() => null);
+  if (!d) { box.innerHTML = ""; return; }
+  const opts = d.endpoints.map((e) => `<option value="${esc(e.id)}"${e.id === d.active ? " selected" : ""}>${esc(e.label)} (${esc(e.url)})</option>`).join("");
+  const rejectNote = d.rejects.length
+    ? `<div class="set-note danger">${icon("shield", 12)} <b>Skipped:</b> ${esc(d.rejects.map((r) => `${r.file}: ${r.reason}`).join(" \u00b7 "))}</div>`
+    : "";
+  box.innerHTML = `
+    <div class="voice-row"><label class="voice-lbl" for="voiceEndpointSel">Endpoints</label>
+      <select id="voiceEndpointSel" class="prov-key">
+        <option value=""${d.active ? "" : " selected"}>${d.endpoints.length ? "choose an imported endpoint\u2026" : "none imported yet"}</option>${opts}
+      </select>
+      <button class="btn-mini" id="voiceEndpointImportBtn" data-tip="Import|Upload a .json exported from the DGX Loader (Export config)">${icon("expand", 12)} Import\u2026</button>
+      <input type="file" id="voiceEndpointFile" accept=".json,application/json" hidden /></div>
+    <div class="set-note">${icon("info", 12)} One-click transfer: in the DGX Loader's Voice tab hit <b>Send to LUCID</b> - the config lands in the handoff folder and appears here on the next Settings open. Or export the file there and Import it here. Configs never carry secrets.</div>
+    ${rejectNote}`;
+}
+/** Populate the Voice card's picker with the SELECTED engine's voices (P-VOICE.2, ADR-0247): ElevenLabs is
+ *  fetched live from the account, OpenAI and Kokoro come from the static catalog. Best-effort: an engine that
+ *  cannot list shows its own note. Called after the card renders and after the key changes. */
 async function loadVoices(): Promise<void> {
   const selEl = $("#voiceSelect") as HTMLSelectElement | null;
   if (!selEl) return;
   const data = await bridge.voices().catch(() => null);
+  // P-STT.6 (ADR-0267): gray out TTS engines that cannot speak on this machine right now, mirroring the
+  // composer voice menu's "needs setup" treatment (voiceEngineHtml). The currently selected engine stays
+  // enabled so an in-progress setup is never locked out; once its key/server is fixed, a re-render clears
+  // the gray. The reason rides the option's title.
+  const ttsSel = $("#voiceTts") as HTMLSelectElement | null;
+  if (ttsSel && data?.engines?.length) {
+    for (const e of data.engines) {
+      const o = ttsSel.querySelector(`option[value="${e.id}"]`) as HTMLOptionElement | null;
+      if (!o || o.value === ttsSel.value) continue;
+      o.disabled = !e.ready;
+      o.title = e.ready ? "" : e.reason;
+    }
+  }
   const note = $("#voiceNote");
   if (!data || !data.voices.length) {
-    selEl.innerHTML = `<option value="">no voices${data?.note ? "" : ""}</option>`;
-    if (note) note.textContent = data?.note || "Add an ElevenLabs key to list voices.";
+    selEl.innerHTML = `<option value="">no voices to list</option>`;
+    if (note) note.textContent = data?.note || "This engine didn't return a voice list - check its key or URL.";
     return;
   }
   if (note) note.textContent = "";
   const favs = new Set(data.favorites);
-  const opt = (v: import("./bridge.ts").ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` · ${esc(v.category)}` : ""}</option>`;
+  const opt = (v: ElevenVoiceView) => `<option value="${esc(v.voiceId)}"${v.voiceId === data.selected ? " selected" : ""}>${esc(v.name)}${v.category ? ` \u00b7 ${esc(v.category)}` : ""}</option>`;
   const favList = data.voices.filter((v) => favs.has(v.voiceId));
   const rest = data.voices.filter((v) => !favs.has(v.voiceId));
   selEl.innerHTML =
@@ -2448,7 +4249,7 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
           <button class="btn-mini" data-agent-toggle="${esc(a.id)}" data-agent-on="${a.enabled ? "0" : "1"}">${a.enabled ? "Disable" : "Enable"}</button>
           <button class="btn-mini danger" data-agent-remove="${esc(a.id)}">${icon("close", 12)} Remove</button>
         </div></div></div>`).join("")
-    : `<div class="empty">No remote agents yet. Add a hermes/openclaw connection below — it's proxied through the Lucid security firewall.</div>`;
+    : `<div class="empty">No remote agents yet. Add a hermes/openclaw connection below - it's proxied through the Lucid security firewall.</div>`;
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add a remote agent</span></div>
       <div class="prov-body">
@@ -2702,6 +4503,54 @@ function secAppearance(): string {
   return setCard("appearance", "Chat background", "personalize · 25% opacity", inner, true);
 }
 
+// ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
+// A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
+// choice (data-theme="") rather than selecting a theme, so "follow the OS" stays a real state and not a
+// guess. Rendered from theme.ts + localStorage, so it paints with no fetch; the click persists through
+// /api/settings and mirrors to localStorage for the next boot's first paint.
+//
+// Invariant 11: `.theme-grid` is `repeat(auto-fill, minmax(220px, 1fr))` and `.theme-nm` is a single
+// ellipsizing line (styles.css). Each `.theme-opt` wraps its label and blurb in their OWN elements, so
+// no raw text is ever a direct flex/grid child next to an inline tag.
+function themeTile(id: string, label: string, blurb: string, swatch: readonly string[], active: boolean): string {
+  // The swatch colours come from the THEMES registry (first-party literals), never from user input, but
+  // they still go through esc() because they land in an inline style attribute.
+  const chips = swatch.map((c) => `<i style="background:${esc(c)}"></i>`).join("");
+  return `<button type="button" class="theme-opt${active ? " on" : ""}" data-theme-pick="${esc(id)}" aria-pressed="${active}">
+      <span class="theme-sw">${chips}</span>
+      <span class="theme-nm">${esc(label)}</span>
+      <span class="theme-bl">${esc(blurb)}</span>
+    </button>`;
+}
+function secTheme(): string {
+  const pref = themePref();
+  const active = resolveTheme(pref, osPrefersLight());
+  // P-THEME.2: "Match system" is now an EXPLICIT choice with its own stored id, not the empty default.
+  // While the two shared one value, a user who had never opened this panel was silently following their
+  // OS, so a light-mode machine moved a long-time user off the dark UI they had always had. Unset now
+  // resolves to Lucid Dark (resolveTheme owns that), and following the OS is opted INTO here.
+  // Its swatch deliberately shows one chip from each side so it reads as "either", and it previews what
+  // the OS currently resolves to.
+  const sys = themeTile(SYSTEM_THEME_ID, "Match system", `Follows your OS. Currently ${active.scheme}.`, ["#0a0b0f", "#c64bd6", "#edeff6"], pref === SYSTEM_THEME_ID);
+  const groups = themeGroups().map(({ scheme, themes }) => `
+    <div class="theme-grp-lbl">${scheme === "light" ? "Light" : "Dark"}</div>
+    <div class="theme-grid">${themes.map((t: ThemeDef) => themeTile(t.id, t.label, t.blurb, t.swatch, pref === t.id)).join("")}</div>`).join("");
+  const inner = `<div class="theme-grid">${sys}</div>${groups}
+    <div class="set-note">${icon("info", 12)} Applies instantly across the app, the code editor, and the trainer. LUCID defaults to <b>Lucid Dark</b>. <b>Match system</b> follows your OS light/dark setting; picking a theme explicitly pins it, so a change to your OS setting will no longer move it.</div>`;
+  const count = themeGroups().reduce((n, g) => n + g.themes.length, 0);
+  return setCard("theme", "Theme", `${count} themes · light &amp; dark`, inner, true);
+}
+/** Persist + apply a theme choice. P-THEME.2: "" clears the choice back to the DEFAULT (Lucid Dark), and
+ *  `system` is the explicit "follow my OS" pick. Optimistic: the paint
+ *  is instant and the localStorage mirror is written first, so the next boot is correct even if the
+ *  server write fails (a cosmetic setting must never block on the network). */
+async function pickTheme(pref: string): Promise<void> {
+  try { if (pref) localStorage.setItem(THEME_KEY, pref); else localStorage.removeItem(THEME_KEY); } catch { /* storage off: this session still applies */ }
+  applyTheme(pref);
+  if (state.settingsOpen) fillSec("theme", secTheme());
+  await bridge.setTheme(pref).catch(() => null);
+}
+
 // ── P-TRIV.4 (ADR-0191): Settings -> Trivia Wire ─────────────────────────────────────────────────
 // The real on/off toggle (no more hand-editing localStorage), the opt-in re-seed sources, and the
 // "Recycle" button that regenerates the per-role pack on the user's SELECTED model. Rendered from
@@ -2710,7 +4559,7 @@ function secTrivia(): string {
   const on = triviaEnabled();
   const toggle = `<label class="set-toggle"><input type="checkbox" id="trivToggle" ${on ? "checked" : ""}/>
       <span><b>Show the Trivia Wire</b> - a word-game ticker that scrolls in the status bar while the agent works, or when you're idle with work to return to. Answer with a click or the A-D keys.</span></label>`;
-  if (!on) return setCard("trivia", "Trivia Wire", "status-bar game", toggle + `<div class="set-note">${icon("info", 12)} Off - the ticker stays hidden everywhere until you switch it back on here.</div>`, true);
+  if (!on) return setCard("trivia", "Trivia Wire", "status-bar game", toggle + `<div class="set-note">${icon("info", 12)} Off - the ticker stays hidden until you switch it back on here. Arcade scoring and your shared LUCID points remain active.</div>`, true);
 
   const role = state.userRole || "developer";
   const src = triviaSources();
@@ -2730,7 +4579,8 @@ function secTrivia(): string {
     ? `<div class="set-note ok">${icon("check", 12)} Using a generated ${esc(role)} pack (${pack.length} questions). <button class="btn-mini triv-reset" id="trivPackReset">${icon("restore", 11)} Use built-in</button></div>`
     : `<div class="set-note">${icon("info", 12)} Using the built-in ${esc(role)} pack. Check a source and Recycle to tailor it to your work.</div>`;
 
-  return setCard("trivia", "Trivia Wire", "status-bar game · on-device", toggle + sources + reseed + status, true);
+  const pointsNote = `<div class="set-note">${icon("info", 12)} LUCID points combine arcade and trivia earnings and are saved on this device. Recycling questions or switching packs keeps your points and trivia accuracy.</div>`;
+  return setCard("trivia", "Trivia Wire", "status-bar game · on-device", toggle + sources + reseed + status + pointsNote, true);
 }
 
 /** Run an AI re-seed: the backend gathers the checked sources, scans them fail-closed, and generates a
@@ -2842,16 +4692,14 @@ async function reindexEmbeddings(): Promise<void> {
 }
 function settingsShell(): string {
   return [
-    `<div data-sec="workspace"></div>`,
+    setSkel("workspace", "Workspace", "folder \u00b7 clone \u00b7 git", true),
     // Profile is just the local name we already hold in state - render it instantly (no skeleton /
     // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
     secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
     setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
-    // AskSage gov gateway sits ABOVE Providers (the foregrounded, accredited path), with its monthly-tokens
-    // bar directly under it; the direct U.S. providers tuck into a default-collapsed card below.
+    setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
-    setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
     setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
@@ -2861,6 +4709,8 @@ function settingsShell(): string {
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+    setSkel("judgment", "Judgment", "Jev · TypeSafe System One", true), // P-JEV.1 (ADR-0374)
+    secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
@@ -2872,7 +4722,7 @@ function hydrateSettings(): void {
   void bridge.workspace().then((ws) => {
     if (ws) { state.workspace = ws; renderWorkspaceBar(); }
     const el = document.querySelector(`#setBody [data-sec="workspace"]`);
-    if (el) el.outerHTML = `<div data-sec="workspace">${ws ? workspaceSection(ws) : ""}</div>`;
+    if (el) el.outerHTML = ws ? workspaceSection(ws) : `<div data-sec="workspace"></div>`;
   });
   void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0221
   // Profile already painted from cache; refresh from disk only if it changed AND the user isn't typing.
@@ -2885,12 +4735,14 @@ function hydrateSettings(): void {
     }
     if (!typing) fillSec("profile", secProfile(s));
   });
-  void bridge.auth().then((a) => {
+  void Promise.all([bridge.auth(), bridge.accounts().catch(() => null)]).then(([a, accts]) => {
     state.auth = a; // store so the AskSage gateway card can render its key entry from auth.gateway
+    if (accts) state.accounts = accts; // P-ACCT.1: the account snapshot lands before the sections fill (an OAuth just completed also refreshes through here)
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
-    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); });
+    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
+    void bridge.judgment().then((j) => fillSec("judgment", secJudgment(a, j))); // P-JEV.1: key state + the clamped mode
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -2933,9 +4785,60 @@ const SCOPE_INFO: Record<string, { label: string; tone: "ok" | "warn" | "danger"
 };
 const SCOPE_ORDER = ["personal", "work", "combined", "cui"] as const;
 
-/** Re-render just the Personalization card (instant - the endpoint is local). */
-function hydratePersonal(): Promise<void> {
-  return bridge.personal().then((p) => fillSec("personal", secPersonal(p)));
+// ── P-KGUI.3 (ADR-0336): the Personalization card knows about the user's named KGs ───────────────────
+//
+// The card used to show three fixed compartment tiles and nothing about the KGs the user actually
+// accumulates. These two module vars are what the tile builder reads; both are filled by hydratePersonal.
+let personalKgs: KgListItem[] = [];
+let personalKgPages: Record<string, number> = {};
+let personalCountsBusy = false;
+let personalHydrationGeneration = 0;
+
+/** The hero KG row, mirroring the LUCID Agent hero button in the Profile card. It opens the EXISTING KG
+ *  picker (select / rename / seed from a folder / import a .lkgpack / the Role KG Packs catalog / new KG),
+ *  which until now was reachable only by opening the KG panel and drilling into its Views dropdown. No new
+ *  capability: the storefront and the importer were already built, they were just three clicks deep. */
+function kgHeroBtnHtml(): string {
+  const active = personalKgs.find((k) => k.active);
+  const name = active?.name.trim() || "My Knowledge";
+  const n = personalKgs.length;
+  return `<button class="role-seg role-seg-hero psc-kg-hero" type="button" id="personalKgPick"`
+    + ` data-tip="Knowledge graphs \u00b7 dropdown|Switch the active KG, rename one, seed a new one from a folder,`
+    + ` import a .lkgpack you own, or browse Role KG Packs. The active KG is what the agent answers from.">`
+    + `${icon("graph", 14)}<span>${esc(name)}</span>`
+    // `n <= 1` rather than `n === 1`: personalKgs is EMPTY on the first paint, before kbList resolves, so a
+    // strict equality check would render "0 graphs" for the fraction of a second before the list lands.
+    + `<em>${n <= 1 ? "select \u00b7 edit \u00b7 upload" : `${n} graphs \u00b7 select \u00b7 edit \u00b7 upload`}</em></button>`;
+}
+
+/** Re-render just the Personalization card (instant - the personal endpoint is local). The KG list rides
+ *  along because the tiles need it; per-KG PAGE COUNTS do not, and are filled in a second pass. */
+async function hydratePersonal(): Promise<void> {
+  const generation = ++personalHydrationGeneration;
+  const [p, kgv] = await Promise.all([bridge.personal(), bridge.kbList().catch(() => null)]);
+  if (generation !== personalHydrationGeneration) return;
+  if (kgv) personalKgs = kgv.kgs.map((k) => ({ kg_id: k.kg_id, name: k.name, active: k.kg_id === kgv.activeId, read_only: k.read_only, source_kind: k.source_kind }));
+  fillSec("personal", secPersonal(p));
+  void fillPersonalKgCounts(p, generation);
+}
+
+/** Second pass: the per-KG page counts. Each KG is its OWN DuckDB file, so this costs one open per KG on
+ *  the first call and must NEVER block the card. The tiles paint with a dash and the numbers land after.
+ *  Single-flight, and it repaints only when a number actually changed, so a burst of hydrations cannot
+ *  fan out into N file opens or flicker the card for nothing. */
+async function fillPersonalKgCounts(p: PersonalStatus | null, generation: number): Promise<void> {
+  if (personalCountsBusy || personalKgs.length === 0) return;
+  personalCountsBusy = true;
+  try {
+    const pages = await bridge.kbCounts().catch(() => null);
+    if (!pages || generation !== personalHydrationGeneration) return; // discard counts from before an import or switch
+    const changed = personalKgs.some((k) => personalKgPages[k.kg_id] !== pages[k.kg_id]);
+    personalKgPages = pages;
+    if (changed) fillSec("personal", secPersonal(p));
+  } finally {
+    personalCountsBusy = false;
+    if (generation !== personalHydrationGeneration && state.settingsOpen) void hydratePersonal();
+  }
 }
 
 // ── P-LOCAL.3 (ADR-0135): Settings → Local Providers ─────────────────────────────────────────────
@@ -2948,6 +4851,28 @@ async function hydrateLocalProviders(): Promise<void> {
   state.localProviders = providers ?? [];
   const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
   fillSec("localProviders", localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron));
+  // P-LOCAL.4: a preset picked in the Provider Hub is applied here, once the add form actually exists.
+  if (pendingLocalPreset) { const id = pendingLocalPreset; pendingLocalPreset = null; applyLocalPreset(id); }
+}
+
+// P-LOCAL.4: pre-fill the Local Providers add form from a model preset - append the id (deduped), nudge auth
+// to bearer (the secure default for a shared unified endpoint), open the add form, focus the base URL. Used
+// by the add-form preset chips AND (via pendingLocalPreset) the Provider Hub's Local & self-hosted tiles.
+let pendingLocalPreset: string | null = null;
+function applyLocalPreset(id: string): void {
+  const sb = $("#setBody"); if (!sb) return;
+  (sb.querySelector(".lp-add") as HTMLElement | null)?.classList.add("open");
+  const models = $("#lpModels", sb) as HTMLInputElement | null;
+  if (models) {
+    const cur = models.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    if (!cur.includes(id)) cur.push(id);
+    models.value = cur.join(", ");
+  }
+  const auth = $("#lpAuth", sb) as HTMLSelectElement | null;
+  if (auth && auth.value === "none") auth.value = "bearer";
+  const name = $("#lpName", sb) as HTMLInputElement | null;
+  if (name && !name.value.trim()) name.value = "Unified LLM gateway";
+  ($("#lpBaseUrl", sb) as HTMLInputElement | null)?.focus();
 }
 
 /** Add a provider from the card's form: validate → (if authed) store the key in the vault → save the def. */
@@ -2995,6 +4920,62 @@ async function testLocalProviderConn(baseUrl: string): Promise<void> {
   }
 }
 
+/** P-LOCAL.6: ask the endpoint what it serves and fill the add form's model ids from its answer, so the
+ *  user stops guessing (and stops inheriting the catalog's editorial guess at a context window). */
+async function discoverLocalProviderModels(): Promise<void> {
+  const body = $("#setBody")!;
+  const u = (($("#lpBaseUrl", body) as HTMLInputElement | null)?.value ?? "").trim();
+  if (!u) { showToast({ tone: "warn", title: "Enter a base URL first", desc: "Type the endpoint's base URL, then discover its models." }); return; }
+  showToast({ title: "Asking the endpoint…", desc: u, timeout: 1400 });
+  const r = await bridge.localProviderDiscover({ baseUrl: u }).catch(() => null);
+  if (!r?.reachable) {
+    const hint = u.startsWith("https") ? " Check the VPN tunnel, TLS cert, and port." : " Check the host/port - is the server running?";
+    showToast({ tone: "danger", title: "Not reachable", desc: (r?.error ?? "no response.") + hint });
+    return;
+  }
+  if (r.authRequired) {
+    showToast({
+      tone: "warn", title: "This endpoint needs a key",
+      desc: "Add the provider with its key first (the key goes to the OS-encrypted vault), then press Discover on its row. LUCID never sends a key through this probe.",
+    });
+    return;
+  }
+  const models = r.models ?? [];
+  if (!models.length) {
+    showToast({ tone: "warn", title: "No models reported", desc: `The endpoint answered HTTP ${r.status} with an empty list. Type the model ids by hand.` });
+    return;
+  }
+  const field = $("#lpModels", body) as HTMLInputElement | null;
+  if (field) field.value = modelsFieldValue(models);
+  const sized = models.filter((m) => m.contextWindow).length;
+  const extra = [
+    sized ? `${sized} with a real context window` : "no context windows reported",
+    r.dropped ? `${r.dropped} entr${r.dropped === 1 ? "y" : "ies"} skipped as unusable` : "",
+  ].filter(Boolean).join(" \u00b7 ");
+  showToast({ tone: "ok", title: `Found ${models.length} model${models.length === 1 ? "" : "s"}`, desc: `${extra}. Edit the list if you only want some of them.` });
+}
+
+/** P-LOCAL.6: refresh a SAVED provider's model list from its endpoint. Authenticates from the vault
+ *  (main injected the secret into the engine's env at spawn), so a credentialed box works here. */
+async function rediscoverLocalProvider(id: string): Promise<void> {
+  const def = state.localProviders.find((p) => p.id === id);
+  if (!def) return;
+  showToast({ title: "Asking the endpoint…", desc: def.baseUrl, timeout: 1400 });
+  const r = await bridge.localProviderDiscover({ id }).catch(() => null);
+  if (!r?.reachable) { showToast({ tone: "danger", title: "Not reachable", desc: r?.error ?? "no response." }); return; }
+  if (r.authRequired) {
+    showToast({ tone: "warn", title: "The endpoint refused the key", desc: "Add or update the key with the Key button, then restart LUCID so the engine picks it up." });
+    return;
+  }
+  const { def: next, added, removed } = providerWithDiscovered(def, r.models ?? [], Date.now());
+  if (next === def) { showToast({ tone: "warn", title: "No models reported", desc: `HTTP ${r.status} with an empty list. The saved list was left alone.` }); return; }
+  const saved = await bridge.localProviderUpsert(next).catch(() => null);
+  if (!saved?.saved) { showToast({ tone: "danger", title: "Could not save", desc: saved?.errors?.join("; ") ?? "the provider was rejected." }); return; }
+  void hydrateLocalProviders();
+  const changes = [added.length ? `+${added.length}` : "", removed.length ? `-${removed.length}` : ""].filter(Boolean).join(" ");
+  showToast({ tone: "ok", title: `${next.models.length} model${next.models.length === 1 ? "" : "s"} from the endpoint`, desc: `${changes || "no change"}. Restart LUCID to apply.` });
+}
+
 /** Store (or rotate) an authed provider's key straight into the OS-encrypted vault, from the inline row. */
 async function saveLocalProviderKey(wrap: HTMLElement): Promise<void> {
   const id = wrap.dataset.lpId ?? "";
@@ -3012,7 +4993,7 @@ async function saveLocalProviderKey(wrap: HTMLElement): Promise<void> {
 }
 // Settings → Personalization (ADR-0010/0012): opt-in encrypted KG + the
 // Work/Personal/Combined/CUI compartment selector with per-mode risk notices.
-function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
+function secPersonal(p: PersonalStatus | null): string {
   const card = (inner: string) => setCard("personal", "Personalization", "private · encrypted · opt-in", inner, true);
   if (!p) return card(`<div class="set-note">${icon("info", 12)} Personalization is unavailable - update the GUI server.</div>`);
   const toggle = `<label class="set-toggle"><input type="checkbox" id="personalToggle" ${p.enabled ? "checked" : ""}/>
@@ -3037,10 +5018,8 @@ function secPersonal(p: import("./bridge.ts").PersonalStatus | null): string {
       <div class="pscope-lbl">Compartment <span class="info-dot" data-tip="Data compartments|Keep Work, Personal, and CUI knowledge separate. CUI lives in its OWN encrypted store with its own passphrase (ADR-0014) and auto-locks when not selected. The active compartment scopes what is learned and recalled; Combined is a union view (never CUI).">${icon("info", 11)}</span></div>
       <div class="seg pscope-seg">${seg}</div>
       <div class="pscope-note ${info.tone}">${icon(info.tone === "danger" ? "shield" : "info", 13)} <span>${esc(info.note)}</span></div>
-      <div class="pscope-counts">
-        <div class="psc"><b class="psc-personal">${c.personal}</b><span>personal</span></div>
-        <div class="psc"><b class="psc-work">${c.work}</b><span>work</span></div>
-        <div class="psc"><b class="psc-cui">${p.cuiUnlocked ? c.cui : "-"}</b><span>cui${p.cuiUnlocked ? "" : " (locked)"}</span></div></div>
+      ${kgHeroBtnHtml()}
+      ${personalStatsHtml(personalStatTiles({ counts: p.counts, cuiConfigured: p.cuiConfigured, cuiUnlocked: p.cuiUnlocked, kgs: personalKgs.map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, active: k.active })), kgPages: personalKgPages }))}
       ${cur === "cui" ? secCui(p) : ""}
       ${p.legacyCuiInMain > 0 ? `<div class="set-note warn">${icon("info", 12)} <span>${p.legacyCuiInMain} legacy CUI fact(s) sit in the main store from before isolation - not recalled or exported. ${p.cuiUnlocked ? `<button class="btn-mini" id="cuiMigrate" data-tip="Move into the isolated store|Relocates these cui facts (ids + timestamps preserved) into the separate CUI store, then removes them from the main store. Audited.">${icon("shield", 11)} Move into the CUI store</button>` : "Select CUI and unlock its store to move them into isolation."}</span></div>` : ""}
       <label class="set-toggle" style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px"><input type="checkbox" id="personalAiToggle" ${p.aiExtract ? "checked" : ""}/>
@@ -3078,6 +5057,7 @@ function openSettings(): void {
   closeKnowledge();
   closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
   closeSkills(); // P-SKILL.4
+  closeMeetings(); // P-MEET.1
   state.settingsOpen = true;
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#settings")!.hidden = false;
@@ -3100,6 +5080,1018 @@ function closeSettings(): void {
 // (event-delegated below) inspects / re-scans / removes / enables each skill. The enable toggle is the
 // SAME decision the delivery path uses (skills.ts isSkillEnabled), so disabling here truly stops a skill
 // being offered/loaded; a flagged skill's toggle is locked (invariant #3, keystone #2).
+// ---- CREATOR-0 (ADR-0282/0281): the Creator Studio fly-out ----
+// A right-edge aside, mutually exclusive with the other surfaces (same discipline as Settings/Skills).
+// It shows every integration with its HONEST capability labels, and the local track library beneath.
+let studioOpen = false;
+function openCreatorStudio(): void {
+  if (!state.buildInfo?.creatorBuild) return; // absent in a standard build, not merely disabled
+  studioOpen = true;
+  closeSettings(); closeKnowledge(); closePreview(); closeSkills(); closeIde();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#creatorStudio")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", b.id === "railStudio"));
+  void renderCreatorStudio();
+}
+function closeCreatorStudio(): void {
+  if (!studioOpen) return;
+  studioOpen = false;
+  stopEditorAudio(); // CREATOR-2: never leave the editor's clip playing behind a closed pane
+  $("#creatorStudio")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+/** The Studio is four panes behind one tab strip: integrations + library, the image tools, the
+ *  follow-along audio editor, and the mixer that layers several takes into one file. */
+function studioTabsHtml(): string {
+  const tab = (id: "integrations" | "images" | "editor" | "mixer" | "render", label: string, ic: string) =>
+    `<button type="button" class="cst-tab${state.studioTab === id ? " on" : ""}" data-studio-tab="${id}">${icon(ic, 13)}<span>${esc(label)}</span></button>`;
+  return `<div class="cst-tabs">${tab("integrations", "Integrations", "market")}${tab("images", "Images", "eye")}${tab("render", "Render", "play")}${tab("editor", "Editor", "volume")}${tab("mixer", "Mixer", "sliders")}</div>`;
+}
+async function renderCreatorStudio(): Promise<void> {
+  const body = $("#studioBody");
+  if (!body) return;
+  if (state.studioTab === "editor") {
+    body.innerHTML = studioTabsHtml() + creatorEditorHtml(state.creatorEditor);
+    paintEditorWave();
+    return;
+  }
+  if (state.studioTab === "mixer") {
+    body.innerHTML = studioTabsHtml() + creatorMixerHtml(state.creatorMixer);
+    return;
+  }
+  if (state.studioTab === "render") {
+    body.innerHTML = studioTabsHtml() + creatorRenderHtml(state.creatorRender);
+    return;
+  }
+  if (state.studioTab === "images") {
+    body.innerHTML = studioTabsHtml() + creatorImagesHtml(state.creatorImages);
+    paintCreatorImageSources();
+    return;
+  }
+  const view = await bridge.creatorStudio().catch(() => null);
+  state.creatorStudio = view;
+  body.innerHTML = studioTabsHtml() + creatorStudioHtml(view);
+}
+
+// ---- CREATOR-IMG (ADR-0291): the image tools ----
+// Pixels live in a canvas here, because the browser is the only side of this app with an image decoder and
+// real fonts. The harness owns the ENCODERS (PNG, GIF, sprite geometry) so a sheet or a GIF is byte-identical
+// whether it came from this pane or from an agent script.
+
+async function loadCreatorImages(fresh = false): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const prev = state.creatorImages;
+  const models = await bridge.creatorModels().catch(() => null);
+  const arts = await bridge.creatorArtifacts().catch(() => null);
+  state.creatorImages = {
+    endpoint: models?.endpoint ?? "",
+    models: models?.models ?? [],
+    note: models?.note ?? "",
+    artifacts: arts ?? [],
+    inputs: prev?.inputs ?? [],
+    selected: (prev?.selected ?? []).filter((id) => (arts ?? []).some((a) => a.id === id)),
+    model: prev?.model || (models?.models[0]?.id ?? ""),
+    prompt: fresh ? "" : prev?.prompt ?? "",
+    negative: fresh ? "" : prev?.negative ?? "",
+    busy: "",
+  };
+  if (studioOpen && state.studioTab === "images") void renderCreatorStudio();
+}
+
+// ---- CREATOR-3 (ADR-0287): the video and 3D render pane ----
+// The pane's honesty is the probe: `attested` comes from the SAME cache the server gates on, so the button
+// is disabled for the same reason the route would refuse, and the user reads that reason before spending a
+// render rather than after.
+
+async function loadCreatorRender(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const prev = state.creatorRender;
+  const models = await bridge.creatorModels().catch(() => null);
+  const studio = state.creatorStudio ?? await bridge.creatorStudio().catch(() => null);
+  if (studio) state.creatorStudio = studio;
+  const comfy = (studio?.probes ?? []).find((p) => p.providerId === "comfyui");
+  state.creatorRender = {
+    kind: prev?.kind ?? "video",
+    prompt: prev?.prompt ?? "",
+    model: prev?.model || (models?.models[0]?.id ?? ""),
+    models: (models?.models ?? []).map((m) => m.id),
+    endpoint: models?.endpoint ?? "",
+    // A probe that is not `ready` proves nothing, so its capability list is deliberately ignored rather
+    // than shown as if it were current.
+    attested: comfy?.state === "ready" ? comfy.attested : [],
+    note: models?.note ?? "",
+    busy: "",
+    status: prev?.status ?? "",
+    statusTone: prev?.statusTone ?? "",
+    run: prev?.run ?? null,
+    progress: prev?.progress ?? null,
+  };
+  if (studioOpen && state.studioTab === "render") void renderCreatorStudio();
+}
+
+/** Read the pane's fields off the DOM before a submit, so a repaint never loses what the user typed (the
+ *  CREATOR-IMG idiom). */
+function readRenderFields(): void {
+  const v = state.creatorRender;
+  if (!v) return;
+  const prompt = ($("#cplPrompt") as HTMLTextAreaElement | null)?.value;
+  const model = ($("#cplModel") as HTMLSelectElement | null)?.value;
+  state.creatorRender = { ...v, prompt: prompt ?? v.prompt, model: model ?? v.model };
+}
+
+async function runCreatorRender(): Promise<void> {
+  readRenderFields();
+  const v = state.creatorRender;
+  if (!v || v.busy) return;
+  state.creatorRender = { ...v, busy: "Rendering...", status: "", statusTone: "", run: null, progress: null };
+  void renderCreatorStudio();
+  const r = await bridge.creatorRender({ kind: v.kind, prompt: v.prompt, model: v.model || undefined });
+  const cur = state.creatorRender;
+  if (!cur) return;
+  if (!r || !r.run) {
+    state.creatorRender = { ...cur, busy: "", status: r?.error ?? "The render service did not answer.", statusTone: "error" };
+    void renderCreatorStudio();
+    return;
+  }
+  // The run object is shown WHOLE, refusals included: a stored-some-and-refused-some render reads as what
+  // it was, never as a clean success.
+  state.creatorRender = {
+    ...cur,
+    busy: "",
+    run: r.run,
+    progress: r.run.progress ?? null,
+    status: r.run.ok ? "" : r.run.error,
+    statusTone: r.run.ok ? "ok" : "error",
+  };
+  void renderCreatorStudio();
+  if (r.run.ok) void loadCreatorImages(); // a stored artifact belongs in the grid immediately
+}
+
+/** Set every thumbnail's bytes as a DOM PROPERTY (never interpolated into HTML - the P-VISION.1 idiom). */
+function paintCreatorImageSources(): void {
+  const v = state.creatorImages;
+  if (!v) return;
+  v.inputs.forEach((input, i) => {
+    const img = $(`[data-mix-src="${i}"]`) as HTMLImageElement | null;
+    if (img) img.src = input.dataUrl;
+  });
+  for (const a of v.artifacts) {
+    const img = $(`[data-art-src="${a.id}"]`) as HTMLImageElement | null;
+    if (!img || img.dataset.loaded === "1") continue;
+    img.dataset.loaded = "1";
+    void bridge.creatorArtifactData(a.id).then((r) => { if (r?.dataUrl) img.src = r.dataUrl; });
+  }
+}
+
+function patchCreatorImages(patch: Partial<CreatorImagesView>): void {
+  if (!state.creatorImages) return;
+  state.creatorImages = { ...state.creatorImages, ...patch };
+  void renderCreatorStudio();
+}
+
+/** Read the generator fields straight off the DOM, so a re-render never loses what the user typed. */
+function creatorImageFields(): { prompt: string; negative: string; model: string; width: number; height: number; seed?: number } {
+  const val = (id: string) => ($(`#${id}`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value ?? "";
+  const num = (id: string, fallback: number) => { const n = Number(val(id)); return Number.isFinite(n) && n > 0 ? Math.trunc(n) : fallback; };
+  const seedRaw = Number(val("cimSeed"));
+  return {
+    prompt: val("cimPrompt").trim(),
+    negative: val("cimNegative").trim(),
+    model: val("cimModel"),
+    width: num("cimWidth", 1024),
+    height: num("cimHeight", 1024),
+    seed: Number.isFinite(seedRaw) && val("cimSeed").trim() ? Math.trunc(seedRaw) : undefined,
+  };
+}
+
+/** Decode one image data URL into RGBA through a canvas - the browser's decoder, not ours. */
+async function decodeToRgba(dataUrl: string): Promise<{ width: number; height: number; rgbaB64: string } | null> {
+  const img = new Image();
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  img.onload = () => resolve(true);
+  img.onerror = () => resolve(false);
+  img.src = dataUrl;
+  if (!(await promise)) return null;
+  const w = Math.max(1, Math.min(2048, img.naturalWidth)), h = Math.max(1, Math.min(2048, img.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, w, h);
+  const data = ctx.getImageData(0, 0, w, h).data;
+  let binary = "";
+  for (let i = 0; i < data.length; i += 8192) binary += String.fromCharCode(...data.subarray(i, i + 8192));
+  return { width: w, height: h, rgbaB64: btoa(binary) };
+}
+
+/** Every selected artifact as RGBA frames, resized to the FIRST one so a sheet or GIF is uniform. */
+async function selectedFrames(): Promise<{ ok: true; frames: { width: number; height: number; rgbaB64: string }[] } | { ok: false; error: string }> {
+  const v = state.creatorImages;
+  if (!v?.selected.length) return { ok: false, error: "Select at least one image first." };
+  const frames: { width: number; height: number; rgbaB64: string }[] = [];
+  let size: { w: number; h: number } | null = null;
+  for (const id of v.selected) {
+    const data = await bridge.creatorArtifactData(id).catch(() => null);
+    if (!data?.dataUrl) return { ok: false, error: "One of those artifacts could not be read." };
+    const frame = await decodeRgbaAt(data.dataUrl, size);
+    if (!frame) return { ok: false, error: "One of those images could not be decoded." };
+    size ??= { w: frame.width, h: frame.height };
+    frames.push(frame);
+  }
+  return { ok: true, frames };
+}
+
+/** Decode to RGBA, drawn into `size` when one is set - GIF and sheet frames must share a size. */
+async function decodeRgbaAt(dataUrl: string, size: { w: number; h: number } | null): Promise<{ width: number; height: number; rgbaB64: string } | null> {
+  if (!size) return decodeToRgba(dataUrl);
+  const img = new Image();
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  img.onload = () => resolve(true);
+  img.onerror = () => resolve(false);
+  img.src = dataUrl;
+  if (!(await promise)) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = size.w; canvas.height = size.h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, size.w, size.h);
+  const data = ctx.getImageData(0, 0, size.w, size.h).data;
+  let binary = "";
+  for (let i = 0; i < data.length; i += 8192) binary += String.fromCharCode(...data.subarray(i, i + 8192));
+  return { width: size.w, height: size.h, rgbaB64: btoa(binary) };
+}
+
+async function generateCreatorImage(): Promise<void> {
+  const v = state.creatorImages;
+  if (!v) return;
+  const f = creatorImageFields();
+  if (!f.prompt) { showToast({ tone: "warn", title: "Nothing to generate", desc: "Write a prompt first.", actions: [{ label: "OK" }], timeout: 3200 }); return; }
+  patchCreatorImages({ prompt: f.prompt, negative: f.negative, model: f.model, busy: "Generating..." });
+  const r = await bridge.creatorGenerateImage({ ...f, inputs: v.inputs.map((i) => ({ role: i.role, dataUrl: i.dataUrl })) });
+  if (!r.ok) {
+    patchCreatorImages({ busy: "" });
+    showToast({ tone: "danger", title: "Generation refused", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 9000 });
+    return;
+  }
+  await loadCreatorImages();
+  const first = r.produced?.[0];
+  if (first) void openArtifactInPreview(first.id);
+  showToast({ title: "Image generated", desc: `${r.produced?.length ?? 0} artifact(s) stored with the prompt and model that made them.`, timeout: 4200 });
+}
+
+async function buildCreatorSheet(): Promise<void> {
+  const got = await selectedFrames();
+  if (!got.ok) { showToast({ tone: "warn", title: "Sprite sheet", desc: got.error, actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  const vals = await creatorPrompt("Build a sprite sheet", "Frames are packed left to right into a PNG grid, with a frame manifest and a steps() CSS animation written beside it.", [
+    { name: "name", label: "Name", kind: "text", value: "sprite" },
+    { name: "columns", label: "Columns", kind: "text", value: String(got.frames.length) },
+    { name: "durationMs", label: "Full cycle (ms)", kind: "text", value: String(got.frames.length * 100) },
+  ]);
+  if (!vals) return;
+  patchCreatorImages({ busy: "Packing..." });
+  const r = await bridge.creatorBuildSheet({ frames: got.frames, name: vals.name, columns: Number(vals.columns) || undefined, durationMs: Number(vals.durationMs) || undefined });
+  patchCreatorImages({ busy: "" });
+  if (!r.ok) { showToast({ tone: "danger", title: "Sprite sheet", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  await loadCreatorImages();
+  if (r.artifact) void openArtifactInPreview(r.artifact.id);
+  showToast({ title: "Sprite sheet built", desc: "PNG, frame manifest, and CSS animation are in the artifact grid.", timeout: 4200 });
+}
+
+async function buildCreatorGif(): Promise<void> {
+  const got = await selectedFrames();
+  if (!got.ok) { showToast({ tone: "warn", title: "GIF", desc: got.error, actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  const vals = await creatorPrompt("Build an animated GIF", "Encoded in LUCID: one global palette, LZW compression, and a Netscape loop block. No provider is involved.", [
+    { name: "delayMs", label: "Frame delay (ms)", kind: "text", value: "120" },
+    { name: "loop", label: "Extra loops (0 = forever)", kind: "text", value: "0" },
+  ]);
+  if (!vals) return;
+  patchCreatorImages({ busy: "Encoding..." });
+  const r = await bridge.creatorBuildGif({ frames: got.frames, delayMs: Number(vals.delayMs) || 120, loop: Number(vals.loop) || 0 });
+  patchCreatorImages({ busy: "" });
+  if (!r.ok) { showToast({ tone: "danger", title: "GIF", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  await loadCreatorImages();
+  if (r.artifact) void openArtifactInPreview(r.artifact.id);
+  showToast({ title: "GIF encoded", desc: `${got.frames.length} frames, looping.`, timeout: 4200 });
+}
+
+/** Meme: real fonts, real measurement, the harness's fit-and-wrap math, then a canvas PNG. */
+async function buildCreatorMeme(): Promise<void> {
+  const v = state.creatorImages;
+  const id = v?.selected[0];
+  if (!id) { showToast({ tone: "warn", title: "Meme", desc: "Select an image first.", actions: [{ label: "OK" }], timeout: 3200 }); return; }
+  const vals = await creatorPrompt("Build a meme", "Top and bottom text are auto-fitted, wrapped, and stroked in the classic style. The picture stays untouched underneath.", [
+    { name: "top", label: "Top text", kind: "text" },
+    { name: "bottom", label: "Bottom text", kind: "text" },
+  ]);
+  if (!vals || (!vals.top && !vals.bottom)) return;
+  const data = await bridge.creatorArtifactData(id).catch(() => null);
+  if (!data?.dataUrl) { showToast({ tone: "danger", title: "Meme", desc: "That image could not be read.", actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  const img = new Image();
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  img.onload = () => resolve(true);
+  img.onerror = () => resolve(false);
+  img.src = data.dataUrl;
+  if (!(await promise)) return;
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.drawImage(img, 0, 0);
+  const font = (px: number) => `700 ${px}px Impact, "Anton", "Arial Black", system-ui, sans-serif`;
+  const layout = memeLayout({
+    width: w, height: h, top: vals.top, bottom: vals.bottom,
+    measure: (text, px) => { ctx.font = font(px); return ctx.measureText(text).width; },
+  });
+  ctx.textAlign = "center";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#000";
+  ctx.fillStyle = "#fff";
+  for (const block of [layout.top, layout.bottom]) {
+    if (!block) continue;
+    ctx.font = font(block.fontPx);
+    ctx.lineWidth = layout.strokePx;
+    block.lines.forEach((line, i) => {
+      const text = line.toUpperCase();
+      const y = block.y + i * block.lineHeight;
+      ctx.strokeText(text, w / 2, y);
+      ctx.fillText(text, w / 2, y);
+    });
+  }
+  const r = await bridge.creatorStoreArtifact({ kind: "meme", dataUrl: canvas.toDataURL("image/png"), width: w, height: h, source: `meme over ${id}` });
+  if (!r.ok) { showToast({ tone: "danger", title: "Meme", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  await loadCreatorImages();
+  if (r.artifact) void openArtifactInPreview(r.artifact.id);
+  showToast({ title: "Meme built", desc: "Open it in the Preview panel to mark it up or send it to chat.", timeout: 4200 });
+}
+
+/** Hand an artifact to the Preview panel, which already owns markup and Screenshot to chat (P-IMG.1). */
+async function openArtifactInPreview(id: string): Promise<void> {
+  const data = await bridge.creatorArtifactData(id).catch(() => null);
+  if (!data?.dataUrl) { showToast({ tone: "warn", title: "Preview", desc: "That artifact could not be read.", actions: [{ label: "OK" }], timeout: 3600 }); return; }
+  const r = await bridge.previewImage(data.dataUrl);
+  if (!r?.path) { showToast({ tone: "warn", title: "Preview", desc: "The preview could not be prepared.", actions: [{ label: "OK" }], timeout: 3600 }); return; }
+  openPreview();
+  await loadPreview(r.path);
+}
+
+/** Stage an existing artifact as a named generation input. */
+async function useArtifactAsInput(id: string): Promise<void> {
+  const v = state.creatorImages;
+  if (!v) return;
+  if (v.inputs.length >= 6) { showToast({ tone: "warn", title: "Mixer full", desc: "Six input images is the cap for one generation.", actions: [{ label: "OK" }], timeout: 3600 }); return; }
+  const data = await bridge.creatorArtifactData(id).catch(() => null);
+  if (!data?.dataUrl) return;
+  const roles = ["style", "composition", "background", "mask", "detail", "extra"];
+  const role = roles[v.inputs.length] ?? `input${v.inputs.length + 1}`;
+  patchCreatorImages({ inputs: [...v.inputs, { role, name: `${id.slice(0, 10)}.png`, dataUrl: data.dataUrl } satisfies MixInputView] });
+}
+/** CREATOR-1: probe one provider or every declared one, then repaint from the server's fresh registry. */
+async function runCreatorProbe(providerId?: string): Promise<void> {
+  const body = $("#studioBody");
+  if (body) body.innerHTML = studioTabsHtml() + `<p class="cst-empty">${esc(providerId ? `Probing ${providerId}...` : "Probing every declared provider...")}</p>`;
+  const r = await bridge.creatorProbe(providerId);
+  if (!r.ok) showToast({ tone: "danger", title: "Probe", desc: r.error ?? "That probe did not run.", actions: [{ label: "OK" }], timeout: 5200 });
+  await renderCreatorStudio();
+  const proven = (r.registry?.probes ?? []).filter((p) => p.state === "ready").length;
+  if (r.ok) showToast({ title: "Probe complete", desc: `${proven} provider(s) proved a capability. Anything unproven stays unusable.`, timeout: 4200 });
+}
+
+/** CREATOR-1: request a stop. The job settles when the runner confirms, never on the click alone. */
+async function cancelCreatorJob(id: string): Promise<void> {
+  const r = await bridge.creatorCancelJob(id);
+  if (!r.ok) { showToast({ tone: "warn", title: "Stop", desc: r.error ?? "That job could not be stopped.", actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  showToast({ title: "Stop requested", desc: "The job settles once the runner confirms it stopped.", timeout: 3600 });
+  await renderCreatorStudio();
+}
+
+/** One library mutation, then repaint from the server's fresh view (never an optimistic guess). */
+async function creatorLibraryOp(op: CreatorLibraryOp): Promise<void> {
+  const r = await bridge.creatorLibrary(op);
+  if (!r.ok) showToast({ tone: "danger", title: "Library", desc: r.error ?? "That did not work.", actions: [{ label: "OK" }], timeout: 4200 });
+  const body = $("#studioBody");
+  if (r.view) { state.creatorStudio = r.view; if (body) body.innerHTML = creatorStudioHtml(r.view); }
+  else if (r.ok) void renderCreatorStudio();
+}
+/** Play one track from a blob URL built out of the base64 the control plane returns (the TTS idiom). */
+let studioAudio: HTMLAudioElement | null = null;
+let studioAudioUrl = "";
+async function playCreatorTrack(id: string): Promise<void> {
+  const clip = await bridge.creatorTrackAudio(id).catch(() => null);
+  if (!clip) { showToast({ tone: "warn", title: "Cannot play that track", desc: "Its audio file is missing from the library.", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+  if (studioAudio) { studioAudio.pause(); studioAudio = null; }
+  if (studioAudioUrl) { URL.revokeObjectURL(studioAudioUrl); studioAudioUrl = ""; }
+  const bytes = Uint8Array.from(atob(clip.audioB64), (c) => c.charCodeAt(0));
+  studioAudioUrl = URL.createObjectURL(new Blob([bytes], { type: clip.mime }));
+  studioAudio = new Audio(studioAudioUrl);
+  studioAudio.addEventListener("ended", () => { if (studioAudioUrl) { URL.revokeObjectURL(studioAudioUrl); studioAudioUrl = ""; } });
+  void studioAudio.play().catch(() => showToast({ tone: "warn", title: "Playback blocked", desc: "The browser refused to start audio. Click play again.", actions: [{ label: "OK" }], timeout: 4000 }));
+}
+
+// CREATOR-0: one small modal for the Studio's text entry (import a track, review it, declare an
+// endpoint). Deliberately plain: it collects strings and hands them to a server route that validates
+// fail-closed, so the UI never has to be the authority on what is acceptable.
+// CREATOR-2 adds `select`, for choosing among things the server already listed (a replacement source):
+// the user picks from real ids, so the modal cannot produce a source that does not exist.
+interface CreatorPromptField {
+  name: string; label: string; kind: "text" | "textarea" | "select"; value?: string; placeholder?: string;
+  options?: readonly { value: string; label: string }[];
+}
+function creatorPrompt(title: string, note: string, fields: CreatorPromptField[]): Promise<Record<string, string> | null> {
+  const { promise, resolve } = Promise.withResolvers<Record<string, string> | null>();
+  const field = (f: CreatorPromptField) => f.kind === "select"
+    ? `<select class="prov-key" data-cst-field="${esc(f.name)}">${(f.options ?? []).map((o) => `<option value="${esc(o.value)}"${o.value === f.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
+    : f.kind === "textarea"
+    ? `<textarea class="prov-key" rows="3" data-cst-field="${esc(f.name)}" placeholder="${esc(f.placeholder ?? "")}">${esc(f.value ?? "")}</textarea>`
+    : `<input class="prov-key" data-cst-field="${esc(f.name)}" value="${esc(f.value ?? "")}" placeholder="${esc(f.placeholder ?? "")}" spellcheck="false" />`;
+  const ov = el(`<div class="mkt-scrim cst-scrim"><div class="cst-modal" role="dialog" aria-label="${esc(title)}">
+    <div class="cst-modal-h"><span class="cst-modal-t">${esc(title)}</span>
+      <button class="mkt-close" data-cst-cancel aria-label="Close">${icon("close", 14)}</button></div>
+    <p class="cst-modal-note">${esc(note)}</p>
+    ${fields.map((f) => `<label class="cst-field"><span class="cst-field-lbl">${esc(f.label)}</span>${field(f)}</label>`).join("")}
+    <div class="cst-modal-acts"><button class="btn-mini" data-cst-cancel>Cancel</button><button class="btn-mini ok" data-cst-ok>Save</button></div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } };
+  const done = (out: Record<string, string> | null) => { document.removeEventListener("keydown", onKey, true); ov.remove(); resolve(out); };
+  document.addEventListener("keydown", onKey, true);
+  ov.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t === ov || t.closest("[data-cst-cancel]")) { done(null); return; }
+    if (!t.closest("[data-cst-ok]")) return;
+    const out: Record<string, string> = {};
+    for (const f of fields) out[f.name] = ($(`[data-cst-field="${f.name}"]`, ov) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value.trim() ?? "";
+    done(out);
+  });
+  ($("[data-cst-field]", ov) as HTMLInputElement | null)?.focus();
+  return promise;
+}
+const splitTags = (raw: string): string[] => raw.split(",").map((s) => s.trim()).filter(Boolean);
+
+async function openTrackAddPrompt(link?: { parentId: string; kind: "remix" | "reprompt" }): Promise<void> {
+  const parent = link ? state.creatorStudio?.tracks.find((t) => t.id === link.parentId) ?? null : null;
+  const vals = await creatorPrompt(
+    link ? (link.kind === "remix" ? "Add a remix" : "Add a re-prompt") : "Add audio to the library",
+    link
+      ? `Point at the new render. It keeps ${parent?.title ?? "the parent track"} as its parent, so the whole chain stays reviewable.`
+      : "Point at an audio file on this machine (mp3, wav, flac, ogg, opus, m4a, aac). It is copied into the Creator library with the prompt and tags you give it.",
+    [
+      { name: "sourcePath", label: "File path", kind: "text", placeholder: "the full path to the audio file" },
+      { name: "title", label: "Title", kind: "text", value: parent ? `${parent.title} (${link!.kind})` : "" },
+      { name: "origin", label: "Made with", kind: "text", value: parent?.origin ?? "suno", placeholder: "suno, elevenlabs, dots-tts, comfyui, local" },
+      { name: "prompt", label: "Prompt", kind: "textarea", value: parent?.prompt ?? "" },
+      { name: "tags", label: "Tags", kind: "text", value: (parent?.tags ?? []).join(", "), placeholder: "synthwave, demo" },
+    ],
+  );
+  if (!vals?.sourcePath) return;
+  await creatorLibraryOp({
+    op: link ? link.kind : "add",
+    id: link?.parentId,
+    sourcePath: vals.sourcePath,
+    title: vals.title,
+    origin: vals.origin,
+    prompt: vals.prompt,
+    tags: splitTags(vals.tags ?? ""),
+  });
+}
+
+async function openTrackReviewPrompt(id: string): Promise<void> {
+  const t = state.creatorStudio?.tracks.find((x) => x.id === id);
+  const vals = await creatorPrompt("Review this track", "Notes stay on this machine beside the track, so the next revision starts from what you actually heard.", [
+    { name: "review", label: "Notes", kind: "textarea", value: t?.review ?? "" },
+    { name: "prompt", label: "Prompt", kind: "textarea", value: t?.prompt ?? "" },
+    { name: "tags", label: "Tags", kind: "text", value: (t?.tags ?? []).join(", ") },
+  ]);
+  if (!vals) return;
+  await creatorLibraryOp({ op: "update", id, review: vals.review, prompt: vals.prompt, tags: splitTags(vals.tags ?? "") });
+}
+
+async function openCreatorEndpointPrompt(providerId: string): Promise<void> {
+  const vals = await creatorPrompt(`Connect ${providerId}`,
+    "LUCID stores a DECLARATION only: the endpoint or executable plus the NAME of a vault credential. The secret itself never lands in settings, and a pasted secret is refused.",
+    [
+      { name: "id", label: "Id", kind: "text", value: `${providerId}-local`, placeholder: "lowercase-id" },
+      { name: "label", label: "Label", kind: "text", placeholder: "what you call this box" },
+      { name: "baseUrl", label: "Base URL", kind: "text", placeholder: "http://127.0.0.1:8188 (network providers)" },
+      { name: "command", label: "Executable", kind: "text", placeholder: "the app binary (Blender, Unreal)" },
+      { name: "vaultRef", label: "Vault credential name", kind: "text", placeholder: "comfyui_token" },
+      { name: "zone", label: "Zone", kind: "text", value: "local", placeholder: "local, internal, external" },
+    ]);
+  if (!vals) return;
+  const endpoint: Record<string, unknown> = { providerId, enabled: true };
+  for (const [k, v] of Object.entries(vals)) if (v) endpoint[k] = v;
+  const r = await bridge.creatorEndpoint({ endpoint });
+  if (!r.ok) { showToast({ tone: "danger", title: "Refused", desc: r.error ?? "That declaration was not accepted.", actions: [{ label: "OK" }], timeout: 5600 }); return; }
+  showToast({ title: "Declaration saved", desc: "Stored by reference. Add the secret itself in the vault.", timeout: 2800 });
+  void renderCreatorStudio();
+}
+
+// ---- CREATOR-2 (ADR-0286): the follow-along audio editor ----
+// Every EDIT is a call into harness/creator/timeline.ts, in this process. The server is touched exactly
+// twice - once to OPEN a track (document + audio + waveform + the provenance line), once to SAVE the
+// render - so an edit is instant, undo restores the previous document exactly, and a refusal arrives as
+// the core's OWN sentence instead of a round trip that lost it.
+//
+// The <audio> element and the undo history are JS-owned, never markup, so a repaint of the pane never
+// restarts playback or drops the stack. The follow-along loop touches only the three nodes that change
+// per frame (canvas, clock, lit chip); a full repaint at 60fps would fight the odometer it sits beside.
+
+const EDITOR_PEAK_BUCKETS = 420;
+let editorAudio: HTMLAudioElement | null = null;
+let editorAudioUrl = "";
+let editorRaf = 0;
+let editorHistory: EditHistory | null = null;
+let editorAnchor = ""; // the chip a shift-click extends the selection from
+let editorDrag: string[] = []; // the span currently in flight between two chips
+
+/** Seed the pane from the library the Studio already holds (fetching it once if the user landed here
+ *  first). Anything the user had typed or opened survives the reseed. */
+async function loadCreatorEditor(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  if (!state.creatorStudio) state.creatorStudio = await bridge.creatorStudio().catch(() => null);
+  const tracks = (state.creatorStudio?.tracks ?? []).map((t) => ({ id: t.id, title: t.title, mime: t.mime }));
+  const prev = state.creatorEditor;
+  state.creatorEditor = {
+    tracks,
+    trackId: prev?.trackId || (tracks.find(isWavTrack)?.id ?? ""),
+    text: prev?.text ?? "",
+    session: prev?.session ?? null,
+    doc: prev?.doc ?? null,
+    selected: prev?.selected ?? [],
+    playheadMs: prev?.playheadMs ?? 0,
+    playing: false,
+    canUndo: !!editorHistory && canUndo(editorHistory),
+    canRedo: !!editorHistory && canRedo(editorHistory),
+    title: prev?.title ?? "",
+    status: prev?.status ?? "",
+    statusTone: prev?.statusTone ?? "",
+    busy: "",
+  };
+  if (studioOpen && state.studioTab === "editor") void renderCreatorStudio();
+}
+
+function setEditorStatus(status: string, tone: "" | "ok" | "error"): void {
+  if (!state.creatorEditor) return;
+  state.creatorEditor = { ...state.creatorEditor, status, statusTone: tone };
+  void renderCreatorStudio();
+}
+
+/** The waveform strip: the peaks the server measured, plus the playhead, in device pixels so the line is
+ *  crisp on a HiDPI screen. NO peaks draws an empty trough - never a flat line, which reads as silence. */
+function paintEditorWave(): void {
+  const v = state.creatorEditor;
+  const cv = $("[data-ced-wave]") as HTMLCanvasElement | null;
+  if (!cv || !v?.session || !v.doc) return;
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = Math.max(1, Math.round(cv.clientWidth));
+  const h = Math.max(1, Math.round(cv.clientHeight || 56));
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+  }
+  const ctx = cv.getContext("2d");
+  if (!ctx) return;
+  const cs = getComputedStyle(cv);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const bars = waveformBars(v.session.peaks, w, h - 4);
+  if (bars.length === 0) {
+    ctx.fillStyle = cs.getPropertyValue("--line").trim() || "#2a2f3a";
+    ctx.fillRect(0, h / 2 - 1, w, 2);
+  } else {
+    ctx.fillStyle = cs.getPropertyValue("--accent").trim() || "#7ebeff";
+    ctx.globalAlpha = 0.5;
+    for (const b of bars) ctx.fillRect(b.x, (h - b.h) / 2, Math.max(0.75, b.w - 0.5), b.h);
+    ctx.globalAlpha = 1;
+  }
+  const x = playheadX(v.playheadMs, Math.max(docDurationMs(v.doc), v.session.durationMs), w);
+  ctx.fillStyle = cs.getPropertyValue("--amber").trim() || "#e8b23c";
+  ctx.fillRect(Math.min(w - 2, Math.max(0, x - 1)), 0, 2, h);
+}
+
+/** The three nodes that change as the audio plays: the playhead, the clock, and the lit word. */
+function syncEditorPlayhead(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session) return;
+  paintEditorWave();
+  const clock = $("[data-ced-clock]");
+  if (clock) clock.textContent = `${formatClock(v.playheadMs)} / ${formatClock(Math.max(docDurationMs(v.doc), v.session.durationMs))}`;
+  const scrub = $("[data-ced-scrub]") as HTMLInputElement | null;
+  if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round(v.playheadMs));
+  const lit = itemAt(v.doc, v.playheadMs)?.id ?? "";
+  for (const node of $$("[data-ced-chip]")) node.classList.toggle("on", (node as HTMLElement).dataset.cedChip === lit);
+}
+
+function editorTick(): void {
+  const v = state.creatorEditor;
+  if (!v || !editorAudio || !v.doc || !v.session) { editorRaf = 0; return; }
+  v.playheadMs = editorAudio.currentTime * 1000;
+  syncEditorPlayhead();
+  editorRaf = requestAnimationFrame(editorTick);
+}
+
+function paintEditorPlayButton(playing: boolean): void {
+  const btn = $("[data-ced-play]");
+  if (!btn) return;
+  btn.innerHTML = icon(playing ? "square" : "chevron", 13);
+  btn.setAttribute("aria-label", playing ? "Pause" : "Play");
+}
+
+/** Paused or ended: drop the animation frame. An idle editor must not burn a frame budget. */
+function onEditorStopped(): void {
+  if (editorRaf) { cancelAnimationFrame(editorRaf); editorRaf = 0; }
+  if (state.creatorEditor) state.creatorEditor.playing = false;
+  paintEditorPlayButton(false);
+}
+
+function stopEditorAudio(): void {
+  if (editorRaf) { cancelAnimationFrame(editorRaf); editorRaf = 0; }
+  if (editorAudio) { editorAudio.pause(); editorAudio = null; }
+  if (editorAudioUrl) { URL.revokeObjectURL(editorAudioUrl); editorAudioUrl = ""; }
+  if (state.creatorEditor) state.creatorEditor.playing = false;
+}
+
+/** One <audio> fed a blob URL built from the session's base64 - the same convention playCreatorTrack uses. */
+function attachEditorAudio(session: EditorSession): void {
+  stopEditorAudio();
+  const bytes = Uint8Array.from(atob(session.audioB64), (c) => c.charCodeAt(0));
+  editorAudioUrl = URL.createObjectURL(new Blob([bytes], { type: session.mime }));
+  editorAudio = new Audio(editorAudioUrl);
+  editorAudio.addEventListener("pause", onEditorStopped);
+  editorAudio.addEventListener("ended", onEditorStopped);
+}
+
+function toggleEditorPlay(): void {
+  const v = state.creatorEditor;
+  if (!v || !editorAudio) return;
+  if (!editorAudio.paused) { editorAudio.pause(); return; } // the pause listener stops the loop
+  void editorAudio.play().then(() => {
+    v.playing = true;
+    paintEditorPlayButton(true);
+    if (!editorRaf) editorRaf = requestAnimationFrame(editorTick);
+  }).catch(() => setEditorStatus("The browser refused to start audio. Click play again.", "error"));
+}
+
+function seekEditor(ms: number): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session) return;
+  v.playheadMs = Math.max(0, Math.min(Math.max(docDurationMs(v.doc), v.session.durationMs), ms));
+  if (editorAudio) editorAudio.currentTime = v.playheadMs / 1000;
+  syncEditorPlayhead();
+}
+
+async function openCreatorEditorSession(): Promise<void> {
+  const v = state.creatorEditor;
+  if (!v) return;
+  const trackId = ($("#cedTrack") as HTMLSelectElement | null)?.value ?? v.trackId;
+  const text = ($("#cedText") as HTMLTextAreaElement | null)?.value ?? v.text;
+  if (!trackId) { setEditorStatus("Pick a WAV track first. The editor cannot align words to audio it does not have.", "error"); return; }
+  state.creatorEditor = { ...v, trackId, text, busy: "Opening...", status: "", statusTone: "" };
+  void renderCreatorStudio();
+  const r = await bridge.creatorEditorOpen({ trackId, text: text.trim() || undefined, buckets: EDITOR_PEAK_BUCKETS });
+  const cur = state.creatorEditor;
+  if (!cur) return;
+  if (!r?.ok || !r.session) {
+    // The route's own words, verbatim: they name what it refused and why.
+    state.creatorEditor = { ...cur, busy: "", status: r?.error ?? "The audio editor did not answer.", statusTone: "error" };
+    void renderCreatorStudio();
+    return;
+  }
+  const session = r.session;
+  editorHistory = newHistory(session.doc);
+  editorAnchor = "";
+  editorDrag = [];
+  attachEditorAudio(session);
+  state.creatorEditor = {
+    ...cur, busy: "", session, doc: session.doc, selected: [], playheadMs: 0, playing: false,
+    title: cur.title || `${session.title} (edit)`,
+    canUndo: false, canRedo: false,
+    status: `${session.doc.items.length} word${session.doc.items.length === 1 ? "" : "s"} over ${formatClock(session.durationMs)} of audio.`,
+    statusTone: "ok",
+  };
+  void renderCreatorStudio();
+}
+
+/** Apply one pure operation. A refusal keeps the core's own sentence - it names the item, the lock, or
+ *  the impossible span, which no generic message could. A success commits so undo restores it exactly. */
+function applyEditorOp(r: OpResult, done: string, selected?: readonly string[]): void {
+  const v = state.creatorEditor;
+  if (!v) return;
+  if (!r.ok) { setEditorStatus(r.error, "error"); return; }
+  editorHistory = editorHistory ? commit(editorHistory, r.doc) : newHistory(r.doc);
+  state.creatorEditor = {
+    ...v, doc: r.doc, selected: selected ?? v.selected,
+    playheadMs: Math.min(v.playheadMs, docDurationMs(r.doc)),
+    canUndo: canUndo(editorHistory), canRedo: canRedo(editorHistory),
+    status: done, statusTone: "ok",
+  };
+  void renderCreatorStudio();
+}
+
+/** Tap a word to seek to it; shift-click to extend the selection from the anchor into a span. */
+function onEditorChip(id: string, shift: boolean): void {
+  const v = state.creatorEditor;
+  if (!v?.doc) return;
+  if (shift && editorAnchor) {
+    state.creatorEditor = { ...v, selected: selectionRange(v.doc, editorAnchor, id) };
+    void renderCreatorStudio();
+    return;
+  }
+  editorAnchor = id;
+  const at = v.doc.items.find((it) => it.id === id)?.startMs ?? v.playheadMs;
+  if (editorAudio) editorAudio.currentTime = at / 1000;
+  state.creatorEditor = { ...v, selected: [id], playheadMs: at };
+  void renderCreatorStudio();
+}
+
+function editorDeleteSpan(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || v.selected.length === 0) return;
+  const n = v.selected.length;
+  applyEditorOp(deleteSpan(v.doc, v.selected), `Deleted ${n} word${n === 1 ? "" : "s"}; the timeline closed up behind them.`, []);
+}
+
+/** One button for both directions: a span with any unlocked word locks, an all-locked span releases. */
+function editorToggleLock(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || v.selected.length === 0) return;
+  const sel = new Set(v.selected);
+  const lock = v.doc.items.some((it) => sel.has(it.id) && !it.locked);
+  let doc = v.doc;
+  for (const id of v.selected) {
+    const r = setItemLock(doc, id, lock);
+    if (!r.ok) { setEditorStatus(r.error, "error"); return; }
+    doc = r.doc;
+  }
+  applyEditorOp({ ok: true, doc }, `${lock ? "Locked" : "Unlocked"} ${v.selected.length} word${v.selected.length === 1 ? "" : "s"}.`);
+}
+
+function editorSplitAtPlayhead(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc) return;
+  const here = itemAt(v.doc, v.playheadMs);
+  if (!here) { setEditorStatus("No word sits under the playhead. Move it into a word and split again.", "error"); return; }
+  applyEditorOp(splitItem(v.doc, here.id, v.playheadMs), `Split "${here.text}" at ${formatClock(v.playheadMs)}.`, [here.id]);
+}
+
+/** Re-render exactly this span: a prompt plus a replacement source from the library the session listed.
+ *  Audio outside the span is untouched, which is what makes the edit reviewable. */
+async function editorRerenderSpan(): Promise<void> {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session || v.selected.length === 0) return;
+  const span = spanOf(v.doc, v.selected);
+  if (!span) { setEditorStatus("That selection is no longer in the document. Pick the words again.", "error"); return; }
+  const sources = v.session.sources;
+  if (sources.length === 0) { setEditorStatus("The library has no other track to take replacement audio from. Import the new render first.", "error"); return; }
+  const vals = await creatorPrompt("Re-render this span",
+    `Only ${formatClock(span.startMs)} to ${formatClock(span.endMs)} is replaced. The new clip records the prompt and the clip it replaced, so this span's history stays reviewable.`,
+    [
+      { name: "prompt", label: "Prompt", kind: "textarea", placeholder: "what produced the replacement audio" },
+      { name: "sourceId", label: "Replacement source", kind: "select", options: sources.map((s) => ({ value: s.id, label: `${s.title}${s.durationMs === null ? " (length unknown)" : ` (${formatClock(s.durationMs)})`}` })) },
+      { name: "durationMs", label: "Length in ms", kind: "text", value: String(Math.round(span.endMs - span.startMs)) },
+    ]);
+  if (!vals?.sourceId) return;
+  const durationMs = Number(vals.durationMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) { setEditorStatus("A replacement needs a positive length in milliseconds.", "error"); return; }
+  const cur = state.creatorEditor;
+  if (!cur?.doc) return;
+  applyEditorOp(replaceSpan(cur.doc, cur.selected, { sourceId: vals.sourceId, durationMs, prompt: vals.prompt ?? "" }),
+    `Replaced ${formatClock(span.startMs)} to ${formatClock(span.endMs)} from ${vals.sourceId}.`);
+}
+
+function stepEditorHistory(back: boolean): void {
+  const v = state.creatorEditor;
+  if (!v || !editorHistory) return;
+  editorHistory = back ? undo(editorHistory) : redo(editorHistory);
+  state.creatorEditor = {
+    ...v, doc: editorHistory.present, selected: [],
+    canUndo: canUndo(editorHistory), canRedo: canRedo(editorHistory),
+    status: back ? "Undone." : "Redone.", statusTone: "ok",
+  };
+  void renderCreatorStudio();
+}
+
+async function saveCreatorEdit(): Promise<void> {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session) return;
+  const title = (($("#cedTitle") as HTMLInputElement | null)?.value ?? v.title).trim();
+  if (!title) { setEditorStatus("Give the saved render a title first.", "error"); return; }
+  state.creatorEditor = { ...v, title, busy: "Rendering...", status: "", statusTone: "" };
+  void renderCreatorStudio();
+  const r = await bridge.creatorEditorSave({ trackId: v.session.trackId, doc: v.doc, title });
+  const cur = state.creatorEditor;
+  if (!cur) return;
+  if (!r?.ok) {
+    state.creatorEditor = { ...cur, busy: "", status: r?.error ?? "The audio editor did not answer.", statusTone: "error" };
+    void renderCreatorStudio();
+    return;
+  }
+  state.creatorEditor = {
+    ...cur, busy: "",
+    status: r.trackId ? `Saved as library track ${r.trackId}.` : "Saved, but the server did not name the new track.",
+    statusTone: r.trackId ? "ok" : "error",
+  };
+  state.creatorStudio = await bridge.creatorStudio().catch(() => state.creatorStudio);
+  await loadCreatorEditor();
+}
+
+// ---- CREATOR-5 (ADR-0289): the mixer ----
+// Several takes at once, each with its own level, pan, fades, and automation, summed to one file. The
+// server is touched EXACTLY twice: once to list which library tracks can play together (and the format
+// they share), once to render. Every control move in between is a call into creator_mixer.ts's immutable
+// helpers against harness/creator/mix.ts - the SAME core the render runs - so a level move is instant and
+// this pane can never disagree with the file it produces.
+//
+// A slider is the one place a full repaint would be a bug: replacing the control mid-drag drops the
+// gesture. So `input` rewrites only the readout beside it, and the release repaints the pane, where a new
+// silence reason or a validation problem becomes visible.
+
+/** Seed the pane from the server's list of mixable tracks. The mix format is whatever the server
+ *  reported: this pane never guesses a sample rate, because a guessed rate is how a mixer silently
+ *  resamples. An open mix keeps its tracks across a reseed, unless the reported format moved under it. */
+async function loadCreatorMixer(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const prev = state.creatorMixer;
+  const payload = await bridge.creatorMixerTracks().catch(() => null);
+  if (!payload) {
+    state.creatorMixer = {
+      library: prev?.library ?? [], sampleRate: prev?.sampleRate ?? null, channels: prev?.channels ?? null,
+      graph: prev?.graph ?? null, addId: prev?.addId ?? "", title: prev?.title ?? "",
+      applyHeadroom: prev?.applyHeadroom ?? false, report: prev?.report ?? null,
+      status: "The mixer route did not answer properly, so nothing was repainted. Nothing on the mix was changed.",
+      statusTone: "error", busy: "",
+    };
+    if (studioOpen && state.studioTab === "mixer") void renderCreatorStudio();
+    return;
+  }
+  // The route omits the format entirely when nothing in the library is decodable. That is an honest
+  // answer, not a malformed one: there is no mix to build until something readable exists, and this pane
+  // will not invent a rate to build one at.
+  const rate = payload.sampleRate ?? null;
+  const channels = payload.channels ?? null;
+  const held = prev?.graph ?? null;
+  const keep = !!held && held.tracks.length > 0 && held.sampleRate === rate && held.channels === channels;
+  const rebuilt = !keep && !!held && held.tracks.length > 0;
+  state.creatorMixer = {
+    library: payload.tracks,
+    sampleRate: rate,
+    channels,
+    graph: keep && held ? held : (rate !== null && channels !== null ? emptyMix(rate, channels) : null),
+    addId: prev?.addId || (payload.tracks[0]?.id ?? ""),
+    title: prev?.title ?? "",
+    applyHeadroom: prev?.applyHeadroom ?? false,
+    report: prev?.report ?? null,
+    status: rate === null || channels === null
+      ? "The library holds nothing this build can decode, so the mixer is not claiming a format to mix at. Import a 16-bit PCM WAV render and open this tab again."
+      : rebuilt
+      ? `The library's shared format is now ${rate}Hz, ${channels === 1 ? "mono" : "stereo"}, so the mix was rebuilt empty at that format rather than rendering at one nobody reported.`
+      : prev?.status ?? "",
+    statusTone: rate === null || channels === null || rebuilt ? "error" : prev?.statusTone ?? "",
+    busy: "",
+  };
+  if (studioOpen && state.studioTab === "mixer") void renderCreatorStudio();
+}
+
+function setMixerStatus(status: string, tone: "" | "ok" | "error"): void {
+  if (!state.creatorMixer) return;
+  state.creatorMixer = { ...state.creatorMixer, status, statusTone: tone };
+  void renderCreatorStudio();
+}
+
+/** Commit a new graph. Every edit goes through here, so a repaint can never observe a half-applied change
+ *  and the status always names what just happened. */
+function commitMixerGraph(graph: MixGraph, done: string): void {
+  const v = state.creatorMixer;
+  if (!v) return;
+  state.creatorMixer = { ...v, graph, status: done, statusTone: "ok" };
+  void renderCreatorStudio();
+}
+
+/** A slider move: patch the graph and rewrite ONLY the readout beside the control, so the drag survives. */
+function dragMixerSlider(input: HTMLInputElement): void {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const value = Number(input.value);
+  const gainId = input.dataset.cmxGain;
+  const panId = input.dataset.cmxPan;
+  let graph = v.graph;
+  let words = "";
+  if (input.dataset.cmxMaster !== undefined) {
+    graph = setMasterGain(v.graph, value);
+    words = formatGain(graph.masterGain);
+  } else if (gainId !== undefined) {
+    graph = patchTrack(v.graph, gainId, { gain: value });
+    words = formatGain(graph.tracks.find((t) => t.id === gainId)?.gain ?? 0);
+  } else if (panId !== undefined) {
+    graph = patchTrack(v.graph, panId, { pan: value });
+    words = panWords(graph.tracks.find((t) => t.id === panId)?.pan ?? 0, graph.channels);
+  } else {
+    return;
+  }
+  state.creatorMixer = { ...v, graph };
+  const out = input.parentElement?.querySelector(".cmx-val");
+  if (out) out.textContent = words;
+}
+
+/** Add the picked library track. A refusal keeps the helper's OWN sentence - it names the real sample
+ *  rate, the unmeasured length, or the track ceiling, which no generic message could. */
+function addMixerTrack(): void {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const id = ($("#cmxAdd") as HTMLSelectElement | null)?.value ?? v.addId;
+  const picked = v.library.find((t) => t.id === id);
+  if (!picked) { setMixerStatus("Pick a library track first. The mixer only offers tracks the server listed.", "error"); return; }
+  const r = addLibraryTrack(v.graph, picked);
+  if (!r.ok) { setMixerStatus(r.error, "error"); return; }
+  state.creatorMixer = {
+    ...v, addId: id, graph: r.graph,
+    status: `Added ${picked.title || picked.id} as ${r.trackId}, at unity gain and centred.`,
+    statusTone: "ok",
+  };
+  void renderCreatorStudio();
+}
+
+function removeMixerTrack(trackId: string): void {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const label = v.graph.tracks.find((t) => t.id === trackId)?.label ?? trackId;
+  commitMixerGraph(removeTrack(v.graph, trackId), `Removed ${label} from the mix.`);
+}
+
+function toggleMixerTrack(trackId: string, which: "muted" | "solo"): void {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const track = v.graph.tracks.find((t) => t.id === trackId);
+  if (!track) return;
+  const on = which === "muted" ? !track.muted : !track.solo;
+  const patch: TrackPatch = which === "muted" ? { muted: on } : { solo: on };
+  const verb = which === "muted" ? (on ? "muted" : "unmuted") : (on ? "soloed" : "unsoloed");
+  commitMixerGraph(patchTrack(v.graph, trackId, patch), `${track.label} ${verb}.`);
+}
+
+/** A two-point gain ramp across the track's own span. Two points is the whole vocabulary here, because
+ *  the core interpolates linearly and a ramp is the automation people actually draw. */
+async function rampMixerTrack(trackId: string): Promise<void> {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const track = v.graph.tracks.find((t) => t.id === trackId);
+  if (!track) return;
+  const vals = await creatorPrompt(`Ramp ${track.label}`,
+    "Two points across this track's own span: the level where its audio starts, and the level where it ends. The core interpolates linearly between them, and nothing else on the mix is touched.",
+    [
+      { name: "from", label: "Level at the start", kind: "text", value: String(track.envelope[0]?.gain ?? track.gain) },
+      { name: "to", label: "Level at the end", kind: "text", value: String(track.envelope[track.envelope.length - 1]?.gain ?? track.gain) },
+    ]);
+  if (!vals) return;
+  const from = Number(vals.from);
+  const to = Number(vals.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < 0) {
+    setMixerStatus("A ramp needs two levels of zero or greater. Nothing was changed.", "error");
+    return;
+  }
+  const cur = state.creatorMixer;
+  if (!cur?.graph) return;
+  commitMixerGraph(setTwoPointEnvelope(cur.graph, trackId, from, to),
+    `Ramped ${track.label} from x${from.toFixed(2)} to x${to.toFixed(2)} across its own span.`);
+}
+
+/** Render the mix. The server is touched here for the second and last time: it loads the sources the
+ *  graph names, runs the same pure core this pane has been editing, and saves the file. Headroom is
+ *  applied ONLY when the checkbox asked for it, and the report prints the exact gain it used. */
+async function renderCreatorMix(): Promise<void> {
+  const v = state.creatorMixer;
+  if (!v?.graph) return;
+  const graph = v.graph;
+  const problems = validateMix(graph);
+  if (problems.length > 0) { setMixerStatus(problems[0]!, "error"); return; }
+  const title = (($("#cmxTitle") as HTMLInputElement | null)?.value ?? v.title).trim();
+  if (!title) { setMixerStatus("Give the saved mix a title first.", "error"); return; }
+  const primaryTrackId = primarySourceId(graph, soloedTrackIds(graph));
+  if (!primaryTrackId) { setMixerStatus("Nothing on this mix names a source, so there is no parent track to record it under.", "error"); return; }
+  const applyHeadroom = ($("#cmxHeadroom") as HTMLInputElement | null)?.checked ?? v.applyHeadroom;
+  state.creatorMixer = { ...v, title, applyHeadroom, report: null, busy: "Rendering...", status: "", statusTone: "" };
+  void renderCreatorStudio();
+  const r = await bridge.creatorMixerRender({ graph, title, primaryTrackId, applyHeadroom });
+  const cur = state.creatorMixer;
+  if (!cur) return;
+  if (!r?.ok) {
+    // The route's own words, verbatim: they name what it refused and why.
+    state.creatorMixer = { ...cur, busy: "", report: null, status: r?.error ?? "The mixer did not answer.", statusTone: "error" };
+    void renderCreatorStudio();
+    return;
+  }
+  state.creatorMixer = {
+    ...cur, busy: "", report: r,
+    status: r.trackId ? `Saved as library track ${r.trackId}. The full report is below.` : "Rendered, but the mixer did not name the saved track.",
+    statusTone: r.trackId ? "ok" : "error",
+  };
+  state.creatorStudio = await bridge.creatorStudio().catch(() => state.creatorStudio);
+  await loadCreatorMixer();
+}
+
 let skillsOpen = false;
 // P-SKILL.6 (ADR-0243): signature of the last-painted Skills directory, so the SWR revalidation repaints only
 // on a real change (a toggle, a re-scan verdict, an added/removed skill) - never a needless flicker.
@@ -3302,6 +6294,8 @@ async function maybeOnboardPersonal(): Promise<void> {
 
 // ───────────────────────── Knowledge graph (P9.3) ─────────────────────────
 let kgHandle: GraphHandle | null = null;
+let kgRenderGeneration = 0; // closing or switching invalidates every in-flight graph read
+let kbSideGeneration = 0;
 const perfWatch = watchPerfTier(); // P-PERF.2 (ADR-0129): battery/spec-aware render tier
 let kgForceRender = false; // P-PERF.2: one-shot "Render anyway" override of the minimal-tier pause (per run)
 // P-PERF.3 (ADR-0130): layout continuity across mounts - re-opening the KG (rail switch, live-refresh
@@ -3440,13 +6434,17 @@ async function openKgPicker(anchor: HTMLElement): Promise<void> {
 }
 /** Activate a KG + draw its page graph. Re-picking the KG already on the canvas returns to the Personal graph. */
 async function pickKg(kgId: string): Promise<void> {
-  if (kbGraphMode && kgId === activeKbId) { updateKbButton(false); await renderKnowledge(); return; }
+  if (kgOpen && kbGraphMode && kgId === activeKbId) { updateKbButton(false); await renderKnowledge(); return; }
   const v = await bridge.kbActivate(kgId).catch(() => null);
-  if (v) {
-    activeKbId = v.activeId;
-    activeKbName = v.kgs.find((k) => k.kg_id === v.activeId)?.name ?? "";
+  if (!v || v.error || v.activeId !== kgId) {
+    showToast({ tone: "danger", title: "KG not activated", desc: v?.error ?? "Couldn't select that graph. Your previous KG is unchanged.", timeout: 5000 });
+    return;
   }
-  await renderKbGraph(); // reads the ACTIVE KG's pages+links (invariant: /api/kb/graph uses the active store)
+  activeKbId = v.activeId;
+  activeKbName = v.kgs.find((k) => k.kg_id === v.activeId)?.name ?? "";
+  updateKbButton(true);
+  void hydratePersonal();
+  if (kgOpen) await renderKbGraph();
 }
 /** Rename a KG via the shared text-prompt modal, then push the refreshed list back into the open picker. */
 async function renameKgFlow(kgId: string, view: import("./bridge.ts").KgListView, apply: (v: import("./bridge.ts").KgListView | null) => void): Promise<void> {
@@ -3467,7 +6465,7 @@ async function newKgFlow(apply: (v: import("./bridge.ts").KgListView | null) => 
  *  vault. Choose the folder, NAME the KG (rename-at-ingest), then a single gated batch compile (every source
  *  scanned fail-closed); on success the freshly-seeded KG is activated + drawn. */
 async function importKgFlow(): Promise<void> {
-  const folder = await openFolderBrowser({ title: "Choose a chat export or Obsidian markdown folder", confirm: "Use this folder" });
+  const folder = await pickFolderDialog({ title: "Choose a chat export or Obsidian markdown folder", confirm: "Use this folder" });
   if (!folder) return;
   const suggested = (folder.split(/[\\/]/).pop() || "Imported KG").trim();
   const name = await promptText({ title: "Name this knowledge graph", label: "KG name", value: suggested, placeholder: "e.g. Backend Engineer" });
@@ -3511,7 +6509,7 @@ async function importKgFlow(): Promise<void> {
  *  signed only if a signing key is configured (the private authoring path), otherwise unsigned. */
 async function exportPackFlow(kgId: string, view: import("./bridge.ts").KgListView): Promise<void> {
   const kgName = view.kgs.find((k) => k.kg_id === kgId)?.name ?? "KG";
-  const dest = await openFolderBrowser({ title: `Export "${kgName}" as a KG Pack - choose a destination`, confirm: "Export here" });
+  const dest = await pickFolderDialog({ title: `Export "${kgName}" as a KG Pack - choose a destination`, confirm: "Export here" });
   if (!dest) return;
   showToast({ title: `Exporting "${kgName}"…`, desc: "Writing the .lkgpack (db + manifest).", timeout: 1600 });
   const r = await bridge.kbPackExport({ kgId, dest }).catch(() => null);
@@ -3519,19 +6517,119 @@ async function exportPackFlow(kgId: string, view: import("./bridge.ts").KgListVi
   showExportToast(`"${kgName}" exported`, `${r.pages ?? 0} pages · ${r.signed ? "signed" : "unsigned"} · a .lkgpack you can share or sell`, r.path);
 }
 /** P-KGPACK.4: import a .lkgpack. Integrity + origin are verified and every page is re-scanned fail-closed
- *  before anything registers; a clean pack installs as a read-only, untrusted KG and is shown. */
+ *  before anything registers; a clean pack installs as a read-only, untrusted KG and is shown.
+ *
+ *  P-KGPACK.7 (ADR-0340): this used to open a FOLDER dialog, so the `.lkgpack.zip` a buyer downloads was
+ *  not selectable at all and the only way through was to guess that unzipping was required. A single
+ *  Windows dialog cannot offer files and folders together, so this asks for the FILE the user actually
+ *  has, and accepts the `manifest.json` inside an already-unzipped pack as the way to point at a folder. */
 async function importPackFlow(): Promise<void> {
-  const folder = await openFolderBrowser({ title: "Choose a .lkgpack KG Pack folder", confirm: "Import this pack" });
-  if (!folder) return;
-  showToast({ title: "Verifying + scanning the pack…", desc: "Integrity + origin are checked and every page is re-scanned before anything installs.", timeout: 2200 });
-  const r = await bridge.kbPackImport({ path: folder }).catch(() => null);
-  if (!r || !r.ok) {
-    showToast({ tone: "danger", title: "Pack rejected", desc: `${r?.error ?? "Couldn't import that pack."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 7000 });
+  const picked = await bridge.pickFile?.({
+    title: "Choose your KG Pack (.lkgpack.zip)",
+    filters: [
+      { name: "KG Pack", extensions: ["zip"] },
+      { name: "Unzipped pack (pick its manifest.json)", extensions: ["json"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  }).catch(() => null);
+  if (!picked) return;
+  await installPackFlow(() => bridge.kbPackImport({ path: picked }));
+}
+
+/** Explain a refused pack in terms of WHOSE problem it is, and hand over one file to send.
+ *
+ *  P-PACKSCAN.1 (ADR-0368): the old message was the raw error plus a bare stage name, which for the
+ *  commonest real failure read `page "doc-01-summary" flagged: fail-closed: scan unavailable (scanner
+ *  not running) (scan)`. That says "your pack is malicious" about a perfectly valid pack whose only sin
+ *  was that LUCID could not find its own scanner directory. A user cannot act on that, and it sent the
+ *  author of the pack hunting through 189 pages for poison that was never there.
+ *
+ *  So each stage now gets its own sentence: what happened, whose fault it is, and what to do. `scanner`
+ *  is OUR bug and says so. Every failure also names the log file, because "send me this one file" is
+ *  the difference between a diagnosis and a conversation. */
+function showPackFailure(r: KbPackImportView | null): void {
+  const stage = r?.stage ?? "";
+  const raw = r?.error ?? "Couldn't confirm the import. Check your KG list before retrying.";
+  const log = r?.logPath;
+  const byStage: Record<string, { title: string; desc: string }> = {
+    scanner: {
+      title: "LUCID could not run its security scanner",
+      desc: `Your pack is probably fine. LUCID refuses to install a pack it cannot scan (fail-closed), and the scanner itself did not start, so nothing was checked. This is a LUCID problem, not a problem with the pack. Restarting LUCID usually fixes it. Details: ${raw}`,
+    },
+    scan: {
+      title: "Pack refused by the scanner",
+      desc: `A page in this pack carries content LUCID blocks (hidden or spoofed characters). Nothing was installed. This is about the pack's content, so the pack's author needs to fix it. Details: ${raw}`,
+    },
+    integrity: {
+      title: "Pack failed its integrity check",
+      desc: `The pack's database does not match the checksum in its manifest, so the download is corrupt or was modified. Download it again. Details: ${raw}`,
+    },
+    signature: {
+      title: "Pack signature did not verify",
+      desc: `This pack is signed, but not by a key this install trusts. Nothing was installed. Details: ${raw}`,
+    },
+    manifest: {
+      title: "That file is not a KG Pack",
+      desc: `Pick the \u200b.lkgpack.zip you downloaded, or the manifest.json inside an already-unzipped pack. Details: ${raw}`,
+    },
+    write: {
+      title: "Pack verified but could not be installed",
+      desc: `Every check passed and writing it to disk failed, so nothing was registered. Free disk space and retry. Details: ${raw}`,
+    },
+  };
+  const m = byStage[stage] ?? { title: "Pack not installed", desc: `${raw}${stage ? ` (${stage})` : ""}` };
+  const actions: Array<{ label: string; run?: () => void }> = [];
+  if (log) {
+    actions.push({ label: "Copy log path", run: () => void navigator.clipboard?.writeText(log).catch(() => {}) });
+    actions.push({ label: "Open log folder", run: () => void bridge.revealPath?.(log).catch(() => {}) });
+  }
+  actions.push({ label: "OK" });
+  showToast({
+    tone: "danger",
+    title: m.title,
+    desc: log ? `${m.desc}\n\nSend this file for support: ${log}` : m.desc,
+    actions,
+    timeout: 0,
+  });
+}
+
+/** One completion path for local files and entitled downloads. Never mount a hidden graph. */
+let packInstallBusy = false;
+async function installPackFlow(install: () => Promise<KbPackImportView | null>): Promise<void> {
+  if (packInstallBusy) {
+    showToast({ tone: "info", title: "A pack is already importing", desc: "Let verification finish before importing another pack.", timeout: 4000 });
     return;
   }
-  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? "Imported pack"; }
-  await renderKbGraph();
-  showToast({ title: `"${r.kgName ?? "Pack"}" installed`, desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only · shown as untrusted data`, timeout: 6000 });
+  packInstallBusy = true;
+  const dismissProgress = showToast({ tone: "info", title: "Importing your KG Pack…", desc: "Checking integrity and origin, then scanning every page. You can keep working; no restart is needed.", timeout: 0 });
+  try {
+    const r = await install().catch(() => null);
+    if (!r?.ok || !r.kgId) {
+      showPackFailure(r);
+      return;
+    }
+    const v = await bridge.kbActivate(r.kgId).catch(() => null);
+    const activated = !!v && !v.error && v.activeId === r.kgId;
+    if (activated) {
+      activeKbId = v.activeId;
+      activeKbName = v.kgs.find((k) => k.kg_id === v.activeId)?.name ?? r.kgName ?? "Imported pack";
+      updateKbButton(true);
+    }
+    // Seed the confirmed count immediately; a stale pre-import count request cannot overwrite it.
+    if (typeof r.pages === "number") personalKgPages[r.kgId] = r.pages;
+    void hydratePersonal();
+    if (activated && kgOpen) await renderKbGraph();
+    showToast({
+      tone: activated ? "ok" : "warn",
+      title: `"${r.kgName ?? "Pack"}" installed`,
+      desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only · untrusted data. ${activated ? "Ready to use now. The graph is a lightweight preview; all pages remain available to the agent." : "Could not activate it. Select it from the KG picker; do not re-import."}`,
+      actions: activated ? [{ label: "View graph preview", run: () => openKnowledge() }, { label: "Done" }] : [{ label: "OK" }],
+      timeout: 0,
+    });
+  } finally {
+    dismissProgress();
+    packInstallBusy = false;
+  }
 }
 
 // P-KGUI.2 (ADR-0185): the Data dropdown - Import history / AI toggle / Export vault / CUI archive,
@@ -3559,7 +6657,7 @@ function openKgDataMenu(anchor: HTMLElement): void {
   });
 }
 async function kgImportHistory(): Promise<void> {
-  const folder = await openFolderBrowser({ title: "Choose your ChatGPT / Claude / Gemini export", confirm: "Import from here" });
+  const folder = await pickFolderDialog({ title: "Choose your ChatGPT / Claude / Gemini export folder", confirm: "Import from here" });
   if (!folder) return;
   // Read-only pre-import estimate → warn about AI-mode token cost + runtime before the paid run.
   const est = await bridge.personalImportEstimate(folder);
@@ -3615,12 +6713,13 @@ function kgSignature(d: PersonalGraphData | null): string {
  *  simulation (positions preserved). No-op if the panel is closed or nothing changed. */
 async function refreshKnowledgeLive(): Promise<void> {
   if (!kgOpen || !kgHandle || kgCodeMode || kbGraphMode) return; // code-graph / compiled-KB mode isn't the live personal graph
+  const generation = kgRenderGeneration;
   const data = await bridge.personalGraph().catch(() => null);
-  if (!data || data.nodes.length === 0) return;
+  if (!kgOpen || generation !== kgRenderGeneration || !kgHandle || kgCodeMode || kbGraphMode || !data || data.nodes.length === 0) return;
   const sig = kgSignature(data);
   if (sig === kgSig) return; // nothing new learned
   kgSig = sig; kgData = data;
-  kgHandle.update(data);
+  kgHandle.update(capGraph(data, graphOpts(perfWatch.tier()).nodeCap).data);
 }
 
 /** After a chat turn, learning happens in the background (learnFromTurn, async + best-effort),
@@ -3636,16 +6735,21 @@ function openKnowledge(): void {
   closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
   closePreview(); // P-PREVIEW.1
   closeSkills(); // P-SKILL.4
+  closeMeetings(); // P-MEET.1
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#knowledge")!.hidden = false;
   $("#inspector")!.hidden = true;
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "knowledge"));
-  updateCodeGraphButtons(false); // always open on the personal graph; the Code-graph button re-enters code mode
-  void renderKnowledge();
+  updateCodeGraphButtons(false);
+  void (kbGraphMode ? renderKbGraph() : renderKnowledge());
 }
 function closeKnowledge(): void {
   if (!kgOpen) return;
   kgOpen = false;
+  kgRenderGeneration++;
+  kbSideGeneration++;
+  kbGraphData = null;
+  kgData = null;
   if (kgRelateMode) setRelateMode(false); // leave relate mode clean for next open
   kgHandle?.destroy(); kgHandle = null;
   showKgCenter(false);
@@ -3655,10 +6759,142 @@ function closeKnowledge(): void {
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
 
+// ── P-MEET.1: the Meetings fly-out ───────────────────────────────────────────────────────────────
+// A thin client of the Lucid Meeting Hub on loopback (the engine validates the origin; 127.0.0.1:5123
+// by default). Everything painted here is fetched live through the engine (which holds the pairing
+// bearer); the IDE stores no meeting data, its only write is marking an action item done, it offers no
+// recording controls beyond a deep link to the Hub window, and it has no cloud path.
+// Deliberately NOT polled: a refresh happens when the panel opens, when the user searches, and when
+// they press Refresh. A dormant Hub costs one 300ms probe and one info row, never a retry storm.
+let meetOpen = false;
+let meetQuery = "";
+let meetSelected: string | null = null;
+let meetSig = "";
+let meetOpenTodos: MeetingTodoView[] | null = null; // null: the Hub's open list was not read, status unknown
+let meetListGeneration = 0;
+let meetDetailGeneration = 0;
+let meetSearchTimer: number | null = null;
+
+function openMeetings(): void {
+  meetOpen = true;
+  closeSettings();
+  closeIde();
+  closeKnowledge();
+  closePreview();
+  closeSkills();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#meetings")!.hidden = false;
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "meetings"));
+  void renderMeetings();
+}
+function closeMeetings(): void {
+  if (!meetOpen) return;
+  meetOpen = false;
+  meetListGeneration++;
+  meetDetailGeneration++;
+  $("#meetings")!.hidden = true;
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+
+async function renderMeetings(): Promise<void> {
+  const gen = ++meetListGeneration;
+  const snap = await bridge.meetings({ q: meetQuery, limit: 50 });
+  if (!meetOpen || gen !== meetListGeneration) return;
+  // A null answer means the ENGINE did not respond, which is a different failure from "no Hub" - but
+  // the user-visible truth is the same (no meetings can be shown), so it folds to the dormant row.
+  const view: MeetingsPanelView = {
+    installed: snap?.installed ?? false,
+    paired: snap?.paired ?? false,
+    locked: snap?.locked ?? false,
+    rows: snap?.rows ?? [],
+    total: snap?.total ?? 0,
+    openTodos: snap?.openTodos ?? null, // an unread open list stays UNKNOWN; [] would paint every item done
+    upcoming: snap?.upcoming ?? null,
+    error: snap?.error ?? null,
+    query: meetQuery,
+    selected: meetSelected,
+    dashboardUrl: snap?.dashboardUrl ?? null,
+  };
+  meetOpenTodos = view.openTodos;
+  const sig = meetingsSig(view);
+  if (sig !== meetSig) {
+    meetSig = sig;
+    $("#meetBody")!.innerHTML = meetingsPanelHtml(view);
+  }
+  $("#meetScopeLbl")!.textContent = !view.installed ? (view.error ? "Hub address refused" : "Hub not running")
+    : !view.paired ? "not paired"
+    : view.locked ? "locked - metadata only"
+    : `${view.total} meeting${view.total === 1 ? "" : "s"}`;
+  if (!view.paired || !view.rows.some((r) => r.filename === meetSelected)) {
+    meetSelected = null;
+    $("#meetDetail")!.innerHTML = meetingDetailHtml(null, []);
+  }
+}
+
+async function showMeetingDetail(file: string): Promise<void> {
+  meetSelected = file;
+  $$("[data-meet-open]").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset.meetOpen === file));
+  const gen = ++meetDetailGeneration;
+  const host = $("#meetDetail")!;
+  host.innerHTML = `<div class="meet-empty">Reading the meeting…</div>`;
+  const r = await bridge.meetingDetail(file);
+  if (!meetOpen || gen !== meetDetailGeneration) return;
+  host.innerHTML = meetingDetailHtml(r?.meeting ?? null, meetOpenTodos, {
+    locked: !!r?.locked,
+    error: r ? r.error : "The engine did not answer.",
+  });
+}
+
+/** The panel's ONE write: flip an open action item to done in the Hub's own ledger. The open list is
+ *  the only thing we can see, so this is done-only; un-doing an item stays a Hub-side action. */
+async function markMeetingTodo(id: string): Promise<void> {
+  const r = await bridge.meetingTodoMark(id, true);
+  if (!r?.ok) {
+    showToast({ tone: "danger", title: "Couldn't mark it done", desc: r?.error ?? "The Meeting Hub did not answer.", actions: [{ label: "OK" }], timeout: 5000 });
+    return;
+  }
+  meetSig = ""; // the row's action count changed - force the list to repaint
+  await renderMeetings();
+  if (meetSelected) await showMeetingDetail(meetSelected);
+}
+
+async function pairMeetingHub(): Promise<void> {
+  const input = $("#meetPairCode") as HTMLInputElement | null;
+  const code = (input?.value ?? "").replace(/\D/g, "");
+  if (code.length !== 6) { showToast({ tone: "warn", title: "Six digits", desc: "Mint a pairing code in the Hub dashboard and type all six digits.", timeout: 4000 }); return; }
+  const r = await bridge.meetingsPair(code);
+  if (input) input.value = ""; // never leave a credential-bearing code sitting in the DOM
+  if (!r?.ok) {
+    showToast({ tone: "danger", title: "Pairing failed", desc: r?.error ?? "The Meeting Hub did not answer.", actions: [{ label: "OK" }], timeout: 6000 });
+    return;
+  }
+  // The bearer travels through the renderer for exactly one hop because Electron's safeStorage is
+  // main-process-only: there is no path from the engine into the OS vault. Hand it straight over and
+  // keep no reference. If the vault refuses (no OS encryption), the pairing still works for THIS
+  // session - the engine holds it in memory - and we say so rather than silently writing plaintext.
+  const stored = bridge.isElectron && bridge.credStore
+    ? await bridge.credStore({ ref: r.vaultRef, kind: "apikey", secret: r.token, label: "Lucid Meeting Hub" })
+    : { error: "the encrypted vault needs the LUCID desktop app" };
+  if (stored && "error" in stored) {
+    showToast({ tone: "warn", title: "Paired for this session only", desc: `The token could not be stored: ${String(stored.error)}. You will need to pair again next launch.`, actions: [{ label: "OK" }], timeout: 7000 });
+  } else {
+    showToast({ tone: "ok", title: "Paired with the Meeting Hub", desc: "The token can read your meetings and mark their action items done. Stored encrypted by your OS; revoke it any time from the Hub.", timeout: 5000 });
+    state.creds = await bridge.credList().catch(() => state.creds);
+  }
+  meetSig = "";
+  await renderMeetings();
+}
+
 // P-PREVIEW.1 (ADR-0096): the in-app browser preview fly-out. A sandboxed <iframe> renders a local app the
 // agent built; a screenshot can be sent to chat. Mirrors the Knowledge-graph fly-out (resizable right aside,
 // mutually exclusive with the other right surfaces). The agent driving it (custom tools) is P-PREVIEW.2.
 let previewOpen = false;
+let agentPreviewRevision = 0;
+let pendingAgentPreviewPath = "";
+const dismissedAgentPreviews = new Set<string>();
 function openPreview(opts?: { reveal?: PrevLane }): void {
   previewOpen = true;
   closeSettings();
@@ -3666,6 +6902,7 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   closeKnowledge();
   closeAgentBuilder(); // P-AGENT.2b
   closeSkills(); // P-SKILL.4
+  closeMeetings(); // P-MEET.1
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#preview")!.hidden = false;
   document.body.classList.add("preview-open"); // shrinks the chat text while the (≤50vw) preview is open
@@ -3683,15 +6920,42 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
 }
+// P-PREVIEW.14: keep the tab-row path field honest.
+//   value  - the path itself.
+//   title  - the FULL path, set only when the field actually truncates, so hovering reveals the part you
+//            cannot see. An absolute Windows path overflows even a generous field, which is the whole
+//            reason the field moved off the crowded toolbar. When the panel is closed the field has no
+//            layout (clientWidth 0), so the title is set unconditionally in that case rather than
+//            measured wrongly and left empty.
+//   reveal - the "show in folder" button exists only when there IS a local file AND the native shell can
+//            select it. A remote URL has no containing folder, and a browser build has no file manager,
+//            so in both cases the button is absent rather than present-and-dead.
+function syncPrevPathField(path: string): void {
+  const input = $("#prevPath") as HTMLInputElement | null;
+  if (input) {
+    input.value = path;
+    const laidOut = input.clientWidth > 0;
+    input.title = path && (!laidOut || input.scrollWidth > input.clientWidth) ? path : "";
+  }
+  const rev = $("#prevReveal") as HTMLButtonElement | null;
+  if (rev) rev.hidden = !path || !bridge.canShowInFolder() || /^https?:\/\//i.test(path.trim());
+}
 /** A file YOU chose to preview (Open, Browse, /figma, image-markup) — always lands on the Yours lane. */
 function openPreviewFile(path: string): void {
   if (!path) return;
+  dismissedAgentPreviews.delete(path); // An explicit user Open can opt this document back in.
   if (!previewOpen) openPreview({ reveal: "yours" });
   else switchPrevLane("yours");
-  const p = $("#prevPath") as HTMLInputElement | null; if (p) p.value = path;
+  syncPrevPathField(path);
   loadPreview(path, "yours");
 }
 function closePreview(): void {
+  setPreviewPan(false);
+  if (pendingAgentPreviewPath) dismissedAgentPreviews.add(pendingAgentPreviewPath);
+  if (prevPathByLane.agent) dismissedAgentPreviews.add(prevPathByLane.agent);
+  ++agentPreviewRevision;
+  pendingAgentPreviewPath = "";
+  clearPreviewTesting();
   if (!previewOpen) return;
   previewOpen = false;
   stopPreviewShotLoop();
@@ -3702,26 +6966,74 @@ function closePreview(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** P-PREVIEW.2 (ADR-0096; auto-show, 2026-07-01): the agent just wrote a browser-previewable file — show it in
- *  the Preview panel automatically. It's just a preview, so we don't ask (the old toast disappeared before the
- *  user could click it). If the panel is already open, swap to the new file; otherwise open it on this file. */
+
+// P-TRAINER.7 (ADR-0267): the immersive Trainer stage as an in-app panel. A sandboxed iframe renders the
+// self-contained trainer experience; mutually exclusive with the other right-edge surfaces. It covers the
+// main work area but leaves the left rail + titlebar live, so re-clicking the rail icon (or Esc) closes it.
+let trainerOpen = false;
+function onTrainerEsc(e: KeyboardEvent): void { if (e.key === "Escape" && trainerOpen) closeTrainer(); }
+function openTrainer(): void {
+  trainerOpen = true;
+  closeSettings(); closeKnowledge(); closePreview(); closeAgentBuilder(); closeSkills();
+  const p = $("#trainerPanel") as HTMLElement | null; if (!p) return;
+  const f = $("#trainerFrame") as HTMLIFrameElement | null;
+  if (f && !f.getAttribute("src")) f.setAttribute("src", "trainer.html"); // lazy-load on first open
+  const tb = document.querySelector(".titlebar") as HTMLElement | null;
+  p.style.top = (tb?.offsetHeight ?? 0) + "px";
+  p.style.left = railWidth() + "px";
+  p.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "trainer"));
+  document.addEventListener("keydown", onTrainerEsc);
+}
+function closeTrainer(): void {
+  if (!trainerOpen) return;
+  trainerOpen = false;
+  document.removeEventListener("keydown", onTrainerEsc);
+  const p = $("#trainerPanel") as HTMLElement | null; if (p) p.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+/** Auto-open only a verified, current target that the user has not dismissed. */
 function onPreviewAvailable(path: string): void {
-  if (!path) return;
-  state.lastPreviewablePath = path;
-  if (!previewOpen) { openPreview({ reveal: "agent" }); return; } // first reveal shows the agent's work (nothing on Yours yet)
-  loadPreview(path, "agent"); // already open → update the AGENT lane live; badges the tab if you're on Yours
+  if (!path || dismissedAgentPreviews.has(path)) return;
+  const revision = ++agentPreviewRevision;
+  const owner = turnViewEpoch;
+  pendingAgentPreviewPath = path;
+  state.lastPreviewablePath = "";
+  // File errors are served as HTML with HTTP 200, so loading is not proof of a valid preview.
+  const ready = resolvePreview(path).kind === "remote"
+    ? bridge.previewEgressAllows(path).then((allowed) => canPreviewRemote(path, allowed))
+    : bridge.previewProbe(path);
+  void ready.catch(() => false).then((resolves) => {
+    const current = revision === agentPreviewRevision && owner === turnViewEpoch;
+    if (!current || dismissedAgentPreviews.has(path)) return;
+    pendingAgentPreviewPath = "";
+    if (!resolves) {
+      showToast({ tone: "warn", title: "Preview unavailable", desc: "The requested document could not be verified. Preview was not opened." });
+      return;
+    }
+    if (!previewOpen) openPreview({ reveal: "agent" });
+    loadPreview(path, "agent");
+    state.lastPreviewablePath = path;
+    schedulePhoneAutoSend(path);
+    kickPreviewShotSoon();
+  });
+}
+// P-PREVIEW.3a-shot: capture a couple of times right after the agent lane loads (the frame paints async), so
+// the agent's preview_screenshot finds a FRESH shot the moment it retries after preview_open — instead of
+// waiting up to a full 1.5s freshness tick. cacheRenderedPreviewShot no-ops when the agent lane isn't the
+// visible one, so this is a cheap no-op when the user is on their own tab.
+function kickPreviewShotSoon(): void {
+  for (const ms of [250, 700]) setTimeout(() => void cacheRenderedPreviewShot(), ms);
 }
 
 // ── P-PREVIEW.6a (ADR-0153): live "reviewing / testing" indicator ────────────────────────────────
 let previewTestingTimer: ReturnType<typeof setTimeout> | undefined;
-/** Glow the Preview panel + show a "reviewing/testing" pill while the agent looks at / tests the preview.
- *  Surfaces the panel if a preview is loaded but hidden, so the user SEES the review happen live.
- *  Debounced — repeated activity keeps it lit; fades ~4.5s after the last signal (or on turn done). */
+/** Show review activity only inside an already-visible Preview. Activity never overrides dismissal. */
 function flashPreviewTesting(label: string): void {
   const panel = $("#preview") as HTMLElement | null;
   const pill = $("#prevPill") as HTMLElement | null;
-  if (!panel || !pill) return;
-  if (panel.hidden && state.lastPreviewablePath) openPreview(); // make the review visible
+  if (!panel || !pill || panel.hidden) return;
   panel.classList.add("testing");
   const lbl = $("#prevPillLabel"); if (lbl) lbl.textContent = label || "Reviewing the preview";
   pill.hidden = false;
@@ -3823,24 +7135,163 @@ async function openDesignInIde(): Promise<void> {
 // the agent can never clobber the file you're reviewing. Only the active lane's iframe is shown; both stay
 // loaded (live page state preserved). Your Open/Browse target the yours lane; the agent's preview_screenshot
 // and preview_inspect target the agent lane; an agent update badges the Agent tab instead of stealing your view.
-type PrevLane = "yours" | "agent";
+// P-PREVIEW.10: tab ids generalize the pair - the fixed "yours" / "agent" lanes plus dynamic
+// "lane:<laneId>" tabs that a fleet lane's previewable writes create (registry in preview_tabs.ts).
+type PrevLane = string;
 let prevLane: PrevLane = "yours";
+/** The dynamic lane tabs' iframes, keyed by tab id - created on demand, removed with their tab. */
+const laneTabFrames = new Map<string, HTMLIFrameElement>();
 const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
-  $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
-const prevPathByLane: Record<PrevLane, string> = { yours: "", agent: "" };
-const prevKindByLane: Record<PrevLane, string> = { yours: "", agent: "" };
+  l.startsWith("lane:") ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
+const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
+const prevKindByLane: Record<string, string> = { yours: "", agent: "" };
+const prevZoomByLane = new Map<PrevLane, number>();
+const prevWheelZoomByLane = new Set<PrevLane>();
+let previewPanEnabled = false;
+let previewPanPointer: number | null = null;
+let previewPanX = 0, previewPanY = 0;
+let previewPanScrollX = 0, previewPanScrollY = 0, previewPanScale = 1;
+function endPreviewPan(): void {
+  const surface = $("#prevPanSurface");
+  const pointer = previewPanPointer;
+  previewPanPointer = null;
+  surface?.classList.remove("dragging");
+  if (pointer !== null && surface?.hasPointerCapture(pointer)) surface.releasePointerCapture(pointer);
+}
+function setPreviewPan(enabled: boolean): void {
+  endPreviewPan();
+  previewPanEnabled = enabled && prevLane === "yours" && !!prevPathByLane.yours;
+  if (previewPanEnabled) setDrawTool("off");
+  const surface = $("#prevPanSurface");
+  if (surface) surface.hidden = !previewPanEnabled;
+  const button = $("#prevPan");
+  button?.setAttribute("aria-pressed", String(previewPanEnabled));
+  if (button) button.textContent = previewPanEnabled ? "Panning · Esc to exit" : "Grab to pan";
+}
+function wirePreviewPan(): void {
+  const surface = $("#prevPanSurface"), viewport = $("#prevViewport");
+  if (!surface || !viewport) return;
+  $("#prevPan")?.addEventListener("click", () => {
+    setPreviewPan(!previewPanEnabled);
+    if (previewPanEnabled) viewport.focus({ preventScroll: true });
+  });
+  surface.addEventListener("pointerdown", (e) => {
+    if (!previewPanEnabled || e.button !== 0 || !e.isPrimary || previewPanPointer !== null) return;
+    e.preventDefault();
+    previewPanPointer = e.pointerId;
+    previewPanX = e.clientX; previewPanY = e.clientY;
+    previewPanScrollX = viewport.scrollLeft; previewPanScrollY = viewport.scrollTop;
+    previewPanScale = viewport.getBoundingClientRect().width / viewport.offsetWidth || 1;
+    surface.setPointerCapture(e.pointerId);
+    surface.classList.add("dragging");
+    viewport.focus({ preventScroll: true });
+  });
+  surface.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== previewPanPointer) return;
+    e.preventDefault();
+    // Account for app-level UI scaling, not content zoom. Keep fractional movement
+    // between events; clamp at each edge so reversing never leaves a dead zone.
+    previewPanScrollX = Math.max(0, Math.min(viewport.scrollWidth - viewport.clientWidth, previewPanScrollX - (e.clientX - previewPanX) / previewPanScale));
+    previewPanScrollY = Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight, previewPanScrollY - (e.clientY - previewPanY) / previewPanScale));
+    viewport.scrollLeft = previewPanScrollX;
+    viewport.scrollTop = previewPanScrollY;
+    previewPanX = e.clientX; previewPanY = e.clientY;
+  });
+  surface.addEventListener("pointerup", endPreviewPan);
+  surface.addEventListener("pointercancel", endPreviewPan);
+  surface.addEventListener("lostpointercapture", endPreviewPan);
+  surface.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); });
+  surface.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey || prevWheelZoomByLane.has(prevLane)) wheelPreviewZoom(e.deltaY, e.deltaMode);
+    else {
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? viewport.clientHeight : 1;
+      viewport.scrollBy(e.shiftKey ? e.deltaY * unit : e.deltaX * unit, e.shiftKey ? 0 : e.deltaY * unit);
+    }
+  }, { passive: false });
+  window.addEventListener("blur", () => setPreviewPan(false));
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !previewPanEnabled) return;
+    e.preventDefault(); e.stopPropagation();
+    setPreviewPan(false);
+    $("#prevPan")?.focus({ preventScroll: true });
+  }, true);
+}
+const PREVIEW_ZOOM_MIN = 0.25, PREVIEW_ZOOM_MAX = 4;
+const previewZoom = (): number => prevZoomByLane.get(prevLane) ?? 1;
+function syncPreviewZoomControls(): void {
+  const pan = $("#prevPan") as HTMLButtonElement | null;
+  if (pan) { pan.hidden = prevLane !== "yours"; pan.disabled = !prevPathByLane.yours; }
+  const zoom = previewZoom();
+  const label = $("#prevZoomReset"); if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  const minus = $("#prevZoomOut") as HTMLButtonElement | null; if (minus) minus.disabled = zoom <= PREVIEW_ZOOM_MIN;
+  const plus = $("#prevZoomIn") as HTMLButtonElement | null; if (plus) plus.disabled = zoom >= PREVIEW_ZOOM_MAX;
+  const toggle = $("#prevWheelZoom");
+  toggle?.setAttribute("aria-pressed", String(prevWheelZoomByLane.has(prevLane)));
+}
+function sendPreviewZoomMode(): void {
+  laneFrame()?.contentWindow?.postMessage({ __lucid: "preview-zoom-mode", enabled: prevWheelZoomByLane.has(prevLane) }, "*");
+}
+function setPreviewZoom(value: number): void {
+  if (!Number.isFinite(value)) return;
+  const old = previewZoom();
+  const zoom = Math.max(PREVIEW_ZOOM_MIN, Math.min(PREVIEW_ZOOM_MAX, value));
+  const viewport = $("#prevViewport");
+  const x = viewport ? (viewport.scrollLeft + viewport.clientWidth / 2) / old : 0;
+  const y = viewport ? (viewport.scrollTop + viewport.clientHeight / 2) / old : 0;
+  prevZoomByLane.set(prevLane, zoom);
+  applyDeviceScale();
+  if (viewport) { viewport.scrollLeft = x * zoom - viewport.clientWidth / 2; viewport.scrollTop = y * zoom - viewport.clientHeight / 2; }
+  syncPreviewZoomControls();
+}
+function wheelPreviewZoom(delta: unknown, mode: unknown): void {
+  if (typeof delta !== "number" || !Number.isFinite(delta) || !delta || (mode !== 0 && mode !== 1 && mode !== 2)) return;
+  const pixels = Math.max(-120, Math.min(120, delta * (mode === 1 ? 16 : mode === 2 ? 120 : 1)));
+  setPreviewZoom(previewZoom() * Math.exp(-pixels * 0.002));
+}
+function wirePreviewZoom(): void {
+  wirePreviewPan();
+  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(previewZoom() / 1.1));
+  $("#prevZoomReset")?.addEventListener("click", () => setPreviewZoom(1));
+  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(previewZoom() * 1.1));
+  $("#prevWheelZoom")?.addEventListener("click", () => {
+    if (prevWheelZoomByLane.has(prevLane)) prevWheelZoomByLane.delete(prevLane); else prevWheelZoomByLane.add(prevLane);
+    syncPreviewZoomControls(); sendPreviewZoomMode();
+  });
+  const onWheel = (event: Event) => {
+    const e = event as WheelEvent;
+    if (e.currentTarget !== $("#prevZoomControls") && !e.ctrlKey && !e.metaKey && !prevWheelZoomByLane.has(prevLane)) return;
+    e.preventDefault(); e.stopPropagation(); wheelPreviewZoom(e.deltaY, e.deltaMode);
+  };
+  $("#prevZoomControls")?.addEventListener("wheel", onWheel, { passive: false });
+  $("#prevViewport")?.addEventListener("wheel", onWheel, { passive: false });
+  window.addEventListener("message", (event) => {
+    const frame = laneFrame();
+    if (!frame || frame.hidden || event.source !== frame.contentWindow) return;
+    const data = event.data;
+    if (!data || typeof data !== "object") return;
+    if (data.__lucid === "preview-zoom-ready") sendPreviewZoomMode();
+    else if (data.__lucid === "preview-zoom-wheel") wheelPreviewZoom(data.deltaY, data.deltaMode);
+  });
+  const body = $("#prevBody");
+  if (body && typeof ResizeObserver !== "undefined") new ResizeObserver(() => { applyDeviceScale(); syncPreviewCanvas(); }).observe(body);
+}
 /** Switch which lane's iframe is visible; the other stays loaded but hidden. Updates the shared header chrome. */
 function switchPrevLane(l: PrevLane): void {
+  setPreviewPan(false);
   prevLane = l;
   const yf = laneFrame("yours"), af = laneFrame("agent");
   if (yf) yf.hidden = l !== "yours" || !prevPathByLane.yours;
   if (af) af.hidden = l !== "agent" || !prevPathByLane.agent;
+  for (const [id, f] of laneTabFrames) f.hidden = l !== id || !prevPathByLane[id]; // P-PREVIEW.10: lane tab frames follow the same rule
   $$(".prev-tab").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.lane === l));
-  if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; } // viewing the agent lane clears the "new" badge
-  const path = $("#prevPath") as HTMLInputElement | null; if (path) path.value = prevPathByLane[l];
-  const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l];
+  if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing the agent lane clears the "new" badge + refreshes the shot cache for preview_screenshot
+  if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; } // viewing a lane tab clears the rail badge
+  syncPrevPathField(prevPathByLane[l] ?? "");
+  const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l] ?? "";
   const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
   const notice = $("#prevNotice") as HTMLElement | null; if (notice) { notice.hidden = true; notice.innerHTML = ""; } // health is per-page, re-derived on load
+  applyDeviceScale(); syncPreviewZoomControls(); sendPreviewZoomMode();
   syncPreviewCanvas();
 }
 // ── P-PREVIEW.9: device viewports ────────────────────────────────────────────────────────────────
@@ -3869,14 +7320,17 @@ function currentViewportInfo(): Record<string, unknown> {
   const d = PREV_DEVICES[prevDevice];
   return prevDevice === "desktop" ? { device: "desktop", note: DEVICE_NOTE } : { device: prevDevice, width: d.w, height: d.h, note: DEVICE_NOTE };
 }
-/** Fit the device-sized stage into the available panel via CSS zoom (recomputed on resize). */
+/** Compose user zoom with device fit. Explicit dimensions preserve the document viewport at every scale. */
 function applyDeviceScale(): void {
-  const body = $("#prevBody"), stage = $("#prevStage") as HTMLElement | null;
-  if (!body || !stage) return;
-  if (prevDevice === "desktop") { stage.style.zoom = ""; return; }
-  const d = PREV_DEVICES[prevDevice];
-  const scale = Math.max(0.2, Math.min(1, (body.clientWidth - 28) / d.w, (body.clientHeight - 28) / d.h));
-  stage.style.zoom = String(scale);
+  const viewport = $("#prevViewport"), stage = $("#prevStage") as HTMLElement | null;
+  if (!viewport || !stage || !viewport.clientWidth || !viewport.clientHeight) return;
+  const device = prevDevice !== "desktop", d = PREV_DEVICES[prevDevice];
+  const w = Math.max(1, viewport.clientWidth - (device ? 28 : 0));
+  const h = Math.max(1, viewport.clientHeight - (device ? 28 : 0));
+  const fit = device ? Math.max(0.2, Math.min(1, w / d.w, h / d.h)) : 1;
+  stage.style.width = `${device ? d.w : w}px`;
+  stage.style.height = `${device ? d.h : h}px`;
+  stage.style.zoom = String(fit * previewZoom());
 }
 function applyDevice(device: PrevDevice): void {
   prevDevice = device;
@@ -3884,7 +7338,7 @@ function applyDevice(device: PrevDevice): void {
   if (!body || !stage) return;
   body.classList.toggle("device", device !== "desktop");
   const d = PREV_DEVICES[device];
-  for (const f of [laneFrame("yours"), laneFrame("agent")]) {
+  for (const f of [laneFrame("yours"), laneFrame("agent"), ...laneTabFrames.values()]) {
     if (!f) continue;
     if (device === "desktop") { f.style.width = ""; f.style.height = ""; }
     else { f.style.width = `${d.w}px`; f.style.height = `${d.h}px`; }
@@ -3914,12 +7368,21 @@ function openDeviceMenu(anchor: HTMLElement): void {
   });
 }
 function loadPreview(target: string, lane: PrevLane = prevLane): void {
+  if (lane === "yours") setPreviewPan(false);
   const frame = laneFrame(lane);
   const empty = $("#prevEmpty") as HTMLElement | null;
   if (!frame || !empty) return;
   const active = lane === prevLane; // only the visible lane drives the shared header / empty / notice chrome
   const kind = active ? $("#prevKind") : null;
   prevPathByLane[lane] = target;
+  if (active) syncPreviewZoomControls();
+  // P-PREVIEW.16: the path bar follows the file that is actually SHOWING. It used to be written only by
+  // switchPrevLane and openPreviewFile, so an agent load into the ALREADY-VISIBLE lane left the previous
+  // path sitting in the field. That field is not decoration: it IS the Open input and the Show-in-folder
+  // target, so pressing Enter re-opened a file that was not the one on screen. Skipped while the field has
+  // focus, so a live agent load can never eat a path you are mid-way through typing.
+  const pathField = $("#prevPath") as HTMLInputElement | null;
+  if (active && document.activeElement !== pathField) syncPrevPathField(target);
   // P-PREVIEW.7: a fresh load clears any stale health overlay (the new page reports its own).
   const notice = $("#prevNotice") as HTMLElement | null;
   if (active && notice) { notice.hidden = true; notice.innerHTML = ""; }
@@ -3970,6 +7433,88 @@ function loadPreview(target: string, lane: PrevLane = prevLane): void {
   }
   // An agent load into the background lane badges the Agent tab instead of stealing your view.
   if (lane === "agent" && prevLane !== "agent" && prevPathByLane.agent) { const d = $("#prevAgentDot"); if (d) d.hidden = false; }
+}
+
+// ── P-PREVIEW.10: dynamic per-lane tabs ──────────────────────────────────────────────────────────
+// A fleet lane that writes a previewable file (fleet_grid's stream sink → the previewLaneFile dep) gets
+// its OWN tab beside Yours / Agent, labeled with the lane's name and backed by its own persistent iframe
+// through the same loadPreview / serve path (nonce reload included). The registry itself is pure
+// (preview_tabs.ts); this section is only the DOM around it.
+let prevLaneTabs: PreviewTab[] = [];
+/** Re-render the tab strip from the registry: the fixed Yours / Agent pair first, then the lane tabs.
+ *  Each lane tab is a flex row with ONE nowrap-ellipsis text span (title = the previewed path) and a
+ *  close X. The Agent tab's "new update" dot survives the re-render. */
+function renderPrevTabs(): void {
+  const strip = $("#prevTabs"); if (!strip) return;
+  const agentDotHidden = ($("#prevAgentDot") as HTMLElement | null)?.hidden ?? true;
+  const act = (id: string) => (prevLane === id ? " active" : "");
+  // P-PREVIEW.12: the tab now shows WHAT it is holding. A lane tab used to be html-or-svg by definition;
+  // now it can be a markdown report, a chart PNG, a JSON payload or a PDF, so the icon + tooltip name the
+  // kind. Invariant 11: the icon is `flex: none` and the label is the row's ONE text child, kept on a
+  // single nowrap-ellipsis line.
+  const lanes = prevLaneTabs.map((t) => {
+    const kind = previewPathKind(t.path);
+    const kindIcon = kind ? icon(PREVIEW_KIND_ICON[kind], 10, "prev-tab-kind") : "";
+    const tip = kind ? `${t.path} (${previewKindLabel(kind)})` : t.path;
+    return `<button type="button" class="prev-tab prev-tab-lane${act(t.id)}" data-lane="${esc(t.id)}" title="${esc(tip)}">` +
+      kindIcon +
+      `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
+      `<span class="prev-tab-x" data-close="${esc(t.id)}" title="Close this lane's preview tab">${icon("close", 10)}</span>` +
+      `</button>`;
+  }).join("");
+  strip.innerHTML =
+    `<button type="button" class="prev-tab${act("yours")}" data-lane="yours" data-tip="Your preview|Files you open stay here - the agent can't clobber this tab.">Yours</button>` +
+    `<button type="button" class="prev-tab${act("agent")}" data-lane="agent" data-tip="The agent's preview|What the agent is building or reviewing. It updates here without stealing your tab.">Agent <span class="prev-tab-dot" id="prevAgentDot"${agentDotHidden ? " hidden" : ""} aria-label="new update"></span></button>` +
+    lanes;
+}
+/** The lane tab's persistent iframe - created on demand into the shared stage, same sandbox / allow as
+ *  the fixed lanes, hidden until its tab is the active one. Matches the active device viewport. */
+function ensureLaneTabFrame(tabId: string): void {
+  const cur = laneTabFrames.get(tabId);
+  if (cur?.isConnected) return;
+  const stage = $("#prevStage"); if (!stage) return;
+  const f = document.createElement("iframe");
+  f.className = "preview-frame";
+  f.setAttribute("sandbox", PREVIEW_SANDBOX);
+  f.setAttribute("allow", PREVIEW_ALLOW);
+  f.setAttribute("referrerpolicy", "no-referrer");
+  f.title = "A fleet lane's app preview";
+  f.hidden = true;
+  if (prevDevice !== "desktop") { const d = PREV_DEVICES[prevDevice]; f.style.width = `${d.w}px`; f.style.height = `${d.h}px`; }
+  stage.appendChild(f);
+  laneTabFrames.set(tabId, f);
+}
+function dropLaneTabFrame(tabId: string): void {
+  laneTabFrames.get(tabId)?.remove();
+  laneTabFrames.delete(tabId);
+  delete prevPathByLane[tabId];
+  delete prevKindByLane[tabId];
+  prevZoomByLane.delete(tabId);
+  prevWheelZoomByLane.delete(tabId);
+}
+/** Close a lane tab (the X): registry + iframe + per-lane state go together; if it was the active tab,
+ *  fall back the same way openPreview picks its reveal (yours-with-content, else agent, else yours). */
+function closeLaneTab(tabId: string): void {
+  prevLaneTabs = removeLaneTab(prevLaneTabs, tabId.startsWith("lane:") ? tabId.slice(5) : tabId);
+  dropLaneTabFrame(tabId);
+  if (prevLane === tabId) switchPrevLane(prevPathByLane.yours ? "yours" : (prevPathByLane.agent ? "agent" : "yours"));
+  renderPrevTabs();
+}
+/** P-PREVIEW.10 entry (threaded into fleet_grid as the previewLaneFile dep): a lane wrote a previewable
+ *  file. Upsert its tab, load the file through the normal serve path, and badge the preview rail icon
+ *  (the agent-dot pattern). NEVER steals the user's current tab: only when the panel is CLOSED does it
+ *  auto-open on the lane tab - mirroring onPreviewAvailable's auto-show. */
+export function previewShowLaneFile(laneId: string, laneName: string, path: string): void {
+  if (!laneId || !path) return;
+  const id = laneTabId(laneId);
+  const prior = prevLaneTabs;
+  prevLaneTabs = upsertLaneTab(prevLaneTabs, laneId, laneName, path);
+  for (const t of prior) if (!prevLaneTabs.some((n) => n.id === t.id)) dropLaneTabFrame(t.id); // cap-evicted
+  renderPrevTabs();
+  ensureLaneTabFrame(id);
+  loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
+  const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
+  if (!previewOpen) openPreview({ reveal: id }); // closed → auto-open ON the lane tab; open → focus nothing
 }
 /** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
  *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
@@ -4024,6 +7569,39 @@ function stopPreviewInspectRelay(): void {
 // runs browser code only, by design. Instead of staying mute, explain it in-pane; when the app dir
 // detects as an Electron app, offer a USER-clicked launch as a real OS process OUTSIDE LUCID
 // (audited server-side; the sandbox stays sealed).
+// Preview documents are untrusted. A frame message can request a link, never authorize egress.
+// The host-owned confirmation requires a second user click and captures the validated destination.
+let dismissPreviewLink: (() => void) | null = null;
+window.addEventListener("message", (ev) => {
+  const frame = laneFrame();
+  const d = ev.data;
+  if (!previewOpen || !frame || frame.hidden || ev.source !== frame.contentWindow || !d || d.__lucid !== "preview-external-link") return;
+  const url = externalHttpUrl(d.url);
+  if (!url) return;
+  dismissPreviewLink?.();
+  dismissPreviewLink = showToast({
+    tone: "info", title: "Open this preview link in your browser?",
+    desc: url, meta: "The external site receives your visit. LUCID and your draft stay open.",
+    actions: [
+      { label: "Open in browser", run: () => { void openAuthUrl(url); } },
+      { label: "Cancel" },
+    ],
+  });
+});
+
+// Normal app anchors use the same OS-browser boundary, including links in rendered chat and hints.
+function openAppLink(ev: MouseEvent): void {
+  if (ev.defaultPrevented || (ev.type === "auxclick" ? ev.button !== 1 : ev.button !== 0)) return;
+  const a = ev.target instanceof Element ? ev.target.closest("a[href]") : null;
+  if (!(a instanceof HTMLAnchorElement) || a.hasAttribute("download")) return;
+  const url = externalHttpUrl(a.href);
+  if (!url || new URL(url).origin === location.origin) return;
+  ev.preventDefault();
+  void openAuthUrl(url);
+}
+document.addEventListener("click", openAppLink);
+document.addEventListener("auxclick", openAppLink);
+
 const NODE_ONLY_ERR = /require is not defined|process is not defined|module is not defined|__dirname is not defined/i;
 window.addEventListener("message", (ev) => {
   const frame = laneFrame(); // health drives the shared notice, so only heed the ACTIVE lane's frame
@@ -4070,13 +7648,16 @@ async function pollPreviewInspect(): Promise<void> {
   const tagged = result && typeof result === "object" && !Array.isArray(result) ? { ...(result as Record<string, unknown>), viewport: currentViewportInfo() } : result;
   await bridge.previewInspectResult(next.id, tagged).catch(() => { /* the tool will time out */ });
 }
-/** Ask the sandboxed preview's bridge to run a read-only query; resolve with its result (or a timeout note). */
-function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknown): Promise<unknown> {
+/** Ask the sandboxed preview's bridge to run a read-only query; resolve with its result (or a timeout note).
+ *  `timeoutMs` is a parameter because CREATOR-3b's frame capture reads a canvas back once per planned frame,
+ *  which legitimately takes longer than an inspect query: a fixed 3s clock would abort a valid 60-frame pass
+ *  and report it as an unresponsive preview. */
+function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknown, timeoutMs = 3000): Promise<unknown> {
   return new Promise((resolve) => {
     const win = frame.contentWindow;
     if (!win) { resolve({ error: "the preview isn't ready" }); return; }
     const done = (r: unknown) => { window.removeEventListener("message", onMsg); window.clearTimeout(to); resolve(r); };
-    const to = window.setTimeout(() => done({ error: "the preview didn't respond (no inspect bridge, or it's still loading)" }), 3000);
+    const to = window.setTimeout(() => done({ error: "the preview didn't respond (no inspect bridge, or it's still loading)" }), timeoutMs);
     function onMsg(ev: MessageEvent): void {
       const d = ev.data as { __lucid?: string; id?: string; result?: unknown } | null;
       if (ev.source !== win || !d || d.__lucid !== "inspect-result" || d.id !== id) return;
@@ -4085,6 +7666,118 @@ function runInspectOnFrame(frame: HTMLIFrameElement, id: string, command: unknow
     window.addEventListener("message", onMsg);
     win.postMessage({ __lucid: "inspect", id, cmd: command }, "*");
   });
+}
+
+// ── CREATOR-3b (ADR-0287 item 3): deterministic frame capture in the Preview panel ───────────────
+// The pure clock, fingerprint and audit shipped with CREATOR-3; this is what finally drives a real scene
+// through them. The plan is one loop at a fixed rate, the pixels come back over the same postMessage bridge
+// the inspect relay uses, and the FIRST pass of a file becomes its baseline so a second pass is a regression
+// compare rather than a fresh opinion.
+
+/** Fingerprints of the first capture of a given file, keyed by path: the baseline a later pass is judged
+ *  against. In memory on purpose - a baseline that outlived the session would be compared against a scene
+ *  that has since been edited, which is worse than having none. */
+interface CaptureBaseline { readonly fingerprints: readonly string[]; readonly signatures: readonly Uint8Array[] }
+const captureBaselines = new Map<string, CaptureBaseline>();
+const CAPTURE_MS = 2000;
+const CAPTURE_FPS = 30; // 2000ms at 30fps is 60 frames, inside the bridge's 64-frame pass cap
+
+/** Decode one PNG data URL to raw RGBA. Base64 is decoded in-process rather than re-fetched, so the
+ *  renderer's own connect-src can never turn a local decode into a blocked request. */
+const decodeCaptureFrame: FrameDecoder = async (dataUrl) => {
+  try {
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) return null;
+    const raw = atob(dataUrl.slice(comma + 1));
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const bmp = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const cv = new OffscreenCanvas(bmp.width, bmp.height);
+    const cx = cv.getContext("2d");
+    if (!cx) return null;
+    cx.drawImage(bmp, 0, 0);
+    const img = cx.getImageData(0, 0, bmp.width, bmp.height);
+    return { width: img.width, height: img.height, rgba: new Uint8Array(img.data) };
+  } catch { return null; }
+};
+/** Wait until the previewed document's bridge actually answers.
+ *
+ *  A capture pressed seconds after a page loads was observed timing out while the SAME command sent by hand
+ *  moments later succeeded: a `postMessage` to a frame whose listener is not installed yet is dropped on the
+ *  floor, and nothing retries it. So the panel pings first with the cheapest read there is, and only then
+ *  spends a 60-frame pass. Returns false when the frame never answers, which the caller reports as such
+ *  instead of blaming the capture. */
+async function previewBridgeReady(frame: HTMLIFrameElement, tries = 6): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    const r = await runInspectOnFrame(frame, `rdy_${Date.now().toString(36)}_${i}`, { what: "title" }, 1200);
+    const ok = !!r && typeof r === "object" && "title" in (r as Record<string, unknown>);
+    if (ok) return true;
+    await new Promise<void>((resolve) => { window.setTimeout(resolve, 400); });
+  }
+  return false;
+}
+
+async function captureCurrentPreview(): Promise<void> {
+  const frame = laneFrame();
+  const path = prevPathByLane[prevLane] ?? "";
+  if (!frame || !path) {
+    showToast({ tone: "danger", title: "Capture", desc: "Open a local page in this lane first.", actions: [{ label: "OK" }], timeout: 4200 });
+    return;
+  }
+  const btn = $("#prevCapture") as HTMLButtonElement | null;
+  if (btn) btn.disabled = true;
+  const notice = $("#prevNotice") as HTMLElement | null;
+  try {
+    const plan = framePlan({ durationMs: CAPTURE_MS, fps: CAPTURE_FPS });
+    if (!plan.ok) { showToast({ tone: "danger", title: "Capture", desc: plan.error, actions: [{ label: "OK" }], timeout: 5200 }); return; }
+    if (!await previewBridgeReady(frame)) {
+      showToast({ tone: "danger", title: "Capture", desc: "This preview is not answering yet. Give the page a moment to finish loading, then press Capture again.", actions: [{ label: "OK" }], timeout: 6200 });
+      return;
+    }
+    const baseline = captureBaselines.get(path);
+    const verdict = await runCapture({
+      plan: plan.frames,
+      // One capture command per pass; the bridge renders and reads every planned frame synchronously, so the
+      // timeout scales with the plan rather than sitting at the inspect default.
+      send: (cmd) => runInspectOnFrame(frame, `cap_${Date.now().toString(36)}`, cmd, 2000 + plan.frames.length * 400),
+      decode: decodeCaptureFrame,
+      baseline: baseline?.fingerprints,
+      baselineSignatures: baseline?.signatures,
+    });
+    if (notice) {
+      notice.hidden = false;
+      notice.textContent = verdict.note;
+    }
+    if (!verdict.ok) {
+      showToast({ tone: "danger", title: verdict.driven ? "Capture: not reproducible" : "Capture: sampled only", desc: verdict.error || verdict.note, actions: [{ label: "OK" }], timeout: 7200 });
+      return;
+    }
+    // A baseline existed and NEITHER compare could run, which now means the floor probe itself failed.
+    // Saying "matches" here would be luck dressed as a result, so the toast reports that and stops.
+    if (verdict.inconclusive) {
+      showToast({
+        tone: "warn",
+        title: "Capture: no verdict",
+        desc: "This platform's readback stability could not be measured, so no baseline verdict was drawn. The capture itself is fine.",
+        actions: [{ label: "OK" }],
+        timeout: 7200,
+      });
+      return;
+    }
+    // Only a DRIVEN, clean pass earns a baseline, and BOTH forms are kept: the fingerprints for a platform
+    // that repeats itself byte for byte, the signatures for one that does not.
+    if (verdict.driven && !baseline) captureBaselines.set(path, { fingerprints: verdict.fingerprints, signatures: verdict.signatures });
+    const how = verdict.regression?.method === "signature"
+      ? `Matched by coarse signature at the tolerance measured on this machine (${verdict.noiseFloor?.changedPixels ?? 0} pixel(s) of readback jitter), because it does not repeat a byte-identical render.`
+      : "Frame for frame identical.";
+    showToast({
+      title: baseline ? "Capture matches its baseline" : "Capture recorded",
+      desc: `${verdict.fingerprints.length} frames at ${CAPTURE_FPS}fps, ${verdict.width}x${verdict.height}. ${baseline ? how : verdict.driven ? "Stored as the baseline for this file." : "Sampled, so nothing was stored as a baseline."}`,
+      timeout: 5200,
+    });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ── P-AGENT.2b (ADR-0133): the Agent Builder workflow canvas ─────────────────────────────────────────────
@@ -4644,8 +8337,7 @@ const previewCanvas = (): HTMLCanvasElement | null => $("#prevCanvas") as HTMLCa
 function syncPreviewCanvas(): void {
   const frame = laneFrame(), cv = previewCanvas(); // the markup canvas overlays whichever lane is visible
   if (!frame || !cv || frame.hidden) return;
-  const r = frame.getBoundingClientRect();
-  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  const w = Math.max(1, frame.offsetWidth), h = Math.max(1, frame.offsetHeight);
   if (cv.width === w && cv.height === h) return;
   const ctx = cv.getContext("2d");
   const prev = ctx && cv.width && cv.height ? ctx.getImageData(0, 0, cv.width, cv.height) : null;
@@ -4654,6 +8346,7 @@ function syncPreviewCanvas(): void {
 }
 function clearPreviewCanvas(): void { const cv = previewCanvas(); const c = cv?.getContext("2d"); if (cv && c) c.clearRect(0, 0, cv.width, cv.height); }
 function setDrawTool(t: "off" | "pen" | "rect" | "text"): void {
+  if (t !== "off") setPreviewPan(false);
   drawTool = t;
   const cv = previewCanvas();
   if (cv) { cv.style.pointerEvents = t === "off" ? "none" : "auto"; cv.style.cursor = t === "text" ? "text" : t === "off" ? "default" : "crosshair"; syncPreviewCanvas(); }
@@ -4665,7 +8358,7 @@ function wirePreviewCanvas(): void {
   if (!cv || previewCanvasWired) return;
   previewCanvasWired = true;
   const ctx = () => cv.getContext("2d")!;
-  const at = (e: MouseEvent) => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  const at = (e: MouseEvent) => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }; };
   cv.addEventListener("mousedown", (e) => {
     if (drawTool === "off") return;
     const p = at(e as MouseEvent);
@@ -4684,14 +8377,10 @@ function wirePreviewCanvas(): void {
   const end = () => { drawing = false; drawSnapshot = null; };
   cv.addEventListener("mouseup", end);
   cv.addEventListener("mouseleave", end);
-  // keep the canvas backing-size matched to the active frame as the panel/window resizes (preserves the drawing),
-  // and refit the device viewport (P-PREVIEW.9) so the scaled device tracks the panel width.
-  const body = $("#prevBody") as HTMLElement | null;
-  if (body && typeof ResizeObserver !== "undefined") new ResizeObserver(() => { syncPreviewCanvas(); applyDeviceScale(); }).observe(body);
 }
 /** A floating input for the text tool - type, Enter commits the text to the canvas, Esc cancels. */
 function addPreviewTextBox(p: { x: number; y: number }): void {
-  const body = $("#prevBody") as HTMLElement | null;
+  const body = $("#prevStage") as HTMLElement | null;
   if (!body) return;
   const inp = el(`<input class="prev-textin" spellcheck="false" placeholder="type, Enter to place" />`) as HTMLInputElement;
   inp.style.left = `${p.x}px`; inp.style.top = `${p.y}px`; inp.style.color = drawColor;
@@ -4784,6 +8473,61 @@ async function downscaleDataUrl(dataUrl: string, max: number): Promise<string> {
   return promise;
 }
 
+// P-PREVIEW-PWA.2: AUTO send-to-phone. When the agent produces or refreshes a preview while a share is
+// live, mirror ONE downscaled snapshot to the connected phones automatically - the exact capture →
+// downscale → broadcast path of the manual button, but silent, rate-limited to one send per 3s, and only
+// ever the AGENT lane (a file YOU opened never auto-leaves this machine). Capture sees on-screen pixels,
+// so it waits for the agent frame to paint and no-ops when that frame is not the visible one.
+const PHONE_AUTO_GAP_MS = 3000;
+const PHONE_AUTO_PAINT_MS = 900;
+let phoneAutoLastSend = 0;
+
+// P-PREVIEW-PWA.4 (ADR-0335): capture the frame with LUCID's own transient chrome hidden.
+//
+// `capturePage` photographs on-screen pixels, and `#toasts` is `position:fixed; right:18px; top:52px`,
+// which is directly over the top-right of the right-edge preview panel. So every toast alive at capture
+// time landed in the image: the guest's snapshot in the field report carried an "Opening the preview" pill
+// baked into it forever. Hiding is done with a body class rather than by touching the toast elements, so a
+// toast that arrives mid-capture is covered too, and the class is removed in a `finally` because a stuck
+// `.lucid-capturing` would silently swallow every future toast.
+async function captureWithoutOverlays(rect: { x: number; y: number; width: number; height: number }): Promise<string | null> {
+  if (!bridge.capturePreview) return null;
+  document.body.classList.add("lucid-capturing");
+  try {
+    // One frame, so the hide is actually painted before the pixels are read.
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    return await bridge.capturePreview(rect).catch(() => null);
+  } finally {
+    document.body.classList.remove("lucid-capturing");
+  }
+}
+function schedulePhoneAutoSend(path: string): void {
+  window.setTimeout(() => void phoneAutoSend(path), PHONE_AUTO_PAINT_MS); // let the agent frame paint first
+}
+async function phoneAutoSend(path: string): Promise<void> {
+  if (!bridge.isElectron || !bridge.capturePreview) return;
+  const frame = laneFrame("agent");
+  const rect = frame?.getBoundingClientRect() ?? { width: 0, height: 0, x: 0, y: 0 };
+  const share = await currentShareStatus().catch(() => null);
+  // P-PREVIEW-PWA.4 (ADR-0335): ASK WHETHER THERE IS ANYTHING WORTH SENDING. A failed preview renders the
+  // engine's own "Can't preview this file" page under HTTP 200, so without this probe the capture path
+  // shipped that error page to a guest as a permanent transcript card. Probed only once the cheap local
+  // conditions already hold, so a hidden lane never costs a round trip.
+  const cheap = { shareActive: !!share?.active, laneVisible: !!frame && !frame.hidden && prevLane === "agent", rect, now: Date.now(), lastSentAt: phoneAutoLastSend, gapMs: PHONE_AUTO_GAP_MS };
+  if (snapshotVerdict({ ...cheap, resolves: true }) !== "send") return; // fails for a reason other than resolution
+  const resolves = await bridge.previewProbe(path).catch(() => false);
+  // Re-read the clock: both awaits above can have raced a burst.
+  if (snapshotVerdict({ ...cheap, resolves, now: Date.now(), lastSentAt: phoneAutoLastSend }) !== "send") return;
+  phoneAutoLastSend = Date.now(); // claim the slot only once a send is authorized, so a failure cannot burn it
+  const png = await captureWithoutOverlays({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) });
+  if (!png) return;
+  const image = await downscaleDataUrl(png, MAX_SNAPSHOT_EDGE);
+  const label = snapshotLabel(path);
+  const evt: ChatEvent = { type: "preview-snapshot", image, label };
+  if (p2pHostActive()) { p2pTeeEvent(evt); return; } // direct-P2P: broadcast straight from the renderer host
+  await bridge.collabBroadcastPreview(image, label).catch(() => { /* best-effort; the manual button reports errors */ });
+}
+
 // P-PREVIEW-PWA.1 (ADR-0237): capture the visible Preview lane + broadcast it to connected phone guests as a
 // scaled-down snapshot - direct-P2P via teeEvent, relay via the backend tap. Electron-only capture (like the
 // Screenshot button); needs a live share.
@@ -4793,8 +8537,16 @@ async function sendPreviewToPhone(): Promise<void> {
   const frame = laneFrame();
   if (!frame || frame.hidden) { showToast({ title: "Nothing to send", desc: "Open a local file in the preview first.", timeout: 2600 }); return; }
   if (!bridge.isElectron || !bridge.capturePreview) { showToast({ tone: "warn", title: "Desktop app only", desc: "Capturing the preview needs the packaged LUCID app.", timeout: 3200 }); return; }
+  // P-PREVIEW-PWA.4 (ADR-0335): refuse to publish a failed preview, and SAY SO. The manual button has a
+  // user standing in front of it, so unlike the silent auto path this one explains itself rather than
+  // no-opping. Same reason as the auto path: a failure renders under HTTP 200 and photographs like an app.
+  const target = (prevPathByLane[prevLane] ?? "").trim();
+  if (target && !(await bridge.previewProbe(target).catch(() => false))) {
+    showToast({ tone: "warn", title: "Nothing to send yet", desc: "This preview did not load, so there is only an error page to capture. Fix or reopen the file, then send it.", timeout: 4200 });
+    return;
+  }
   const rect = frame.getBoundingClientRect();
-  const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
+  const png = await captureWithoutOverlays({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) });
   if (!png) { showToast({ tone: "warn", title: "Capture failed", desc: "Could not capture the preview.", timeout: 2600 }); return; }
   const image = await downscaleDataUrl(png, MAX_SNAPSHOT_EDGE);
   const evt: ChatEvent = { type: "preview-snapshot", image, label: "Preview snapshot" };
@@ -4802,6 +8554,85 @@ async function sendPreviewToPhone(): Promise<void> {
   else { const r = await bridge.collabBroadcastPreview(image, "Preview snapshot"); if (!r?.sent) { showToast({ tone: "warn", title: "Not sent", desc: "The relay share is not live.", timeout: 3000 }); return; } }
   showToast({ title: "Preview sent to phone", desc: "Connected guests can view + save it.", timeout: 2600 });
 }
+
+// ── P-BROWSER.1 (wave 2): the agent-browser pill (BrowserFeature section) ────────────────────────────
+// While the agent drives its visible browser window (bridge.browserStatus().active), a floating pill
+// hovers near the top of the chat: the live page title, a CSS-only breathing-particle aura, a pulse
+// replayed each time a screenshot lands, and two controls - "Close tab" (just the window, the agent
+// keeps working) and "Stop agent" (window + the running turn). Self-contained: its own 2.5s poll,
+// lazily mounted into main.center on the first tick. When a shot lands AND a collab share is live,
+// the capture auto-forwards to phone guests (3s minimum gap) via the P-PREVIEW-PWA.1 downscale +
+// broadcast path. Invariant #11: the pill row has ONE text child (.bp-label, nowrap+ellipsis).
+let bpLastShots = -1; // -1 = not yet sighted this activation (never pulse or auto-send on first sight)
+let bpLastSentAt = 0;
+let bpPollBusy = false;
+
+function ensureBrowserPill(): HTMLElement | null {
+  const existing = document.getElementById("browserPill");
+  if (existing) return existing;
+  const host = document.querySelector("main.center");
+  if (!host) return null; // layout not rendered yet - the next tick retries
+  const el = document.createElement("div");
+  el.id = "browserPill";
+  el.className = "browser-pill";
+  el.hidden = true;
+  el.innerHTML = `
+    <span class="bp-fx" aria-hidden="true"></span>
+    <span class="bp-ico" aria-hidden="true">${icon("eye", 14)}</span>
+    <span class="bp-label">Agent browser</span>
+    <button class="bp-btn" id="browserPillClose" type="button" data-tip="Close the agent's browser window">Close tab</button>
+    <button class="bp-btn bp-danger" id="browserPillStop" type="button" data-tip="Close the window and stop the agent's turn">Stop agent</button>`;
+  el.querySelector("#browserPillClose")?.addEventListener("click", () => { void bridge.browserClose(); });
+  // Stop agent = both halves: close the window (server-side) AND interrupt the running turn (the same
+  // stop path as the composer's Stop button; a no-op when nothing is streaming).
+  el.querySelector("#browserPillStop")?.addEventListener("click", () => { void bridge.browserStop(); void stopTurn(); });
+  host.appendChild(el);
+  return el;
+}
+
+// AUTO SEND-TO-PHONE: forward the newest browser shot to connected guests - only while a share is
+// actually live (same gate as sendPreviewToPhone), never more than once per 3s.
+async function browserAutoSendShot(title: string): Promise<void> {
+  const now = Date.now();
+  if (now - bpLastSentAt < 3000) return;
+  bpLastSentAt = now; // claim the slot before any await so overlapping ticks can't double-send
+  const share = await currentShareStatus();
+  if (!share?.active) return;
+  const png = await bridge.browserShot();
+  if (!png) return;
+  const image = await downscaleDataUrl(png, MAX_SNAPSHOT_EDGE);
+  const label = `Browser: ${title}`.slice(0, 120);
+  const evt: ChatEvent = { type: "preview-snapshot", image, label };
+  if (p2pHostActive()) p2pTeeEvent(evt); // direct-P2P: broadcast straight from the renderer host
+  else void bridge.collabBroadcastPreview(image, label); // relay share; fail-quiet (no toast spam on auto)
+}
+
+async function browserPillTick(): Promise<void> {
+  if (bpPollBusy) return;
+  bpPollBusy = true;
+  try {
+    const s = await bridge.browserStatus();
+    const el = ensureBrowserPill();
+    if (!el) return;
+    if (!s?.active) { el.hidden = true; bpLastShots = -1; return; }
+    el.hidden = false;
+    const label = el.querySelector(".bp-label") as HTMLElement | null;
+    if (label) {
+      label.textContent = `Agent browser - ${s.title || s.url || "loading"}`;
+      label.title = s.url || "";
+    }
+    const grew = bpLastShots >= 0 && s.shots > bpLastShots;
+    bpLastShots = s.shots;
+    if (grew) {
+      el.classList.remove("snap");
+      void el.offsetWidth; // restart the CSS pulse so every shot visibly lands
+      el.classList.add("snap");
+      void browserAutoSendShot(s.title || s.url);
+    }
+  } catch { /* fail-quiet: a status poll error never breaks the app */
+  } finally { bpPollBusy = false; }
+}
+window.setInterval(() => { void browserPillTick(); }, 2500);
 // P-IMG.1 (ADR-0208): a download for an image data URL — the standard blob/anchor idiom, but a data: URL is
 // already a valid href, so set it as a PROPERTY (never interpolated into HTML) and click a transient anchor.
 function downloadDataUrl(dataUrl: string, filename: string): void {
@@ -4913,6 +8744,10 @@ async function openResourcePanelLive(): Promise<void> {
   openResourcePanel(status);
 }
 async function renderKnowledge(): Promise<void> {
+  if (!kgOpen) return;
+  const generation = ++kgRenderGeneration;
+  kbSideGeneration++;
+  kbGraphData = null;
   const canvas = $("#kgCanvas"), side = $("#kgSide"), scopeLbl = $("#kgScopeLbl");
   if (!canvas || !side) return;
   kbGraphMode = false; updateKbButton(false); // P-KB.2b: personal graph is neither code nor compiled-KB
@@ -4924,7 +8759,9 @@ async function renderKnowledge(): Promise<void> {
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // the facts panel only appears on selection
   let status: Awaited<ReturnType<typeof bridge.personal>>;
   try { status = await bridge.personal(); }
-  catch { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>Couldn't load your graph. Try reopening this panel.</div></div>`; return; }
+  catch { if (kgOpen && generation === kgRenderGeneration) canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>Couldn't load your graph. Try reopening this panel.</div></div>`; return; }
+  if (!kgOpen || generation !== kgRenderGeneration) return;
+  if (scopeLbl) scopeLbl.removeAttribute("title");
   if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
   const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; showKgCenter(false); syncKgSideOpen(); };
   if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
@@ -4936,11 +8773,15 @@ async function renderKnowledge(): Promise<void> {
   // P-SYSRES.1 (ADR-0182): hard-pause the CPU-heavy graph build while the machine is starved. Checked
   // BEFORE the decrypt so pausing skips that cost too. Fail-open: no profile evidence never blocks.
   const sysKg = await bridge.systemStatus().catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (sysKg?.verdict.level === "blocked") return renderSysBlocked(canvas as HTMLElement, sysKg, "knowledge graph", () => void renderKnowledge());
   // P-PERF.2: pause BEFORE the decrypt - skipping the render should skip its cost too.
   if (perfWatch.tier() === "minimal" && !kgForceRender) return renderKgPaused(canvas as HTMLElement);
-  try { kgData = await bridge.personalGraph(); }
-  catch { return gate("Couldn't decrypt your graph. Try reopening this panel."); }
+  let data: PersonalGraphData | null;
+  try { data = await bridge.personalGraph(); }
+  catch { if (kgOpen && generation === kgRenderGeneration) gate("Couldn't decrypt your graph. Try reopening this panel."); return; }
+  if (!kgOpen || generation !== kgRenderGeneration) return;
+  kgData = data;
   if (!kgData || kgData.nodes.length === 0) return gate("Nothing learned yet. It remembers durable facts about <b>you</b> - not what we discuss. Tell me things like <i>“I prefer Rust”</i>, <i>“I use vim”</i>, <i>“I decided to go with Postgres”</i>, or <i>“remember that I deploy with Kubernetes”</i> and they'll appear here (each is security-scanned first).");
   (side as HTMLElement).hidden = true; side.innerHTML = ""; // appears only when a node is clicked
   // P-PERF.2: tier-scaled fidelity - calm + shorter settle + a top-hubs cap off AC power. kgData stays
@@ -4990,10 +8831,16 @@ function updateKbButton(active: boolean): void {
   updateKgViewsLabel(); // P-KGUI.1: the consolidated views button shows the active graph
 }
 /** Render a selected compiled page in the kg side panel - its body is UNTRUSTED DATA (escaped + framed). */
-function renderKbSide(id: string | null): void {
+async function renderKbSide(id: string | null): Promise<void> {
   const side = $("#kgSide") as HTMLElement | null; if (!side) return;
-  const page = id ? kbGraphData?.pages.find((p) => p.page_id === id) : null;
-  if (!page) { side.hidden = true; side.innerHTML = ""; syncKgSideOpen(); return; }
+  const generation = ++kbSideGeneration;
+  const graph = kbGraphData;
+  if (!id || !graph?.pages.some((p) => p.page_id === id)) { side.hidden = true; side.innerHTML = ""; syncKgSideOpen(); return; }
+  side.innerHTML = `<div class="kg-empty">Loading page…</div>`;
+  side.hidden = false; syncKgSideOpen();
+  const page = await bridge.kbPage(graph.kgId, id).catch(() => null);
+  if (!kgOpen || !kbGraphMode || generation !== kbSideGeneration || graph !== kbGraphData) return;
+  if (!page) { side.innerHTML = `<div class="kg-empty">Couldn't load this page. Select it again to retry.</div>`; return; }
   side.innerHTML = `<div class="kb-side">
     <div class="kb-side-hd"><b>${esc(page.title)}</b> <span class="skdir-trust ${esc(page.trust_label)}">${esc(page.trust_label)}</span></div>
     <div class="kb-side-kind">${esc(page.kind)} \u00b7 <code>${esc(page.slug)}</code></div>
@@ -5003,21 +8850,41 @@ function renderKbSide(id: string | null): void {
 }
 /** Fetch + draw the compiled KB page graph in the shared canvas (mirrors renderCodeGraph). */
 async function renderKbGraph(): Promise<void> {
+  if (!kgOpen) return;
+  const generation = ++kgRenderGeneration;
+  kbSideGeneration++;
+  kbGraphData = null;
+  kgData = null;
   const canvas = $("#kgCanvas"), side = $("#kgSide") as HTMLElement | null, scopeLbl = $("#kgScopeLbl");
   if (!canvas) return;
   kgHandle?.destroy(); kgHandle = null;
-  kbGraphMode = true; updateKbButton(true); updateCodeGraphButtons(false); // mutually exclusive with code + personal
-  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>Loading the compiled KB\u2026</div></div>`;
+  updateKbButton(true); updateCodeGraphButtons(false);
+  showKgCenter(false);
+  canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>Loading graph preview…</div></div>`;
   if (side) { side.hidden = true; side.innerHTML = ""; }
-  const g = await bridge.kbGraph().catch(() => null);
+  syncKgSideOpen();
+  const sys = await bridge.systemStatus().catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
+  if (sys?.verdict.level === "blocked") return renderSysBlocked(canvas as HTMLElement, sys, "graph preview", () => void renderKbGraph());
+  const g = await bridge.kbGraph(activeKbId ?? undefined).catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   kbGraphData = g;
-  if (scopeLbl) scopeLbl.textContent = g ? `\u00b7 compiled KB \u00b7 ${g.pages.length} pages \u00b7 ${g.links.length} links` : "";
-  if (!g || !g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>The compiled KB is empty. Ingest a document to build summary, concept &amp; entity pages.</div></div>`; showKgCenter(false); syncKgSideOpen(); return; }
-  kgHandle = mountGraph(canvas as HTMLElement, kbToGraphData(g), (id) => renderKbSide(id), {}, {
-    positions: kgLayoutCache.get("kb"),
-    onPositions: (pos) => kgLayoutCache.set("kb", pos),
+  if (scopeLbl) {
+    scopeLbl.textContent = g ? `· ${g.totalPages} pages · ${g.totalLinks} links · preview ${g.pages.length} nodes / ${g.links.length} links` : "";
+    scopeLbl.setAttribute("title", "Lightweight preview: at most 100 nodes and 200 links. All pages remain available to the agent; Find a node searches this preview.");
+  }
+  if (!g) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>Couldn't load the graph preview. Your imported pack is still installed. Reopen this view to retry.</div></div>`; return; }
+  if (!g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>This knowledge graph is empty. Import a document to add pages.</div></div>`; return; }
+  kgData = kbToGraphData(g);
+  const cacheKey = `kb:${g.kgId}`;
+  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => void renderKbSide(id), {}, {
+    staticLayout: true,
+    positions: kgLayoutCache.get(cacheKey),
+    onPositions: (pos) => kgLayoutCache.set(cacheKey, pos),
   });
   kgHandle.setLens(kgLens);
+  const query = ($("#kgSearch") as HTMLInputElement | null)?.value.trim();
+  if (query) kgHandle.setSearch(matchNodes(kgData.nodes, query));
   showKgCenter(true); syncKgSideOpen();
 }
 // P-KGPACK.2 (ADR-0205): the compiled-KB view is entered through the KG picker (openKgPicker → pickKg),
@@ -5036,6 +8903,10 @@ function updateCodeGraphButtons(active: boolean, meta?: import("./bridge.ts").Co
 /** Render the workspace code graph at `level`. `ingest` forces a fresh (re)build; otherwise load the stored
  *  graph (building on first use). Bypasses the personalization gate - the code graph isn't private user data. */
 async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeGraphLevel): Promise<void> {
+  if (!kgOpen) return;
+  const generation = ++kgRenderGeneration;
+  kbSideGeneration++;
+  kbGraphData = null;
   codeGraphLevel = level;
   const canvas = $("#kgCanvas"), side = $("#kgSide") as HTMLElement | null;
   if (!canvas) return;
@@ -5047,13 +8918,16 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   // P-SYSRES.1 (ADR-0182): the AST ingest is the app's biggest CPU spike - hard-pause it while the
   // machine is starved (notice + what-to-close panel + re-check). Fail-open on missing evidence.
   const sysCg = await bridge.systemStatus().catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (sysCg?.verdict.level === "blocked") {
     renderSysBlocked(canvas as HTMLElement, sysCg, "code graph", () => void renderCodeGraph(ingest, level));
     updateCodeGraphButtons(true, null);
     return;
   }
   let data = ingest ? await bridge.codeGraphIngest(level).catch(() => null) : await bridge.codeGraph(level).catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (data && !data.ingested && !ingest) data = await bridge.codeGraphIngest(level).catch(() => null); // never built → build now
+  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (!data || !data.nodes.length) {
     canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>No ${level === "symbol" ? "symbols" : "source files"} found to graph in this workspace. Open a code repo as your workspace, then try again.</div></div>`;
     updateCodeGraphButtons(true, null); showKgCenter(false); return;
@@ -5259,7 +9133,7 @@ async function copyExportPath(dest: string): Promise<void> {
 // ───────────────────────── workspace ─────────────────────────
 function workspaceSection(ws: WorkspaceInfo): string {
   const gitPatSaved = state.creds.some((c) => c.ref === "git_pat"); // ADR-0216: a git PAT already in the vault?
-  return `<div class="set-sec"><div class="set-lbl">Workspace <span class="set-sub">the folder the agent works in</span></div>
+  return setCard("workspace", "Workspace", esc(ws.name), `
     <div class="ws-current">
       <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
       <div class="ws-path">${esc(ws.current)}</div>
@@ -5281,8 +9155,8 @@ function workspaceSection(ws: WorkspaceInfo): string {
     <div class="set-sub ws-gitpat-note">${gitPatSaved
       ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`
       : `Optional. A GitHub/GitLab personal access token for private-repo clones. Stored in the OS-encrypted vault; never sent to the agent.`}</div>
-    ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<button class="ws-recent-item" data-ws="${esc(r.path)}" title="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)} ${esc(r.name)}</button>`).join("")}</div>` : ""}
-  </div>`;
+    ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<span class="ws-recent-item" title="${esc(r.path)}"><button class="ws-recent-open" data-ws="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)}<span class="ws-recent-name">${esc(r.name)}</span></button><button class="ws-recent-rm" data-ws-remove="${esc(r.path)}" title="Remove from recents" aria-label="Remove ${esc(r.name)} from recents">${icon("close", 10)}</button></span>`).join("")}</div>` : ""}
+  `, true);
 }
 // ADR-0216: persist a git PAT into the OS-encrypted vault (ref "git_pat"). Kept in `sessionGitPat` too so it
 // authenticates a clone THIS session (passed inline) before the next-launch env injection; the field is cleared
@@ -5361,18 +9235,150 @@ function renderThread(msgs: { role: string; text: string; turn?: number }[] | nu
     }
     for (const g of steps ?? []) if (g.turn > maxUserTurn && maxUserTurn > 0) attachRestoredSteps(g);
   } else seedThread();
+  // A replaced thread opens on its NEWEST message. The per-message scrollChat() calls above cannot do
+  // this: the first one (thread still empty, so "near bottom") queues the single follow-frame, the
+  // rest coalesce into it, and that frame re-checks nearBottom only AFTER the whole transcript is in
+  // the DOM. By then scrollTop is 0 (innerHTML="" collapsed it) over thousands of px of content, the
+  // check fails, and the session opened parked at its first message. jumpToEnd lands on the bottom
+  // and clears the previous session's lastWroteTop, so live output on this thread follows again.
+  jumpToEnd();
+  holdAtEnd();
+}
+/** After a thread is replaced, late layout (restored images decoding, fonts) keeps growing it after
+ *  jumpToEnd ran, and nothing else would scroll again. Stay pinned to the end while the thread
+ *  resizes, until the reader takes over (wheel, touch, key, pointer on the scroller) or it settles. */
+let endHold: (() => void) | null = null;
+function holdAtEnd(settleMs = 3000): void {
+  endHold?.();
+  const c = $("#chat"), t = $("#thread");
+  if (!c || !t || typeof ResizeObserver === "undefined") return;
+  const ro = new ResizeObserver(() => jumpToEnd());
+  const inputs = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+  const timer = window.setTimeout(() => release(), settleMs);
+  const release = (): void => {
+    ro.disconnect(); window.clearTimeout(timer);
+    for (const ev of inputs) c.removeEventListener(ev, release);
+    if (endHold === release) endHold = null;
+  };
+  for (const ev of inputs) c.addEventListener(ev, release, { passive: true });
+  ro.observe(t);
+  endHold = release;
 }
 // P-PERF.4 (ADR-0131): resume loads only the transcript TAIL - matches the SWR cache cap, so the IPC
 // payload and the DOM stay bounded no matter how long the chat grew. The full history stays on disk.
 const RESUME_TAIL = 400;
-async function resumeSession(id: string): Promise<void> {
+// P-TURN-RECOVERY-BOOT: read-only status/context first, then attach the identified live turn.
+async function adoptMasterTurn(status: TurnStatus, owner: number): Promise<void> {
+  const page = status.sessionId ? await bridge.sessionMessages(status.sessionId, RESUME_TAIL).catch(() => null) : null;
+  if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return;
+  setRecoveryChecking(false);
+  if (status.sessionId) $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === status.sessionId));
+  await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: page?.messages });
+}
+async function recoverMasterTurn(): Promise<void> {
+  if (isLaneTarget(state.composerTarget) || activeTurnView || goalLoopRunning) return;
+  const owner = ++turnViewEpoch;
+  $("#turnReconnect")?.remove();
+  // Status discovery is not a running turn. Keep Send blocked without offering Stop.
+  setRecoveryChecking(true); state.streaming = false; setSendEnabled();
+  try {
+    const [status, promoted] = await Promise.all([bridge.chatStatus(), bridge.fleetPromoted()]);
+    if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return;
+    if (promoted?.lane) {
+      state.streaming = false; setSendEnabled();
+      showTurnReconnect("A fleet lane owns the composer. Reopen it to follow its activity.", () => void promoteLane(promoted.lane!.id));
+      return;
+    }
+    // A reachable engine with no adoptable turn is the NORMAL fresh-open outcome: clear both surfaces.
+    if (!canAdoptTurn(status)) { setRecoveryChecking(false); state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled(); return; }
+    await adoptMasterTurn(status!, owner);
+  } catch (error) {
+    if (owner !== turnViewEpoch) return;
+    // Nothing rendered means nothing at stake: a fresh open whose probe timed out gets the quiet
+    // composer button, not a paragraph. With a conversation on screen the banner still explains itself,
+    // because there the user needs to know their history may be out of date before they send again.
+    if (!$("#thread")?.querySelector(".turn, .msg, .asst, .user")) {
+      setRecoveryChecking(false); setSendEnabled();
+      showQuietReconnect(() => void recoverMasterTurn());
+      return;
+    }
+    showTurnReconnect(`Connection unavailable: ${error instanceof Error ? error.message : String(error)}. Reconnect to check session status before sending.`, () => void recoverMasterTurn());
+    // P-RECOVER.1 (ADR-0385): a conversation is on screen and the engine did not answer: find out why.
+    superviseRecovery({ kind: "connection", state: "failed" }, false, masterRecoveryHooks(owner));
+  }
+}
+
+/** P-RECOVER.1 (ADR-0385): settle what the previous run left behind. Main recorded an unclean exit (or
+ *  the processes it stopped) before this engine started; the engine kept the previous master session id.
+ *  Try that session once, VERIFIED, say plainly whether it worked, and offer the report either way.
+ *  Other unseen incidents (e.g. an engine restart that reloaded this window) get the notice only. */
+async function startupRecovery(): Promise<void> {
+  const st = await bridge.recoveryState();
+  const unseen = st?.incidents.filter((i) => !i.seen) ?? [];
+  if (!unseen.length) return;
+  const startup = unseen.find((i) => i.kind === "unclean-shutdown" || i.kind === "leftover-processes");
+  // The resume re-renders the thread, so it goes first and the other notices land after it.
+  if (startup) await settleStartupIncident(startup, st?.previous?.sessionId ?? null);
+  for (const inc of unseen.filter((i) => i !== startup).slice(0, 3)) {
+    showIncidentNotice(inc);
+    void bridge.incidentSeen(inc.id);
+  }
+}
+
+async function settleStartupIncident(inc: IncidentView, previousId: string | null): Promise<void> {
+  const headline = incidentHeadline(inc.kind, "pending");
+  const settle = async (outcome: "recovered" | "not-recovered", note: string, lead: string) => {
+    const updated = await bridge.incidentUpdate(inc.id, outcome, note);
+    void bridge.incidentSeen(inc.id);
+    showIncidentNotice(updated ?? inc, lead, "recoveryNotice");
+  };
+  if (!previousId) {
+    await settle("recovered", "There was no previous chat session to restore.", headline);
+    return;
+  }
+  // A turn the boot check already adopted owns the thread; never pull it away for the old session.
+  if (activeTurnView || isLaneTarget(state.composerTarget)) {
+    await settle("not-recovered", "A live turn was open at launch, so the previous session was not restored.", headline);
+    return;
+  }
+  showRecoveryNotice(`${headline} Restoring your previous session\u2026`);
+  const r = await bridge.recoveryResume(previousId);
+  // A failed resume records its own session-unrecoverable incident; the startup notice below covers it.
+  if (r?.incidentId && r.incidentId !== inc.id) void bridge.incidentSeen(r.incidentId);
+  if (r?.ok) {
+    await resumeSession(r.sessionId ?? previousId, { loaded: true });
+    await settle("recovered", "The previous chat session was restored after launch.", `${headline} Your previous session was restored.`);
+    return;
+  }
+  clearRecoveryNotice();
+  await settle("not-recovered", "The previous chat session could not be restored; a new session was started.", "Your previous session could not be recovered. A new session was started.");
+}
+
+/** Open session `id` in the thread. `loaded`: the engine already has it loaded (a verified P-RECOVER.1
+ *  resume, or a resync of the current session), so only the transcript is fetched and rendered.
+ *  Resolves true when the thread shows the session (or its live turn), false when it could not. */
+async function resumeSession(id: string, opts: { loaded?: boolean } = {}): Promise<boolean> {
+  if (isLaneTarget(state.composerTarget)) demoteLane();
+  const owner = leaveTurnView();
+  // Status discovery is not a running turn. Keep Send blocked without offering Stop.
+  setRecoveryChecking(true); state.streaming = false; setSendEnabled();
+  let status: TurnStatus | null;
+  try { status = await bridge.chatStatus(); }
+  catch (error) {
+    if (owner === turnViewEpoch) showTurnReconnect(`Cannot check the active turn: ${error instanceof Error ? error.message : String(error)}`, () => void resumeSession(id, opts));
+    return false;
+  }
+  if (owner !== turnViewEpoch) return false;
+  if (status?.running && status.sessionId === id && !isLaneTarget(state.composerTarget)) { void adoptMasterTurn(status, owner); return true; }
   closeSettings();
   $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === id));
+
   // P-PERF.1: paint the CACHED transcript instantly (no blank thread), then reconcile with the fresh load.
   const cached = cachedTranscript(id);
   let shownSig = "";
   if (cached && cached.length) { renderThread(cached); shownSig = transcriptSig(cached); }
   const page = await bridge.sessionMessages(id, RESUME_TAIL);
+  if (owner !== turnViewEpoch) return false;
   if (page) {
     // P-RESUME.1: the cached paint never carries restored steps, so any steps force one re-render.
     const freshSig = transcriptSig(page.messages) + (page.steps?.length ? `+s${page.steps.length}` : "");
@@ -5387,9 +9393,12 @@ async function resumeSession(id: string): Promise<void> {
   } else if (!shownSig) {
     renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
-  await bridge.resumeSession(id);
+  if (!opts.loaded) await bridge.resumeSession(id);
+  if (owner !== turnViewEpoch) return false;
+  setRecoveryChecking(false); state.streaming = false; setSendEnabled();
   void loadSessionMode(); // ADR-0219: reflect THIS session's CUI/Search mode + banner
   $("#input")?.focus();
+  return !!page || !!shownSig;
 }
 
 /** Delete a session from history (with confirm). Backend closes the live session first if it's
@@ -5418,7 +9427,98 @@ function confirmDeleteSession(id: string): void {
   });
 }
 
+// Remove one folder from the recents pills. The active workspace is untouched, so there's no respawn and no
+// session reset - just persist the drop and re-render the Workspace section (+ the top bar) in place.
+async function forgetRecentWorkspace(path: string): Promise<void> {
+  const info = await bridge.removeRecentWorkspace(path).catch(() => null);
+  if (info) state.workspace = info;
+  const el = document.querySelector(`#setBody [data-sec="workspace"]`);
+  if (el && state.workspace) el.outerHTML = `<div data-sec="workspace">${workspaceSection(state.workspace)}</div>`;
+  renderWorkspaceBar();
+}
+// P-WSSETUP: the workspace-initialization offer. When the opened folder has no .agents framework
+// and was never asked before, offer to lay one down: an empty folder gets a "what is this for?"
+// step first, an existing code repo gets a one-step scan-and-set-up offer. Skip / Not now / Esc is
+// remembered server-side per folder, so nobody is nagged twice about the same workspace.
+async function maybeOfferWorkspaceSetup(): Promise<void> {
+  const prof = await bridge.workspaceSetupProfile();
+  if (!prof || prof.asked || prof.hasAgentsFramework || document.getElementById("wsSetup")) return;
+  type Purpose = import("./bridge.ts").WorkspacePurpose;
+
+  const ov = el(`<div id="wsSetup" class="modal-ov"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="wsSetupTitle"></div></div>`);
+  const box = $(".modal", ov) as HTMLElement;
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); dismiss(); } };
+  const close = () => { document.removeEventListener("keydown", onKey); ov.remove(); };
+  const dismiss = () => { close(); void bridge.workspaceSetupDismiss(); };
+  const accept = async (purpose: Purpose, scan: boolean) => {
+    close();
+    const r = await bridge.agentsInit(purpose, scan);
+    if (r?.ok) showToast({ title: "Workspace initialized", desc: "AGENTS.md and .agents/ created (" + r.created.length + " files).", timeout: 4000 });
+    else showToast({ tone: "danger", title: "Workspace setup failed", desc: (r?.error ?? "Could not create the .agents files.").slice(0, 180), timeout: 6000 });
+  };
+
+  // Step 2 of the purpose flows: explain the .agents framework, then scaffold on accept.
+  const frameworkStep = (purpose: Purpose): void => {
+    box.innerHTML = `
+      <div class="modal-icon">${icon("folder", 24)}</div>
+      <h2 class="modal-title" id="wsSetupTitle">Set up the .agents framework?</h2>
+      <p class="modal-desc">The .agents folder is a portable context layer that lives inside the workspace: agents record their context, progress, decisions, and skills there as plain files.</p>
+      <p class="modal-desc">Any agent on any system, and any person who works on this project later, inherits that record instead of starting cold.</p>
+      <p class="modal-desc">LUCID will create AGENTS.md plus .agents/ with CONTEXT, PROGRESS, DECISIONS, and skills files. Nothing existing is overwritten.</p>
+      <div class="modal-actions">
+        <button class="btn-mini" id="wsSetupNo" type="button">Not now</button>
+        <button class="btn-mini ok" id="wsSetupGo" type="button">${icon("check", 12)} Set up .agents framework</button>
+      </div>`;
+    $("#wsSetupNo", box)!.addEventListener("click", dismiss);
+    $("#wsSetupGo", box)!.addEventListener("click", () => void accept(purpose, false));
+  };
+
+  if (!prof.isEmpty && prof.hasCode) {
+    // Existing code repo: a single step - offer the scan + scaffold directly.
+    const detected = prof.stack.length ? ` (detected: ${esc(prof.stack.join(", "))})` : "";
+    box.innerHTML = `
+      <div class="modal-icon">${icon("folder", 24)}</div>
+      <h2 class="modal-title" id="wsSetupTitle">Existing project detected</h2>
+      <p class="modal-desc">This folder already contains an application${detected}.</p>
+      <p class="modal-desc">The .agents folder saves context, progress, decisions, and skills as plain files inside the workspace, so other agents and future developers inherit that record instead of starting cold.</p>
+      <p class="modal-desc">LUCID can scan the project and pre-fill AGENTS.md with the detected stack and commands. Nothing existing is overwritten.</p>
+      <div class="modal-actions">
+        <button class="btn-mini" id="wsSetupNo" type="button">Not now</button>
+        <button class="btn-mini ok" id="wsSetupGo" type="button">${icon("scan", 12)} Scan and set up .agents</button>
+      </div>`;
+    $("#wsSetupNo", box)!.addEventListener("click", dismiss);
+    $("#wsSetupGo", box)!.addEventListener("click", () => void accept("app", true));
+  } else {
+    // Empty folder (or non-empty without code): ask what the folder is FOR first. Documents
+    // leads the list when the folder already holds non-code content.
+    const choices: { purpose: Purpose; icon: string; label: string }[] = [
+      { purpose: "app", icon: "spark", label: "Build a new application" },
+      { purpose: "docs", icon: "report", label: "Analyze documents" },
+      { purpose: "analysis", icon: "search", label: "Research or data analysis" },
+      { purpose: "other", icon: "folder", label: "Something else" },
+    ];
+    if (!prof.isEmpty) choices.unshift(choices.splice(1, 1)[0]!); // docs first
+    box.innerHTML = `
+      <div class="modal-icon">${icon("folder", 24)}</div>
+      <h2 class="modal-title" id="wsSetupTitle">${prof.isEmpty ? "Set up this new workspace" : "Set up this workspace"}</h2>
+      <p class="modal-desc">What will you use this folder for? LUCID can lay down a starting structure.</p>
+      <div class="gov-choices">
+        ${choices.map((c) => `<button class="gov-choice" type="button" data-purpose="${c.purpose}">${icon(c.icon, 18)}<span class="gov-choice-tx"><b>${c.label}</b></span></button>`).join("")}
+      </div>
+      <div class="modal-actions"><button class="btn-mini" id="wsSetupSkip" type="button">Skip</button></div>`;
+    $("#wsSetupSkip", box)!.addEventListener("click", dismiss);
+    $$("[data-purpose]", box).forEach((b) => b.addEventListener("click", () => {
+      const c = choices.find((x) => x.purpose === (b as HTMLElement).dataset.purpose);
+      if (c) frameworkStep(c.purpose);
+    }));
+  }
+
+  document.body.appendChild(ov);
+  document.addEventListener("keydown", onKey);
+}
 async function applyWorkspace(path: string): Promise<void> {
+  const owner = leaveTurnView();
+  setRecoveryChecking(true); setSendEnabled();
   // #11 perceived-latency: setWorkspace() respawns the backend (2–5s). Reassure the user
   // up front that work is happening, then confirm when it's ready, and reflect the switch
   // immediately on the workspace bar via a "loading…" pill.
@@ -5426,12 +9526,15 @@ async function applyWorkspace(path: string): Promise<void> {
   const bar = $("#wsBar") as HTMLButtonElement | null;
   if (bar) { bar.hidden = false; bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}switching…</span>`; }
   const info = await bridge.setWorkspace(path);
+  if (owner !== turnViewEpoch) return;
+  setRecoveryChecking(false); setSendEnabled();
   if (info) { state.workspace = info; }
   renderWorkspaceBar();
   seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail();
   void renderSessions(); void renderSettings();
   showToast({ title: "Workspace set", desc: `Agent now works in ${info?.name ?? path}.`, actions: [{ label: "OK" }], timeout: 2600 });
   if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); // P-COLLAB.14: mirror the folder switch to direct-P2P edit guests
+  void maybeOfferWorkspaceSetup(); // P-WSSETUP: offer the .agents framework for the newly opened folder
 }
 
 function chips(items: { cls: string; n: number | string; l: string }[]): string {
@@ -5486,6 +9589,12 @@ function securityHtml(d: SecuritySnapshot | null): string {
             <button class="btn-mini dismiss" data-dismiss="${esc(b.id)}" data-tip="Dismiss|Acknowledge this block and move it to the Dismissed section. The call STAYS blocked - this only clears it from the active queue. The audit record is kept.">${icon("close", 13)} Dismiss</button></div>
         </div>`).join("")
       : `<div class="empty">No active blocks - everything released, dismissed, or clean.</div>`;
+    // Bulk acknowledge, above the queue and only when there is more than one active block (a single row
+    // already carries its own Dismiss, so a bulk control there is noise). Two-step: arm, then confirm.
+    // The row is a flex box holding ONE element (invariant 11) and the button is icon + one text run.
+    const bulkDismiss = live.quarantined.length > 1
+      ? `<div class="row-actions lb-bulk"><button class="btn-mini dismiss" data-dismiss-all="1" data-tip="Dismiss all ${live.quarantined.length}|Acknowledges every active block at once and moves them to the Dismissed section. Nothing is released: all ${live.quarantined.length} calls STAY blocked and every audit record is kept. Click once to arm it, again to confirm.">${icon("close", 13)} Dismiss all ${live.quarantined.length}</button></div>`
+      : "";
     const approvedNote = live.approved.length ? `<div class="lb-approved">${icon("check", 12)} ${live.approved.length} released this session · audited</div>` : "";
     // Dismissed: reviewed + acknowledged, STILL blocked. Muted + collapsed, out of the active count.
     const dismissedNote = live.dismissed.length
@@ -5497,7 +9606,7 @@ function securityHtml(d: SecuritySnapshot | null): string {
           </div>`).join("")
         + `</details>`
       : "";
-    h += accordion("sec.live", "Live blocks", "this session · gate-enforced", rows + approvedNote + dismissedNote, true, String(live.quarantined.length));
+    h += accordion("sec.live", "Live blocks", "this session · gate-enforced", bulkDismiss + rows + approvedNote + dismissedNote, true, String(live.quarantined.length));
   }
   if (!d && !live.total) { h += `<div class="empty">Nothing has tripped the scanner yet. The moment a tool call carries hidden-Unicode or another injection, the finding, the quarantine queue, and the audit trail appear right here.</div>`; return h; }
   // P-SECACK.1: shared by the Quarantine-review + Approval-queue sections so their ack affordances
@@ -5739,7 +9848,7 @@ function memoryHtml(d: MemorySnapshot | null): string {
       + (hm.facts.length ? table([{ key: "entity", label: "entity" }, { key: "statement", label: "statement" }, { key: "trust_label", label: "trust", pill: true }], hm.facts) : ""),
       OPEN.has("mem.layers"));
   } else {
-    h += `<div class="empty">No harness memory yet - appears once the gate runs, or run <code>bun run demo-P4.3</code>.</div>`;
+    h += `<div class="empty">No harness memory yet - the memory layers fill in once the security gate records activity in a session.</div>`;
   }
   return h;
 }
@@ -5836,7 +9945,7 @@ function budgetBody(budgets: NonNullable<MemorySnapshot["budgets"]>): string {
   const rows = budgets.map((b) => {
     const on = active(b.label);
     return `<div class="bgt${on ? " on" : ""}">${on ? `<span class="bgt-tag" data-tip="Provider for your current model">current model</span>` : ""}${
-      gauge(b.label.replace(/^Claude /, ""), b.used, `<span style="color:var(--txt-4)">${esc(b.status)} · resets ${ageStr(b.resetsAt)}</span>`)}</div>`;
+      cachedBudgetRow(b)}</div>`;
   }).join("");
   // P10.3: live API-key rate-limit probes (opt-in) render as extra gauges, tagged so they're
   // distinct from omp's subscription/OAuth windows above.
@@ -5847,8 +9956,8 @@ function budgetBody(budgets: NonNullable<MemorySnapshot["budgets"]>): string {
     <span>Live API-key probe ${state.probeEnabled ? "" : ""}<button class="info-dot" data-tip="Live rate-limit probe|For providers set with an API KEY (Anthropic / OpenAI), read the real remaining limit from response headers. Off by default - each check makes one tiny request (a token or two). Your OAuth 5-hour window is already shown above and has no header to probe.">${icon("info", 11)}</button></span></label>`;
   return `<div class="bgt-head">
       <button class="btn-mini" data-budget-refresh data-tip="Re-check provider usage now">${icon("refresh", 13)} Refresh</button>
-      <span class="bgt-note">auto every 5 min</span>
-    </div>${rows}${probed}${probeToggle}`;
+      <span class="bgt-note">re-read cache every 5 min</span>
+    </div><div class="set-note">Subscription plan: <b>unknown</b>. Reports are cached; sample time and account identity are not supplied. Remaining is estimated from cached usage, not a live balance. A passed reset does not confirm replenishment. Check the provider's usage page for current allowance.</div>${rows}${probed}${probeToggle}`;
 }
 
 const RICHTIP_DUCKDB = `<div class="rt-h">${icon("shield", 14)} Where this is stored</div>
@@ -5868,31 +9977,39 @@ function asksageChip(): string {
 function renderStatus(): void {
   const m = state.memory, s = m?.session;
   const lu = state.liveUsage;
-  const curTok = lu ? lu.used : (s?.current ?? 0);
-  // Prefer the selected model's real context window over omp's reported size
+  // P-FLEET.L19: attached to a spoke, the ring speaks for the LANE only. Its fill is the lane's own
+  // sample (seeded on promote from LaneView.usage) over the LANE's model window; the master's figures
+  // never stand in for it, so a lane with no sample yet reads "--" instead of the master's fill.
+  const tgt = state.composerTarget;
+  const onLane = isLaneTarget(tgt);
+  const curTok = lu ? lu.used : onLane ? 0 : (s?.current ?? 0);
+  // Prefer the model's real context window over omp's reported size
   // (which is wrong for the AskSage gateway models); fall back for unknown models.
-  const winTok = modelCtx(state.model) ?? (lu ? lu.size : (s?.window ?? 0));
+  const winTok = modelCtx(onLane ? tgt.model : state.model) ?? (lu ? lu.size : onLane ? 0 : (s?.window ?? 0));
   const ctx = winTok ? curTok / winTok : 0;
   const budget = m?.budgets?.[0];
   const ctxPct = Math.round(ctx * 100);
+  const noSample = onLane && !lu;
   // Minimal status bar: a context-fill RING · (Claude API status / Gov usage when present) · the
   // Trivia Wire's flexible gap. The model seg was removed (redundant - the titlebar model badge
   // already shows it) and the gate-active pill retired (the gate's WORK surfaces in the Security
   // panel + rail badge); the cache/session-cost pills live on in the Memory panel.
   $("#statusbar")!.innerHTML = `
-    <div class="seg ctx" data-tip="Context window|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? " · live this session" : ""}">
+    <div class="seg ctx" data-tip="${noSample ? `Context window · ${esc(tgt.name)}|This spoke has not reported its context fill yet. It fills in with the spoke's next reply.` : `Context window${onLane ? ` · ${esc(tgt.name)}` : ""}|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? onLane ? " · this spoke's own sample" : " · live this session" : ""}`}">
       <svg class="ctx-ring" viewBox="0 0 22 22" width="17" height="17" aria-hidden="true">
         <circle class="ctx-track" cx="11" cy="11" r="8"/>
         <circle class="ctx-arc" pathLength="100" cx="11" cy="11" r="8" style="stroke:${loadColor(ctx)};stroke-dashoffset:${100 - Math.min(100, Math.max(0, ctxPct))}"/>
-      </svg><b>${ctxPct}%</b></div>
+      </svg><b>${noSample ? "--" : `${ctxPct}%`}</b></div>
     <div class="seg-mid">
-      ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} usage|${budget.used >= 0.9 ? "Almost spent - turns may start stalling. " : ""}Click to re-check now · auto every 5 min. From the provider's API-key rate-limit headers.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
+      ${budget && currentProviderHasApiKey() ? `<div class="seg seg-btn${budget.used >= 0.9 ? " warn" : ""}" data-budget-refresh data-tip="${esc(budget.label)} cached usage|Last reported subscription usage, not API-key billing or live rate-limit headers. Sample time and account identity are unknown. Click to re-read the cache; confirm current allowance on the provider usage page.">${esc(budget.label)} <b style="color:${loadColor(budget.used)}">${Math.round(budget.used * 100)}%</b> ${icon("refresh", 11)}</div>` : ""}
       ${asksageChip()}
     </div>
     <div class="triv-slot" id="trivSlot"></div>`;
   mountTrivia(); // P-TRIV.1: re-adopt the persistent ticker after the innerHTML swap
   mountSharePill(); // P-REMOTE.11: re-adopt the minimized Share pill (it lives in the bar, right of the ticker)
   mountJoinPill(); // P-COLLAB.20: re-adopt the minimized Join pill (watching continues while minimized)
+  mountFleetPill(); // P-FLEET.L2: re-adopt the minimized Fleet pill - without this the innerHTML swap above dropped it every status repaint and the next 2.5s poll put it back, which is the lower-right flicker
+  mountProcButton(); // P-INTERJECT.4: re-adopt the Processes button (same fleet-pill convention - the innerHTML swap above would drop it every 2.5s repaint)
 }
 
 // ───────────────────────── the Trivia Wire — P-TRIV.1 (ADR-0174) ─────────────────────────
@@ -5902,7 +10019,7 @@ function renderStatus(): void {
 // trivia.ts; this block owns just the animation loop and the input wiring. The ticker element is
 // created once and re-adopted after every renderStatus innerHTML swap so its scroll position and
 // in-flight question survive the 2s data poll.
-const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}
+const TRIVIA_SCORE_KEY = "lucid.trivia";        // lifetime {score,answered,correct}; score includes arcade points
 const TRIVIA_ENABLED_KEY = "lucid.trivia-enabled"; // "1" = on (default OFF - an easter egg people find; toggle in Settings -> Trivia Wire)
 const TRIVIA_SPEED = 78;                        // px/s - an easy reading clip
 const TRIVIA_EXPLAIN_SPEED = 95;
@@ -5954,10 +10071,36 @@ function loadNewsLine(): boolean {
   return true;
 }
 
+// Retain the latest tally across bank rebuilds even if storage is blocked or full.
+// All points flow through triviaGame; arcade never writes behind its cached tally.
+let trivStoredTally: string | null | undefined;
 const trivStore = () => ({
-  get: () => localStorage.getItem(TRIVIA_SCORE_KEY),
-  set: (v: string) => localStorage.setItem(TRIVIA_SCORE_KEY, v),
+  get: () => {
+    if (trivStoredTally === undefined) trivStoredTally = localStorage.getItem(TRIVIA_SCORE_KEY);
+    return trivStoredTally;
+  },
+  set: (v: string) => {
+    trivStoredTally = v;
+    localStorage.setItem(TRIVIA_SCORE_KEY, v);
+  },
 });
+
+/** Initialize scoring independently of the opt-in ticker and its timers/listeners. */
+function ensureTriviaGame(): TriviaGame {
+  if (!triviaGame) {
+    trivBank = effectiveTriviaBank(state.userRole);
+    triviaGame = createTriviaGame(trivBank, trivStore());
+  }
+  return triviaGame;
+}
+
+const arcadeScorePort = {
+  total(): number { return ensureTriviaGame().state().score; },
+  award(points: number): void {
+    ensureTriviaGame().awardBonus(points);
+    renderMetricsRail();
+  },
+};
 
 async function refreshTriviaKg(): Promise<void> {
   try { const p = await bridge.personal(); trivKgUnlocked = !!(p?.enabled && p?.unlocked); }
@@ -6017,8 +10160,8 @@ function clearTriviaPack(role: string | null | undefined): void {
   try { localStorage.removeItem(TRIVIA_PACK_PREFIX + key); } catch { /* ignore */ }
 }
 
-/** Adopt a pack: persist it, then rebuild the live game on it (lifetime score survives - it lives in
- *  trivStore, not the game). No-op before the ticker exists; ensureTrivia picks up the stored pack. */
+/** Adopt a pack, then rebuild the live game without resetting arcade/trivia points or accuracy.
+ *  No-op before scoring is initialized; ensureTriviaGame picks up the stored pack. */
 function applyTriviaPack(role: string | null | undefined, questions: readonly TriviaQuestion[], model: string): void {
   saveTriviaPack(role, questions, model);
   if (!triviaGame) return;
@@ -6027,8 +10170,8 @@ function applyTriviaPack(role: string | null | undefined, questions: readonly Tr
   loadTriviaLine();
 }
 
-/** Rebuild the game when the role's bank actually changed (lifetime score survives - it lives in
- *  the store, not the game). No-op before the ticker exists or when the bank is unchanged. */
+/** Rebuild when the role's bank changes, retaining arcade/trivia points and trivia accuracy.
+ *  No-op before scoring is initialized or when the bank is unchanged. */
 function refreshTriviaGame(): void {
   if (!triviaGame) return;
   const bank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): generated pack ?? seed bank
@@ -6042,8 +10185,7 @@ const trivReducedMotion = typeof matchMedia === "function" && matchMedia("(prefe
 
 function ensureTrivia(): void {
   if (trivEl || !triviaEnabled()) return;
-  trivBank = effectiveTriviaBank(state.userRole); // P-TRIV.4 (ADR-0191): adopt a generated pack when present
-  triviaGame = createTriviaGame(trivBank, trivStore());
+  ensureTriviaGame();
   // Idle-engagement inputs (P-TRIV.2): a composer keystroke restarts the idle grace, and the KG
   // unlock state is polled gently (never per frame - bridge.personal() is a fetch).
   $("#input")?.addEventListener("input", () => { trivIdleSince = Date.now(); });
@@ -6124,7 +10266,8 @@ function answerTrivia(k: number): void {
   const pills = trivIn ? Array.from(trivIn.querySelectorAll<HTMLElement>("[data-tch]")) : [];
   pills[k]?.classList.add(res.correct ? "ok" : "bad");
   if (!res.correct) pills[res.correctIndex]?.classList.add("ok");
-  renderMetricsRail(); // the score tile updates immediately
+  lastRailSig = ""; // An incorrect answer changes the accuracy tooltip without changing points.
+  renderMetricsRail(); // shared points and trivia accuracy update immediately
   setTimeout(() => { if (triviaGame?.state().phase === "explain") loadTriviaLine(); }, TRIVIA_ANSWER_LINGER_MS);
 }
 
@@ -6219,15 +10362,17 @@ async function refresh(): Promise<void> {
 
 // P10.3: warn BEFORE you hit the wall. The Claude 5-hour (oauth) limit has no header to
 // probe and probing would consume it, so we watch omp's reported figure and warn once per
-// window when it crosses 90% - turning the silent stall into an early heads-up.
+// window when it crosses 90%.
+// Fix (2026-08-25): warn ONLY on a VERIFIABLY LIVE window - rateLimits() already drops rows whose
+// window expired (the stale "always at 100%" bug), and a row with no reset timestamp cannot be
+// confirmed current over OAuth, so it renders in the Memory panel but never toasts.
 function checkBudgetWarning(budgets: NonNullable<MemorySnapshot["budgets"]> | null | undefined): void {
   for (const b of budgets ?? []) {
-    if (b.used >= 0.9 && !state.budgetWarned.has(b.label)) {
+    if (b.used >= 0.9 && b.resetsAt != null && b.resetsAt > Date.now() && !state.budgetWarned.has(b.label)) {
       state.budgetWarned.add(b.label);
       showToast({
-        title: `${b.label} almost spent`,
+        title: `${b.label} budget almost spent`,
         desc: `You're at ${Math.round(b.used * 100)}% of your ${b.label} budget. New turns may stall until it resets ${ageStr(b.resetsAt)}.`,
-        meta: "a stalled turn now ends with a clear message instead of hanging",
         actions: [{ label: "OK" }],
         timeout: 9000,
       });
@@ -6253,9 +10398,14 @@ async function refreshBudget(manual = false): Promise<void> {
   if (state.asksage?.configured) state.asksageTokens = await bridge.asksageTokens(); // gov usage on the same cadence
   if (state.inspectorTab === "memory" && !state.inspectorRail) renderInspector();
   renderStatus();
+  const providers = [...(state.auth?.majors ?? []), ...(state.auth?.others ?? []), ...(state.auth?.gateway ?? [])];
+  for (const target of $$('[data-provider-quota]')) {
+    const p = providers.find((p) => p.id === target.getAttribute("data-provider-quota"));
+    if (p) target.innerHTML = providerQuotaBody(p);
+  }
   if (manual) showToast({
-    title: budgets?.length ? "Budget refreshed" : "No usage yet",
-    desc: budgets?.length ? "Latest provider usage pulled for your current model." : "Nothing recorded yet - send a turn, then refresh.",
+    title: budgets?.length ? "Usage cache re-read" : "Usage unavailable",
+    desc: budgets?.length ? "Cached reports loaded. Sample time is unknown; confirm current allowance on the provider's usage page." : "No usage report returned. This does not mean zero usage or unlimited allowance.",
     actions: [{ label: "OK" }], timeout: 2200,
   });
   scheduleBudgetPoll();
@@ -6444,6 +10594,7 @@ function toggleSidebar(force?: boolean): void {
 }
 /** Update the composer's quick controls (persona · skills). Model/mode/thinking live in the top picker. */
 function updateComposerTools(): void {
+  syncAgentExtras();
   const set = (sel: string, v: string) => { const e = $(sel); if (e) e.textContent = v; };
   const pBtn = $("#ctPersona");
   if (pBtn) {
@@ -6760,6 +10911,7 @@ function restoreSpeakBtn(btn?: HTMLElement | null): void {
 // audio option) - click it any time. It shows a spinner while the model synthesizes, flips to a Stop
 // control while playing, and surfaces the real engine error if TTS isn't configured.
 async function speakText(text: string, btn?: HTMLElement | null): Promise<void> {
+  speech.stop(); // P-VOICE.2: the manual button and the auto-speak queue must never talk over each other
   if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; restoreSpeakBtn(btn); return; }
   // P-REPORT.7: sanitize per line so the TTS reads flowing speech, not codes/symbols/markdown artifacts.
   const clean = (text || "").split(/\n+/).map((ln) => speakable(ln)).filter(Boolean).join(" ").trim();
@@ -6784,12 +10936,476 @@ async function speakText(text: string, btn?: HTMLElement | null): Promise<void> 
   ttsAudio.play().catch(() => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); });
 }
 
+// ── P-VOICE.2 (ADR-0247): live read-aloud (auto-speak) ───────────────────────
+// "It talks while it writes." The read-aloud BUTTON waits for the settled reply and synthesizes it as one
+// clip - on a long answer that is ~20 seconds of silence before the first word. Auto-speak instead pumps the
+// GROWING stream buffer through takeSpeechChunks(): each complete sentence (never an unterminated code fence)
+// is synthesized on its own and played in order, so audio starts after sentence one.
+//
+// The ordering / cancellation mechanics live in SpeechQueue (speech_queue.ts) so they are testable without a
+// DOM; this file supplies the renderer half - the real HTTP synth, blob URLs, an <audio> element, and the
+// toast shown when the engine returns nothing.
+// P-VOICE.4 (ADR-0248): ONE persistent element plays every clip, and the equalizer taps it. Web Audio's
+// createMediaElementSource() may be called only once per element, so a fresh Audio() per sentence would make
+// a real spectrum display impossible - and churned an element per sentence besides. Swapping `.src` is all a
+// queued clip needs.
+const speechEl = new Audio();
+let speechAudioUrl = "";
+const voiceEq = new VoiceEqualizer();
+const speech = new SpeechQueue({
+  synth: (text) => bridge.speak(text),
+  open: (b64, mime) => audioBlobUrl(b64, mime),
+  close: (url) => {
+    if (speechAudioUrl === url) { speechEl.pause(); speechAudioUrl = ""; voiceEq.end(); }
+    URL.revokeObjectURL(url);
+  },
+  play: (url) => new Promise<void>((resolve) => {
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      speechEl.onended = null;
+      speechEl.onerror = null;
+      if (speechAudioUrl === url) { speechAudioUrl = ""; voiceEq.end(); }
+      resolve();
+    };
+    speechEl.onended = done;
+    speechEl.onerror = done; // a decode failure must advance the queue, not wedge it
+    speechAudioUrl = url;
+    speechEl.src = url;
+    // ensure() builds the analyser graph on first use and resolves false when Web Audio can't run; either way
+    // we play. A visual is never worth muting the agent for.
+    void voiceEq.ensure(speechEl).then(() => {
+      if (speechAudioUrl !== url) { done(); return; } // stopped while the audio graph was starting
+      voiceEq.begin();
+      speechEl.play().catch(done); // autoplay refusal must not wedge the queue
+    });
+  }),
+  onError: (note) => showToast({
+    tone: "warn",
+    title: "Nothing came back from the speech engine",
+    desc: note || "Pick an engine and voice from the composer's voice button, or add that provider's API key.",
+    actions: [{ label: "Voice settings", kind: "ok", run: () => openSettingsToVoice() }, { label: "OK" }],
+    timeout: 7000,
+  }),
+  onChange: () => updateVoiceChip(),
+  onIdle: () => maybeListen(), // P-VOICE.3: the agent stopped talking - in conversation mode, open the mic
+});
+
+/** P-VOICE.6 (ADR-0249): one keystroke into (and out of) hands-free. Turning it ON implies auto-speak - the
+ *  loop is meaningless without the speaking half - so a single press from a silent session goes fully
+ *  hands-free. Turning it OFF leaves auto-speak alone: you stop being listened to, but replies are still read
+ *  aloud, which is the state most people want back. */
+async function toggleConversationMode(): Promise<void> {
+  const on = !state.voice?.ttsConversation;
+  await applyVoicePatch(on ? { ttsAutoSpeak: true, ttsConversation: true } : { ttsConversation: false });
+  if (!on) { if (dictation) void endDictation(); stopThinkingCues(); }
+  showToast({
+    tone: on ? "ok" : "info",
+    title: on ? "Conversation mode on" : "Conversation mode off",
+    desc: on
+      ? `Replies are read aloud, then the mic opens so you can just answer. ${modCombo("G")} again to stop.`
+      : "The mic no longer opens on its own. Replies are still read aloud.",
+    timeout: 3200,
+  });
+  if (on) maybeListen(); // already idle? start listening now rather than after the next reply
+}
+
+/** P-VOICE.3: hands-free turn-taking. Opening the mic is guarded on every side - both toggles on, the reply
+ *  fully SPOKEN (not merely written), the turn settled, and no session already running - so it can never end
+ *  up listening to the agent's own voice, and never grabs the microphone in plain auto-speak mode. */
+function maybeListen(): void {
+  if (!state.voice?.ttsAutoSpeak || !state.voice?.ttsConversation) return;
+  if (state.streaming || speech.busy || dictation) return;
+  if (document.hidden) return; // the window isn't in front; don't take the mic behind the user's back
+  void toggleMicRecording(true);
+}
+/** How much of the current turn's answer buffer has already been handed to the queue, and the buffer length
+ *  at the last pump (the growth gate — rescanning the whole buffer on every token is wasted work). */
+let speechCursor = 0;
+let speechFedAt = 0;
+
+/** Queue one span of reply text. speakable() strips markdown, code and increment/ADR codes first, so the
+ *  audio reads prose instead of narrating backticks and "ADR-0247"; a span that reduces to nothing (a pure
+ *  code block, a table rule) is dropped rather than sent to a paid endpoint. */
+function speechSay(raw: string): void {
+  const clean = raw.split(/\n+/).map((ln) => speakable(ln)).filter(Boolean).join(" ").trim();
+  if (!clean) return;
+  if (ttsAudio && !ttsAudio.paused) { ttsAudio.pause(); ttsAudio = null; } // never over the manual read-aloud
+  lastVoiceAt = Date.now(); // P-VOICE.6: the cue clock measures silence since the last thing SAID
+  speech.say(clean.slice(0, 4000));
+}
+
+// ── P-VOICE.6/.7 (ADR-0249/0257): spoken progress while the agent works ──────────────────────────
+let lastVoiceAt = 0;
+let cuesSpoken = 0;
+let cueTimer = 0;
+let cueSeed = 0; // P-VOICE.7: one seed per turn, so a turn's cues share one register and turns vary
+let cueLastSnapshot: string | null = null; // the last thinking snapshot spoken - never narrate it twice
+
+/** Start the cue clock for a turn. Conversation mode only: with your eyes on the screen the thinking block
+ *  and tool chips already say "working", and a spoken cue would just talk over what you are reading. */
+function startThinkingCues(o: { toolActive: () => boolean; topic: string | null; thinking: () => string }): void {
+  stopThinkingCues();
+  if (!state.voice?.ttsAutoSpeak || !state.voice?.ttsConversation) return;
+  lastVoiceAt = Date.now();
+  cuesSpoken = 0;
+  cueSeed = Math.floor(Math.random() * 0xffffff);
+  cueLastSnapshot = null;
+  cueTimer = window.setInterval(() => {
+    // Never queue a cue behind audio that is already playing - by the time it was heard it would be stale,
+    // and it would delay the answer sitting behind it.
+    if (speech.busy) { lastVoiceAt = Date.now(); return; }
+    const cue = nextThinkingCue({
+      cuesSpoken,
+      sinceVoiceMs: Date.now() - lastVoiceAt,
+      answerStarted: speechCursor > 0,
+      toolActive: o.toolActive(),
+      seed: cueSeed,
+      topic: o.topic,
+      thinking: o.thinking(),
+      lastSnapshot: cueLastSnapshot,
+    });
+    if (!cue) return;
+    cuesSpoken++;
+    if (cue.snapshot) cueLastSnapshot = cue.snapshot;
+    speechSay(cue.text);
+  }, 700);
+}
+function stopThinkingCues(): void {
+  if (cueTimer) { clearInterval(cueTimer); cueTimer = 0; }
+}
+
+/** Feed the turn's growing answer buffer to the queue. The FIRST span goes out as soon as one sentence
+ *  exists (audio starts fast); later spans batch to ~180 characters so a long reply is a handful of synth
+ *  calls rather than one per sentence. `flush` speaks whatever is left when the turn settles. */
+function speechFeed(buf: string, flush: boolean): void {
+  if (!state.voice?.ttsAutoSpeak) return;
+  if (!flush && buf.length - speechFedAt < 48) return; // don't rescan the buffer on every single token
+  speechFedAt = buf.length;
+  // P-VOICE.6 digest mode: for slow engines the audio narrates a DIGEST, not the transcript. The FIRST
+  // settled sentence still goes out immediately (the comprehension anchor - the listener hears something
+  // within one synthesis round-trip); the verbatim middle is withheld; on settle the model-written digest
+  // of the whole reply speaks instead. The composer keeps every word either way.
+  if (state.voice.ttsDigest) {
+    if (flush) { void speakDigestTail(buf); return; }
+    if (speechCursor > 0) return; // anchor already out - the rest waits for the digest
+    const r = takeSpeechChunks(buf, 0, { minChars: 24 });
+    if (r.chunks.length) { speechCursor = r.cursor; speechSay(r.chunks[0]!); }
+    return;
+  }
+  const r = takeSpeechChunks(buf, speechCursor, flush ? { flush: true } : { minChars: speechCursor ? 180 : 24 });
+  speechCursor = r.cursor;
+  for (const c of r.chunks) speechSay(c);
+}
+
+/** P-VOICE.6: speak the settled turn's remainder in digest mode. Short replies skip the completion
+ *  round-trip (they ARE their own digest); a failed/empty digest falls back to the verbatim tail so
+ *  digest mode can degrade the audio's brevity but never its existence. */
+async function speakDigestTail(buf: string): Promise<void> {
+  const spokenTail = () => {
+    const r = takeSpeechChunks(buf, speechCursor, { flush: true });
+    speechCursor = r.cursor;
+    for (const c of r.chunks) speechSay(c);
+  };
+  if (buf.slice(speechCursor).trim().length === 0) return; // anchor covered everything
+  if (buf.trim().length < DIGEST_MIN_CHARS) { spokenTail(); return; }
+  const d = await bridge.voiceDigest(buf).catch(() => null);
+  const digest = d?.digest?.trim() ?? "";
+  if (digest) { speechCursor = buf.length; speechSay(digest); return; }
+  spokenTail();
+}
+
+// ── P-VOICE.4 (ADR-0248): the floating "LUCID Agent [Voice]" panel ─────────────────────────
+// The mini strip under the prompt bar is fine while you are looking at the composer, but the equalizer is
+// something people want to WATCH - so it pops out into a panel that can be dragged anywhere in the window and
+// stays there. Geometry, clamping, edge-snapping and persistence are the already-tested share/join dock
+// primitives (share_dock.ts, ADR-0232/0242) under this panel's own storage key, so it can sit on screen
+// beside a live Share dock without either one moving the other.
+const VOICE_DOCK_KEY = "lucid.voiceDock.v1";
+const VOICE_DOCK_OPEN_KEY = "lucid.voiceDock.open";
+/** Wide and short: an analyser is a letterbox, not a column. Clamped to the dock minimums on load. */
+const voiceDockFallback = (vw: number, vh: number): DockShape => ({ x: Math.max(12, vw - 372 - 16), y: Math.max(12, vh - 260), w: 360, h: 210 });
+const dockStore = { get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* storage off */ } } };
+let voiceDock: HTMLElement | null = null;
+let voiceDockState: DockState | null = null;
+
+/** Whether the user has popped the panel out. Persisted, so an anchored panel survives a restart. */
+function voiceDockOpen(): boolean { return dockStore.get(VOICE_DOCK_OPEN_KEY) === "1"; }
+
+function applyVoiceDockShape(): void {
+  if (!voiceDock || !voiceDockState) return;
+  const s = voiceDockState.shape;
+  voiceDock.style.left = `${s.x}px`;
+  voiceDock.style.top = `${s.y}px`;
+  voiceDock.style.width = `${s.w}px`;
+  voiceDock.style.height = voiceDockState.minimized ? "" : `${s.h}px`;
+  voiceDock.classList.toggle("min", voiceDockState.minimized);
+}
+
+/** Drag the header to move, the corner grip to resize. On release the shape snaps to a frame edge if it is
+ *  close enough, is clamped fully on-screen, and is persisted - the same behaviour as the Share dock. */
+function wireVoiceDockDrag(head: HTMLElement, grip: HTMLElement): void {
+  const start = (e: PointerEvent, mode: "move" | "size"): void => {
+    if (!voiceDockState || e.button !== 0) return;
+    const from = { ...voiceDockState.shape };
+    const ox = e.clientX;
+    const oy = e.clientY;
+    const target = e.currentTarget;
+    if (target instanceof HTMLElement) target.setPointerCapture(e.pointerId);
+    voiceDock?.classList.add("dragging");
+    const move = (m: PointerEvent): void => {
+      if (!voiceDockState) return;
+      const dx = m.clientX - ox;
+      const dy = m.clientY - oy;
+      const next = mode === "move"
+        ? { ...from, x: from.x + dx, y: from.y + dy }
+        : { ...from, w: from.w + dx, h: from.h + dy };
+      voiceDockState.shape = clampToViewport(next, window.innerWidth, window.innerHeight);
+      applyVoiceDockShape();
+    };
+    const up = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      voiceDock?.classList.remove("dragging");
+      if (!voiceDockState) return;
+      const rail = document.querySelector(".rail")?.getBoundingClientRect().width ?? 0;
+      const snapped = snapDecision(voiceDockState.shape, window.innerWidth, window.innerHeight, rail);
+      voiceDockState = { ...voiceDockState, ...snapped };
+      applyVoiceDockShape();
+      saveDockState(dockStore, voiceDockState, VOICE_DOCK_KEY);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    e.preventDefault();
+  };
+  head.addEventListener("pointerdown", (e) => { if (!(e.target as HTMLElement).closest("button")) start(e, "move"); });
+  grip.addEventListener("pointerdown", (e) => start(e, "size"));
+}
+
+/** Open (and build, once) the floating panel, mounting its canvas on the shared analyser. */
+function openVoiceDock(): void {
+  dockStore.set(VOICE_DOCK_OPEN_KEY, "1");
+  if (voiceDock) { voiceDock.hidden = false; updateVoiceChip(); return; }
+  voiceDockState = loadDockState(dockStore, window.innerWidth, window.innerHeight, VOICE_DOCK_KEY, voiceDockFallback(window.innerWidth, window.innerHeight));
+  voiceDock = el(`<div class="vdock" id="voiceDock" role="dialog" aria-label="LUCID Agent Voice">
+    <div class="vdock-head" id="voiceDockHead">
+      <span class="vdock-title">LUCID Agent <span class="vdock-tag">[Voice]</span></span>
+      <div class="vdock-acts">
+        <button class="vdock-btn" id="voiceDockMin" aria-label="Minimize" data-tip="Minimize">${icon("collapse", 13)}</button>
+        <button class="vdock-btn" id="voiceDockClose" aria-label="Close the voice panel" data-tip="Close|Send the equalizer back to the prompt bar">${icon("close", 13)}</button>
+      </div>
+    </div>
+    <div class="vdock-body">
+      <canvas class="vdock-eq" id="voiceDockCanvas" aria-hidden="true"></canvas>
+      <div class="vdock-foot">
+        <span class="vdock-meta" id="voiceDockMeta"></span>
+        <button class="btn-mini" id="voiceDockStop">${icon("close", 12)} Stop</button>
+      </div>
+    </div>
+    <div class="vdock-grip" id="voiceDockGrip" aria-hidden="true"></div>
+  </div>`);
+  document.body.appendChild(voiceDock);
+  applyVoiceDockShape();
+  const cv = $("#voiceDockCanvas", voiceDock);
+  if (cv instanceof HTMLCanvasElement) voiceEq.mount(cv);
+  wireVoiceDockDrag($("#voiceDockHead", voiceDock)!, $("#voiceDockGrip", voiceDock)!);
+  $("#voiceDockStop", voiceDock)?.addEventListener("click", () => speech.stop());
+  $("#voiceDockClose", voiceDock)?.addEventListener("click", () => closeVoiceDock());
+  $("#voiceDockMin", voiceDock)?.addEventListener("click", () => {
+    if (!voiceDockState) return;
+    voiceDockState.minimized = !voiceDockState.minimized;
+    applyVoiceDockShape();
+    saveDockState(dockStore, voiceDockState, VOICE_DOCK_KEY);
+  });
+  updateVoiceChip();
+}
+
+/** Send the equalizer back to the prompt-bar strip. Geometry is kept, so re-opening lands where it was. */
+function closeVoiceDock(): void {
+  dockStore.set(VOICE_DOCK_OPEN_KEY, "0");
+  const cv = voiceDock ? $("#voiceDockCanvas", voiceDock) : null;
+  if (cv instanceof HTMLCanvasElement) voiceEq.unmount(cv);
+  voiceDock?.remove();
+  voiceDock = null;
+  updateVoiceChip();
+}
+/** Paint the composer's voice chip (accent when auto-speak is armed) and the live "Speaking" indicator. */
+function updateVoiceChip(): void {
+  const chip = $("#ctVoice");
+  if (chip) {
+    const on = !!state.voice?.ttsAutoSpeak;
+    chip.classList.toggle("on", on);
+    const engine = TTS_PROVIDERS.find((p) => p.id === state.voice?.ttsProvider)?.label ?? "ElevenLabs";
+    const talking = on && !!state.voice?.ttsConversation;
+    chip.classList.toggle("conv", talking);
+    const hk = modCombo("G");
+    chip.setAttribute("data-tip", talking
+      ? `Voice - conversation mode \u00b7 ${hk}|${engine} reads each reply aloud, then the mic opens by itself so you can just answer. A few seconds of silence sends your turn. Click to change the engine or the voice; ${hk} switches it off.`
+      : on
+        ? `Voice - auto-speak on \u00b7 ${hk}|Replies are read aloud as they stream, via ${engine}. ${hk} goes fully hands-free. Click to change the engine or the voice.`
+        : `Voice - read aloud \u00b7 ${hk}|Replies are spoken only when you click a reply's speaker button. ${hk} goes hands-free. Click to pick the engine and voice.`);
+  }
+  // P-VOICE.4: the strip carries the equalizer, so it is hidden whenever the panel is popped out - two live
+  // analysers of the same voice, six inches apart, is noise.
+  const popped = voiceDockOpen();
+  const live = $("#ctSpeak");
+  if (live) live.hidden = !speech.busy || popped;
+  const lbl = $("#ctSpeakLbl");
+  if (lbl) lbl.textContent = speech.speaking ? "Speaking" : "Synthesizing";
+  const meta = $("#voiceDockMeta");
+  if (meta) {
+    const engine = TTS_PROVIDERS.find((p) => p.id === state.voice?.ttsProvider)?.label ?? "";
+    const status = speech.speaking ? "speaking" : speech.busy ? "synthesizing" : state.voice?.ttsAutoSpeak ? "ready" : "manual";
+    meta.textContent = `${engine} \u00b7 ${status}`;
+  }
+  voiceDock?.classList.toggle("live", speech.busy);
+}
+
+/** One voice row (engine or voice) in the composer picker — same tick/name/meta shape as the persona list. */
+function voiceOptHtml(attr: string, id: string, name: string, meta: string, tip: string, on: boolean): string {
+  return `<div class="cfg-opt voice-opt${on ? " on" : ""}" ${attr}="${esc(id)}" data-tip="${esc(name)}|${esc(tip)}" data-tip-side="left"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(name)}</span>${meta ? `<span class="id">${esc(meta)}</span>` : ""}</div>`;
+}
+
+/** The voice list for the picker — favorites first (ElevenLabs), then everything else. */
+function voiceRowsHtml(data: VoiceListView | null): string {
+  if (!data) return `<div class="empty">Couldn't reach the voice list.</div>`;
+  if (!data.voices.length) return `<div class="empty">${esc(data.note || "This engine has no voices to list.")}</div>`;
+  const favs = new Set(data.favorites);
+  const row = (v: ElevenVoiceView): string => voiceOptHtml("data-vid", v.voiceId, v.name, v.category ?? "", v.description || v.category || v.voiceId, v.voiceId === data.selected);
+  const fav = data.voices.filter((v) => favs.has(v.voiceId));
+  const rest = data.voices.filter((v) => !favs.has(v.voiceId));
+  if (!fav.length) return rest.map(row).join("");
+  return `<div class="voice-grp">${icon("spark", 11)} Favorites</div>${fav.map(row).join("")}<div class="voice-grp">All voices</div>${rest.map(row).join("")}`;
+}
+
+/** One engine row. An engine that CANNOT speak (no key, nothing listening) renders greyed + non-selectable
+ *  with a tag, exactly like an unavailable model - picking it and discovering the failure one toast per reply
+ *  is the behaviour this replaces. The reason is shown when it is the engine currently selected. */
+function voiceEngineHtml(e: TtsEngineView, provider: string): string {
+  const on = e.id === provider;
+  const meta = e.cloud ? "cloud" : "offline";
+  if (e.ready) return voiceOptHtml("data-vprov", e.id, e.label, meta, e.blurb, on);
+  return `<div class="cfg-opt voice-opt unavail${on ? " on" : ""}" data-vunavail="${esc(e.id)}" data-tip="${esc(e.label)} \u2014 unavailable|${esc(e.reason)}" data-tip-side="left">
+    <span class="tick">${icon("check", 13)}</span><span class="nm">${esc(e.label)}</span><span class="unavail-tag">needs setup</span></div>`;
+}
+
+function voicePopHtml(data: VoiceListView | null, provider: string, autoSpeak: boolean, conversation: boolean, loading: boolean): string {
+  // Before the first response lands we only know the static catalog; assume ready so the menu doesn't flash
+  // "needs setup" on every engine while the real readiness is still in flight.
+  const list: TtsEngineView[] = data?.engines?.length
+    ? data.engines
+    : TTS_PROVIDERS.map((p) => ({ ...p, ready: true, reason: "" }));
+  const cur = list.find((e) => e.id === provider);
+  const blocked = cur && !cur.ready ? cur.reason : "";
+  return `<div class="cfg-sec voice-pop">
+    <div class="cfg-lbl">Read aloud <span class="cur">${autoSpeak ? (conversation ? "conversation" : "auto-speak on") : "manual"}</span></div>
+    <label class="voice-auto"><input type="checkbox" id="voiceAuto"${autoSpeak ? " checked" : ""} />
+      <span><b>Speak replies as they stream</b><i>Audio starts after the first sentence. A cloud engine sends the reply text to that provider.</i></span></label>
+    <label class="voice-auto${autoSpeak ? "" : " off"}"><input type="checkbox" id="voiceConv"${conversation ? " checked" : ""}${autoSpeak ? "" : " disabled"} />
+      <span><b>Conversation mode <span class="voice-hk">${esc(modCombo("G"))}</span></b><i>${autoSpeak ? "The mic opens when the reply finishes; a few seconds of silence sends your turn." : "Needs \u201cSpeak replies as they stream\u201d above."}</i></span></label>
+    <div class="cfg-lbl">Engine</div>
+    <div class="cfg-list">${list.map((e) => voiceEngineHtml(e, provider)).join("")}</div>
+    ${blocked ? `<div class="set-note danger">${icon("shield", 12)} ${esc(blocked)}</div>` : ""}
+    <div class="cfg-lbl">Voice</div>
+    <div class="cfg-list voice-voices">${loading ? `<div class="empty">loading voices\u2026</div>` : voiceRowsHtml(data)}</div>
+    ${data?.note && data.voices.length ? `<div class="set-note">${icon("info", 12)} ${esc(data.note)}</div>` : ""}
+    <div class="voice-pop-foot"><button class="btn-mini" id="voicePopTest"${blocked ? " disabled" : ""}>${icon("volume", 12)} Test voice</button><button class="btn-mini" id="voicePopMore">${icon("sliders", 12)} Voice settings</button></div>
+  </div>`;
+}
+
+/** Persist a voice-settings change, refresh the cached copy, and repaint everything that reflects it. */
+async function applyVoicePatch(patch: Partial<VoiceSettingsView>): Promise<void> {
+  const next = await bridge.setVoiceSettings(patch).catch(() => null);
+  if (next) state.voice = next;
+  updateVoiceChip();
+  if ($("#voiceTts")) void renderSettings(); // the Settings "Voice" card is open — keep the two views in step
+}
+
+/** The composer's voice menu: auto-speak, engine, and the engine's voices — the whole read-aloud surface in
+ *  one place, next to the mic, instead of buried three scrolls into Settings. */
+async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
+  cfgClose?.();
+  let provider: VoiceSettingsView["ttsProvider"] = state.voice?.ttsProvider ?? "elevenlabs";
+  let autoSpeak = !!state.voice?.ttsAutoSpeak;
+  let conversation = !!state.voice?.ttsConversation;
+  let data: VoiceListView | null = null;
+  const { node, close, reposition } = popover(anchor, voicePopHtml(null, provider, autoSpeak, conversation, true), () => { cfgClose = null; });
+  cfgClose = close;
+  // The card is anchored to the composer at the BOTTOM of the window, so it opens upward - and it grows when
+  // the fetched voice list replaces the skeleton. Every repaint re-runs placement, or the taller card would
+  // extend past the bottom edge from a `top` computed for the shorter one.
+  const paint = (loading: boolean): void => { node.innerHTML = voicePopHtml(data, provider, autoSpeak, conversation, loading); reposition(); };
+  const reload = async (): Promise<void> => {
+    paint(true);
+    data = await bridge.voices(provider).catch(() => null);
+    paint(false);
+  };
+  node.addEventListener("change", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.id === "voiceAuto") {
+      autoSpeak = (t as HTMLInputElement).checked;
+      if (!autoSpeak) { speech.stop(); conversation = false; } // the loop can't run without the speaking half
+      void applyVoicePatch({ ttsAutoSpeak: autoSpeak });
+      paint(false);
+      return;
+    }
+    if (t.id !== "voiceConv") return;
+    conversation = (t as HTMLInputElement).checked;
+    if (!conversation && dictation) void endDictation(); // turning it off closes an open mic immediately
+    void applyVoicePatch({ ttsConversation: conversation });
+    paint(false);
+  });
+  node.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    // A greyed engine explains itself rather than silently doing nothing on click.
+    const dead = (t.closest("[data-vunavail]") as HTMLElement | null)?.dataset.vunavail;
+    if (dead) {
+      const row = data?.engines?.find((x) => x.id === dead);
+      showToast({ tone: "warn", title: `${row?.label ?? "That engine"} isn't ready`, desc: row?.reason ?? "It needs setting up first.", actions: [{ label: "Voice settings", kind: "ok", run: () => { close(); openSettingsToVoice(); } }, { label: "OK" }], timeout: 9000 });
+      return;
+    }
+    const eng = (t.closest("[data-vprov]") as HTMLElement | null)?.dataset.vprov;
+    if (eng && eng !== provider) {
+      provider = eng as VoiceSettingsView["ttsProvider"];
+      void applyVoicePatch({ ttsProvider: provider }).then(reload);
+      return;
+    }
+    const vid = (t.closest("[data-vid]") as HTMLElement | null)?.dataset.vid;
+    if (vid) {
+      if (data) data.selected = vid;
+      void applyVoicePatch({ ttsVoice: vid });
+      paint(false);
+      return;
+    }
+    if (t.closest("#voicePopTest")) { void speakText("This is the voice I'll use to read replies aloud."); return; }
+    if (t.closest("#voicePopMore")) { close(); openSettingsToVoice(); }
+  });
+  await reload();
+}
+
 // ── P-VOICE.1 (ADR-0115): mic → speech-to-text into the composer ──────────────
 // Click the mic to record, click again to stop. The blob is sent to /api/transcribe (ElevenLabs Scribe
 // or an offline Whisper server, per Settings → Voice) and the transcript is INSERTED into the composer for
 // review before you send — it's ordinary user input, scanned on send like anything typed.
-let micRecorder: MediaRecorder | null = null;
-let micChunks: Blob[] = [];
+// P-STT.3: fluid dictation - a live session (continuous VAD -> per-utterance transcribe -> the words land in
+// the composer as you pause) that auto-stops on a longer silence. The timing brain is the tested pure state
+// machine (dictation.ts); this drives the mic. The transcript is ordinary user input, scanned on send.
+interface DictationSession {
+  stream: MediaStream; ctx: AudioContext; analyser: AnalyserNode;
+  rec: MediaRecorder | null; chunks: Blob[]; mime: string;
+  timer: number; state: DictationState; active: boolean;
+  // P-VOICE.3: conversation mode. `pending` counts in-flight transcriptions; `autoSend` is set when the
+  // session ended by SILENCE (not by a click), so the turn is sent once the last utterance has landed.
+  pending: number; autoSend: boolean;
+  data: Float32Array<ArrayBuffer>; // reused VAD frame buffer (explicit ArrayBuffer for getFloatTimeDomainData)
+  // P-STT.4: live waveform + visible-failure state.
+  wave: number[]; waveCount: number; raf: number; startedAt: number; bucketAt: number; bucketPeak: number;
+  failWarned: boolean; // one engine-failure toast per session (reset when the user starts local Whisper)
+}
+let dictation: DictationSession | null = null;
+const DICTATION_TICK_MS = 100;
+const WAVE_BUCKET_MS = 90; // one waveform bar per bucket; ~4s of history across the strip
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -6798,41 +11414,212 @@ function blobToBase64(blob: Blob): Promise<string> {
     r.readAsDataURL(blob);
   });
 }
-async function toggleMicRecording(): Promise<void> {
-  const btn = $("#ctMic");
-  if (micRecorder && micRecorder.state === "recording") { micRecorder.stop(); return; } // second click = stop
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+/** whisper.cpp's /inference (and OpenAI-compatible STT) decode WAV/PCM, not the WebM/Opus that MediaRecorder
+ *  produces - a raw upload 400s and the mic looks "heard you, but nothing transcribed". Decode the clip with
+ *  the Web Audio API (Chromium decodes its own WebM/Opus), downmix to mono, resample to 16 kHz, and re-encode
+ *  as 16-bit PCM WAV. Returns null when the clip can't be decoded, so the caller falls back to the raw blob. */
+async function blobToWav16kMono(blob: Blob): Promise<Blob | null> {
+  try {
+    const bytes = await blob.arrayBuffer();
+    // A fresh OfflineAudioContext per clip just decodes (no playback) and avoids the live-AudioContext cap.
+    const decoded = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(bytes);
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < decoded.numberOfChannels; c++) channels.push(decoded.getChannelData(c));
+    const pcm = resampleLinear(downmixMono(channels), decoded.sampleRate, WHISPER_SAMPLE_RATE);
+    if (pcm.length === 0) return null;
+    return new Blob([encodeWavPcm16(pcm, WHISPER_SAMPLE_RATE)], { type: "audio/wav" });
+  } catch { return null; }
+}
+/** RMS level (0..~1) of the current mic frame - drives voice-activity detection. */
+function micRms(sess: DictationSession): number {
+  sess.analyser.getFloatTimeDomainData(sess.data);
+  let sum = 0;
+  for (let i = 0; i < sess.data.length; i++) { const v = sess.data[i]!; sum += v * v; }
+  return Math.sqrt(sum / sess.data.length);
+}
+// P-STT.4: the live waveform chip next to the mic - a scrolling level history (newest at the right,
+// seconds sliding left) + an elapsed clock, so the user SEES the mic hearing them while they speak.
+const WAVE_CAP = 64; // ring-buffer bound; wider than any strip at 3px pitch
+let waveColors = { voiced: "#e05a5a", quiet: "#8a93a5", grid: "rgba(255,255,255,.1)" };
+/** Show + size the chip (DPR-crisp), cache theme colors, and start the paint loop. */
+function startWaveChip(sess: DictationSession): void {
+  const chip = $("#ctWave") as HTMLElement | null;
+  const cv = $("#ctWaveCanvas") as HTMLCanvasElement | null;
+  if (!chip || !cv) return;
+  chip.hidden = false;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.max(1, Math.round(cv.clientWidth * dpr));
+  cv.height = Math.max(1, Math.round(cv.clientHeight * dpr));
+  const cs = getComputedStyle(document.documentElement);
+  waveColors = {
+    voiced: cs.getPropertyValue("--red").trim() || "#e05a5a",
+    quiet: cs.getPropertyValue("--txt-3").trim() || "#8a93a5",
+    grid: cs.getPropertyValue("--line-soft").trim() || "rgba(255,255,255,.1)",
+  };
+  sess.raf = requestAnimationFrame(() => waveFrame(sess));
+}
+/** Per-frame: sample the mic, roll completed buckets into the history ring, repaint, tick the clock. */
+function waveFrame(sess: DictationSession): void {
+  if (!sess.active) return;
+  const now = performance.now();
+  const level = micRms(sess);
+  sess.bucketPeak = Math.max(sess.bucketPeak, level);
+  while (now - sess.bucketAt >= WAVE_BUCKET_MS) {
+    pushWave(sess.wave, sess.bucketPeak, WAVE_CAP);
+    sess.waveCount++; sess.bucketAt += WAVE_BUCKET_MS; sess.bucketPeak = level;
+  }
+  drawWave(sess, now);
+  const t = $("#ctWaveTime");
+  if (t) t.textContent = waveClock(now - sess.startedAt);
+  sess.raf = requestAnimationFrame(() => waveFrame(sess));
+}
+/** Paint the strip: history bars slide left as buckets age; the in-progress bucket grows at the right
+ *  edge. Bars at/above the VAD voice threshold use the recording red (so the user sees what counts as
+ *  speech); quieter bars are muted. Faint gridlines mark whole seconds. */
+function drawWave(sess: DictationSession, now: number): void {
+  const cv = $("#ctWaveCanvas") as HTMLCanvasElement | null;
+  const g = cv?.getContext("2d");
+  if (!cv || !g) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.width / dpr, h = cv.height / dpr;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const pitch = 3, bw = 2; // 2px bar + 1px gap
+  const frac = Math.min(1, (now - sess.bucketAt) / WAVE_BUCKET_MS);
+  const bar = (x: number, level: number, absIdx: number) => {
+    if ((absIdx * WAVE_BUCKET_MS) % 1000 < WAVE_BUCKET_MS) { g.fillStyle = waveColors.grid; g.fillRect(x, 0, 1, h); } // whole-second tick
+    const bh = Math.max(2, waveHeight(level) * (h - 2));
+    g.fillStyle = level >= DICTATION_DEFAULTS.voiceLevel ? waveColors.voiced : waveColors.quiet;
+    g.fillRect(x, (h - bh) / 2, bw, bh);
+  };
+  bar(w - bw, sess.bucketPeak, sess.waveCount); // the live bucket, pinned to the right edge
+  for (let j = 0; j < sess.wave.length; j++) {
+    const x = w - bw - (j + frac) * pitch;
+    if (x < -bw) break;
+    bar(x, sess.wave[sess.wave.length - 1 - j]!, sess.waveCount - 1 - j);
+  }
+}
+/** P-STT.4: one visible warning per session when an utterance transcribed to NOTHING because the engine
+ *  failed (server down / missing key) - with one-click recovery. Genuine silence stays silent. */
+async function warnSttFailure(sess: DictationSession, r: { text: string; note: string } | null): Promise<void> {
+  const msg = sttFailureMessage(r);
+  if (!msg || sess.failWarned) return;
+  sess.failWarned = true;
+  const [v, ws] = await Promise.all([bridge.voiceSettings().catch(() => null), bridge.whisperStatus().catch(() => null)]);
+  const actions: { label: string; kind?: "ok" | "danger"; run?: () => void }[] = [];
+  if (v?.sttProvider !== "elevenlabs" && ws && !ws.running && ws.capable && ws.binAvailable) {
+    actions.push({ label: "Start local Whisper", kind: "ok", run: () => { void startManagedWhisperFromMic(); } });
+  }
+  actions.push({ label: "Voice settings", run: () => { openSettingsToVoice(); } });
+  showToast({ tone: "warn", title: "Heard you, but nothing transcribed", desc: msg, actions, timeout: 12000 });
+}
+/** Start the managed offline Whisper from the dictation-failure toast (same flow as the Voice card's
+ *  button). Dictation keeps listening; once the server is up the next utterance lands normally. */
+async function startManagedWhisperFromMic(): Promise<void> {
+  showToast({ title: "Starting local Whisper\u2026", desc: "Downloading the model if needed and starting the offline server; dictation keeps listening meanwhile.", timeout: 4000 });
+  const wr = await bridge.whisperStart(undefined).catch(() => null);
+  if (wr?.ok) {
+    if (dictation) dictation.failWarned = false; // re-arm: a later failure should warn again
+    showToast({ tone: "ok", title: "Local Whisper is running", desc: "Speak again - your words will land in the prompt bar.", timeout: 4000 });
+  } else showToast({ tone: "warn", title: "Couldn't start local Whisper", desc: wr?.reason || "See Settings \u2192 Voice.", timeout: 5000 });
+}
+/** Record ONE utterance; on stop, transcribe it and append to the composer, then - if the session is still
+ *  live - immediately start the next utterance's recorder so no words are dropped between utterances. */
+function startUtterance(sess: DictationSession): void {
+  sess.chunks = [];
+  sess.rec = new MediaRecorder(sess.stream, sess.mime ? { mimeType: sess.mime } : undefined);
+  sess.rec.ondataavailable = (e) => { if (e.data.size) sess.chunks.push(e.data); };
+  sess.rec.onstop = async () => {
+    const type = sess.rec?.mimeType || "audio/webm";
+    const blob = new Blob(sess.chunks, { type });
+    sess.rec = null;
+    if (sess.active) startUtterance(sess); // keep listening for the next utterance right away
+    if (blob.size < 1400) { maybeSendSpokenTurn(sess); return; } // essentially silence - nothing to transcribe
+    // whisper.cpp / OpenAI-compatible STT decode WAV, not MediaRecorder's WebM/Opus - transcode first, else
+    // the server 400s the raw clip and the mic looks "heard, but nothing transcribed". Fall back to the raw
+    // blob only if decoding fails (keeps the ElevenLabs cloud path, which accepts WebM, working).
+    const wav = (await blobToWav16kMono(blob)) ?? blob;
+    sess.pending++; // P-VOICE.3: conversation mode must not send the turn until this lands
+    const r = await bridge.transcribe(await blobToBase64(wav), wav.type).catch(() => null);
+    sess.pending--;
+    if (r?.text) {
+      // P-AVATAR.5: a pending voice approval eats a matching verdict; anything else is dictation.
+      if (!consumeApprovalUtterance(r.text)) {
+        const ta = $("#input") as HTMLTextAreaElement;
+        ta.value = mergeTranscript(ta.value, r.text); autosize(ta); setSendEnabled();
+      }
+    } else void warnSttFailure(sess, r); // P-STT.4: a dead engine is VISIBLE, not a silent nothing
+    maybeSendSpokenTurn(sess);
+  };
+  sess.rec.start();
+}
+/** P-VOICE.3: the spoken turn is complete - the session ended on SILENCE and every utterance has been
+ *  transcribed - so send it, closing the conversation loop. A session the user stopped by CLICKING never
+ *  sets `autoSend`: a manual stop means "let me read it first". Consumes the flag so a late second
+ *  transcription can't double-send. */
+function maybeSendSpokenTurn(sess: DictationSession): void {
+  if (!sess.autoSend || sess.pending > 0 || sess.active) return; // still listening, or still transcribing
+  sess.autoSend = false;
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  if (!ta?.value.trim() || state.streaming) return; // heard nothing usable, or a turn is already running
+  void send();
+}
+
+/** End the fluid dictation session: stop the ticker + the final recorder (its onstop transcribes the last
+ *  utterance), release the mic, and clear the UI. Idempotent. */
+async function endDictation(): Promise<void> {
+  const sess = dictation; if (!sess) return;
+  dictation = null; sess.active = false; // active=false BEFORE stop so onstop won't restart the recorder
+  clearInterval(sess.timer);
+  cancelAnimationFrame(sess.raf); // P-STT.4: stop + hide the waveform chip
+  const chip = $("#ctWave") as HTMLElement | null;
+  if (chip) chip.hidden = true;
+  const tlab = $("#ctWaveTime");
+  if (tlab) tlab.textContent = "0:00";
+  ($("#ctMic") as HTMLElement | null)?.classList.remove("recording");
+  try { if (sess.rec && sess.rec.state === "recording") sess.rec.stop(); } catch { /* already stopped */ }
+  // Ending BETWEEN utterances leaves no recorder to fire onstop, so nothing would ever close the loop.
+  if (!sess.rec) maybeSendSpokenTurn(sess);
+  setTimeout(() => { sess.stream.getTracks().forEach((t) => t.stop()); void sess.ctx.close().catch(() => {}); }, 60);
+}
+/** Toggle fluid dictation: click to start hands-free live dictation (utterances land as you pause; it
+ *  auto-stops after a longer silence), click again to stop early. Built on the tested dictation.ts core. */
+async function toggleMicRecording(auto = false): Promise<void> {
+  if (dictation) { void endDictation(); return; } // click during a session = stop
+  const btn = $("#ctMic") as HTMLElement | null;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined" || typeof AudioContext === "undefined") {
     showToast({ tone: "warn", title: "No microphone", desc: "This environment can't capture audio.", timeout: 2600 }); return;
   }
   let stream: MediaStream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  // P-VOICE.3: echo cancellation is explicit, not left to the UA default - in conversation mode the mic is
+  // open while the speakers may still be settling, and without it the agent's own voice feeds back in.
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
   catch { showToast({ tone: "warn", title: "Microphone blocked", desc: "Allow microphone access to use voice input.", timeout: 2800 }); return; }
-  micChunks = [];
+  const ctx = new AudioContext();
+  try { await ctx.resume(); } catch { /* best-effort under autoplay policy */ }
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
   const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
-  micRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-  micRecorder.ondataavailable = (e) => { if (e.data.size) micChunks.push(e.data); };
-  micRecorder.onstop = async () => {
-    stream.getTracks().forEach((t) => t.stop());
-    btn?.classList.remove("recording");
-    const type = micRecorder?.mimeType || "audio/webm";
-    micRecorder = null;
-    const blob = new Blob(micChunks, { type });
-    if (!blob.size) return;
-    btn?.classList.add("busy");
-    try {
-      const r = await bridge.transcribe(await blobToBase64(blob), blob.type).catch(() => null);
-      if (r?.text) {
-        const ta = $("#input") as HTMLTextAreaElement;
-        ta.value = (ta.value ? ta.value.replace(/\s*$/, "") + " " : "") + r.text;
-        ta.focus(); autosize(ta); setSendEnabled();
-      } else {
-        showToast({ tone: "warn", title: "No transcript", desc: r?.note || "The speech-to-text engine returned nothing. Check Settings → Voice.", timeout: 3200 });
-      }
-    } finally { btn?.classList.remove("busy"); }
-  };
-  micRecorder.start();
+  const t0 = performance.now();
+  const sess: DictationSession = { stream, ctx, analyser, data: new Float32Array(new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT)), rec: null, chunks: [], mime, timer: 0, state: newDictation(), active: true, wave: [], waveCount: 0, raf: 0, startedAt: t0, bucketAt: t0, bucketPeak: 0, failWarned: false, pending: 0, autoSend: false };
+  dictation = sess;
+  startUtterance(sess);
+  sess.timer = window.setInterval(() => {
+    if (!dictation || !dictation.active) return;
+    const r = dictationTick(dictation.state, micRms(dictation), DICTATION_TICK_MS, DICTATION_DEFAULTS);
+    dictation.state = r.state;
+    if (r.action === "flush") { try { dictation.rec?.stop(); } catch { /* between utterances */ } } // onstop transcribes + restarts
+    // A longer silence = "I'm done talking". In conversation mode that ENDS THE TURN and sends it (a click
+    // stop deliberately does not, so a manual dictation is still reviewed before sending).
+    else if (r.action === "stop") { dictation.autoSend = !!state.voice?.ttsConversation; void endDictation(); }
+  }, DICTATION_TICK_MS);
   btn?.classList.add("recording");
-  showToast({ title: "Recording…", desc: "Click the mic again to stop and transcribe.", timeout: 1800 });
+  startWaveChip(sess); // P-STT.4: live waveform + elapsed clock while the session runs
+  // The conversation loop opens the mic every single turn; the waveform chip already says "listening", so a
+  // toast each round would be noise. Only an explicit click explains itself.
+  if (!auto) showToast({ title: "Listening\u2026", desc: "Speak naturally - your words land as you pause. It stops on a longer silence, or click the mic to stop.", timeout: 2800 });
 }
 
 function openGoalForm(): void {
@@ -7147,7 +11934,7 @@ function loadRunWith(ov: HTMLElement): void {
       if (gov.length) opts = gov;
     }
     if (locked) {
-      modelSel.innerHTML = groupByFamily(sortGovFirstNewest(opts), GUIDED_GOV_FAMILY_ORDER)
+      modelSel.innerHTML = groupByFamily(sortGovFirstByLevel(opts), GUIDED_GOV_FAMILY_ORDER)
         .map(({ fam, models }) => `<optgroup label="${esc(fam.label)}">` + models.map((o) => `<option value="${esc(o.value)}">${esc(o.name || o.value.split("/").pop() || o.value)}</option>`).join("") + `</optgroup>`).join("");
     } else {
       const byProv = new Map<string, { value: string; name?: string }[]>();
@@ -8105,6 +12892,7 @@ async function runGoalLoop(
   verb = "/goal",
 ): Promise<void> {
   if (state.streaming) { showToast({ tone: "warn", title: "A turn is running", desc: "Wait for it to finish before starting a loop.", timeout: 2400 }); return; }
+  const owner = leaveTurnView();
   if (!autoCollapsedSessions) { autoCollapsedSessions = true; if (!state.sidebarCollapsed) toggleSidebar(true); }
   state.lastPrompt = opts.goal;
   addMessage("user", `${verb}${opts.resume ? " (resume)" : ""}: ${opts.goal}${opts.command ? `\nverify: \`${opts.command}\`` : ""}  ·  up to ${opts.maxIters} iterations`);
@@ -8114,6 +12902,7 @@ async function runGoalLoop(
   const wrap = el(`<div class="goal-loop"></div>`); textEl.appendChild(wrap);
   let iterEl: HTMLElement | null = null, streamEl: HTMLElement | null = null, buf = "";
   const onEvent = (e: ChatEvent) => {
+    if (owner !== turnViewEpoch) return;
     if (e.type === "goal-memory") { wrap.appendChild(el(`<div class="goal-mem">${icon("folder", 12)} loop memory: <code>${esc(e.path)}</code></div>`)); scrollChat(); }
     else if (e.type === "goal-iter") {
       buf = "";
@@ -8143,7 +12932,7 @@ async function runGoalLoop(
     else if (e.type === "done") { if (streamEl) streamEl.innerHTML = renderMarkdown(buf); }
   };
   try { await (stream ?? ((on: (e: ChatEvent) => void) => bridge.runGoal(opts, on)))(onEvent); }
-  finally { state.streaming = false; goalLoopRunning = false; setSendEnabled(); void renderSessions(); void refreshBudget(false); }
+  finally { if (owner === turnViewEpoch) { state.streaming = false; goalLoopRunning = false; setSendEnabled(); void renderSessions(); void refreshBudget(false); } }
 }
 
 // ── "/" command + skill autocomplete (P-SLASH.1) ──────────────────────────────
@@ -8197,7 +12986,9 @@ function updateSlashAC(): void {
   // mid-sentence too ("fix this /lic…"), not only when the whole input is one token.
   const caret = ta.selectionStart ?? ta.value.length;
   const tok = slashTokenBeforeCaret(ta.value.slice(0, caret));
-  if (!tok || state.streaming) { closeSlashAC(); return; }
+  // P-FLEET.L8: the master composer expands these, so on a lane target the menu would offer completions
+  // that could never reach the lane's own omp child. targetCaps says so; the menu stays shut.
+  if (!tok || state.streaming || !targetCaps(state.composerTarget).slashCommands) { closeSlashAC(); return; }
   slashItems = filterSlash(tok.slice(1));
   if (!slashItems.length) { closeSlashAC(); return; }
   if (slashSel >= slashItems.length) slashSel = slashItems.length - 1;
@@ -8301,6 +13092,20 @@ function promptText(opts: { title: string; label?: string; value?: string; place
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } else if (e.key === "Escape") done(null); });
     setTimeout(() => { inp.focus(); inp.select(); }, 0);
   });
+}
+
+/** Choose a folder. P-KG-INGEST.5 (ADR-0264): ALWAYS the real OS dialog (Explorer / Finder) when we're in
+ *  Electron, so every picker navigates like the workspace/git one - type a path, use Quick access, sort,
+ *  search. P-FS.2 (ADR-0265): the browser build gets the SAME native dialog through the local backend,
+ *  which runs on this machine (loopback bind) and opens Explorer / Finder / zenity itself. A native
+ *  CANCEL (`supported:true, path:null`) resolves null and never re-prompts. `openFolderBrowser` is the
+ *  fallback ONLY when no native dialog exists anywhere (headless server, no dialog binary). Every folder
+ *  pick in the app goes through here; call the in-app browser directly nowhere. */
+async function pickFolderDialog(opts: { title?: string; confirm?: string } = {}): Promise<string | null> {
+  if (bridge.isElectron && bridge.pickFolder) return bridge.pickFolder({ title: opts.title, buttonLabel: opts.confirm });
+  const native = await bridge.pickFolderNative({ title: opts.title, buttonLabel: opts.confirm }).catch(() => null);
+  if (native?.supported) return native.path;
+  return openFolderBrowser(opts);
 }
 
 function openFolderBrowser(opts: { title?: string; confirm?: string } = {}): Promise<string | null> {
@@ -8588,7 +13393,7 @@ function runGuestPromptLocally(text: string, from: string, images?: string[]): v
 // host resolved from the opaque id (a guest never sent, and never learns, the path).
 function runGuestModelLocally(value: string, from: string): void {
   showToast({ title: `${from} switched the model`, desc: modelLabel(value), timeout: 3500 });
-  void applyConfig("model", value);
+  void applyConfig("model", value, { system: true }); // a collab guest's pick, not the host's sticky default
 }
 function runGuestWorkspaceLocally(path: string, from: string): void {
   showToast({ title: `${from} switched the folder`, desc: path, timeout: 3500 });
@@ -8989,7 +13794,9 @@ function openSharePanel(): void {
       // the token. Poll marketUser so the panel flips to the ready state the moment the callback lands.
       const r = beginSignIn();
       if (r.opened) {
-        showToast({ title: "Finish signing in", desc: "Complete Google sign-in in your browser, then come back to this window.", timeout: 6000 });
+        // P-KGMARKET.5 (ADR-0333): name the OBJECT. This toast and the pack-purchase one were byte-identical
+        // ("Finish signing in"), so a user who had both in flight could not tell which browser tab was which.
+        showToast({ title: "Finish signing in to share", desc: "Complete Google sign-in in your browser, then come back to this window.", timeout: 6000 });
         let tries = 0;
         const iv = window.setInterval(() => {
           if (marketUser().signedIn) { clearInterval(iv); if ($("#shareModal")) { void draw(); showToast({ title: "Signed in", desc: "You can start sharing now.", timeout: 3000 }); } }
@@ -9049,6 +13856,10 @@ function openSharePanel(): void {
             onGuestSetWorkspace: (id, guest) => { const path = p2pWsById[id]; if (path) runGuestWorkspaceLocally(path, guest.name); },
             // P-COLLAB.18: host-authoritative audit — a guest joined/left this direct-P2P share.
             onParticipant: (kind, guest) => bridge.collabAudit(kind === "join" ? "guest_joined" : "guest_left", { transport: "direct-p2p", access: guest.access, roomId: p2pHostStatus()?.roomId, guest: guest.name }),
+            // P-REMOTE.14: advertise this host's CUI + lockdown stance so a phone guest can tell whether
+            // device-native dictation is permitted. Read fresh per call (the titlebar toggle can flip mid
+            // share), and it matches the relay host's wiring so upgrading to P2P never changes the answer.
+            posture: () => ({ cui: state.sessionMode === "cui", lockdown: !!(state.managed?.asksageOnly || state.asksage?.only) }),
           });
           bridge.collabAudit("share_started", { transport: "direct-p2p", access: allowEdit ? "edit" : "view", roomId: p2pStatus.roomId });
         } catch (e) { startFail("Couldn't start sharing", String((e as Error)?.message ?? e)); return; }
@@ -9366,6 +14177,12 @@ function openKgPacks(): void {
 // so the storefront is a hint — open the product page. Once the private Firebase provider is registered, the
 // decision is fail-closed: not signed in → sign-in prompt; owned → pull (which STILL clears the P-KGPACK.4
 // import gate); otherwise → Stripe Checkout. The actual signed-download + install lands in P-KGMARKET.2.
+// P-KGMARKET.5 (ADR-0333): what the user was buying when the browser sign-in took them away. Held in module
+// state rather than storage on purpose: an intent that does not survive a window reload SHOULD not survive
+// one, and `shouldResumeCheckout` expires it anyway because `lucid://auth` is shared with LUCID Remote and
+// Google Drive.
+let pendingCheckout: PendingCheckout | null = null;
+
 async function getPackFlow(pack: KgPack): Promise<void> {
   const prov = getMarketProvider();
   if (!prov.configured()) { window.open(pack.url, "_blank", "noopener"); return; } // public build: storefront is a hint
@@ -9375,11 +14192,17 @@ async function getPackFlow(pack: KgPack): Promise<void> {
   if (action === "signin") {
     // P-KGMARKET.4: kick off the hosted sign-in (or the local dev stub). Stub mode signs in synchronously, so
     // re-run the flow straight into checkout/pull; firebase opens the browser and the lucid://auth deep link
-    // (wired at boot) finishes it, after which the user clicks the row again.
+    // (wired at boot) finishes it.
     const r = beginSignIn();
     if (r.signedIn) { void getPackFlow(pack); return; }
-    if (r.opened) { showToast({ title: "Finish signing in", desc: "Complete sign-in in your browser, then click the pack again to install it.", timeout: 6000 }); return; }
-    showToast({ tone: "warn", title: "Sign in to buy", desc: r.reason ?? "Sign in to purchase and install role packs.", actions: [{ label: "Open product page", run: () => window.open(pack.url, "_blank", "noopener") }, { label: "Close" }], timeout: 0 });
+    if (r.opened) {
+      // P-KGMARKET.5: hold the user's place across the detour. The old copy told them to "click the pack
+      // again", which is the checkout asking the user to remember the checkout.
+      pendingCheckout = { packId: pack.id, packName: pack.name, startedAt: Date.now() };
+      showToast({ ...packSignInCopy("pending", pack.name), timeout: 6000 });
+      return;
+    }
+    showToast({ tone: "warn", ...packSignInCopy("blocked", pack.name, r.reason), actions: [{ label: "Open product page", run: () => window.open(pack.url, "_blank", "noopener") }, { label: "Close" }], timeout: 0 });
     return;
   }
   if (action === "checkout") {
@@ -9390,12 +14213,7 @@ async function getPackFlow(pack: KgPack): Promise<void> {
   // action === "pull": entitled → fetch the signed download URL, then download + gated-install (P-KGMARKET.4).
   const dl = await prov.downloadUrl(pack.id).catch(() => null);
   if (!dl) { showToast({ tone: "danger", title: "Couldn't start the download", desc: "The pack is owned, but no download link came back. Try again.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
-  showToast({ title: `Installing "${pack.name}"…`, desc: "Downloading the signed pack - it's verified for origin and re-scanned before anything installs.", timeout: 2200 });
-  const r = await bridge.kbPackInstallFromUrl(dl).catch(() => null);
-  if (!r || !r.ok) { showToast({ tone: "danger", title: "Install failed", desc: `${r?.error ?? "Couldn't install that pack."}${r?.stage ? ` (${r.stage})` : ""}`, actions: [{ label: "OK" }], timeout: 7000 }); return; }
-  if (r.kgId) { await bridge.kbActivate(r.kgId).catch(() => null); activeKbId = r.kgId; activeKbName = r.kgName ?? pack.name; }
-  await renderKbGraph();
-  showToast({ title: `"${r.kgName ?? pack.name}" installed`, desc: `${r.pages ?? 0} pages · ${r.signed ? `signed (${r.keyId || "trusted"})` : "unsigned"} · read-only`, timeout: 6000 });
+  await installPackFlow(() => bridge.kbPackInstallFromUrl(dl));
 }
 
 function wire(): void {
@@ -9405,24 +14223,60 @@ function wire(): void {
     // Toggle: clicking the rail icon of a fly-out that's ALREADY open slides it back away (and the
     // close() restores the inspector + re-activates the chat rail). Second click = dismiss.
     if (r === "knowledge" && kgOpen) return closeKnowledge();
+    if (r === "meetings" && meetOpen) return closeMeetings(); // P-MEET.1
     if (r === "preview" && previewOpen) return closePreview();
     if (r === "agentBuilder" && abOpen) return closeAgentBuilder();
     if (r === "settings" && state.settingsOpen) return closeSettings();
     if (r === "skills" && skillsOpen) return closeSkills(); // P-SKILL.4
+    if (r === "trainer" && trainerOpen) return closeTrainer(); // P-TRAINER.7
     if (r !== "knowledge") closeKnowledge();
+    if (r !== "meetings") closeMeetings(); // P-MEET.1
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
     if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b
     if (r !== "skills") closeSkills(); // P-SKILL.4
+    if (r !== "trainer") closeTrainer(); // P-TRAINER.7
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
     else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
+    else if (r === "meetings") openMeetings(); // P-MEET.1
     else if (r === "preview") openPreview();
     else if (r === "agentBuilder") openAgentBuilder(); // P-AGENT.2b
     else if (r === "skills") openSkills(); // P-SKILL.4
+    else if (r === "trainer") openTrainer(); // P-TRAINER.7
     else palette.show();
   }));
+  // P-MEET.1: the Meetings fly-out. Delegated, because meetingsPanelHtml replaces the body wholesale
+  // on every repaint - a listener bound to an inner node would be thrown away with it.
+  $("#meetClose")?.addEventListener("click", () => closeMeetings());
+  // Refresh re-reads the open detail too, so action items shown as "unknown" after a failed todo read
+  // resolve on the next successful one instead of lingering until the meeting is re-selected.
+  $("#meetRefresh")?.addEventListener("click", async () => {
+    meetSig = "";
+    await renderMeetings();
+    if (meetOpen && meetSelected) await showMeetingDetail(meetSelected);
+  });
+  $("#meetSearch")?.addEventListener("input", (e) => {
+    meetQuery = (e.target as HTMLInputElement).value;
+    // Debounced: each keystroke is a real round trip to the Hub's search.
+    if (meetSearchTimer !== null) window.clearTimeout(meetSearchTimer);
+    meetSearchTimer = window.setTimeout(() => { meetSearchTimer = null; void renderMeetings(); }, 220);
+  });
+  $("#meetBody")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("#meetPairGo")) { void pairMeetingHub(); return; }
+    const row = t.closest("[data-meet-open]") as HTMLElement | null;
+    if (row) void showMeetingDetail(row.dataset.meetOpen ?? "");
+  });
+  $("#meetBody")?.addEventListener("keydown", (e) => {
+    const ev = e as KeyboardEvent;
+    if (ev.key === "Enter" && (ev.target as HTMLElement).id === "meetPairCode") { ev.preventDefault(); void pairMeetingHub(); }
+  });
+  $("#meetDetail")?.addEventListener("click", (e) => {
+    const todo = (e.target as HTMLElement).closest("[data-meet-todo]") as HTMLElement | null;
+    if (todo) void markMeetingTodo(todo.dataset.meetTodo ?? "");
+  });
   // P-AGENT.2b: Agent Builder toolbar (add-node kinds · connect mode · validate · save).
   $$("[data-ab-add]").forEach((b) => b.addEventListener("click", () => addAbNode((b as HTMLElement).dataset.abAdd as NodeKind)));
   $("#abConnect")?.addEventListener("click", () => toggleAbConnect());
@@ -9454,11 +14308,29 @@ function wire(): void {
   $("#prevOpen")?.addEventListener("click", () => openPreviewFile((($("#prevPath") as HTMLInputElement | null)?.value ?? "").trim()));
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") openPreviewFile(($("#prevPath") as HTMLInputElement).value.trim()); });
   $("#prevReload")?.addEventListener("click", () => { const f = laneFrame(); if (f && !f.hidden && f.src) f.src = f.src; }); // reload the visible lane
+  // P-PREVIEW.14: reveal the previewed file in the OS file manager, SELECTED rather than just opening
+  // its folder. Reuses the P-FSREVEAL.1 (ADR-0212) shell seam the chat feed already uses, so there is one
+  // reveal path in the app. Reads the LANE's loaded path, not the input's text, so a half-typed path in
+  // the field can never send the file manager somewhere the user is not actually previewing.
+  $("#prevReveal")?.addEventListener("click", () => {
+    const path = (prevPathByLane[prevLane] ?? "").trim();
+    if (!path) return;
+    void bridge.showInFolder(path).then((ok) => {
+      if (!ok) showToast({ tone: "warn", title: "Couldn't open the folder", desc: "Revealing a file needs the desktop app's file manager access.", timeout: 3000 });
+    }).catch(() => { /* best-effort: the preview itself is unaffected */ });
+  });
   // P-PREVIEW.8: the Yours / Agent tab strip.
-  $("#prevTabs")?.addEventListener("click", (e) => { const t = (e.target as HTMLElement).closest(".prev-tab") as HTMLElement | null; if (t?.dataset.lane) switchPrevLane(t.dataset.lane as PrevLane); });
+  $("#prevTabs")?.addEventListener("click", (e) => {
+    const closeId = ((e.target as HTMLElement).closest(".prev-tab-x") as HTMLElement | null)?.dataset.close;
+    if (closeId) { closeLaneTab(closeId); return; } // the close X wins over the tab switch
+    const tabId = ((e.target as HTMLElement).closest(".prev-tab") as HTMLElement | null)?.dataset.lane;
+    if (tabId) switchPrevLane(tabId);
+  });
   $("#prevBrowse")?.addEventListener("click", () => void browsePreviewFile()); // P-PREVIEW.5: open cwd file
   $("#prevDevice")?.addEventListener("click", (e) => openDeviceMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.9: device viewports
+  wirePreviewZoom();
   $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.5: markup tools
+  $("#prevCapture")?.addEventListener("click", () => void captureCurrentPreview()); // CREATOR-3b: deterministic frame capture
   $("#prevShot")?.addEventListener("click", () => void screenshotPreviewToChat());
   $("#prevToPhone")?.addEventListener("click", () => void sendPreviewToPhone()); // P-PREVIEW-PWA.1 (ADR-0237)
   // Knowledge graph: close, lens toggle, forget-fact, export (P9.4)
@@ -9501,9 +14373,13 @@ function wire(): void {
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.
-  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(perfWatch.tier() !== "full"); });
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
+  // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing
+  // "Browse Role KG Packs" into the command palette, so the one commercial surface in the product was the
+  // one surface with no way in.
+  $("#kgPacks")?.addEventListener("click", () => openKgPacks());
   $("#knowledge")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const lens = t.closest("[data-lens]") as HTMLElement | null;
@@ -9562,6 +14438,227 @@ function wire(): void {
   $("#cmdkBtn")?.addEventListener("click", () => palette.show());
   $("#railAbout")?.addEventListener("click", () => openAbout());
   $("#railMarket")?.addEventListener("click", () => openMarketplace()); // P-MARKET.1 (ADR-0158)
+  // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
+  $("#railStudio")?.addEventListener("click", () => openCreatorStudio());
+  $("#studioClose")?.addEventListener("click", () => closeCreatorStudio());
+  $("#creatorStudio")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const play = t.closest("[data-track-play]") as HTMLElement | null;
+    if (play) { void playCreatorTrack(play.dataset.trackPlay!); return; }
+    const add = t.closest("[data-track-add]");
+    if (add) { void openTrackAddPrompt(); return; }
+    const row = t.closest("[data-track]") as HTMLElement | null;
+    const id = row?.dataset.track ?? "";
+    const star = t.closest("[data-track-rate]") as HTMLElement | null;
+    if (star && id) { void creatorLibraryOp({ op: "update", id, rating: Number(star.dataset.trackRate) }); return; }
+    const review = t.closest("[data-track-review]") as HTMLElement | null;
+    if (review) { void openTrackReviewPrompt(review.dataset.trackReview!); return; }
+    const remix = t.closest("[data-track-remix]") as HTMLElement | null;
+    if (remix) { void openTrackAddPrompt({ parentId: remix.dataset.trackRemix!, kind: "remix" }); return; }
+    const reprompt = t.closest("[data-track-reprompt]") as HTMLElement | null;
+    if (reprompt) { void openTrackAddPrompt({ parentId: reprompt.dataset.trackReprompt!, kind: "reprompt" }); return; }
+    const remove = t.closest("[data-track-remove]") as HTMLElement | null;
+    if (remove) { void creatorLibraryOp({ op: "remove", id: remove.dataset.trackRemove! }); return; }
+    const ep = t.closest("[data-creator-endpoint]") as HTMLElement | null;
+    if (ep) { void openCreatorEndpointPrompt(ep.dataset.creatorEndpoint!); return; }
+    // CREATOR-1 (ADR-0292): probe a provider (or all of them), and stop a running job.
+    const probe = t.closest("[data-creator-probe]") as HTMLElement | null;
+    if (probe) { void runCreatorProbe(probe.dataset.creatorProbe!); return; }
+    if (t.closest("[data-creator-probe-all]")) { void runCreatorProbe(); return; }
+    const cancel = t.closest("[data-job-cancel]") as HTMLElement | null;
+    if (cancel) { void cancelCreatorJob(cancel.dataset.jobCancel!); return; }
+    // CREATOR-IMG (ADR-0291): the Studio tab strip + the image tools.
+    const tab = t.closest("[data-studio-tab]") as HTMLElement | null;
+    if (tab) {
+      const want = tab.dataset.studioTab;
+      state.studioTab = want === "images" ? "images" : want === "editor" ? "editor" : want === "mixer" ? "mixer" : want === "render" ? "render" : "integrations";
+      if (state.studioTab !== "editor") stopEditorAudio(); // CREATOR-2: leaving the pane stops its clip
+      if (state.studioTab === "images" && !state.creatorImages) { void loadCreatorImages(); return; }
+      if (state.studioTab === "editor" && !state.creatorEditor) { void loadCreatorEditor(); return; }
+      if (state.studioTab === "mixer" && !state.creatorMixer) { void loadCreatorMixer(); return; } // CREATOR-5
+      if (state.studioTab === "render" && !state.creatorRender) { void loadCreatorRender(); return; } // CREATOR-3
+      void renderCreatorStudio();
+      return;
+    }
+    // CREATOR-3 (ADR-0287): the render pane. Switching kind re-reads the fields first, so a typed prompt
+    // survives the repaint, and re-evaluates the probe gate for the NEW kind.
+    const renderKind = t.closest("[data-cpl-kind]") as HTMLElement | null;
+    if (renderKind && state.creatorRender) {
+      readRenderFields();
+      const v = state.creatorRender;
+      state.creatorRender = { ...v, kind: renderKind.dataset.cplKind ?? v.kind, status: "", statusTone: "" };
+      void renderCreatorStudio();
+      return;
+    }
+    if (t.closest("#cplRun")) { void runCreatorRender(); return; }
+    // CREATOR-2 (ADR-0286): the follow-along editor. Chips first - they are the surface the user lives on.
+    const chip = t.closest("[data-ced-chip]") as HTMLElement | null;
+    if (chip) { onEditorChip(chip.dataset.cedChip!, (e as MouseEvent).shiftKey); return; }
+    const wave = t.closest("[data-ced-wave]") as HTMLCanvasElement | null;
+    const ed = state.creatorEditor;
+    if (wave && ed?.doc && ed.session) {
+      const box = wave.getBoundingClientRect();
+      const total = Math.max(docDurationMs(ed.doc), ed.session.durationMs);
+      seekEditor(msAtX((e as MouseEvent).clientX - box.left, total, box.width));
+      return;
+    }
+    if (t.closest("[data-ced-open]")) { void openCreatorEditorSession(); return; }
+    if (t.closest("[data-ced-play]")) { toggleEditorPlay(); return; }
+    if (t.closest("[data-ced-split]")) { editorSplitAtPlayhead(); return; }
+    if (t.closest("[data-ced-lock]")) { editorToggleLock(); return; }
+    if (t.closest("[data-ced-delete]")) { editorDeleteSpan(); return; }
+    if (t.closest("[data-ced-rerender]")) { void editorRerenderSpan(); return; }
+    if (t.closest("[data-ced-undo]")) { stepEditorHistory(true); return; }
+    if (t.closest("[data-ced-redo]")) { stepEditorHistory(false); return; }
+    if (t.closest("[data-ced-save]")) { void saveCreatorEdit(); return; }
+    // CREATOR-5 (ADR-0289): the mixer. Every control move is a pure graph edit in this process; only Add
+    // (which needs the server's list) and Render ever leave it.
+    if (t.closest("[data-cmx-add]")) { addMixerTrack(); return; }
+    const cmxMute = t.closest("[data-cmx-mute]") as HTMLElement | null;
+    if (cmxMute) { toggleMixerTrack(cmxMute.dataset.cmxMute!, "muted"); return; }
+    const cmxSolo = t.closest("[data-cmx-solo]") as HTMLElement | null;
+    if (cmxSolo) { toggleMixerTrack(cmxSolo.dataset.cmxSolo!, "solo"); return; }
+    const cmxRamp = t.closest("[data-cmx-env]") as HTMLElement | null;
+    if (cmxRamp) { void rampMixerTrack(cmxRamp.dataset.cmxEnv!); return; }
+    const cmxDrop = t.closest("[data-cmx-remove]") as HTMLElement | null;
+    if (cmxDrop) { removeMixerTrack(cmxDrop.dataset.cmxRemove!); return; }
+    if (t.closest("[data-cmx-render]")) { void renderCreatorMix(); return; }
+    if (t.closest("[data-cim-refresh]")) { void loadCreatorImages(); return; }
+    if (t.closest("[data-cim-generate]")) { void generateCreatorImage(); return; }
+    if (t.closest("[data-cim-sheet]")) { void buildCreatorSheet(); return; }
+    if (t.closest("[data-cim-gif]")) { void buildCreatorGif(); return; }
+    if (t.closest("[data-cim-meme]")) { void buildCreatorMeme(); return; }
+    if (t.closest("[data-cim-clear]")) { patchCreatorImages({ selected: [] }); return; }
+    const drop = t.closest("[data-mix-drop]") as HTMLElement | null;
+    if (drop && state.creatorImages) {
+      const i = Number(drop.dataset.mixDrop);
+      patchCreatorImages({ inputs: state.creatorImages.inputs.filter((_, idx) => idx !== i) });
+      return;
+    }
+    const pick = t.closest("[data-art-pick]") as HTMLElement | null;
+    if (pick && state.creatorImages) {
+      const id = pick.dataset.artPick!;
+      const sel = state.creatorImages.selected;
+      patchCreatorImages({ selected: sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id] });
+      return;
+    }
+    const prev = t.closest("[data-art-preview]") as HTMLElement | null;
+    if (prev) { void openArtifactInPreview(prev.dataset.artPreview!); return; }
+    const asInput = t.closest("[data-art-input]") as HTMLElement | null;
+    if (asInput) { void useArtifactAsInput(asInput.dataset.artInput!); return; }
+  });
+  // CREATOR-IMG: a role rename is a field edit, not a click.
+  $("#creatorStudio")?.addEventListener("change", (e) => {
+    const t = e.target as HTMLElement;
+    const role = t.closest("[data-mix-role]") as HTMLInputElement | null;
+    if (role && state.creatorImages) {
+      const i = Number(role.dataset.mixRole);
+      const next = state.creatorImages.inputs.map((input, idx) => (idx === i ? { ...input, role: role.value.trim() || input.role } : input));
+      state.creatorImages = { ...state.creatorImages, inputs: next };
+      return;
+    }
+    // CREATOR-2: hold what the user typed/picked, so the next repaint does not throw it away.
+    const ed = state.creatorEditor;
+    if (!ed) return;
+    const pick = t.closest("#cedTrack") as HTMLSelectElement | null;
+    if (pick) { state.creatorEditor = { ...ed, trackId: pick.value }; return; }
+    const words = t.closest("#cedText") as HTMLTextAreaElement | null;
+    if (words) { state.creatorEditor = { ...ed, text: words.value }; return; }
+    const name = t.closest("#cedTitle") as HTMLInputElement | null;
+    if (name) state.creatorEditor = { ...ed, title: name.value };
+  });
+  // CREATOR-2: the scrub bar is continuous - it seeks while dragged, not only on release.
+  $("#creatorStudio")?.addEventListener("input", (e) => {
+    const scrub = (e.target as HTMLElement).closest("[data-ced-scrub]") as HTMLInputElement | null;
+    if (scrub) seekEditor(Number(scrub.value));
+    // CREATOR-5: a level/pan/master drag rewrites only its own readout. A full repaint here would replace
+    // the control under the user's finger and drop the gesture.
+    const slider = (e.target as HTMLElement).closest("[data-cmx-master],[data-cmx-gain],[data-cmx-pan]") as HTMLInputElement | null;
+    if (slider) dragMixerSlider(slider);
+  });
+  // CREATOR-5 (ADR-0289): the mixer's fields. A slider RELEASE repaints the pane, because that is when a
+  // new silence reason or a validation problem becomes visible; a text field only stores what was typed.
+  $("#creatorStudio")?.addEventListener("change", (e) => {
+    const v = state.creatorMixer;
+    if (!v) return;
+    const t = e.target as HTMLElement;
+    const slider = t.closest("[data-cmx-master],[data-cmx-gain],[data-cmx-pan]") as HTMLInputElement | null;
+    if (slider) { dragMixerSlider(slider); void renderCreatorStudio(); return; }
+    const add = t.closest("#cmxAdd") as HTMLSelectElement | null;
+    if (add) { state.creatorMixer = { ...v, addId: add.value }; void renderCreatorStudio(); return; }
+    const mixTitle = t.closest("#cmxTitle") as HTMLInputElement | null;
+    if (mixTitle) { state.creatorMixer = { ...v, title: mixTitle.value }; return; }
+    const headroom = t.closest("[data-cmx-headroom]") as HTMLInputElement | null;
+    if (headroom) { state.creatorMixer = { ...v, applyHeadroom: headroom.checked }; void renderCreatorStudio(); return; }
+    if (!v.graph) return;
+    const fadeIn = t.closest("[data-cmx-fadein]") as HTMLInputElement | null;
+    if (fadeIn) {
+      const ms = Number(fadeIn.value);
+      commitMixerGraph(patchTrack(v.graph, fadeIn.dataset.cmxFadein!, { fadeInMs: ms }), `Fade in set to ${ms}ms.`);
+      return;
+    }
+    const fadeOut = t.closest("[data-cmx-fadeout]") as HTMLInputElement | null;
+    if (fadeOut) {
+      const ms = Number(fadeOut.value);
+      commitMixerGraph(patchTrack(v.graph, fadeOut.dataset.cmxFadeout!, { fadeOutMs: ms }), `Fade out set to ${ms}ms.`);
+    }
+  });
+  // CREATOR-2: drag a SELECTED span onto another chip to move it there. A chip outside the selection is
+  // not draggable, and a drop back inside the span resolves to null (no move, no history churn).
+  $("#creatorStudio")?.addEventListener("dragstart", (e) => {
+    const chip = (e.target as HTMLElement).closest("[data-ced-chip]") as HTMLElement | null;
+    const v = state.creatorEditor;
+    if (!chip || !v) return;
+    if (!v.selected.includes(chip.dataset.cedChip!)) { e.preventDefault(); return; }
+    editorDrag = [...v.selected];
+    (e as DragEvent).dataTransfer?.setData("text/plain", chip.dataset.cedChip!);
+  });
+  $("#creatorStudio")?.addEventListener("dragover", (e) => {
+    if (editorDrag.length && (e.target as HTMLElement).closest("[data-ced-chip]")) e.preventDefault();
+  });
+  $("#creatorStudio")?.addEventListener("drop", (e) => {
+    const chip = (e.target as HTMLElement).closest("[data-ced-chip]") as HTMLElement | null;
+    const v = state.creatorEditor;
+    if (!chip || !v?.doc || editorDrag.length === 0) return;
+    e.preventDefault();
+    const moving = editorDrag;
+    editorDrag = [];
+    const targetMs = dropTargetMs(v.doc, chip.dataset.cedChip!, moving);
+    if (targetMs === null) return;
+    applyEditorOp(moveSpan(v.doc, moving, targetMs), `Moved ${moving.length} word${moving.length === 1 ? "" : "s"} to ${formatClock(targetMs)}.`, moving);
+  });
+  $("#creatorStudio")?.addEventListener("dragend", () => { editorDrag = []; });
+  // CREATOR-IMG: paste an image straight into the Images pane to stage it as an input.
+  $("#creatorStudio")?.addEventListener("paste", (e) => {
+    const v = state.creatorImages;
+    if (state.studioTab !== "images" || !v) return;
+    const items = [...((e as ClipboardEvent).clipboardData?.items ?? [])].filter((i) => i.type.startsWith("image/"));
+    if (!items.length) return;
+    e.preventDefault();
+    const file = items[0]!.getAsFile();
+    if (!file || v.inputs.length >= 6) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result ?? "");
+      if (!url.startsWith("data:image/")) return;
+      const roles = ["style", "composition", "background", "mask", "detail", "extra"];
+      patchCreatorImages({ inputs: [...v.inputs, { role: roles[v.inputs.length] ?? "extra", name: file.name || "pasted.png", dataUrl: url }] });
+    };
+    reader.readAsDataURL(file);
+  });
+  // CREATOR-0 (ADR-0283): the odometer chips - click to expand the detailed flyout in place, click the
+  // same chip again to collapse it. Refresh re-samples fresh rather than serving the 3s memo.
+  $("#inspBody")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const chip = t.closest("[data-cod-chip]") as HTMLElement | null;
+    if (chip) {
+      const metric = chip.dataset.codChip === "gpu" ? "gpu" : "cpu";
+      state.creatorDetail = state.creatorDetail === metric ? "" : metric;
+      lastInspHash = ""; renderInspector();
+      return;
+    }
+    if (t.closest("[data-cod-refresh]")) { void refreshCreatorResources(true); }
+  });
   $("#railReports")?.addEventListener("click", () => openReportsPanel()); // P-REPORT.1 (ADR-0116)
   $("#railShare")?.addEventListener("click", () => openSharePanel()); // P-COLLAB.3 (ADR-0192)
   void refreshShareDot(); // reflect any already-live share in the rail glyph
@@ -9604,6 +14701,18 @@ function wire(): void {
   // model / mode / thinking picker
   $("#modelBadge")!.addEventListener("click", () => openConfigPopover($("#modelBadge")!));
 
+  // P-AVATAR.1: back into the stage after an Esc exit (chip only visible for the lucid-agent role).
+  $("#tbStage")!.addEventListener("click", () => setImmersive(true));
+  $("#agentTier")!.addEventListener("change", async (event) => {
+    if (state.userRole !== "lucid-agent" || state.streaming || agentTierApplying) { syncAgentExtras(); return; }
+    const previous = agentTier;
+    agentTier = (event.target as HTMLSelectElement).value === "max" ? "max" : "regular";
+    try {
+      await applyAgentTier();
+      try { localStorage.setItem("lucid.agent-tier", agentTier); } catch { /* Session choice remains usable without storage. */ }
+    } catch { agentTier = previous; }
+    syncAgentExtras();
+  });
   // text zoom
   $("#zoomIn")!.addEventListener("click", () => nudgeZoom(0.1));
   $("#zoomOut")!.addEventListener("click", () => nudgeZoom(-0.1));
@@ -9615,6 +14724,10 @@ function wire(): void {
     else if (e.key === "0") { e.preventDefault(); resetZoom(); }
     // P-REPORT.5b: Ctrl/⌘+D toggles the mic (voice input), matching the mic button's tooltip.
     else if ((e.key === "d" || e.key === "D") && !e.shiftKey && !e.altKey) { e.preventDefault(); void toggleMicRecording(); }
+    // P-VOICE.6 (ADR-0249): Ctrl/\u2318+G toggles hands-free conversation mode. G is the nearest key to the mic's
+    // D that is free on all three platforms - Ctrl+E/F/R/S/W/A/Q are browser or OS bindings, and LUCID has no
+    // find bar for \u2318G to collide with on macOS.
+    else if ((e.key === "g" || e.key === "G") && !e.shiftKey && !e.altKey) { e.preventDefault(); void toggleConversationMode(); }
   });
 
   // inspector collapse ↔ metrics rail
@@ -9631,6 +14744,109 @@ function wire(): void {
     if (seg?.dataset.mode) void applySessionMode(seg.dataset.mode as "cui" | "search");
   });
   $("#ctMic")?.addEventListener("click", () => void toggleMicRecording()); // P-VOICE.1 (ADR-0115)
+  // P-VOICE.2 (ADR-0247): the read-aloud control - the picker, and a one-click stop while a reply is spoken.
+  $("#ctVoice")?.addEventListener("click", () => void openVoiceDropdown($("#ctVoice")!));
+  $("#ctSpeakStop")?.addEventListener("click", () => speech.stop());
+  // P-VOICE.4 (ADR-0248): the equalizer - a mini strip in the composer, or a panel anchored anywhere.
+  const miniEq = $("#ctEqCanvas");
+  if (miniEq instanceof HTMLCanvasElement) voiceEq.mount(miniEq);
+  $("#ctEqPop")?.addEventListener("click", () => openVoiceDock());
+  if (voiceDockOpen()) openVoiceDock(); // an anchored panel survives a restart
+  window.addEventListener("resize", () => {
+    if (!voiceDock || !voiceDockState) return;
+    voiceDockState.shape = clampToViewport(voiceDockState.shape, window.innerWidth, window.innerHeight);
+    applyVoiceDockShape();
+  });
+  void bridge.voiceSettings().then((v) => { if (v) { state.voice = v; updateVoiceChip(); } });
+  // P-FLEET.L1: the fleet grid dashboard - headless local lanes as streaming mini agent windows.
+  initFleetGrid({
+    fleetStatus: bridge.fleetStatus,
+    fleetSpawn: bridge.fleetSpawn,
+    fleetPrompt: bridge.fleetPrompt,
+    fleetRetry: bridge.fleetRetry, // P-FLEET.L4: streamed re-send of the last turn
+    fleetRespawn: bridge.fleetRespawn, // P-FLEET.L4: revive in place, memory carried
+    fleetQueueAdd: bridge.fleetQueueAdd, // P-FLEET.L3: stage a prompt while the lane is busy
+    fleetQueueRemove: bridge.fleetQueueRemove,
+    fleetQueueMove: bridge.fleetQueueMove,
+    fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
+    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving
+    fleetAnswer: bridge.fleetAnswer, // scope "session" also allows every same-kind ask for the lane's session
+    fleetAuto: bridge.fleetAuto, // full auto-mode: risk-gated ON, per-lane or all-lanes
+    fleetCancel: bridge.fleetCancel,
+    fleetStop: bridge.fleetStop,
+    fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
+    fleetSetModel: bridge.fleetSetModel,
+    interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
+    previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
+    getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
+    getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
+    getMasterCwd: () => state.workspace?.current ?? "",
+    // P-FLEET.L2: the same real OS dialog every other folder pick in the app uses (Electron dialog ->
+    // local-backend Explorer/Finder/zenity -> in-app browser), so a lane folder can be browsed to or
+    // CREATED without typing a path.
+    pickFolder: (opts) => pickFolderDialog(opts ?? {}),
+    // P-FLEET.L2: a git token is stored per HOST in the OS-encrypted vault (ref git_pat_<host_slug>), which
+    // main.ts injects back as LUCID_GIT_PAT_<HOST_SLUG> at launch so workspace.ts hands it ONLY to that
+    // host. The plaintext goes renderer -> main's safeStorage and nowhere else; it never reaches the agent.
+    saveGitToken: async ({ host, token, label }) => {
+      if (!bridge.isElectron || !bridge.credStore) return { ok: false, error: "the encrypted vault needs the LUCID desktop app" };
+      const ref = gitCredRef(host);
+      if (!ref) return { ok: false, error: `unusable host "${host}"` };
+      const r = await bridge.credStore({ ref, kind: "apikey", secret: token, label });
+      if (r && "error" in r) return { ok: false, error: String(r.error) };
+      state.creds = await bridge.credList().catch(() => state.creds);
+      return { ok: true };
+    },
+    vaultAvailable: () => bridge.isElectron && !!bridge.credStore,
+    // P-FLEET.L8: the card's Promote / Back buttons. Attaching is a renderer-side retarget, so the deps are
+    // fire-and-forget; the card's own promoted look comes from LaneView.promoted on the fleet poll.
+    promoteLane: (laneId) => void promoteLane(laneId),
+    demoteLane: () => demoteLane(),
+  });
+  // P-FLEET.L17: the hub-and-spoke Orbit map over the SAME lanes. It reuses the grid's promote/demote
+  // pair (attach is app.ts-owned either way) and opens the grid dock for spawning and per-lane work,
+  // so the two views can never disagree about what a lane is doing.
+  initFleetOrbit({
+    fleetStatus: bridge.fleetStatus,
+    fleetAnswer: bridge.fleetAnswer,
+    fleetRespawn: bridge.fleetRespawn,
+    fleetSpawn: bridge.fleetSpawn, // P-FLEET.L17 recovery: respawn a historical spoke by its old identity
+    timelineList: bridge.timelineList, // P-FLEET.L17 recovery: the P-FLEET.L5 durable ledger feeds the ghosts
+    promoteLane: (laneId) => void promoteLane(laneId),
+    demoteLane: () => demoteLane(),
+    openGrid: () => openFleetGrid(),
+    pickFolder: (opts) => pickFolderDialog(opts ?? {}), // the same real OS dialog the grid form uses
+    getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
+    // P-FLEET.L18: the on-orbit form clones too - identical vault path as the grid form's deps above.
+    saveGitToken: async ({ host, token, label }) => {
+      if (!bridge.isElectron || !bridge.credStore) return { ok: false, error: "the encrypted vault needs the LUCID desktop app" };
+      const ref = gitCredRef(host);
+      if (!ref) return { ok: false, error: `unusable host "${host}"` };
+      const r = await bridge.credStore({ ref, kind: "apikey", secret: token, label });
+      if (r && "error" in r) return { ok: false, error: String(r.error) };
+      state.creds = await bridge.credList().catch(() => state.creds);
+      return { ok: true };
+    },
+    vaultAvailable: () => bridge.isElectron && !!bridge.credStore,
+    getTarget: () => state.composerTarget,
+    getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
+    getMasterCwd: () => state.workspace?.current ?? "",
+    // While attached, liveUsage carries the LANE's own samples (both stream paths write it), so the
+    // banner's memory chip speaks for the spoke. Promote/demote null it, so it is never the master's.
+    // P-FLEET.L19: the window is the one the status ring uses (the lane model's real window, omp's size
+    // as the fallback), so the banner chip and the ring can never show two different percentages.
+    getLaneUsage: () => {
+      const t = state.composerTarget, lu = state.liveUsage;
+      if (!isLaneTarget(t) || !lu) return null;
+      return { used: lu.used, size: modelCtx(t.model) ?? lu.size, cost: lu.cost };
+    },
+  });
+  // P-FLEET.L18: the Fleet button opens whichever view the user PINNED (orbit by default); each view's
+  // header links to the other, so neither choice ever strands you.
+  $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
+  // P-FLEET.L5: the reviewable timeline dock.
+  initTimelineDock({ timelineList: bridge.timelineList, timelineSession: bridge.timelineSession });
+  $("#ctTimeline")?.addEventListener("click", () => toggleTimelineDock());
 
   // settings page actions (delegated)
   $("#setClose")!.addEventListener("click", () => closeSettings());
@@ -9640,6 +14856,31 @@ function wire(): void {
     if (t.id === "chinaAckInput") { const b = $("#chinaAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
     if (t.id === "thirdPartyAckInput") { const b = $("#thirdPartyAckBtn", $("#setBody")!) as HTMLButtonElement | null; if (b) b.disabled = (t as HTMLInputElement).value.trim() !== "ACKNOWLEDGE"; }
   });
+  // P-KGMARKET.5 (ADR-0333): Enter in a passphrase field runs that field's action. A password input with a
+  // button beside it and no Enter binding reads as broken, and the unlock path is walked every session.
+  // Routed through the BUTTON's own click so the setup/unlock logic stays in exactly one place (the
+  // delegated click handler further down), and gated by an allowlist so Enter in a provider API-key row
+  // cannot fire something the user never aimed at.
+  $("#setBody")!.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing) return;
+    const t = e.target as HTMLElement | null;
+    const input = t?.closest("input");
+    if (!input) return;
+    const body = $("#setBody")!;
+    const target = enterSubmitTarget(input.id, (id) => !!$(`#${id}`, body));
+    if (!target) return;
+    e.preventDefault(); // an Enter that submits must not also do whatever the browser would have done
+    const btn = $(`#${target}`, body);
+    btn?.click();
+  });
+  // P-ACCT.1: persist each provider accordion's open state across fillSec repaints (native <details>
+  // toggle doesn't bubble -> capture; the dockSec pattern, session-only).
+  $("#setBody")!.addEventListener("toggle", (e) => {
+    const d = e.target as HTMLElement;
+    if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("prov-acc")) return;
+    const id = d.dataset.provAcc; if (!id) return;
+    if (d.open) PROV_ACC_OPEN.add(id); else PROV_ACC_OPEN.delete(id);
+  }, true);
   // P-VOICE.1 (ADR-0115): persist a voice setting when a Voice-card control changes.
   $("#setBody")!.addEventListener("change", async (e) => {
     const t0 = e.target as HTMLElement;
@@ -9659,19 +14900,76 @@ function wire(): void {
       if (row?.dataset.lpId) { await bridge.localProviderEnable(row.dataset.lpId, (t0 as HTMLInputElement).checked).catch(() => {}); }
       return;
     }
+    // P-VOICE.7: activate an imported endpoint - one click makes it THE speaking engine (url + model +
+    // provider switch together server-side), and the URL field repaints to show the effective value.
+    if (t0.id === "voiceEndpointSel") {
+      const sel = t0 as HTMLSelectElement; // well-known node: this branch is keyed on its id
+      if (!sel.value) return;
+      const r = await bridge.voiceEndpointActivate(sel.value).catch(() => null);
+      if (!r) { showToast({ tone: "warn", title: "Couldn't activate", desc: "The engine didn't answer - is it running?", timeout: 4000 }); return; }
+      const next = await bridge.voiceSettings().catch(() => null);
+      if (next) state.voice = next;
+      const urlInput = $("#voiceDotsUrl") as HTMLInputElement | null;
+      if (urlInput && r.url) urlInput.value = r.url;
+      updateVoiceChip();
+      void loadVoices();
+      showToast({ title: "Endpoint activated", desc: `dots.tts now speaks through ${r.url ?? "the imported endpoint"}. Pick a voice below.`, timeout: 3600 });
+      return;
+    }
+    if (t0.id === "voiceEndpointFile") {
+      const fileInput = t0 as HTMLInputElement; // well-known node: keyed on its id
+      const f = fileInput.files?.[0];
+      if (!f) return;
+      const text = await f.text();
+      fileInput.value = ""; // allow re-picking the same file after a fix
+      const r = await bridge.voiceEndpointImport(text).catch(() => null);
+      if (r?.imported) {
+        showToast({ title: "Endpoint imported", desc: "Pick it in the Endpoints list to activate it.", timeout: 3600 });
+        void hydrateVoiceEndpoints();
+      } else {
+        showToast({ tone: "danger", title: "Import rejected", desc: "Not a valid lucid-voice-endpoint file (wrong shape, or it carries a credential-like field - secrets never travel in endpoint exports).", actions: [{ label: "OK" }], timeout: 0 });
+      }
+      return;
+    }
+    // P-JEV.1 (ADR-0374): the judgment backend. The server persists, clamps under lockdown, and restarts omp
+    // when the effective pin changes; repaint from its answer so "omp is told X" is never a client guess.
+    if (t0.matches("[data-judgment-set]")) {
+      const next = await bridge.setJudgment((t0 as HTMLSelectElement).value as JudgmentView["stored"]).catch(() => null);
+      if (!next) { showToast({ tone: "warn", title: "Couldn't save judgment backend", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
+      fillSec("judgment", secJudgment(state.auth, next));
+      showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the LLM chain until it is turned off." : "omp restarts with it; the next turn uses it.", timeout: 4000 });
+      return;
+    }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
     if (!vs) return;
     const key = vs.dataset.voiceSet!;
-    await bridge.setVoiceSettings({ [key]: vs.value } as never).catch(() => {});
-    if (key === "sttProvider") { const row = $("#voiceSttUrlRow"); if (row) (row as HTMLElement).hidden = vs.value !== "whisper"; }
-    if (key === "ttsProvider") void loadVoices(); // only ElevenLabs lists custom voices
+    // P-VOICE.2: auto-speak is a checkbox, the engines are selects - read the right property for each.
+    const value = vs instanceof HTMLInputElement && vs.type === "checkbox" ? vs.checked : vs.value;
+    const next = await bridge.setVoiceSettings({ [key]: value } as never).catch(() => null);
+    if (next) { state.voice = next; updateVoiceChip(); }
+    if (key === "ttsAutoSpeak" && value !== true) speech.stop();
+    if (key === "sttProvider") { const row = $("#voiceSttUrlRow") as HTMLElement | null; if (row) row.hidden = vs.value !== "whisper"; }
+    if (key === "ttsProvider") {
+      // DOM casts: $() returns Element; `hidden` lives on HTMLElement (well-known nodes, named consts).
+      const dotsRow = $("#voiceDotsUrlRow") as HTMLElement | null; // P-VOICE.6: URL row only for the DGX engine
+      if (dotsRow) dotsRow.hidden = vs.value !== "dots-tts";
+      const epBox = $("#voiceEndpointsBox") as HTMLElement | null; // P-VOICE.7: same visibility rule
+      if (epBox) { epBox.hidden = vs.value !== "dots-tts"; if (vs.value === "dots-tts") void hydrateVoiceEndpoints(); }
+      void loadVoices(); // each engine has its own voices (and its own remembered pick)
+    }
   });
   $("#setBody")!.addEventListener("click", async (e) => {
     const t = e.target as HTMLElement;
     const head = t.closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; (head.closest(".acc")!.classList.toggle("open")) ? OPEN.add(k) : OPEN.delete(k); return; }
+    // P-THEME.1: a theme tile. `data-theme-pick=""` is the "Match system" tile, which CLEARS the stored
+    // choice, so the empty string is meaningful here and the attribute presence (not truthiness) is the
+    // test. dataset.themePick is "" for that tile, hence `!= null` rather than a plain truthy check.
+    const th = t.closest("[data-theme-pick]") as HTMLElement | null;
+    if (th) { void pickTheme(th.dataset.themePick ?? ""); return; }
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
+    if (t.closest("#voiceEndpointImportBtn")) { ($("#voiceEndpointFile") as HTMLInputElement | null)?.click(); return; } // P-VOICE.7
     if (t.closest("#bgClear")) { void updateChatBg({ image: "", mode: "off" }); return; }
     // P-TRIV.4 (ADR-0191): Trivia Wire toggle + opt-in re-seed sources + the Recycle action
     if (t.closest("#trivToggle")) {
@@ -9697,14 +14995,51 @@ function wire(): void {
       clearTriviaPack(state.userRole);
       refreshTriviaGame(); // rebuild on the seed bank now that the generated pack is gone
       fillSec("trivia", secTrivia());
-      showToast({ title: "Back to the built-in pack", desc: "The generated questions were cleared for this role.", timeout: 2600 });
+      showToast({ title: "Back to the built-in pack", desc: "The generated questions were cleared for this role. Arcade and trivia points and trivia accuracy are unchanged.", timeout: 2600 });
       return;
     }
     if (t.closest("#trivReseed")) { await reseedTrivia(t.closest("#trivReseed") as HTMLButtonElement); return; }
     // P-LOCAL.3 (ADR-0135): Local Providers card
     if (t.closest("[data-lp-addtoggle]")) { (t.closest(".lp-add") as HTMLElement | null)?.classList.toggle("open"); return; }
+    // P-LOCAL.4: a preset chip appends its model id to the add-form (click several to serve them behind ONE
+    // unified endpoint), and nudges auth to bearer (the secure default for a shared gateway). Reuses the
+    // existing add/validate/vault flow - the chip only fills the form.
+    const lpPreset = t.closest("[data-lp-preset]") as HTMLElement | null;
+    if (lpPreset) { applyLocalPreset(lpPreset.dataset.lpPreset!); return; }
     if (t.closest("[data-lp-add]")) { await addLocalProviderFromForm(); return; }
+    // P-STT.2b: managed offline Whisper - one button downloads (if needed) + starts the local server + wires STT.
+    if (t.closest("[data-whisper-start]")) {
+      const startBtn = t.closest("[data-whisper-start]") as HTMLButtonElement | null;
+      const tier = ($("#whisperTier", $("#setBody")!) as HTMLSelectElement | null)?.value || undefined;
+      if (startBtn) { startBtn.disabled = true; startBtn.textContent = "Working\u2026"; }
+      showToast({ title: "Setting up local Whisper\u2026", desc: "Downloading the model if needed and starting the offline server; this can take a bit.", timeout: 4000 });
+      // Poll status while the (long) start request runs so the card shows a live download progress bar.
+      const wpoll = window.setInterval(() => { void hydrateWhisper(); }, 500);
+      const wr = await bridge.whisperStart(tier).catch(() => null);
+      window.clearInterval(wpoll);
+      if (wr?.ok) showToast({ tone: "ok", title: "Local Whisper is running", desc: "Offline speech-to-text is live; click the mic to dictate.", timeout: 4000 });
+      else showToast({ tone: "warn", title: "Couldn't start local Whisper", desc: wr?.reason || "See Settings \u2192 Voice.", timeout: 5000 });
+      await hydrateWhisper();
+      return;
+    }
+    if (t.closest("[data-whisper-stop]")) { await bridge.whisperStop().catch(() => null); await hydrateWhisper(); return; }
+    // P-STT.6 (ADR-0267): delete a downloaded model's weights (the running tier is refused server-side).
+    const wrm = t.closest("[data-whisper-remove]") as HTMLElement | null;
+    if (wrm) {
+      const tier = wrm.dataset.whisperRemove ?? "";
+      const rr = await bridge.whisperRemove(tier).catch(() => null);
+      if (rr?.ok) showToast({ tone: "ok", title: "Model removed", desc: `The ${tier} weights were deleted from disk.`, timeout: 3000 });
+      else showToast({ tone: "warn", title: "Couldn't remove the model", desc: rr?.reason || "See Settings \u2192 Voice.", timeout: 4500 });
+      await hydrateWhisper();
+      return;
+    }
     if (t.closest("[data-lp-test-form]")) { await testLocalProviderConn(($("#lpBaseUrl", $("#setBody")!) as HTMLInputElement | null)?.value ?? ""); return; }
+    if (t.closest("[data-lp-discover-form]")) { await discoverLocalProviderModels(); return; }
+    if (t.closest("[data-lp-discover]")) {
+      const w = t.closest("[data-lp-id]") as HTMLElement | null;
+      if (w) await rediscoverLocalProvider(w.dataset.lpId ?? "");
+      return;
+    }
     const lpTest = t.closest("[data-lp-test]") as HTMLElement | null;
     if (lpTest) { await testLocalProviderConn(lpTest.dataset.url ?? ""); return; }
     if (t.closest("[data-lp-rekey-save]")) { const w = t.closest("[data-lp-id]") as HTMLElement | null; if (w) await saveLocalProviderKey(w); return; }
@@ -9717,7 +15052,7 @@ function wire(): void {
       // Prefer the NATIVE OS folder-open dialog (Electron): it browses the whole machine and can create new
       // folders, with no home-folder confinement. Fall back to the in-app browser only in a plain browser
       // build where no native dialog exists.
-      const path = bridge.isElectron && bridge.pickFolder ? await bridge.pickFolder() : await openFolderBrowser();
+      const path = await pickFolderDialog({ title: "Choose or create a workspace folder", confirm: "Open this folder" });
       if (path) await applyWorkspace(path);
       return;
     }
@@ -9735,10 +15070,12 @@ function wire(): void {
       const pat = (($("#wsGitPat", $("#setBody")!) as HTMLInputElement | null)?.value.trim() || sessionGitPat) || undefined;
       showToast({ title: "Cloning…", desc: "Fetching the repo - this can take a moment.", timeout: 2500 });
       const info = await bridge.cloneWorkspace(url, pat);
-      if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); }
+      if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); void maybeOfferWorkspaceSetup(); /* P-WSSETUP: clone does not funnel through applyWorkspace */ }
       else showToast({ tone: "danger", title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
       return;
     }
+    const wsRm = t.closest("[data-ws-remove]") as HTMLElement | null;
+    if (wsRm) { await forgetRecentWorkspace(wsRm.dataset.wsRemove!); return; }
     const wsr = t.closest("[data-ws]") as HTMLElement | null;
     if (wsr) { await applyWorkspace(wsr.dataset.ws!); return; }
     // P-IDE.1c: China-origin model unlock / re-lock
@@ -9756,6 +15093,8 @@ function wire(): void {
       showToast({ title: "Re-locked", desc: "China-origin models are hidden again.", actions: [{ label: "OK" }], timeout: 2600 });
       return;
     }
+    // P-PROV.2: jump from the Settings Providers card to the dedicated Provider Hub popup.
+    if (t.closest("#openProvHub")) { openProviderHub(); return; }
     // Third-party / non-U.S. "More providers" reveal / re-lock (mirrors the China-origin gate).
     if (t.closest("#thirdPartyAckBtn")) {
       const v = ($("#thirdPartyAckInput", $("#setBody")!) as HTMLInputElement)?.value.trim() ?? "";
@@ -9781,6 +15120,11 @@ function wire(): void {
       await loadVoices();
       showToast({ title: nowFav ? "Added to favorites" : "Removed from favorites", desc: nowFav ? "This voice now appears first in the picker." : "Removed from your favorites.", timeout: 1800 });
       return;
+    }
+    // P-ACCT.1: named account actions (switch / add / rename / remove) inside a provider accordion.
+    // The handler adopts the server's returned snapshot; repaint both account-bearing sections from it.
+    if (t.closest("[data-acct-switch],[data-acct-add],[data-acct-rename],[data-acct-remove]")) {
+      if (await handleAccountAction(t, $("#setBody")!)) { repaintAccountSections(); return; }
     }
     const save = t.closest("[data-savekey]") as HTMLElement | null;
     if (save) {
@@ -9820,8 +15164,8 @@ function wire(): void {
       if (only) {
         const model = state.config.find((c) => c.id === "model");
         if (model && !isAsksage(model.currentValue)) {
-          const gov = model.options.find((o) => isAsksage(o.value));
-          if (gov) await applyConfig("model", gov.value);
+          const gov = topModel(model.options, isAsksage)?.value;
+          if (gov) await applyConfig("model", gov, { system: true });
         }
       }
       if (only) showDodBanner(); // ADR-0224: entering lockdown surfaces the DoD/STIG consent banner
@@ -9852,6 +15196,7 @@ function wire(): void {
         state.userRole = role;
         await bridge.saveRole(role).catch(() => null);
         applyRoleDefault(role);
+        syncImmersiveWithRole(role); // P-AVATAR.1: entering/leaving the lucid-agent role flips the stage
         fillSec("profile", secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }));
         showToast({ title: `${ROLE_META[role].label} view`, desc: ROLE_META[role].blurb, timeout: 2800 });
       }
@@ -9978,6 +15323,9 @@ function wire(): void {
       showToast({ title: on ? "Richer graph on" : "Richer graph off", desc: on ? "New turns use the model to extract semantic facts + relationships (one extra call per turn)." : "Back to offline pattern extraction (no model cost).", actions: [{ label: "OK" }], timeout: 3200 });
       return;
     }
+    // P-KGUI.3 (ADR-0336): the hero KG row opens the existing picker, anchored on the button itself.
+    const kgHero = t.closest("#personalKgPick");
+    if (kgHero instanceof HTMLElement) { void openKgPicker(kgHero); return; }
     if (t.closest("#personalSetup") || t.closest("#personalUnlock")) {
       const setup = !!t.closest("#personalSetup");
       const pass = ($("#personalPass", $("#setBody")!) as HTMLInputElement)?.value ?? "";
@@ -10072,91 +15420,10 @@ function wire(): void {
     }
     const clear = t.closest("[data-clearkey]") as HTMLElement | null;
     if (clear) { await bridge.saveKey(clear.dataset.clearkey!, ""); void renderSettings(); return; }
+    const guide = t.closest("[data-guide]") as HTMLElement | null;
+    if (guide) { await openGuide(guide.dataset.guide!); return; }
     const oauth = t.closest("[data-oauth]") as HTMLElement | null;
-    if (oauth) {
-      const oauthId = oauth.dataset.oauth!;
-      // GitHub Copilot (ADR-0210) is a device-code flow whose broker first asks for a GitHub Enterprise
-      // domain (blank = github.com), then shows a one-time code the user enters ON GitHub's device page
-      // (nothing is pasted back here). So drive it in two inline steps: collect the optional domain, then
-      // start the sign-in and surface the code from the broker's output.
-      if (oauthId === "github-copilot") {
-        const card = oauth.closest(".set-card") as HTMLElement | null;
-        if (card && !card.querySelector(".copilot-oauth-box")) {
-          const box = el(`<div class="copilot-oauth-box prov-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
-            <input class="prov-key" id="ghDomain" type="text" placeholder="GitHub Enterprise domain (blank for github.com)" autocomplete="off" style="font-family:var(--mono)" />
-            <button class="btn-mini ok" id="ghCopilotStart">${icon("expand", 12)} Start Copilot sign-in</button>
-            <div class="copilot-oauth-out" id="ghCopilotOut" style="flex:1 1 100%;font-family:var(--mono);font-size:12px;white-space:pre-wrap;opacity:.9"></div></div>`);
-          card.appendChild(box);
-          const start = $("#ghCopilotStart", card)!;
-          start.addEventListener("click", async () => {
-            const domain = ($("#ghDomain", card) as HTMLInputElement | null)?.value.trim() ?? "";
-            const out = $("#ghCopilotOut", card) as HTMLElement | null;
-            if (out) out.textContent = "Starting sign-in…";
-            const rr = await bridge.oauthLogin("github-copilot", domain);
-            if (rr?.url) void openAuthUrl(rr.url);
-            // The broker prints the verification URL + the one-time code; show that text so the user can
-            // read the code and type it into the opened GitHub device page. Nothing is pasted back here.
-            if (out) out.textContent = (rr?.output?.trim() || "Follow the sign-in in your browser.") + "\n\nEnter the code above on the opened GitHub page. This card updates automatically once Copilot is connected.";
-            showToast({ title: "Finish in your browser", desc: "Enter the one-time code on the GitHub device page, then authorize Copilot.", actions: [{ label: "OK" }], timeout: 0 });
-            setTimeout(() => void renderSettings(), 4000);
-            void pollOauthThenRefresh("github-copilot");
-          });
-          ($("#ghDomain", card) as HTMLInputElement | null)?.focus();
-        }
-        return;
-      }
-      const r = await bridge.oauthLogin(oauthId);
-      if (r?.url) void openAuthUrl(r.url);
-      // Device-flow providers show a code on the provider's page that the user must paste back. Redirect-flow
-      // providers (OpenAI, Anthropic, Google) complete silently via the localhost callback. (GitHub Copilot
-      // is also device-flow but has its own two-step branch above — it isn't listed here.)
-      const DEVICE_FLOW_IDS = new Set(["xai-oauth", "openai-codex-device"]);
-      if (DEVICE_FLOW_IDS.has(oauthId)) {
-        showToast({
-          title: "Paste the code from the sign-in page",
-          desc: "Copy the code shown in your browser, paste it below, and click Submit. If no page opened, use “Open sign-in page” below.",
-          actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
-          timeout: 0, // persistent until dismissed
-        });
-        // Inject a device-code input into the provider card itself
-        const card = oauth.closest(".set-card") as HTMLElement | null;
-        if (card) {
-          let box = card.querySelector(".oauth-device-box") as HTMLElement | null;
-          if (!box) {
-            box = el(`<div class="oauth-device-box prov-row" style="margin-top:8px">
-              <input class="prov-key" id="deviceCode_${oauthId}" type="text" placeholder="Paste device code here…" autocomplete="off" style="font-family:var(--mono)" />
-              <button class="btn-mini ok" id="deviceSubmit_${oauthId}">${icon("check", 12)} Submit</button></div>`);
-            card.appendChild(box);
-            const submit = $(`#deviceSubmit_${oauthId}`, card)!;
-            submit.addEventListener("click", async () => {
-              const inp = $(`#deviceCode_${oauthId}`, card) as HTMLInputElement;
-              const code = inp?.value.trim();
-              if (!code) return;
-              const sr = await bridge.oauthCode(oauthId, code);
-              if (sr?.sent) {
-                showToast({ title: "Code sent", desc: "Waiting for the provider to verify…", timeout: 4000 });
-                box?.remove();
-              } else {
-                showToast({ tone: "danger", title: "Couldn't send code", desc: sr?.reason ?? "The broker may have exited. Try again.", actions: [{ label: "OK" }], timeout: 6000 });
-              }
-            });
-          }
-          ($(`#deviceCode_${oauthId}`, card) as HTMLInputElement)?.focus();
-        }
-      } else {
-        showToast({
-          title: "Finish signing in in your browser",
-          desc: r?.url
-            ? "A sign-in page should have opened. If it didn't, click “Open sign-in page” (or Copy URL and paste it into your browser). The model list updates automatically once you finish."
-            : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."),
-          actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
-          timeout: r?.url ? 0 : 6000, // persist while the user completes the browser step
-        });
-      }
-      setTimeout(() => void renderSettings(), 4000);
-      void pollOauthThenRefresh(oauthId); // watch for completion, then refresh models
-      return;
-    }
+    if (oauth) { await startProviderOauth(oauth.dataset.oauth!, oauth.closest(".set-card"), () => void renderSettings()); return; }
     const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
     if (logout) { await bridge.oauthLogout(logout.dataset.oauthLogout!); void renderSettings(); return; }
     const logoutAll = t.closest("[data-oauth-logout-all]") as HTMLElement | null;
@@ -10211,6 +15478,52 @@ function wire(): void {
     if (dnsAdd) { openWhitelistQuickAdd(dnsAdd, dnsAdd.dataset.dnsAdd!); return; } // P-NETWL.4
     const head = (e.target as HTMLElement).closest("[data-acc-toggle]") as HTMLElement | null;
     if (head) { const k = head.dataset.accToggle!; const acc = head.closest(".acc")!; const open = acc.classList.toggle("open"); open ? OPEN.add(k) : OPEN.delete(k); return; }
+    // P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal, audited
+    // server-side). The row leaves the list only when the ACE really came off — a failed revoke keeps
+    // it visible so a persistent host mutation can never silently outlive the panel.
+    // P-SANDBOX.12 (ADR-0390): the sandbox switch. The server decides (policy wins, UAC when needed),
+    // restarts the agent, and audits; the panel just reports what actually happened.
+    const sbxMode = (e.target as HTMLElement).closest("[data-sbx-mode]") as HTMLElement | null;
+    if (sbxMode) {
+      const mode = sbxMode.dataset.sbxMode as "off" | "auto" | "unregister";
+      (sbxMode as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.sandboxMode(mode);
+        await refresh();
+        showToast(r?.changed
+          ? { title: mode === "off" ? "Sandbox off" : mode === "auto" ? "Sandbox on" : "Registration removed", desc: r.detail, actions: [{ label: "OK" }], timeout: 5000 }
+          : { tone: "warn", title: "Sandbox unchanged", desc: r?.detail || "The change did not apply.", actions: [{ label: "OK" }], timeout: 6000 });
+      })();
+      return;
+    }
+    // P-SANDBOX.13 (ADR-0391): Add folder. The engine opens the Explorer picker and grants only the pick.
+    const sbxAdd = (e.target as HTMLElement).closest("[data-sbx-add]") as HTMLElement | null;
+    if (sbxAdd) {
+      const mode = sbxAdd.dataset.sbxAdd === "rw" ? "rw" : "rx";
+      (sbxAdd as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.sandboxGrantAdd(mode);
+        await refresh();
+        if (r?.cancelled) return; // a deliberate cancel needs no toast
+        showToast(r?.added
+          ? { title: "Folder added", desc: r.detail, actions: [{ label: "OK" }], timeout: 5000 }
+          : { tone: "warn", title: "Folder not added", desc: r?.detail || "The permission did not apply.", actions: [{ label: "OK" }], timeout: 6000 });
+      })();
+      return;
+    }
+    const grantRevoke = (e.target as HTMLElement).closest("[data-grant-revoke]") as HTMLElement | null;
+    if (grantRevoke) {
+      const path = grantRevoke.dataset.grantRevoke!;
+      (grantRevoke as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.sandboxGrantRevoke(path);
+        await refresh(); // repaint the grants list (row gone on success, kept on failure)
+        showToast(r?.revoked
+          ? { title: "Grant revoked", desc: `The sandbox no longer has access to ${path}.`, actions: [{ label: "OK" }], timeout: 4000 }
+          : { tone: "warn", title: "Revoke failed", desc: r?.detail || "The ACL change did not apply. The grant stays listed.", actions: [{ label: "OK" }], timeout: 5000 });
+      })();
+      return;
+    }
     // Approve & retry: the audited fail-closed override for one live gate block (ADR-0019 C).
     const approve = (e.target as HTMLElement).closest("[data-approve]") as HTMLElement | null;
     if (approve) {
@@ -10245,6 +15558,34 @@ function wire(): void {
           title: "Dismissed · still blocked",
           desc: "Moved to the Dismissed section. The call stays blocked; the audit record is kept.",
           meta: `tool=${r.tool} · dismissed`,
+          actions: [{ label: "OK" }], timeout: 4000,
+        });
+      })();
+      return;
+    }
+    // Dismiss all: the bulk form of the same acknowledge-without-release, for an unusable 100-row queue.
+    // TWO-STEP, matching the fleet lane's stop-then-dismiss precedent (ADR-0313): the first click arms
+    // the button and re-labels it with the count, the second executes. Clicking any other Dismiss /
+    // Approve button, or any refresh(), re-renders the section and disarms it, so an armed button is
+    // never left lying around. Nothing is released here either: every call stays blocked, audit kept.
+    const dismissAll = (e.target as HTMLElement).closest("[data-dismiss-all]") as HTMLButtonElement | null;
+    if (dismissAll) {
+      const n = state.security?.live?.quarantined.length ?? 0;
+      if (!n) { showToast({ title: "Already handled", desc: "There are no active blocks left to dismiss.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+      if (dismissAll.dataset.armed !== "1") {
+        dismissAll.dataset.armed = "1"; // second click executes; a re-render drops the flag with the node
+        dismissAll.innerHTML = `${icon("close", 13)} Confirm: dismiss ${n}?`;
+        return;
+      }
+      dismissAll.disabled = true;
+      void (async () => {
+        const r = await bridge.securityDismissAll();
+        await refresh(); // drops them from the active list + counts, into the Dismissed section
+        if (!r || !r.dismissed) { showToast({ title: "Already handled", desc: "Those blocks were already released or dismissed.", actions: [{ label: "OK" }], timeout: 3000 }); return; }
+        showToast({
+          title: `${r.dismissed} dismissed \u00b7 still blocked`,
+          desc: "Moved to the Dismissed section. Every one of those calls stays blocked; all audit records are kept.",
+          meta: `${r.dismissed} acknowledged \u00b7 nothing released`,
           actions: [{ label: "OK" }], timeout: 4000,
         });
       })();
@@ -10339,10 +15680,16 @@ function wire(): void {
   // P-ACP.4: while a turn runs the Send button is a Stop control (interrupt the turn); else it sends.
   $("#send")!.addEventListener("click", () => { if (state.streaming) void stopTurn(); else void send(); });
 
+  // P-FLEET.L8: paint the (absent) badge once at boot, so the capability mask is applied from the start.
+  renderComposerTarget();
+
   // Jump-to-latest: show the catch-up arrow on user scroll / resize; click pages down one screen.
   $("#chat")?.addEventListener("scroll", scheduleJump, { passive: true });
   window.addEventListener("resize", scheduleJump, { passive: true });
+  const arcadeHost = $("#agentArcadeHost");
+  if (arcadeHost) new ResizeObserver(syncArcadeGap).observe(arcadeHost);
   $("#jumpDown")?.addEventListener("click", jumpDownOnePage);
+  $("#jumpEnd")?.addEventListener("click", jumpToEnd);
 
   // P-IDE.4: "View in IDE" on chat code blocks → open the read-only Monaco panel (delegated, one
   // listener for all current + future blocks). Exclusivity: opening the IDE closes Settings + KG.
@@ -10357,7 +15704,7 @@ function wire(): void {
       showToast({ title: "Added to the composer", desc: "Review it and press send when ready.", timeout: 2500 });
     },
     pickSavePath: async (suggested) => {
-      const dir = await openFolderBrowser({ title: "Choose a folder to save into", confirm: "Save here" });
+      const dir = await pickFolderDialog({ title: "Choose a folder to save into", confirm: "Save here" });
       if (!dir) return null;
       const name = await promptText({ title: "Save as", label: "File name", value: suggested, placeholder: "filename.ext" });
       if (!name) return null;
@@ -10393,18 +15740,79 @@ function wire(): void {
     if (t.closest("[data-asksage-refresh]")) { void refreshAsksage(); return; }
     if (t.closest("[data-budget-refresh]")) void refreshBudget(true);
   });
-  $("#newSession")!.addEventListener("click", () => newSession());
-  const w = (window as any).lucid?.win;
-  $("#winMin")!.addEventListener("click", () => w?.minimize?.());
-  $("#winMax")!.addEventListener("click", () => w?.toggleMaximize?.());
-  $("#winClose")!.addEventListener("click", () => w?.close?.());
+  $("#newSession")!.addEventListener("click", () => confirmNewSession());
+  $("#winMin")!.addEventListener("click", () => window.lucid?.win?.minimize());
+  $("#winMax")!.addEventListener("click", () => window.lucid?.win?.toggleMaximize());
+  $("#winClose")!.addEventListener("click", () => confirmWindowClose());
+}
+
+// ───────────────────────── mis-click guards (P-MASCOT.5) ─────────────────────────
+// Reported live: the titlebar and side-panel controls sit so close together that Maximise/Collapse
+// overshoots land on Close/New session, both of which destroyed work with no confirmation and no undo.
+// The buttons are also spaced apart in styles.css; this is the second half of the fix. Nothing prompts
+// when there is nothing to lose, so the common case stays one click.
+
+function confirmWindowClose(): void {
+  const draft = (($("#input") as HTMLTextAreaElement | null)?.value ?? "").trim();
+  const reason = state.streaming
+    ? "A turn is still streaming and will be cut off."
+    : draft ? "You have an unsent prompt in the composer." : "";
+  if (!reason) { window.lucid?.win?.close(); return; }
+  showToast({
+    title: "Close LUCID?",
+    desc: `${reason} Closing now loses it.`,
+    tone: "warn",
+    actions: [{ label: "Close anyway", kind: "danger", run: () => window.lucid?.win?.close() }, { label: "Stay" }],
+    timeout: 8000,
+  });
+}
+
+function confirmNewSession(): void {
+  const dirty = $$("#thread .msg").length > 0 || (($("#input") as HTMLTextAreaElement | null)?.value ?? "").trim();
+  if (!dirty) { newSession(); return; }
+  showToast({
+    title: "Start a new session?",
+    desc: "The current conversation leaves the composer view. It stays in Sessions history, so you can reopen it.",
+    tone: "warn",
+    actions: [{ label: "New session", kind: "danger", run: () => newSession() }, { label: "Cancel" }],
+    timeout: 8000,
+  });
 }
 
 // ───────────────────────── palette actions ─────────────────────────
 function newSession(): void {
+  const owner = leaveTurnView();
+  setRecoveryChecking(true); setSendEnabled();
   seedThread(); state.liveUsage = null;
-  void bridge.newSession().then(() => loadSessionMode()); // ADR-0219: fresh session defaults to CUI under lockdown
+  resetAgentPreviewLane(); // P-PREVIEW.19 (ADR-0339): the agent's preview belongs to the conversation that ended
+  void bridge.newSession().then(() => { if (owner !== turnViewEpoch) return; setRecoveryChecking(false); setSendEnabled(); void loadSessionMode(); });
   renderStatus(); $("#input")?.focus();
+}
+
+/** P-PREVIEW.19 (ADR-0339): drop the AGENT preview lane at a session boundary, and leave YOURS alone.
+ *
+ *  A new chat session does not reload the window, so without this every piece of preview state survives
+ *  into the next conversation: `lastPreviewablePath` keeps re-opening the panel, and the agent frame keeps
+ *  showing a document from a conversation the user has moved on from. The user's own tab is not
+ *  conversation-scoped and is not ours to close. */
+function resetAgentPreviewLane(): void {
+  ++agentPreviewRevision; // Invalidate pending probes even when the lane is already empty.
+  pendingAgentPreviewPath = "";
+  const { lanes, changed } = previewAfterNewSession({
+    yours: prevPathByLane.yours ?? "",
+    agent: prevPathByLane.agent ?? "",
+    lastPreviewable: state.lastPreviewablePath,
+  });
+  if (!changed) return; // nothing was carried, so no teardown and no repaint
+  state.lastPreviewablePath = lanes.lastPreviewable;
+  prevPathByLane.agent = lanes.agent;
+  prevKindByLane.agent = "";
+  // Unload the frame too: leaving a live document in a hidden iframe keeps its timers, audio and network
+  // running for a conversation that is over.
+  const af = laneFrame("agent");
+  if (af) { af.removeAttribute("srcdoc"); af.removeAttribute("src"); af.hidden = true; }
+  const dot = $("#prevAgentDot"); if (dot) dot.hidden = true; // no "new" badge for something we just dropped
+  if (previewOpen && prevLane === "agent") switchPrevLane(prevPathByLane.yours ? "yours" : "agent");
 }
 /** Drop an omp slash command into the composer (omp runs it on send via ACP). */
 function runCommand(c: OmpCommand): void {
@@ -10416,6 +15824,7 @@ function runCommand(c: OmpCommand): void {
 const palette = createPalette(() => {
   const acts: Action[] = [
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
+    { id: "prov", title: "Connect a provider…", icon: "expand", hint: "providers", run: () => openProviderHub() }, // P-PROV.2: Provider Hub
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
@@ -10431,6 +15840,12 @@ const palette = createPalette(() => {
     { id: "side", title: "Toggle sidebar", icon: "layout", run: () => toggleSidebar() },
     { id: "insp", title: "Collapse / expand inspector (metrics rail)", icon: "collapse", run: () => setInspectorRail(!state.inspectorRail) },
     { id: "refresh", title: "Refresh dashboards now", icon: "refresh", run: () => refresh() },
+    // Mis-click safety: the titlebar buttons are 30px wide and two pixels apart, so every window
+    // action also has a keyboard route here. Close still runs the unsaved-work guard.
+    { id: "winmin", title: "Minimise window", icon: "minus", hint: "window", run: () => window.lucid?.win?.minimize() },
+    { id: "winmax", title: "Maximise / restore window", icon: "expand", hint: "window", run: () => window.lucid?.win?.toggleMaximize() },
+    { id: "winclose", title: "Close window", icon: "close", hint: "window", run: () => confirmWindowClose() },
+    { id: "stage", title: state.immersive ? "Leave the immersive stage" : "Enter the immersive stage", icon: "spark", hint: "Esc exits", run: () => setImmersive(!state.immersive) },
   ];
   const model = state.config.find((c) => c.id === "model");
   if (model) for (const o of model.options.slice(0, 10)) acts.push({ id: "m:" + o.value, title: `Model: ${o.name}`, icon: "spark", hint: o.value === model.currentValue ? "current" : "", run: () => applyConfig("model", o.value) });
@@ -10466,14 +15881,63 @@ function loadCachedConfig(): void {
     }
   } catch { /* ignore */ }
 }
-// P-IDE.1d: the live config can lag omp's session warm-up. getConfig() on the backend never blocks now
-// (it returns the current config and warms in the background), so the renderer RE-POLLS until the live
-// list lands. If it never does (a wedged session), we stop after CONFIG_WARM_MAX_TRIES and clear the
-// "updating…" spinner rather than leaving it frozen forever — the cached list stays usable.
-const CONFIG_WARM_MAX_TRIES = 6;
-const CONFIG_WARM_POLL_MS = 1500;
+// P-IDE.1d: the live config lags omp's session warm-up. getConfig() on the backend never blocks (it
+// returns the current config and warms in the background), so the renderer RE-POLLS until the live list
+// lands, then STOPS after a bounded budget so a wedged session doesn't spin "updating…" forever. The
+// budget is PER WARM CYCLE (config_warm.ts): a DELIBERATE load (boot, OAuth connect, key change, opening
+// a still-warming picker, manual refresh) re-arms it via newCycle=true; the re-poll continuation spends
+// it via newCycle=false. Before this, a monotonic lifetime counter reset only on success meant a slow
+// cold boot that spent the budget left the post-OAuth refresh (cold omp again) unable to retry, so the
+// just-connected provider's models never appeared until a manual refresh.
 let configWarmTries = 0;
-async function loadConfig(): Promise<void> {
+let configWarmTimer: number | null = null; // the single scheduled re-poll (one chain at a time)
+// P-MODEL.2: once per launch, land on the model the user should actually be on. The order is a strict
+// preference ladder, and every rung is there because the previous behaviour got it wrong:
+//
+//   1. chosenModel  - an EXPLICIT picker click. A deliberate choice is never re-litigated.
+//   2. lastModel    - the model the COMPOSER last ran on. This rung is the fix for the reported bug.
+//                     The old code consulted only chosenModel, so a user who switched models any way
+//                     other than clicking a picker row had an empty chosenModel and got re-defaulted by
+//                     a heuristic on every single launch. "Use the last model I was using" is what the
+//                     user asked for, and it is also what the backend's resolveStartupModel already
+//                     does, so consulting it here stops the renderer from fighting the backend.
+//   3. curated default - preferredDefaultModel walks DEFAULT_MODEL_PREFERENCE (Opus 5 first). This is
+//                     what a genuinely NEW install lands on. It replaced topModel-within-the-current-
+//                     family, which ranked by raw version digits and therefore produced an arbitrary
+//                     answer across providers (a "6" beating a "5" tells you nothing when the scales
+//                     are unrelated). A new flagship is now a one-line edit to that curated list.
+//
+// Runs only on a real ADOPTED list, never over a live turn, and under AskSage lockdown it stays on a gov
+// model. Fire-and-forget, guarded once per launch.
+let defaultModelApplied = false;
+async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promise<void> {
+  if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming || state.userRole === "lucid-agent") return;
+  defaultModelApplied = true;
+  // loadAsksage / auth race loadConfig at boot; both gate what's selectable, so make sure they're known.
+  if (state.asksage == null) { const a = await bridge.asksage().catch(() => null); if (a) state.asksage = a; }
+  if (!state.auth) { const au = await bridge.auth().catch(() => null); if (au) state.auth = au; }
+  const [chosen, last] = await Promise.all([
+    bridge.chosenModel().catch(() => ""),
+    bridge.lastModel().catch(() => ""),
+  ]);
+  if (agentPrior || state.streaming) return; // the role was entered mid-await: the tier owns the model now
+  const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value));
+  if (!candidates.length) return;
+  const inList = (v: string) => !!v && candidates.some((o) => o.value === v);
+  // A remembered model only wins while it is STILL OFFERED and still selectable: a revoked key or a
+  // retired model must fall through to the curated default rather than pin the picker to a dead id.
+  let desired = inList(chosen) ? chosen
+    : inList(last) ? last
+    : (preferredDefaultModel(candidates)?.value ?? "");
+  if (state.asksage?.only && desired && !isGovModel(desired)) {
+    // Lockdown overrides even a remembered pick: a CUI session may not route direct. Prefer the curated
+    // gov default, then any gov model at all, and only then give up (the backend clamp is authoritative).
+    desired = preferredDefaultModel(candidates, isGovModel)?.value ?? topModel(candidates, isGovModel)?.value ?? desired;
+  }
+  if (desired && desired !== modelOpt.currentValue) await applyConfig("model", desired, { system: true });
+}
+async function loadConfig(newCycle = true): Promise<void> {
+  if (newCycle && configWarmTimer !== null) { window.clearTimeout(configWarmTimer); configWarmTimer = null; }
   try {
     const live = await bridge.config();
     state.commands = await bridge.commands();
@@ -10485,22 +15949,31 @@ async function loadConfig(): Promise<void> {
     // an empty list - keep the cached list visible (spinner stays) rather than blanking the picker. When
     // omp IS ready, the live config replaces the cache (so a revoked key/OAuth's models drop out).
     const liveModel = live?.find((c) => c.id === "model");
-    if (live && live.length && liveModel && liveModel.options.length) {
-      state.config = live;
+    const hasLiveModels = !!(live && live.length && liveModel && liveModel.options.length);
+    const step = warmStep(configWarmTries, hasLiveModels, newCycle);
+    configWarmTries = step.tries;
+    if (step.action === "adopt") {
+      state.config = live!;
       state.configCached = false;
+      state.configWarming = false;
       cacheConfig();
-      configWarmTries = 0;
-    } else if (configWarmTries < CONFIG_WARM_MAX_TRIES) {
-      // Session still warming — re-poll so the picker self-heals when the live list lands (non-blocking).
-      configWarmTries++;
-      setTimeout(() => void loadConfig(), CONFIG_WARM_POLL_MS);
-    } else if (state.configCached) {
+    } else if (step.action === "repoll") {
+      // Session still warming; keep the spinner up and re-poll so the picker self-heals when the live
+      // list lands (non-blocking). newCycle=false: this continuation spends the cycle's budget.
+      state.configWarming = true;
+      configWarmTimer = window.setTimeout(() => { configWarmTimer = null; void loadConfig(false); }, CONFIG_WARM_POLL_MS);
+    } else {
       // Gave up warming (session likely wedged). Stop the spinner so it isn't stuck on "updating…" forever;
-      // the cached list stays usable and "Refresh models" retries. Root cause is tracked separately.
+      // whatever list we have stays usable and "Refresh models" / reopening the picker re-arms a new cycle.
       state.configCached = false;
+      state.configWarming = false;
     }
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
+    if (step.action === "adopt") {
+      if (state.userRole === "lucid-agent") void applyAgentTier().catch(() => {});
+      else void maybeApplyDefaultModel(model);
+    } // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
     updateComposerTools();
     void syncMode();
     pickerRedraw?.(); // if a picker is open on the cached list, refresh it with the live one
@@ -10567,13 +16040,35 @@ function authUrlActions(url: string): { label: string; kind?: "ok" | "danger"; r
  *  respawned omp when the broker exited, so a plain loadConfig() surfaces the new models. */
 async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const startedAt = Date.now();
   let resolved = false;
   const check = async (): Promise<boolean> => {
     if (resolved) return true;
     const a = await bridge.auth();
     const prov = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId);
+    // The broker exited WITHOUT a credential: stop spinning and say why. The browser's "Authentication
+    // Successful" page renders before the token exchange + provider onboarding run, so this toast is
+    // the user's ONLY evidence of what actually failed (e.g. Google's "requires GOOGLE_CLOUD_PROJECT"
+    // abort for Workspace accounts). Only a failure from THIS attempt counts - a minute of slack covers
+    // the server/renderer clock being the same machine but the record predating our first poll.
+    if (!prov?.oauthActive && prov?.oauthError && prov.oauthError.at >= startedAt - 60_000) {
+      resolved = true;
+      const gcpHint = /GOOGLE_CLOUD_PROJECT/i.test(prov.oauthError.message)
+        ? " Fill the \u201cGCP project ID\u201d field on this provider's card (a project with the Gemini for Google Cloud API enabled), save it, then retry."
+        : "";
+      if (a) state.auth = a; // let renderSettings paint the card's failure note without a second fetch
+      if (state.settingsOpen) renderSettings();
+      showToast({ tone: "danger", title: `${prov.name}: sign-in failed`, desc: prov.oauthError.message + gcpHint, actions: [{ label: "OK" }], timeout: 0 });
+      return true;
+    }
     if (prov?.oauthActive) {
       resolved = true;
+      // Force the omp respawn before re-reading the model list. The badge reads the credential vault
+      // directly, so it flips green the moment the token lands - but omp still holds the model list it
+      // built at spawn, and a broker that lingers instead of exiting never triggers the server-side
+      // respawn. A plain loadConfig() would then show a stale picker underneath a toast claiming the
+      // models updated. refreshConfig() respawns first; loadConfig() then applies the fresh state.
+      try { await bridge.refreshConfig(); } catch { /* fall through: loadConfig still refreshes what it can */ }
       await loadConfig();
       if (state.settingsOpen) renderSettings();
       showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
@@ -10593,15 +16088,23 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   } finally { document.removeEventListener("visibilitychange", onVisible); }
 }
 
-async function applyConfig(configId: string, value: string): Promise<void> {
+async function applyConfig(configId: string, value: string, opts: { system?: boolean; confirm?: boolean } = {}): Promise<void> {
+  if (configId === "model" && !opts.system && state.userRole === "lucid-agent" && !state.streaming) {
+    value = resolveAgentTierModel(modelOptions(), value, agentTier) ?? value;
+  }
+  const previousModel = state.model;
   // P-ACP.2/3: the mode control is the client 3-way Plan/Ask/Agent; it sets omp's session mode +
   // the permission posture in one call, not an omp config option.
   if (configId === "mode") {
-    const ui = (value === "ask" || value === "plan" ? value : "agent") as "agent" | "ask" | "plan";
+    // CREATOR-0: `creator` is only reachable in a Creator build; anywhere else it folds to `agent`, and
+    // the backend re-normalizes independently (a forged POST cannot open a surface this build lacks).
+    const creatorBuild = !!state.buildInfo?.creatorBuild;
+    const ui = value === "ask" || value === "plan" ? value : value === "creator" && creatorBuild ? "creator" : "agent";
     state.uiMode = ui; // optimistic
     try { const m = await bridge.setUiMode(ui); if (m?.ui) state.uiMode = m.ui; } catch { /* keep optimistic */ }
     updateComposerTools();
-    showToast({ title: `Mode → ${MODE_UI_OPTS.find((o) => o.value === state.uiMode)?.name ?? state.uiMode}`, desc: MODE_DESC[state.uiMode] ?? "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
+    if (state.uiMode === "creator") openCreatorStudio();
+    showToast({ title: `Mode \u2192 ${modeUiOptions(creatorBuild).find((o) => o.value === state.uiMode)?.name ?? state.uiMode}`, desc: MODE_DESC[state.uiMode] ?? "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
     return;
   }
   const opt = state.config.find((c) => c.id === configId);
@@ -10613,19 +16116,41 @@ async function applyConfig(configId: string, value: string): Promise<void> {
   if (opt) opt.currentValue = value;
   if (configId === "model") { state.model = value; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(value); renderStatus(); if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); /* P-COLLAB.14: mirror to direct-P2P edit guests */ }
   updateComposerTools();
-  void bridge.setConfig(configId, value)
+  // P-MODELDEF: a genuine USER pick becomes the sticky default (restored on the next launch). A SYSTEM
+  // switch (lockdown clamp, no-response fallback, collab-guest mirror, boot default-select) never does.
+  if (configId === "model" && !opts.system) void bridge.setChosenModel(value).catch(() => {});
+  const configured = bridge.setConfig(configId, value)
     .then((cfg) => {
+      if (opts.confirm && cfg.find((c) => c.id === configId)?.currentValue !== value) throw new Error("The engine did not confirm the selected model");
       state.config = cfg;
       const o = state.config.find((c) => c.id === configId); if (o) o.currentValue = value;
       updateComposerTools();
     })
-    .catch(() => showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 }));
-  // P-IDE.1e (ADR-0109): selecting Fable 5 raises a persistent privacy notice (no absolute privacy from the
-  // U.S. government) instead of the routine "applied" toast.
-  if (configId === "model" && shortModelId(value) === FABLE_ID) {
-    showToast({ title: "Fable 5 selected - privacy notice", desc: `${FABLE_PRIVACY_WARN} New turns use Fable 5; you can switch models anytime.`, tone: "danger", actions: [{ label: "I understand" }], timeout: 0 });
+    .catch((error) => {
+      if (opts.confirm && configId === "model" && state.model === value) {
+        state.model = previousModel;
+        if (opt) opt.currentValue = previousModel;
+        const label = $("#modelName"); if (label) label.textContent = modelLabel(previousModel);
+        renderStatus(); if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); // undo the optimistic branch everywhere it painted
+        updateComposerTools();
+      }
+      showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 });
+      if (opts.confirm) throw error;
+    });
+  if (opts.confirm) await configured;
+  // P-IDE.1e (ADR-0109) / P-MODEL.2: selecting an API-only Claude model (Fable / Mythos) raises a
+  // persistent notice instead of the routine "applied" toast: no absolute privacy from the U.S.
+  // government, AND pay-as-you-go billing outside the plan's included usage.
+  if (configId === "model" && needsClaudeCredential(value)) {
+    // Explicit pick raises a persistent modal; a SYSTEM select (e.g. the boot default) shows a brief timed
+    // notice so a serious warning is not a blocking modal on every launch.
+    // Name the model from its own label rather than a hardcoded "Fable 5", so 5.1 and Mythos read right.
+    const warnDesc = `${FABLE_PRIVACY_WARN} It also bills as pay-as-you-go API credits, outside your plan's included usage.`;
+    if (opts.system) showToast({ title: `${label} selected - privacy and billing notice`, desc: warnDesc, tone: "danger", timeout: 8000 });
+    else showToast({ title: `${label} selected - privacy and billing notice`, desc: `${warnDesc} New turns use this model; you can switch anytime.`, tone: "danger", actions: [{ label: "I understand" }], timeout: 0 });
     return;
   }
+  if (opts.system) return; // a system switch is automatic - no routine "applied" toast noise on boot
   showToast({ title: `${opt?.name ?? configId} → ${label}`, desc: configId === "model" ? "New turns use this model." : "Applied to the active session.", actions: [{ label: "OK" }], timeout: 2400 });
 }
 
@@ -10636,21 +16161,32 @@ const ITAR_REASON = "Currently unavailable - restricted under U.S. ITAR export c
 const UNAVAILABLE: Record<string, string> = {
   "claude-mythos-5": ITAR_REASON, // Mythos 5 stays ITAR-gated until cleared.
 };
-// P-IDE.1e (ADR-0109): Fable 5 is enabled, but ONLY when a Claude account is connected (it routes through
-// Anthropic), and it carries a U.S.-government privacy notice.
-const FABLE_ID = "claude-fable-5";
-const FABLE_NEEDS_AUTH = "Connect a Claude account to enable Fable 5 - sign in with Claude OAuth or add an ANTHROPIC_API_KEY in Providers.";
+// P-IDE.1e (ADR-0109) / P-MODEL.2: the Fable and Mythos families are enabled, but ONLY when a Claude
+// account is connected (they route through Anthropic), and they carry a U.S.-government privacy notice.
+//
+// P-MODEL.2 widened this from the single hardcoded `claude-fable-5` id to the whole API-ONLY family, via
+// model_families.isApiOnlyModel. The reason is billing, not branding: on Pro and standard Team seats these
+// models draw on pay-as-you-go credits and are NOT included in the plan's usage limits, so they need a
+// real credential and the user needs to be told before the first call, not after the invoice. Keying on
+// one literal id meant Fable 5.1 shipped ungated and unwarned the moment it appeared in a picker.
+const FABLE_NEEDS_AUTH = "Connect a Claude account to enable this model - sign in with Claude OAuth or add an ANTHROPIC_API_KEY in Providers. It bills as pay-as-you-go API credits, not from your plan's included usage.";
 const FABLE_PRIVACY_WARN = "Chat history for this model has NO expectation of absolute privacy from the U.S. government.";
-/** Is a Claude (Anthropic) OAuth session or API key connected? Gates Fable 5. */
+/** Is a Claude (Anthropic) OAuth session or API key connected? Gates the API-only Claude models. */
 function claudeAuthed(): boolean {
   const m = (state.auth?.majors ?? []).find((x) => x.id === "anthropic");
   return !!m && (!!m.oauthActive || !!m.keySet);
 }
-/** Why a model is non-selectable, or undefined if it's available. Fable 5 needs a connected Claude account. */
+/** Does this model need a DIRECT Anthropic credential to be selectable? True for the API-only Fable /
+ *  Mythos families on the direct route. A GOV-routed copy is excluded: it draws on the AskSage gateway's
+ *  own credential and quota, so an Anthropic key is irrelevant to whether it can run. */
+function needsClaudeCredential(value: string): boolean {
+  return isApiOnlyModel(value) && !isGovModel(value);
+}
+/** Why a model is non-selectable, or undefined if it's available. The API-only Claude models (Fable /
+ *  Mythos) need a connected Claude account; ITAR-gated ids are listed in UNAVAILABLE. */
 function unavailableReason(value: string): string | undefined {
-  const short = shortModelId(value);
-  if (short === FABLE_ID) return claudeAuthed() ? undefined : FABLE_NEEDS_AUTH;
-  return UNAVAILABLE[short];
+  if (needsClaudeCredential(value)) return claudeAuthed() ? undefined : FABLE_NEEDS_AUTH;
+  return UNAVAILABLE[shortModelId(value)];
 }
 // Advisory shown on gov-gateway (AskSage) models until they're cleared for production use.
 const GOV_ADVISORY = "Government (AskSage) model - restricted to internal prototype use only until cleared for production by the U.S. government.";
@@ -10690,8 +16226,9 @@ const modelRow = (o: { value: string; name: string }, sel: string) => {
   const iq = `<span class="row-iq" aria-label="Intelligence ${info.iq} of 5">${"★".repeat(info.iq)}<span class="row-iq-dim">${"☆".repeat(5 - info.iq)}</span></span>`;
   const ctxLbl = info.ctx ?? "";
   const ctx = ctxLbl ? `<span class="row-ctx" data-tip="Context window">${esc(ctxLbl)}</span>` : "";
-  // P-IDE.1e (ADR-0109): a small privacy marker on the Fable 5 row (the hover card + selection toast carry the full notice).
-  const warnPill = shortModelId(o.value) === FABLE_ID ? `<span class="row-warn" data-tip="U.S.-gov privacy notice|${esc(FABLE_PRIVACY_WARN)}">${icon("shield", 10)}</span>` : "";
+  // P-IDE.1e (ADR-0109) / P-MODEL.2: a small privacy marker on every API-only Claude row (the hover card
+  // + selection toast carry the full notice). Family-keyed, so Fable 5.1 and Mythos get it too.
+  const warnPill = needsClaudeCredential(o.value) ? `<span class="row-warn" data-tip="U.S.-gov privacy notice|${esc(FABLE_PRIVACY_WARN)}">${icon("shield", 10)}</span>` : "";
   // P-FAV.1: the star toggles membership in the pinned Favorites section; it must never SELECT the
   // row, so the click handlers check [data-fav] before [data-val].
   const fav = favSet.has(o.value);
@@ -10743,7 +16280,31 @@ function familyListHTML(models: { value: string; name: string }[], sel: string, 
       <button class="cfg-fam-h" type="button" data-fam-toggle="favs"><span class="cfg-fam-name">${icon("star", 12, "fam-star")} Favorites</span><span class="cfg-fam-n">${starred.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
       <div class="cfg-fam-list">${starred.map((o) => modelRow(o, sel)).join("")}</div>
     </div>`;
-  return favSec + groupByFamily(filtered, order).map(({ fam, models: ms }) => {
+  // P-LOCALPICK.1 (ADR-0371): the user's OWN hardware pins to the VERY TOP, above Favorites. A
+  // configured local provider is the strongest intent signal in the app (nobody wires a DGX over a
+  // VPN by accident), and its models are otherwise the least findable: no family regex matches a
+  // self-hosted id, so they sank to "Other models" at the bottom. Collapsible like any family and the
+  // collapse persists; local models render ONLY here, never duplicated into a family section, because
+  // unlike Favorites there is no family muscle memory to preserve for an id no family claims.
+  //
+  // The pending row is the other half. A freshly Discovered model is ABSENT from omp's report until
+  // the app restarts, and the only explanation lived in a Settings banner three surfaces away, so the
+  // picker looked simply broken ("I discovered it, it does not show up"). Now the section itself says
+  // which declared models a restart will load, searching included, with the restart one click away.
+  const localPrefixes = localPrefixSet(state.localProviders ?? []);
+  const { local: localRows, rest } = splitLocalModels(filtered, localPrefixes);
+  // Pending rows obey the query too: searching "glm" MUST surface a pending GLM (that is the exact
+  // reported confusion), while searching "claude" must not show unrelated local noise.
+  const pending = filterModels(pendingLocalModels(state.localProviders ?? [], models), q);
+  const pendingRows = pending.map((p) => `<div class="cfg-local-pending" title="${esc(p.value)}">
+      ${icon("clock", 12)}<span><b>${esc(p.name)}</b> loads after a restart</span>
+      <button class="btn-mini" type="button" data-lp-apply>Restart now</button>
+    </div>`).join("");
+  const localSec = localRows.length === 0 && pending.length === 0 ? "" : `<div class="cfg-fam cfg-fam-local${!searching && collapsed.has("local") ? " collapsed" : ""}" data-fam="local">
+      <button class="cfg-fam-h" type="button" data-fam-toggle="local"><span class="cfg-fam-name">${icon("bolt", 12, "fam-local")} Local (self-hosted)</span><span class="cfg-fam-n">${localRows.length + pending.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
+      <div class="cfg-fam-list">${localRows.map((o) => modelRow(o, sel)).join("")}${pendingRows}</div>
+    </div>`;
+  return localSec + favSec + groupByFamily(rest, order).map(({ fam, models: ms }) => {
     const isCollapsed = !searching && collapsed.has(fam.id);
     return `<div class="cfg-fam${isCollapsed ? " collapsed" : ""}" data-fam="${fam.id}">
       <button class="cfg-fam-h" type="button" data-fam-toggle="${fam.id}"><span class="cfg-fam-name">${esc(fam.label)}</span><span class="cfg-fam-n">${ms.length}</span>${icon("chevron", 13, "cfg-fam-chev")}</button>
@@ -10759,14 +16320,37 @@ function familyListHTML(models: { value: string; name: string }[], sel: string, 
 interface ModelInfo { exp: number; iq: number; eff: string; best: string; ctx?: string }
 const MODEL_INFO: Record<string, ModelInfo> = {
   // Anthropic (direct)
+  // P-MODEL.2: Fable/Mythos 5.1 are the current Mythos-level ceiling. `exp: 5` is not a guess: they list
+  // at $10/$50 per Mtok, double Fable 5's tier, and on Pro / standard Team seats they bill as
+  // pay-as-you-go credits OUTSIDE the plan's included limits, so an unaware user pays real money per
+  // call. isApiOnlyModel drives the explicit warning; this card carries the cost framing.
+  "claude-fable-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  "claude-mythos-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
   "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   "claude-mythos-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
+  // P-MODEL.2: Opus 5.5 (2026-09-22) opens the Claude 5.5 family. Anthropic's own framing: Fable-5.1-level
+  // results on most work at 40% lower running cost than Opus 5 ($4/$20 per Mtok), with adaptive thinking
+  // always on, and their new agentic-coding lead (Terminal-Bench 4.0 66.4% at xhigh, GDPval-AA v2.1 1846).
+  "claude-opus-5-5": { exp: 3, iq: 5, eff: "First of the Claude 5.5 family: Fable-5.1-level results on most work at 40% lower cost than Opus 5, with adaptive thinking always on.", best: "Hard bugs, architecture, and long-horizon agentic coding.", ctx: "1M" },
+  "claude-opus-5": { exp: 3, iq: 5, eff: "Frontier-class reasoning at about half the prior Opus price; a low/medium/high effort toggle trades cost for depth.", best: "Hard bugs, architecture, and long-horizon agentic coding.", ctx: "1M" },
   "claude-opus-4-8": { exp: 4, iq: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
   "claude-opus-4-7": { exp: 4, iq: 5, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
   "claude-opus-4-6": { exp: 4, iq: 4, eff: "Prior Opus - very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
   "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
   "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
   "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude - excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
+  // P-MODEL.2: GPT-6 (codename astra) is OpenAI's current flagship and the first to ship a 1M context.
+  // It rolls out in stages, so it may be absent from a given account's list; when the provider offers it
+  // the picker shows it, and when it does not, nothing here fabricates it.
+  "gpt-6-astra": { exp: 4, iq: 5, eff: "OpenAI's current flagship, with a 1M context window.", best: "Hard reasoning, architecture, and very long-context analysis.", ctx: "1M" },
+  // GPT-6 tier codenames (omp 18.2.10, 2026-09-23): Sol is the mid tier at a fifth of Astra's price, Luna the
+  // fast tier at a hundredth. Same 1M window and effort levels; the picker offers whichever the provider carries.
+  "gpt-6-sol": { exp: 2, iq: 4, eff: "GPT-6 mid tier: most of Astra's reasoning at $2/$10 per Mtok; 1M context.", best: "Everyday coding, analysis and long-context work at a workhorse price.", ctx: "1M" },
+  "gpt-6-luna": { exp: 1, iq: 3, eff: "GPT-6 fast tier at $0.10/$0.50 per Mtok; 1M context.", best: "Quick edits, lookups, and high-volume long-context tasks.", ctx: "1M" },
+  // Grok 4.7 / 4.6 (omp 18.2.10, xai + xai-oauth): $2/$6 per Mtok ($4/$12 past 200K input), 500K context,
+  // reasoning with an effort toggle, text + image input.
+  "grok-4.7": { exp: 2, iq: 4, eff: "xAI's newest Grok: strong reasoning at $2/$6 per Mtok, doubling past 200K input; 500K context.", best: "Everyday coding and analysis with long context at a low price.", ctx: "500K" },
+  "grok-4.6": { exp: 2, iq: 4, eff: "Prior Grok at the same $2/$6 price and 500K context.", best: "A version pin for Grok work.", ctx: "500K" },
   // AskSage · OpenAI. GPT-5.6 ships three tier codenames (luna=mid / sol / terra); luna is the default RAG model.
   "gpt-5.6-luna": { exp: 3, iq: 5, eff: "Newest mid-tier GPT-5.6; the default RAG model.", best: "General gov coding, analysis, and RAG grounding.", ctx: "256K" },
   "gpt-5.6-sol": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },
@@ -10806,6 +16390,7 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "gemini-3.1-pro-preview": { exp: 4, iq: 5, eff: "Preview of Gemini 3.1 Pro - flagship reasoning, 1M context.", best: "Complex reasoning + huge-context analysis (preview).", ctx: "1M" },
   "gemini-3-pro": { exp: 4, iq: 5, eff: "Gemini 3 Pro - top-tier reasoning, 1M context.", best: "Hard bugs, architecture, complex reasoning.", ctx: "1M" },
   "gemini-3-pro-preview": { exp: 4, iq: 5, eff: "Preview of Gemini 3 Pro - top-tier reasoning, 1M context.", best: "Complex reasoning + architecture (preview).", ctx: "1M" },
+  "gemini-3.8-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3.8 Flash, the current Flash line; 1M context.", best: "Quick edits, lookups, high-volume long-context tasks.", ctx: "1M" },
   "gemini-3.5-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3.5 Flash; 1M context.", best: "Quick edits, lookups, high-volume long-context tasks.", ctx: "1M" },
   "gemini-3-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3 Flash; 1M context.", best: "Quick edits, lookups, high-volume tasks.", ctx: "1M" },
   "gemini-3-flash-preview": { exp: 1, iq: 3, eff: "Preview of Gemini 3 Flash - fast + cheap; 1M context.", best: "Quick edits + high-volume tasks (preview).", ctx: "1M" },
@@ -10823,12 +16408,11 @@ const MODEL_INFO: Record<string, ModelInfo> = {
 const stripProvider = (v: string) => v.replace(/^[^/]*\//, "");
 const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemini: "Google Gemini", gpt: "OpenAI GPT", "gpt-o": "OpenAI o-series", rag: "AskSage RAG", other: "this provider" };
 function inferModelInfo(value: string): ModelInfo {
-  const s = stripProvider(value).toLowerCase();
   const fam = familyOf(value).id;
-  // `\bmini` (word boundary) so "ge·mini" no longer false-matches as small (it was downgrading EVERY
-  // inferred Gemini - incl. the Pro tiers - to 3 stars); "-mini" in gpt-5-mini etc. still matches.
-  const small = /\bmini|nano|lite|flash|haiku|oss|-8b|-7b/.test(s);
-  const big = !small && /opus|pro|max|fable|mythos|ultra|gpt-5|gpt-o/.test(s);
+  // Capability tier from the SHARED heuristic (model_families.capabilityTier) so the hover-card iq stars
+  // match the picker/default "level" ranking exactly: 2 = flagship, 1 = balanced, 0 = small/fast.
+  const t = capabilityTier(value);
+  const small = t === 0, big = t === 2;
   const iq = big ? 5 : small ? 3 : 4;
   const exp = big ? 4 : small ? 1 : 3;
   const ctxNum = modelCtx(value);
@@ -10847,8 +16431,9 @@ function modelTipHTML(value: string): string {
   const gov = isAsksage(value);
   // ITAR-unavailable reason + gov-prototype-only advisory sit above the (always-present) ratings.
   const banner = reason ? `<div class="mt-banner warn">${esc(reason)}</div>` : "";
-  // P-IDE.1e (ADR-0109): Fable 5, once selectable (Claude connected), carries the U.S.-gov privacy notice.
-  const privacyBanner = shortModelId(value) === FABLE_ID && !reason ? `<div class="mt-banner warn">${icon("shield", 12)} ${esc(FABLE_PRIVACY_WARN)}</div>` : "";
+  // P-IDE.1e (ADR-0109) / P-MODEL.2: an API-only Claude model, once selectable (Claude connected), carries
+  // the U.S.-gov privacy notice.
+  const privacyBanner = needsClaudeCredential(value) && !reason ? `<div class="mt-banner warn">${icon("shield", 12)} ${esc(FABLE_PRIVACY_WARN)}</div>` : "";
   const govNote = gov ? `<div class="mt-banner gov">${esc(GOV_ADVISORY)}</div>` : "";
   const ratings = `<div class="mt-rate">${stars5(info.exp, "exp")}<span class="mt-rlabel">Token Expense</span></div>
     <div class="mt-rate">${stars5(info.iq, "iq")}<span class="mt-rlabel">Intelligence Level</span></div>
@@ -10904,17 +16489,24 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // gov-first + newest→oldest WITHIN each family (groupByFamily preserves that relative order).
   const govOk = !!state.asksage?.configured;
   const chinaOk = !!state.chinaAck;
+  // P-LOCALPICK.1 (ADR-0371): a model served from the user's OWN configured local provider bypasses
+  // the data-sovereignty gate. That gate exists because prompts EGRESS to a foreign-controlled cloud;
+  // a Local Provider is a declared internal endpoint (a DGX on the LAN, a box over the VPN), so the
+  // weights' country of origin does not change where the data goes. Without this, a user who never
+  // acknowledged China-cloud models could Discover their own self-hosted GLM and the picker would
+  // hide it with no hint, which is the edge-first posture inverted.
+  const localOk = localPrefixSet(state.localProviders ?? []);
   const visible = opt.options.filter((o) =>
     !isAuxiliaryModel(o.value) &&
     !isDeprecatedModel(o.value) &&
     (govOk || !isGovModel(o.value)) &&
-    (chinaOk || !isChinaModel(o.value)));
+    (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
   // Lockdown: only the gov-gateway models are selectable.
   const list = state.asksage?.only ? visible.filter((o) => isGovModel(o.value)) : visible;
   // Final safety: an omp catalog can list the same model twice under one provider. Drop rows that would
   // render IDENTICALLY (same gov/provider + same display name) - the user can't tell them apart anyway.
   const seen = new Set<string>();
-  const deduped = sortGovFirstNewest(list).filter((o) => {
+  const deduped = sortGovFirstByLevel(list).filter((o) => {
     const key = `${isGovModel(o.value) ? "gov" : providerLabel(o.value)}|${cleanModelName(o.name)}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -10933,11 +16525,19 @@ const THINK_DESC: Record<string, string> = {
 };
 // P-ACP.2/3: the composer's 3-way edit mode (Claude-Code-style). "Ask" is a client posture, not an
 // omp mode - see acp_backend.setUiMode. Order: Agent (autonomous) · Ask (approve each) · Plan (read-only).
-const MODE_UI_OPTS: { value: "agent" | "ask" | "plan"; name: string }[] = [
+type UiModeOption = { value: "agent" | "creator" | "ask" | "plan"; name: string };
+const MODE_UI_OPTS: UiModeOption[] = [
   { value: "agent", name: "Agent" }, { value: "ask", name: "Ask" }, { value: "plan", name: "Plan" },
 ];
+// CREATOR-0 (ADR-0280): Creator sits immediately AFTER Agent, and only in a Creator build. Its security
+// posture is identical to Agent (uiModePosture); what changes is the workspace it opens.
+const CREATOR_MODE_OPT: UiModeOption = { value: "creator", name: "Creator" };
+function modeUiOptions(creatorBuild: boolean): UiModeOption[] {
+  return creatorBuild ? [MODE_UI_OPTS[0]!, CREATOR_MODE_OPT, ...MODE_UI_OPTS.slice(1)] : MODE_UI_OPTS;
+}
 const MODE_DESC: Record<string, string> = {
   agent: "Edits files and runs tools autonomously.",
+  creator: "Agent autonomy plus the Creator studio, integrations, and live resource limits.",
   ask: "Asks you to approve each tool call before it runs.",
   plan: "Read-only - drafts a plan, makes no changes.",
 };
@@ -10948,18 +16548,269 @@ let cfgClose: (() => void) | null = null;
 // everything the HTML derives from: the curated list, selection, query, collapse state, gov ordering.
 let pickerMemo: { key: string; html: string } | null = null;
 
+// ── P-PROV.2: provider OAuth connect (shared by Settings + the Provider Hub) ──────────────────────
+// Device-flow providers show a one-time code on the provider's page; redirect-flow ones (OpenAI, Anthropic,
+// Google) complete silently via the localhost callback. GitHub Copilot is its own two-step (domain → code).
+// `cardEl` is the container the device/copilot input boxes attach to (a Settings .set-card or a hub
+// .provhub-config); `refresh` re-renders the caller's surface after the browser step.
+const DEVICE_FLOW_IDS: Record<string, true> = { "xai-oauth": true, "openai-codex-device": true };
+async function startProviderOauth(oauthId: string, cardEl: HTMLElement | null, refresh: () => void): Promise<void> {
+  if (oauthId === "github-copilot") {
+    // GitHub Copilot (ADR-0210): the broker first asks for a GitHub Enterprise domain (blank = github.com),
+    // then prints a one-time code the user enters ON GitHub's device page (nothing is pasted back here).
+    if (cardEl && !cardEl.querySelector(".copilot-oauth-box")) {
+      const box = el(`<div class="copilot-oauth-box prov-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
+        <input class="prov-key" id="ghDomain" type="text" placeholder="GitHub Enterprise domain (blank for github.com)" autocomplete="off" style="font-family:var(--mono)" />
+        <button class="btn-mini ok" id="ghCopilotStart">${icon("expand", 12)} Start Copilot sign-in</button>
+        <div class="copilot-oauth-out" id="ghCopilotOut" style="flex:1 1 100%;font-family:var(--mono);font-size:12px;white-space:pre-wrap;opacity:.9"></div></div>`);
+      cardEl.appendChild(box);
+      const start = $("#ghCopilotStart", cardEl)!;
+      start.addEventListener("click", async () => {
+        const domain = ($("#ghDomain", cardEl) as HTMLInputElement | null)?.value.trim() ?? "";
+        const out = $("#ghCopilotOut", cardEl) as HTMLElement | null;
+        if (out) out.textContent = "Starting sign-in\u2026";
+        const rr = await bridge.oauthLogin("github-copilot", domain);
+        if (rr?.url) void openAuthUrl(rr.url);
+        if (out) out.textContent = (rr?.output?.trim() || "Follow the sign-in in your browser.") + "\n\nEnter the code above on the opened GitHub page. This card updates automatically once Copilot is connected.";
+        showToast({ title: "Finish in your browser", desc: "Enter the one-time code on the GitHub device page, then authorize Copilot.", actions: [{ label: "OK" }], timeout: 0 });
+        setTimeout(refresh, 4000);
+        void pollOauthThenRefresh("github-copilot");
+      });
+      ($("#ghDomain", cardEl) as HTMLInputElement | null)?.focus();
+    }
+    return;
+  }
+  const r = await bridge.oauthLogin(oauthId);
+  if (r?.url) void openAuthUrl(r.url);
+  if (DEVICE_FLOW_IDS[oauthId]) {
+    showToast({
+      title: "Paste the code from the sign-in page",
+      desc: "Copy the code shown in your browser, paste it below, and click Submit. If no page opened, use \u201cOpen sign-in page\u201d below.",
+      actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
+      timeout: 0,
+    });
+    if (cardEl) {
+      let box = cardEl.querySelector(".oauth-device-box") as HTMLElement | null;
+      if (!box) {
+        box = el(`<div class="oauth-device-box prov-row" style="margin-top:8px">
+          <input class="prov-key" id="deviceCode_${oauthId}" type="text" placeholder="Paste device code here\u2026" autocomplete="off" style="font-family:var(--mono)" />
+          <button class="btn-mini ok" id="deviceSubmit_${oauthId}">${icon("check", 12)} Submit</button></div>`);
+        cardEl.appendChild(box);
+        const submit = $(`#deviceSubmit_${oauthId}`, cardEl)!;
+        submit.addEventListener("click", async () => {
+          const code = ($(`#deviceCode_${oauthId}`, cardEl) as HTMLInputElement)?.value.trim();
+          if (!code) return;
+          const sr = await bridge.oauthCode(oauthId, code);
+          if (sr?.sent) { showToast({ title: "Code sent", desc: "Waiting for the provider to verify\u2026", timeout: 4000 }); box?.remove(); }
+          else { showToast({ tone: "danger", title: "Couldn't send code", desc: sr?.reason ?? "The broker may have exited. Try again.", actions: [{ label: "OK" }], timeout: 6000 }); }
+        });
+      }
+      ($(`#deviceCode_${oauthId}`, cardEl) as HTMLInputElement)?.focus();
+    }
+  } else {
+    showToast({
+      title: "Finish signing in in your browser",
+      desc: r?.url
+        ? "A sign-in page should have opened. If it didn't, click \u201cOpen sign-in page\u201d (or Copy URL and paste it into your browser). The model list updates automatically once you finish."
+        : (r?.output?.slice(0, 160) || "Follow omp's prompt in the GUI server window."),
+      actions: r?.url ? authUrlActions(r.url) : [{ label: "OK" }],
+      timeout: r?.url ? 0 : 6000,
+    });
+  }
+  setTimeout(refresh, 4000);
+  void pollOauthThenRefresh(oauthId);
+}
+
+// ── P-PROV.2: the Provider Hub - a dedicated, discoverable popup listing every provider omp offers as
+// same-size, logo'd tiles grouped by section; clicking a tile drops its OAuth/key config inline. The
+// open-weight / non-U.S. section stays hidden behind the typed ACKNOWLEDGE (provider_hub.buildHubSections).
+let hubClose: (() => void) | null = null;
+function hubTileHtml(id: string, name: string, configured: boolean, canOauth: boolean): string {
+  // P-ACCT.1: a multi-account provider badges the count; single-account configured stays "connected".
+  const nAccts = state.accounts?.[id]?.length ?? 0;
+  const badge = nAccts > 1
+    ? `<span class="provhub-badge ok">${nAccts} accounts</span>`
+    : configured
+      ? `<span class="provhub-badge ok">${icon("check", 10)} connected</span>`
+      : `<span class="provhub-badge">${canOauth ? "sign in / key" : "add key"}</span>`;
+  return `<div class="provhub-item" data-hub-item="${esc(id)}">
+    <button class="provhub-tile" type="button" data-hub-tile="${esc(id)}">
+      <span class="provhub-nm">${esc(name)}</span>${badge}${icon("chevron", 14)}
+    </button>
+    <div class="provhub-config"></div></div>`;
+}
+function hubSectionHtml(sec: HubSection): string {
+  const head = `<div class="provhub-sec-h"><b>${esc(sec.title)}</b><span>${esc(sec.subtitle)}</span>${
+    sec.key === "open" && !sec.locked ? `<button class="btn-link" id="hubRelock">Re-lock</button>` : ""}</div>`;
+  if (sec.key === "open" && sec.locked) {
+    return `<div class="provhub-sec">${head}
+      <div class="set-note danger">${icon("shield", 12)} <b>Open-weight &amp; non-U.S. providers</b> - DeepSeek, Kimi/Moonshot, Qwen, GLM (Z.AI), MiniMax, Groq, OpenRouter. These route to third-party or non-U.S. servers (or aggregate many origins) with <b>no U.S. data-sovereignty guarantee</b>; review each provider's terms before use.</div>
+      <div class="china-unlock"><input id="hubAckInput" placeholder="Type ACKNOWLEDGE to reveal" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="hubAckBtn" disabled>Reveal</button></div></div>`;
+  }
+  const tiles = sec.providers.map((p) => hubTileHtml(p.id, p.name, p.configured, p.canOauth)).join("") || `<div class="cfg-empty">none available</div>`;
+  return `<div class="provhub-sec">${head}<div class="provhub-grid">${tiles}</div></div>`;
+}
+// P-LOCAL.4: the hub's "Local & self-hosted" section - the user's configured self-hosted endpoints, plus an
+// "Add local models" tile that opens Settings -> Local Providers (where the one-click presets + add form live).
+function hubLocalSectionHtml(): string {
+  const configured = (state.localProviders ?? []).map((p) => {
+    const n = p.models?.length ?? 0;
+    return `<div class="provhub-item"><button class="provhub-tile" type="button" data-hub-local-open="${esc(p.id)}">
+      <span class="provhub-nm">${esc(p.name)}</span><span class="provhub-badge ok">${n} model${n === 1 ? "" : "s"}</span>${icon("chevron", 14)}</button></div>`;
+  }).join("");
+  // One-click presets: clicking one opens Settings -> Local Providers with the model pre-filled into the
+  // unified-endpoint add form (via pendingLocalPreset), where the user enters the NGINX base URL + token.
+  const presets = LOCAL_MODEL_PRESETS.map((m) =>
+    `<div class="provhub-item"><button class="provhub-tile" type="button" data-hub-local-preset="${esc(m.id)}">
+      <span class="provhub-nm">${esc(m.name)}</span><span class="provhub-badge">${esc(m.params)}</span>${icon("chevron", 14)}</button></div>`).join("");
+  const addTile = `<div class="provhub-item"><button class="provhub-tile" type="button" data-hub-local-add>
+    <span class="provhub-nm">${icon("plus", 13)} Add a custom endpoint</span><span class="provhub-badge">manual</span>${icon("chevron", 14)}</button></div>`;
+  return `<div class="provhub-sec"><div class="provhub-sec-h"><b>Local &amp; self-hosted</b><span>your hardware \u00b7 unified NGINX endpoint</span></div>
+    <div class="provhub-grid">${configured}${presets}${addTile}</div></div>`;
+}
+function openProviderHub(onClose?: () => void): void {
+  hubClose?.();
+  const ov = el(`<div id="provHub" class="modal-ov">
+    <div class="modal provhub" role="dialog" aria-modal="true" aria-labelledby="provHubTitle">
+      <div class="provhub-head">
+        <div class="modal-icon">${icon("spark", 22)}</div>
+        <div class="provhub-head-tx"><h2 class="modal-title" id="provHubTitle">Connect a provider</h2>
+          <p class="modal-desc">Sign in with a subscription (OAuth) or paste an API key. Models appear in the picker automatically.</p></div>
+        <button class="icon-btn provhub-x" id="provHubClose" aria-label="Close">${icon("close", 16)}</button>
+      </div>
+      <div class="provhub-body" id="provHubBody"></div>
+    </div></div>`);
+  document.body.appendChild(ov);
+  const body = $("#provHubBody", ov)!;
+  // P-GUIDE.2: onboarding header - new users land here with nothing configured, so the hub leads with
+  // the guided-setup entry (the choosing guide, incl. the free-tier start ladder and the Creator-edition
+  // pointer) and names the /providers command. `.set-note` = block prose, single text child per line.
+  const onboardHtml = `<div class="provhub-sec"><div class="set-note">${icon("spark", 12)} <b>New here?</b> Open the <b>guided setup</b> for a walkthrough: what each provider costs, which free tiers exist, and which plan fits your work. Or type <code>/providers</code> plus what you are trying to do, and the agent walks you through it live.</div>
+    <div class="prov-row"><button class="btn-mini ok" data-guide="choosing">${icon("expand", 12)} Guided setup: choose a provider</button></div></div>`;
+  const redraw = () => { body.innerHTML = providerQuotaNotice() + onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+  const close = () => { ov.remove(); hubClose = null; document.removeEventListener("keydown", onKey); onClose?.(); };
+  hubClose = close;
+  redraw();
+  // P-LOCAL.4: pull the user's configured self-hosted endpoints so the "Local & self-hosted" section lists them.
+  void bridge.localProvidersList().then((list) => { if (list) { state.localProviders = list; redraw(); } }).catch(() => { /* best-effort */ });
+  // P-ACCT.1: the account snapshot drives the "N accounts" tile badges + the expanded account lists.
+  void bridge.accounts().then((s) => { if (s) { state.accounts = s; redraw(); } }).catch(() => { /* best-effort */ });
+  document.addEventListener("keydown", onKey);
+  $("#provHubClose", ov)!.addEventListener("click", close);
+  ov.addEventListener("click", (e) => { if (e.target === ov) close(); }); // click-away on the backdrop
+  // P-ACCT.1: auth and the account snapshot refresh together, so a finished OAuth sign-in also lands
+  // its new named account in the tiles and the expanded lists.
+  const refreshAuth = async () => {
+    const [a, s] = await Promise.all([bridge.auth().catch(() => null), bridge.accounts().catch(() => null)]);
+    if (a) { state.auth = a; renderStatus(); }
+    if (s) state.accounts = s;
+  };
+  // Enable the ACKNOWLEDGE reveal only when the exact word is typed (mirrors the Settings gate).
+  body.addEventListener("input", (e) => {
+    if ((e.target as HTMLElement).id === "hubAckInput") {
+      const b = $("#hubAckBtn", body) as HTMLButtonElement | null;
+      if (b) b.disabled = (e.target as HTMLInputElement).value.trim() !== "ACKNOWLEDGE";
+    }
+  });
+  body.addEventListener("click", async (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("#hubAckBtn")) {
+      if (($("#hubAckInput", body) as HTMLInputElement)?.value.trim() !== "ACKNOWLEDGE") { showToast({ title: "Type ACKNOWLEDGE", desc: "Confirm you accept the third-party / non-U.S. data risk.", timeout: 3000 }); return; }
+      state.thirdPartyAck = !!(await bridge.setThirdPartyAck(true))?.acknowledged;
+      if (state.settingsOpen) fillSec("others", secOthers(state.auth)); // keep Settings in sync
+      redraw();
+      return;
+    }
+    if (t.closest("#hubRelock")) {
+      state.thirdPartyAck = !!(await bridge.setThirdPartyAck(false))?.acknowledged;
+      if (state.settingsOpen) fillSec("others", secOthers(state.auth));
+      redraw();
+      return;
+    }
+    // P-ACCT.1: the same four account actions as Settings, scoped to the hub body (mirrors how
+    // data-savekey is duplicated here). Repaint the hub AND, when open, the Settings sections.
+    if (t.closest("[data-acct-switch],[data-acct-add],[data-acct-rename],[data-acct-remove]")) {
+      // Which provider's tile the click lived in - read BEFORE redraw() detaches the node.
+      const provId = (t.closest("[data-acct-prov]") as HTMLElement | null)?.dataset.acctProv
+        ?? (t.closest("[data-acct-add]") as HTMLElement | null)?.dataset.acctAdd;
+      if (await handleAccountAction(t, body)) {
+        await refreshAuth(); // a switch swaps the active env key; badges must tell the new truth
+        if (state.settingsOpen) repaintAccountSections();
+        redraw();
+        // Re-expand the tile that was acted on so the refreshed account list stays visible.
+        if (provId) {
+          const wrap = $(`[data-hub-item="${provId}"]`, body);
+          const p = [...(state.auth?.gateway ?? []), ...(state.auth?.majors ?? []), ...(state.auth?.others ?? [])].find((x) => x.id === provId);
+          const cfg = wrap?.querySelector(".provhub-config") as HTMLElement | null;
+          if (wrap && cfg && p) { wrap.classList.add("open"); cfg.innerHTML = accountsBlock(p) + provCard(p); }
+        }
+        return;
+      }
+    }
+    // Provider config actions (own-scoped: the hub lives outside #setBody, so its own handlers do the work).
+    const clear = t.closest("[data-clearkey]") as HTMLElement | null;
+    if (clear) { await bridge.saveKey(clear.dataset.clearkey!, ""); await refreshAuth(); redraw(); return; }
+    const save = t.closest("[data-savekey]") as HTMLElement | null;
+    if (save) {
+      const env = save.dataset.savekey!;
+      const val = ($(`.prov-key[data-env="${env}"]`, body) as HTMLInputElement | null)?.value.trim() ?? "";
+      if (!val) { showToast({ tone: "warn", title: "Nothing to save", desc: "Paste a key first.", timeout: 2000 }); return; }
+      await bridge.saveKey(env, val);
+      showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", timeout: 2800 });
+      await refreshAuth(); await loadConfig(); redraw();
+      return;
+    }
+    const guide = t.closest("[data-guide]") as HTMLElement | null;
+    if (guide) { hubClose?.(); await openGuide(guide.dataset.guide!); return; } // close the hub modal first: the preview takes the screen
+    const oauth = t.closest("[data-oauth]") as HTMLElement | null;
+    if (oauth) { await startProviderOauth(oauth.dataset.oauth!, oauth.closest(".provhub-config"), () => { void refreshAuth().then(redraw); }); return; }
+    const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
+    if (logout) { await bridge.oauthLogout(logout.dataset.oauthLogout!); await refreshAuth(); redraw(); return; }
+    // P-LOCAL.4: a preset tile pre-fills the add form (via pendingLocalPreset); a configured tile / the
+    // "Add a custom endpoint" tile just opens Settings -> Local Providers. All route to the one add form.
+    const lpPresetTile = t.closest("[data-hub-local-preset]") as HTMLElement | null;
+    if (lpPresetTile) { pendingLocalPreset = lpPresetTile.dataset.hubLocalPreset!; close(); openSettingsToLocalProviders(); return; }
+    if (t.closest("[data-hub-local-add]") || t.closest("[data-hub-local-open]")) { close(); openSettingsToLocalProviders(); return; }
+    // Expand/collapse a tile's inline config (ignore clicks already inside an expanded config).
+    const tile = t.closest("[data-hub-tile]") as HTMLElement | null;
+    if (tile && !t.closest(".provhub-config")) {
+      const wrap = tile.closest(".provhub-item") as HTMLElement;
+      const opening = !wrap.classList.contains("open");
+      for (const other of $$(".provhub-item.open", body)) other.classList.remove("open"); // accordion
+      if (opening) {
+        wrap.classList.add("open");
+        const id = tile.dataset.hubTile!;
+        const p = [...(state.auth?.gateway ?? []), ...(state.auth?.majors ?? []), ...(state.auth?.others ?? [])].find((x) => x.id === id);
+        const cfg = wrap.querySelector(".provhub-config") as HTMLElement | null;
+        if (cfg && p) cfg.innerHTML = accountsBlock(p) + provCard(p); // P-ACCT.1: accounts list over the exact Settings config body (OAuth / key / fields)
+      }
+    }
+  });
+}
+
 function openConfigPopover(anchor: HTMLElement): void {
   cfgClose?.(); // close any popover already open
   const model = state.config.find((c) => c.id === "model");
   const think = state.config.find((c) => c.id === "thinking");
   const models = model ? curatedModels(model) : [];
+  // P-IDE.1d: the live list can lag omp's warm-up (cold boot / just-connected provider). "pending" = no
+  // adopted live list yet. Render the model section anyway (spinner + a "Loading models…" list) so the
+  // picker NEVER opens blank, and kick a RE-ARMED warm cycle so opening it drives the refresh (pickerRedraw
+  // swaps the real list in when it lands). Fully-live path is untouched (no kick, no spinner).
+  const modelsPending = state.configCached || state.configWarming || !(model && model.options.length);
+  const showModel = !!model || modelsPending;
+  if (modelsPending) void loadConfig(); // deliberate open → newCycle=true re-arms the retry budget
 
-  const modelSec = model ? `<div class="cfg-sec">
-      <div class="cfg-lbl">Model <span class="cur">${esc(modelLabel(model.currentValue))}</span><span class="cfg-loading" id="cfgLoading"${state.configCached ? "" : " hidden"}><span class="cfg-spin"></span>updating…</span></div>
-      <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="Search ${models.length} models…" /></div>
-      <div class="cfg-list" id="cfgModelList"></div></div>` : "";
+  const modelCur = model ? modelLabel(model.currentValue) : modelLabel(state.model);
+  const modelPh = models.length ? `Search ${models.length} models…` : "Search models…";
+  const modelSec = showModel ? `<div class="cfg-sec">
+      <div class="cfg-lbl">Model <span class="cur">${esc(modelCur)}</span><span class="cfg-loading" id="cfgLoading"${modelsPending ? "" : " hidden"}><span class="cfg-spin"></span>updating…</span></div>
+      <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="${esc(modelPh)}" /></div>
+      <div class="cfg-list" id="cfgModelList"></div>
+      <button class="cfg-provhub" id="cfgAddProv" type="button" data-tip="Connect a provider|Open the Provider Hub - sign in (OAuth) or paste a key. New providers' models show up here." data-tip-side="top">${icon("expand", 13)} Add or manage providers</button></div>` : "";
   const modeSec = `<div class="cfg-sec"><div class="cfg-lbl">Mode</div>
-      <div class="seg" data-cfg="mode">${MODE_UI_OPTS.map((o) =>
+      <div class="seg" data-cfg="mode">${modeUiOptions(!!state.buildInfo?.creatorBuild).map((o) =>
         `<button class="${o.value === state.uiMode ? "on" : ""}" data-val="${esc(o.value)}" data-tip="${esc(o.name)}|${esc(MODE_DESC[o.value] ?? "")}" data-tip-side="top">${esc(o.name)}</button>`).join("")}</div></div>`;
   const thinkCur = think?.options.find((o) => o.value === think.currentValue);
   const thinkSec = think ? `<div class="cfg-sec"><div class="cfg-lbl">Thinking</div>
@@ -10973,27 +16824,50 @@ function openConfigPopover(anchor: HTMLElement): void {
   cfgClose = close;
 
   // searchable model list
-  if (model) {
+  if (showModel) {
     const list = $("#cfgModelList", node)!;
     const search = $("#cfgModelSearch", node) as HTMLInputElement;
     // P-IDE.1/1d: collapsible family sections; search filters across all families. draw() recomputes
-    // from the LIVE state.config each call, so the cold-boot refresh (pickerRedraw) swaps the cached
-    // list for the live one in place and clears the "updating…" spinner.
+    // from the LIVE state.config each call, so the cold-boot refresh (pickerRedraw) swaps the warming
+    // placeholder / cached list for the live one in place and clears the "updating…" spinner.
     const draw = (q = "") => {
       const m = state.config.find((c) => c.id === "model");
       const list2 = m ? curatedModels(m) : [];
-      const cur = m?.currentValue ?? model.currentValue;
-      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}`; // P-FAV.1: stars invalidate the memo
+      const cur = m?.currentValue ?? model?.currentValue ?? state.model;
+      const warming = state.configCached || state.configWarming;
+      const ld = $("#cfgLoading", node) as HTMLElement | null; if (ld) ld.hidden = !warming;
+      if (!list2.length) {
+        // No live models yet: a loading affordance while a warm cycle runs, else an actionable empty state.
+        list.innerHTML = `<div class="cfg-empty">${warming ? "Loading models…" : "No models yet. Connect a provider, then Refresh."}</div>`;
+        search.placeholder = "Search models…";
+        return;
+      }
+      // P-LOCALPICK.1: local providers shape the pinned section, the china bypass, AND the pending
+      // rows, so they are part of the memo key or a Discover/save while the picker sits open would
+      // paint a stale list forever.
+      const lp = (state.localProviders ?? []).map((p) => `${p.ompProvider}:${p.enabled ? 1 : 0}:${(p.models ?? []).map((mm) => mm.id).join("+")}`).join(";");
+      const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}|${lp}`; // P-FAV.1: stars invalidate the memo
       if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
       list.innerHTML = pickerMemo.html;
       search.placeholder = `Search ${list2.length} models…`;
-      const ld = $("#cfgLoading", node) as HTMLElement | null; if (ld) ld.hidden = !state.configCached;
     };
     draw();
+    // P-LOCALPICK.1: the pinned Local section reads state.localProviders, which only Settings and the
+    // Provider Hub hydrated before, so a picker opened first (the common cold path) would miss it.
+    // Refresh in the background and redraw once the list lands; best-effort, the picker never waits.
+    void bridge.localProvidersList?.().then((l) => { if (l) { state.localProviders = l; draw(search.value); } }).catch(() => { /* best-effort */ });
+    // P-PROV.2: the always-visible footer opens the Provider Hub (closing the picker first).
+    $("#cfgAddProv", node)?.addEventListener("click", () => { close(); openProviderHub(); });
     pickerRedraw = () => draw(search.value); // refresh when live config lands (cold-boot cache → live)
     attachModelTips(list); // premium per-model hover cards (delegated → survives re-render)
     search.addEventListener("input", (e) => draw((e.target as HTMLInputElement).value));
     list.addEventListener("click", (e) => {
+      // P-LOCALPICK.1: "Restart now" on a pending local model - same relaunch the Settings banner does.
+      if ((e.target as HTMLElement).closest("[data-lp-apply]")) {
+        showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 });
+        void bridge.relaunch().catch(() => { /* the app is going down anyway */ });
+        return;
+      }
       // P-FAV.1: the star is INSIDE a [data-val] row - check it first so starring never selects.
       const fs = (e.target as HTMLElement).closest("[data-fav]") as HTMLElement | null;
       if (fs) { saveFavs(toggleFav(favsOf(), fs.dataset.fav!)); draw(search.value); return; }
@@ -11064,6 +16938,12 @@ function openOptionDropdown(anchor: HTMLElement, configId: string): void {
   }
   listEl.addEventListener("click", (e) => {
     if (configId === "model") {
+      // P-LOCALPICK.1: "Restart now" on a pending local model - same relaunch as the Settings banner.
+      if ((e.target as HTMLElement).closest("[data-lp-apply]")) {
+        showToast({ title: "Restarting LUCID…", desc: "Applying your local providers.", timeout: 2000 });
+        void bridge.relaunch().catch(() => { /* the app is going down anyway */ });
+        return;
+      }
       // P-FAV.1: star toggle first (inside a [data-val] row) - starring never selects.
       const fs = (e.target as HTMLElement).closest("[data-fav]") as HTMLElement | null;
       if (fs) { saveFavs(toggleFav(favsOf(), fs.dataset.fav!)); listEl.innerHTML = familyListHTML(opts, c.currentValue, ($("#miniSearch", node) as HTMLInputElement)?.value ?? ""); return; }
@@ -11108,6 +16988,7 @@ function initResize(): void {
     const kw = Number(localStorage.getItem("lucid.kg-w")); if (kw) setW("kg", kw);
     const pw = Number(localStorage.getItem("lucid.preview-w")); if (pw) setW("preview", Math.min(pw, Math.round(window.innerWidth * 0.5))); // P-PREVIEW.1: never restore wider than 50%
     const ksw = Number(localStorage.getItem("lucid.kgside-w")); if (ksw) setW("kgside", ksw); // P-KG-CODE.1b
+    const mw = Number(localStorage.getItem("lucid.meetings-w")); if (mw) setW("meetings", mw); // P-MEET.1
   } catch { /* ignore */ }
   // data-resize value → the panel element id ("kg" → #knowledge, "kgside" → the KG side flyout); all
   // right-side panels resize from their left edge, the sidebar (left panel) from its right edge.
@@ -11150,6 +17031,8 @@ wire();
 initZoom();
 initResize();
 seedThread();
+void recoverMasterTurn();
+void startupRecovery(); // P-RECOVER.1 (ADR-0385): resume the previous session after an unclean exit, report either way
 // Sessions panel: remember your choice across launches; default OPEN so a past
 // conversation is one click away (it used to start collapsed → expand-then-click felt like
 // a double-click). Collapse it once and it stays collapsed.
@@ -11164,9 +17047,35 @@ void loadConfig().then(renderStatus);
 initMarket(readMarketBootConfig());
 try {
   (window as unknown as { lucid?: { onAuthCallback?: (cb: (url: string) => void) => void } }).lucid?.onAuthCallback?.((url) => {
-    if (handleAuthCallback(url)) showToast({ title: "Signed in", desc: "You're signed in - click a pack to install it.", timeout: 5000 });
+    if (!handleAuthCallback(url)) return;
+    // P-KGMARKET.5 (ADR-0333): finish the purchase the user started, instead of telling them to find the
+    // row again. ONE SHOT and time-boxed: this deep link also lands for a LUCID Remote sign-in and for a
+    // Google Drive authorisation, so a stale intent must never open a payment page nobody asked for.
+    const pend = pendingCheckout;
+    pendingCheckout = null;
+    const pack = pend && shouldResumeCheckout(pend, Date.now()) ? KG_PACKS.find((p) => p.id === pend.packId) : undefined;
+    if (pend && pack) {
+      showToast({ ...packSignInCopy("resumed", pend.packName), timeout: 4000 });
+      void getPackFlow(pack);
+      return;
+    }
+    showToast({ title: "Signed in", desc: "You're signed in - click a pack to install it.", timeout: 5000 });
   });
 } catch { /* not in Electron */ }
+// CREATOR-0 (ADR-0279): learn this build's identity FIRST, then reveal the Creator surfaces (mode option,
+// rail entry, Resources tab). A standard build never renders them, and a failed call reveals nothing.
+void bridge.buildInfo().then((info) => {
+  state.buildInfo = info;
+  if (!info?.creatorBuild) return;
+  const tab = $("#inspResTab"); if (tab) tab.hidden = false;
+  const studio = $("#railStudio"); if (studio) studio.hidden = false;
+  void refreshCreatorResources(true);
+  // The odometers poll on their own slow clock while the Resources tab (or the Studio) is on screen.
+  window.setInterval(() => {
+    if (document.hidden) return;
+    if (state.inspectorTab === "resources" && !state.inspectorRail) void refreshCreatorResources();
+  }, 3000);
+});
 void loadWorkspace();
 void loadAsksage();
 void loadSkills();
@@ -11178,7 +17087,30 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   state.userRole = s?.role ?? null;               // ADR-0088: null until the user picks a role
   state.tourSeen = !!s?.tourSeen;                  // ADR-0089: first-run walkthrough replay guard
   state.govconCui = s?.govconCui ?? null;         // P-GOVCUI.1: null until the first-run gov/CUI step asks
+  // P-THEME.1: the SERVER is the source of truth for the theme; localStorage is only the mirror that
+  // makes the first paint synchronous (see bootTheme). Reconcile whenever they disagree, which is how a
+  // choice made on another machine, or after the mirror was cleared, still lands. Re-paint only on a real
+  // change so a matching value costs nothing.
+  if (s && typeof s.theme === "string" && s.theme !== themePref()) {
+    try { if (s.theme) localStorage.setItem(THEME_KEY, s.theme); else localStorage.removeItem(THEME_KEY); } catch { /* storage off */ }
+    applyTheme(s.theme);
+  }
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
+  syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
+  // P-AVATAR.6: the lucid-agent role gets a hero opening over the ~6-9s session warm - REAL signals
+  // only, min beat + hard cap in boot_cinematic.ts, Esc/Skip always, reduced-motion = static card.
+  if (state.userRole === "lucid-agent" && !document.getElementById("bootCine")) {
+    mountBootCinematic(
+      () => ({
+        settings: true, // we are inside the settings .then - the gate answered
+        config: state.config.some((c) => c.id === "model"),
+        models: state.config.find((c) => c.id === "model")?.options?.length ?? 0,
+        voice: !!state.voice,
+      }),
+      () => { /* the stage below is already live; nothing to hand off */ },
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    );
+  }
   runOnboarding(); // ADR-0088/0089 + P-GOVCUI.1: role pick → email → gov/CUI setup → first-run tour, in sequence
 });
 refresh();

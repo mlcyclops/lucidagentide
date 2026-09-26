@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-1695%20harness%20%2B%204018%20desktop%20%2B%2062%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-1725%20harness%20%2B%203756%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -73,16 +73,43 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <br/>
 
-<!-- ✦✦✦  HEADLINE BANNER - Claude Fable 5  ✦✦✦ -->
+<!-- v2.3.0 BETA CALL - swap for a "v2.3.0 is out" banner when the stable tag ships -->
 <table align="center" width="100%">
 <tr>
 <td align="center">
 
-# ✦ Claude&nbsp;5.0&nbsp;**Fable** is here - available through LUCID ✦
+# 📣 v2.3.0 is almost here. Help us test the beta.
 
-### The newest Claude model, <b>Claude&nbsp;Fable&nbsp;5</b> (<code>claude-fable-5</code>), is live in the model picker.
+<p align="center"><b>🛡️ a Windows sandbox that chat actually works inside</b> · <b>🧭 Jev typed judgment</b> · <b>🖱 a browser agent that reads before it clicks</b> · <b>🪐 Claude Opus 5.5, GPT-6 Sol / Luna and Grok 4.7</b> · <b>👥 several accounts per provider</b> · <b>🧹 fewer dead ends</b></p>
 
-<p align="center"><b>Connect a Claude account</b> (OAuth or <code>ANTHROPIC_API_KEY</code>) and pick <b>Claude&nbsp;Fable&nbsp;5</b> from the model list - that's it. It routes through Anthropic and carries a clear <b>U.S.-government data-privacy notice</b> so you always know where your chat history stands.</p>
+<a href="https://github.com/mlcyclops/lucidagentide/releases"><img src="https://img.shields.io/github/v/release/mlcyclops/lucidagentide?include_prereleases&sort=semver&label=newest%20beta&style=for-the-badge&color=c64bd6&logo=github&logoColor=white" alt="Newest beta (prerelease) on the Releases page" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml"><img src="https://img.shields.io/badge/Found%20a%20bug%3F-Open%20an%20issue-d73a49?style=for-the-badge&logo=github&logoColor=white" alt="Found a bug? Open an issue" /></a>
+<a href="#how-to-pull-your-logs"><img src="https://img.shields.io/badge/How%20to-pull%20your%20logs-555555?style=for-the-badge" alt="How to pull your logs" /></a>
+
+<p align="center"><sub>Betas ship as GitHub <b>prereleases</b>: stable installs are never offered one, the download buttons above and Homebrew stay on 2.2.x, and a beta install updates itself to the next beta. <a href="#-v230-is-almost-here-test-the-beta"><b>What's in it, how to install it, and how to report a bug with screenshots and logs</b></a>.</sub></p>
+
+</td>
+</tr>
+</table>
+
+<br/>
+
+<!-- HEADLINE BANNER - the current live model line-up -->
+<table align="center" width="100%">
+<tr>
+<td align="center">
+
+# <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" /> The newest frontier models are live in LUCID <img src=".github/assets/icons/announce-animated.svg" width="30" align="top" alt="" />
+
+### <b>Claude&nbsp;Opus&nbsp;5.5&nbsp;·&nbsp;Opus&nbsp;5</b>, <b>Claude&nbsp;Fable&nbsp;5.1</b> and <b>Mythos&nbsp;5.1</b>, <b>GPT-6&nbsp;Astra · Sol · Luna</b>, and <b>Gemini&nbsp;3.1&nbsp;Pro · 3.8&nbsp;Flash</b> - all in the picker today. And <b>Jev</b>, the <b>TypeSafe</b> typed-judgment engine, sits behind them as the judgment backend (beta).
+
+<p align="center"><b>Connect the account you already pay for</b> (OAuth subscription or an API key) and pick the model from the list - that's it. Each one carries a <b>cost + intelligence card</b> and a clear <b>U.S.-government data-privacy notice</b>, so you always know what a turn costs and where your chat history stands.</p>
+
+<p align="center"><sub><code>claude-opus-5-5</code> · <code>claude-opus-5</code> · <code>claude-fable-5-1</code> · <code>claude-mythos-5-1</code> · <code>gpt-6-astra</code> · <code>gpt-6-sol</code> · <code>gpt-6-luna</code> · <code>gemini-3.1-pro</code> · <code>gemini-3.8-flash</code> · plus every other model the runtime exposes, including the AskSage gov gateway (<code>gpt-5.6-luna · sol · terra</code>, <code>google-gemini-3.1-pro-com</code>) and your own local endpoints.</sub></p>
+
+<p align="center"><sub><b>Context windows are declared per model</b>, so Opus 5.5 and Opus 5, Fable/Mythos 5.1 and GPT-6 Astra, Sol and Luna are all billed and metered against their real <b>1M</b> window instead of inheriting a 256K assumption - and vendor-superseded ids are <b>removed</b> from the catalog rather than left to rot in the picker.</sub></p>
+
+<p align="center"><sub><b>Jev / TypeSafe support</b> (<a href="#-whats-new-in-v230-beta1-prerelease">v2.3.0-beta.1</a>): paste a TypeSafe key under <b>Settings &gt; Judgment</b> and every typed judgment - classifications, yes/no checks, scores, the agent's <code>judge()</code> calls and the <code>browser_run</code> browser policy - is answered by Jev as a typed result with probabilities and a confidence, traced under the reply. No key, or AskSage lockdown, and the same calls fall back to your chat model.</sub></p>
 
 </td>
 </tr>
@@ -95,6 +122,79 @@ personalization internals are proprietary and intentionally undocumented here - 
 <p align="center"><b>“Allow all websites + local LAN” is pre-checked</b>, so a fresh agent can browse and search the web immediately - while the curated, trust-scoped whitelist is one toggle away whenever you want to lock it down (it still asks before a public IP or a foreign-country site).</p>
 
 </div>
+
+---
+
+## 🧪 v2.3.0 is almost here: test the beta
+
+> **v2.3.0 is the next stable release, and all of it is already out as a public beta.** Install it, use it on real work, and tell us what breaks before it reaches everyone. Betas are GitHub **prereleases**: stable installs are never offered one, the rolling download buttons and the Homebrew cask stay on 2.2.x until 2.3.0 ships, and a beta install updates itself to the next beta.
+
+### The headlines
+
+- **🛡️ A Windows sandbox that chat actually works inside.** The agent runtime runs inside a **Windows AppContainer**: filesystem access only to the folders it has been granted, no direct internet, and model traffic carried through LUCID's audited egress proxy. The green pill lights **only after the real runtime has booted inside the container**, so green means a working chat; otherwise the session stays on the disclosed passthrough and the reason is logged. **Security > Runtime sandbox** has the on/off switch, **Add folder** buttons that open a Windows folder picker, and the full list of folders the sandbox can reach. When the agent needs another folder it asks for a standing grant you approve. Administrators get Group Policy keys to lock the switch and pre-approve folders. Linux (bubblewrap) and macOS (Seatbelt) keep their containment. *(P-SANDBOX.7-.14)*
+- **🧭 Jev, typed judgment.** Classifications, yes/no checks and scores come back as typed answers with probabilities and a confidence, not a keyword parsed out of prose. Paste a TypeSafe key under **Settings > Judgment**; every judgment in a turn is drawn under the reply, and without a key the same calls fall back to your chat model. *(P-JEV.1-.3)*
+- **🖱 A browser agent that reads before it clicks.** `browser_run` takes one goal, reads the page's real controls, and has Jev pick each click, dropdown choice and field from what is actually on screen. No model ever writes the text it types: every typed string is a value you supplied. *(P-JEV.4)*
+- **🪐 The newest models.** **Claude Opus 5.5** is the new default, and **GPT-6 Astra, Sol and Luna** are in the picker with cost cards and their real 1M context windows, on omp 18.2.10. **Grok 4.7** joins them with its 500K window under a new **xAI Grok** family. *(P-MODEL.4, P-MODEL.5)*
+- **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
+- **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
+
+The per-beta details are in [What's new in v2.3.0-beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+
+### Get the beta
+
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.8](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.8)).
+2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
+3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
+
+### Upgrade notes and known issues
+
+- **Coming from beta.7?** Beta.8 fixes the Windows green-pill, dead-chat sandbox. If you held off on turning the sandbox on, switch it on from **Security > Runtime sandbox** now; it asks for administrator approval once if Windows needs it. If the panel stays on **disclosed** instead of **isolated**, the contained runtime failed its boot check and LUCID fell back safely. That is exactly the report we want: a screenshot of the Runtime sandbox section plus the support zip below.
+- Everything else we already know about is in the **[open bug list](https://github.com/mlcyclops/lucidagentide/issues?q=is%3Aissue+is%3Aopen+label%3Abug)**. Check it before filing, and add a comment with your details if your bug is already there.
+
+### Report a bug
+
+**[Open a new issue](https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml)** (the form asks for each of these) and include:
+
+1. **Version and machine:** the LUCID version from the **About** button at the bottom of the left rail, your OS and version, and the model and provider you were using.
+2. **What happened:** the steps, what you expected, and what you got instead.
+3. **Screenshots:** capture the whole window if you can (Windows `Win+Shift+S`, macOS `Cmd+Shift+4` then `Space` to pick a window, Linux `PrtSc`) and paste straight into the issue box. For a sandbox or security problem, include the **Security** panel's **Runtime sandbox** section. For a tool call that was blocked or prompted unexpectedly, turn on **Settings > Developer > Developer mode** and include the **Logs** panel's *Exec / egress gate decisions* section.
+4. **Logs:** a support bundle or log files, as described below.
+
+> **Issues are public.** Never paste an API key, token, password, or anything under CUI into an issue, a screenshot, or a log you attach.
+
+### How to pull your logs
+
+**Windows: one command, redacted zip.** Open **PowerShell** (Start, type *PowerShell*) and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\LucidAgentIDE\resources\repo\tools\collect-support-logs.ps1"
+```
+
+This writes `lucid-support-<date>-<time>.zip` to your Desktop. It collects the engine log, the agent runtime logs from the last 7 days (add `-Days 14` for more), metadata-only telemetry tails, a redacted settings summary, and a system report (OS, versions, and which process owns port 5319). Keys, tokens and passwords are redacted, and the credential vaults are never read. It **does** include your sign-in email, your folder paths, and the last four characters of each configured key, so open the zip and remove anything you would not post publicly. If the script is not at that path, download it and run it from there:
+
+```powershell
+irm https://raw.githubusercontent.com/mlcyclops/lucidagentide/master/tools/collect-support-logs.ps1 -OutFile "$env:TEMP\collect-support-logs.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\collect-support-logs.ps1"
+```
+
+**macOS and Linux: attach the log files.** No collector script yet, so zip these by hand:
+
+| Log | What it shows | macOS | Linux |
+| :-- | :-- | :-- | :-- |
+| Engine log | startup, crashes, port and sandbox errors | `~/Library/Application Support/lucidagentide-desktop/engine.log` | `~/.config/lucidagentide-desktop/engine.log` |
+| Runtime stderr | why an agent process exited | `~/.omp/lucid-acp.log` | `~/.omp/lucid-acp.log` |
+| Runtime daily logs | provider errors, HTTP status, model id | newest one or two `~/.omp/logs/omp.<date>.<pid>.log` | same |
+
+```bash
+# macOS
+cd ~ && zip -j ~/Desktop/lucid-logs.zip "Library/Application Support/lucidagentide-desktop/engine.log" .omp/lucid-acp.log $(ls -t .omp/logs/omp.*.log | head -2)
+# Linux
+cd ~ && tar czf ~/lucid-logs.tar.gz .config/lucidagentide-desktop/engine.log .omp/lucid-acp.log $(ls -t .omp/logs/omp.*.log | head -2)
+```
+
+These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `key` before you attach them. On Windows the same files live at `%APPDATA%\lucidagentide-desktop\engine.log` and `%USERPROFILE%\.omp\`, and an instance started on a non-default port writes to `lucidagentide-desktop-<port>` instead.
+
+**Never attach these:** `~/.omp/lucid-gui.json` (holds provider keys in plain text), `~/.omp/agent/agent.db` and `~/.omp/lucid-cred-vault/` (your credential vaults), or anything under `~/.omp/logs/http-400-requests/` (a full copy of the rejected request, including your prompt and file contents).
 
 ---
 
@@ -177,30 +277,346 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## ✨ What's new in v1.11.9
+## Unreleased: grab to pan in Yours
 
-> **📱 LUCID Remote - drive your desktop LUCID from your phone.** Plus: model replies no longer stall behind the dashboards, and the Preview panel grows tabs + device viewports.
+Open a document in **Preview > Yours**, zoom in, then select **Grab to pan** and drag to move the enlarged preview. The cursor changes from grab to grabbing. Press **Escape** or toggle the button off to click, type, or select text inside the page again. Arrow keys and wheel scrolling work in pan mode; Ctrl/Meta+wheel still zooms. Pan and markup are mutually exclusive, and switching tabs, opening another Yours document, or closing Preview exits pan mode. This moves the outer zoomed viewport, not an embedded PDF viewer's internal page scroller. Available after loading the updated app. *(P-PREVIEW-YOURS-PAN)*
 
-- **📱 LUCID Remote (the headline)** - your running desktop LUCID becomes reachable from a **phone browser**:
-  scan a **QR invite** from the Share panel, **sign in with Google**, and watch - or **drive** - your agent from
-  anywhere. Everything rides the existing **end-to-end-encrypted** collaboration plane (the relay only ever sees
-  ciphertext; the room key lives in the link fragment and never touches a server), and every remote prompt still
-  runs **on the host** through your fail-closed gate + approvals. Includes a hosted **guest PWA**, dual
-  **edit / view-only** invite links, live **presence**, **preview snapshots** on the phone, a **floating Join
-  dock**, and a self-host-or-hosted rendezvous (Cloud Run) with **claims-gated admission** for the paid Remote
-  Access tier. *(ADR-0226/0227 + ADR-0240-0242, P-REMOTE.1-.10)* - see the full section below.
-- **⚡ Model replies no longer crawl** - the live dashboards used to re-aggregate your **entire session history**
-  (and even spawn an omp subprocess) every few seconds on the server's single event loop, so **every model's
-  reply queued behind them** - the longer you used LUCID, the slower it got. The poll is now gated + memoized
-  and the underlying scans cached: repeat dashboard reads went from **~1-8 s to ~0-2 ms**, idle server CPU
-  dropped **~29% → ~8%** of a core, and streaming stays smooth mid-turn. *(P-PERF.3)*
-- **👀 Preview: two lanes + device viewports** - the preview fly-out gains **Yours / Agent tabs** (the agent
-  updates its own tab and badges it instead of clobbering what you're reviewing), **phone / tablet viewports**
-  (portrait + landscape, fit-scaled, with the viewport surfaced to the agent so it designs for mobile), and a
-  hard **50% width cap** so your chat and its Close button always stay visible.
-- **🩹 The v1.11.8 reliability rollup rides along** - the air-gap `bun` fix (clean machines boot with zero
-  prerequisites), reliable OAuth connect/disconnect, the overloaded-provider fallback, the model-picker freeze
-  safety-net, and the Linux air-gap Python fix.
+## Unreleased: seamless KG pack imports
+
+Import a `.lkgpack.zip` from Settings > Personalization or the KG panel's Packs menu. Verification stays visible until completion. On success, the pack becomes active and its page count refreshes without restarting LUCID. Settings stays open; **View graph preview** opens the visualization when you want it.
+
+The preview shows at most **100 nodes and 200 links**, with full graph totals in the header. It uses static placement, not a force simulation or animated particles. Click a node to load its page; Find a node searches the displayed preview. All pages remain available to knowledge retrieval, including pages outside the preview. Imports still verify integrity and origin, scan every page fail-closed, and install read-only as untrusted data. Existing installations need the updated build; importing after that does not require a restart. *(P-KGPACK.8, [ADR-0341](DECISIONS.md))*
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.8 (prerelease)
+
+> **🛡 Chat works inside the Windows sandbox, and you control it.** On beta.7 a green AppContainer pill could still mean every turn died. Beta.8 makes the contained agent actually run, and adds a sandbox switch, folder access you pick in a Windows dialog, and policy keys for administrators.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.8](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.8). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🟢 A green pill means a working chat** - four stacked causes killed every contained turn (the helper never handed its std handles to omp, the container could not read its own runtime, omp 18 proxies inference only via `PI_PROXY`, and a loopback registration could store a nameless SID). Each is fixed, bun moves to 1.4.2 (1.3.14 cannot start a script in the container), and the pill now lights only after the real runtime boots through the same wrap; otherwise the session stays on the disclosed passthrough with the reason logged. A Windows CI smoke runs the contained omp for real. *(P-SANDBOX.9/.10/.11, [ADR-0386](DECISIONS.md), [ADR-0387](DECISIONS.md), [ADR-0389](DECISIONS.md))*
+- **🎚 The sandbox switch** - Security > Runtime sandbox turns the Windows sandbox off without admin rights, on again with one administrator prompt when needed, and can remove its Windows registration entirely. *(P-SANDBOX.12, [ADR-0390](DECISIONS.md))*
+- **📁 Add folders from a Windows dialog** - **Add folder (read-only)** and **(read-write)** open a Windows folder picker; nothing is granted until you choose, too-broad picks (a drive, your whole profile, Windows) are refused, and the panel lists every folder the sandbox can reach. Under Smart App Control, where PowerShell cannot build the picker, the bundled helper opens the dialog instead. *(P-SANDBOX.13/.13b, [ADR-0391](DECISIONS.md), [ADR-0393](DECISIONS.md))*
+- **🏢 Enterprise policy** - `SandboxAllowUserOff`, `SandboxReadFolders`, `SandboxReadWriteFolders` and `SandboxLockFolders` (Group Policy or the policy file) keep the switch on, grant admin-approved folders at every contained spawn, and lock user and agent folder adds. *(P-SANDBOX.14, [ADR-0394](DECISIONS.md))*
+- **💬 Errors read as words** - an agent error reaches the chat as its message, never `[object Object]`. *(P-NORESP.2, [ADR-0388](DECISIONS.md))*
+- **✨ Grok 4.7** - pricing, the 500K window and a card, and an **xAI Grok** family in the picker. *(P-MODEL.5, [ADR-0392](DECISIONS.md))*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.7 (prerelease)
+
+> **🔌 The port that stayed busy, and two more GPT-6 tiers.** Upgrading from an earlier beta could leave the previous session's engine holding port 5319, so every launch died on the bind. Beta.7 ends that orphan after asking you, and the picker gains GPT-6 Sol and Luna.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.7](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.7). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🧹 An orphaned engine is reaped, with a warning** - PR #367 (P-PORTGUARD.2) stops the engine from outliving the app from now on, and names the process when the port is busy. It deliberately does not kill whatever holds the port, because an arbitrary listener cannot be proven to be ours. Beta.7 draws that line: when the owner probe attributes the listener to a LUCID engine (the `lucid-engine` binary, or the `bun run desktop/dev.ts` fallback), a dialog names it (pid, start time, command line) and offers **Stop it and continue** or **Quit**; Stop ends the process tree, the omp session under it included, waits for the socket to close, then starts normally. Anything else on the port is left alone and the existing foreign-listener dialog applies. *(P-PORTGUARD.3, [ADR-0382](DECISIONS.md))*
+- **🪐 GPT-6 Sol and Luna in the picker** - omp 18.2.10 catalogs the two new tiers natively, so the pin moves from 18.2.7 and the picker offers whichever your provider carries. LUCID adds what the catalog does not: cost cards (Astra $10/$50, Sol $2/$10, Luna $0.10/$0.50 per Mtok), 1M context declared per id, a fresh-install default that ranks Astra, then Sol, then Luna (a provider without Astra opens on Sol, never the fast tier), and the Agent role's Regular/Max tier walking Sol down to Luna and Luna up to Astra. *(P-MODEL.4, [ADR-0383](DECISIONS.md))*
+- **📂 Past sessions load again** - carried from beta.6: omp 18 writes a title slot as line one of every session file and the transcript reader trusted line one. *(P-SESS.3, [ADR-0380](DECISIONS.md))*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.1 (prerelease)
+
+> **🧭 Jev arrives, and the agent can drive a page by itself.** Typed judgment instead of guessed keywords, a browser agent that picks every click from what is actually on the page, several accounts per provider, and an Agent Mode that got a model tier, a game cabinet, and a whiteout fix.
+>
+> **This is a beta.** It ships as a GitHub prerelease only: stable installs are **not** offered it through auto-update, the Homebrew cask stays on 2.2.2, and the rolling `latest` download links are untouched. Beta testers install it by hand from the prerelease page, and a beta install updates itself to the next beta automatically.
+>
+> **➡️ Install the prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.1) (Windows installer and portable, macOS pkg and zip for Apple Silicon and Intel, Linux AppImage, deb and rpm, plus an arm64 AppImage).
+
+### Jev, in one paragraph
+
+**Jev** (also written JEV, or **TypeSafe**) is a **typed-judgment engine**, not a chat model. You hand it one piece of state and a set of questions, and it answers each one as a type: a **choice** with a probability per option and a confidence, a **yes/no probability**, or a **score** over ordered levels. That is a different job from generating prose: a chat model asked "is this suspicious?" writes a sentence and you parse a keyword out of it; Jev returns `{ choice: "suspicious", probabilities: { suspicious: 0.83, benign: 0.17 }, confidence: 0.71 }`, every time, in the same shape, fast. LUCID reaches it through omp's judgment backend: the agent calls `judge(state, questions)` from eval, omp's own callers (thinking-effort selection, unexpected-stop detection) use the same path, and when no TypeSafe key is configured the same call is answered by the chat-model fallback, more slowly and less precisely, with the trace naming which one answered.
+
+- **🔑 Jev in Settings** - a **Judgment** card holds the TypeSafe key (masked, vault-stored, excluded from every chat-model picker) and an `auto | typesafe | llm` backend switch delivered to every omp child as a config overlay. **AskSage lockdown pins it to `llm`**, because a judgment ships session state to api.typesafe.ai and a CUI session must not. *(P-JEV.1, [ADR-0374](DECISIONS.md))*
+- **🔎 Jev in the chat** - every typed judgment of a turn is recorded and drawn under the reply: the question, the typed answer with its probabilities, the backend that answered and the latency, and a plain "Jev not consulted this turn" note when a configured Jev sat idle. omp records none of this itself; an in-process extension wraps its two judge classes and posts each report to the desktop before omp acts on the answer. *(P-JEV.2, [ADR-0377](DECISIONS.md))*
+- **🗣 The agent knows the word** - "use Jev" used to get "I am not sure what JEV refers to". A frozen prompt policy now names Jev, says it is reached only through `judge()`, when to call it (you name it, or you ask for a judgment, classification, rating or confidence), and that the typed answer is what gets reported. *(P-JEV.3, [ADR-0378](DECISIONS.md))*
+- **🖱 `browser_run`: the Jev browser policy** - a TypeScript port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT). Open a page in the visible agent browser, give it one goal, and each step is: read the page's controls into an indexed table (in an isolated script world the page cannot tamper with), ask Jev **one** question set for the operation and a target per operation, execute only the matching head through the same input path the screenshot tools use, and re-verify the page did not change first. Two posture rules on top of upstream: **no model ever writes text** (every typed string is a value you supplied by name; Jev only picks which value goes in which field, so page content can never become input), and any malformed judgment, stale page or unreachable judge **stops the run with nothing executed**. A `jev-browser` skill teaches the agent the loop. *(P-JEV.4, [ADR-0379](DECISIONS.md))*
+
+### Agent Mode, improved
+
+- **🎚 Regular / Max model tier** - a tier select in the title bar switches the Agent role between the provider's regular and top model of the same family without leaving the route, honoring CUI and managed lockdown, confirming the switch with rollback, and restoring the prior model only after the backend confirms. The select the OS was swallowing as a window-drag region now opens. *(P-MASCOT.4)*
+- **👥 Several accounts per provider** - multiple OAuth identities or named API keys on one provider, switchable from nested cards in Settings and the Provider Hub, with the inactive rows parked rather than deleted. *(P-ACCT.1, [ADR-0375](DECISIONS.md))*
+- **🪟 A preview link no longer restarts the front end** - clicking an external link inside a guide or preview used to blank the whole window and lose the prompt you were typing. Navigation policy now owns every top-level and frame navigation, sends external links to the OS browser, and keeps your draft. *(P-UX-JEV.1, [ADR-0376](DECISIONS.md))*
+- **🕹 The game cabinet** - the under-composer arcade grew into a cabinet of three mini games with a runner that finally walks instead of skating, solid crates, spaced hazards and buttons that stop eating clicks. Play while the agent works. *(P-MASCOT.4, P-MASCOT.5)*
+- **📌 omp 18.2.6** - the exact pin moves to the omp line that ships the judgment module Jev needs. *(P-OMP18.2, [ADR-0373](DECISIONS.md))*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.2.0
+
+> **🐛 Four reported defects, fixed.** A fleet lane that could not run a command at all, a phone that was shown a broken preview, a Preview panel that followed you into your next conversation, and a storefront with no door.
+
+- **🚦 A fleet lane can run bash and eval again** - there are **two** approval gates in front of a tool call, and the lane was only answering the first. Ours (the lane's own permission request, resolved by auto-approve with no human) worked perfectly; omp's per-tool gate raises a *second* request, and the lane had a handler for it that it had **never advertised it could answer**. So omp never asked, and every `bash` and `eval` in a lane was denied at the tool-permission layer no matter what you had configured. Fixing the advertisement then exposed the other half: that handler read the offered choices from the wrong path and replied in the wrong shape, so switching it on still resolved to nothing. Both gates now read one shared module that **both** interactive clients import, so a future third client cannot get it half-right. Verified on a live two-node DGX lane. *(P-FLEET.L14/L15, [ADR-0337](DECISIONS.md), [ADR-0338](DECISIONS.md))*
+- **📵 A broken preview is never published to your phone** - a preview that could not render was still screenshotted and delivered to a phone guest, with the "Opening the preview" toast baked into the image and captioned with a file from an unrelated session. The serve route answers a failure with HTTP 200 and an HTML body that *says* it failed, so every existing guard read the failure page as a working page. The target is now **probed** before anything is captured, the toast is suppressed for the shot, and the rate-limit slot is claimed only once a send is authorized, so a failure can no longer burn the slot of the good preview behind it. *(P-PREVIEW-PWA.4, [ADR-0335](DECISIONS.md))*
+- **🪟 The Preview panel stops following you into the next conversation** - an unresolvable target was remembered exactly like a successful one, and that memory outlived the session boundary, so starting a fresh chat could pop the panel open on a file from a conversation that was already over. The agent's preview lane now closes with the session; a document **you** opened by hand is left exactly where you put it, broken or not. *(P-PREVIEW.19, [ADR-0339](DECISIONS.md))*
+- **🛍 The Role KG Packs storefront has a door, and checkout remembers itself** - the only commercial surface in the product could be reached only by typing its name into the command palette. It now has a **Packs** button in the knowledge-graph header. Clicking "Get pack" while signed out used to open a browser and then ask you to click the pack again when you got back; the pending purchase now survives the sign-in detour and resumes that exact pack, under a 15-minute one-shot intent (the sign-in deep link is shared with LUCID Remote and Drive, so a stale purchase must never turn a future sign-in into a payment page). *(P-KGMARKET.5, [ADR-0333](DECISIONS.md))*
+- **🧠 The Personalization card, rebuilt for someone with many knowledge graphs** - a hero KG row that opens the picker you already had (select, rename, seed from a folder, import a pack, browse Role KG Packs, new KG) instead of burying it three clicks deep in another panel, plus a stat strip that scrolls at a measured two-row cap rather than clipping a row in half. Missing numbers read as a dash, never as `NaN`. *(P-KGUI.3, [ADR-0336](DECISIONS.md))*
+- **📦 The rolling update channel can publish at all** - the release identity gate compared Debian and RPM versions literally, but neither format permits `-` in a version field, so every prerelease build failed the gate and the rolling channel had **never once completed** in its life. A publishing dispatch also stamped itself as a test build, which would have offered a test version to every installed user through auto-update. Both fixed and confirmed against the live feeds. *(P-RELEASE.5, [ADR-0332](DECISIONS.md))*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.1.0
+
+> **🔓 Connect via OAuth works again, and a lane transcript you can navigate.** If "Connect via OAuth" ever failed for you with an `EPERM` error, this is the release that fixes it.
+
+- **🔐 OAuth sign-in no longer dies on a path it cannot read** - on a packaged Windows install, "Connect via OAuth" could fail with Bun's own `error: EPERM reading ...pi-coding-agent\dist\cli.js` instead of opening a sign-in page. The resolver accepted the bundled omp because the path **existed**, so the broker spawned a file it could not read inside the ACL-protected application directory. This was **not new in 2.0.0**: the offending resolver shipped in every release from v1.11.8 (15 July) onward, so it had been failing for anyone whose install directory denied that read. Existence was never the right question, and runnability is: each candidate is now **probed by running it**, with a fall-through to one that works and a log naming every path tried when none do. Three files had each grown a private copy of that resolver and had already drifted once; they now share one. *(P-AUTH.3)*
+- **🖱 A fleet lane scrollbar you can actually grab** - the global scrollbar thumb carries a 3px transparent border, leaving a 5px pointer target: fine down the edge of a full-height chat, unusable inside a 300px lane card. Lane transcripts now get a 14px track with a 10px thumb and a visible resting colour, so the bar reads as draggable before you hover it. The global bar stays slim everywhere else. *(P-FLEET.L13)*
+- **⬇ Catch-up buttons in every lane** - the same pair the main composer carries: one chevron steps a page and keeps a line of overlap so you resume on a line you have already read, two chevrons run to the newest line instantly. The scroll arithmetic now lives in one shared module that the chat and the lanes both read, so the chat can never get a tuning pass the lanes miss. *(P-FLEET.L13)*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.0.0
+
+> **🎉 The major.** Eighteen increments: a current-generation model catalog, light mode and seven themes, sessions that finish what they started, and a fleet that grew from demo to workday.
+>
+> **Why 2.0 and not 1.15:** this release changes defaults you were relying on and **removes** superseded models from the catalog. New capability is a minor; changed defaults and withdrawn options are what a major exists to announce. See **Breaking changes** at the end of this section.
+
+**New models**
+
+- **🧠 The catalog moves to the current generation** - **Claude Opus 5** becomes the house default (1M context), **GPT-6 Astra** arrives as OpenAI's flagship and the first of its generations to match Claude's 1M window, and the **Gemini 3 / 3.1 Pro** and **3.5 Flash** family lands alongside **Claude Fable 5.1** and **Mythos 5.1**. Context windows are declared per model rather than inherited, so a 1M model is never billed against a 256K assumption. *(P-MODEL.2, ADR-0317)*
+- **🎯 The picker default follows YOU** - it used to open on a hardcoded id, so a user whose provider did not offer that model met an empty picker. It now resolves against what your own providers actually expose, and a model the gateway has not rolled out to your account is simply absent rather than fabricated.
+- **📉 Capability tiers come from one source of truth** - a hand-copied third variant of the ranking heuristic had never learned GPT-6, so a user whose only provider offered `gpt-6-astra` had their flagship ranked as a workhorse. One registry now answers that question everywhere: chat, the trainer, and cost estimation.
+
+**Features**
+
+- **🎨 Light mode, and seven themes** - LUCID was dark-only for its entire life. There is now a theme picker with **Lucid Dark**, **Lucid Light**, Midnight, Slate, Ember, Paper and High Contrast, applied instantly across the app, the code editor and the trainer. Every palette is **token-complete by test**, parsed off the stylesheet in CI, because a light theme that forgets one token silently inherits the dark base and ships unreadable white-on-white, and no typecheck or smoke test catches that. Contrast ratios are computed rather than eyeballed. *(P-THEME.1, ADR-0320)*
+- **📝 The agent can write to the knowledge graph** - memory was read-only to the agent, so anything it learned mid-session died with the session. It can now write, and a **locked vault stops lying**: a locked graph reports itself locked instead of quietly answering as if it were empty, which is the failure that makes a memory system untrustworthy. *(P-KG.3, ADR-0319)*
+- **🩺 A session that heals itself, so nobody restarts the app** - the harness watches its own sessions on a ladder (ok, quiet, probe, recover): it asks a quiet session for status through the operator-note path, and if that fails it cancels and respawns the child **in place**, reloading the same session id so the conversation survives. An **open tool call is never killed on a clock** at any silence duration, because a ten-minute build is work, not a stall. *(P-HEALTH.1, ADR-0311)*
+- **🧯 A stalled session resumes the run, instead of quietly dropping it (the headline)** - the self-watch already recovered a wedged session (cancel, drop the omp child, reload the same session id so the conversation survives), but it never resumed the WORK: dropping the child rejects the in-flight prompt, so the turn printed "[agent unavailable]" and settled. The session was healthy again and the run was gone, with nothing saying which, so you still had to notice and re-ask. The run is now **re-sent on the recovered session** with a short operator note (do not start over, re-read and verify any file you were part-way through writing), and you are told plainly that the stalled session is restarting and picking up where it left off. A user **Stop** is never resumed, one recovery authorizes exactly **one** restart, a session that failed to reload is never resumed rather than talking to a phantom, and the budget is per RUN and not refilled by activity, so a repeatedly wedging turn stops and says the work so far is saved. *(P-HEALTH.2, ADR-0324)*
+- **🧹 Dismiss all** - the security panel's live-block queue had 100 rows and only per-row buttons, which is not a review workflow. One two-step **Dismiss all** now acknowledges the whole active queue. It is not "approve all" and never becomes one: every call stays **blocked**, approved rows are untouched, and each block still writes its **own** ledger line and its own security event, because per-block provenance is the entire point of the audit trail. *(P-SEC.4)*
+- **📄 Markdown previews render** - a `.md` report the model had just written came back as its own source: literal `#`, `**bold**` and fenced code. It now renders with headings, lists, GFM tables and fenced code in one readable column. Sanitation is deliberately **not** DOMPurify (that needs a browser DOM; this runs in the engine): the renderer never PRODUCES raw HTML, so a `<script>` in a `.md` is displayed rather than run and a `javascript:` link degrades to plain text. Stricter than the chat thread on purpose, because a file on disk is untrusted input. *(P-PREVIEW.16)*
+- **🚢 Fleet lanes you can actually size and drag** - card width was a **column span** over 300px tracks with a half-track deadzone, so a 149px drag moved nothing and a 150px drag jumped 300px. Width is pixels now and the right edge tracks the pointer **1:1**. The panel became a wrapping flex row, so widening one card pushes its neighbour along instead of jumping to the next row and leaving a hole. Lane headers **wrap** their action buttons onto a second line instead of clipping them, every header carries an always-draggable **grip** (the drag surface used to be the header minus every button, select and input, which leaves almost nothing to aim at), and the resize hit boxes doubled with a visible resting state, because a handle nobody can see is a handle nobody knows exists. *(P-FLEET.L12, ADR-0325)*
+- **🌙 Lucid Dark is the default again** - an unset theme resolved through your OS colour-scheme hint, so a long-time user on a light-mode machine was moved off the dark UI they had always had. Unset now means **Lucid Dark**, and "Match system" became an explicit opt-in choice rather than the silent default. An explicit theme pick is untouched either way. *(P-THEME.2)*
+
+**Fixes (the ones you would have noticed)**
+
+- **🖼️ The preview screenshot no longer bleeds into the composer** - the renderer measures the preview frame in CSS pixels and handed that rect straight to Electron's `capturePage`, which crops in **DIP**. Those match only at zoom 1.0, so at 118% every capture started ~18% left of the panel (pulling the chat column into the shot) and ran ~18% short (slicing the right edge off the previewed app). The zoom factor is now applied at the one IPC seam, which fixes all four capture paths at once: the agent's screenshot, "Screenshot to chat", and both send-to-phone snapshots. *(P-PREVIEW.15)*
+- **🔌 A dropped engine stream stops freezing the composer in silence** - every PRE-stream failure was loud (unreachable, 404, non-OK all printed a line and settled the turn) while a MID-stream death, by far the likeliest on a long turn, was a bare `catch {}`. The composer froze on its last event while the engine kept working, and the only way to see what happened was to stop the session and reopen it. An unaborted stream that ends without a terminal event now says so and settles the turn. A separate guard means a render error on ONE event no longer silently eats it either. *(P-TURN-VIS.1)*
+- **🔕 The Preview panel stopped opening for everything** - widening the panel so it COULD show a markdown report or a chart PNG also widened the AUTO-OPEN trigger, and an agent writes `.md` and `.json` constantly (notes, plans, configs, fixtures). Auto-open is now html / svg / pdf only; every other kind stays fully previewable **on request**. The `preview_open` tool description was rewritten too, because "a markdown report, a data file, a chart PNG all work" read as an invitation and the agent took it. *(P-PREVIEW.18)*
+- **📕 PDF previews render** - a `.pdf` opened as a blank white frame for every file, because Chromium's built-in PDF viewer sits behind Electron's `plugins` flag, which defaults to false. *(P-PREVIEW.17)*
+- **🔗 Promote a lane into the main composer** - attaching a lane to the composer is an **attach, not a handoff**: the lane's child, session id, folder and model are byte-identical before and after, which is the only design that works mid-turn and makes detaching instant. Every promote and demote writes a ledger line naming the lane, folder, model at that moment, and turns carried, so a stretch driven from the main chat is never indistinguishable from lane work. *(P-FLEET.L8/L11, ADR-0310/0314)*
+- **🧭 The preview path bar follows the file on screen** - it was written only when you switched lanes or opened a file yourself, so an agent load into the already-visible lane left the previous path sitting there. That field is not decoration: it is the **Open** input and the show-in-folder target, so pressing Enter re-opened a file that was not the one being displayed. *(P-PREVIEW.16)*
+- **🧪 The test suite stopped writing into your real security ledger** - `recordBlock` is imported by the KG pack importer, the skills importer and registry, the news and trivia seeders and the command store, and the ledger path was resolved once at module load from your home directory. So every full suite run appended its **fixture** blocks to `~/.omp/lucid-blocks.jsonl`, which is worse than noise: a review queue full of test residue buries the real blocks the panel exists to surface. The block ledger and the OCSF audit sink now resolve per call and, under test, never resolve to the real files at all. *(P-SEC.4)*
+
+**Breaking changes** (why this is a major, and what to expect)
+
+- **Superseded models are GONE from the catalog.** A deprecation floor removes ids that vendors have themselves superseded (GPT below 5.4). If you had pinned one, the picker no longer offers it and you will land on a current model instead. The o-series and `gpt-oss` are exempt.
+- **An unset theme no longer follows your OS.** It now means **Lucid Dark**. If you WANT the app to track your system light/dark setting, pick **Match system** once in Settings: it is a real stored choice now, not the silent default. An explicit theme pick is unaffected.
+- **The Preview panel no longer opens itself for most file kinds.** Auto-open is html / svg / pdf. A written `.md`, `.json`, `.csv`, `.log` or `.png` stays fully previewable, it just waits to be asked. If you relied on a markdown report surfacing on write, open it from the panel or ask the agent to.
+- **No migration to run.** Persisted fleet card sizes convert automatically (an old column span becomes its pixel equivalent), sessions, vault contents, knowledge graphs and provider credentials are untouched, and nothing in storage is rewritten by the theme change.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.14.2
+
+> **🛡️ Four increments, one field report.** A user reported that the update installed a different product entirely. The release was innocent - the trust boundaries were not.
+
+- **🛡️ The window can never render a stranger (the headline)** - LUCID's window is a shell over a local engine on a fixed port, and it used to render whatever answered `/api/health` there. A dev server left running by another project won that port and got painted **inside LUCID's chrome**, sign-in page and all, surviving two upgrades and a checksum-verified reinstall. Now main mints a **per-launch nonce**, the engine echoes it, and anything else fails **loudly**: no window, a diagnosable dialog, and a copy/paste incident report naming the squatter's process, pid, start time and command line. Never a silent roll onto another port either - userData is port-keyed identity, so a silent roll would quietly move you onto a different profile. *(P-PORTGUARD.1, ADR-0305)*
+- **📦 CI reads the shipped bytes before upload** - proving that release innocent took a full session of hand-parsing installer headers, because **no gate had ever looked inside an artifact**. One branch here builds two products, so a filename is exactly what a mis-set config gets right while the payload is wrong. Every build now has its **embedded** identity checked before any upload: pkg bundle id + payload `.app` path + version, deb package name, rpm lead, and the updater feed's declared path (both flavors emit a file named `latest.yml`, so the filename can never separate them). An empty dir, an unparseable artifact, or an unrecognized file **fails the build**. *(P-RELEASE.4, ADR-0307)*
+- **📄 Real Word, Excel, and PowerPoint** - agents can create, read, and edit `.docx` / `.xlsx` / `.pptx` with **no Office installed**, through a pinned, digest-verified OfficeCLI wired as a **gated skill**: read-only verbs sit at the read tier, mutating verbs at local-mutate, `install` and `watch` higher, and an unrecognized verb stays fail-closed. The point is the **render-look-fix loop** - render to HTML, open it in the Preview panel, look at it, fix what you saw. The piped `curl | bash` installer is prohibited (and independently classifies as always-prompt). *(P-OFFICE.1, ADR-0306)*
+- **🖼️ The Preview panel obeys the agent again** - `preview_open` had gone silent: the panel opened only as a side effect of pattern-matching the agent's tool-call **title**, and enabling intent tracing rewrote that title to the model's own prose (the ACP update carries no tool name at all). The tool now **reports itself** over its own token'd channel, like the screenshot and inspect tools always did. The same shadowing had left every preview activity pill dark, so those report by kind now too. *(P-PREVIEW.11/.11b, ADR-0308)*
+- **⬇️ Two scroll helpers for long sessions** - a restored session had no way to just reach the newest message. Now the right edge carries a **page stepper** (one viewport, with a line of overlap so you resume where you were) and, below it, a **run-to-the-end** button that is deliberately instant - a smooth glide across tens of thousands of pixels is a slow ride to somewhere you already asked to be.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.14.1
+
+> **📱 The fleet fits in your pocket now.** A lane's whole conversation reaches your phone, the composer is one row, the fleet strip costs 33 pixels, and nothing on the phone ever opens itself.
+
+- **📱 A lane's conversation on the phone (the headline)** - lane events and chat events were disjoint unions, so no lane byte had any path to a guest. Now the phone **subscribes** to exactly one conversation with a read-only `watch` frame, the host **unicasts** lane events only to peers that asked (an idle lane streams nothing at a phone on cellular), and a bounded `lane-sync` replay means a lane that has worked for ten minutes never opens empty. A lane crash gets its own visibly distinct chip, never the security gate's block, and a `watch` from a peer that never authenticated is ignored outright. *(P-PWA-FOCUS.1, ADR-0300)*
+- **✍️ One-row composer** - seven controls plus a two-line disclaimer became `[+] [hold-to-talk] [more] [?] ... [Stop] [Send]`. Same-family controls collapsed into menus, Queue and Send merged (they were always the same frame underneath), and the voice disclaimer moved behind a `?` that goes **amber** whenever the current path would send audio off the phone - the cloud-consent gate untouched. *(P-REMOTE.15, ADR-0298)*
+- **🚢 The fleet costs 33px** - the permanently-expanded strip became an auto-collapsed double-decker carrying the desktop dock pill's own count pips, so the transcript keeps 660 of 844 viewport pixels. Each lane card has its **own composer**, so the master input has one destination again, and lane colours now key off the desktop's exact status hexes - the phone previously disagreed on four of seven states. *(P-PWA-FLEET.2, ADR-0299)*
+- **🔄 Cross-lock sync** - per-target seen counters replace two global singletons: only the conversation you are looking at is marked seen, so an unwatched lane holds a real backlog. Under a minute away auto-syncs; longer offers a **Sync** control that scrolls to a drawn **"new since you looked away"** boundary (centred, so the last thing you read stays as context). Sync never repoints the composer - a backlog elsewhere is a tappable row - and per an explicit user decision, **no phone panel ever opens itself**: attention is colour and count in the always-visible bar. *(P-PWA-FOCUS.2, ADR-0301/0302)*
+- **🎬 Deterministic Preview capture** - a previewed scene that defines `lucidRenderAt(tMs)` is stepped through a fixed timestep on LUCID's own clock, fingerprinted, and compared to its baseline with the method **named** in the verdict: byte-exact where the platform repeats itself, coarse signature at a tolerance measured on **your** machine where it does not, and an honest "no verdict" when readback stability could not be measured at all. A page without the hook is sampled on its own clock, and the verdict says so. *(ADR-0297)*
+- **🧪 The test gate measures what it claims** - `make test-harness` had no path scope, so on any clone with a populated `vendor/` it swept in oh-my-pi's own 11,000-test suite; the per-tree habit everyone used instead silently omitted all of `tools/`. Scope is now defined by **exclusion** with a stated reason per excluded tree, and both entry points (`make` and `bun run test`) run the identical scope. *(ADR-0303)*
+- **🎨 One branch, two products** - the LUCID **Creator** flavor (studio, capability probes, durable jobs, the follow-along audio editor, the mixer, and the image / video / 3D pipelines) now lives on trunk behind `build_flavor` gates: absent from standard builds, its own port / identity / data roots, and its own `creator-v*` release channel wired so the two products can **never cross-install** through GitHub's shared latest-release pointer. *(ADR-0279..0296, 0304)*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.14.0
+
+> **🎛️ Say it mid-turn, and it hears you.** Steer a running agent without stopping it, approve once instead of forty times, let it drive a real browser you can watch, and dictate from your phone only when the audio can be proven to stay on it.
+
+- **🗣️ Mid-turn interjection (the headline)** - type while the agent is working and choose **Queue for next turn** or **Push mid-turn**. A pushed note reaches the model at its **next tool boundary**: the security gate already rewrites tool results in-process, so the note rides that seam and lands *outside* the UNTRUSTED envelope, clearly marked as operator input, and the agent weighs it and either adjusts course or finishes the step first. No cancel, no restart, no lost work. Queued prompts stack as chips (cap 8) with per-item **Push now**, and a **Check in** button beside the turn clock answers "is it stuck or thinking?" instantly from live state - elapsed, phase, pending tool calls, queue depth - plus a one-click "ask the agent for a status update". *(P-INTERJECT.1)*
+- **✅ Approval scopes + full auto-mode** - a fleet lane's approval bar gains **Allow for session** (approves this ask and every same-kind ask for that lane's life) beside Allow and Deny, so a forty-file refactor stops asking forty times. A per-lane (or fleet-wide) **full auto-mode** sits behind an explicit risk-acceptance modal that states plainly what it grants; the server refuses to enable it without that acknowledgment, and auto-granted asks stream as visible chips so the card keeps an audit trail. The in-omp security gate still scans **every** tool call in auto-mode: it removes the human step, never the scan. *(P-FLEET.L6)*
+- **🌐 An agent-controlled browser you can watch** - for pages that cannot be read or driven any other way, the agent opens a **visible** Chromium window: `browser_open` is egress-gated per website, then it iterates screenshot, scroll, click, type, drag, and key combos. Screenshots are compositor-level, so a page that blocks in-DOM automation cannot blind it, and coordinates are expressed in **screenshot space** and mapped back onto the live window, so the model never needs the viewport size. The window breathes an accent glow and flashes per snapshot, the chat shows a live pill with the tab title, and **closing the window is a hard kill switch** that fails every in-flight command instantly. Snapshots land in the transcript as images and auto-forward to your phone when a share is live. *(P-BROWSER.1..3)*
+- **📱 Fleet control + device dictation on the phone** - the PWA gains a **fleet strip**: filter lanes by name, prompt one, stop one, or answer its approval (once / session / deny), all edit-gated on the host as well as the client. Plus **optional device-native speech-to-text**, gated honestly: the Web Speech API defaults to the browser vendor's **cloud**, so device dictation is offered only when the phone can *prove* on-device processing (`processLocally` with a verified local language pack, Android Chrome today), and under a CUI-plus-lockdown posture a cloud path is **refused outright**. iOS Safari cannot prove local and an installed iOS PWA is blocked from the API entirely, so each case explains itself and points at hold-to-talk, which transcribes on your desktop with offline Whisper. *(P-REMOTE.14)*
+- **🗂️ Workspace init + the `.agents` framework** - open a new folder and LUCID asks what it is for (build an app, analyze documents, research), then offers to scaffold **`AGENTS.md` plus `.agents/`** with CONTEXT, PROGRESS, DECISIONS, and skills files: a portable, file-backed record so the next agent (on any system, in any tool) and the next developer inherit your context instead of starting cold. Point it at an existing repo and it offers to **scan** it first, pre-filling the detected stack and commands. Nothing existing is ever overwritten, and it asks once per folder. *(P-WSSETUP)*
+- **🕰️ The Timeline stops drowning in its own noise** - the repo's echo and demo scripts spawn throwaway sessions dozens to the minute, which buried every real conversation. They are now classified and **held back by default** (a chip says how many, one click shows them), with a load-bearing safety rule: a real workspace past two turns is *never* filtered, whatever it is titled. The dock is now a **two-pane inspector** - chronology on the left with aligned metadata columns and horizontal scrolling so a long title is readable in full, the selected transcript on the right behind a monospace role gutter - plus a filter box, keyboard navigation, and sticky day headers carrying each day's composition. *(P-TL.2/.3)*
+- **🩺 "No response from the provider" is diagnosable now** - a fresh install whose bundled runtime half-provisioned killed every turn with a bare `agent process exited (code 1)` and no evidence. Every omp child's stderr now persists to a rolling `~/.omp/lucid-acp.log`, a non-zero exit **quotes its last line** in the error card, and the support log collector picks the file up (secrets redacted). *(support diagnosability)*
+- **🌐 One canonical home: lucid-agents.com** - the marketing site, its structured data, sitemap, and the desktop About link now point at **lucid-agents.com** (domain-mapped to the same Google Cloud instance, so both hostnames keep serving). The phone PWA and the sign-in page deliberately stay on the `lucid-agent.web.app` origin: that origin is what the OAuth `authDomain` is registered against, and moving it would re-break `signInWithRedirect` under iOS Safari storage partitioning.
+- **🔑 The vanishing Local Provider, fixed (Windows)** - `safeStorage` is Chromium `os_crypt`, whose key lives per **profile dir**. Because LUCID suffixes its userData per port so a dev build can run beside the installed app, every port-instance quietly had its *own* encryption key while the credential vault stayed global: a key written by one instance was undecryptable by the next, so the Local Provider was skipped at engine spawn and never reached the model picker, all while the UI still said "key in vault". Port-keyed instances now converge on **one** os_crypt key (seeded pre-Chromium-init, backfilled when only dev builds ever ran), and a corrupt or foreign `Local State` is never overwritten. *(ADR-0278)*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.13.2
+
+> **🛟 Fleet agents that survive, show their work, and stay reviewable.** A crashed lane revives with its memory; lane cards show real diffs and pasted images and stage your next prompts; and every session - chats, lanes, imports - lands on one reviewable Timeline.
+
+- **🛟 Lanes that survive (the headline)** - the 10-minute lane turn clock is **deleted**: a prompt is raced against the child's *life*, so a mid-turn crash surfaces as `error` in **milliseconds**, never after a 600-second wait, and a long think is patience, not a death sentence (an amber `quiet Nm` chip keeps the silence legible). Error is a **recoverable state**: `Retry` re-sends the last prompt, `Respawn` revives the lane **in place** - same lane id, memory carried - via native `session/load` when the agent offers it, else the recorded transcript replays as clearly delimited memory. Fail-closed survives every revival: an approval open at death dies as a **deny**, and the revived lane **re-asks a human** - nothing gated is ever replayed. *(P-FLEET.L4, ADR-0275)*
+- **📝 Diff chips in lane cards** - a worker's write/edit no longer collapses to a 120-character title: the authored code crosses the lane wire (the same extraction the main chat's chips use, paths resolved against the *lane's* folder) and renders as a one-line chip - filename, green `+N` / red `-N` - expanding to the hunk. Chips survive closing and reopening the card. *(P-FLEET.L3, ADR-0276)*
+- **🖼️ Paste images into lanes** - paste a screenshot into any lane composer and it thumbnails above the input, rides the prompt as a real image block (identical to the main chat), and shows in the transcript. Recovery memory records the **count**, never the bytes. *(P-FLEET.L3)*
+- **📥 Staged prompts** - while a compact card streams, Send flips to an amber **Stage**: park your next thoughts as numbered one-line chips with reorder/remove (a manager-owned queue, cap 8, survives closing the dock) and they run **in order** when the lane goes idle. One-turn-per-lane is never crossed, and a queued turn only drains into a **visible** card - an approval mid-queue always has somewhere to glow. *(P-FLEET.L3)*
+- **🕰️ The Timeline (new rail icon)** - every session this machine has had - master chats, **fleet lanes**, and import throwaways - across **every workspace**, day-grouped and newest-first: time, kind badge, lane name, title, workspace, turns. Click a row and the transcript expands in place, tail-limited and honest ("showing the last N of M"). Read-only by design. Behind it: every lane spawn and recovery now **names its session in a durable ledger**, so the histories omp always persisted stop being anonymous - a lane you stopped last week is labeled and readable today, across engine restarts. *(P-FLEET.L5, ADR-0277)*
+- **🔬 Grounded in a survey of DeepSeek Harness (MIT)** - the append-only-log recovery semantics, the one-corpus query topology, and the persist-what-the-card-needs presentation principle were adopted as concepts; the Cordis plugin runtime and dsh's session format were explicitly rejected (we extend omp, never re-platform). *(ADR-0274)*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.13.1
+
+> **🚀 The fleet grows with your machine.** The lane cap is gone. A lane is refused only when the box has actually been busy for half a minute, and you can point one straight at a repo URL.
+
+- **🚀 Unlimited lanes, gated by sustained pressure (the headline)** - the instantaneous 75% watermark and the `min(6, cores/2)` lane ceiling are **deleted**. Admission now reads a **rolling pressure window**: a lane is refused only when CPU **or** memory has held **90%+ for 30 unbroken seconds**. So a compile, an AST ingest, or a browser opening forty tabs never blocks work, a cool **or blind** reading resets the streak (a failed sample can never be counted as load, and no evidence fails open), and every refusal names the measured percent **and** how long it held: *"system memory has been at 94% for 34s"*. The manager measures this itself with a cheap 3s sampler that retires when the fleet is idle, so "sustained" is measured, never guessed. *(P-FLEET.L2, ADR-0273)*
+- **🌐 Spawn a lane straight from a repo remote** - paste a **GitHub, GitLab, Azure DevOps** or self-hosted URL (`https://`, `ssh://` or `git@host:org/repo`) and LUCID clones it into the folder you picked and runs the lane there; an existing clone is **reused**, so re-spawning the same repo is idempotent. The form tells you what it recognized, where the clone will land, and which credential that remote actually takes. A local path can never be mistaken for a remote, and a pasted `user:password@` is discarded rather than echoed back at you. *(ADR-0273)*
+- **🔐 Private repos, with the token kept per host** - a personal access token is stored in the **OS-encrypted vault** under the host you typed it for (Keychain on macOS, DPAPI on Windows, libsecret on Linux). It wins over CI-style environment variables for that host, is **never** offered to a different host, and an unrecognized host never receives your general-purpose PAT. The token rides an **auth header**, never the URL, so it cannot persist into `.git/config`, and it is redacted out of every error line. SSH remotes are never asked for a token: they authenticate with your keys and now fail fast with a key-specific message instead of hanging on an invisible passphrase prompt. *(ADR-0273)*
+- **📂 The lane folder opens the real OS dialog** - Explorer on Windows, Finder on macOS, zenity/kdialog on Linux, with **create-new-folder** enabled, instead of hand-editing a path into a text box. Same dialog every other folder pick in the app already used. *(ADR-0265)*
+- **🔴 The minimized fleet pill is a truthful snapshot** - the lower-right pill used to **flicker** (the status bar rebuilds itself constantly and nobody re-adopted the fleet pill, so it vanished and came back on the next poll, worst of all while a lane was working). Fixed at the cause. It now carries **one colored dot per lane state with its count**, ordered so anything blocked on a human comes first, and hovering a dot names the lanes in that state. You keep working in the main window and still know, at a glance, that lane three wants approval. *(ADR-0273)*
+
+<!-- FLEET MODE SCREENSHOTS: uncomment this block once the three captures land in
+     .github/assets/screenshots/v1.13.1/ (see the README in that folder for what to shoot).
+     Kept commented so the published README never shows broken images.
+<table>
+  <tr>
+    <td width="50%"><img src=".github/assets/screenshots/v1.13.1/fleet-mode-grid.png" alt="LUCID Agent in Fleet Mode: several lanes streaming at once, each frame carrying its own status colour" /></td>
+    <td width="50%"><img src=".github/assets/screenshots/v1.13.1/fleet-mode-spawn.png" alt="The new-lane form: a repo remote pasted, the resolved clone path, and the per-host token field" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src=".github/assets/screenshots/v1.13.1/fleet-mode-pill.png" alt="The minimized fleet pill in the status bar: one colored dot per lane state with counts" /></td>
+  </tr>
+</table>
+-->
+
+> 📸 **Screenshots pending.** Captures of LUCID Agent in Fleet Mode (the multi-lane grid, the repo-remote spawn form, and the minimized per-state pill) drop into [`.github/assets/screenshots/v1.13.1/`](.github/assets/screenshots/v1.13.1/) - that folder's README lists exactly what to shoot, and the gallery above is one comment-marker away from live.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.13.0
+
+> **🤖 One LUCID running many.** A Chief-of-Staff session fans work out to N gated LUCID workers, and every reply comes back through the same fail-closed gate.
+
+- **🤖 The Fleet Manager (the headline)** - async **job handles** through the Agent Firewall: `dispatch` / `job_status` / `cancel` plus a bounded-wait `prompt`, all over **one** gated execution path. Work fans out across worker connections and stays serialized within one, every reply is **scanned and UNTRUSTED-delimited** before the orchestrator sees it, each job is fail-closed on its own, deadlines clean up after themselves, and a retry with the same key is idempotent. *(P-FLEET.1, ADR-0268/0270)*
+- **🗂️ Local lanes in a grid** - N concurrent gated headless LUCID agents on **this** machine, each on its own repo and its own model, streaming into editable mini windows inside one movable, resizable, minimizable dock. The card frame *is* the status: cyan pulse working, amber glow awaiting you, red glow needs approval (fail-closed: silence is a deny), green done. *(P-FLEET.L1, ADR-0271)*
+- **🏢 Fleet Profiles scoped** - the design for project-bound **full-GUI** instances (a second LUCID window bound to a second repo, rather than a headless lane), plus the control panel's `F` option as a working launcher-only prototype. *(ADR-0272)*
+- **⏳ The ingest cannot hang, and Stop always stops** - every ACP request in the chat-history import now carries a clock, pending work is drained when a child dies, Stop interrupts the in-flight model call, and a force-cancel releases the single-flight lock. *(P-KG-INGEST.5, ADR-0264)*
+- **🕰️ No turn clock** - the 10-minute cutoff is gone. A long subagent fan-out runs to completion while the HUD names what the turn is actually waiting on, with elapsed time per open tool call. *(P-STALL.2, ADR-0263)*
+- **🗣️ Spoken thinking snapshots** - conversation mode stops repeating one canned opener: it picks from twelve varied lines, restates a short ask faithfully, and once reasoning is streaming it speaks **snapshots of the live thinking** instead of filler. *(P-VOICE.7, ADR-0269)*
+- **📂 Real OS folder dialogs in the browser build** - the plain-browser launch path used to fall back to a cramped in-app file browser; it now opens Explorer / Finder / zenity through the local backend, which runs on the same machine. *(P-FS.2, ADR-0265)*
+- **🎙️ Whisper housekeeping + a quota-toast fix** - only the model tiers that actually fit are offered, each with a Remove button, and an expired provider quota window stops warning forever. *(P-STT.6, ADR-0267)*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.12.1
+
+> **🧠 Teach it once. It trains everyone.** LUCID becomes a knowledge trainer: it interviews your expert, distills what they know into verified lesson units, and quizzes the team on it - for ANY role you give it.
+
+- **🧠 The LUCID Trainer (the headline)** - a new brain icon on the rail opens an immersive extraction stage: LUCID interviews your expert scenario-first ("walk me through the Friday-4pm wire..."), chases exceptions with capped five-whys followups, and never re-asks confirmed ground. Every answer runs the fail-closed pipeline before ANYTHING is stored: PII redacted to typed placeholders, scanned, distilled by your configured model inside untrusted delimiters, re-scanned, and born untrusted until the expert confirms the teach-back - confirmation IS the promotion. A live coverage HUD shows each domain filling L0 to L3, and drills (next-step, spot-the-exception, sequence) are generated ONLY from confirmed units, with a trainee miss re-opening extraction. *(P-TRAINER.1-.8, ADR-0252..0255)*
+- **🎯 Train ANY role** - the trainer is role-generic: paste a Position Description or a task list and it builds the coverage map for THAT job; a fresh install asks for your role instead of assuming one. The wealth-management-ops pack ships as a clearly-labeled sample you can try in one click. *(P-TRAINER.9, ADR-0257)*
+- **🥷 The LUCID Agent role** - an immersive agent persona with a talking mascot, cinematic boot, and hands-free flow, sharing the stage machinery the trainer runs on. Its 40x52 original ninja sprites now include expressive eyes and six palettes (Lucid, Ember, Glacier, Orchid, Solar, Stealth). Working rotates kata, shuriken, meditation, coding, scanning, and staff practice with coordinated costumes; other session states retain the green brand palette. The eight-pose run and small composer footprint are preserved. The role now carries a **Regular / Max model tier** beside the Stage chip: Regular prefers the Opus/Luna class, Max the strongest model for your CURRENT provider route (Fable 5+ / Astra 6+ class; gov lockdown and credential gates always win, and leaving the role restores your prior model only after the engine confirms it). And an **opt-in arcade easter egg** lives under the prompt bar while a run is active: pick any of the six themed LUCID ninjas, jump crates, duck beams and fast ninja stars, smash flower pots, and earn the chopstick **Flycatch** bonus round every five clears - arrows move/aim, Up or Alt jumps, Down ducks, Ctrl punches, Down+Ctrl kicks; keys are captured only while the game canvas is focused, and the game pauses the moment the run ends or focus leaves. Points land in the shared lifetime **LUCID points** balance (same wallet as Trivia Wire, shown top right in the game and in the status metrics). Open `desktop/.mascot-qa/roster.html` for an animated color/activity gallery with pause, single-step, and speed controls, or `desktop/.mascot-qa/arcade.html` for a live arcade review. Rebuild that gallery with `bun build desktop/.mascot-qa/preview.ts --target=browser --format=iife --banner "// Copyright (c) 2026 TechLead 187 LLC | SPDX-License-Identifier: BUSL-1.1" --outfile desktop/.mascot-qa/preview.js`. Proof: `make demo-P-MASCOT.4`. *(ADR-0251, P-MASCOT.4)*
+- **🖼️ Preview panel: no more stale documents** - re-opening or re-editing a previewed file now always repaints; the panel used to pin the first served document forever (a same-URL iframe assignment never renavigates). *(fix)*
+- **🎨 Trainer stage readability** - WCAG AA contrast pass across the stage (dim labels, placeholders, drag grips, HUD chips) and design-token alignment with the app shell. *(fix)*
+- **🛡️ Sandbox hardening** - macOS Seatbelt now probes real sandbox_apply capability instead of mere presence, and the Windows AppContainer helper gains mediated loopback-only networking; plus the zombie-SID GPU-sandbox self-heal on Windows. *(P-SANDBOX.4/.7b, P-GPUFIX.1)*
+- **🚁 Groundwork: the agent fleet** - the Chief-of-Staff fleet design (one LUCID orchestrating N gated workers over `ssh <host> lucid acp`, every reply scanned) is now a documented plan. *(ADR-0256)*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.12.0
+
+> **🗣️ Talk to it.** LUCID reads its replies aloud as it writes them, opens the mic when it finishes, and answers you the way a person would - short, spoken, hands-free.
+
+- **🗣️ Conversation mode (the headline)** - one keystroke (`Ctrl/⌘+G`) and LUCID becomes a
+  **hands-free conversation**: it reads each reply aloud **as it streams**, the mic opens by itself when it
+  finishes, and a few seconds of silence sends your turn. Audio starts after the **first sentence**, not after
+  the whole answer - so a long reply begins speaking in about a second instead of twenty. *(P-VOICE.2/.3)*
+- **🧠 It answers for the ear, automatically** - in conversation mode the agent is told, every turn, to
+  write for **listening**: lead with the answer, two or three sentences, plain spoken prose, no headings,
+  lists, tables, code blocks or file paths. You should never have to ask it to be brief. It constrains the
+  answer's **shape**, never the work behind it. *(P-VOICE.5)*
+- **🗂️ A local fleet in a grid (NEW)** - spawn **multiple headless LUCID agents on this same
+  machine**, each on its **own repo (cwd)** and its **own model** (a dropdown per lane, defaulting to
+  whatever the master/orchestrator session is using), streaming live into **editable mini windows** in one
+  movable, resizable, minimizable **fleet dashboard** (auto-arranging grid). Each frame is a status light:
+  **cyan pulse** working, **amber glow** awaiting your input, **red glow** needs approval (fail-closed:
+  silence is a deny), **green** done. Admission is capped by a **75% system headroom guard** (CPU, memory,
+  and a core-derived lane ceiling) so the OS and your other apps keep breathing, and every refusal shows
+  the measured number. The master agent sees the lanes through its `fleet_status` tool - metadata only,
+  never lane text. *(P-FLEET.L1)*
+- **📻 A glowing equalizer** - a real spectrum analyser of the agent's actual voice: segmented LEDs with
+  hanging peak caps, log-spaced bands and hi-fi ballistics. It lives as a **mini strip** in the prompt bar, or
+  **pops out** as a **LUCID Agent [Voice]** panel you drag and anchor anywhere in the window - it snaps to the
+  edges, resizes, minimizes, and remembers where you left it. *(P-VOICE.4)*
+- **⏳ It keeps you company while it thinks** - eyes-off, a long turn used to be dead air. Now you get short,
+  escalating spoken acknowledgements that actively LISTEN: the opener is picked from twelve varied lines and,
+  when your ask is short enough to restate faithfully, it restates it - *"Got it: fix the login redirect. On it
+  now."* Once reasoning is streaming, later cues speak **snapshots of the live thinking** - *"Quick update: the
+  timeout only fires on the retry path."* - and keep going at a slow cadence for as long as the thinking
+  genuinely moves forward. Capped per turn, and never over the answer. *(P-VOICE.6/.7)*
+- **🎛️ A voice picker that tells the truth** - engine + voice moved out of Settings and into the composer,
+  with **every** engine's voices listed (ElevenLabs, ChatGPT/OpenAI, offline Kokoro), a remembered voice **per
+  engine**, and any engine you can't actually use **greyed out with the specific reason** - including the one
+  that catches people out: an OpenAI *subscription* sign-in cannot reach the platform speech API. *(P-VOICE.3)*
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v1.11.12
+
+> Offline voice that actually works: dictate hands-free into a fully on-device Whisper, installed in one click.
+
+- **🎙️ Reliable offline dictation (the headline)** - the mic showed *"heard you, but nothing transcribed"*
+  because it uploaded the browser's **WebM/Opus** recording to a local Whisper whose endpoint decodes **WAV
+  only**. LUCID now **transcodes each utterance to 16 kHz mono WAV on-device** before it leaves the composer,
+  so your words land - fully air-gapped, audio never leaves the machine. It also **drops Whisper's non-speech
+  placeholders** (a silent pause no longer types `[BLANK_AUDIO]`) and never mislabels a healthy local server as
+  *"no STT server answered"* on silence. *(P-STT.3/.4/.5)*
+- **📦 One-click, zero-prereq offline Whisper** - the whisper.cpp server is now **bundled in the installer** on
+  **Windows, macOS, and Linux** (pinned + SHA-256-verified, or built-from-source on macOS), with a
+  hardware-aware model picker and a real **download-progress bar**. Install & start with one button - no Python,
+  no toolchain. *(P-STT.2c/.2d)*
+- **🎚️ Live mic waveform** - a scrolling level meter beside the mic so you can *see* it hearing you as you speak,
+  and it auto-stops on a longer silence. *(P-STT.4)*
+- **🧩 Provider Hub + one-click local models** - providers are grouped into a searchable hub, and top local-model
+  presets (Ollama / vLLM / llama.cpp) are one click to configure. *(P-PROV.2 / P-LOCAL.4)*
+
+---
+
+
+> <sub><b>Earlier releases.</b> v1.11.9 and older have moved to the <a href="https://github.com/mlcyclops/lucidagentide/releases">GitHub Releases</a> page, which carries the full notes and the installers for every version.</sub>
+
+---
+
+## 🗣️ Voice mode
+
+> **Put it down and talk to it.** LUCID speaks its replies while it writes them, listens when it finishes,
+> and shapes the answer for your ears instead of your eyes - all on the engine you choose, including a fully
+> offline one.
+
+<div align="center">
+<img src=".github/assets/voice-panel-undocked.jpg" alt="The LUCID Agent [Voice] equalizer panel popped out and anchored inside the LUCID window, showing segmented LED bars with peak caps while a reply is spoken" width="440" />
+<img src=".github/assets/voice-mini-composer.jpg" alt="The mini equalizer strip under the LUCID prompt bar, beside the mic button, while a reply is being read aloud" width="440" />
+<br><sub><b>Left:</b> the <b>LUCID Agent [Voice]</b> panel popped out and anchored where you want it. <b>Right:</b> the mini strip under the prompt bar.</sub>
+</div>
+
+- **🗣️ Hands-free turn-taking.** `Ctrl/⌘+G`. The reply is read aloud, the mic opens the moment it stops
+  speaking, a longer silence ends your turn and sends it. Guarded on every side so it can never listen to the
+  agent's own voice: it waits for the audio to actually **finish**, not just the text, and echo cancellation is
+  requested explicitly. A manual mic stop (`Ctrl/⌘+D`) never auto-sends - that one is still yours to review.
+- **⚡ It starts talking after the first sentence.** The streaming answer is chunked on sentence boundaries and
+  synthesized a span at a time, so audio begins while the model is still writing. An unterminated code fence is
+  withheld, so it never narrates raw source at you.
+- **🎛️ Your engine, your voice.** ElevenLabs (your account's cloned voices), ChatGPT/OpenAI, or **Kokoro
+  running offline on your own machine** - air-gap safe, no key, nothing leaves the box. The picker sits in the
+  composer, remembers a voice **per engine**, and greys out anything that isn't actually configured with the
+  reason why.
+- **📻 A spectrum analyser, not an animation.** The bars are driven by the real audio through a Web Audio
+  analyser - log-spaced bands, fast attack and slow release, hanging peak caps. Mini in the prompt bar, or
+  popped out as a draggable, snapping, self-remembering panel.
+- **🧠 Spoken answers are written for speech.** In conversation mode the agent gets standing, per-turn
+  guidance to lead with the answer in two or three plain sentences - no markdown, no paths, no code read aloud -
+  and to say the short version out loud when the full answer belongs on screen. Switch the mode off and the very
+  next turn is a full written answer again.
+- **🔒 Same gate, same rules.** A transcript is ordinary user input and is scanned on send like anything
+  typed; a cloud TTS engine is ordinary egress you opt into per engine, and the offline path keeps the audio on
+  your machine. Auto-speak is **off by default**.
+
+<sub>*(ADR-0247/0248/0249 · increments P-VOICE.2-.6)*</sub>
 
 ---
 
@@ -234,149 +650,14 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## ✨ What's new in v1.11.6
 
-> Runs cold on an air-gapped laptop, grounds any model on your own knowledge, and never leaves you staring at a silent provider.
 
-- **📦 Air-gap-capable installer** - the app now **bundles omp, a relocatable Python, and its own Bun runtime**,
-  so a locked-down or fully offline machine works on first launch with **zero prerequisites and zero network** -
-  no `bun add`, no `uv venv`, nothing fetched at first run. A CI air-gap smoke test scrubs the global runtime
-  and boots the packaged app to prove the bundle is self-contained. *(ADR-0225)*
-- **📚 RAG for everyone, not just AskSage** - a `knowledge_search` tool lets **any model** (Claude, GPT, Gemini,
-  local) ground its answers on **your own** ingested Obsidian vault, folders, or imported chat history - lexical
-  + graph retrieval today, and **bring-your-own-embeddings semantic search** (your OpenAI key or a local Ollama /
-  vLLM `/embeddings`) for true vector recall. Retrieved text still enters **delimited, scanned, and post-cache**.
-  *(ADR-0220/0221)*
-- **🏛️ Gov hardening, fail-closed** - AskSage **lockdown is now enforced server-side** across model routing,
-  egress, and agent runs (it was renderer-only), with the real GPT-5.6 model ids, a per-session **CUI / Search
-  mode**, a centered violet **CUI banner**, and an opt-in **DoD / STIG consent banner**. *(ADR-0217/0218/0219/0224)*
-- **🛒 KG-pack marketplace** - name a knowledge graph, seed it, and share it as a portable **`.lkgpack`** -
-  now browsable and installable from an in-client **storefront**. *(ADR-0223)*
-- **🤝 A roomier shared-session view** - the live-collaboration guest view now shows the host's **thinking and
-  tool calls** and uses the **whole window**. *(ADR-0222)*
-- **🔌 Never stuck on a silent provider** - when an overloaded model (GPT-5.6 / 5.5, Claude Fable 5) **fails
-  silently**, LUCID now says so and **recommends a fallback** - a lower model in the same family, or an
-  equivalent from another provider (Fable 5 → 4.8 Opus). One click switches and retries. *(P-NORESP.1)*
-- **🔑 Reliable OAuth + honest support tools** - Connect **reliably opens the sign-in page** and always shows the
-  URL; Disconnect **authoritatively clears** stored logins (plus "Sign out of all"); and a one-click
-  **diagnostics collector** bundles redacted logs for troubleshooting.
-- **✨ "Lucid Agent"** - a friendlier app and window name across Windows, macOS, and Linux, with the data-safe
-  install path left unchanged.
 
----
 
-## ✨ What's new in v1.11.0
-
-> Live collaboration: share a running LUCID session with another LUCID - end-to-end encrypted. Watch, or drive.
-
-- **🤝 Share a live session** - a host broadcasts its running session to a guest over an **end-to-end-encrypted**
-  relay (AES-256-GCM; the relay only ever sees ciphertext). Send an invite link; the guest **watches
-  read-only**, or - with an edit link - **drives** the session. Every guest prompt still runs **on the host**,
-  through *your* fail-closed scan gate + exec/egress approvals, so a guest bypasses nothing. *(P-COLLAB, ADR-0192/0198)*
-- **🏠 Self-hosted by default** - **be the relay** on your own device (loopback / LAN / VPN bind picker) or run
-  the standalone broker on a jumpbox; the public relay is opt-in. Enterprise/MDM policy clamps who may host and
-  which binds/relays are allowed, fail-closed. *(ADR-0193/0195/0199)*
-- **⚡ Direct P2P (WebRTC)** - flip on "prefer a direct connection" and a share upgrades to a direct **DTLS
-  DataChannel** - the relay only brokers the signaling handshake, then peers go peer-to-peer, with automatic
-  relay fallback. A **metadata-only audit trail** records share/join start/stop over both transports (never
-  keys, links, or content). *(ADR-0194/0201/0202/0204)*
-- **📋 Copy, everywhere** - a **Copy** button on every code block + **right-click → Copy** for chat text and
-  code blocks (Electron ships no default menu). *(ADR-0203)*
-- **✨ Polish** - the product **website** in the About panel (with its brand emblem inlined so it paints
-  instantly), and the default **zoom** pulled back a notch (what used to read 90% is the new 100%).
-
----
-
-## ✨ What's new in v1.10.6
-
-> The agent turn, redesigned - and a Model-Evaluation suite that scores the work honestly.
-
-- **💬 A settled turn you can actually read** - when the agent finishes, a long answer folds into
-  **collapsible sections** on the model's own headings, and each tool call threads back inline as a
-  compact **chip** (with a **+/- diffstat** and a code drilldown) *where it fired* - but only when a
-  chip genuinely lands between paragraphs. On a short, flat answer the rich **activity window** stays
-  put instead: every tool step, its diffstat, its written code, and the **expanded subagent detail**
-  (each delegate's thinking/tools/output). *(ADR-0188/0189)*
-- **📊 Model-Evaluation reports** - a settled turn that **wrote code** offers a thin, subdued
-  **"Generate engineering report"**: per-run efficiency/quality metrics with **honesty tiers**
-  (`direct` / `proxy` / `needs_signal` - a missing signal is `null`, never a fake 0), plus a
-  **cross-run rollup** in the Reports panel (per-model means + per-model **API-latency p50/p95**).
-  It only appears when there's written work to evaluate. *(ADR-0190)*
-- **⏳ Patience for overloaded providers** - when a model goes quiet under load, the turn now waits up
-  to **10 minutes** with an honest **"still waiting on the provider"** notice at each silent 2-minute
-  mark - no more a 5-minute cutoff that falsely blamed "2 minutes". *(ADR-0186)*
-- **🎲 Trivia Wire, opt-in + fresh** - the ticker now **defaults off** (an easter egg you switch on in
-  Settings), and can **AI-regenerate** a role-relevant question pack on your selected model from opt-in
-  on-device context - scanned fail-closed, tool-free, falling back to the built-in pack. *(ADR-0191)*
-
-Under the hood: the eval suite persists per-run metrics + per-model latency to frozen DuckDB tables
-via the same read-only-safe JSONL-sink pattern as the rest of the observer store.
-
----
-
-## ✨ What's new in v1.10.5
-
-> Quality of life everywhere you look: watch your subagents think, graphs that open settled and
-> centered, a machine-aware guard for the heavy builds, and a trivia wire for the wait.
-
-- **🔬 Live subagent activity** - the delegation card now opens up: one row per subagent with a live
-  "now" line and tool count, each expandable into its actual trail - thinking, tool calls (with the
-  model's own intent notes), and output - refreshing while it works. *(ADR-0180)*
-- **🧭 Graphs form in place** - a knowledge or code graph with hundreds of nodes opens already settled,
-  centered, and still: the layout computes off-screen before the first paint, live updates nestle in
-  silently, and resizing the panel never shakes the canvas. Drag is the only thing that still moves.
-  *(ADR-0183)*
-- **🩺 System resource guard** - on a weak processor under heavy CPU/RAM load, the CPU-spike features
-  (the KG render and the Code Graph ingest) pause behind a notice that lists the top resource-hungry
-  processes to close, with a one-click re-check. Fail-open by design: a missing profile never blocks
-  a feature. *(ADR-0182)*
-- **🖥️ Electron preview, explained and runnable** - previewing an Electron app used to show a silent
-  white pane; now LUCID explains why and offers a user-clicked "Run with Electron" that launches the
-  real app outside LUCID (detached, audited as an exec event). *(ADR-0179)*
-- **🗞️ Trivia Wire** - a role-aware trivia ticker in the status bar's idle gap: developer, security
-  (CMMC/RMF), manager (CMMI-DEV), and executive banks - and the executive wire interleaves live
-  Intelligence/Defense-sector headlines, scanned and sanitized like everything else. *(ADR-0174-0176)*
-- **🧹 A calmer KG header** - the stacked Relate / Code graph / Compiled KB buttons are now one labeled
-  dropdown, and the title is a compact "KG". *(ADR-0184)*
-- **🛒 Marketplace curated for fit** - off-fit entries retired; **Mermaid**, **Gitleaks**, **Semgrep**,
-  **Trivy**, and **Pandoc** join as planned integrations. *(ADR-0181)*
-- **📦 Boot robustness** - the v1.10.2/v1.10.3 packaging regressions are fixed and guarded by a test
-  that boots a real filtered install, and the desktop shell now writes an `engine.log` for
-  supportability. *(ADR-0177/0178)*
-
----
-
-## ✨ What's new in v1.10.0
-
-> The biggest batch since 1.9 - run **local models**, a multimodal agent that **reviews its own UI**, native
-> **Figma** import, an **Agent Builder**, and a **security firewall** for remote agents. (v1.9.2 also shipped a
-> battery-aware performance epic - calmer knowledge-graph rendering and faster switches on battery.)
-
-- **🖥️ Local & hybrid providers** - point LUCID at a **self-hosted or custom LLM** (Ollama · llama.cpp · vLLM ·
-  any OpenAI-compatible endpoint), including a private box reached **over a VPN**. Run U.S. open-weight model
-  families like **Gemma**, **Llama**, **gpt-oss**, and **Phi** entirely on your own hardware. Keys live in the
-  **OS-encrypted vault** and never reach the renderer or the agent; add, key, and test each one from a
-  Settings card. *(ADR-0135)*
-- **🖼️ Multimodal prompts** - **paste or drop a screenshot** straight into the prompt bar; it shows as a thumbnail
-  above the composer and travels to the model as an image **only when you hit send** - no auto-push. *(ADR-0136)*
-- **👁️ The agent reviews & tests its work live** - as it screenshots, reads the DOM, and **clicks / types** in the
-  in-app Preview to verify its UI, the panel **glows** and a **"testing" pill** shows you exactly what it's doing -
-  all over a sandboxed postMessage bridge (no eval, egress stays blocked). *(ADR-0153)*
-- **🎨 DESIGN.md + native Figma** - a project **`DESIGN.md`** is honored every turn like `CLAUDE.md`; **`/figma`**
-  imports a design into the Preview (token in the vault, used server-side only), then the agent **reviews it** or
-  **builds a DESIGN.md** from it for you to edit in the IDE. *(ADR-0154)*
-- **🤖 Agent Builder** - **describe an agent and LUCID builds it**: an allow-list chip editor, live per-turn canvas
-  collaboration, portable **share / import** with credential provisioning, **n8n** interop, and your own saved
-  **`/command`s**. *(ADR-0137-0146)*
-- **🧯 Agent Firewall** - reach remote **hermes / openclaw** agent runtimes through a **fail-closed security proxy**
-  that scans both directions (blocks injected instructions outbound, quarantines + delimits replies inbound), with
-  per-connection permission policy - plus an in-process gate for **every MCP tool result**. *(ADR-0147-0152)*
-- **⌨️ Neovim & terminal** - drive LUCID from **Neovim** and the terminal, not just the desktop app. *(ADR-0150/0151)*
-
----
 
 ## Table of contents
 
+- [🧪 v2.3.0 beta: install it, report bugs, pull logs](#-v230-is-almost-here-test-the-beta)
 - [<img src=".github/assets/icons/overview.svg" width="16" alt=""> Overview](#-overview)
 - [<img src=".github/assets/icons/novelty.svg" width="16" alt=""> What makes it novel](#-what-makes-it-novel)
 - [<img src=".github/assets/icons/models.svg" width="16" alt=""> Any model, any provider](#-any-model-any-provider)
@@ -389,6 +670,7 @@ via the same read-only-safe JSONL-sink pattern as the rest of the observer store
 - [<img src=".github/assets/icons/gateway.svg" width="16" alt=""> Models and the AskSage gateway](#-models-and-the-asksage-gateway)
 - [📚 Knowledge & RAG](#-knowledge--rag)
 - [🤝 Live collaboration](#-live-collaboration)
+- [🗣️ Voice mode](#️-voice-mode)
 - [📱 LUCID Remote](#-lucid-remote)
 - [<img src=".github/assets/icons/builton.svg" width="16" alt=""> Built on](#-built-on)
 - [<img src=".github/assets/icons/quickstart.svg" width="16" alt=""> Quick start](#-quick-start)
@@ -616,11 +898,6 @@ is unavailable the store is *refused*, never written in plaintext. Each key show
 across AWS/Azure/GCP/Oracle/IBM, automated rotation, attestation) is a private add-on
 ([ADR-0107](DECISIONS.md) draws the public/private line).
 
-<div align="center">
-<img src=".github/assets/network-whitelist.png" alt="LucidAgentIDE Settings - the Network Whitelist: a curated domain and IP/CIDR allow-list split by internal/external zone, with enforced trust scopes (always / project / this-loop) and per-loop call budgets, plus per-site OS-encrypted credentials shown masked (last-4) with rotation status and a one-click Rotate" width="720" />
-<br><sub>Network Whitelist - scoped, budgeted, credential-aware egress allow-list (last-4 masking + rotation). <em>Screenshot placeholder.</em></sub>
-</div>
-
 ## <img src=".github/assets/icons/memory-animated.svg" width="28" align="top" alt=""> Memory and the personalization graph
 
 **Two memories, both shipped.**
@@ -799,6 +1076,30 @@ cd desktop && bun install && bun run start   # the packaged Electron app
 path** and you get genuine model replies in a plain browser - no Electron needed. See
 [`desktop/README.md`](desktop/README.md) and [ADR-0006](DECISIONS.md).
 
+### Themes
+
+LUCID was dark-only for its entire life. There is now a **theme picker** in **Settings -> Theme**: seven
+full palettes plus an explicit **Match system** tile, applied instantly across the app, the Monaco code
+editor and the trainer stage.
+
+| Theme | Scheme | Character |
+|:--|:--|:--|
+| **Lucid Dark** *(default)* | dark | The original: near-black ground, magenta accent, cyan for data. |
+| **Midnight** | dark | Deep indigo, cooler and quieter than the default. |
+| **Slate** | dark | Neutral grey with the colour turned right down. |
+| **Ember** | dark | Warm amber and red over a roasted dark ground. |
+| **High Contrast** | dark | Pure black with maximum-contrast text for low vision. |
+| **Lucid Light** | light | The same brand hues on a light neutral ground. |
+| **Paper** | light | Warm sepia light, easy on the eyes in a bright room. |
+| **Match system** | follows OS | An opt-in choice with its own stored id, not a silent default. |
+
+Two rules worth knowing. **An unset preference means Lucid Dark**, not "follow the OS": while those two
+shared one value, a long-time user on a light-mode machine was silently moved off the dark UI they had
+always had, so following the OS is now something you pick once *(P-THEME.2, ADR-0326)*. And every palette
+is **token-complete by test** - CI parses the stylesheet and fails the build if a theme omits a token,
+because a light theme that forgets one silently inherits the dark base and ships unreadable white-on-white,
+which no typecheck or smoke test catches *(P-THEME.1, ADR-0320)*.
+
 ### Platform Builds
 
 CI builds desktop installers for **all three platforms** on every tag push:
@@ -823,12 +1124,15 @@ needs **zero prerequisites**. Code-signing and notarization are supported when c
 
 ### Homebrew (macOS)
 
-Install the desktop app with Homebrew Cask straight from this repo - no manual unzip, and `brew upgrade`
-keeps the cask wiring current (the app itself also self-updates via electron-updater):
+Install the desktop app with Homebrew Cask straight from this repo - no manual unzip. The cask is
+pinned to the current tagged release with real SHA-256 checksums, and CI re-pins it on every release
+(the `update-cask` job), so `brew update && brew upgrade --cask lucidagentide` is the reliable way to
+update on macOS. (In-app auto-update cannot install on the unsigned macOS build until code-signing
+lands - ADR-0246 - so Homebrew IS the macOS update channel for now.)
 
 ```bash
 brew tap mlcyclops/lucid https://github.com/mlcyclops/lucidagentide
-brew trust --cask mlcyclops/lucid/lucidagentide   # Homebrew >= 6 gates third-party taps
+brew trust --cask mlcyclops/lucid/lucidagentide
 brew install --cask lucidagentide
 ```
 
@@ -889,7 +1193,82 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v1.11.9):**
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.2.0):** the
+reported defects, fixed: a **fleet lane can run bash and eval again** (it answered omp's per-tool
+approval gate without ever advertising that it could, so omp never asked and every command in a lane was
+denied) *(ADR-0337, ADR-0338)*, a **failed preview is never photographed and published** to a phone guest
+*(ADR-0335)*, the **Preview panel no longer follows you into your next conversation** *(ADR-0339)*, the
+**Role KG Packs storefront finally has a button** with a purchase that survives the sign-in detour
+*(ADR-0333)*, and a **Personalization card rebuilt for many named KGs** *(ADR-0336)*. **v2.1.0** brought
+the **OAuth sign-in fix** packaged Windows installs needed, where the broker spawned an omp it could not
+read inside the ACL-protected application directory *(ADR-0330)*, plus a lane scrollbar you can actually
+grab *(ADR-0331)*. **v2.0.0** brought
+current-generation **models** (Claude **Opus 5** as the house default at 1M context, **GPT-6 Astra**,
+the **Gemini 3** family), with the picker resolving against the providers *you* actually have and
+superseded ids **removed** *(ADR-0317)*; **light mode and seven themes**, every palette token-complete
+by test because a light theme missing one token ships unreadable *(ADR-0320)*, with an unset theme
+now meaning **Lucid Dark** rather than silently following your OS *(ADR-0326)*; sessions that
+**finish what they started** - the harness recovers a wedged session in place and then **re-sends the
+run** it interrupted, telling you it is picking up where it left off *(ADR-0311, ADR-0324)*; and the
+agent can finally **write to the knowledge graph**, with a locked vault that stops lying about what it
+holds *(ADR-0319)*. **v1.14.2** brought
+🛡️ **the window can never render a stranger** - main mints a per-launch nonce, the engine echoes it,
+and a foreign process squatting the engine port fails **loudly** with a pasteable incident report
+naming the process, pid, start time and command line, never a silent roll onto someone else's UI
+*(ADR-0305)*; **CI now reads each artifact's embedded identity before upload** (pkg bundle id +
+payload path, deb package name, rpm lead, the updater feed's declared path), so a mis-flavored or
+mis-versioned build fails the build instead of reaching a Release *(ADR-0307)*; agents get real
+**Word / Excel / PowerPoint** through a pinned, digest-verified OfficeCLI as a gated skill with the
+render-look-fix loop on the Preview panel *(ADR-0306)*; and the **Preview panel obeys the agent
+again** - `preview_open` reports itself over its own channel instead of an ACP call title that intent
+tracing rewrites, which had also left every preview pill dark *(ADR-0308)*. **v1.14.1** brought
+📱 **a lane's whole conversation on the phone** - the PWA **subscribes** to exactly one lane with a
+read-only `watch` frame, the host unicasts lane events only to peers that asked (idle lanes stream
+nothing at a phone on cellular), and a bounded `lane-sync` replay means a long-running lane never
+opens empty; the composer collapses to **one row**, the fleet strip to **33px** with per-lane
+composers and desktop-matched status colours, per-target seen counters draw a **"new since you looked
+away"** boundary that Sync scrolls to, and **no phone panel ever opens itself** *(ADR-0298..0302)*;
+the Preview panel gains **deterministic capture** (a scene stepped on LUCID's clock, compared to its
+baseline at a noise floor measured on your machine, every verdict naming its method) *(ADR-0297)*;
+the test gate now **measures what it claims** (scope by exclusion, ADR-0303); and the **Creator
+flavor** lands on trunk with its own `creator-v*` release channel that can never cross-install with
+Agent *(ADR-0279..0296, 0304)*. **v1.14.0** brought
+🎛️ **steer a running agent without stopping it** - type mid-turn and choose **Queue** or **Push
+mid-turn**, and a pushed note reaches the model at its **next tool boundary** through the security
+gate's own tool-result seam (landing outside the UNTRUSTED envelope, marked as operator input), while a
+**Check in** button answers "stuck or thinking?" from live state; fleet approvals gain
+**Allow for session** and a per-lane **full auto-mode** behind an explicit risk acceptance (the gate
+still scans every call); an agent-controlled **visible browser** iterates screenshot / scroll / click /
+type / drag / keys on pages that block in-DOM automation, with a breathing glow and a close-X
+**kill switch**; the phone gains **fleet control** and **device dictation that is refused unless the
+audio can be proven to stay on the device**; new folders get a **`.agents` framework** scaffold so the
+next agent inherits your context; the **Timeline** hides its own self-test noise and becomes a two-pane
+inspector; and on Windows every port-keyed instance now shares **one** `safeStorage` key, so the
+**Local Provider stops vanishing** from the picker *(ADR-0278)*. **v1.13.2** brought
+🛟 **fleet agents that survive, show their work, and stay reviewable** - the lane turn clock is gone
+(a crash surfaces in **milliseconds**, never after 600 seconds) and an errored lane offers
+**Retry / Respawn**: revived **in place** with its memory (native `session/load` when offered, else a
+delimited transcript replay), with any pre-crash approval **re-asked, never replayed**; lane cards gain
+**diff chips** (+N/-N, expandable hunks), **pasted-image thumbnails**, and **staged prompts** (amber
+Stage while busy; a capped, reorderable manager-owned queue that drains in order when idle); and the
+**Timeline** rail icon reviews **every** session - chats, lanes, imports - across every workspace,
+each lane **named in a durable ledger** at spawn so stopped lanes stay labeled and readable across
+engine restarts *(ADR-0274..0277)*. **v1.13.1** brought 🚀 **unlimited lanes** under the
+sustained-pressure guard (90% held 30s; the cap deleted), lanes **from a repo remote** (GitHub /
+GitLab / **Azure DevOps**; per-host tokens in the OS-encrypted vault, header-only), the real OS folder
+dialog, and the truthful minimized per-state pill *(ADR-0273)*. **v1.13.0** brought 🤖 the **Fleet
+Manager** - one Chief-of-Staff LUCID orchestrating N gated LUCID workers: async **job handles**
+through the Agent Firewall (dispatch / status / cancel over ONE fail-closed path - fan-out across
+connections, every reply scanned + trust-labeled), **local lanes** streaming into a movable
+fleet-grid dashboard with fail-closed approval glows, plus spoken **thinking snapshots** for
+hands-free work, an ingest that **cannot hang** (Stop always stops), real **OS folder dialogs** from
+the browser build, and **no turn clock** - long subagent fan-outs run to completion while the HUD
+names what the turn is waiting on *(ADR-0263..0272)*; **v1.12.2** brought the **Windows Program Files
+fix arc** - compiled engine, a strict CI boot gate from a real write-denied Program Files tree,
+per-machine installs re-enabled *(ADR-0259..0262)*; **v1.12.1** brought the **LUCID Trainer** + the
+**LUCID Agent** immersive role *(ADR-0252..0257)*; **v1.12.0** brought hands-free **Voice mode**
+*(ADR-0246/0247)*.
+**Earlier (v1.11.9):**
 **📱 LUCID Remote** - drive your running desktop LUCID from a **phone browser**: QR pairing, Google sign-in,
 an installable **guest PWA**, dual edit/view-only invites, and a self-host-or-hosted Cloud Run rendezvous with
 claims-gated admission - all over the E2E-encrypted collab plane, with every remote prompt still running the
@@ -899,14 +1278,27 @@ reads ~1-8 s → ~0-2 ms, idle server CPU ~29% → ~8%); and the **Preview panel
 every model** with bring-your-own-embeddings, server-side **gov lockdown**, the KG-pack marketplace, and the
 overloaded-provider fallback; v1.11.0 brought E2E-encrypted **live collaboration**.)*
 
-**5,700+ tests** across the harness (1,695), desktop (4,018), and Python sidecar (62), green in CI, with
-`tsc --noEmit` clean on the shipping projects. The
+**4,900+ tests**: the repo's scoped gate measures **378 files / 4,937 tests** (scope defined by
+exclusion, ADR-0303) plus the Python sidecar's 57, with `tsc --noEmit` clean on the shipping projects. The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
 ### Recent updates
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v2.3.0-beta.1 batch** | **🧭 Jev, the Jev browser policy, named accounts, and the Agent Mode pass** - `ADR-0373..0379`, shipped as a **prerelease** that never touches the rolling `latest` channel or the Homebrew cask. **JEV**: a typed-judgment engine (choice with per-option probabilities and confidence, yes/no probability, score over ordered levels) wired as omp's judgment backend, with a Settings card for the TypeSafe key and backend switch pinned to `llm` under AskSage lockdown, a per-turn trace under every reply naming the question, the typed answer, the backend and the latency, and a frozen prompt policy so "use Jev" is understood. **BROWSER**: `browser_run`, a TypeScript port of browser-use/jev-ultrafast: an isolated-world DOM snapshot becomes an indexed element table, one judgment picks the operation plus a target per operation, only the matching head executes through the existing input path after a freshness re-check, and every typed string is a caller-supplied named value (no text-generating model, page content can never become input). **ACCOUNTS**: several OAuth identities or named keys per provider, switchable from Settings and the Provider Hub. **AGENT MODE**: Regular/Max model tier in the title bar (and the drag-region bug that swallowed its clicks), the preview-link whiteout fixed by one navigation policy, the game cabinet, omp pinned to 18.2.6. Install: [releases/tag/v2.3.0-beta.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.1). | [ADR-0373](DECISIONS.md), [ADR-0374](DECISIONS.md), [ADR-0375](DECISIONS.md), [ADR-0376](DECISIONS.md), [ADR-0377](DECISIONS.md), [ADR-0378](DECISIONS.md), [ADR-0379](DECISIONS.md) |
+| **v2.2.0 batch** | **🐛 The reported-defect batch: a lane that could not run a command, a phone shown a broken preview, a panel that followed you home** - `ADR-0332..0339`. **FLEET**: there are TWO approval gates in front of a tool call and a lane answered only the first, because it had a handler for omp's per-tool `elicitation/create` gate that it had never ADVERTISED it could answer, so omp never sent it and denied every `bash` and `eval` in a lane regardless of configuration; fixing the advertisement exposed the other half, a handler reading the offered choices from the wrong path and replying in the wrong shape, so it still resolved to nothing. Both gates now read one shared module that both interactive clients import, verified on a live two-node DGX lane. **PREVIEW**: a FAILED preview was screenshotted and published to a phone guest, toast baked into the image and captioned with a file from an unrelated session (the serve route answers a failure with HTTP 200 and an HTML body saying so, so every guard read the failure page as a working page), now probed before capture with the toast suppressed and the rate-limit slot claimed only once a send is authorized; and the panel no longer follows the user into the next conversation, because an unresolvable target was remembered exactly like a success and outlived the session boundary, while a document the user opened by hand is still left alone. **MARKET + KG**: the Role KG Packs storefront gets a Packs button in the KG header (the only way in had been the command palette), a purchase resumes the exact pack after the sign-in detour under a 15-minute one-shot intent because that deep link is shared with Remote and Drive, and the Personalization card is rebuilt for a user with many named KGs (hero row into the existing picker, a measured two-row stat strip, missing numbers as a dash and never `NaN`). **RELEASE**: the rolling update channel could never publish, because the identity gate compared deb and rpm versions literally when neither format permits `-`, and a publishing dispatch stamped itself as a test build | [ADR-0332..0339](DECISIONS.md) |
+| **v2.1.0 batch** | **🔓 The OAuth fix users actually needed, plus lane scroll affordances** - "Connect via OAuth" failed on packaged Windows installs with Bun's own `EPERM reading ...pi-coding-agent\dist\cli.js` instead of opening a sign-in page: the resolver accepted the bundled omp because the path EXISTED, so the broker spawned a file it could not read inside the ACL-protected application directory. NOT a 2.0.0 regression, the offending resolver shipped in every tag from v1.11.8 (15 July) onward. Existence was never the question and runnability is, so each candidate is now PROBED by running `--version`, with a fall-through to one that works and a log naming every path tried when none do; three files had grown private copies of that resolver and had already drifted once, and now share one module. Plus a lane transcript scrollbar you can actually grab (the global thumb is 5px of pointer target once its 3px transparent border is counted, fine down a full-height chat and unusable in a 300px card) and the composer's two catch-up buttons per lane, with the scroll arithmetic in one module the chat and the lanes both read | [ADR-0330](DECISIONS.md), [ADR-0331](DECISIONS.md) |
+| **v2.0.0 batch** | **🎉 The major: eighteen increments, and it is a MAJOR because of what it takes away** - `ADR-0309..0326`. The version is not justified by the feature count (1.x absorbed Fleet Mode's introduction and the whole PWA as minors) but by **withdrawn options and flipped defaults**, which is what a major exists to announce: the model catalog now **removes** vendor-superseded ids (GPT below 5.4), an unset theme no longer follows your OS, and the Preview panel no longer auto-opens for most file kinds. **MODELS**: the catalog moves to the current generation (Claude Opus 5 as the house default at 1M ctx, GPT-6 Astra as the first OpenAI generation to match that window, the Gemini 3 / 3.1 Pro + 3.5 Flash family, Fable/Mythos 5.1), the picker default resolves against the user's OWN providers instead of a hardcoded id, and capability tiers come from ONE registry after a hand-copied third regex had never learned GPT-6 and ranked a flagship as a workhorse *(ADR-0317)*. **LOOK**: light mode plus seven themes after a dark-only lifetime, every palette parsed off the stylesheet in CI and proven token-complete because a missing token silently inherits the dark base and ships unreadable white-on-white *(ADR-0320)*, then P-THEME.2 makes the default honest by separating "never chosen" from "follow the OS" *(ADR-0326)*. **SESSIONS THAT FINISH**: the self-watch ladder recovers a wedged session in place, reloading the same session id so the conversation survives, and never kills a turn with an open tool call on a clock *(ADR-0311)*; then the recovered run is **re-sent** with an operator note telling the agent to carry on rather than start over, bounded per run and never after a Stop *(ADR-0324)*. **THE FLEET GROWS UP**: lane tool-call fidelity and the repaint that was eating transcripts *(ADR-0309)*, promote-as-ATTACH so a lane keeps its child, session, folder and model byte-identical *(ADR-0310/0314)*, dismissable lanes *(ADR-0313)*, a spend meter that refuses to invent numbers *(ADR-0312/0315)*, and cards you can size and drag with pixel widths that track the pointer 1:1, wrapping headers and a real grab grip *(ADR-0325)*. **MEMORY**: the agent can write to the knowledge graph and a locked vault stops lying *(ADR-0319)*. **PREVIEW BECOMES A SURFACE**: twelve renderable kinds, rendered markdown, working PDFs, and an auto-open trigger narrowed back to html/svg/pdf after it began hijacking the screen for every .md and .json an agent writes *(ADR-0321/0322/0323)*. Plus tools that name themselves so evaluation can attribute them *(ADR-0318)*, a login confirmed by the VAULT rather than an exit code *(ADR-0316)*, one-gesture bulk dismissal of a 100-row security queue, and the test suite no longer appending its fixture blocks into the operator's real security ledger. |
+| **v1.14.2 batch** | **🛡️ The trust-boundary pass: four increments traced back to one field report** - a user reported that v1.14.1 had installed a different product entirely; the release was genuine and the boundaries were not. The window can no longer render a **stranger** (main mints a per-launch nonce, the engine echoes it on `/api/health`, and a foreign process holding the engine port fails LOUDLY with a copy/paste incident report naming the process, pid, start time and command line - never a silent port roll, because userData is port-keyed identity), **CI reads each artifact's EMBEDDED identity before upload** (pkg bundle id + payload `.app` path + version, deb package name, rpm lead, and the updater feed's declared `path` since both flavors emit a file named `latest.yml`; an empty dir, an unparseable artifact, or an unrecognized file fails the build), agents gain real **Word / Excel / PowerPoint** through a pinned digest-verified OfficeCLI as a gated skill graded per subcommand with the render-look-fix loop on the Preview panel, and the **Preview panel obeys the agent again** - `preview_open` reports itself over its own token'd channel rather than an ACP call title that intent tracing rewrites to the model's prose, which had also left all five preview activity pills dark. Plus two stacked chat scroll helpers (step a page, or run to the end) and paste-safe Homebrew docs, since stock zsh does not strip `#` comments from a pasted command | [ADR-0305/0306/0307/0308](DECISIONS.md) |
+| **v1.14.1 batch** | **📱 The phone follow-through + the honest gate: lane conversations reach the PWA, and the repo's test gate measures what it claims** - the composer collapses to **one row** (same-family controls fold into menus, Queue and Send merge into the one `PromptFrame` path they always were, the voice caution moves behind a `?` that goes amber whenever the current path would send audio off the phone), the fleet strip becomes an auto-collapsed **33px double-decker** with the desktop pill's count pips, per-lane composers, and the desktop's exact lane-status hexes; `EventFrame` gains an optional `lane` field with a read-only `watch` subscription (the host unicasts lane events ONLY to peers that asked, bounded `lane-sync` replay, a distinct `lane-error` chip, protocol version unchanged and every addition backward-safe); per-target seen counters + the **"new since you looked away"** boundary + a Sync that never repoints the composer; **no phone panel ever opens itself**; deterministic Preview **capture** with a measured readback noise floor and method-naming verdicts; `make test-harness` scope defined by **exclusion** so the documented gate reproduces its own numbers through both entry points; and the **Creator flavor** on trunk behind `build_flavor` gates with the `creator-v*` channel that cannot cross-install with Agent. | [ADR-0297..0304](DECISIONS.md) |
+| **v1.14.0 batch** | **🎛️ The control + reach arc: steer a running agent, approve once, drive a real browser, dictate only when it is provably local** - **MID-TURN interjection** (a note typed while the agent works reaches the model at its **next tool boundary** through the security gate's own tool-result seam, landing OUTSIDE the UNTRUSTED envelope and marked as operator input, so the agent adjusts course or finishes the step first: no cancel, no restart), **stacked hold-or-push prompt queues** (cap 8, per-item Push now), **Check-in cards** synthesized from live turn state (elapsed, phase, pending calls, queue depth) plus a canned "status update" interjection, and a status-bar **running-processes popover** (master turn, lanes, imports, browser) with per-row Stop; fleet **approval scopes** (Allow / **Allow-for-session**, keyed on the ask's tool kind for that lane's life / Deny, a deny never remembered) and a per-lane or fleet-wide **full auto-mode** gated behind an explicit risk acceptance the server enforces (the in-omp gate still scans EVERY call; auto grants stream as visible chips); an **agent-controlled VISIBLE browser** (egress-gated `browser_open`, then screenshot / scroll / click / type / drag / key-combo iteration; compositor-level capture defeats DOM-locked pages, coordinates ride SCREENSHOT space and are mapped back through the last shot's width, a breathing accent glow plus per-snapshot flash marks the window, and the close-X is a hard kill switch that fails every in-flight command); **per-lane Preview tabs** + **auto send-to-phone** for previews and browser snapshots; **workspace INIT offers** that scaffold `AGENTS.md` + `.agents/` (CONTEXT / PROGRESS / DECISIONS / skills, never overwriting, asked once per folder, with a deterministic repo scan pre-filling the detected stack and commands); the phone PWA gains **fleet control** (name filter, prompt / stop / approve-once / approve-session / deny, edit-gated on BOTH sides) and **optional device-native STT** that is refused unless on-device processing can be PROVEN (`processLocally` + a verified local pack; a CUI-plus-lockdown posture refuses the vendor-cloud path outright, and the iOS installed-PWA and WebKit dead-ends explain themselves instead of showing a dead button); the **Timeline** hides its own self-test throwaways by default (workspace-pattern classification, with a real workspace past two turns NEVER filtered) and becomes a **two-pane inspector** (aligned metadata columns, horizontal scrolling so long titles stay readable, a monospace role gutter, filter box, keyboard navigation, sticky day headers with per-day composition); **ACP child stderr persists** to a rolling `~/.omp/lucid-acp.log` and a code-1 exit **quotes its last line** in the error card (the "no response from the provider" support ticket, collector-aware); and on Windows every **port-keyed instance converges on ONE `safeStorage` os_crypt key** (seeded pre-Chromium-init, backfilled when only dev builds ever ran, a corrupt or foreign `Local State` never overwritten), so a vault credential written by one instance is readable by the next and the **Local Provider stops vanishing** from the model picker. | `P-FLEET.L6`, `P-WSSETUP`, `P-INTERJECT.1`, `P-BROWSER.1..3`, `P-REMOTE.14`, `P-TL.2/.3`, [ADR-0278](DECISIONS.md) |
+| **v1.13.2 batch** | **🛟 The fleet fidelity arc: survival, fidelity, and the reviewable Timeline** - the lane turn clock is **deleted** (a prompt is raced against the child's LIFE: a mid-turn crash lands `error` in milliseconds, event-driven, never a 600s deadline; long silence shows an amber `quiet Nm` chip), error is a **recoverable state** (`Retry` re-sends the last prompt, `Respawn` revives IN PLACE on the same lane id with manager-owned transcript memory - capability-gated `session/load` native resume when the agent advertises it, else a one-shot delimited transcript preamble - and an ask open at death dies as a DENY with the revived lane RE-ASKING a human); lane cards gain **diff chips** (the P-CHAT.1 rawInput extraction over the lane wire, paths resolved against the LANE's cwd, +N/-N expanding to the hunk, persisted across card reopen), **pasted-image thumbnails** (real ACP image blocks, count-only replay memory), and **staged prompts** (manager-owned FIFO per lane, cap 8 with loud refusal, amber Stage while busy, reorder/remove chips, renderer-triggered drain so a queued approval always has a visible card); and **P-FLEET.L5** names every lane session in a durable JSONL ledger at spawn/recovery and ships the **Timeline dock** - every session (chats, lanes labeled by name, kg-ingest) across EVERY workspace, day-grouped newest-first with in-place tail-limited transcripts, read-only by design; grounded in a deepseek-harness (MIT) survey with Cordis re-platforming explicitly rejected | [ADR-0274-0277](DECISIONS.md) |
+| **v1.13.1 batch** | **🚀 Unlimited fleet lanes + lanes from a repo remote + a truthful minimized HUD** - the instantaneous 75% watermark and the `min(6, cores/2)` ceiling are **deleted**: admission is now **sustained pressure** over a rolling window (refuse only when CPU or memory has held **90%+ for 30 unbroken seconds**, measured by the manager's own 3s sampler), so a compile or an ingest burst never refuses a lane, a cool **or blind** reading resets the streak (no evidence fails open, ADR-0182), and every refusal reports the measured percent **and** duration ("system memory has been at 94% for 34s"); the HUD and the master agent read the policy out of the payload (`pressurePct`/`sustainMs`/`cpuHotMs`/`memHotMs`, a contract change with every consumer moved in the same increment). **Spawn a lane from a repo remote**: pure `git_url.ts` parses `https`, `ssh://` and `git@` for GitHub / GitLab / **Azure DevOps** / self-hosted (a scp-like form demands a dotted host so a Windows drive path can never reach `git clone`; embedded `user:password@` is discarded), `/api/fleet/spawn` clones through the existing redacting `cloneRepo` into the folder you picked and **reuses** an existing clone (idempotent), credentials are **per host** in the OS-encrypted vault (`git_pat_<host>`, so an unknown host never receives your generic PAT) and ride the HTTP Basic header, never the URL, never `.git/config`, never an error line; SSH remotes never ask for a token and fail fast under `BatchMode` instead of blocking on an invisible passphrase prompt. The lane folder now opens the **real Explorer / Finder / zenity dialog** (ADR-0265), and the **minimized dock pill** stops flickering (it is re-adopted on every status repaint, identical markup is never rewritten, and a connected node is never re-appended) while carrying one colored dot **per lane state** with counts, ordered needs-approval first, hovering to name the lanes | [ADR-0273](DECISIONS.md) |
+| **v1.13.0 batch** | **🤖 The Fleet Manager** - async **job handles** through the Agent Firewall (dispatch/job_status/cancel + bounded-wait prompt over ONE gated execution path: fan-out across worker connections, serialization within one, every reply scanned + UNTRUSTED-delimited, fail-closed per job, deadline cleanup, idempotent retries); **local lanes** (N concurrent gated headless LUCID agents under a 75% headroom guard, each streaming into an editable mini window in the movable fleet-grid dock with working/awaiting/needs-approval/done glows - approvals fail-closed) + **Fleet Profiles** scope (project-bound GUI instances, bat `F`); **P-VOICE.7** varied openers + active-listening restatement + spoken thinking snapshots; the chat-history **ingest cannot hang** (bounded ACP requests, pending drained on child death, Stop interrupts the in-flight model call, force-cancel releases single-flight); real **OS folder dialogs** in the browser build; frozen **prefix v10** (data-integration steer); Whisper housekeeping (offered set tiny/base/small, per-model Remove, tiny default); **no turn clock** + pending-task visibility; the stale **quota-toast fix** (expired windows never warn) | [ADR-0263-0272](DECISIONS.md) |
+| **v1.12.2 batch** | **🛠️ The Windows Program Files fix arc + no-cutoff turns** - the engine ships as a **compiled binary** (`bin/lucid-engine`: dev.ts embedded, native addons the only externals, renderer prebuilt) so a `C:\Program Files` install boots instead of bricking; a **strict CI boot gate** stages every Windows build into a real write-denied Program Files tree and requires `/api/health` + the prebuilt bundle before anything ships; **per-machine installs allowed again** (assisted installer, per-user default, the relax coupled to the gate so removing the gate turns a demo red); `bin/` kept tracked so fresh-checkout dists work under current Bun; and the **10-minute turn cutoff is gone** - long subagent fan-outs run to completion, a dead agent process rejects in-flight requests event-driven, and every slow notice names the open tool calls / spawned subagent tasks with elapsed time | [ADR-0259-0263](DECISIONS.md) |
+| **v1.12.1 batch** | **🧠 The LUCID Trainer + role-generic training + the LUCID Agent role** - the knowledge-trainer flywheel (scenario-first expert interviews, capped five-whys, fail-closed distillation: PII redacted to typed placeholders + scanned + distilled inside untrusted delimiters + re-scanned + born untrusted, teach-back confirmation IS the promotion, coverage HUD L0-L3, drills generated only from confirmed units, a trainee miss re-opens extraction); **role-generic packs** from a pasted Position Description with the wealth-management-ops pack as a labeled sample; the **LUCID Agent** immersive role (talking mascot, cinematic boot, hands-free flow); plus the **preview stale-document fix**, the trainer-stage **WCAG AA contrast pass**, sandbox hardening (Seatbelt capability probe, AppContainer mediated loopback, GPU-sandbox self-heal), and the **P-FLEET** Chief-of-Staff fleet scope | [ADR-0251-0257](DECISIONS.md) |
+| **v1.12.0 batch** | **🗣️ Voice mode** - hands-free conversation (streaming read-aloud that starts after the first sentence, auto-mic on finish, silence sends the turn), answers shaped for the ear, the glowing pop-out equalizer, spoken thinking acknowledgements, and the per-engine voice picker that greys out engines you cannot use with the specific reason | [ADR-0246/0247](DECISIONS.md) |
 | **v1.11.9 batch** | **📱 LUCID Remote + the performance overhaul + preview tabs/viewports** - drive the desktop LUCID from a **phone browser** over the E2E-encrypted collab plane: **QR invite** from the Share panel, **Google sign-in** at the rendezvous (Firebase ID-token verified server-side, first-frame auth - never a URL param), the installable **guest PWA** (live transcript + composer + presence + preview snapshots), dual **edit/view-only** links, host **re-claim** with a grace window for flaky networks, self-host **or** hosted Cloud Run rendezvous with **claims-gated admission** (the paid Remote Access tier admits; payment never buys trust - every remote prompt still runs the host's fail-closed gate); plus **P-PERF.3** (the dashboard poll re-aggregated the entire session history + spawned omp synchronously every few seconds, stalling every model's replies - now gated/memoized/cached: repeat reads ~1-8 s → ~0-2 ms, idle CPU ~29% → ~8%) and the **preview panel**'s Yours/Agent tabs, phone/tablet device viewports, and 50% width cap | [ADR-0226/0227, 0240-0242](DECISIONS.md) |
 | **v1.11.6 batch** | **Air-gap installer + RAG for everyone + gov hardening** - the packaged app **bundles omp, a relocatable Python, and Bun**, so an offline or locked-down machine runs cold on first launch with **zero prerequisites and zero network** (a CI air-gap smoke test scrubs the global runtime to prove it); a **`knowledge_search`** tool grounds **any model** (Claude/GPT/Gemini/local) on your ingested **Obsidian vault / folders / imported history** - lexical + graph retrieval plus **bring-your-own-embeddings** semantic search (your OpenAI key or a local Ollama/vLLM `/embeddings`); AskSage **lockdown enforced server-side** across routing + egress + agent runs (was renderer-only) with the real GPT-5.6 ids, a per-session **CUI/Search mode**, and CUI + opt-in **DoD/STIG** banners; the **KG-pack `.lkgpack` marketplace/storefront**; a roomier **shared-session viewer** (host thinking + tools, whole window); an **overloaded-provider fallback** that recommends a lower same-family or cross-provider model when a model fails silently (Fable 5 → 4.8 Opus); reliable **OAuth connect/disconnect** (+ "Sign out of all") and a one-click **diagnostics collector**; and the **"Lucid Agent"** rename | [ADR-0217-0225](DECISIONS.md) |
 | **v1.11.0 batch** | **Live collaboration** - share a running session with another LUCID over an **E2E-encrypted** relay; a guest **watches read-only** or (edit link) **drives** the host (guest prompts run **on the host**, through its fail-closed gate + approvals); **self-hosted by default** ("be the relay" loopback/LAN/VPN, or a standalone jumpbox broker; public relay opt-in) with **enterprise/MDM** clamps; an optional **direct P2P (WebRTC)** upgrade (DTLS DataChannel, relay only signals, auto-fallback); a **metadata-only** share/join **audit trail**; plus a **Copy** button + **right-click Copy** for chat & code, the product **website** in About, and a pulled-back default **zoom** | [ADR-0192-0204](DECISIONS.md) |
