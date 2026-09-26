@@ -10,7 +10,7 @@
 
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
-import { planSessionSwitch, spokeNameFor, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0402)
+import { planSessionSwitch, spokeNameFor, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403)
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -9424,7 +9424,7 @@ async function resumeSession(id: string, opts: { loaded?: boolean; force?: boole
   return !!page || !!shownSig;
 }
 
-// ── P-SWITCH.1 (ADR-0402): opening a session never stops Main's work unless the user chooses to ──────
+// ── P-SWITCH.1 (ADR-0403): opening a session never stops Main's work unless the user chooses to ──────
 // Main is one omp process holding one session, so "keep that one running while I work in this one" means
 // one of them runs in a spoke. The engine refuses a switch while Main is busy (409 without force); these
 // functions ask first and offer the spoke, so the refusal is the rare race and not the normal path.
@@ -15941,7 +15941,7 @@ function confirmWindowClose(): void {
 }
 
 async function confirmNewSession(): Promise<void> {
-  // P-SWITCH.1 (ADR-0402): a working Main is not "a conversation that stays in history": its turn would be
+  // P-SWITCH.1 (ADR-0403): a working Main is not "a conversation that stays in history": its turn would be
   // cancelled. Offer the spoke instead of the history reassurance below, which is only true when idle.
   const main = await bridge.sessionBusy().catch(() => null);
   if (main?.busy) { showSwitchSheet(null, main.busy, main.sessionId); return; }

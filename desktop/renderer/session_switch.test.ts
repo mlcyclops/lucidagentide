@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-SWITCH.1 (ADR-0402): opening a session never stops Main's work unless the user chose to, and never puts
+// P-SWITCH.1 (ADR-0403): opening a session never stops Main's work unless the user chose to, and never puts
 // one session in two omp processes.
 
 import { describe, expect, test } from "bun:test";

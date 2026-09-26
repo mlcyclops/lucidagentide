@@ -1451,7 +1451,7 @@ class Backend {
    *  Used by the delete route to close the session before removing its file (#53). */
   currentSessionId(): string | null { return this.sessionId; }
 
-  /** P-SWITCH.1 (ADR-0402): why loading another session into Main, or starting a new one, would stop
+  /** P-SWITCH.1 (ADR-0403): why loading another session into Main, or starting a new one, would stop
    *  work right now, or null when nothing would be lost. loadSession/newSession run clearTurnRecovery,
    *  which cancels a live turn (ADR-0385, and correctly so), so the HTTP routes ask this first and refuse
    *  unless the caller explicitly chose to stop. A loop or automation outranks the turn it is running

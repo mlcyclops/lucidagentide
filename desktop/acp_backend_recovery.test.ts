@@ -189,7 +189,7 @@ describe("session-switch wedge: a cleared turn releases the session", () => {
   }
 });
 
-// P-SWITCH.1 (ADR-0402): /api/session/load and /api/newSession refuse on this predicate. A blocker that
+// P-SWITCH.1 (ADR-0403): /api/session/load and /api/newSession refuse on this predicate. A blocker that
 // missed a live turn lets a click cancel work again; one that outlived the turn locks switching for good.
 describe("switch guard", () => {
   test("switchBlocker names a live turn and clears once the turn ends", async () => {

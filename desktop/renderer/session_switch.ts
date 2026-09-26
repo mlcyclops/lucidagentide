@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-SWITCH.1 (ADR-0402): what opening a session does, decided without touching the DOM.
+// P-SWITCH.1 (ADR-0403): what opening a session does, decided without touching the DOM.
 //
 // Main (the hub) is ONE omp process holding ONE session. Loading another session into it, or starting a
 // new one, runs AcpBackend.clearTurnRecovery, which cancels a live turn (ADR-0385: correct, it ended the

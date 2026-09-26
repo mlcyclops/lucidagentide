@@ -24197,7 +24197,7 @@ P-SANDBOX.13 designed around this (the Add folder route never accepts a path fro
 
 **Consequences.** A recovered spoke continues where it stopped, on its own model, and promote lands in its conversation. Loading replays the history through the lane's notify handler, so observers attached before the spawn see the replayed chunks as tokens (the in-place respawn already behaves this way); `prompt()` clears the live buffers before the first real turn, so nothing replayed folds into it. The ghost row counts the ledger's assistant messages and the lane counts user turns, so the two numbers can differ after a recover.
 
-## ADR-0402 -- P-SWITCH.1: opening a session never stops the running one unless you choose to (2026-09-26)
+## ADR-0403 -- P-SWITCH.1: opening a session never stops the running one unless you choose to (2026-09-26)
 
 **Context.** Issue #390. With a turn running, a click on another session in the sidebar (or New session) stopped it with no warning. The sidebar row called `resumeSession`, which posts `/api/session/load`; `AcpBackend.loadSession` (and `newSession`) run `clearTurnRecovery`, which sends `session/cancel` for the live turn. That cancel is correct (ADR-0385: it ended the "already running" wedge), but nothing asked the user first. Main is one omp process holding one session, so the only way to keep one session working while you work in another is to run one of them in a spoke. A second risk sits next to it: the sidebar lists every session in the workspace, including one a live spoke holds, and loading that into Main would put one session in two omp processes appending to the same file.
 

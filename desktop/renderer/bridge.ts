@@ -1067,7 +1067,7 @@ export interface LucidBridge {
   // P-RESUME.1 (ADR-0171): user messages carry their `turn` ordinal; `steps` is the restored agent
   // activity (thinking/tool/failure groups) recorded in the lucid-steps sidecar, keyed by that ordinal.
   sessionMessages(id: string, limit?: number): Promise<{ messages: { role: string; text: string; turn?: number }[]; total: number; userTotal?: number; steps?: RestoredTurn[] } | null>;
-  /** P-SWITCH.1 (ADR-0402): what would stop if Main switched sessions now (null = nothing), and the
+  /** P-SWITCH.1 (ADR-0403): what would stop if Main switched sessions now (null = nothing), and the
    *  session Main holds. Null when the engine did not answer. */
   sessionBusy(): Promise<{ busy: string | null; sessionId: string | null } | null>;
   /** Load `id` into Main. While Main is busy the engine refuses (`busy` carries its reason) unless `force`,
@@ -1405,7 +1405,7 @@ async function getData(path: string): Promise<any> {
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
 }
-/** P-SWITCH.1 (ADR-0402): the outcome of asking Main to open or start a session. `busy` is set only by the
+/** P-SWITCH.1 (ADR-0403): the outcome of asking Main to open or start a session. `busy` is set only by the
  *  engine's 409 refusal; any other failure is `ok: false` without it (the caller's old best-effort path). */
 export interface SessionSwitchResult { ok: boolean; busy?: string }
 async function postSessionSwitch(path: string, body: unknown): Promise<SessionSwitchResult> {

@@ -977,7 +977,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 #spokeAskDock .perm-egress{border-left-color:var(--red)}
 #spokeAskDock .perm-eg-head .ic{color:var(--red)}
 #spokeAskDock .perm-url{white-space:pre-wrap;word-break:break-word}
-/* P-SWITCH.1 (ADR-0402): "Main is still working" docks in the same slot. Prose is plain blocks (invariant 11):
+/* P-SWITCH.1 (ADR-0403): "Main is still working" docks in the same slot. Prose is plain blocks (invariant 11):
    the body is one block paragraph and each button holds block children, never a flex row of text runs. */
 #switchSheet{max-width:min(1080px,94vw);margin:0 auto 10px;display:flex;flex-direction:column;animation:rise var(--t) var(--ease-out)}
 #switchSheet .switch-body{margin:0 12px 9px;font-size:12px;color:var(--txt-3);line-height:1.45}

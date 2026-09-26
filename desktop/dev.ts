@@ -1357,7 +1357,7 @@ const json = (data: unknown) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 
-/** P-SWITCH.1 (ADR-0402): the one refusal both session routes send while Main is busy. 409 because the
+/** P-SWITCH.1 (ADR-0403): the one refusal both session routes send while Main is busy. 409 because the
  *  request is fine and the state is not; `busy` is the engine's reason, shown to the user verbatim. */
 const switchRefused = (busy: string, sessionId: string | null) =>
   Response.json({ ok: false, busy, sessionId, error: `Main is busy (${busy}). Send force: true to stop it and switch.` }, { status: 409, headers: { "cache-control": "no-store" } });
@@ -3678,7 +3678,7 @@ return Bun.serve({
         syncStepTurns(sid, page.userTotal);
         return json({ ok: true, data: { ...page, steps: readTurnSteps(sid) } });
       }
-      // P-SWITCH.1 (ADR-0402): opening a session never stops Main's work unless the caller chose to. Every
+      // P-SWITCH.1 (ADR-0403): opening a session never stops Main's work unless the caller chose to. Every
       // client (desktop, PWA, a script) gets the same refusal; `force: true` is the explicit "stop it".
       if (p === "/api/session/busy") return json({ ok: true, data: { busy: backend.switchBlocker(), sessionId: backend.currentSessionId() } });
       if (p === "/api/session/load" && req.method === "POST") {
@@ -4536,7 +4536,7 @@ return Bun.serve({
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
       if (p === "/api/newSession" && req.method === "POST") {
         const { force } = await readBody<{ force?: unknown }>(req).catch(() => ({ force: undefined }));
-        const busy = force === true ? null : backend.switchBlocker(); // P-SWITCH.1 (ADR-0402)
+        const busy = force === true ? null : backend.switchBlocker(); // P-SWITCH.1 (ADR-0403)
         if (busy) return switchRefused(busy, backend.currentSessionId());
         await backend.newSession(); await refreshRecall(); return json({ ok: true });
       }
