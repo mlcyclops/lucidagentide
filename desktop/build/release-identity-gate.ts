@@ -13,8 +13,9 @@
 // electron-builder output dir it reads the EMBEDDED identity - the .pkg's bundle id, payload .app path
 // and version out of Distribution+PackageInfo, the .deb package name and version out of the ar
 // archive's control member, the .rpm name out of the lead, the updater feed's declared version and
-// artifact path - and compares it against the flavor being built. Only the formats that genuinely carry
-// nothing readable (.zip, NSIS/portable .exe, .AppImage) fall back to a filename-stem check.
+// artifact path - and compares it against the flavor being built. Only the formats that carry nothing
+// readable without unpacking (.zip, NSIS/portable .exe, .msi, .appx, .AppImage) fall back to a
+// filename-stem check.
 //
 // FAIL-CLOSED, three ways, because every failure mode here is a silent-pass shape:
 //   1. A missing or EMPTY release dir is a FAILURE. A gate that reports green over zero inputs is the

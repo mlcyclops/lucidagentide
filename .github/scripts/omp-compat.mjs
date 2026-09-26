@@ -7,7 +7,8 @@ import { pathToFileURL } from "node:url";
 // pi-tui joined the pin set at 18.2.6: omp 18.2.5 moved the status-line context-usage helpers (used
 // by harness/prompt/prompt_audit.ts) out of pi-coding-agent's subpaths and into pi-tui, so the five
 // packages must move in lockstep or the Tokenizer type identity splits across two copies.
-const PACKAGES = ["pi-agent-core", "pi-ai", "pi-coding-agent", "pi-tui", "pi-utils"].map(name => `@oh-my-pi/${name}`);
+// pi-catalog joined with R-07 (#347): harness/omp/provider_catalog.test.ts pins its provider universe.
+const PACKAGES = ["pi-agent-core", "pi-ai", "pi-catalog", "pi-coding-agent", "pi-tui", "pi-utils"].map(name => `@oh-my-pi/${name}`);
 const REGRESSION = "harness/prompt/prefix_compaction.test.ts";
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SUPPORTED = /^const SUPPORTED_OMP = "([^"]+)";\r?$/gm;
@@ -24,7 +25,7 @@ export function exactVersion(value) {
 function packagePin(manifest) {
 	const pin = exactVersion(manifest.dependencies?.[PACKAGES[0]]);
 	for (const name of PACKAGES) {
-		if (manifest.dependencies?.[name] !== pin) throw new Error(`All four omp pins must agree: ${name}`);
+		if (manifest.dependencies?.[name] !== pin) throw new Error(`All omp pins must agree: ${name}`);
 	}
 	return pin;
 }
