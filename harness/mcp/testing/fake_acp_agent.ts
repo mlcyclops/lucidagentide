@@ -19,6 +19,8 @@
 //                 replies with the recorded outcome so a test can assert we denied.
 //   hang        → NEVER answers session/prompt (P-FLEET.1 deadline checks) - unless a session/cancel
 //                 arrives, which is answered faithfully with stopReason "cancelled" like a real agent.
+//   midturn     → streams one tool_call + one chunk, then keeps the prompt open like `hang` (P-FLEET.L8:
+//                 a promote mid-turn must carry the in-flight output).
 //   crash       → streams one chunk then EXITS mid-turn without answering session/prompt (P-FLEET.L4
 //                 recovery checks: the client must see the death event-driven, and a respawned lane must
 //                 carry the transcript forward).
@@ -82,6 +84,14 @@ async function handle(line: string): Promise<void> {
     const sessionId = params?.sessionId ?? "fake-session-1";
     const promptText = extractText(params?.prompt);
     if (MODE === "hang") { hangingPromptId = id; return; } // never answer - the client's deadline must fire
+    if (MODE === "midturn") {
+      // P-FLEET.L8: a turn caught IN FLIGHT - one tool call and some answer text already out, then the
+      // agent keeps working (never answers) until a session/cancel, so a test can attach mid-turn.
+      write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "call-mid-1", title: "read notes.md", kind: "read", status: "completed" } } });
+      write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "so far: " } } } });
+      hangingPromptId = id;
+      return;
+    }
     if (MODE === "crash") {
       write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "half a thought before the lights go out" } } } });
       process.exit(1); // mid-turn death: session/prompt never gets its response

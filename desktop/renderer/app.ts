@@ -1971,7 +1971,10 @@ async function send(): Promise<void> {
   }
   // P-INTERJECT.2 (was P-ACP.4's single slot): a turn is already running - the send action becomes an
   // explicit choice instead of a silent stage: hold it for the next turn, or push it into THIS one.
-  if (state.streaming) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
+  // P-FLEET.L8: the same when the ATTACHED LANE is mid-turn. The engine runs one turn per lane and refused
+  // a second prompt with a lone error the composer never showed, which left the bubble on "Connection
+  // lost" and muted the watch: the lane looked dead while it was working.
+  if (turnInFlight()) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
   // First message of the app session: auto-collapse the sessions panel (Claude-Code style) so the
   // chat takes the focus - the nav hamburger (#sideToggle) reopens history on demand. Done once so
   // we never fight a user who reopens it mid-chat.
@@ -2170,6 +2173,20 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // The engine's stream-failure envelope ({type:"error"}) is outside ChatEvent, so compare the wire string.
     const wireType: string = e.type;
     if (wireType === "error" && !sawSnapshot && !adopted && !opts.laneId) { refused = true; return; }
+    // A LANE turn ends on its own error with no `done` (fleet_lanes.prompt): a refusal (busy, stopped,
+    // recovery failed) before anything ran, or a turn that died mid-way. Both were dropped here before, so
+    // the bubble sat on "Connection lost; turn status unknown" and Send stayed blocked for a turn that
+    // did not exist.
+    if (wireType === "error" && opts.laneId) {
+      terminal = true;
+      const why = ("message" in e && typeof e.message === "string" && e.message) || "the lane did not accept the prompt";
+      const started = buf.trim() || sawTool;
+      stopThinkingCues(); finishHud(); setPhase(started ? "Failed" : "Not sent"); paintHud();
+      if (started) { buf += `\n\n[turn ended in error: ${why}]`; (node as MsgNode)._md = buf; renderAnswerBody(streamEl, buf, marks); }
+      else streamEl.textContent = `Not sent: ${why}.`;
+      state.streaming = false; setSendEnabled();
+      return;
+    }
     if (e.type === "done" && refused) {
       terminal = true;
       stopThinkingCues(); finishHud(); setPhase("Not sent"); paintHud();
@@ -2339,8 +2356,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     void renderSessions(); void refreshBudget(false); void syncMode(); void refresh();
     scheduleKnowledgeRefresh(); maybeListen();
     // P-TURN-RECOVERY-DRAIN: only done or deliberate Stop may release a held prompt.
-    const nq = nextHold(state.queuedItems);
-    if ((terminal || stopped) && nq.item) { state.queuedItems = nq.rest; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; if (!ta2.value.trim()) { ta2.value = nq.item.text; setSendEnabled(); void send(); } else { state.queuedItems = [nq.item, ...state.queuedItems]; renderQueued(); } }
+    if (terminal || stopped) releaseHeldPrompt();
   };
   const run = async (transport: typeof connect) => {
     if (!owns() || settled || connecting) return;
@@ -2515,18 +2531,34 @@ const STATUS_ASK = "Please give a brief status update: what is finished, what yo
  *  shows, plus the last pending-call snapshot a { type:"slow" } event carried (aged via pendingAt). */
 const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0 };
 
-/** P-INTERJECT.2: interject a note into the RUNNING master turn + leave a transcript record chip. */
+/** The turn on the composer's target ended: send the first HELD prompt, unless the user has typed since
+ *  (then it stays staged rather than clobbering their draft). Shared by the master turn's settle and the
+ *  attached lane's watch, so a prompt staged behind a lane's turn runs when THAT turn ends. */
+function releaseHeldPrompt(): void {
+  const nq = nextHold(state.queuedItems);
+  if (!nq.item) return;
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  if (!ta || ta.value.trim()) return;
+  state.queuedItems = nq.rest; renderQueued();
+  ta.value = nq.item.text; setSendEnabled(); void send();
+}
+
+/** P-INTERJECT.2: interject a note into the RUNNING turn (the attached lane's, or the master's) + leave a
+ *  transcript record chip. */
 async function pushMidTurn(text: string): Promise<void> {
-  const r = await bridge.interject("master", text);
+  const r = await bridge.interject(isLaneTarget(state.composerTarget) ? state.composerTarget.laneId : "master", text);
   if (r) addNoteChip(`Pushed mid-turn: ${text}`);
   else showToast({ tone: "warn", title: "Push not delivered", desc: "The note was refused - the per-turn note cap may be full, or the backend is unreachable.", timeout: 6000 });
 }
 
-/** A quiet transcript note (the .evt chip family): one nowrap-ellipsis text span, full text in title. */
+/** A quiet transcript note (the .evt chip family): one nowrap-ellipsis text span, full text in title.
+ *  Dismissable: it is a record for the reader, not a message, so nothing else ever removes it (on an
+ *  empty thread it would otherwise sit under the "Ask the agent anything" hint until the next resume). */
 function addNoteChip(text: string): void {
-  const chip = addEvent(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
+  const chip = addEvent(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span><button class="note-chip-x" data-tip="Dismiss this note">${icon("close", 12)}</button></div>`);
   const t = $(".note-chip-txt", chip) as HTMLElement | null;
   if (t) { t.textContent = text; t.title = text; }
+  $(".note-chip-x", chip)?.addEventListener("click", () => chip.remove());
 }
 
 // ───────────────────────── P-FLEET.L8: promote a lane into the composer ─────────────────────────
@@ -2556,6 +2588,12 @@ let laneWatchNode: LaneWatchBubble | null = null;
  *  order. Cleared by the watch's done/error, a fresh watch, or a grace timer after our turn ends. */
 let laneOwnedTail = false;
 let laneOwnedGen = 0;
+/** The attached lane has a turn in flight that this composer did NOT start (seeded from the lane's status
+ *  at promote, then kept by the watch's events). A prompt sent now would be refused by the engine (one turn
+ *  per lane), so send() stages or interjects it instead, exactly as it does while the master streams. */
+let laneTurnLive = false;
+/** A turn is running on whatever the composer is attached to: our own, or the attached lane's. */
+const turnInFlight = (): boolean => state.streaming || (isLaneTarget(state.composerTarget) && laneTurnLive);
 
 /** P-SCROLL.1: where the reader was on each composer target, for the "return to where I left off"
  *  preference. Keyed "master" or by lane id; in memory only (a reload lands on the newest anyway). */
@@ -2633,6 +2671,20 @@ async function promoteLane(laneId: string): Promise<void> {
   const turns = seedTurns(r.transcript ?? []);
   renderThread(turns);
   addNoteChip(promoteNotice(target, turns.length));
+  // MID-TURN: show what the running turn has done so far, in the same bubble the watch will keep filling.
+  // The transcript holds settled turns only, so without this the composer landed on the bare prompt of a
+  // lane that had been working for minutes and read as "the spoke stopped".
+  laneTurnLive = lane.status === "working" || lane.status === "needs-approval";
+  if (r.live && (r.live.text || r.live.tools.length)) {
+    laneTurnLive = true;
+    const live = openLaneWatchNode();
+    for (const title of r.live.tools) live.stream.before(laneToolChip(title));
+    if (r.live.text) {
+      live.seg = r.live.text; live.buf = r.live.text;
+      live.stream.innerHTML = renderMarkdown(live.seg) + `<span class="cursor"></span>`;
+      (live.node as MsgNode)._md = live.buf;
+    }
+  }
   // TELL THE AGENT. Without this the model has no idea which surface is driving it: the session is the
   // same session either way, so the content is all present, but "restate what was written in the main
   // composer" is unanswerable when nothing ever said a main composer exists. Observed in use: the agent
@@ -2661,6 +2713,16 @@ function demoteLane(): void {
   laneOwnedTail = false;
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
   // no further event will ever settle.
+  laneTurnLive = false;
+  closeQueueChooser(); // a chooser for the lane's turn must not stage text into the master's queue
+  // A prompt held for the lane's next turn would otherwise fire at the MASTER's next settle.
+  const held = nextHold(state.queuedItems);
+  if (held.item) {
+    state.queuedItems = state.queuedItems.filter((q) => q.mode !== "hold"); renderQueued();
+    const ta = $("#input") as HTMLTextAreaElement | null;
+    if (ta && !ta.value.trim()) { ta.value = held.item.text; autosize(ta); setSendEnabled(); }
+    showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the lane's turn to end. It is back in the composer; reattach the lane to send it there.", timeout: 7000 });
+  }
   settleLaneWatchNode();
   saveReadingSpot(was); // P-SCROLL.1: before the master thread replaces it
   // TELL THE AGENT it is back on its fleet card, BEFORE the release call, so the note lands while the
@@ -2708,6 +2770,10 @@ function onLaneWatchEvent(e: LaneEvent): void {
     if (e.type === "done" || e.type === "error") laneOwnedTail = false;
     return;
   }
+  // A turn this composer did not start is running the moment its output arrives, and over on done/error.
+  // A staged prompt (hold) runs when that turn ends, as it does when the master's own turn settles.
+  if (e.type === "token" || e.type === "thinking" || e.type === "tool") laneTurnLive = true;
+  else if (e.type === "done" || e.type === "error") laneTurnLive = false;
   if (e.type === "thinking") {
     // P-SCROLL.1: reasoning is not the answer. It used to be appended into the answer text, which read as
     // the reply's sentences arriving jumbled; it now gets the master turn's collapsible reasoning block.
@@ -2743,11 +2809,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
     const live = laneWatchNode ?? openLaneWatchNode();
     if (live.reasoning) { live.reasoning.finish(Date.now() - live.t0); live.reasoning = null; }
     cutLaneWatchSegment(live);
-    const chip = el(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
-    const label = e.detail ? `${e.name}: ${e.detail}` : e.name;
-    const txt = $(".note-chip-txt", chip) as HTMLElement;
-    txt.textContent = label; txt.title = label;
-    live.stream.before(chip);
+    live.stream.before(laneToolChip(e.detail ? `${e.name}: ${e.detail}` : e.name));
     scrollChat();
     return;
   }
@@ -2763,11 +2825,21 @@ function onLaneWatchEvent(e: LaneEvent): void {
     // The turn died, so the half-written bubble has to stop looking live.
     settleLaneWatchNode();
     addNoteChip(`The lane reported an error: ${e.message}`);
+    releaseHeldPrompt();
     return;
   }
   if (e.type === "done") {
     settleLaneWatchNode();
+    releaseHeldPrompt();
   }
+}
+
+/** One tool step inside a watched lane bubble: the call's compact title, never a transcript note. */
+function laneToolChip(label: string): HTMLElement {
+  const chip = el(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
+  const txt = $(".note-chip-txt", chip) as HTMLElement;
+  txt.textContent = label; txt.title = label;
+  return chip;
 }
 
 /** Freeze the watched bubble: drop the cursor and section the open segment, exactly as a settled master
@@ -2852,14 +2924,14 @@ function openQueueChooser(text: string): void {
   const resend = () => { const ta = $("#input") as HTMLTextAreaElement; ta.value = text; autosize(ta); setSendEnabled(); void send(); };
   ($("[data-qc-hold]", ch) as HTMLElement).addEventListener("click", () => {
     closeQueueChooser();
-    if (!state.streaming) { resend(); return; }
+    if (!turnInFlight()) { resend(); return; }
     const r = addQueued(state.queuedItems, text, "hold");
     if (r.ok) { state.queuedItems = r.items; renderQueued(); }
     else showToast({ tone: "warn", title: "Not staged", desc: `${r.reason ?? "refused"}.`, timeout: 5000 });
   });
   ($("[data-qc-push]", ch) as HTMLElement).addEventListener("click", () => {
     closeQueueChooser();
-    if (!state.streaming) { resend(); return; }
+    if (!turnInFlight()) { resend(); return; }
     void pushMidTurn(text);
   });
   ($("[data-qc-x]", ch) as HTMLElement).addEventListener("click", () => {
