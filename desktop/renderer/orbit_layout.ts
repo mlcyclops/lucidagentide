@@ -160,6 +160,8 @@ export interface GhostSpoke {
   /** Logical identity: the user-given name + folder. Survives engine restarts, which mint new lane ids. */
   key: string;
   name: string; cwd: string; model: string; turns: number;
+  /** The omp session behind the latest run: Recover loads it, so the spoke comes back with its memory. */
+  sessionId: string;
   /** Latest activity across every recorded run of this logical spoke. */
   lastAt: number;
 }
@@ -180,7 +182,7 @@ export interface GhostLists { active: GhostSpoke[]; archived: GhostSpoke[]; hidd
  *  unhide brings it back; ARCHIVED (archive mark covers it) is tucked into the archived list, still
  *  recoverable; everything else is active. Hide beats archive. Newest first in every list. */
 export function ghostSpokes(
-  entries: readonly { kind: string; laneId?: string; laneName?: string; cwd: string; model: string; turns: number; updatedAt: number }[],
+  entries: readonly { sessionId: string; kind: string; laneId?: string; laneName?: string; cwd: string; model: string; turns: number; updatedAt: number }[],
   live: readonly { name: string; cwd: string }[],
   hides: readonly GhostMark[],
   archives: readonly GhostMark[] = [],
@@ -200,7 +202,7 @@ export function ghostSpokes(
     if (alive.has(key)) continue;
     const prior = best.get(key);
     if (!prior || e.updatedAt > prior.lastAt) {
-      best.set(key, { key, name: e.laneName, cwd: e.cwd, model: e.model, turns: e.turns, lastAt: e.updatedAt });
+      best.set(key, { key, name: e.laneName, cwd: e.cwd, model: e.model, turns: e.turns, sessionId: e.sessionId, lastAt: e.updatedAt });
     }
   }
   const active: GhostSpoke[] = [], archived: GhostSpoke[] = [], hidden: GhostSpoke[] = [];

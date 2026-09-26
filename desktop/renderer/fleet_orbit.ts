@@ -291,7 +291,7 @@ const HIDE_BTN = `<button class="orbit-ghost-x" data-ghost-hide data-tip="Hide|T
 function ghostRow(g: GhostSpoke, i: number, list: GhostList): string {
   const actions = list === "h"
     ? `<button class="btn-mini orbit-btn" data-ghost-unhide data-tip="Unhide|Back on the Recover list.">${icon("eye", 12)} Unhide</button>`
-    : `<button class="btn-mini orbit-btn" data-ghost-recover data-tip="Recover|Respawns this spoke with its old name, folder and model. New session; the old conversation stays reviewable in the Timeline.">${icon("restore", 12)} Recover</button>
+    : `<button class="btn-mini orbit-btn" data-ghost-recover data-tip="Recover|Brings this spoke back with its old name, folder, model and conversation: the agent loads the recorded session and continues where it left off.">${icon("restore", 12)} Recover</button>
       ${list === "z"
         ? `<button class="orbit-ghost-x" data-ghost-unarchive data-tip="Unarchive|Back to the main list.">${icon("archive", 12)}</button>`
         : `<button class="orbit-ghost-x" data-ghost-archive data-tip="Archive|Tucks this spoke into the archived section. Reversible; a future run also resurfaces it.">${icon("archive", 12)}</button>`}
@@ -326,14 +326,15 @@ function paintGhostPanel(): void {
     + ghostSection("Hidden", hidden, "h", hidOpen, "data-ghost-hidopen");
 }
 
-/** Respawn the spoke under its recorded identity. A fresh omp session (the old one died with its
- *  process); the full old conversation stays reviewable in the Timeline, which is named right on the
- *  row so recovery never silently impersonates memory it does not have. */
+/** Respawn the spoke under its recorded identity AND its recorded session: the engine asks omp to load
+ *  the old session (its history and model come back with it) and seeds the composer from the on-disk
+ *  transcript, so the recovered spoke continues the conversation instead of starting a blank one.
+ *  Found live: the earlier fresh-session recover read as "restored, but the whole history is gone". */
 async function recoverGhost(g: GhostSpoke, row: HTMLElement): Promise<void> {
   if (!deps) return;
   const btn = row.querySelector("[data-ghost-recover]") as HTMLButtonElement | null;
   if (btn) { btn.disabled = true; btn.textContent = "Recovering\u2026"; }
-  const r = await deps.fleetSpawn({ cwd: g.cwd, name: g.name, ...(g.model ? { model: g.model } : {}) }).catch(() => null);
+  const r = await deps.fleetSpawn({ cwd: g.cwd, name: g.name, sessionId: g.sessionId, ...(g.model ? { model: g.model } : {}) }).catch(() => null);
   if (!r?.ok) {
     // The folder may be gone, or pressure may refuse admission: say WHY, on the row, and let go.
     const err = row.querySelector("[data-ghost-err]") as HTMLElement | null;
@@ -580,7 +581,7 @@ function buildView(): HTMLElement {
       <div class="orbit-census" data-orbit-census></div>
       <div class="orbit-hud" data-orbit-hud data-tip="Fleet pressure|CPU and memory right now. A metric sustained over the line refuses NEW spokes; running ones are never touched."></div>
       <span class="orbit-headgap"></span>
-      <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every lane that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
+      <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every lane that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model, with its conversation loaded; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
       <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} New spoke</button>
       <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and spoke as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
       <button class="btn-mini orbit-btn" data-orbit-grid data-tip="Grid view|The classic fleet dashboard: streaming mini agent windows with per-lane composers, queues and transcripts.">${icon("layout", 13)} Grid</button>

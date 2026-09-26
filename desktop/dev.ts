@@ -104,7 +104,7 @@ import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById,
 import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
-import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
@@ -4542,7 +4542,7 @@ return Bun.serve({
       // silence).
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
       if (p === "/api/fleet/spawn" && req.method === "POST") {
-        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown }>(req);
+        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown; sessionId?: unknown }>(req);
         // P-FLEET.L2: a lane can be spawned straight from a GitHub / GitLab / Azure DevOps remote. The clone
         // lands INSIDE the folder the user picked in the OS dialog (or under ~/.omp/lucid-workspaces when
         // they picked none) and an existing clone is reused, so re-spawning the same repo is idempotent.
@@ -4556,7 +4556,17 @@ return Bun.serve({
           if (!c.ok || !c.path) return json({ ok: true, data: { ok: false, reason: c.error || "git clone failed" } });
           cwd = c.path;
         }
-        const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined });
+        // P-FLEET.L17: recovering a historical spoke brings its RECORDED session back (omp loads it
+        // natively; the on-disk transcript seeds the composer and is the fallback memory).
+        const sessionId = typeof b.sessionId === "string" ? b.sessionId.trim() : "";
+        let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
+        if (sessionId) {
+          const page = sessionMessages(sessionId, TRANSCRIPT_MAX_TURNS);
+          const transcript: LaneTurnRecord[] = [];
+          for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
+          resume = { sessionId, transcript, turns: page.userTotal };
+        }
+        const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined, ...(resume ? { resume } : {}) });
         return json({ ok: true, data: r });
       }
       // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
