@@ -107,6 +107,9 @@ import { fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleet
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
+import { initTitlebarRepo, refreshTitlebarRepo } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): which repo, where commits go
+import { pushLabel, repoChip } from "../repo_identity.ts";
+import type { RepoContext } from "./bridge.ts";
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
@@ -337,6 +340,8 @@ let autoCollapsedSessions = false; // collapse the sessions panel once, on the f
 // ADR-0216: a freshly-entered git PAT kept in renderer session memory ONLY (never persisted here) so a private
 // clone works THIS session without waiting for the next-launch vault→env injection. Cleared on app restart.
 let sessionGitPat = "";
+/** P-REPO.1 (ADR-0406): Main's last repo context; the titlebar chip's refresh keeps it current. */
+let mainRepo: RepoContext | null = null;
 
 // ───────────────────────── shell ─────────────────────────
 function buildShell(): void {
@@ -347,6 +352,8 @@ function buildShell(): void {
       <button class="model-badge" id="modelBadge" data-tip="Model · mode · thinking|Click to choose" data-tip-icon="spark">
         <span class="dot"></span><span id="modelName">${esc(modelLabel(state.model))}</span>${icon("chevron", 13)}
       </button>
+      <!-- P-REPO.1 (ADR-0406): the repo the composer's session works on, and where its commits go. -->
+      <button class="tb-chip repo-chip" id="tbRepo" type="button" hidden aria-label="Repository and push target"></button>
       <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
       <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
       <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
@@ -3042,6 +3049,7 @@ function renderComposerTarget(): void {
   // P-FLEET.L17: the takeover banner at the TOP of the screen tracks the same target as the chip - it
   // paints on every attach/detach, before any early return below, so the two can never disagree.
   renderSpokeBanner(state.composerTarget);
+  void refreshTitlebarRepo(); // P-REPO.1: the titlebar repo chip speaks for the same target
   const wrap = $(".composer-wrap") as HTMLElement | null;
   if (!wrap) return;
   const badge = targetBadge(state.composerTarget);
@@ -9610,7 +9618,14 @@ function renderWorkspaceBar(): void {
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
-  bar.innerHTML = `${icon(w.isGit ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}`;
+  // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
+  // inside the workspace folder) and where its commits go, so "which repo is this?" never needs a guess.
+  const r = mainRepo?.repo;
+  const same = (a: string, b: string): boolean => a.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase() === b.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
+  const repoLine = r
+    ? `<span class="ws-bar-repo${r.push ? "" : " local"}">${esc(same(r.root, w.current) ? (r.branch || r.head) : repoChip(r))} ${icon("arrowRight", 10)} ${esc(pushLabel(r))}</span>`
+    : "";
+  bar.innerHTML = `<span class="ws-bar-top">${icon(w.isGit || r ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}</span>${repoLine}`;
 }
 async function loadWorkspace(): Promise<void> {
   // #11 perceived-latency: the bar used to stay hidden until workspace() resolved, then
@@ -9623,6 +9638,7 @@ async function loadWorkspace(): Promise<void> {
   }
   state.workspace = await bridge.workspace().catch(() => null);
   renderWorkspaceBar();
+  void refreshTitlebarRepo(); // P-REPO.1
 }
 // P-RESUME.1 (ADR-0171): insert one restored-activity group and wire its collapse toggles (the
 // live windows attach listeners at creation; restored markup is a static string, so wire here).
@@ -10045,7 +10061,9 @@ async function applyWorkspace(path: string): Promise<void> {
   if (owner !== turnViewEpoch) return;
   setRecoveryChecking(false); setSendEnabled();
   if (info) { state.workspace = info; }
+  mainRepo = null; // P-REPO.1: the old folder's repo must not linger under the new name
   renderWorkspaceBar();
+  void refreshTitlebarRepo();
   seedThread(); state.liveUsage = null; renderStatus(); renderMetricsRail();
   void renderSessions(); void renderSettings();
   showToast({ title: "Workspace set", desc: `Agent now works in ${info?.name ?? path}.`, actions: [{ label: "OK" }], timeout: 2600 });
@@ -15342,6 +15360,9 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
+    repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New lane form picks a repo instead of typing
+    repoGithub: bridge.repoGithub,
+    openUrl: (url) => void openAuthUrl(url),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
@@ -15379,6 +15400,10 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove,
     fleetSpawn: bridge.fleetSpawn, // P-FLEET.L17 recovery: respawn a historical spoke by its old identity
     timelineList: bridge.timelineList, // P-FLEET.L17 recovery: the P-FLEET.L5 durable ledger feeds the ghosts
+    repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New spoke panel picks a repo instead of typing
+    repoGithub: bridge.repoGithub,
+    repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo
+    openUrl: (url) => void openAuthUrl(url),
     promoteLane: (laneId) => void promoteLane(laneId),
     demoteLane: () => demoteLane(),
     openGrid: () => openFleetGrid(),
@@ -15407,6 +15432,13 @@ function wire(): void {
       if (!isLaneTarget(t) || !lu) return null;
       return { used: lu.used, size: modelCtx(t.model) ?? lu.size, cost: lu.cost };
     },
+  });
+  // P-REPO.1 (ADR-0406): the titlebar names the repo the composer's session works on and where it pushes.
+  initTitlebarRepo({
+    bridge,
+    getLaneTarget: () => { const t = state.composerTarget; return isLaneTarget(t) ? { laneId: t.laneId, name: t.name } : null; },
+    openUrl: (url) => void openAuthUrl(url),
+    onMainContext: (ctx) => { mainRepo = ctx; renderWorkspaceBar(); },
   });
   // P-FLEET.L18: the Fleet button opens whichever view the user PINNED (orbit by default); each view's
   // header links to the other, so neither choice ever strands you.
@@ -15638,7 +15670,7 @@ function wire(): void {
       const pat = (($("#wsGitPat", $("#setBody")!) as HTMLInputElement | null)?.value.trim() || sessionGitPat) || undefined;
       showToast({ title: "Cloning…", desc: "Fetching the repo - this can take a moment.", timeout: 2500 });
       const info = await bridge.cloneWorkspace(url, pat);
-      if (info?.cloned) { state.workspace = info; renderWorkspaceBar(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); void maybeOfferWorkspaceSetup(); /* P-WSSETUP: clone does not funnel through applyWorkspace */ }
+      if (info?.cloned) { state.workspace = info; mainRepo = null; renderWorkspaceBar(); void refreshTitlebarRepo(); seedThread(); void renderSessions(); void renderSettings(); showToast({ title: "Cloned & opened", desc: `Agent now works in ${info.name}.`, actions: [{ label: "OK" }], timeout: 3000 }); void maybeOfferWorkspaceSetup(); /* P-WSSETUP: clone does not funnel through applyWorkspace */ }
       else showToast({ tone: "danger", title: "Clone failed", desc: (info?.error ?? "Check the URL and your git access.").slice(0, 180), actions: [{ label: "OK" }], timeout: 6000 });
       return;
     }

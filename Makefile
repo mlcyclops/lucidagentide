@@ -869,6 +869,9 @@ demo-P-PROGRESS.1: ## P-PROGRESS.1 (ADR-0404): workers say what they are doing (
 .PHONY: demo-P-SCROLL.1
 demo-P-SCROLL.1: ## P-SCROLL.1 (ADR-0405): the chat follows new output until the reader scrolls up (a fast burst no longer releases it); a spoke switch lands on the newest message or, by preference, where the reader left off; the attached spoke's live turn renders in arrival order; a new spoke opens on the last spoke's model
 	$(BUN) run harness/scripts/demo_p_scroll_1.ts
+.PHONY: demo-P-REPO.1
+demo-P-REPO.1: ## P-REPO.1 (ADR-0406): every session names the repo it works on and where its commits go (git's own push rules, no token in the view), taken from the files the session edits when its folder holds several repos; a spoke is started by picking a repo (local checkouts or the user's GitHub repos) instead of typing a URL
+	$(BUN) run desktop/scripts/demo_p_repo_1.ts
 
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing

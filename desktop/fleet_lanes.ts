@@ -41,6 +41,7 @@ import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } fr
 import { WorkspaceGate, type FolderQueue, type WaitView } from "./workspace_gate.ts"; // P-PROGRESS.1
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
 import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
+import type { RepoContext } from "./repo_identity.ts";
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -96,6 +97,9 @@ export interface LaneView {
   progress?: ProgressView;
   /** P-PROGRESS.1: the lane's turn is queued behind another worker's turn in the same folder. */
   waiting?: WaitView;
+  /** P-REPO.1 (ADR-0406): the repo this lane works on and where its commits go. Absent until the first
+   *  background probe lands (the status poll never waits on git). */
+  repo?: RepoContext;
 }
 
 /** P-FLEET.L3: a pasted image riding a lane prompt - the P-VISION.1 shape the master chat uses. */
@@ -249,6 +253,15 @@ export interface FleetLaneDeps {
   gate?: WorkspaceGate;
   /** P-PROGRESS.1: turn and tool lengths shared with the master, for the estimate. */
   history?: DurationHistory;
+  /** P-REPO.1 (ADR-0406): the repo tracker (repo_probe.ts). `observe` sees every tool_call, `peek` is a
+   *  synchronous cached read for the status view. Optional: without it a lane simply reports no repo. */
+  repo?: RepoTracker;
+}
+
+/** P-REPO.1: what the lane manager needs from the repo tracker. */
+export interface RepoTracker {
+  observe: (sessionId: string | null, update: unknown, cwd: string) => void;
+  peek: (sessionId: string | null, cwd: string) => RepoContext | undefined;
 }
 
 /** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time.
@@ -342,7 +355,7 @@ export class FleetLaneManager {
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
   readonly #observers = new Set<LaneObserver>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & Pick<FleetLaneDeps, "recordLaneSession" | "env" | "interject" | "onWrite" | "preface"> & { masterSessionId?: () => string | null; sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & Pick<FleetLaneDeps, "recordLaneSession" | "env" | "interject" | "onWrite" | "preface" | "repo"> & { masterSessionId?: () => string | null; sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -356,7 +369,7 @@ export class FleetLaneManager {
   constructor(deps: FleetLaneDeps) {
     this.#gate = deps.gate ?? new WorkspaceGate({ now: deps.now ?? Date.now });
     this.#durations = deps.history ?? new DurationHistory();
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}), ...(deps.repo ? { repo: deps.repo } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select.
@@ -1150,6 +1163,7 @@ export class FleetLaneManager {
           }
           if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
           trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
+          this.#deps.repo?.observe(typeof params?.sessionId === "string" ? params.sessionId : lane.sessionId, u, lane.cwd); // P-REPO.1
           // P-FLEET.L3 (mirrors P-CHAT.1): the authored code rides the CALL's rawInput - a write's
           // `content`, an edit's `edits[{old_text,new_text}]` joined into one before/after pair, or omp's
           // hashline patch in a single `input` string. Relative paths resolve against the LANE's cwd.
@@ -1282,7 +1296,9 @@ export class FleetLaneManager {
   }
 
   #view(lane: Lane): LaneView {
+    const repo = this.#deps.repo?.peek(lane.sessionId, lane.cwd);
     return {
+      ...(repo ? { repo } : {}),
       id: lane.id,
       name: lane.name,
       cwd: lane.cwd,

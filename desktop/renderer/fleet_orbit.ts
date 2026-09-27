@@ -19,6 +19,8 @@ import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts"; // P
 import { ageStr, esc } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { popover, showToast } from "./ui.ts";
+import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): repo + push target per spoke
+import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
@@ -35,6 +37,12 @@ export interface FleetOrbitDeps {
   fleetSpawn: LucidBridge["fleetSpawn"];
   /** P-FLEET.L17 recovery: the durable lane-session ledger (P-FLEET.L5) - the memory ghosts rise from. */
   timelineList: LucidBridge["timelineList"];
+  /** P-REPO.1 (ADR-0406): the New spoke picker's lists, Main's repo for the hub, and the details card's
+   *  "Open on GitHub" (the OS browser in the desktop app). */
+  repoChoices: LucidBridge["repoChoices"];
+  repoGithub: LucidBridge["repoGithub"];
+  repoContext: LucidBridge["repoContext"];
+  openUrl: (url: string) => void;
   /** The P-FLEET.L8 attach/release pair, owned by app.ts (thread park/seed lives there). */
   promoteLane: (laneId: string) => void;
   demoteLane: () => void;
@@ -397,19 +405,40 @@ function paintSpawnPanel(): void {
   const pick = spawnModelDefault(offered, rememberedSpokeModel(), deps.getMasterModel());
   const models = !pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered];
   box.innerHTML = `<div class="orbit-panel-h">${icon("plus", 14)}<b>New spoke</b><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>
-    <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-spawnp-name placeholder="what this spoke is for (defaults to the folder name)" maxlength="64"></label>
-    <label class="orbit-spawn-l">repo url <i>optional</i><input type="text" data-spawnp-repo spellcheck="false" autocomplete="off" placeholder="https://github.com/org/repo.git or git@host:org/repo"></label>
+    <div class="orbit-spawn-l">repository</div>
+    ${repoPickerHtml()}
     <small class="orbit-spawn-note" data-spawnp-repo-note hidden></small>
+    <details class="orbit-spawn-more">
+      <summary>Other folder or clone URL</summary>
+      <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
+        <button class="btn-mini orbit-btn" data-spawnp-browse>${icon("folder", 12)} Browse</button></span></label>
+      <label class="orbit-spawn-l">repo url <i>optional</i><input type="text" data-spawnp-repo spellcheck="false" autocomplete="off" placeholder="https://github.com/org/repo.git or git@host:org/repo"></label>
+    </details>
     <div class="orbit-spawn-auth" data-spawnp-auth hidden>
       <input type="password" data-spawnp-pat autocomplete="off" spellcheck="false" placeholder="Personal access token (private repos)">
       <label class="orbit-spawn-save"><input type="checkbox" data-spawnp-save checked><span data-spawnp-save-txt>Remember this token for this host</span></label>
     </div>
-    <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
-      <button class="btn-mini orbit-btn" data-spawnp-browse>${icon("folder", 12)} Browse</button></span></label>
+    <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-spawnp-name placeholder="what this spoke is for (defaults to the folder name)" maxlength="64"></label>
     <label class="orbit-spawn-l">model<select data-spawnp-model>${models.map((m) => `<option value="${esc(m.value)}"${m.value === pick ? " selected" : ""}>${esc(m.label)}</option>`).join("") || `<option value="">master's model</option>`}</select></label>
     <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-spawnp-go>${icon("bolt", 13)} Create spoke</button></div>
     <small class="orbit-ghost-err" data-spawnp-err></small>`;
-  ($("[data-spawnp-name]", box) as HTMLInputElement | null)?.focus();
+  // P-REPO.1 (ADR-0406): the pick fills the same folder / URL fields the panel always submitted.
+  const cwdIn = $("[data-spawnp-cwd]", box) as HTMLInputElement | null;
+  const repoIn = $("[data-spawnp-repo]", box) as HTMLInputElement | null;
+  const nameIn = $("[data-spawnp-name]", box) as HTMLInputElement | null;
+  const d = deps;
+  mountRepoPicker(box, d, () => cwdIn?.value ?? "", (pick) => {
+    if (!cwdIn || !repoIn) return;
+    if (pick.kind === "local") { cwdIn.value = pick.path; repoIn.value = ""; }
+    else { repoIn.value = pick.cloneUrl; cwdIn.value = d.getMasterCwd(); }
+    if (nameIn) nameIn.placeholder = pick.name;
+    paintOrbitRepoHint();
+    const signIn = githubPickNote(pick, cwdIn.value.trim());
+    const note = $("[data-spawnp-repo-note]", box) as HTMLElement | null;
+    const auth = $("[data-spawnp-auth]", box) as HTMLElement | null;
+    if (signIn && note) { note.textContent = signIn; note.classList.remove("bad"); if (auth) auth.hidden = true; }
+  });
+  ($("[data-repo-q]", box) as HTMLInputElement | null)?.focus();
 }
 
 /** P-FLEET.L18: the live hint under the repo field - what was recognized, where the clone lands, and
@@ -604,6 +633,7 @@ function buildView(): HTMLElement {
           <span class="orbit-hub-mark">${piMark}</span>
           <b>Main</b>
           <span class="orbit-hub-model" data-orbit-hub-model></span>
+          <span class="repo-chip orbit-hub-repo" data-orbit-hub-repo hidden></span>
           <span class="orbit-hub-here" data-orbit-hub-here></span>
         </div>
       </div>
@@ -745,6 +775,8 @@ function paintHead(s: FleetStatusView): void {
   hud.classList.toggle("hot", hot);
 }
 
+/** P-REPO.1: when the hub last asked for Main's repo. */
+let hubRepoAt = 0;
 function paintHub(): void {
   const model = $("[data-orbit-hub-model]", view!) as HTMLElement;
   const next = deps?.getMasterModel() || "";
@@ -755,6 +787,14 @@ function paintHub(): void {
   const t = onLane ? "click to return" : "you are here";
   if (here.textContent !== t) here.textContent = t;
   $("[data-orbit-hub]", view!)?.classList.toggle("here", !onLane);
+  // P-REPO.1 (ADR-0406): the hub names Main's repo like every spoke names its own. Re-read at most every
+  // 10 s (the engine caches git for 15 s anyway); the orbit polls every 2.5 s.
+  // A freshly built view has an empty (hidden) node, so it asks at once.
+  const hubRepo = $("[data-orbit-hub-repo]", view!) as HTMLElement;
+  if (deps && (hubRepo.hidden || Date.now() - hubRepoAt > 10_000)) {
+    hubRepoAt = Date.now();
+    void deps.repoContext().then((ctx) => { if (ctx && hubRepo.isConnected) paintRepoChip(hubRepo, ctx, "compact"); });
+  }
 }
 
 /** Census reconcile: create cards for new lanes (they fly OUT of the hub), update the rest in place,
@@ -803,6 +843,7 @@ function buildNode(lane: LaneView): HTMLElement {
       <div class="orbit-node-card">
         <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-incomposer" hidden>${icon("arrowRight", 11)} composer</span><button class="orbit-node-x" data-orbit-stop="${esc(lane.id)}">${icon("close", 11)}</button></div>
         <div class="orbit-glance"></div>
+        <div class="repo-chip orbit-repo" hidden></div>
         <div class="orbit-meta"><span class="orbit-model"></span></div>
         <div class="orbit-approve" hidden>
           <span class="orbit-approve-sum"></span>
@@ -837,6 +878,12 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   card.title = `${lane.name}\n${lane.cwd}\n${lane.model}`;
   setText(card, ".orbit-glance", spokeGlance(lane));
   setText(card, ".orbit-model", lane.model);
+  // P-REPO.1 (ADR-0406): which repo this spoke works in and where it pushes; hidden until probed.
+  const repo = card.querySelector(".orbit-repo") as HTMLElement;
+  // The card title is the spoke name (usually the folder), so the row leads with where commits go; a
+  // spoke whose repo differs from its name gets the repo named too.
+  if (lane.repo) paintRepoChip(repo, lane.repo, lane.repo.repo && lane.repo.repo.name.toLowerCase() !== lane.name.toLowerCase() ? "full" : "push");
+  else repo.hidden = true;
   (card.querySelector(".orbit-incomposer") as HTMLElement).hidden = !lane.promoted;
   const ap = card.querySelector(".orbit-approve") as HTMLElement;
   ap.hidden = !lane.pendingApproval;
@@ -940,6 +987,7 @@ export function renderSpokeBanner(target: ComposerTarget): void {
       <span class="spoke-beacon" aria-hidden="true"></span>
       <span class="spoke-kicker">on spoke</span>
       <b class="spoke-name"></b>
+      <button class="repo-chip spoke-repo" type="button" hidden aria-label="This spoke's repository and push target"></button>
       <span class="spoke-vitals">
         <button class="spoke-chip spoke-chip-mem" data-tip="Spoke memory|THIS lane's own measured context fill and session cost - never the master's. Click for the full vitals.">${icon("brain", 12)}<b class="spoke-ctx">ctx --</b></button>
         <button class="spoke-chip spoke-chip-sec" data-tip="Spoke security|Approval mode, pending asks and session-allowed tools for THIS lane. Click for the full vitals.">${icon("shield", 12)}<b class="spoke-sec">\u2026</b></button>
@@ -950,6 +998,8 @@ export function renderSpokeBanner(target: ComposerTarget): void {
     ($(".spoke-menu-btn", banner) as HTMLElement).addEventListener("click", () => void openSwitchMenu());
     ($(".spoke-close-btn", banner) as HTMLElement).addEventListener("click", () => void closeFromBanner());
     for (const chip of banner.querySelectorAll(".spoke-chip")) chip.addEventListener("click", () => void openVitals());
+    const repoBtn = $(".spoke-repo", banner) as HTMLElement;
+    repoBtn.addEventListener("click", () => { if (bannerLane?.repo) openRepoDetails(repoBtn, bannerLane.repo, `spoke ${bannerLane.name}`, (u) => deps?.openUrl(u)); });
     banner.classList.toggle("static", resolveMode() === "static"); // Lite reaches the banner's ornaments too
     document.body.appendChild(banner);
     requestAnimationFrame(() => banner?.classList.add("show"));
@@ -964,6 +1014,7 @@ export function renderSpokeBanner(target: ComposerTarget): void {
     bannerLane = null;
     menuPop?.close(); menuPop = null;
     if (askDock && askDock.dataset.laneId !== target.laneId) paintAskDock(null, "", undefined);
+    ($(".spoke-repo", banner) as HTMLElement).hidden = true; // the old spoke's repo never shows under the new name
     paintVitalChips();
     if (vitalsPop) { paintVitals(vitalsPop.node); vitalsPop.reposition(); }
   }
@@ -1003,6 +1054,7 @@ async function bannerRefresh(): Promise<void> {
   bannerLane = s?.lanes.find((l) => l.id === laneId) ?? null;
   // A failed poll (null status) says nothing about the ask, so it never clears a docked prompt.
   if (s) paintAskDock(laneId, t.name, bannerLane?.pendingApproval);
+  if (bannerLane?.repo) paintRepoChip($(".spoke-repo", banner) as HTMLElement, bannerLane.repo); // P-REPO.1
   paintVitalChips();
   if (vitalsPop) { paintVitals(vitalsPop.node); vitalsPop.reposition(); } // an ask arriving grows the card
 }

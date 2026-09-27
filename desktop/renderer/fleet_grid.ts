@@ -36,6 +36,8 @@ import { LANE_JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump
 import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new lanes open on the last lane's model
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
+import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
+import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
@@ -50,7 +52,7 @@ import type { ChipKind } from "./answer_chips.ts";
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "repoChoices" | "repoGithub">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -79,6 +81,8 @@ export interface FleetGridDeps extends FleetFns {
    *  actually holds the composer, so it is free to ignore it. */
   promoteLane?: (laneId: string) => void;
   demoteLane?: (laneId: string) => void;
+  /** P-REPO.1 (ADR-0406): open a repo's web page from its details card (OS browser in the desktop app). */
+  openUrl?: (url: string) => void;
 }
 
 const FLEET_DOCK_KEY = "lucid.fleetDock.v1";
@@ -754,6 +758,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the lane card" title="Collapse (keeps the header)">${icon("minus", 12)}</button>
       <button class="fleet-card-btn fleet-dismiss" data-fleet-stop aria-label="Stop this lane" title="Stop the lane">${icon("close", 12)}</button>
     </div>
+    <button class="repo-chip fleet-repo" data-fleet-repo type="button" hidden aria-label="This lane's repository and push target"></button>
     <div class="fleet-card-main">
       <div class="fleet-out" data-fleet-out>
         <!-- P-FLEET.L13: the same catch-up pair the main composer carries. Single chevron steps ONE page
@@ -897,6 +902,9 @@ function paintFrame(run: LaneRun): void {
   }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
   if (cwd) { cwd.textContent = baseName(v.cwd); cwd.title = v.cwd; }
+  // P-REPO.1 (ADR-0406): the repo this lane works in and where its commits go. Hidden until probed.
+  const repo = $("[data-fleet-repo]", card) as HTMLElement | null;
+  if (repo) { if (v.repo) paintRepoChip(repo, v.repo); else repo.hidden = true; }
   // P-FLEET.L18: the group chip - the assigned name, or a bare glyph inviting one.
   const grp = $("[data-fleet-grp]", card) as HTMLElement | null;
   if (grp) {
@@ -1566,14 +1574,19 @@ function toggleSpawnForm(): void {
       <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-lane form" title="Close">${icon("close", 12)}</button>
     </div>
     <div class="fleet-spawn">
-      <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
-      <div class="fleet-spawn-row">
-        <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
-        <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
-      </div>
-      <label class="fleet-spawn-lbl">Repo URL <span class="fleet-spawn-opt">optional</span></label>
-      <input class="fleet-spawn-in" data-spawn-repo type="text" spellcheck="false" autocomplete="off" aria-label="A GitHub, GitLab or Azure DevOps repository URL to clone" placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git" />
+      <label class="fleet-spawn-lbl">Repository</label>
+      ${repoPickerHtml()}
       <div class="fleet-spawn-note" data-spawn-repo-note hidden></div>
+      <details class="fleet-spawn-more" data-spawn-more>
+        <summary>Other folder or clone URL</summary>
+        <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
+        <div class="fleet-spawn-row">
+          <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
+          <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
+        </div>
+        <label class="fleet-spawn-lbl">Repo URL <span class="fleet-spawn-opt">optional</span></label>
+        <input class="fleet-spawn-in" data-spawn-repo type="text" spellcheck="false" autocomplete="off" aria-label="A GitHub, GitLab or Azure DevOps repository URL to clone" placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git" />
+      </details>
       <div class="fleet-spawn-auth" data-spawn-auth hidden>
         <input class="fleet-spawn-in" data-spawn-pat type="password" autocomplete="off" spellcheck="false" aria-label="Personal access token for this repository host" placeholder="Personal access token (private repos)" />
         <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
@@ -1589,7 +1602,24 @@ function toggleSpawnForm(): void {
   grid.prepend(form);
   paintEmpty();
   paintRepoHint(form);
-  ($("[data-spawn-cwd]", form) as HTMLInputElement | null)?.focus();
+  // P-REPO.1 (ADR-0406): pick a repo instead of typing. The pick fills the same folder / URL fields the
+  // form always submitted, so the spawn path and its clone rules are unchanged.
+  const cwdIn = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
+  const repoIn = $("[data-spawn-repo]", form) as HTMLInputElement | null;
+  const nameIn = $("[data-spawn-name]", form) as HTMLInputElement | null;
+  const d = deps;
+  mountRepoPicker(form, d, () => cwdIn?.value ?? "", (pick) => {
+    if (!cwdIn || !repoIn) return;
+    if (pick.kind === "local") { cwdIn.value = pick.path; repoIn.value = ""; }
+    else { repoIn.value = pick.cloneUrl; cwdIn.value = d.getMasterCwd(); }
+    if (nameIn) nameIn.placeholder = pick.name;
+    paintRepoHint(form);
+    const signIn = githubPickNote(pick, cwdIn.value.trim());
+    const note = $("[data-spawn-repo-note]", form) as HTMLElement | null;
+    const auth = $("[data-spawn-auth]", form) as HTMLElement | null;
+    if (signIn && note) { note.textContent = signIn; note.className = "fleet-spawn-note"; if (auth) auth.hidden = true; }
+  });
+  ($("[data-repo-q]", form) as HTMLInputElement | null)?.focus();
 }
 
 /** The REAL OS dialog (Explorer / Finder / zenity), where the user can also CREATE the folder. A cancel
@@ -1749,6 +1779,12 @@ function onClick(ev: Event): void {
     const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
     if (grid) applyOrder(grid);
     for (const r of runs.values()) if (r.card) paintFrame(r); // chips lose their freed group name
+    return;
+  }
+  const rc = t.closest("[data-fleet-repo]") as HTMLElement | null;
+  if (rc) {
+    const rrun = runs.get((rc.closest(".fleet-card[data-lane]") as HTMLElement | null)?.dataset.lane ?? "");
+    if (rrun?.view.repo) openRepoDetails(rc, rrun.view.repo, `spoke ${rrun.view.name}`, (u) => deps?.openUrl?.(u));
     return;
   }
   const gc = t.closest("[data-fleet-grp]") as HTMLElement | null;

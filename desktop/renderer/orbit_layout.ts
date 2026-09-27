@@ -18,7 +18,7 @@ export interface OrbitOpts { nodeW?: number; nodeH?: number; pad?: number }
 
 /** The card footprint the geometry reserves per spoke. fleet_orbit.ts sizes the real cards to match. */
 export const ORBIT_NODE_W = 172;
-export const ORBIT_NODE_H = 92;
+export const ORBIT_NODE_H = 108; // P-REPO.1: +16 for the repo row
 const ORBIT_PAD = 26;
 
 /** Ring radii as fractions of the full ellipse, by how many rings the fleet needs. Inner rings exist
