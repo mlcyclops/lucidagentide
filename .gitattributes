@@ -9,3 +9,10 @@
 # conflict (order is irrelevant on this throwaway test branch; code is what's tested).
 PROGRESS.md merge=union
 DECISIONS.md merge=union
+
+# The knowledge-envelope spec and its conformance vectors are pinned BY SHA-256 in both
+# repositories (this repo's drift test and LUCIDMeetingHub's tests/test_spec_pin.py). A
+# CRLF rewrite on checkout would make that pin machine-dependent - the digest would match
+# on the machine that wrote it and fail everywhere else, which is the worst failure mode
+# a cross-repo contract can have.
+docs/specs/** text eol=lf
