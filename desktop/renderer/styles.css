@@ -4878,6 +4878,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .checkin-card .ck-acts{display:flex;gap:6px;margin-top:6px}
 /* transcript note chip: one nowrap-ellipsis text span inside the .evt flex row */
 .note-chip-txt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note-chip-x{flex:none;background:none;border:0;color:var(--txt-4);cursor:pointer;display:grid;place-items:center;
+  width:18px;height:18px;border-radius:50%}
+.note-chip-x:hover{color:var(--txt);background:var(--bg-3)}
 /* the per-lane fleet check-in card (inline at the top of the lane body) */
 .fleet-checkin{margin:6px 8px 0;padding:7px 9px;border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-2)}
 .fleet-ck-line{display:block;font-size:11px;color:var(--txt-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
