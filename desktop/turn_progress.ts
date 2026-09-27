@@ -126,6 +126,11 @@ export class DurationHistory {
     return this.#turns.filter((t) => !m || t.model === m).map((t) => t.totalMs);
   }
 
+  /** P-PROGRESS.2: this tool's sampled lengths (for estimateFromSamples on an open call). */
+  toolSamples(name: string): readonly number[] {
+    return this.#tools.get((name || "").trim().toLowerCase()) ?? [];
+  }
+
   /** The 75th percentile of this tool's sampled lengths, or undefined before two samples. */
   toolTypical(name: string): number | undefined {
     const arr = this.#tools.get((name || "").trim().toLowerCase());
@@ -145,19 +150,54 @@ export interface EstimateInput {
 /** Elapsed against the typical length of this model's recent turns (or every model's, when this one has
  *  too few). Pure. */
 export function estimateTurn(i: EstimateInput): TurnEstimate {
-  const none: TurnEstimate = { etaMs: null, percent: null, basis: "none", samples: 0, typicalMs: null, overrun: false };
-  if (!usable(i.elapsedMs)) return none;
   let samples = i.history.turnSamples(i.model);
   let basis: TurnEstimate["basis"] = "model";
   if (samples.length < MIN_MODEL_SAMPLES) {
     samples = i.history.turnSamples();
     basis = "any";
-    if (samples.length < MIN_ANY_SAMPLES) return none;
+    if (samples.length < MIN_ANY_SAMPLES) return NO_ESTIMATE;
   }
-  const typicalMs = Math.max(1, percentile(samples, 0.75));
-  const overrun = i.elapsedMs > typicalMs;
-  const percent = Math.min(PERCENT_CAP, Math.floor((i.elapsedMs / typicalMs) * 100));
-  return { etaMs: overrun ? 0 : typicalMs - i.elapsedMs, percent, basis, samples: samples.length, typicalMs, overrun };
+  return estimateFromSamples(i.elapsedMs, samples, 1, basis);
+}
+
+const NO_ESTIMATE: TurnEstimate = { etaMs: null, percent: null, basis: "none", samples: 0, typicalMs: null, overrun: false };
+
+/** P-PROGRESS.2: the same labelled percentile for any worker with a sample set (a subagent run against
+ *  the lengths of finished runs, a turn against past turns). Fewer than `minSamples` usable lengths is
+ *  basis "none": no number. Pure. */
+export function estimateFromSamples(elapsedMs: number, samples: readonly number[], minSamples = 2, basis: TurnEstimate["basis"] = "any"): TurnEstimate {
+  if (!usable(elapsedMs)) return NO_ESTIMATE;
+  const good = samples.filter((s) => usable(s) && s > 0);
+  if (!good.length || good.length < minSamples) return NO_ESTIMATE;
+  const typicalMs = Math.max(1, percentile(good, 0.75));
+  const overrun = elapsedMs > typicalMs;
+  const percent = Math.min(PERCENT_CAP, Math.floor((elapsedMs / typicalMs) * 100));
+  return { etaMs: overrun ? 0 : typicalMs - elapsedMs, percent, basis, samples: good.length, typicalMs, overrun };
+}
+
+/** P-PROGRESS.2: the ETA words for a running worker. With history: "about 1 m left (est.)" or "longer than
+ *  usual (typically 2 m)". Without: "ETA estimating", said plainly so a missing number reads as "not known
+ *  yet" rather than as nothing at all. Pure. */
+export function etaPhrase(e: TurnEstimate): string {
+  if (e.typicalMs === null) return ETA_ESTIMATING;
+  return e.overrun ? `longer than usual (typically ${humanMs(e.typicalMs)})` : `about ${humanMs(e.etaMs ?? 0)} left (est.)`;
+}
+
+/** What a running worker with no usable history shows in place of a number. */
+export const ETA_ESTIMATING = "ETA estimating";
+
+/** P-PROGRESS.2: the whole prompt's ETA: the turn itself plus every helper still working for it (subagent
+ *  runs outlive the turn). `turn` is null once the turn ended; each helper is ms left, or null when its time
+ *  left is not known. The prompt ends when its slowest part ends, so the figure is the largest known one;
+ *  when some parts are unknown it is a floor ("at least"), and with nothing known it is "ETA estimating".
+ *  "" when nothing is running. Pure. */
+export function wholeEtaPhrase(turn: TurnEstimate | null, helpers: readonly (number | null)[]): string {
+  if (!helpers.length) return turn ? etaPhrase(turn) : "";
+  const parts = turn ? [...helpers, turn.typicalMs === null || turn.overrun ? null : turn.etaMs] : [...helpers];
+  const known = parts.filter((p): p is number => p !== null && usable(p));
+  if (!known.length) return ETA_ESTIMATING;
+  const most = humanMs(Math.max(...known));
+  return known.length === parts.length ? `about ${most} left (est.)` : `at least ${most} left (est.)`;
 }
 
 export interface LivenessInput {
@@ -227,15 +267,14 @@ export function progressView(i: ProgressInput): ProgressView {
   };
 }
 
-/** One line for a HUD or a card: "42 s · step 4 · about 1 m left (est.)" / "longer than usual (typically 2 m)". */
+/** One line for a HUD or a card: "42 s · step 4 · about 1 m left (est.)" / "longer than usual (typically 2 m)".
+ *  P-PROGRESS.2: a running worker always carries an ETA part; with no history it says "ETA estimating". */
 export function progressLine(p: ProgressView): string {
   const bits = [humanMs(p.elapsedMs)];
   const steps = p.stepsDone + p.stepsOpen.length;
   if (steps) bits.push(`step ${steps}`);
-  const e = p.estimate;
-  if (e.typicalMs !== null) {
-    bits.push(e.overrun ? `longer than usual (typically ${humanMs(e.typicalMs)})` : `about ${humanMs(e.etaMs ?? 0)} left (est.)`);
-  }
+  const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
+  if (running) bits.push(etaPhrase(p.estimate));
   return bits.join(" \u00b7 ");
 }
 

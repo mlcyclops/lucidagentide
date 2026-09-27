@@ -5,7 +5,7 @@
 // finishes a running turn, and liveness follows the evidence in strength order.
 
 import { describe, expect, test } from "bun:test";
-import { DurationHistory, estimateTurn, livenessVerdict, progressLine, progressView, QUIET_MS, STREAMING_MS } from "./turn_progress.ts";
+import { DurationHistory, ETA_ESTIMATING, estimateFromSamples, estimateTurn, etaPhrase, livenessVerdict, progressLine, progressView, QUIET_MS, STREAMING_MS, wholeEtaPhrase } from "./turn_progress.ts";
 
 function seeded(model: string, ms: number[]): DurationHistory {
   const h = new DurationHistory();
@@ -140,5 +140,39 @@ describe("progressView", () => {
     expect(p.estimate.basis).toBe("none");
     expect(p.liveness.state).toBe("idle");
     expect(progressLine(p)).toBe("0 s");
+  });
+
+  test("P-PROGRESS.2: a running worker with no history says ETA estimating instead of leaving the ETA out", () => {
+    const now = 500_000;
+    const p = progressView({ busy: true, dead: false, startedAt: now - 12_000, lastActivityAt: now - 1_000, stepsDone: 1, stepsOpen: [], model: "a", history: new DurationHistory(), now });
+    expect(progressLine(p)).toBe(`12 s \u00b7 step 1 \u00b7 ${ETA_ESTIMATING}`);
+    const dead = progressView({ busy: true, dead: true, startedAt: now - 12_000, lastActivityAt: now - 1_000, stepsDone: 1, stepsOpen: [], model: "a", history: new DurationHistory(), now });
+    expect(progressLine(dead)).toBe("12 s \u00b7 step 1"); // a dead worker has no ETA to estimate
+  });
+});
+
+describe("P-PROGRESS.2 estimateFromSamples and wholeEtaPhrase", () => {
+  test("below the sample floor there is no number; at it, the p75 of usable lengths", () => {
+    expect(estimateFromSamples(1_000, [60_000], 2).typicalMs).toBeNull();
+    expect(estimateFromSamples(1_000, [60_000, -5, Number.NaN], 2).typicalMs).toBeNull(); // junk is not history
+    const e = estimateFromSamples(20_000, [60_000, 120_000], 2);
+    expect(e.typicalMs).toBe(120_000);
+    expect(e.etaMs).toBe(100_000);
+  });
+
+  test("the whole prompt ends with its slowest known part; unknown parts make it a floor", () => {
+    const turn = estimateFromSamples(10_000, [40_000, 40_000], 2); // 30 s left
+    expect(wholeEtaPhrase(turn, [])).toBe(etaPhrase(turn));
+    expect(wholeEtaPhrase(turn, [90_000])).toBe("about 1 m 30 s left (est.)");
+    expect(wholeEtaPhrase(turn, [90_000, null])).toBe("at least 1 m 30 s left (est.)");
+    expect(wholeEtaPhrase(estimateFromSamples(10_000, [], 2), [null])).toBe(ETA_ESTIMATING);
+    expect(wholeEtaPhrase(null, [20_000])).toBe("about 20 s left (est.)"); // the turn ended; a helper still runs
+    expect(wholeEtaPhrase(null, [])).toBe("");
+  });
+
+  test("a turn past its typical length counts as unknown time left, not as zero", () => {
+    const over = estimateFromSamples(50_000, [40_000, 40_000], 2);
+    expect(over.overrun).toBe(true);
+    expect(wholeEtaPhrase(over, [20_000])).toBe("at least 20 s left (est.)");
   });
 });
