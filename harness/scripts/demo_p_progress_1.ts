@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_progress_1.ts
 //
-// P-PROGRESS.1 (ADR-0404): workers say what they are doing, how far along they probably are, and whether
+// P-PROGRESS.1 (ADR-0409): workers say what they are doing, how far along they probably are, and whether
 // they are alive; same-folder turns take turns visibly. Proven headless against the real seams:
 //   [1] the estimate is history or nothing, and never finishes a running turn;
 //   [2] liveness follows the evidence (dead > watchdog action > streaming > open call > quiet);
@@ -23,7 +23,7 @@ import { FleetLaneManager, type LaneEvent } from "../../desktop/fleet_lanes.ts";
 const fail = (m: string): never => { console.error(`FAIL: ${m}`); process.exit(1); };
 const ok = (cond: boolean, m: string) => { if (!cond) fail(m); console.log(`  ok  ${m}`); };
 
-console.log("== #ADR-0404 P-PROGRESS.1: progress, liveness, and same-folder turns ==\n");
+console.log("== #ADR-0409 P-PROGRESS.1: progress, liveness, and same-folder turns ==\n");
 
 console.log("[1] the estimate");
 const h = new DurationHistory();

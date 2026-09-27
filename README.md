@@ -138,11 +138,11 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
 - **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
 
-The per-beta details are in [What's new in v2.3.0-beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+The per-beta details are in [What's new in v2.3.0-beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
 
 ### Get the beta
 
-1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.8](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.8)).
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.9](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.9)).
 2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
 
@@ -277,23 +277,22 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 
 ---
 
-## Unreleased: a shorter Preview header
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.9 (prerelease)
 
-The Preview panel's chrome is two rows on any width: the header keeps Reload, Device viewport, Browser (pop the local file out into your default browser), Screenshot to chat and a ⋯ menu (Browse, Markup, Capture frames, Send to phone, Games, Wheel zoom); the second row is the Yours / Agent tabs, the path field, zoom and Pan. On a narrow panel the button labels fold to icons and the zoom steps tuck away, so the tabs are always reachable. *(P-PREVIEW.20)*
+> **👀 Workers you can read, sessions with one owner, and a Preview panel that fits a laptop.** Beta.9 folds nine merged branches: every tool step says what it is doing and whether the worker is alive, one omp session can no longer run in two processes, every session names its repo, the chat follows until you scroll up, and the Preview panel gets a two-row header, three offline games and a pop-out to your browser.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.9](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.9). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
 
-## Unreleased: three offline games in Preview
-
-Open **Preview > Games** for **Orbit Loom** (drop-and-merge chains), **Signal Garden** (eight-wave tower defense) or **Nebula Fusion: Voyage**, the AI Workshop gravity-well merge game rebuilt around a fifteen-mission ladder: forge each body, chain fusions, hit score marks, birth a nebula. Every mission pays a bonus and a solar wind that dissolves the smallest bodies; the collapse screen tallies your missions and finishing the ladder opens endless play. All three are single-file HTML games: keyboard and touch controls, pause, sound toggle, scoring and replay. Each row has a **Browser** chip that opens the game full size in your default browser (the local file, nothing leaves the machine). The Agent role's Arcade cabinet has the same launchers. Games run in the opaque-origin, network-blocked Preview frame; no account or external assets. For making a new game, enable the built-in **Game Design** skill under Skills: it steers small-screen loops and optional one-shot Jev critique without putting a large reference catalog into every prompt. *(P-GAME.1)*
-
-## Unreleased: grab to pan in Yours
-
-Open a document in **Preview > Yours**, zoom in, then select **Grab to pan** and drag to move the enlarged preview. The cursor changes from grab to grabbing. Press **Escape** or toggle the button off to click, type, or select text inside the page again. Arrow keys and wheel scrolling work in pan mode; Ctrl/Meta+wheel still zooms. Pan and markup are mutually exclusive, and switching tabs, opening another Yours document, or closing Preview exits pan mode. This moves the outer zoomed viewport, not an embedded PDF viewer's internal page scroller. Available after loading the updated app. *(P-PREVIEW-YOURS-PAN)*
-
-## Unreleased: seamless KG pack imports
-
-Import a `.lkgpack.zip` from Settings > Personalization or the KG panel's Packs menu. Verification stays visible until completion. On success, the pack becomes active and its page count refreshes without restarting LUCID. Settings stays open; **View graph preview** opens the visualization when you want it.
-
-The preview shows at most **100 nodes and 200 links**, with full graph totals in the header. It uses static placement, not a force simulation or animated particles. Click a node to load its page; Find a node searches the displayed preview. All pages remain available to knowledge retrieval, including pages outside the preview. Imports still verify integrity and origin, scan every page fail-closed, and install read-only as untrusted data. Existing installations need the updated build; importing after that does not require a restart. *(P-KGPACK.8, [ADR-0341](DECISIONS.md))*
+- **🧭 Workers say what they are doing, how far along, and whether they are alive** - every tool step opens on its doing line, arguments and outcome; the HUD and every lane card carry a history estimate, a liveness pill tied to evidence, and a Restart button when the agent process is dead; two turns on one folder take turns, visibly, with expected start times. Quick, failed, repeated and empty calls fold into one summary line, and every running worker states an ETA or says it is estimating. *(P-PROGRESS.1/.2, [ADR-0409](DECISIONS.md), [ADR-0408](DECISIONS.md))*
+- **🔒 One session, one owner** - opening a session never stops the running one unless you choose to, and a session a live spoke holds is never loaded into Main as well: the sidebar shows where each session runs before you click. *(P-SWITCH.1/.2, [ADR-0403](DECISIONS.md), [ADR-0404](DECISIONS.md))*
+- **📝 One checkout, known writers** - a hub and its spokes sharing a checkout know who else is writing there, check in with each other agent to agent, and a `git add -A` that would sweep another session's edits is refused with the explicit adds the caller owns. *(P-OWN.1, [ADR-0407](DECISIONS.md))*
+- **🌐 Every session names its repo and where its commits go** - a repo chip in the titlebar, lane cards and spokes (green arrow pushes to a remote, amber means local only), and a new spoke starts from a repo picker over your local checkouts and GitHub repos instead of a typed URL. *(P-REPO.1, [ADR-0406](DECISIONS.md))*
+- **⬇️ The chat follows until you scroll up** - a fast burst no longer releases the follow; a spoke switch lands on the newest message or, by preference, where you left off; the attached spoke's live turn renders in arrival order; a new spoke opens on the last spoke's model. *(P-SCROLL.1, [ADR-0405](DECISIONS.md))*
+- **🖼 A shorter Preview header** - two rows on any width: Reload, Device viewport, **Browser** (pop the local file out into your default browser), Screenshot to chat and a ⋯ menu (Browse, Markup, Capture frames, Send to phone, Games, Wheel zoom); the second row is the Yours / Agent tabs, the path field, zoom and Pan. On a narrow panel the labels fold to icons so the tabs are always reachable. *(P-PREVIEW.20/.21)*
+- **🕹 Three offline games in Preview** - **Preview > Games** opens **Orbit Loom** (drop-and-merge chains), **Signal Garden** (eight-wave tower defense) or **Nebula Fusion: Voyage**, the AI Workshop gravity-well merge game rebuilt around a fifteen-mission ladder with solar-wind rewards, a victory screen and endless play. Single-file HTML, keyboard and touch, sound toggle, replay; each row also opens full size in your browser. The Agent role's Arcade has the same launchers, and a bundled **Game Design** skill steers original, goal-driven small-screen games with optional one-shot Jev critique. *(P-GAME.1/.2/.3)*
+- **✋ Grab to pan in Yours** - zoom a document in **Preview > Yours**, select **Pan** and drag; Escape returns to page interaction. *(P-PREVIEW-YOURS-PAN)*
+- **📦 Seamless KG pack imports** - a `.lkgpack.zip` import stays visible until it completes, becomes active without a restart, and offers a bounded graph preview (100 nodes, 200 links). *(P-KGPACK.8, [ADR-0341](DECISIONS.md))*
+- **🎯 The launcher defaults to Opus 5.5** - `LucidAgentIDE.bat` reports which Anthropic auth it found (OAuth or key) and starts on `claude-opus-5-5`. Plus: a spoke closes from its orbit node or banner, a historical spoke recovers with a model id omp accepts, and the Knowledge Item envelope v1 spec lands as docs. *(P-FLEET.L17/.L20, [ADR-0401](DECISIONS.md), [ADR-0402](DECISIONS.md))*
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.8 (prerelease)
 

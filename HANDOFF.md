@@ -13,13 +13,23 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-09-24, v2.3.0-beta.8 prerelease)
+## Current state (2026-09-27, v2.3.0-beta.9 prerelease)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. The newest stretch is the
-**Windows AppContainer sandbox arc** (ADR-0386 to ADR-0395), released as the
-**v2.3.0-beta.8** GitHub prerelease on 2026-09-24 (never marked latest, cask
-untouched):
+now product increments, each with its own ADR. **v2.3.0-beta.9** (2026-09-27)
+integrates nine branches on top of beta.8: P-PROGRESS.1/.2 (ADR-0409/0408,
+what every worker is doing and its ETA), P-SWITCH.1/.2 (ADR-0403/0404, one
+session one owner), P-OWN.1 (ADR-0407, known writers per checkout), P-REPO.1
+(ADR-0406, repo chip and picker), P-SCROLL.1 (ADR-0405), P-GAME.1/.2/.3 and
+P-PREVIEW.20/.21 (offline games, a two-row Preview header, a Browser
+pop-out), the Knowledge Item envelope spec, and the root dependabot bump.
+Integration note: #396 and #397 both claimed ADR-0404; P-PROGRESS.1 was
+renumbered to ADR-0409 (the `adr_numbering` test is the alarm). The desktop
+dependabot bump (#351) was left out: its Windows test gate failed.
+
+The stretch before it, the **Windows AppContainer sandbox arc** (ADR-0386 to
+ADR-0395), shipped as **v2.3.0-beta.8** on 2026-09-24 (never marked latest,
+cask untouched):
 
 - **P-SANDBOX.9 to .11** (ADR-0386/0387/0389): chat actually works inside the
   AppContainer. The helper hands its std handles to omp, the container can

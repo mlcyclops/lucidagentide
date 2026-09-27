@@ -519,4 +519,13 @@
 //            for the switch and folders (P-SANDBOX.14, ADR-0394). Agent errors reach the chat as words
 //            (P-NORESP.2, ADR-0388); Grok 4.7 and an xAI Grok picker family (P-MODEL.5, ADR-0392).
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.8";
+// v2.3.0-beta.9 = beta.8 plus nine merged branches. Every tool step says what it is doing, how far along
+//            and whether the worker is alive, with folds for quick or empty calls and an ETA for every
+//            worker (P-PROGRESS.1/.2, ADR-0409/0408); one omp session has one owner and the sidebar shows
+//            where it runs (P-SWITCH.1/.2, ADR-0403/0404); a shared checkout knows its writers and refuses a
+//            sweeping commit (P-OWN.1, ADR-0407); every session names its repo and spokes start from a repo
+//            picker (P-REPO.1, ADR-0406); the chat follows until you scroll up (P-SCROLL.1, ADR-0405); the
+//            Preview panel gets a two-row header, a Browser pop-out and three offline games (P-PREVIEW.20/.21,
+//            P-GAME.1/.2/.3); the launcher defaults to Opus 5.5.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.9";
