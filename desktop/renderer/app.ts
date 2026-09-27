@@ -44,7 +44,8 @@ import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (A
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { describeTool } from "./tool_describe.ts"; // P-PROGRESS.1: what a tool call is doing, in plain words
-import { humanMs, progressLine, QUIET_MS, STREAMING_MS, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) progress view helpers
+import { DurationHistory, ETA_ESTIMATING, estimateFromSamples, etaPhrase, humanMs, progressLine, QUIET_MS, STREAMING_MS, wholeEtaPhrase, type ProgressView, type TurnEstimate } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) progress view helpers
+import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
 import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (type only: the module itself is engine-side)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
@@ -71,7 +72,7 @@ import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable)
-import { delegationSettled, filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
+import { delegationSettled, filterRunsForBatch, mergeRunSamples, runEta, type RunSample, type TimedRun } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
 // P-KGUI.3 (ADR-0336): the Personalization card's stat tiles, rebuilt for a user with MANY knowledge graphs.
@@ -1151,7 +1152,8 @@ function phaseForTool(name: string, detail: string): string {
   if (/edit|write|notebook|patch|apply|create/.test(n)) return "Editing files…";
   if (/bash|shell|run|exec|command/.test(n)) return /\b(test|jest|vitest|pytest|build|tsc)\b/.test(d) ? "Running tests…" : "Running commands…";
   if (/fetch|web|http|browse/.test(n)) return "Searching the web…";
-  return `Using ${name}…`;
+  // P-PROGRESS.2: a coarse kind ("tool", "other", "think") names nothing; say it is processing instead.
+  return COARSE_KINDS[n] || !n ? "Processing…" : `Using ${name}…`;
 }
 // A category icon for a tool, so each consolidated activity step reads at a glance.
 function phaseIcon(name: string): string {
@@ -1255,9 +1257,13 @@ interface ThoughtsWin {
   relabel(id: string, name: string): void;
   /** P-PROGRESS.1: the step's call ended: mark it done or failed, with how long it took. */
   settle(id: string, ok: boolean, elapsedMs?: number): void;
+  /** P-PROGRESS.2: age the open rows' elapsed time and ETA (called by the HUD's 1 s timer). */
+  tick(): void;
   /** Collapse into the final one-line summary (auto-collapse on done). */
   finish(ms: number): void;
 }
+/** P-PROGRESS.2: tool lengths seen in this app session, for an open long call's ETA ("about 8 s left"). */
+const toolLengths = new DurationHistory();
 /** omp's coarse ACP kinds: a label that is one of these never replaces a real tool name (ADR-0318). */
 const COARSE_KINDS: Record<string, true> = { edit: true, execute: true, read: true, search: true, fetch: true, think: true, other: true, tool: true, run: true, delete: true, move: true };
 function createThoughts(): ThoughtsWin {
@@ -1277,7 +1283,63 @@ function createThoughts(): ThoughtsWin {
   let steps = 0, failed = 0;
   const files = new Set<string>();
   // P-PROGRESS.1: rows by toolCallId, so the real name and the outcome land on the row they belong to.
-  const rows = new Map<string, { row: HTMLElement; kEl: HTMLElement; dEl: HTMLElement; stateEl: HTMLElement; doingEl: HTMLElement; nameEl: HTMLElement; s: { name: string; detail: string; intent?: string; input?: string; code?: ToolCode } }>();
+  // P-PROGRESS.2: a row is BUILT at once but only SHOWN when it earns it (tool_fold.ts): still running at
+  // QUICK_MS, or settled as a long call. Quick calls fold into a summary line; failed, repeated and empty
+  // calls fold in as "processing". A folded row keeps its drilldown under the fold line's chevron.
+  interface StepRow { row: HTMLElement; kEl: HTMLElement; dEl: HTMLElement; stateEl: HTMLElement; doingEl: HTMLElement; nameEl: HTMLElement; s: { name: string; detail: string; intent?: string; input?: string; code?: ToolCode }; informative: boolean; redundant: boolean; at: number; shown: boolean; placed: boolean; timer: number }
+  const rows = new Map<string, StepRow>();
+  const seenKeys = new Set<string>();
+  // The fold line currently collecting: only while it is the last thing in the body, so the window stays in
+  // call order (a long row in between starts a new fold after it).
+  let fold: { el: HTMLElement; dEl: HTMLElement; list: HTMLElement; quick: string[]; processing: number } | null = null;
+  const keepInView = () => { if (win.classList.contains("open")) body.scrollTop = body.scrollHeight; };
+  const showRow = (r: StepRow) => {
+    if (r.placed) return;
+    r.placed = r.shown = true;
+    body.appendChild(r.row);
+    keepInView();
+  };
+  const foldIn = (r: StepRow, fate: "quick" | "processing", why: string) => {
+    if (!fold || fold.el !== body.lastElementChild) {
+      const el0 = el(`<div class="thoughts-step ts-fold">
+        <button class="ts-row" type="button" aria-expanded="false">${icon("check", 13)}<span class="ts-k"></span><span class="ts-d"></span><span class="ts-chev">${icon("chevron", 13)}</span></button>
+        <div class="ts-foldlist" hidden></div>
+      </div>`);
+      const btn = $(".ts-row", el0) as HTMLButtonElement;
+      const list = $(".ts-foldlist", el0) as HTMLElement;
+      btn.addEventListener("click", () => {
+        const opening = list.hasAttribute("hidden");
+        if (opening) list.removeAttribute("hidden"); else list.setAttribute("hidden", "");
+        btn.setAttribute("aria-expanded", String(opening));
+        el0.classList.toggle("open", opening);
+      });
+      body.appendChild(el0);
+      fold = { el: el0, dEl: $(".ts-d", el0) as HTMLElement, list, quick: [], processing: 0 };
+    }
+    if (fate === "quick") fold.quick.push(r.s.name); else fold.processing++;
+    r.row.classList.add("folded");
+    r.row.dataset.fold = why;
+    r.placed = true; r.shown = false;
+    fold.list.appendChild(r.row); // moves it out of the body when it had been shown
+    ($(".ts-k", fold.el) as HTMLElement).textContent = fold.quick.length ? "summary" : "processing";
+    fold.el.dataset.kind = fold.quick.length ? "quick" : "processing";
+    fold.dEl.textContent = foldSummary(fold.quick, fold.processing);
+    keepInView();
+  };
+  // An open row that earned its place says how long it has run and, from this session's lengths of the same
+  // tool, about how long is left; with too few samples it says so ("ETA estimating").
+  const paintOpen = (r: StepRow, now: number) => {
+    const ran = now - r.at;
+    const eta = etaPhrase(estimateFromSamples(ran, toolLengths.toolSamples(r.s.name), 2));
+    r.stateEl.textContent = `${humanMs(ran)} \u00b7 ${eta}`;
+    r.stateEl.title = `running for ${humanMs(ran)}; ${eta}`;
+  };
+  // Where a settled (or never-settling) call goes, and why it was folded when it was.
+  const place = (r: StepRow, ok: boolean | undefined, elapsedMs: number | undefined) => {
+    const fate = stepFate({ informative: r.informative, redundant: r.redundant, ok, elapsedMs });
+    if (fate === "row") { showRow(r); return; }
+    foldIn(r, fate, ok === false ? "failed" : r.redundant ? "repeat" : !r.informative ? "empty" : "quick");
+  };
   const toggle = (open: boolean) => {
     win.classList.toggle("open", open);
     headBtn.setAttribute("aria-expanded", String(open));
@@ -1288,8 +1350,10 @@ function createThoughts(): ThoughtsWin {
     step(s) {
       steps++;
       const { name, detail, code } = s;
-      const doing = describeTool({ name, kind: name, title: detail, intent: s.intent, input: s.input, path: code?.path }).doing;
-      curEl.textContent = doing;
+      const desc = describeTool({ name, kind: name, title: detail, intent: s.intent, input: s.input, path: code?.path });
+      const doing = desc.doing;
+      // P-PROGRESS.2: a call with nothing specific to say is "Processing", never a bare "tool".
+      curEl.textContent = desc.informative ? doing : "Processing\u2026";
       countEl.hidden = false;
       countEl.textContent = String(steps);
       if (/edit|write|notebook|patch|apply|create/i.test(name) && detail) files.add(detail.trim());
@@ -1328,10 +1392,16 @@ function createThoughts(): ThoughtsWin {
         btn.setAttribute("aria-expanded", String(opening));
         row.classList.toggle("open", opening);
       });
-      body.appendChild(row);
-      if (s.id) rows.set(s.id, { row, kEl, dEl, stateEl, doingEl, nameEl, s: { name, detail, intent: s.intent, input: s.input, code } });
-      // Keep the newest step in view while expanded, without stealing the page scroll.
-      if (win.classList.contains("open")) body.scrollTop = body.scrollHeight;
+      const key = stepKey(name, s.input, s.intent);
+      const redundant = !!key && seenKeys.has(key);
+      if (key) seenKeys.add(key);
+      const r: StepRow = { row, kEl, dEl, stateEl, doingEl, nameEl, s: { name, detail, intent: s.intent, input: s.input, code }, informative: desc.informative, redundant, at: Date.now(), shown: false, placed: false, timer: 0 };
+      // No id: no settle report can ever arrive, so place it now on what is known.
+      if (!s.id) { place(r, undefined, undefined); return; }
+      rows.set(s.id, r);
+      // Still running at QUICK_MS: it is not quick, so it earns its row now (unless it is empty or a repeat,
+      // which stay "processing" whatever their length).
+      r.timer = window.setTimeout(() => { if (stateEl.dataset.state === "open" && r.informative && !r.redundant) { showRow(r); paintOpen(r, Date.now()); } }, QUICK_MS);
     },
     relabel(id, name) {
       const r = rows.get(id);
@@ -1340,19 +1410,31 @@ function createThoughts(): ThoughtsWin {
       r.s.name = name;
       r.kEl.textContent = name;
       r.nameEl.textContent = `Tool: ${name}`;
-      const doing = describeTool({ name, title: r.s.detail, intent: r.s.intent, input: r.s.input, path: r.s.code?.path }).doing;
-      r.dEl.textContent = doing; r.doingEl.textContent = doing;
-      if (wasCurrent) curEl.textContent = doing;
+      const desc = describeTool({ name, title: r.s.detail, intent: r.s.intent, input: r.s.input, path: r.s.code?.path });
+      r.dEl.textContent = desc.doing; r.doingEl.textContent = desc.doing;
+      if (!r.placed) r.informative = desc.informative;
+      if (wasCurrent && desc.informative) curEl.textContent = desc.doing;
     },
     settle(id, ok, elapsedMs) {
       const r = rows.get(id);
       if (!r || r.stateEl.dataset.state === "done" || r.stateEl.dataset.state === "failed") return;
       if (!ok) failed++;
+      window.clearTimeout(r.timer);
       r.stateEl.dataset.state = ok ? "done" : "failed";
       const took = elapsedMs !== undefined && elapsedMs >= 0 ? humanMs(elapsedMs) : "";
       r.stateEl.textContent = took;
       r.stateEl.title = ok ? (took ? `done in ${took}` : "done") : (took ? `failed after ${took}` : "failed");
       r.row.classList.toggle("failed", !ok);
+      if (ok && elapsedMs !== undefined && elapsedMs >= 0) toolLengths.addTool(r.s.name, elapsedMs);
+      // P-PROGRESS.2: a quick, failed, repeated or empty call folds (a shown row that then failed moves into
+      // the fold); a long one keeps, or now takes, its own row.
+      // With no length in the report, the time since the call was announced stands in.
+      const ran = elapsedMs !== undefined && elapsedMs >= 0 ? elapsedMs : Date.now() - r.at;
+      if (!r.shown || stepFate({ informative: r.informative, redundant: r.redundant, ok, elapsedMs: ran }) !== "row") place(r, ok, ran);
+    },
+    tick() {
+      const now = Date.now();
+      for (const r of rows.values()) if (r.shown && r.stateEl.dataset.state === "open") paintOpen(r, now);
     },
     finish(ms: number) {
       win.removeAttribute("data-streaming");
@@ -1367,7 +1449,13 @@ function createThoughts(): ThoughtsWin {
         : "No tools used";
       countEl.hidden = true;
       // A step still open when the turn ends never got its report: say so instead of spinning forever.
-      for (const r of rows.values()) if (r.stateEl.dataset.state === "open") { r.stateEl.dataset.state = "unknown"; r.stateEl.title = "no result report"; }
+      // P-PROGRESS.2: one that never showed is placed now on what is known (no outcome, its length so far).
+      for (const r of rows.values()) {
+        window.clearTimeout(r.timer);
+        if (r.stateEl.dataset.state !== "open") continue;
+        r.stateEl.dataset.state = "unknown"; r.stateEl.textContent = ""; r.stateEl.title = "no result report";
+        if (!r.placed) place(r, undefined, Date.now() - r.at);
+      }
     },
   };
 }
@@ -1689,7 +1777,33 @@ function renderAnswerBody(container: HTMLElement, md: string, marks?: readonly T
   return false;
 }
 
-function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true): { el: HTMLElement; finish: () => void } {
+/** P-PROGRESS.2: finished subagent run lengths, kept across sessions so the first delegation of a day
+ *  already has an ETA. Folds in newly finished runs and returns every known length. */
+const RUN_SAMPLES_KEY = "lucid.subagentRunMs.v1";
+let runSamples: readonly RunSample[] | null = null;
+function rememberRunSamples(runs: readonly TimedRun[]): number[] {
+  if (runSamples === null) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(RUN_SAMPLES_KEY) ?? "[]") as unknown;
+      runSamples = Array.isArray(raw) ? raw.filter((s): s is RunSample => !!s && typeof s.k === "string" && typeof s.ms === "number") : [];
+    } catch { runSamples = []; }
+  }
+  const next = mergeRunSamples(runSamples, runs);
+  if (next !== runSamples) {
+    runSamples = next;
+    try { localStorage.setItem(RUN_SAMPLES_KEY, JSON.stringify(next)); } catch { /* storage full or blocked: this session still has them */ }
+  }
+  return runSamples.map((s) => s.ms);
+}
+
+interface SubagentCard {
+  el: HTMLElement;
+  finish: () => void;
+  /** P-PROGRESS.2: ms left per live run (null = not known yet); empty once the delegation settled. */
+  etas: () => readonly (number | null)[];
+}
+
+function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true): SubagentCard {
   const n = e.assignments.length;
   const body = (e.assignments.length ? e.assignments : [e.title]).map((a) =>
     `<div class="subagent-task">${icon("chevron", 11)}<span>${esc(a)}</span></div>`).join("");
@@ -1697,6 +1811,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     <button class="subagent-head" type="button" aria-expanded="true">
       <span class="subagent-spin">${CLIPBOARD_SVG}</span>
       <span class="subagent-cur">Delegated to <b>${esc(e.agent)}</b>${n > 1 ? ` · ${n} subtasks` : ""}</span>
+      <span class="subagent-eta" data-state="estimating">${esc(ETA_ESTIMATING)}</span>
       <span class="subagent-chev">${icon("chevron", 14)}</span>
     </button>
     <div class="subagent-body">${body}<div class="subagent-runs"></div></div>
@@ -1714,10 +1829,23 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
   const runsBox = $(".subagent-runs", win) as HTMLElement;
   const openRuns = new Set<string>(); // user-expanded rows survive re-render
   const stepIcon = (k: string): string => (k === "thinking" ? icon("spark", 11) : k === "tool" ? icon("bolt", 11) : icon("info", 11));
-  const renderRuns = (runs: { name: string; done: boolean; lastAt: number; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[]): void => {
+  const headEta = $(".subagent-eta", win) as HTMLElement;
+  let liveEtas: (number | null)[] = []; // P-PROGRESS.2: ms left per live run (null = estimating), for the HUD's whole-prompt ETA
+  const renderRuns = (runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[], samples: readonly number[]): void => {
+    // P-PROGRESS.2: every run says how long it has left against the lengths of finished runs, and the head
+    // says when the whole delegation should be done (the slowest run). Too little history: "ETA estimating".
+    const at = Date.now();
+    const etas = runs.map((r) => runEta(r, samples, at));
+    // No runs on disk yet: the delegation is still a helper whose time is unknown.
+    liveEtas = runs.length ? etas.filter((x) => x.live).map((x) => x.etaMs) : [null];
+    const whole = liveEtas.length ? wholeEtaPhrase(null, liveEtas) : "all runs finished";
+    headEta.textContent = whole;
+    headEta.dataset.state = whole === ETA_ESTIMATING ? "estimating" : liveEtas.length ? "known" : "done";
     if (!runs.length) return;
     win.querySelectorAll(".subagent-task").forEach((t) => t.remove()); // real runs supersede the static rows
-    runsBox.innerHTML = runs.map((r) => {
+    runsBox.innerHTML = runs.map((r, i) => {
+      const eta = etas[i]!;
+      const etaState = !eta.live ? "done" : eta.label === ETA_ESTIMATING ? "estimating" : "known";
       const last = r.steps[r.steps.length - 1];
       const now = last ? `${last.kind === "tool" ? `${esc(last.tool ?? "tool")} · ` : ""}${esc(last.label)}` : "starting…";
       // P-PROGRESS.1: is this worker alive? The transcript's last line is the evidence: its age says
@@ -1733,6 +1861,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
           <span class="sa-name">${esc(r.name)}</span>
           <span class="sa-now">${now}</span>
           <span class="sa-alive" data-state="${aliveState}">${esc(alive)}</span>
+          <span class="sa-eta" data-state="${etaState}">${esc(eta.label)}</span>
           <span class="sa-meta">${r.tools} tool${r.tools === 1 ? "" : "s"}</span>
           <span class="subagent-chev">${icon("chevron", 12)}</span>
         </button>
@@ -1758,15 +1887,21 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     // P-CHAT.B.1: keep the delegation card EXPANDED on settle so each subagent's thinking/tools stay
     // visible after the turn (P-TASK.5 collapsed it, which hid the detail); the user can still fold it.
     win.removeAttribute("data-streaming"); win.classList.add("done");
+    // P-PROGRESS.2: a settled delegation is no longer a helper the prompt waits on.
+    if (liveEtas.length) { headEta.textContent = "no longer running"; headEta.dataset.state = "done"; }
+    liveEtas = [];
   };
   const refreshRuns = async (): Promise<void> => {
     const v = await bridge.subagents().catch(() => null);
     // P-TASK.5a: /api/subagents returns ALL runs in the parent session - scope this card to ITS batch
     // (task names when the delegation carried them, else assignment-prefix matching; the sole-card
     // fallback keeps single-batch turns rendering even when neither yields a match).
-    const mine = v?.runs ? filterRunsForBatch(v.runs as Parameters<typeof renderRuns>[0], { names: e.names, assignments: e.assignments, soleCard: isSoleCard() }) : [];
+    const all = (v?.runs ?? []) as Parameters<typeof renderRuns>[0];
+    const mine = all.length ? filterRunsForBatch(all, { names: e.names, assignments: e.assignments, soleCard: isSoleCard() }) : [];
     if (settled) return;
-    renderRuns(mine);
+    // P-PROGRESS.2: every finished run in the session (any batch) is history for the ETA, kept across sessions.
+    const samples = rememberRunSamples(all);
+    renderRuns(mine, samples);
     if (delegationSettled(mine, turnEndedAt, Date.now())) settle();
   };
   void refreshRuns();
@@ -1774,6 +1909,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
 
   return {
     el: win,
+    etas: () => liveEtas,
     finish() {
       if (turnEndedAt !== null) return;
       turnEndedAt = Date.now();
@@ -2096,7 +2232,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
-  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button></div>`);
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-eta" data-state="estimating"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button></div>`);
   const streamEl = el(`<div class="stream"></div>`);
   // P-PROGRESS.1: the progress strip under the HUD: a bar (the history estimate, 95% at most while the
   // turn runs), the progress line, the liveness pill (with the restart action when the agent process is
@@ -2132,6 +2268,24 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     progSignal.textContent = running ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago${aged.lastSignalMs >= QUIET_MS && !aged.stepsOpen.length ? " (quiet)" : ""}`) : "";
     progRestart.hidden = p.liveness.state !== "dead";
   };
+  // P-PROGRESS.2: the whole prompt's ETA on the HUD line itself: this turn against its history plus every
+  // delegated run still working. Until the history supports a number it says "ETA estimating" (and pulses),
+  // so the line is never silent about when the work ends. Cleared when the turn settles.
+  const etaEl = $(".hud-eta", hud) as HTMLElement;
+  let etaDone = false;
+  const paintEta = () => {
+    if (etaDone) { etaEl.textContent = ""; etaEl.dataset.state = "done"; return; }
+    const e = progress?.estimate;
+    const age = Math.max(0, Date.now() - progressAt);
+    const turnEst: TurnEstimate = !e ? { etaMs: null, percent: null, basis: "none", samples: 0, typicalMs: null, overrun: false }
+      : e.etaMs === null ? e : { ...e, etaMs: Math.max(0, e.etaMs - age), overrun: e.overrun || e.etaMs - age <= 0 };
+    const phrase = wholeEtaPhrase(turnEst, subCards.flatMap((c) => c.etas()));
+    etaEl.textContent = `\u00b7 ${phrase}`;
+    etaEl.dataset.state = phrase === ETA_ESTIMATING ? "estimating" : turnEst.overrun ? "long" : "known";
+    etaEl.setAttribute("data-tip", phrase === ETA_ESTIMATING
+      ? "ETA|Not enough finished turns or runs on this machine to estimate yet. A number appears as soon as there is history."
+      : "ETA|From how long recent turns and helper runs took on this machine (75th percentile). An estimate, not a promise.");
+  };
   progRestart.addEventListener("click", () => {
     // P-PROGRESS.1: the in-place recovery the watchdog performs, on demand: restart the agent process,
     // reload the same session. The whole app never needs to restart for this.
@@ -2164,7 +2318,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   let judgments: JudgmentsWin | null = null; // P-JEV.2: the typed-judgment trace (below the tool activity), created on the first report
   const permCards = new Map<string, { el: HTMLElement; finalize: () => void }>();
   const answeredPermissions = new Set<string>();
-  const subCards: { el: HTMLElement; finish: () => void }[] = []; // P-TASK.1 subagent delegation cards
+  const subCards: SubagentCard[] = []; // P-TASK.1 subagent delegation cards
   const marks: ToolMark<ChipData>[] = []; // P-CHAT.B (ADR-0189): tool calls anchored by answer-buffer length, interleaved into the answer on settle
   const dropThoughtsWindow = () => thoughts?.el.remove(); // once chips carry the activity, the live thoughts window is redundant
   const failures: { tool: string; reason: string; cmd?: string }[] = []; // P-CHAT.C (ADR-0190): this turn's failed (non-quarantined) tool calls, feed the eval report's fail-rate / wasted-token metrics
@@ -2216,6 +2370,8 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // is shown to the cent ($0.00) - the sub-cent precision read as noise.
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
     paintProgress(); // P-PROGRESS.1: the ages move every second between engine samples
+    paintEta();
+    thoughts?.tick(); // P-PROGRESS.2: open long calls age their elapsed time and ETA
   };
   phaseEl.textContent = phase;
   // P-INTERJECT.3: reset the live-turn mirror for this turn and arm the HUD's Check-in button.
@@ -2231,7 +2387,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     if (tps.isStreaming) tps.stop(); // freeze the readout at the final avg tok/s
     const ic = $(".hud-ic", hud); if (ic) ic.innerHTML = icon("check", 12);
     hud.classList.remove("streaming"); hud.classList.add("done");
-    setPhase("Done"); paintHud();
+    etaDone = true; setPhase("Done"); paintHud();
     // P-PROGRESS.1: the strip settles with the turn: a full bar, the time it took, no more ages.
     if (progress) {
       progress = null; clearQueue();
@@ -2390,7 +2546,10 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
         for (const m of marks) if (m.data.id === e.id) { if (laneSettle.status === "failed") m.chip.failed = true; if (laneSettle.elapsedMs !== undefined) m.data.elapsedMs = laneSettle.elapsedMs; }
         return;
       }
-      sawTool = true; clearQueue(); setPhase(phaseForTool(e.name, e.detail)); paintHud();
+      // P-PROGRESS.2: the HUD says what the call is doing ("Reading PR 398") when the call says; otherwise the
+      // category line, and "Processing…" for a call that names nothing.
+      const desc = describeTool({ name: e.name, kind: e.name, title: e.detail, intent: e.intent, input: e.input, path: e.code?.path });
+      sawTool = true; clearQueue(); setPhase(desc.informative ? desc.doing : phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
       thoughts.step({ id: e.id, name: e.name, detail: e.detail, code: e.code, input: e.input, intent: e.intent });
       // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it

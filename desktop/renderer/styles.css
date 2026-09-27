@@ -6011,3 +6011,33 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-spawn-more>summary,.orbit-spawn-more>summary{cursor:pointer;font-size:11px;color:var(--txt-3);white-space:nowrap;padding:2px 0}
 .fleet-spawn-more[open]>summary,.orbit-spawn-more[open]>summary{margin-bottom:4px}
 .fleet-spawn-more{display:flex;flex-direction:column;gap:5px}
+
+/* P-PROGRESS.2: the HUD phase now carries a call's own doing line, so it ellipsizes (invariant 11) while the
+   whole-prompt ETA beside it stays on one line. "ETA estimating" breathes until history gives a number. */
+.hud-phase{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hud-eta,.hud-tps,.hud-meta{flex:none;white-space:nowrap}
+.hud-eta{color:var(--txt-2);font-variant-numeric:tabular-nums}
+.hud-eta:empty{display:none}
+.hud-eta[data-state="known"]{color:var(--cyan)}
+.hud-eta[data-state="long"]{color:var(--amber-txt)}
+.hud-eta[data-state="estimating"],.sa-eta[data-state="estimating"],.subagent-eta[data-state="estimating"]{animation:etaBreath 1.8s var(--ease) infinite}
+@keyframes etaBreath{0%,100%{opacity:1}50%{opacity:.45}}
+/* Fold lines: quick calls summarized ("Read 3 files, 2 searches"), failed / repeated / empty calls counted as
+   processing. The folded calls keep their own rows (and drilldowns) under the fold line's chevron. */
+.thoughts-step.ts-fold{display:block;padding:0}
+.ts-fold>.ts-row .ts-k{color:var(--green)}
+.ts-fold[data-kind="processing"]>.ts-row .ts-k{color:var(--txt-4)}
+.ts-fold.open>.ts-row .ts-chev{transform:rotate(90deg)}
+.ts-foldlist{border-top:1px solid var(--line-soft);background:var(--bg-0)}
+.ts-foldlist .ts-row{padding-left:24px}
+.thoughts-step.folded[data-fold="failed"] .ts-k{color:var(--red)}
+.thoughts-step.folded[data-fold="repeat"] .ts-d,.thoughts-step.folded[data-fold="empty"] .ts-d{color:var(--txt-4)}
+/* An open long call's state carries its elapsed time and ETA next to the spinner. */
+.ts-state[data-state="open"]:not(:empty)::before{margin-right:5px}
+/* Subagent runs and the delegation head: the ETA of each run, and of the slowest one. */
+.sa-eta,.subagent-eta{flex:none;font-family:var(--mono);font-size:10.5px;white-space:nowrap;color:var(--txt-3)}
+.sa-eta[data-state="known"],.subagent-eta[data-state="known"]{color:var(--cyan)}
+.sa-eta[data-state="done"],.subagent-eta[data-state="done"]{color:var(--txt-4)}
+@media (prefers-reduced-motion: reduce){
+  .hud-eta[data-state="estimating"],.sa-eta[data-state="estimating"],.subagent-eta[data-state="estimating"]{animation:none}
+}

@@ -1282,7 +1282,7 @@ export interface LucidBridge {
   // Same close POST; the stop-the-turn half happens renderer-side (the pill calls stopTurn itself).
   browserStop(): Promise<void>;
   // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
-  subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
+  subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
   systemStatus(fresh?: boolean): Promise<SystemStatusView | null>;
   // CREATOR-0 (ADR-0279): this build's identity + which Creator surfaces exist. Null in an old backend.
