@@ -112,14 +112,27 @@ export class CheckoutRegistry {
   async gate(meId: string, cwd: string, command: string): Promise<{ block: boolean; reason?: string }> {
     const sweeps = gitSweeps(command);
     if (sweeps.length === 0) return { block: false };
-    const root = this.root(cwd);
-    if (!root) return { block: false };
-    const dirtyRel = await this.dirty(root);
-    this.#prune(root, dirtyRel);
+    // A `git -C <dir>` sweep lands in <dir>'s checkout, not the caller's: a session sitting outside a
+    // checkout and reaching in with -C is gated on the tree it reaches into. One decision per root.
+    const byRoot = new Map<string, typeof sweeps>();
+    for (const s of sweeps) {
+      const root = this.root(s.dir ? (isAbsolute(s.dir) ? s.dir : resolve(cwd, s.dir)) : cwd);
+      if (!root) continue;
+      const list = byRoot.get(root) ?? [];
+      list.push(s);
+      byRoot.set(root, list);
+    }
+    if (byRoot.size === 0) return { block: false };
     const sessions = this.#deps.sessions();
     const me = sessions.find((s) => s.id === meId) ?? { id: meId, name: meId };
-    const dirty = dirtyRel.map((rel) => ({ path: rel, owner: this.owners.owner(root, join(root, rel)) }));
-    return sweepDecision({ sweeps, me: { id: me.id, name: me.name }, dirty });
+    for (const [root, list] of byRoot) {
+      const dirtyRel = await this.dirty(root);
+      this.#prune(root, dirtyRel);
+      const dirty = dirtyRel.map((rel) => ({ path: rel, owner: this.owners.owner(root, join(root, rel)) }));
+      const d = sweepDecision({ sweeps: list, me: { id: me.id, name: me.name }, dirty });
+      if (d.block) return d;
+    }
+    return { block: false };
   }
 
   /** Drop owner entries for files git no longer reports dirty: committed, reverted, or deleted. */

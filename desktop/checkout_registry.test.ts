@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { CheckoutRegistry, parsePorcelainZ, type CheckoutSession } from "./checkout_registry.ts";
 
 let root = "";
@@ -91,6 +91,20 @@ describe("peers and gate", () => {
     expect((await reg.gate("master", root, "git add src/mine.ts && git commit -m x")).block).toBe(false);
     expect((await reg.gate("lane-a", root, "git add -A")).block).toBe(true); // mine.ts is the master's
     expect((await reg.gate("master", "/not/a/checkout", "git add -A")).block).toBe(false);
+  });
+
+  test("gate: `git -C <dir>` is gated on the checkout it reaches into, from a cwd outside it", async () => {
+    const reg = registry([
+      { id: "lane-a", name: "alpha", cwd: root, task: "", running: true },
+    ], { "*": ["src/a.ts"] });
+    reg.recordWrite({ id: "lane-a", name: "alpha" }, join(root, "src", "a.ts"), root);
+    const outside = tmpdir(); // no .git above it in these tests
+    const viaAbs = await reg.gate("lane-b", outside, `git -C "${root}" add -A`);
+    expect(viaAbs.block).toBe(true);
+    expect(viaAbs.reason).toContain("alpha");
+    const viaRel = await reg.gate("lane-b", join(root, ".."), `git -C ${basename(root)} add -A`);
+    expect(viaRel.block).toBe(true);
+    expect((await reg.gate("lane-b", outside, "git add -A")).block).toBe(false); // no -C: the cwd's (non) checkout
   });
 });
 

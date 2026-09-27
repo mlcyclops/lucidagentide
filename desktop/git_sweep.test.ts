@@ -42,6 +42,13 @@ describe("gitSweeps", () => {
     expect(kinds("git commit --amend --author=me -m x")).toEqual([]);
   });
 
+  test("a -C directory rides the sweep so the gate can resolve the checkout it lands in", () => {
+    expect(gitSweeps("git -C /repo add --all")).toEqual([{ kind: "add-all", text: "git -C /repo add --all", dir: "/repo" }]);
+    expect(gitSweeps("git -Csub commit -am x")[0]!.dir).toBe("sub");
+    expect(gitSweeps("git -C a -C b add .")[0]!.dir).toBe("b"); // the last one wins, as in git
+    expect(gitSweeps("git add -A")[0]!.dir).toBeUndefined();
+  });
+
   test("global options before the subcommand are skipped", () => {
     expect(kinds("git -C /repo add --all")).toEqual(["add-all"]);
     expect(kinds("git -c user.name=x -C /repo --no-pager commit -am wip")).toEqual(["commit-all"]);

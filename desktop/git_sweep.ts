@@ -20,7 +20,9 @@
 import type { Owner } from "./checkout_owners.ts";
 
 export type SweepKind = "add-all" | "add-update" | "commit-all" | "stash-all";
-export type GitSweep = { kind: SweepKind; text: string };
+/** `dir`: the `-C <dir>` the call named (the last one wins, as in git), so the gate resolves the checkout
+ *  the sweep lands in rather than the caller's cwd. Relative to the cwd when relative. Absent otherwise. */
+export type GitSweep = { kind: SweepKind; text: string; dir?: string };
 
 // Inside double quotes bash only honors a backslash before these; elsewhere `\P` stays two chars,
 // which is what keeps a quoted Windows path like "C:\Program Files\Git\bin\git.exe" intact.
@@ -97,18 +99,21 @@ function isGitProgram(tok: string): boolean {
 
 /** Locate the git subcommand in a token list: skip env assignments and `exec`, require a git
  *  program token, then skip global options. Returns the subcommand and its arguments, or null. */
-function gitInvocation(tokens: string[]): { sub: string; args: string[] } | null {
+function gitInvocation(tokens: string[]): { sub: string; args: string[]; dir?: string } | null {
   let i = 0;
   while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!) || tokens[i] === "exec")) i++;
   if (i >= tokens.length || !isGitProgram(tokens[i]!)) return null;
   i++;
+  let dir: string | undefined;
   while (i < tokens.length) {
     const t = tokens[i]!;
     if (!t.startsWith("-")) break;
+    if (t === "-C") dir = tokens[i + 1];
+    else if (t.startsWith("-C") && t.length > 2) dir = t.slice(2); // `-Cdir`
     i += GIT_GLOBAL_WITH_VALUE[t] ? 2 : 1;
   }
   if (i >= tokens.length) return null;
-  return { sub: tokens[i]!, args: tokens.slice(i + 1) };
+  return { sub: tokens[i]!, args: tokens.slice(i + 1), ...(dir ? { dir } : {}) };
 }
 
 function classifyAdd(args: string[]): SweepKind | null {
@@ -169,7 +174,7 @@ export function gitSweeps(command: string): GitSweep[] {
     if (inv.sub === "add") kind = classifyAdd(inv.args);
     else if (inv.sub === "commit") kind = classifyCommit(inv.args);
     else if (inv.sub === "stash") kind = classifyStash(inv.args);
-    if (kind) out.push({ kind, text: segment });
+    if (kind) out.push({ kind, text: segment, ...(inv.dir ? { dir: inv.dir } : {}) });
   }
   return out;
 }
