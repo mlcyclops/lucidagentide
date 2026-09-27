@@ -74,6 +74,12 @@ export interface LaneView {
    *  Changes when a fallback recovery mints a fresh session; every id this lane has held is in the
    *  durable lane-session ledger. */
   sessionId: string | null;
+  /** P-SWITCH.3 (ADR-0410): the MAIN session that was the hub when this spoke was created. A spoke keeps
+   *  its hub for life: switching Main to another session never reparents it, so the orbit for that other
+   *  session shows its own spokes and this one waits under its original hub. null only when the master
+   *  had no session at spawn time (a spoke born before the first prompt): the orbit shows it under
+   *  whichever hub is current. */
+  hubSessionId: string | null;
   /** P-FLEET.L3: staged prompts waiting for the lane to go idle. Previews only - clamped text + image
    *  count; the full payloads live in the manager, drained FIFO one turn at a time. */
   queued: { text: string; images: number }[];
@@ -156,6 +162,10 @@ export interface FleetStatusData {
   /** P-PROGRESS.1: every folder with two or more workers on it right now (the master counts as one), in
    *  run order. Empty when nobody shares a folder. */
   queues: FolderQueue[];
+  /** P-SWITCH.3 (ADR-0410): the master session that is the hub RIGHT NOW. The orbit shows the spokes
+   *  whose `hubSessionId` is this (or null); every other live spoke stays under its own hub, listed in
+   *  the orbit's Hubs panel. null when the master has no session yet. */
+  hub: string | null;
 }
 
 // P-FLEET.L4 (ADR-0274): there is NO lane turn clock. ADR-0186's ten-minute deadline killed exactly the
@@ -210,6 +220,10 @@ export interface LaneSessionRecord {
   model?: string;
   /** Turn count carried across a promote, or the harness's one-sentence reason for a probe/recover. */
   note?: string;
+  /** P-SWITCH.3 (ADR-0410): the master session that was the hub at spawn/respawn, so the ledger says
+   *  which hub a spoke's work belonged to. Absent on lines older than this field and when the master
+   *  had no session at the time. */
+  hub?: string;
 }
 
 export interface FleetLaneDeps {
@@ -217,8 +231,9 @@ export interface FleetLaneDeps {
   argv: () => { cmd: string; args: string[] };
   /** The master session's current model - the lane default. */
   masterModel: () => string;
-  /** P-SWITCH.2 (ADR-0404): the omp session Main holds right now, so a lane never loads it too. Optional:
-   *  a manager built without it (tests, tools) only enforces the lane-vs-lane half of the rule. */
+  /** P-SWITCH.2 (ADR-0404): the omp session Main holds right now, so a lane never loads it too. P-SWITCH.3
+   *  (ADR-0410): also the hub a new spoke is born under and the hub `status()` reports. Optional: a manager
+   *  built without it (tests, tools) only enforces the lane-vs-lane half of the rule and runs one nameless hub. */
   masterSessionId?: () => string | null;
   /** Machine sample for admission + the dashboard headroom bar. */
   sample?: () => Promise<SystemSnapshot>;
@@ -288,6 +303,8 @@ interface Lane {
   turns: number;
   client: ACPClient;
   sessionId: string | null;
+  /** P-SWITCH.3: the master session this spoke was born under (LaneView.hubSessionId). */
+  hubSessionId: string | null;
   /** Live event sinks (the streaming mini window). */
   sinks: Set<(e: LaneEvent) => void>;
   /** The unanswered permission ask, if any. Resolving it answers the remote. */
@@ -364,6 +381,11 @@ export class FleetLaneManager {
     this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}), ...(deps.repo ? { repo: deps.repo } : {}) };
   }
 
+  /** P-SWITCH.3 (ADR-0410): the hub right now. A throwing or absent dep is a nameless hub, never a crash. */
+  #hub(): string | null {
+    try { return this.#deps.masterSessionId?.() ?? null; } catch { return null; }
+  }
+
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select.
    *
    *  P-FLEET.L17 `resume`: bring a RECORDED session back as this lane's own, memory included. The omp
@@ -416,6 +438,7 @@ export class FleetLaneManager {
       turns: opts.resume ? Math.max(0, Math.floor(opts.resume.turns)) : 0,
       client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id) ?? {}),
       sessionId: opts.resume?.sessionId ?? null,
+      hubSessionId: this.#hub(), // P-SWITCH.3: born under the hub of the moment, kept for life
       sinks: new Set(),
       pending: null,
       autoApprove: this.#autoDefault,
@@ -760,6 +783,7 @@ export class FleetLaneManager {
       },
       masterModel: this.#deps.masterModel(),
       queues: this.#gate.queues(), // P-PROGRESS.1
+      hub: this.#hub(),
     };
   }
 
@@ -1036,7 +1060,7 @@ export class FleetLaneManager {
     // P-FLEET.L5: name the session in the durable ledger the moment it exists - the timeline's link
     // between this lane and its on-disk .jsonl. Fail-quiet by contract.
     if (lane.sessionId) {
-      try { this.#deps.recordLaneSession?.({ at: this.#deps.now(), laneId: lane.id, name: lane.name, cwd: lane.cwd, sessionId: lane.sessionId, event: resume ? "respawn" : "spawn" }); }
+      try { this.#deps.recordLaneSession?.({ at: this.#deps.now(), laneId: lane.id, name: lane.name, cwd: lane.cwd, sessionId: lane.sessionId, event: resume ? "respawn" : "spawn", ...(lane.hubSessionId ? { hub: lane.hubSessionId } : {}) }); }
       catch { /* a broken ledger never blocks a lane */ }
     }
   }
@@ -1288,6 +1312,7 @@ export class FleetLaneManager {
       canRetry: lane.lastPrompt !== null,
       respawns: lane.respawns,
       sessionId: lane.sessionId,
+      hubSessionId: lane.hubSessionId,
       queued: lane.queue.map((q) => ({ text: q.text.length > 140 ? `${q.text.slice(0, 140)}\u2026` : q.text, images: q.images.length })),
       autoApprove: lane.autoApprove,
       sessionAllow: [...lane.sessionAllow],

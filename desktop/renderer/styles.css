@@ -5570,6 +5570,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-hub-mark svg{width:22px;height:22px}
 .orbit-hub-model{font-family:var(--mono);font-size:9.5px;color:var(--txt-3);max-width:120px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-SWITCH.3 (ADR-0410): the hub names its session; one text child, ellipsized (invariant #11). */
+.orbit-hub-sess{font-size:10.5px;color:var(--txt-2);max-width:124px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .orbit-hub-here{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-4)}
 .orbit-hub.here .orbit-hub-here{color:var(--accent-2)}
 .orbit-hub-ping{position:absolute;width:148px;height:148px;border-radius:50%;pointer-events:none;
@@ -5835,6 +5837,13 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-spawn-row input{flex:1;min-width:0}
 .orbit-spawn-go{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
 .orbit-panel .orbit-ghost-err{padding:2px 6px}
+/* P-SWITCH.3 (ADR-0410): the Other hubs panel. A hub row (title, count, Open), then its spokes as pips
+   on their own line so the row's label never shares a flex track with prose. */
+.orbit-hubrow{display:flex;align-items:center;gap:9px;padding:7px 9px 3px;border-radius:9px 9px 0 0}
+.orbit-hubrow-lanes{display:flex;flex-wrap:wrap;gap:5px;padding:0 9px 8px 9px;margin-bottom:4px;
+  border-bottom:1px solid var(--line)}
+.orbit-hubrow-lanes .fleet-pip{font-size:11px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.orbit-btn.waiting .orbit-ghost-n{color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14)}
 
 /* P-FLEET.L17: the grid card header is now a takeover surface too (click = the orbit's spoke click;
    the grip alone keeps the reorder gesture). The pointer cursor says so; controls override it. */

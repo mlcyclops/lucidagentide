@@ -5212,3 +5212,12 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (amendment 2, 2026-09-27):** step marks, fold labels and lane chips back to the subdued Beta 8 palette (neutral check/cross, cyan kinds); the Jev scale tips (beam rocks, pans rise and fall) instead of spinning.
 - **stubbed (amendment 2):** checked in a headless page against the real stylesheet (beam matrix and pan offsets sampled mid-animation), not yet in the installed app.
 - **next (amendment 2):** rebuild the installer from the merged branches and confirm the palette and the scale on device.
+## P-FLEET.L8 fix: a master turn that ends while the composer is on a spoke shows its reply on return (ADR-0411)
+- **shipped:** `promoteLane` flags the master thread stale when it leaves mid-turn; `recoverMasterTurn` reloads the session transcript on return when no turn is running any more (`refreshMasterThread`: chips kept, re-render only on change, SWR cache refreshed); `resumeSession` clears the flag. Renderer tsc clean, bundle rebuilt.
+- **stubbed:** not clicked through against a real engine (the mock engine has no running turn).
+- **next:** in the installed app: long prompt on Main, attach a spoke, let Main finish, detach, confirm the reply shows under the detach notice.
+
+## P-SWITCH.3 (part): a new session is a new hub; the previous session keeps its spokes (ADR-0410)
+- **shipped:** engine stamps `hubSessionId` on every spoke at spawn (`masterSessionId` dep, ledger `hub`), `fleet.status()` reports `hub`; pure `hubLanes`/`otherHubs` in orbit_layout.ts; the orbit draws only the current session's spokes, names the hub's session, offers Other hubs (count, waiting, panel with Open through the guarded switch), cycles and switches within the hub, and explains an empty ring. Tests: fleet_lanes 31 pass (+1), orbit_layout 17 pass (+4); all three tsc configs clean; bundle rebuilt. Browser check against a mock engine: two hubs shown apart, Open switched Main and the ring, New session landed on an empty hub with "3 spokes keep running under 2 other sessions".
+- **stubbed:** the grid still lists every lane; Recover stays global; Swap, View only, the remembered choice, and the single-owner registry remain P-SWITCH.2/.3. Pre-existing: a one-spoke ring draws its decorative ellipse as a vertical line (`layoutStage` derives rx from a 12 o'clock slot).
+- **next:** compile the engine, install into resources/repo, restart LUCID when no spoke is mid-task; then spawn a spoke, start a new session, open the orbit.

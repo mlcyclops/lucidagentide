@@ -23,7 +23,7 @@ import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (AD
 import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
-import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
+import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, otherHubs, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type HubEntry, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
 import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model
 
 export interface FleetOrbitDeps {
@@ -64,6 +64,12 @@ export interface FleetOrbitDeps {
    *  while promoted; P-FLEET.L19 seeds it on attach from the engine's last sample, and `size` is the
    *  same window the status ring divides by). null only for a lane that has never reported. */
   getLaneUsage: () => { used: number; size: number; cost: number } | null;
+  /** P-SWITCH.3 (ADR-0410): a session's sidebar title, for the hub core and the Hubs panel. null when the
+   *  sidebar has not listed it (a session that has not flushed to disk yet). */
+  sessionTitle: (sessionId: string) => string | null;
+  /** P-SWITCH.3: make another hub's session Main, through the guarded switch (P-SWITCH.1: a busy Main
+   *  gets the sheet, never a silent stop). Owned by app.ts. */
+  openSession: (sessionId: string) => void;
 }
 
 const POLL_MS = 2500;
@@ -276,10 +282,11 @@ function paintGhosts(): void {
 }
 
 // ---------------------------------------------------------------------- the in-orbit side panels
-// One panel at a time: "ghosts" (historical spokes) or "spawn" (new spoke). Both are children of the
-// stage, so the fleet stays visible behind them and no popover positioning is involved.
+// One panel at a time: "ghosts" (historical spokes), "spawn" (new spoke), or "hubs" (the other sessions'
+// spokes, P-SWITCH.3). All are children of the stage, so the fleet stays visible behind them and no
+// popover positioning is involved.
 
-type OrbitPanel = "ghosts" | "spawn";
+type OrbitPanel = "ghosts" | "spawn" | "hubs";
 let openedPanel: OrbitPanel | null = null;
 
 function togglePanel(which: OrbitPanel): void {
@@ -292,6 +299,59 @@ function togglePanel(which: OrbitPanel): void {
   if (openedPanel === null) { const body = $("[data-orbit-panel-body]", host); if (body) body.innerHTML = ""; }
   if (openedPanel === "ghosts") { paintGhostPanel(); void refreshGhosts(); }
   if (openedPanel === "spawn") paintSpawnPanel();
+  if (openedPanel === "hubs") paintHubsPanel();
+}
+
+// ------------------------------------------------------ P-SWITCH.3 (ADR-0410): the other hubs' spokes
+//
+// The orbit is ONE session's hub and spoke. A spoke born under another session keeps running under that
+// hub; this panel lists every such hub with its spokes, and "Open" makes that session Main through the
+// guarded switch, so its orbit shows them. The model (hubLanes / otherHubs) is pure and tested.
+
+/** The other hubs from the last poll. Repainted per poll only while the panel is open. */
+let hubList: HubEntry[] = [];
+
+function hubTitle(sessionId: string): string {
+  return deps?.sessionTitle(sessionId) || `Session ${sessionId.slice(0, 8)}`;
+}
+
+function paintHubsBadge(): void {
+  if (!view) return;
+  const n = hubList.length;
+  const spokes = hubList.reduce((a, h) => a + h.lanes.length, 0);
+  const waiting = hubList.reduce((a, h) => a + h.waiting, 0);
+  for (const b of view.querySelectorAll("[data-orbit-hubs]")) {
+    const badge = b.querySelector("[data-orbit-hubsn]") as HTMLElement | null;
+    if (badge) {
+      const t = waiting ? `${spokes} \u00b7 ${waiting} waiting` : String(spokes);
+      if (badge.textContent !== t) badge.textContent = t;
+    }
+    (b as HTMLElement).hidden = n === 0;
+    (b as HTMLElement).classList.toggle("waiting", waiting > 0);
+  }
+  // An empty ring with spokes elsewhere must say so, or a new session reads as "my spokes are gone".
+  const msg = $("[data-orbit-empty-msg]", view) as HTMLElement | null;
+  const text = n === 0
+    ? "No spokes yet. The hub is all alone out here."
+    : `No spokes under this session yet. ${spokes} ${spokes === 1 ? "spoke keeps" : "spokes keep"} running under ${n === 1 ? "your other session" : `${n} other sessions`}.`;
+  if (msg && msg.textContent !== text) msg.textContent = text;
+  if (openedPanel === "hubs") paintHubsPanel();
+}
+
+function paintHubsPanel(): void {
+  if (openedPanel !== "hubs" || !view) return;
+  const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
+  if (!box) return;
+  const head = `<div class="orbit-panel-h">${icon("share", 14)}<b>Other hubs</b><span>${hubList.length}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
+  if (hubList.length === 0) {
+    box.innerHTML = `${head}<div class="orbit-ghosts-empty">Every running spoke belongs to this session. A new session starts its own hub; spokes started there stay with it.</div>`;
+    return;
+  }
+  box.innerHTML = head + hubList.map((h, i) => `<div class="orbit-hubrow" data-hub-i="${i}" title="${esc(h.sessionId)}">
+      <span class="orbit-ghost-id"><b>${esc(hubTitle(h.sessionId))}</b><small>${h.lanes.length} ${h.lanes.length === 1 ? "spoke" : "spokes"}${h.waiting ? ` \u00b7 ${h.waiting} waiting on you` : ""}</small></span>
+      <button class="btn-mini orbit-btn" data-hub-open data-tip="Open this hub|Makes this session Main and shows its spokes on the orbit. Nothing here stops: if Main is busy you get the choice first.">${icon("restore", 12)} Open</button>
+    </div>
+    <div class="orbit-hubrow-lanes">${h.lanes.map((l) => `<span class="fleet-pip lane-${esc(l.status)}" data-tip="${esc(l.status)}"><i></i>${esc(l.name)}</span>`).join("")}</div>`).join("");
 }
 
 /** Which list a row belongs to: active, archived ("z"), or hidden. */
@@ -386,6 +446,13 @@ function onPanelClick(t: HTMLElement): boolean {
     } else if (t.closest("[data-ghost-recover]")) {
       void recoverGhost(g, row);
     }
+    return true;
+  }
+  // P-SWITCH.3: open another hub. The guarded switch owns what happens to a busy Main.
+  const hubRow = t.closest("[data-hub-i]") as HTMLElement | null;
+  if (hubRow && t.closest("[data-hub-open]")) {
+    const h = hubList[Number(hubRow.dataset.hubI)];
+    if (h) { closeFleetOrbit(); deps?.openSession(h.sessionId); }
     return true;
   }
   // Spawn-panel controls.
@@ -563,7 +630,7 @@ function onSpokeHotkey(e: KeyboardEvent): void {
     const s = await deps!.fleetStatus();
     if (!s) return;
     const t = deps!.getTarget();
-    const next = cycleSpoke(s.lanes, isLaneTarget(t) ? t.laneId : null, dir);
+    const next = cycleSpoke(hubLanes(s.lanes, s.hub), isLaneTarget(t) ? t.laneId : null, dir); // P-SWITCH.3: this hub's ring
     if (next) takeover(next);
   })();
 }
@@ -620,6 +687,7 @@ function buildView(): HTMLElement {
       <div class="orbit-census" data-orbit-census></div>
       <div class="orbit-hud" data-orbit-hud data-tip="Fleet pressure|CPU and memory right now. A metric sustained over the line refuses NEW spokes; running ones are never touched."></div>
       <span class="orbit-headgap"></span>
+      <button class="btn-mini orbit-btn" data-orbit-hubs hidden data-tip="Other hubs|Spokes still running under your other sessions. Each session is its own hub: a new session starts empty, and the spokes you started before stay with the session that started them. Open a hub to make that session Main and see its spokes here.">${icon("share", 13)} Other hubs <b class="orbit-ghost-n" data-orbit-hubsn></b></button>
       <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every lane that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model, with its conversation loaded; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
       <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} New spoke</button>
       <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and spoke as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
@@ -634,14 +702,16 @@ function buildView(): HTMLElement {
         <div class="orbit-hub-core">
           <span class="orbit-hub-mark">${piMark}</span>
           <b>Main</b>
+          <span class="orbit-hub-sess" data-orbit-hub-sess></span>
           <span class="orbit-hub-model" data-orbit-hub-model></span>
           <span class="repo-chip orbit-hub-repo" data-orbit-hub-repo hidden></span>
           <span class="orbit-hub-here" data-orbit-hub-here></span>
         </div>
       </div>
       <div class="orbit-empty" data-orbit-empty hidden>
-        <p>No spokes yet. The hub is all alone out here.</p>
+        <p data-orbit-empty-msg>No spokes yet. The hub is all alone out here.</p>
         <button class="btn-mini orbit-btn" data-orbit-spawn>${icon("plus", 13)} Spawn your first spoke</button>
+        <button class="btn-mini orbit-btn" data-orbit-hubs hidden>${icon("share", 13)} Other hubs <b class="orbit-ghost-n" data-orbit-hubsn></b></button>
         <button class="btn-mini orbit-btn" data-orbit-recover hidden>${icon("restore", 13)} Recover a historical spoke <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
       </div>
       <aside class="orbit-panel" data-orbit-panel hidden><div class="orbit-panel-body" data-orbit-panel-body></div></aside>
@@ -671,6 +741,7 @@ function onViewClick(ev: Event): void {
   }
   if (t.closest("[data-orbit-pin]")) { setFleetHome("orbit"); return; }
   if (t.closest("[data-orbit-recover]")) { togglePanel("ghosts"); return; }
+  if (t.closest("[data-orbit-hubs]")) { togglePanel("hubs"); return; }
   // The on-orbit panel spawns (folder or repo clone + vault PAT, P-FLEET.L18), so creating a spoke never
   // leaves the screen; the grid stays one click away as the workbench.
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
@@ -746,10 +817,16 @@ async function refresh(first: boolean): Promise<void> {
   const s = await deps.fleetStatus();
   if (!s || !view || view.hidden) return;
   lastStatus = s;
-  paintHead(s);
-  reconcile(s.lanes, first);
-  layoutStage(s.lanes);
+  // P-SWITCH.3 (ADR-0410): this orbit is the CURRENT session's hub. Spokes born under another session
+  // stay off the ring (and out of the census) and are reachable through the Hubs panel; the ghost census
+  // below still counts them as live, so none of them is ever offered as a ghost to recover.
+  const mine = hubLanes(s.lanes, s.hub);
+  hubList = otherHubs(s.lanes, s.hub);
+  paintHead({ ...s, lanes: mine });
+  reconcile(mine, first);
+  layoutStage(mine);
   paintHub();
+  paintHubsBadge();
   // Ghosts read the durable ledger, which only changes when a lane runs or dies - the open-time fetch
   // plus every census change keeps the Recover badge honest without hammering the ledger per poll.
   if (first || censusSig(s.lanes) !== ghostCensus) { ghostCensus = censusSig(s.lanes); void refreshGhosts(); }
@@ -783,6 +860,11 @@ function paintHub(): void {
   const model = $("[data-orbit-hub-model]", view!) as HTMLElement;
   const next = deps?.getMasterModel() || "";
   if (model.textContent !== next) model.textContent = next;
+  // P-SWITCH.3: which session this hub IS, so two hubs are never told apart by their model alone.
+  const sess = $("[data-orbit-hub-sess]", view!) as HTMLElement;
+  const hub = lastStatus?.hub ?? null;
+  const title = hub ? hubTitle(hub) : "new session";
+  if (sess.textContent !== title) { sess.textContent = title; sess.title = hub ?? ""; }
   const here = $("[data-orbit-hub-here]", view!) as HTMLElement;
   const target = deps?.getTarget();
   const onLane = !!target && isLaneTarget(target);
@@ -1210,7 +1292,11 @@ async function openSwitchMenu(): Promise<void> {
   const s = await deps.fleetStatus();
   const target = deps.getTarget();
   const current = isLaneTarget(target) ? target.laneId : null;
-  const rows = switchEntries(s?.lanes ?? [], current);
+  // P-SWITCH.3: this hub's spokes. The attached spoke is always listed, even when the guarded switch
+  // promoted it from another hub, so the menu never hides where the composer is.
+  const mine = s ? hubLanes(s.lanes, s.hub) : [];
+  if (current && s && !mine.some((l) => l.id === current)) { const cur = s.lanes.find((l) => l.id === current); if (cur) mine.push(cur); }
+  const rows = switchEntries(mine, current);
   const html = `<div class="spoke-switch">${rows.map(rowHtml).join("")}
     <div class="spoke-sw-div" aria-hidden="true"></div>
     <div class="spoke-sw-keys">Ctrl+Alt+\u2190/\u2192 cycle spokes \u00b7 Ctrl+Alt+\u2191 Main \u00b7 Ctrl+Alt+\u2193 orbit</div></div>`;
