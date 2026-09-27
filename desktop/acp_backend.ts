@@ -179,6 +179,12 @@ const KNOWLEDGE_EXT = repoAsset("harness", "omp", "knowledge_extension.ts");
 // its tool_result hook sees already-wrapped content and appends OUTSIDE the untrusted envelope.
 // Only added when the file exists - a missing extension never blocks omp launch.
 const INTERJECT_EXT = repoAsset("harness", "omp", "interject_extension.ts");
+// P-OWN.1: one checkout, known writers. checkin_extension registers checkin_peers / checkin_send (the
+// agent-to-agent channel, delivered as untrusted PEER notes by the interject drain above);
+// commit_gate_extension refuses a sweeping `git add -A` / `commit -a` while another session's edits are
+// uncommitted. Master AND lanes; AFTER the security gate (it is a coordination guard, never a substitute).
+const CHECKIN_EXT = repoAsset("harness", "omp", "checkin_extension.ts");
+const COMMIT_GATE_EXT = repoAsset("harness", "omp", "commit_gate_extension.ts");
 // P-BROWSER.1 (wave 2): the agent-controlled visible browser window's tools (browser_open /
 // browser_screenshot / browser_scroll / browser_close). MASTER ONLY - the window is a singleton and
 // lanes driving one shared window would fight over it (same rationale that keeps preview off lanes).
@@ -293,7 +299,8 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   if (!GATE) throw new Error(gateRefusal());
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -480,6 +487,15 @@ class Backend {
   // guidance) — never the frozen prefix (invariant #5/#6). Distinct from the P9.2 recall above.
   private memoryRecall: string | null = null;
   private memoryRecallDelivered = false;
+  // P-OWN.1: the checkout ownership seams dev.ts wires. `onAuthoredPath` is told every path the master's
+  // write/edit tool calls name (path only); `checkoutBriefing` yields the standing "who else writes
+  // here" block for each prompt ("" when alone). `lastTask` is what the registry reports as this
+  // session's task to the other writers (the user's last prompt, clipped).
+  onAuthoredPath: ((path: string) => void) | null = null;
+  checkoutBriefing: (() => Promise<string>) | null = null;
+  private lastTask = "";
+  /** P-OWN.1: what this session is working on, for the other writers' briefing. */
+  currentTask(): string { return this.lastTask; }
   // P-IDE.2 (ADR-0029): an active BUNDLED skill's trusted guidance. STANDING guidance: re-delivered
   // every turn (never the frozen prefix, never --append-system-prompt) so the skill keeps guiding the
   // agent until cleared (issue #54). Already wrapped (`<active-skill name="…">…</active-skill>`).
@@ -799,6 +815,7 @@ class Backend {
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
+        const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
         // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
         const toolMetaArgs = existsSync(TOOL_META_EXT) ? ["-e", TOOL_META_EXT] : [];
@@ -814,7 +831,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -891,6 +908,7 @@ class Backend {
                 // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
                 // read it live — this JSONL is the live-readable copy (same linediff count as the chat chip).
                 if (code) {
+                  if (code.path && this.onAuthoredPath) { try { this.onAuthoredPath(code.path); } catch { /* the ledger never breaks the chat */ } } // P-OWN.1
                   const a = attribution();
                   recordAiLoc({
                     model: this.activeModel() || lastModel(),
@@ -1651,7 +1669,12 @@ class Backend {
         memoryRecallDelivered: this.memoryRecallDelivered,
       });
       this.memoryRecallDelivered = built.memoryRecallDelivered;
-      const body = built.preamble + text;
+      // P-OWN.1: standing, rebuilt every turn from the live registry (a spoke may have started since).
+      // Harness-origin like the rest of the preamble; "" when nobody else writes in this checkout.
+      let checkoutBlock = "";
+      if (this.checkoutBriefing) { try { checkoutBlock = await this.checkoutBriefing(); } catch { checkoutBlock = ""; } }
+      this.lastTask = text.replace(/\s+/g, " ").trim().slice(0, 200);
+      const body = built.preamble + (checkoutBlock ? `${checkoutBlock}\n\n` : "") + text;
       // P-VISION.1 (ADR-0136): user-attached images ride as ACP image content blocks after the text. omp's
       // session/prompt accepts `(text|image)[]` (same shape the preview_screenshot tool returns). Only
       // well-formed blocks (base64 data + image mime) are appended — the renderer already validated them.

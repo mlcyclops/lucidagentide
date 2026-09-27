@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-OWN.1: one checkout, known writers (ADR-0407)
+- **shipped:** ownership ledger over every observed write (master + lanes), keyed by checkout root, pruned against `git status`; a standing `<checkout-peers>` briefing on every master and lane prompt naming the other sessions, their task and dirty files; `checkin_peers` / `checkin_send` tools with peer notes delivered as untrusted PEER blocks on the interject drain and an optional 90 s reply wait; a commit gate that refuses `git add -A`, `.`, `-u`, `commit -a` and bare `stash` while another session's edits are dirty, at the bash hook and in the git broker (the shim sends its session id). Tests: checkout_owners, git_sweep, checkout_registry, interject_store, checkin_extension, commit_gate_extension, interject_extension (167 pass across the touched files); root, desktop and server tsc clean.
+- **stubbed:** nothing. Not covered by design: a simultaneous edit of one file (advice, not a lock), human edits (warned, never blocked), worktree-per-spoke.
+- **next:** merge; rebuild the installed app; with two spokes in one checkout, watch the briefing land, send a check-in from one to the other, and try `git add -A` from the spoke that does not own the file. Then decide on worktree-per-spoke as the default spawn.
+
 ## P-FLEET.L20: close a spoke from its orbit node or its banner (ADR-0402)
 - **shipped:** the orbit node keeps click-to-open and gains an X (hidden until hover, always shown on a stopped card) that takes the grid's two-step: a live spoke stops and stays with Respawn, a stopped spoke dismisses and falls back into the hub; the takeover banner gains an X beside Switch that runs the same step and returns the composer to Main; one pure `spokeClose(status)` decides act, label and tip (`orbit_layout.ts`, 2 tests); dismiss detaches the composer before the remove; refusals show on the node's glance line or in a toast. `FleetOrbitDeps` gains `fleetStop`/`fleetRemove`. Verified live on :5392 with two real lanes (stop, relabel, dismiss, banner close); `make demo-P-FLEET.L20`; desktop tsc clean; served bytes carry `data-orbit-stop` and `spoke-close-btn`.
 - **stubbed:** nothing. The click gesture has no automated DOM coverage (no DOM harness in this repo); the step and wording are pure and tested.

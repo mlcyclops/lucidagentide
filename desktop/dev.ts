@@ -105,7 +105,8 @@ import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from 
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
-import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
+import { addInterject, addPeerNote, awaitPeerReply, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
+import { CheckoutRegistry, gitDirtyPaths, type CheckoutSession } from "./checkout_registry.ts"; // P-OWN.1: who is writing in which checkout
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
@@ -1159,6 +1160,7 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/sandbox/grant",      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool POSTs the approved grant claim
   "/api/git/exec",           // P-SANDBOX.17 (ADR-0399): the contained agent's git shim asks the host to run git
   "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
+  "/api/checkout/peers", "/api/checkout/gate", "/api/checkin", "/api/checkin/reply", // P-OWN.1: checkin_* tools + the commit gate
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
@@ -1175,7 +1177,25 @@ const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter
 // the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
 // P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
 // interject_extension drains only the notes addressed to it (the master child gets target "master").
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }), interject: (laneId, text) => { addInterject(laneId, text); } });
+// P-OWN.1: who is writing where. Sessions = the main composer plus every live spoke; dirty files come
+// from git itself (the user's git, or the sandbox's MinGit when that is what is on this host).
+const checkouts: CheckoutRegistry = new CheckoutRegistry({
+  sessions: (): CheckoutSession[] => [
+    { id: "master", name: "main composer", cwd: currentWorkspace(), task: backend.currentTask(), running: backend.midTurn().busy },
+    ...fleet.sessionsView(),
+  ],
+  gitStatus: (root) => { const dir = gitCmdDir(); return gitDirtyPaths(dir ? join(dir, "git.exe") : "git", root); },
+});
+backend.onAuthoredPath = (path) => checkouts.recordWrite({ id: "master", name: "main composer" }, path, currentWorkspace());
+backend.checkoutBriefing = () => checkouts.briefingFor("master", currentWorkspace());
+const fleet: FleetLaneManager = new FleetLaneManager({
+  argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
+  env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
+  interject: (laneId, text) => { addInterject(laneId, text); },
+  // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.
+  onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
+  preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
+});
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
@@ -1788,10 +1808,16 @@ return Bun.serve({
       // every check (subcommand + option allowlist, workspace-confined paths, validated and held repo
       // config, forced overrides, network through the egress proxy); every call is audited.
       if (p === "/api/git/exec" && req.method === "POST") {
-        const b = await readBody<{ args?: unknown; cwd?: unknown }>(req);
+        const b = await readBody<{ args?: unknown; cwd?: unknown; target?: unknown }>(req);
         const args = Array.isArray(b.args) ? b.args.map(String) : [];
         const cmdDir = gitCmdDir();
-        const r = await runBrokeredGit({ args, cwd: String(b.cwd ?? "") }, { workspace: currentWorkspace(), gitExe: cmdDir ? join(cmdDir, "git.exe") : null, proxyUrl: runningEgressProxyUrl() });
+        // P-OWN.1: the shim names its session; a shim that names none is gated as "unknown", which owns
+        // nothing, so any sweep over another session's dirty files is refused (fail-closed on identity).
+        const gateTarget = String(b.target ?? "").trim() || "unknown";
+        const r = await runBrokeredGit({ args, cwd: String(b.cwd ?? "") }, {
+          workspace: currentWorkspace(), gitExe: cmdDir ? join(cmdDir, "git.exe") : null, proxyUrl: runningEgressProxyUrl(),
+          sweepGate: async (command, cwd) => { const d = await checkouts.gate(gateTarget, cwd, command); return d.block ? d.reason ?? "refused by the checkout gate" : null; },
+        });
         emitSecurityEvent({ category: "exec", type: "git_broker", decision: r.refused ? "block" : "allow", severity: r.refused ? "medium" : "info", tool: "git", reason: `${r.sub || "(none)"}${r.refused ? ` refused: ${r.refused}` : ` exit ${r.code}`}`.slice(0, 200) });
         return json({ ok: true, data: { code: r.code, stdout: Buffer.from(r.stdout).toString("base64"), stderr: Buffer.from(r.stderr, "utf8").toString("base64") } });
       }
@@ -4778,7 +4804,46 @@ return Bun.serve({
       }
       if (p === "/api/interject/pending" && req.method === "GET") {
         const target = String(url.searchParams.get("target") ?? "").trim();
-        return json({ ok: true, data: { notes: target ? drainInterjects(target) : [] } });
+        // P-OWN.1: peer notes ride the same drain as a separate kind; the child marks them untrusted.
+        return json({ ok: true, data: { notes: target ? drainInterjects(target) : [], peer: target ? drainPeerNotes(target) : [] } });
+      }
+      // P-OWN.1: one checkout, known writers. `peers` is what the checkin_peers tool and the prompt
+      // briefing read; `gate` is asked by the commit_gate extension before a bash `git` call runs;
+      // `checkin` queues an agent-to-agent note and `checkin/reply` waits for one. Every caller is an
+      // omp child carrying its own LUCID_INTERJECT_TARGET as `target`/`from`; the engine never trusts a
+      // child to speak for another session beyond that name (a wrong name only mislabels a note, and the
+      // note is delivered as untrusted peer data either way).
+      if (p === "/api/checkout/peers" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const cwd = String(url.searchParams.get("cwd") ?? "").trim() || currentWorkspace();
+        if (!target) return json({ ok: false, error: "target required" });
+        return json({ ok: true, data: await checkouts.peers(target, cwd) });
+      }
+      if (p === "/api/checkout/gate" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const cwd = String(url.searchParams.get("cwd") ?? "").trim() || currentWorkspace();
+        const command = String(url.searchParams.get("command") ?? "");
+        if (!target) return json({ ok: false, error: "target required" });
+        const d = await checkouts.gate(target, cwd, command);
+        if (d.block) emitSecurityEvent({ category: "exec", type: "checkout_gate", decision: "block", severity: "low", tool: "git", reason: (d.reason ?? "").slice(0, 200) });
+        return json({ ok: true, data: d });
+      }
+      if (p === "/api/checkin" && req.method === "POST") {
+        const b = await readBody<{ from?: unknown; to?: unknown; text?: unknown }>(req);
+        const from = String(b.from ?? "").trim();
+        const to = String(b.to ?? "").trim();
+        const known = [{ id: "master", name: "main composer" }, ...fleet.sessionsView()];
+        const sender = known.find((s) => s.id === from);
+        if (!sender) return json({ ok: true, data: { ok: false, reason: `unknown sender "${from}"` } });
+        if (!known.some((s) => s.id === to)) return json({ ok: true, data: { ok: false, reason: `unknown session "${to}" - call checkin_peers for the live ids` } });
+        return json({ ok: true, data: addPeerNote(to, from, sender.name, String(b.text ?? "")) });
+      }
+      if (p === "/api/checkin/reply" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const from = String(url.searchParams.get("from") ?? "").trim();
+        const timeoutMs = Math.min(90_000, Math.max(0, Number(url.searchParams.get("timeoutMs")) || 0));
+        if (!target || !from) return json({ ok: false, error: "target and from required" });
+        return json({ ok: true, data: { reply: await awaitPeerReply(target, from, timeoutMs) } });
       }
       // P-INTERJECT.1: the unified Processes list (master turn, live lanes, import job, wave-2 browsers).
       if (p === "/api/processes") return json({ ok: true, data: { processes: await buildProcessViews() } });
@@ -5199,6 +5264,12 @@ process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain
 // (interjectChildEnv in acp_backend.ts for the master, the fleet env dep above for lanes).
 process.env.LUCID_DEV_URL = `http://127.0.0.1:${server.port}`;
 process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${AGENT_TOKEN}`;
+// P-OWN.1: the checkin_* tools and the commit gate, one complete token'd URL each (the child appends
+// `&target=...` and the rest). Per-child identity is LUCID_INTERJECT_TARGET, as for the notes.
+process.env.LUCID_CHECKIN_PEERS_URL = `http://127.0.0.1:${server.port}/api/checkout/peers?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKIN_SEND_URL = `http://127.0.0.1:${server.port}/api/checkin?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKIN_REPLY_URL = `http://127.0.0.1:${server.port}/api/checkin/reply?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKOUT_GATE_URL = `http://127.0.0.1:${server.port}/api/checkout/gate?t=${AGENT_TOKEN}`;
 // P-BROWSER.1 (wave 2): the omp child's browser_* tools reach the agent-browser routes through this
 // token'd BASE (the extension appends /open, /capture, /scroll, /close, /shot and keeps the ?t=).
 // Gated on LUCID_MAIN_TOKEN: without the Electron main there is no window executor, so the env stays
