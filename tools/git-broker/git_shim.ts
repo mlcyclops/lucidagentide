@@ -15,7 +15,9 @@ if (!url) {
 }
 let res: Response;
 try {
-  res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) });
+  // P-OWN.1: `target` names this session (LUCID_INTERJECT_TARGET, inherited from the engine) so the
+  // checkout commit gate knows whose edits are whose. It labels; it authorizes nothing.
+  res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), target: process.env.LUCID_INTERJECT_TARGET ?? "" }) });
 } catch (e) {
   process.stderr.write(`git: could not reach LUCID's git broker: ${e instanceof Error ? e.message : String(e)}\n`);
   process.exit(128);

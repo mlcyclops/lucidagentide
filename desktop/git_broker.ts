@@ -277,7 +277,12 @@ export function findRepo(cwd: string, workspace: string, io: { kind(p: string): 
 // ── the Windows runner ───────────────────────────────────────────────────────────────────────────────
 
 export interface BrokerResult { code: number; stdout: Uint8Array; stderr: string; refused: string | null; sub: string }
-export interface BrokerDeps { workspace: string; gitExe: string | null; proxyUrl: string | null; env?: Record<string, string | undefined> }
+export interface BrokerDeps {
+  workspace: string; gitExe: string | null; proxyUrl: string | null; env?: Record<string, string | undefined>;
+  /** P-OWN.1: the checkout commit gate for the contained agent's git, which never passes through bash.
+   *  Given the argv (as one command line) and the real cwd, answers a refusal reason or null. */
+  sweepGate?: (command: string, cwd: string) => Promise<string | null>;
+}
 
 const OUT_CAP = 16 * 1024 * 1024;
 const ERR_CAP = 1024 * 1024;
@@ -383,6 +388,8 @@ export async function runBrokeredGit(req: { args: readonly string[]; cwd: string
     if (!planned.ok) return refuse(planned.reason);
     const plan = planned.plan;
     for (const p of plan.paths) if (!within(realish(p), workspace)) return refuse(`${p} leads outside the workspace (through a link), and git here runs with your full file access`);
+    // P-OWN.1: a sweeping add/commit/stash while another session's edits are dirty is refused by name.
+    if (d.sweepGate) { const why = await d.sweepGate(["git", ...req.args].map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" "), cwd); if (why) return refuse(why); }
     if (!d.gitExe) return refuse("no git is installed on this machine (LUCID looked on PATH and in the usual Git for Windows, MinGit, scoop, Chocolatey, winget and GitHub Desktop locations)");
     if (plan.network && !d.proxyUrl) return refuse("network git runs through the sandbox's egress proxy, which is not running");
 

@@ -36,6 +36,7 @@ import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSa
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
 import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
+import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -214,6 +215,13 @@ export interface FleetLaneDeps {
    *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
    *  manager built without it simply never probes; it still escalates to recover. */
   interject?: (laneId: string, text: string) => void;
+  /** P-OWN.1: a lane's write/edit tool call named this path (absolute, resolved against the lane's cwd).
+   *  dev.ts records it in the checkout ownership ledger. Metadata only: the path, never the content. */
+  onWrite?: (lane: { id: string; name: string; cwd: string }, path: string) => void;
+  /** P-OWN.1: the standing checkout briefing prepended to EVERY prompt this lane sends (who else is
+   *  writing in its checkout, their task and dirty files). "" when the lane is alone. Best-effort: a
+   *  rejected promise sends the prompt without it. */
+  preface?: (lane: { id: string; name: string; cwd: string }) => Promise<string>;
 }
 
 /** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time.
@@ -285,11 +293,13 @@ interface Lane {
 
 export class FleetLaneManager {
   readonly #lanes = new Map<string, Lane>();
+  /** P-OWN.1: write/edit calls waiting for their terminal update, keyed lane id + NUL + toolCallId. */
+  readonly #pendingWrites = new PendingWrites(1024);
   /** P-PWA-FOCUS.1: persistent cross-lane observers, present AND future lanes. Held here rather than in
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
   readonly #observers = new Set<LaneObserver>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & { sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number; recordLaneSession?: (rec: LaneSessionRecord) => void; env?: (laneId: string) => Record<string, string>; interject?: (laneId: string, text: string) => void };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & Pick<FleetLaneDeps, "recordLaneSession" | "env" | "interject" | "onWrite" | "preface"> & { sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -301,7 +311,7 @@ export class FleetLaneManager {
   #autoDefault = false;
 
   constructor(deps: FleetLaneDeps) {
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select.
@@ -437,7 +447,11 @@ export class FleetLaneManager {
     try {
       // The wire text carries the one-shot recovery preamble when a fallback resume is pending; the
       // transcript recorded only `text` - the user never "said" the preamble.
-      const wireText = lane.resumeContext ? `${lane.resumeContext}${text}` : text;
+      // P-OWN.1: the checkout briefing opens the wire text (standing: who else writes here, right now).
+      // Harness-origin like the resume preamble, and never recorded as something the user said.
+      let preface = "";
+      if (this.#deps.preface) { try { preface = await this.#deps.preface({ id: lane.id, name: lane.name, cwd: lane.cwd }); } catch { preface = ""; } }
+      const wireText = `${preface ? `${preface}\n\n` : ""}${lane.resumeContext ?? ""}${text}`;
       lane.resumeContext = null;
       const imageBlocks = images.filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
       const res = await lane.client.request<{ stopReason?: string }>("session/prompt", { sessionId: lane.sessionId, prompt: [{ type: "text", text: wireText }, ...imageBlocks] });
@@ -728,6 +742,18 @@ export class FleetLaneManager {
     return { ok: true, lane: this.#view(lane) };
   }
 
+  /** P-OWN.1: every live lane as a checkout session: id, name, folder, what it is doing (its last
+   *  prompt, clipped) and whether a turn is running. Synchronous and allocation-light: the registry
+   *  asks on every tool call of every session. Stopped lanes are not writers. */
+  sessionsView(): { id: string; name: string; cwd: string; task: string; running: boolean }[] {
+    const out: { id: string; name: string; cwd: string; task: string; running: boolean }[] = [];
+    for (const lane of this.#lanes.values()) {
+      if (lane.status === "stopped") continue;
+      out.push({ id: lane.id, name: lane.name, cwd: lane.cwd, task: (lane.lastPrompt ?? "").replace(/\s+/g, " ").trim().slice(0, 200), running: lane.busy });
+    }
+    return out;
+  }
+
   /** The lane the composer is attached to, if any. */
   promotedLane(): LaneView | null {
     const lane = [...this.#lanes.values()].find((l) => l.promoted);
@@ -997,6 +1023,13 @@ export class FleetLaneManager {
           // `content`, an edit's `edits[{old_text,new_text}]` joined into one before/after pair, or omp's
           // hashline patch in a single `input` string. Relative paths resolve against the LANE's cwd.
           const code = u.sessionUpdate === "tool_call" ? this.#toolCode(lane, u) : undefined;
+          // P-OWN.1: an authored path becomes this lane's in the checkout ownership ledger (path only) once
+          // the call COMPLETES: a denied or failed edit must not make the lane the owner of another's file.
+          const callKey = typeof u.toolCallId === "string" && u.toolCallId ? `${lane.id}\u0000${u.toolCallId}` : "";
+          const wrote = u.sessionUpdate === "tool_call"
+            ? (code?.path ? this.#pendingWrites.opened(callKey, code.path, u.status) : null)
+            : (callKey ? this.#pendingWrites.settled(callKey, u.status) : null);
+          if (wrote && this.#deps.onWrite) { try { this.#deps.onWrite({ id: lane.id, name: lane.name, cwd: lane.cwd }, wrote); } catch { /* the ledger never breaks a lane */ } }
           // P-FLEET.L7: and the ARGUMENTS ride it too. Emitted only on the CALL (an update repeats the
           // title with no rawInput), and only when there is no authored code, since `code` is the richer
           // view of the same bytes and showing both would just duplicate a diff under its own patch.
