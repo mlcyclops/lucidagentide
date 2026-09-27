@@ -1188,8 +1188,15 @@ const checkouts: CheckoutRegistry = new CheckoutRegistry({
 });
 backend.onAuthoredPath = (path) => checkouts.recordWrite({ id: "master", name: "main composer" }, path, currentWorkspace());
 backend.checkoutBriefing = () => checkouts.briefingFor("master", currentWorkspace());
+// P-PROGRESS.1: the estimate's history starts from the latency ledger's tail (every past chat turn's
+// length, per model), then grows live from master and lane turns alike. Fail-quiet: an unreadable ledger
+// means the estimate starts empty, which shows nothing rather than a wrong number.
+try {
+  if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
+} catch { /* no history yet */ }
 const fleet: FleetLaneManager = new FleetLaneManager({
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
+  gate: backend.workspaceGate, history: backend.durations, // P-PROGRESS.1: one folder lease and one estimate history with the master
   env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
   interject: (laneId, text) => { addInterject(laneId, text); },
   // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.
@@ -4745,7 +4752,7 @@ return Bun.serve({
       // foreign process squatting the engine port has to be detectable before anything is authenticated.
       // Reusing it would have both shadowed this route (the guard is registered first and wins) and hung
       // session telemetry off an unauthenticated path.
-      if (p === "/api/session-health") return json({ ok: true, data: { master: backend.healthStatus(), lanes: fleet.healthReport() } });
+      if (p === "/api/session-health") return json({ ok: true, data: { master: backend.healthStatus(), lanes: fleet.healthReport(), progress: backend.progressView() } }); // P-PROGRESS.1: progress rides along
       if (p === "/api/session-health/tick" && req.method === "POST") {
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });

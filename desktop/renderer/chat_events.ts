@@ -14,7 +14,11 @@ import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: u
 import type { JudgmentReport } from "../../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the judgment trace (DOM-free)
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (DOM-free)
 import type { TurnSnapshot } from "../turn_recovery.ts";
+import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure progress + liveness view
+import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1: the same-folder wait view
 export type { TurnStatus, TurnSnapshot } from "../turn_recovery.ts";
+export type { ProgressView, Liveness, LivenessState, TurnEstimate, OpenStep } from "../turn_progress.ts";
+export type { WaitView, SequenceEntry, FolderQueue } from "../workspace_gate.ts";
 
 /** P-PWA-FLEET.1: one fleet lane's status as mirrored to phone guests. `cwd` carries only the folder
  *  BASENAME (the frames.ts "no file paths" invariant - a full path never crosses the wire). */
@@ -35,10 +39,19 @@ export type ChatEvent =
   | { type: "thinking"; text: string }
   // P-EVAL.4 (ADR-0318): `id` is omp's toolCallId; `name` is only omp's COARSE ACP kind ("other" for
   // every custom and MCP tool), because the ACP tool_call update structurally carries no tool name.
-  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
+  // P-PROGRESS.1: `input` is the bounded, code-stripped arguments ("the command used", desktop/tool_input.ts)
+  // and `intent` the agent's own `i` phrase, so the live step can say what the call is doing and open on it.
+  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string }; input?: string; intent?: string } // P-CHAT.1: inline code/diff preview
   // P-EVAL.4 (ADR-0318): the real tool name (and later its pass/fail) for a call already streamed as
   // `tool`, self-reported from inside omp where the hook API does have it. Display + report metadata.
-  | { type: "tool-meta"; id: string; name: string; ok?: boolean }
+  // P-PROGRESS.1: `elapsedMs` rides the settling report (ok defined), so the step can show how long it took.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
+  // P-PROGRESS.1: the worker's progress view, every PROGRESS_TICK_MS while a turn runs (and once on every
+  // tool call settle). Goes through onEvent directly, like `slow`: telling the user never counts as activity.
+  | { type: "progress"; progress: ProgressView }
+  // P-PROGRESS.1: this turn is waiting for another worker's turn in the same folder (workspace_gate.ts).
+  // Emitted once when the wait begins; the next real event means the lease was granted.
+  | { type: "waiting"; wait: WaitView }
   // P-JEV.2 (ADR-0377): one typed judgment (Jev / chat model) the omp child answered during this turn,
   // self-reported by the judgment extension with the question, the answers and which backend answered.
   | { type: "judgment"; report: JudgmentReport }

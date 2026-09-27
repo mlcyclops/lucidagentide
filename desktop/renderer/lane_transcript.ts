@@ -16,6 +16,7 @@
 
 import { toolChip } from "./answer_chips.ts";
 import type { ToolChip } from "./answer_chips.ts";
+import { describeTool } from "./tool_describe.ts"; // P-PROGRESS.1: the plain-words doing line
 import { lineDiff, patchLineType } from "./linediff.ts";
 import type { DiffRow } from "./linediff.ts";
 
@@ -25,7 +26,32 @@ export interface LaneToolCode { path: string; content?: string; oldText?: string
 /** P-FLEET.L7: one tool call in a lane transcript. `input` is the bounded, code-stripped rawInput JSON the
  *  engine now carries: literally "the command used", shown in the chevron drilldown for tools that authored
  *  no code (bash/read/search/fetch). */
-export interface LaneToolRow { id: string; name: string; detail: string; code?: LaneToolCode; input?: string; open: boolean }
+export interface LaneToolRow {
+  id: string; name: string; detail: string; code?: LaneToolCode; input?: string; open: boolean;
+  /** P-PROGRESS.1: omp's toolCallId, so the settle event finds the row its call opened. */
+  callId?: string;
+  /** P-PROGRESS.1: the agent's own intent line, the best "what it is doing" there is. */
+  intent?: string;
+  /** P-PROGRESS.1: open until the call's terminal update; absent for a row with no callId. */
+  status?: "open" | "done" | "failed";
+  elapsedMs?: number;
+}
+
+/** P-PROGRESS.1: what a tool row is doing, in plain words, for the chip head and the drilldown. */
+export function laneToolDoing(t: LaneToolRow): string {
+  return describeTool({ name: t.name, kind: t.name, title: t.detail, intent: t.intent, input: t.input, path: t.code?.path }).doing;
+}
+
+/** P-PROGRESS.1: a settle event (`tool` with id + done/failed) closes the row its call opened, in place.
+ *  Returns false when no open row carries that call id, so the caller appends nothing: a settle for a call
+ *  this card never saw is not a row. Pure on the row; mutates only the matched entry. */
+export function settleToolRow(rows: LaneToolRow[], callId: string, status: "done" | "failed", elapsedMs?: number): boolean {
+  const row = rows.find((r) => r.callId === callId);
+  if (!row) return false;
+  row.status = status;
+  if (elapsedMs !== undefined && Number.isFinite(elapsedMs) && elapsedMs >= 0) row.elapsedMs = elapsedMs;
+  return true;
+}
 
 export interface LaneTurnRow {
   id: string;
@@ -103,7 +129,7 @@ export function mintId(prefix: string, seq: number): string {
  *  master-composer chip can never disagree. `hasBody` is false only when there is genuinely nothing to
  *  reveal, so the DOM layer can omit the chevron rather than render a dead one. */
 export function laneChip(t: LaneToolRow): ToolChip & { hasBody: boolean } {
-  return { ...toolChip(t.name, t.detail, t.code), hasBody: bodyKind(t) !== null };
+  return { ...toolChip(t.name, t.detail, t.code, t.status === "failed"), hasBody: bodyKind(t) !== null };
 }
 
 /** omp's hashline patch already IS a diff: every line stays RAW, because its own +/- and its `[path#hash]`

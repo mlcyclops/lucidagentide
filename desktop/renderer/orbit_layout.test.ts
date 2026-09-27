@@ -100,3 +100,15 @@ describe("switchEntries", () => {
     expect(onMaster[0]!.kind === "master" && onMaster[0]!.current).toBe(true);
   });
 });
+
+// P-PROGRESS.1: a spoke in line for its folder names whom it waits for; a running spoke with history shows
+// its estimated percent, labelled as an estimate, and every older glance string is unchanged.
+describe("spokeGlance (P-PROGRESS.1)", () => {
+  test("waiting names the holder; a percent rides only a working spoke", () => {
+    const base = { turns: 2, queued: [] as unknown[] };
+    expect(spokeGlance({ ...base, status: "working", waiting: { on: { name: "alpha" } } })).toBe("waiting for alpha");
+    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: 40 } } })).toBe("working \u00b7 turn 3 \u00b7 40% (est.)");
+    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: null } } })).toBe("working \u00b7 turn 3");
+    expect(spokeGlance({ ...base, status: "done", progress: { estimate: { percent: 40 } } })).toBe("done \u00b7 2 turns");
+  });
+});
