@@ -16,12 +16,13 @@
 //
 // Metadata only: paths and names, never file contents. Every call fails soft to "no peers" rather than
 // blocking a prompt; the commit gate is the one place a failure blocks, and only when the gate itself
-// decided so (a git failure there is "no dirty files", so nothing to refuse).
+// decided so. A git failure is "unknown", not "clean": that one gate call fails open and the ownership
+// ledger is kept, rather than pruned to nothing.
 
-import { existsSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { CheckoutOwners, briefing, normalizeCheckoutPath, peersView, type PeersViewResult } from "./checkout_owners.ts";
-import { gitSweeps, sweepDecision } from "./git_sweep.ts";
+import { gitSweeps, sweepDecision, type GitSweep } from "./git_sweep.ts";
 
 /** One live agent session, as the registry needs to know it. */
 export interface CheckoutSession { id: string; name: string; cwd: string; task: string; running: boolean }
@@ -29,19 +30,68 @@ export interface CheckoutSession { id: string; name: string; cwd: string; task: 
 export interface CheckoutRegistryDeps {
   /** The main composer plus every fleet spoke, live. */
   sessions: () => CheckoutSession[];
-  /** Dirty paths (relative to root, forward slashes) via `git status`; [] when git is unavailable. */
-  gitStatus: (root: string) => Promise<string[]>;
+  /** Dirty paths (relative to root, forward slashes) via `git status`; null when git could not answer
+   *  (not installed, timed out, failed). Null is NOT a clean tree: nothing is pruned on it. */
+  gitStatus: (root: string) => Promise<string[] | null>;
   now?: () => number;
 }
 
 /** How long one `git status` answer stands in for the next ones. */
 const STATUS_TTL_MS = 2_000;
+/** Cache bounds. Directory lookups are per distinct directory (the checkin_peers tool accepts any
+ *  absolute cwd), status snapshots per checkout; both are hints that can be recomputed, so the
+ *  oldest entries are simply dropped. The owner ledger itself is bounded by git's dirty set. */
+const ROOTS_CAP = 1_024;
+const STATUS_CAP = 64;
+
+/** Map.set that drops the oldest entries past `cap` (insertion order; a re-set moves the key to the end). */
+function setBounded<K, V>(m: Map<K, V>, k: K, v: V, cap: number): void {
+  m.delete(k);
+  m.set(k, v);
+  while (m.size > cap) m.delete(m.keys().next().value as K);
+}
+
+/** The real on-disk form of `p`: junctions, symlinks and substituted drives resolved, so one checkout
+ *  opened through two aliases is ONE root (otherwise each alias saw an empty checkout and the gate let
+ *  a sweep through). The deepest existing ancestor is resolved and any not-yet-created tail re-appended,
+ *  so a path the agent is about to create still maps into its checkout. */
+function realPath(p: string): string {
+  let head = resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try { return tail.length ? join(realpathSync.native(head), ...tail.reverse()) : realpathSync.native(head); }
+    catch {
+      const up = dirname(head);
+      if (up === head) return resolve(p);
+      tail.push(basename(head));
+      head = up;
+    }
+  }
+}
+
+/** A scoped sweep's pathspecs (relative to `base`) as root-relative keys, or null when they reach the
+ *  whole checkout (one names the root itself) or name nothing inside it: both are weighed as a whole-tree
+ *  sweep, the conservative reading. */
+function scopeOf(root: string, base: string, paths: string[]): string[] | null {
+  const out: string[] = [];
+  for (const p of paths) {
+    const key = normalizeCheckoutPath(realPath(resolve(base, p)));
+    if (key === root) return null;
+    if (key.startsWith(`${root}/`)) out.push(key.slice(root.length + 1));
+  }
+  return out.length ? out : null;
+}
+
+/** Is root-relative `rel` (normalized) the pathspec or under it? */
+function inScope(rel: string, scope: string[]): boolean {
+  return scope.some((s) => rel === s || rel.startsWith(`${s}/`));
+}
 
 export class CheckoutRegistry {
   readonly owners = new CheckoutOwners();
   readonly #deps: CheckoutRegistryDeps;
   readonly #roots = new Map<string, string | null>();
-  readonly #status = new Map<string, { at: number; dirty: string[]; pending: Promise<string[]> | null }>();
+  readonly #status = new Map<string, { at: number; dirty: string[]; pending: Promise<string[] | null> | null }>();
 
   constructor(deps: CheckoutRegistryDeps) { this.#deps = deps; }
 
@@ -49,7 +99,8 @@ export class CheckoutRegistry {
 
   /** The checkout root holding `p` (a file or directory), or null outside any checkout. A `.git`
    *  FILE counts too (a linked worktree), and that worktree is its own root: two worktrees of one
-   *  repo are two working trees, so sessions in them never overlap. */
+   *  repo are two working trees, so sessions in them never overlap. Roots are keyed by the REAL path
+   *  (realPath), so aliases of one checkout agree. */
   root(p: string): string | null {
     if (!p || !isAbsolute(p)) return null;
     let dir = resolve(p);
@@ -58,32 +109,35 @@ export class CheckoutRegistry {
     const cached = this.#roots.get(key);
     if (cached !== undefined) return cached;
     let found: string | null = null;
-    for (let d = dir; ; d = dirname(d)) {
+    for (let d = realPath(dir); ; d = dirname(d)) {
       if (existsSync(join(d, ".git"))) { found = normalizeCheckoutPath(d); break; }
       if (dirname(d) === d) break;
     }
-    this.#roots.set(key, found);
+    setBounded(this.#roots, key, found, ROOTS_CAP);
     return found;
   }
 
-  /** A session wrote `absPath` (a relative path resolves against `cwd`). Outside a checkout: ignored. */
+  /** A session wrote `absPath` (a relative path resolves against `cwd`). Outside a checkout: ignored.
+   *  Recorded under its real path, the same form root() and git's relative paths join to. */
   recordWrite(owner: { id: string; name: string }, path: string, cwd: string): void {
-    const abs = isAbsolute(path) ? path : resolve(cwd, path);
+    const abs = realPath(isAbsolute(path) ? path : resolve(cwd, path));
     const root = this.root(abs);
     if (root) this.owners.record(root, abs, owner, this.#now());
   }
 
-  /** Dirty paths for `root`, from git, cached for STATUS_TTL_MS. Concurrent askers share one call. */
-  dirty(root: string): Promise<string[]> {
+  /** Dirty paths for `root`, from git, cached for STATUS_TTL_MS; null when git could not answer (never
+   *  cached, so the next asker retries). Concurrent askers share one call. */
+  dirty(root: string): Promise<string[] | null> {
     const now = this.#now();
     const c = this.#status.get(root);
     if (c && now - c.at < STATUS_TTL_MS) return c.pending ?? Promise.resolve(c.dirty);
     if (c?.pending) return c.pending;
-    const pending = this.#deps.gitStatus(root).catch(() => [] as string[]).then((dirty) => {
-      this.#status.set(root, { at: this.#now(), dirty, pending: null });
+    const pending = this.#deps.gitStatus(root).catch(() => null).then((dirty) => {
+      if (dirty) setBounded(this.#status, root, { at: this.#now(), dirty, pending: null }, STATUS_CAP);
+      else this.#status.delete(root);
       return dirty;
     });
-    this.#status.set(root, { at: now, dirty: c?.dirty ?? [], pending });
+    setBounded(this.#status, root, { at: now, dirty: c?.dirty ?? [], pending }, STATUS_CAP);
     return pending;
   }
 
@@ -93,8 +147,10 @@ export class CheckoutRegistry {
     const me = sessions.find((s) => s.id === meId) ?? { id: meId, name: meId };
     const root = this.root(cwd);
     if (!root) return { root: null, me: { id: me.id, name: me.name }, peers: [], unowned: [] };
-    const dirtyRel = await this.dirty(root);
-    this.#prune(root, dirtyRel);
+    // Git unavailable: say nothing about files this time, and keep the ledger for the next answer.
+    const status = await this.dirty(root);
+    const dirtyRel = status ?? [];
+    if (status) this.#prune(root, status);
     const here = sessions.filter((s) => this.root(s.cwd) === root);
     const view = peersView({ root, me: { id: me.id, name: me.name }, dirtyRel, owners: this.owners, sessions: here });
     return { root, me: { id: me.id, name: me.name }, ...view };
@@ -114,12 +170,13 @@ export class CheckoutRegistry {
     if (sweeps.length === 0) return { block: false };
     // A `git -C <dir>` sweep lands in <dir>'s checkout, not the caller's: a session sitting outside a
     // checkout and reaching in with -C is gated on the tree it reaches into. One decision per root.
-    const byRoot = new Map<string, typeof sweeps>();
+    const byRoot = new Map<string, { sweep: GitSweep; scope: string[] | null }[]>();
     for (const s of sweeps) {
-      const root = this.root(s.dir ? (isAbsolute(s.dir) ? s.dir : resolve(cwd, s.dir)) : cwd);
+      const base = s.dir ? (isAbsolute(s.dir) ? s.dir : resolve(cwd, s.dir)) : cwd;
+      const root = this.root(base);
       if (!root) continue;
       const list = byRoot.get(root) ?? [];
-      list.push(s);
+      list.push({ sweep: s, scope: s.paths ? scopeOf(root, base, s.paths) : null });
       byRoot.set(root, list);
     }
     if (byRoot.size === 0) return { block: false };
@@ -127,10 +184,17 @@ export class CheckoutRegistry {
     const me = sessions.find((s) => s.id === meId) ?? { id: meId, name: meId };
     for (const [root, list] of byRoot) {
       const dirtyRel = await this.dirty(root);
+      // Git could not answer: fail open for THIS call only (the ledger is kept for the next one).
+      if (!dirtyRel) continue;
       this.#prune(root, dirtyRel);
       const dirty = dirtyRel.map((rel) => ({ path: rel, owner: this.owners.owner(root, join(root, rel)) }));
-      const d = sweepDecision({ sweeps: list, me: { id: me.id, name: me.name }, dirty });
-      if (d.block) return d;
+      for (const { sweep, scope } of list) {
+        // A sweep scoped to named paths is weighed against the dirty files under them; my own files stay
+        // in so the refusal can still list what I may stage.
+        const weighed = scope ? dirty.filter((d) => d.owner?.id === me.id || inScope(normalizeCheckoutPath(d.path), scope)) : dirty;
+        const d = sweepDecision({ sweeps: [sweep], me: { id: me.id, name: me.name }, dirty: weighed });
+        if (d.block) return d;
+      }
     }
     return { block: false };
   }
@@ -159,8 +223,9 @@ export function parsePorcelainZ(out: string): string[] {
   return paths;
 }
 
-/** Run git status for `root` with the given executable; [] on any failure (no git, not a repo, timeout). */
-export async function gitDirtyPaths(gitExe: string, root: string, timeoutMs = 8_000): Promise<string[]> {
+/** Run git status for `root` with the given executable; null on any failure (no git, not a repo,
+ *  timeout). Null is deliberately not [], which would read as "clean" and prune every owner. */
+export async function gitDirtyPaths(gitExe: string, root: string, timeoutMs = 8_000): Promise<string[] | null> {
   try {
     const proc = Bun.spawn([gitExe, "-c", "core.quotepath=off", "status", "--porcelain", "-z", "--untracked-files=all"], {
       cwd: root, stdout: "pipe", stderr: "ignore", stdin: "ignore",
@@ -171,6 +236,6 @@ export async function gitDirtyPaths(gitExe: string, root: string, timeoutMs = 8_
     const out = await new Response(proc.stdout).text();
     const code = await proc.exited;
     clearTimeout(timer);
-    return code === 0 ? parsePorcelainZ(out) : [];
-  } catch { return []; }
+    return code === 0 ? parsePorcelainZ(out) : null;
+  } catch { return null; }
 }

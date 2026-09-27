@@ -22,6 +22,7 @@ import type { IncidentEvent, IncidentKind, IncidentOutcome } from "./incident_re
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
 import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
@@ -492,6 +493,7 @@ class Backend {
   // here" block for each prompt ("" when alone). `lastTask` is what the registry reports as this
   // session's task to the other writers (the user's last prompt, clipped).
   onAuthoredPath: ((path: string) => void) | null = null;
+  private readonly pendingWrites = new PendingWrites();
   checkoutBriefing: (() => Promise<string>) | null = null;
   private lastTask = "";
   /** P-OWN.1: what this session is working on, for the other writers' briefing. */
@@ -908,7 +910,9 @@ class Backend {
                 // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
                 // read it live — this JSONL is the live-readable copy (same linediff count as the chat chip).
                 if (code) {
-                  if (code.path && this.onAuthoredPath) { try { this.onAuthoredPath(code.path); } catch { /* the ledger never breaks the chat */ } } // P-OWN.1
+                  // P-OWN.1: the path becomes this session's only once the call completes (tool_call_update below).
+                  const now = code.path ? this.pendingWrites.opened(callId, code.path, u.status) : null;
+                  if (now && this.onAuthoredPath) { try { this.onAuthoredPath(now); } catch { /* the ledger never breaks the chat */ } }
                   const a = attribution();
                   recordAiLoc({
                     model: this.activeModel() || lastModel(),
@@ -965,6 +969,10 @@ class Backend {
             // text, so the renderer's collapsed toolbox badge can expand into an honest per-action view.
             case "tool_call_update": {
               settleToolCall(this.openCalls, u); // P-STALL.2: a terminal status closes the awaited call
+              if (typeof u.toolCallId === "string") { // P-OWN.1: a completed write is now this session's
+                const wrote = this.pendingWrites.settled(u.toolCallId, u.status);
+                if (wrote && this.onAuthoredPath) { try { this.onAuthoredPath(wrote); } catch { /* the ledger never breaks the chat */ } }
+              }
               if (u.status === "failed" || u.status === "rejected") { this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break; }
               // P-IMG.1 (ADR-0208): surface image output from a tool result (a generated image, a rendered
               // chart, etc.). extractToolImages validates every block through the strict image-data-URL gate

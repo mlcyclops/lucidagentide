@@ -36,6 +36,7 @@ import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSa
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
 import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
+import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -292,6 +293,8 @@ interface Lane {
 
 export class FleetLaneManager {
   readonly #lanes = new Map<string, Lane>();
+  /** P-OWN.1: write/edit calls waiting for their terminal update, keyed lane id + NUL + toolCallId. */
+  readonly #pendingWrites = new PendingWrites(1024);
   /** P-PWA-FOCUS.1: persistent cross-lane observers, present AND future lanes. Held here rather than in
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
@@ -1020,8 +1023,13 @@ export class FleetLaneManager {
           // `content`, an edit's `edits[{old_text,new_text}]` joined into one before/after pair, or omp's
           // hashline patch in a single `input` string. Relative paths resolve against the LANE's cwd.
           const code = u.sessionUpdate === "tool_call" ? this.#toolCode(lane, u) : undefined;
-          // P-OWN.1: an authored path is this lane's, in the checkout ownership ledger (path only).
-          if (code?.path && this.#deps.onWrite) { try { this.#deps.onWrite({ id: lane.id, name: lane.name, cwd: lane.cwd }, code.path); } catch { /* the ledger never breaks a lane */ } }
+          // P-OWN.1: an authored path becomes this lane's in the checkout ownership ledger (path only) once
+          // the call COMPLETES: a denied or failed edit must not make the lane the owner of another's file.
+          const callKey = typeof u.toolCallId === "string" && u.toolCallId ? `${lane.id}\u0000${u.toolCallId}` : "";
+          const wrote = u.sessionUpdate === "tool_call"
+            ? (code?.path ? this.#pendingWrites.opened(callKey, code.path, u.status) : null)
+            : (callKey ? this.#pendingWrites.settled(callKey, u.status) : null);
+          if (wrote && this.#deps.onWrite) { try { this.#deps.onWrite({ id: lane.id, name: lane.name, cwd: lane.cwd }, wrote); } catch { /* the ledger never breaks a lane */ } }
           // P-FLEET.L7: and the ARGUMENTS ride it too. Emitted only on the CALL (an update repeats the
           // title with no rawInput), and only when there is no authored code, since `code` is the richer
           // view of the same bytes and showing both would just duplicate a diff under its own patch.

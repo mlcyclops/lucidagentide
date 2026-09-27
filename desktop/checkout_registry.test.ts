@@ -6,7 +6,7 @@
 // truth, owner entries for clean files are pruned, and the gate refuses a sweep by owner name.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { CheckoutRegistry, parsePorcelainZ, type CheckoutSession } from "./checkout_registry.ts";
@@ -105,6 +105,49 @@ describe("peers and gate", () => {
     const viaRel = await reg.gate("lane-b", join(root, ".."), `git -C ${basename(root)} add -A`);
     expect(viaRel.block).toBe(true);
     expect((await reg.gate("lane-b", outside, "git add -A")).block).toBe(false); // no -C: the cwd's (non) checkout
+  });
+
+  test("a git status failure is not a clean tree: the ledger survives and the next answer still blocks", async () => {
+    let fail = true;
+    const clock = { now: 0 };
+    const reg = new CheckoutRegistry({
+      sessions: () => [{ id: "lane-a", name: "alpha", cwd: root, task: "", running: true }],
+      gitStatus: async () => (fail ? null : ["src/a.ts"]),
+      now: () => clock.now,
+    });
+    reg.recordWrite({ id: "lane-a", name: "alpha" }, join(root, "src", "a.ts"), root);
+    // Unknown: this one call fails open, and nothing is pruned.
+    expect((await reg.gate("lane-b", root, "git add -A")).block).toBe(false);
+    expect((await reg.peers("lane-b", root)).peers.map((p) => p.id)).toEqual(["lane-a"]);
+    fail = false;
+    clock.now = 10_000;
+    const g = await reg.gate("lane-b", root, "git add -A");
+    expect(g.block).toBe(true);
+    expect(g.reason).toContain("alpha");
+  });
+
+  test("an update-mode add scoped to my own path passes; one scoped over another's file is refused", async () => {
+    const reg = registry([], { "*": ["src/a.ts", "src/mine.ts", "docs/x.md"] });
+    reg.recordWrite({ id: "lane-a", name: "alpha" }, join(root, "src", "a.ts"), root);
+    reg.recordWrite({ id: "master", name: "main composer" }, join(root, "src", "mine.ts"), root);
+    expect((await reg.gate("master", root, "git add -u -- src/mine.ts")).block).toBe(false);
+    expect((await reg.gate("master", root, "git add -A docs")).block).toBe(false);
+    expect((await reg.gate("master", root, "git add -u src")).block).toBe(true); // src/ holds alpha's a.ts
+    expect((await reg.gate("master", join(root, "src"), "git add -u .")).block).toBe(true); // "." is the whole tree
+  });
+
+  test("one checkout opened through a junction or symlink is one root, and its owners are shared", async () => {
+    const alias = `${root}-alias`;
+    try { symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir"); }
+    catch { return; } // the platform refuses links here; nothing to test
+    try {
+      const reg = registry([], { "*": ["src/a.ts"] });
+      expect(reg.root(join(alias, "src"))).toBe(reg.root(root));
+      reg.recordWrite({ id: "lane-a", name: "alpha" }, join(root, "src", "a.ts"), root);
+      const g = await reg.gate("lane-b", alias, "git add -A");
+      expect(g.block).toBe(true);
+      expect(g.reason).toContain("alpha");
+    } finally { try { unlinkSync(alias); } catch { rmdirSync(alias); } } // removes the link only, never the target
   });
 });
 

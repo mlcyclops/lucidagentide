@@ -92,6 +92,29 @@ describe("gitSweeps", () => {
   });
 });
 
+describe("gitSweeps: wrappers and scoped adds", () => {
+  test("env, command, nohup and nice in front of git do not hide a sweep", () => {
+    expect(kinds("env GIT_OPTIONAL_LOCKS=0 git add -A")).toEqual(["add-all"]);
+    expect(kinds("env -u HOME -i git add .")).toEqual(["add-all"]);
+    expect(kinds("command git commit -am save")).toEqual(["commit-all"]);
+    expect(kinds("A=1 env B=2 command git stash")).toEqual(["stash-all"]);
+    expect(kinds("nohup nice -n 5 git add --all")).toEqual(["add-all"]);
+  });
+
+  test("a lookup runs nothing; a wrapper form the parser cannot follow is treated as a sweep", () => {
+    expect(kinds("command -v git")).toEqual([]);
+    expect(kinds(`env -S "git add -A"`)).toEqual(["add-all"]);
+    expect(kinds(`env -S "echo hi"`)).toEqual([]);
+  });
+
+  test("-A and -u with plain paths carry them as the sweep's scope; wide pathspecs do not", () => {
+    expect(gitSweeps("git add -u -- src/mine.ts")).toEqual([{ kind: "add-update", text: "git add -u -- src/mine.ts", paths: ["src/mine.ts"] }]);
+    expect(gitSweeps("git add -A docs src/x.ts")[0]!.paths).toEqual(["docs", "src/x.ts"]);
+    expect(gitSweeps("git add -u .")[0]!.paths).toBeUndefined();
+    expect(kinds("git add 'src/*.ts'")).toEqual(["add-all"]); // a glob's reach is not bounded by a path check
+  });
+});
+
 describe("sweepDecision", () => {
   const sweeps = gitSweeps("git add -A");
 

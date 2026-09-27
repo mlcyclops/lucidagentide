@@ -22,7 +22,10 @@ import type { Owner } from "./checkout_owners.ts";
 export type SweepKind = "add-all" | "add-update" | "commit-all" | "stash-all";
 /** `dir`: the `-C <dir>` the call named (the last one wins, as in git), so the gate resolves the checkout
  *  the sweep lands in rather than the caller's cwd. Relative to the cwd when relative. Absent otherwise. */
-export type GitSweep = { kind: SweepKind; text: string; dir?: string };
+export type GitSweep = { kind: SweepKind; text: string; dir?: string; paths?: string[] };
+// `paths`: the literal pathspecs an `add -A|-u` named (relative to `dir` or the cwd). Present only when
+// every pathspec is a plain path: the sweep then stages only under those paths, and the gate weighs only
+// the dirty files there. Absent means the whole tree.
 
 // Inside double quotes bash only honors a backslash before these; elsewhere `\P` stays two chars,
 // which is what keeps a quoted Windows path like "C:\Program Files\Git\bin\git.exe" intact.
@@ -97,12 +100,46 @@ function isGitProgram(tok: string): boolean {
   return base === "git" || base === "git.exe";
 }
 
-/** Locate the git subcommand in a token list: skip env assignments and `exec`, require a git
- *  program token, then skip global options. Returns the subcommand and its arguments, or null. */
-function gitInvocation(tokens: string[]): { sub: string; args: string[]; dir?: string } | null {
+/** Prefix commands that run the next word as the program. The value is how their options behave:
+ *  "env" understands env's own flags (`-u NAME`, `-C DIR`, `-S STRING` take a value), "flags" skips
+ *  `-x` style options that take no value (`command -p`, `nohup`, `time -p`), "nice" also skips `-n N`. */
+const WRAPPERS: Record<string, "env" | "flags" | "nice"> = {
+  env: "env", command: "flags", builtin: "flags", exec: "flags", nohup: "flags", time: "flags", nice: "nice",
+};
+const ENV_WITH_VALUE: Record<string, true> = { "-u": true, "--unset": true, "-C": true, "--chdir": true };
+
+/** Skip what precedes the program word: `NAME=value` assignments and the wrapper commands above, in any
+ *  order and depth (`env A=1 command git ...`). Returns the index of the program word, or -1 when the
+ *  segment is a lookup rather than a run (`command -v git`) or uses a form this parser does not follow
+ *  (`env -S "git add -A"`): those are reported as unknown so the caller can decide. */
+function programIndex(tokens: string[]): number | "unknown" {
   let i = 0;
-  while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!) || tokens[i] === "exec")) i++;
-  if (i >= tokens.length || !isGitProgram(tokens[i]!)) return null;
+  while (i < tokens.length) {
+    const t = tokens[i]!;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { i++; continue; }
+    const mode = WRAPPERS[t];
+    if (!mode) return i;
+    i++;
+    while (i < tokens.length && tokens[i]!.startsWith("-") && tokens[i] !== "-") {
+      const o = tokens[i]!;
+      if (o === "--") { i++; break; }
+      if (mode === "flags" && (o === "-v" || o === "-V")) return -1; // `command -v git`: a lookup, runs nothing
+      if (mode === "env" && (o === "-S" || o.startsWith("--split-string") || (o.startsWith("-") && !o.startsWith("--") && o.includes("S")))) return "unknown";
+      i += (mode === "env" && ENV_WITH_VALUE[o]) || (mode === "nice" && o === "-n") ? 2 : 1;
+    }
+  }
+  return -1;
+}
+
+/** Locate the git subcommand in a token list: skip assignments and wrapper commands, require a git
+ *  program token, then skip global options. Returns the subcommand and its arguments, or null. A git
+ *  run behind a wrapper form this parser does not follow is returned as `sub: "?"`, which the caller
+ *  treats as a sweep: an unclassifiable git call must not slip past the gate. */
+function gitInvocation(tokens: string[]): { sub: string; args: string[]; dir?: string } | null {
+  const at = programIndex(tokens);
+  if (at === "unknown") return tokens.some((t) => /(^|[\s/\\])git(\.exe)?(\s|$)/i.test(t)) ? { sub: "?", args: [] } : null;
+  let i = at;
+  if (i < 0 || i >= tokens.length || !isGitProgram(tokens[i]!)) return null;
   i++;
   let dir: string | undefined;
   while (i < tokens.length) {
@@ -116,23 +153,37 @@ function gitInvocation(tokens: string[]): { sub: string; args: string[]; dir?: s
   return { sub: tokens[i]!, args: tokens.slice(i + 1), ...(dir ? { dir } : {}) };
 }
 
-function classifyAdd(args: string[]): SweepKind | null {
+/** A pathspec that names the whole tree, or one whose reach a plain path check cannot bound (git's
+ *  magic `:(...)` forms and globs). */
+function wideSpec(a: string): boolean {
+  return a === "." || a === "./" || a === ":/" || a === ":/." || a.startsWith(":") || /[*?[]/.test(a);
+}
+
+/** `git add`: a sweep when it stages everything under its pathspecs without naming files (`-A`, `-u`,
+ *  their long forms, or a whole-tree pathspec). With plain paths only, the sweep is scoped to them, so
+ *  `git add -u -- src/mine.ts` is weighed against src/mine.ts alone. */
+function classifyAdd(args: string[]): { kind: SweepKind; paths?: string[] } | null {
   let kind: SweepKind | null = null;
   let afterDashDash = false;
+  let wide = false;
+  const paths: string[] = [];
   for (const a of args) {
     if (!afterDashDash && a === "--") { afterDashDash = true; continue; }
     if (!afterDashDash && a.startsWith("-")) {
-      if (a === "--all" || a === "--no-ignore-removal") return "add-all";
-      if (a === "--update") kind = kind ?? "add-update";
-      if (/^-[A-Za-z]+$/.test(a)) {
-        if (a.includes("A")) return "add-all";
-        if (a.includes("u")) kind = kind ?? "add-update";
+      if (a === "--all" || a === "--no-ignore-removal") kind = "add-all";
+      else if (a === "--update") kind = kind ?? "add-update";
+      else if (/^-[A-Za-z]+$/.test(a)) {
+        if (a.includes("A")) kind = "add-all";
+        else if (a.includes("u")) kind = kind ?? "add-update";
       }
       continue;
     }
-    if (a === "." || a === "./" || a === ":/" || a === ":/." || a === "*") return "add-all";
+    if (wideSpec(a)) wide = true;
+    else paths.push(a);
   }
-  return kind;
+  if (wide) return { kind: kind ?? "add-all" };
+  if (!kind) return null;
+  return paths.length ? { kind, paths } : { kind };
 }
 
 function classifyCommit(args: string[]): SweepKind | null {
@@ -170,11 +221,9 @@ export function gitSweeps(command: string): GitSweep[] {
   for (const segment of splitSegments(command)) {
     const inv = gitInvocation(tokenize(segment));
     if (!inv) continue;
-    let kind: SweepKind | null = null;
-    if (inv.sub === "add") kind = classifyAdd(inv.args);
-    else if (inv.sub === "commit") kind = classifyCommit(inv.args);
-    else if (inv.sub === "stash") kind = classifyStash(inv.args);
-    if (kind) out.push({ kind, text: segment, ...(inv.dir ? { dir: inv.dir } : {}) });
+    const add = inv.sub === "add" ? classifyAdd(inv.args) : null;
+    const kind = add?.kind ?? (inv.sub === "commit" ? classifyCommit(inv.args) : inv.sub === "stash" ? classifyStash(inv.args) : inv.sub === "?" ? "add-all" : null);
+    if (kind) out.push({ kind, text: segment, ...(inv.dir ? { dir: inv.dir } : {}), ...(add?.paths ? { paths: add.paths } : {}) });
   }
   return out;
 }
