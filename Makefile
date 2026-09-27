@@ -876,6 +876,10 @@ demo-P-REPO.1: ## P-REPO.1 (ADR-0406): every session names the repo it works on 
 .PHONY: demo-P-PROGRESS.2
 demo-P-PROGRESS.2: ## P-PROGRESS.2 (ADR-0408): the activity window folds calls under 5 s into one summary line and failed, repeated or empty calls into "processing", so only long calls keep a row (with elapsed time and ETA); every running worker, subagent run and the whole prompt states an ETA, "ETA estimating" until history supports a number
 	$(BUN) run harness/scripts/demo_p_progress_2.ts
+.PHONY: demo-P-GAME.1
+demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
 
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing

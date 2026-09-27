@@ -58,6 +58,9 @@ export function initTooltips(): void {
     if (t && t === cur) { cur = null; clearTimeout(timer); tip.classList.remove("show"); }
   });
   window.addEventListener("scroll", () => { tip.classList.remove("show"); cur = null; }, true);
+  // A click means the user has moved on from reading the hint: a menu or panel is about to open under
+  // the pointer, and a tooltip lingering beside (or behind) it reads as a stray card.
+  document.addEventListener("pointerdown", () => { clearTimeout(timer); tip.classList.remove("show"); cur = null; }, true);
 }
 
 // ───────────────────────── rich (hoverable) tooltip ─────────────────────────

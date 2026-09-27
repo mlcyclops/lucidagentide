@@ -1149,6 +1149,7 @@ export interface LucidBridge {
   /** P-GUIDE.1/.2: guide id (provider id or "choosing") -> absolute path of the bundled advisor guide
    *  (served into the Preview panel by path). Missing files are omitted server-side. */
   guides(): Promise<Record<string, string> | null>;
+  arcadeGames(): Promise<Record<string, string> | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
   oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
@@ -1911,6 +1912,7 @@ export const bridge: LucidBridge = {
   meetingsPair: (code) => post("/api/meetings/pair", { code }),
   auth: () => getData("/api/auth"),
   guides: () => getData("/api/guides"), // P-GUIDE.1: absolute paths of bundled advisor guides
+  arcadeGames: () => getData("/api/arcade/games"),
 
   saveKey: (env, key) => post("/api/auth/key", { env, key }),
   oauthLogin: (oauthId, promptAnswer?: string) => post("/api/auth/oauth", { oauthId, promptAnswer }),

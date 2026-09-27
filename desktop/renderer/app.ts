@@ -20,6 +20,7 @@ import { externalHttpUrl } from "../navigation_policy.ts";
 import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
 import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
 import { mountAgentArcade, type AgentArcadeHandle } from "./mascot_game.ts";
+import { ARCADE_GAMES, type ArcadeGameId } from "../arcade_games.ts";
 import { nextGap, readinessChecklist, resolveAgentTierModel, restoreModel, type AgentModelTier, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
 import { approvalPrompt, matchApprovalUtterance, pickOption, type ApprovalOption } from "./voice_approval.ts"; // P-AVATAR.5: approve tool calls by voice
 import { mountBootCinematic } from "./boot_cinematic.ts"; // P-AVATAR.6: the hero opening over the config warm
@@ -575,16 +576,26 @@ function buildShell(): void {
         <div class="resizer resizer-l" data-resize="preview" data-tip="Drag to resize|Widen the preview or collapse toward the chat" data-tip-side="left"></div>
         <div class="set-head">
           <div class="set-title">${icon("eye", 17)} Preview <span class="set-sub" id="prevKind"></span></div>
+          <!-- P-PREVIEW.20: two rows of chrome, never four. The header keeps the two actions used every
+               minute (Reload, Screenshot to chat) plus one overflow menu; below a container width the
+               labels drop and the icons stay. Everything else lives in #prevMore, which is real DOM
+               (its buttons keep their ids and their init-time listeners) shown as a popover on demand. -->
           <div class="kg-tools">
-            <button class="btn-mini" id="prevBrowse" data-tip="Browse your workspace|Open a file from the current working directory to preview it yourself (native file picker).">${icon("folder", 13)} Browse…</button>
-            <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)} Reload</button>
-            <button class="btn-mini" id="prevDevice" data-tip="Device viewport|Preview at phone or tablet size (portrait / landscape) - for reviewing a PWA or a mobile / responsive layout.">${devSvg("phone-portrait", 14)}${icon("chevron", 10)}</button>
-            <button class="btn-mini" id="prevMarkup" data-tip="Markup tools|Draw on the preview - pen, rectangle, text - then send the marked-up screenshot to chat.">${icon("markup", 14)} Markup ${icon("chevron", 10)}</button>
-            <button class="btn-mini" id="prevCapture" data-tip="Capture frames|Step an animated scene through a FIXED timestep and audit it: the same times must paint the same pixels. Needs the scene to define window.lucidRenderAt(tMs); without it LUCID can only sample the page's own clock and says so.">${icon("play", 13)} Capture</button>
-            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview (with your markup) and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)} Screenshot \u2192 chat</button>
-            <button class="btn-mini" id="prevToPhone" data-tip="Send to phone|Broadcast this preview to your connected phone guests (Session Share) - they can view + save it. Needs a live share; desktop app only.">${icon("phone", 13)} To phone</button>
+            <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)}<span class="bl">Reload</span></button>
+            <button class="btn-mini" id="prevDevice" data-tip="Device viewport|Preview at phone or tablet size (portrait / landscape) - for reviewing a PWA or a mobile / responsive layout.">${devSvg("phone-portrait", 14)}<span class="bl">Device</span>${icon("chevron", 10)}</button>
+            <button class="btn-mini" id="prevExternal" hidden data-tip="Open in your browser|Pop the file shown here out into your default browser, full size. It runs there as an ordinary local file, outside this sandbox and with normal network access, so use it for pages you trust (your own, or the bundled games). Desktop app only.">${icon("link", 13)}<span class="bl">Browser</span></button>
+            <button class="btn-mini" id="prevShot" data-tip="Send a screenshot to chat|Capture the preview (with your markup) and attach it to the composer for the agent to react to. Desktop app only.">${icon("eye", 13)}<span class="bl">Screenshot \u2192 chat</span></button>
+            <button class="btn-mini" id="prevMoreBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="prevMore" data-tip="More|Browse, markup, capture, send to phone, games, wheel zoom.">${icon("more", 14)}</button>
             <button class="set-close" id="prevClose" data-tip="Close">${icon("close", 16)}</button>
           </div>
+        </div>
+        <div class="markup-pop prev-more" id="prevMore" role="menu" aria-label="More preview actions" hidden>
+          <button class="pdev-opt" id="prevBrowse" role="menuitem" data-tip="Browse your workspace|Open a file from the current working directory to preview it yourself (native file picker)." data-tip-side="left">${icon("folder", 14)}<span>Browse workspace…</span></button>
+          <button class="pdev-opt" id="prevMarkup" role="menuitem" data-tip="Markup tools|Draw on the preview - pen, rectangle, text - then send the marked-up screenshot to chat." data-tip-side="left">${icon("markup", 14)}<span>Markup tools</span>${icon("chevron", 10)}</button>
+          <button class="pdev-opt" id="prevCapture" role="menuitem" data-tip="Capture frames|Step an animated scene through a FIXED timestep and audit it: the same times must paint the same pixels. Needs the scene to define window.lucidRenderAt(tMs); without it LUCID can only sample the page's own clock and says so." data-tip-side="left">${icon("play", 14)}<span>Capture frames</span></button>
+          <button class="pdev-opt" id="prevToPhone" role="menuitem" data-tip="Send to phone|Broadcast this preview to your connected phone guests (Session Share) - they can view + save it. Needs a live share; desktop app only." data-tip-side="left">${icon("phone", 14)}<span>Send to phone</span></button>
+          <button class="pdev-opt" id="prevGames" role="menuitem" data-tip="Secret arcade|Play original offline games here or full size in your browser." data-tip-side="left">${icon("spark", 14)}<span>Games</span>${icon("chevron", 10)}</button>
+          <button class="pdev-opt" id="prevWheelZoom" role="menuitemcheckbox" aria-pressed="false" data-tip="Wheel zoom|Plain wheel zooms local preview documents. Off keeps wheel scrolling; Ctrl/Meta+wheel always zooms." data-tip-side="left">${icon("search", 14)}<span>Wheel zoom</span><em id="prevWheelZoomState">off</em></button>
         </div>
         <!-- P-PREVIEW.14: the path field lives on the TAB ROW, not the toolbar. Up top it was squeezed
              between seven buttons and showed roughly 18 characters of an absolute Windows path, so the
@@ -602,16 +613,12 @@ function buildShell(): void {
             <button class="btn-mini" id="prevOpen" data-tip="Open|Load the path in the field into this preview tab.">${icon("download", 13)} Open</button>
             <button class="btn-mini prev-reveal" id="prevReveal" hidden data-tip="Show in folder|Open the containing folder in your file manager with this file selected.">${icon("folder", 13)}</button>
           </div>
-        </div>
-        <div class="preview-zoomrow">
-          <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" title="Wheel here to zoom any preview, including PDF and remote frames">
+          <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" title="Zoom the preview. Ctrl/Meta+wheel zooms local content; for PDFs, remote pages and nested frames, wheel over these controls.">
             <button type="button" class="btn-mini" id="prevZoomOut" aria-label="Zoom Preview out">-</button>
             <button type="button" class="btn-mini" id="prevZoomReset" aria-label="Reset Preview zoom to 100 percent">100%</button>
             <button type="button" class="btn-mini" id="prevZoomIn" aria-label="Zoom Preview in">+</button>
           </div>
-          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" title="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">Grab to pan</button>
-          <button type="button" class="btn-mini" id="prevWheelZoom" aria-pressed="false" title="Toggle plain wheel zoom inside local preview documents. Off preserves scrolling; Ctrl/Meta+wheel still zooms.">Wheel zoom</button>
-          <span class="preview-zoom-hint" title="Ctrl/Meta+wheel zooms local content. For native PDFs, remote pages and nested frames, wheel over the percentage controls instead.">Ctrl/Meta+wheel; PDF/remote: wheel here</span>
+          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" title="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
         </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
@@ -4227,6 +4234,7 @@ function syncAgentExtras(): void {
     const host = $("#agentArcadeHost");
     if (host) agentArcade = mountAgentArcade(host, arcadeScorePort, {
       onLayout: (open) => { miniRunner?.setSuspended(open); syncArcadeGap(); },
+      onOpenPreviewGame: (id, where) => void openArcadeGame(id, where),
     });
   }
   agentArcade?.update(active);
@@ -7528,7 +7536,83 @@ function syncPrevPathField(path: string): void {
     input.title = path && (!laidOut || input.scrollWidth > input.clientWidth) ? path : "";
   }
   const rev = $("#prevReveal") as HTMLButtonElement | null;
-  if (rev) rev.hidden = !path || !bridge.canShowInFolder() || /^https?:\/\//i.test(path.trim());
+  const local = !!path && !/^https?:\/\//i.test(path.trim());
+  if (rev) rev.hidden = !local || !bridge.canShowInFolder();
+  // P-PREVIEW.21: the pop-out. Present only where the native shell can open a file (Electron), and only
+  // for a local file; a remote page has no file to hand over and belongs to the egress gate.
+  const ext = $("#prevExternal") as HTMLButtonElement | null;
+  if (ext) { ext.hidden = !bridge.canRevealPath(); ext.disabled = !local; }
+}
+/** Open the visible lane's local file in the OS default browser (shell.openPath, existing files only). */
+async function openPreviewInBrowser(): Promise<void> {
+  const path = (prevPathByLane[prevLane] ?? "").trim();
+  if (!path || /^https?:\/\//i.test(path)) return;
+  const ok = await bridge.revealPath(path).catch(() => false);
+  if (ok) showToast({ title: "Opened in your browser", desc: path.split(/[\\/]/).pop() ?? path, timeout: 2600 });
+  else showToast({ tone: "warn", title: "Could not open it", desc: "The file may have moved. Use Show in folder and open it from there.", timeout: 5000 });
+}
+export type ArcadeSurface = "preview" | "browser";
+/** Play a bundled game in the Preview panel, or hand the local file to the OS default browser for a
+ *  full-size window. The browser route is the same existing-file-only shell.openPath seam that
+ *  "reveal export" uses; the engine only ever answers manifest-listed paths, so nothing else can ride it. */
+async function openArcadeGame(id: ArcadeGameId, where: ArcadeSurface = "preview"): Promise<void> {
+  const paths = await bridge.arcadeGames().catch(() => null);
+  const path = paths?.[id];
+  if (!path) { showToast({ tone: "warn", title: "Arcade unavailable", desc: "The bundled game could not be found. Rebuild or reinstall LUCID.", timeout: 5000 }); return; }
+  if (where === "preview") { openPreviewFile(path); return; }
+  const opened = bridge.canRevealPath() && await bridge.revealPath(path).catch(() => false);
+  if (opened) showToast({ title: `${ARCADE_GAMES[id].name} opened in your browser`, desc: "It runs from the local file; nothing leaves this machine.", timeout: 3200 });
+  else showToast({ tone: "warn", title: "Needs the desktop app", desc: `Open this file in a browser yourself: ${path}`, timeout: 7000 });
+}
+
+/** P-PREVIEW.20: the header overflow. #prevMore is permanent DOM so its buttons keep their ids and
+ *  listeners; this only shows it as a popover under the ⋯ button and hides it after any item is
+ *  used. Device / Markup / Games open their own menus anchored on the item they were clicked from,
+ *  which is why the hide runs AFTER the item's own listener (bubble order). */
+function wirePreviewMore(): void {
+  const btn = $("#prevMoreBtn") as HTMLButtonElement | null;
+  const pop = $("#prevMore") as HTMLElement | null;
+  if (!btn || !pop) return;
+  const close = () => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); document.removeEventListener("mousedown", outside, true); };
+  const outside = (e: MouseEvent) => { if (!pop.contains(e.target as Node) && !btn.contains(e.target as Node)) close(); };
+  btn.addEventListener("click", () => {
+    if (!pop.hidden) { close(); return; }
+    pop.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    const r = btn.getBoundingClientRect();
+    // Right-aligned under the button by its RIGHT edge, so the menu's own width never needs measuring.
+    pop.style.left = "auto";
+    pop.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+    pop.style.top = `${r.bottom + 6}px`;
+    setTimeout(() => document.addEventListener("mousedown", outside, true), 0);
+  });
+  pop.addEventListener("click", (e) => { if ((e.target as HTMLElement).closest("button")) close(); });
+  pop.addEventListener("keydown", (e) => { if (e.key === "Escape") { close(); btn.focus(); } });
+}
+
+/** Optional games menu: explicit user action, never replaces an agent's preview tab. */
+let closeArcadeMenu: (() => void) | null = null;
+function openArcadeMenu(anchor: HTMLElement): void {
+  closeArcadeMenu?.();
+  const browser = bridge.canRevealPath();
+  const rows = Object.entries(ARCADE_GAMES).map(([id, game]) =>
+    `<div class="pgame-row"><button class="pdev-opt" data-arcade="${id}" data-where="preview"><span>${game.name}</span></button>${browser ? `<button class="pdev-opt pgame-ext" data-arcade="${id}" data-where="browser" title="Open ${game.name} full size in your default browser">${icon("link", 13)}<span>Browser</span></button>` : ""}</div>`).join("");
+  const pop = el(`<div class="markup-pop prev-devpop prev-gamepop" role="group" aria-label="Preview games">${rows}</div>`);
+  document.body.appendChild(pop);
+  const rect = anchor.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pop.offsetWidth - 12))}px`;
+  pop.style.top = `${rect.bottom + 6}px`;
+  const close = () => { pop.remove(); document.removeEventListener("mousedown", outside, true); closeArcadeMenu = null; };
+  closeArcadeMenu = close;
+  const outside = (event: MouseEvent) => { if (!pop.contains(event.target as Node) && !anchor.contains(event.target as Node)) close(); };
+  setTimeout(() => { if (closeArcadeMenu === close) document.addEventListener("mousedown", outside, true); }, 0);
+  pop.addEventListener("click", (event) => {
+    const target = (event.target as HTMLElement).closest<HTMLElement>("[data-arcade]");
+    const id = target?.dataset.arcade;
+    if (!id || !Object.hasOwn(ARCADE_GAMES, id)) return;
+    close();
+    void openArcadeGame(id as ArcadeGameId, target?.dataset.where === "browser" ? "browser" : "preview");
+  });
 }
 /** A file YOU chose to preview (Open, Browse, /figma, image-markup) — always lands on the Yours lane. */
 function openPreviewFile(path: string): void {
@@ -7540,6 +7624,7 @@ function openPreviewFile(path: string): void {
   loadPreview(path, "yours");
 }
 function closePreview(): void {
+  closeArcadeMenu?.();
   setPreviewPan(false);
   if (pendingAgentPreviewPath) dismissedAgentPreviews.add(pendingAgentPreviewPath);
   if (prevPathByLane.agent) dismissedAgentPreviews.add(prevPathByLane.agent);
@@ -7756,7 +7841,7 @@ function setPreviewPan(enabled: boolean): void {
   if (surface) surface.hidden = !previewPanEnabled;
   const button = $("#prevPan");
   button?.setAttribute("aria-pressed", String(previewPanEnabled));
-  if (button) button.textContent = previewPanEnabled ? "Panning · Esc to exit" : "Grab to pan";
+  const label = button?.querySelector(".bl"); if (label) label.textContent = previewPanEnabled ? "Panning · Esc" : "Pan";
 }
 function wirePreviewPan(): void {
   const surface = $("#prevPanSurface"), viewport = $("#prevViewport");
@@ -7816,8 +7901,9 @@ function syncPreviewZoomControls(): void {
   const label = $("#prevZoomReset"); if (label) label.textContent = `${Math.round(zoom * 100)}%`;
   const minus = $("#prevZoomOut") as HTMLButtonElement | null; if (minus) minus.disabled = zoom <= PREVIEW_ZOOM_MIN;
   const plus = $("#prevZoomIn") as HTMLButtonElement | null; if (plus) plus.disabled = zoom >= PREVIEW_ZOOM_MAX;
-  const toggle = $("#prevWheelZoom");
-  toggle?.setAttribute("aria-pressed", String(prevWheelZoomByLane.has(prevLane)));
+  const wheelOn = prevWheelZoomByLane.has(prevLane);
+  $("#prevWheelZoom")?.setAttribute("aria-pressed", String(wheelOn));
+  const wheelState = $("#prevWheelZoomState"); if (wheelState) wheelState.textContent = wheelOn ? "on" : "off";
 }
 function sendPreviewZoomMode(): void {
   laneFrame()?.contentWindow?.postMessage({ __lucid: "preview-zoom-mode", enabled: prevWheelZoomByLane.has(prevLane) }, "*");
@@ -7936,7 +8022,7 @@ function applyDevice(device: PrevDevice): void {
   applyDeviceScale();
   // The button reads as a phone at rest (the "go mobile" affordance) and shows the active device + a highlight.
   const btn = $("#prevDevice");
-  if (btn) { btn.innerHTML = `${devSvg(device === "desktop" ? "phone-portrait" : device, 14)}${icon("chevron", 10)}`; btn.classList.toggle("on", device !== "desktop"); }
+  if (btn) { btn.innerHTML = `${devSvg(device === "desktop" ? "phone-portrait" : device, 14)}<span class="bl">${device === "desktop" ? "Device" : PREV_DEVICES[device].label}</span>${icon("chevron", 10)}`; btn.classList.toggle("on", device !== "desktop"); }
   syncPreviewCanvas();
 }
 /** The device dropdown: Desktop / Phone Portrait / Phone Landscape / Tablet Landscape. */
@@ -15050,6 +15136,7 @@ function wire(): void {
   $("#prevOpen")?.addEventListener("click", () => openPreviewFile((($("#prevPath") as HTMLInputElement | null)?.value ?? "").trim()));
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") openPreviewFile(($("#prevPath") as HTMLInputElement).value.trim()); });
   $("#prevReload")?.addEventListener("click", () => { const f = laneFrame(); if (f && !f.hidden && f.src) f.src = f.src; }); // reload the visible lane
+  $("#prevExternal")?.addEventListener("click", () => void openPreviewInBrowser()); // P-PREVIEW.21: pop out to the OS browser
   // P-PREVIEW.14: reveal the previewed file in the OS file manager, SELECTED rather than just opening
   // its folder. Reuses the P-FSREVEAL.1 (ADR-0212) shell seam the chat feed already uses, so there is one
   // reveal path in the app. Reads the LANE's loaded path, not the input's text, so a half-typed path in
@@ -15069,9 +15156,17 @@ function wire(): void {
     if (tabId) switchPrevLane(tabId);
   });
   $("#prevBrowse")?.addEventListener("click", () => void browsePreviewFile()); // P-PREVIEW.5: open cwd file
-  $("#prevDevice")?.addEventListener("click", (e) => openDeviceMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.9: device viewports
+  // P-PREVIEW.20: an item inside the overflow anchors its own menu on the ⋯ button, because the
+  // overflow hides once the item is used and a menu hanging off a hidden row would float mid-panel.
+  const menuAnchor = (e: Event): HTMLElement => {
+    const self = e.currentTarget as HTMLElement;
+    return self.closest("#prevMore") ? ($("#prevMoreBtn") as HTMLElement | null) ?? self : self;
+  };
+  $("#prevDevice")?.addEventListener("click", (e) => openDeviceMenu(menuAnchor(e))); // P-PREVIEW.9: device viewports
+  $("#prevGames")?.addEventListener("click", (e) => openArcadeMenu(menuAnchor(e)));
+  wirePreviewMore();
   wirePreviewZoom();
-  $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(e.currentTarget as HTMLElement)); // P-PREVIEW.5: markup tools
+  $("#prevMarkup")?.addEventListener("click", (e) => openMarkupMenu(menuAnchor(e))); // P-PREVIEW.5: markup tools
   $("#prevCapture")?.addEventListener("click", () => void captureCurrentPreview()); // CREATOR-3b: deterministic frame capture
   $("#prevShot")?.addEventListener("click", () => void screenshotPreviewToChat());
   $("#prevToPhone")?.addEventListener("click", () => void sendPreviewToPhone()); // P-PREVIEW-PWA.1 (ADR-0237)

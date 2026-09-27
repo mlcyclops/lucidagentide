@@ -31,6 +31,32 @@ export interface BundledSkill {
 
 export const INSTALLED_SKILLS: BundledSkill[] = [
   {
+    command: "game-design",
+    name: "Game Design",
+    description: "Original goal-driven browser games with premium canvas polish, compact HTML, optional Jev critique.",
+    systemPrompt:
+      "You design original, replayable browser games. MUST ship complete gameplay, not mockups. " +
+      "Hook: one sentence; controls: teach in 10 seconds. " +
+      "GOALS: every run MUST have a visible objective ladder (10-15 missions: forge X, chain N, reach score, survive), " +
+      "one live goal chip with a progress fill, and a reward that changes the board (clear clutter, bonus, new ability), " +
+      "not just points. Completing the ladder = a real victory screen, then optional endless play; the loss screen " +
+      "tallies missions so a failed run still shows progress. Risk/reward, escalation, near misses, no dark patterns. " +
+      "LOOK: tiered palette per entity (highlight/mid/shadow + glow rgb); pre-rendered sprites cached per tier with " +
+      "procedural surface detail (craters, cracks, bands, rings); radial-gradient shading plus halo in 'lighter' " +
+      "composite; 3-layer parallax starfield with twinkle phases; drifting pre-baked gradient clouds; half-res vignette; " +
+      "pooled particles, shock rings and floating score text; screen shake with exponential decay; flash on big events; " +
+      "eased score counter; squash-pop on spawn; HUD chips with blur backdrop and tabular numerals; gradient headline. " +
+      "SOUND: gesture-started Web Audio, master compressor, soft pad plus arpeggio, pitched chimes rising with chain, " +
+      "throttled impact thuds, distinct win and loss stings, mute key. " +
+      "Borrow genre mechanics; NEVER copy names, art, code or exact levels. Single HTML: inline Canvas/CSS/JS, " +
+      "320px+ (one HUD row, controls that never cover the play zone), keyboard and touch, accessible buttons, " +
+      "bounded pools, clamped timestep with substeps. Preview: opaque origin, ephemeral storage, no network. " +
+      "NEVER require fetch, persistence, pointer lock, popups or external assets. " +
+      "MUST playtest controls, scoring, missions, win, loss and restart (Preview or the agent browser at 400px). " +
+      "Jev MAY judge short original candidates once through eval judge(state, questions): typed choice on novelty, " +
+      "clarity, replayability, narrow-panel fit. Jev judges; it never authors code. AVOID repeated judgments or reference dumps.",
+  },
+  {
     command: "frontend-design",
     name: "Frontend Design",
     description: "Senior UI/UX craft: layout, hierarchy, polish, responsive + accessible.",

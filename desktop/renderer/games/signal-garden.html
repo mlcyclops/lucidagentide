@@ -1,0 +1,428 @@
+<!-- Copyright (c) 2026 TechLead 187 LLC -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signal Garden</title>
+  <style>
+    :root { color-scheme: dark; font: 14px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; background: #07151b; color: #e5f5ec; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 280px; }
+    main { width: min(100%, 500px); margin: auto; padding: 12px 12px 24px; }
+    h1 { font-size: 22px; letter-spacing: .06em; margin: 0; color: #b9f4ca; }
+    .subtitle { margin: 2px 0 12px; color: #91aaa8; font-size: 12px; }
+    .hud { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 8px; }
+    .stat { min-width: 0; background: #10272d; border: 1px solid #285047; border-radius: 8px; padding: 5px 7px; }
+    .stat small { display: block; color: #a1b8af; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stat strong { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .board { position: relative; border: 1px solid #467665; border-radius: 12px; overflow: hidden; background: #0c2529; box-shadow: 0 12px 38px #0007, inset 0 0 32px #89e7aa16; }
+    canvas { display: block; width: 100%; height: auto; aspect-ratio: 9 / 11; touch-action: none; outline: none; cursor: crosshair; }
+    canvas:focus-visible { outline: 3px solid #e2bf73; outline-offset: -4px; }
+    .veil { position: absolute; inset: 0; display: grid; place-items: center; background: #071a20d9; padding: 22px; text-align: center; }
+    .veil[hidden] { display: none; }
+    .veil-inner { max-width: 290px; padding: 24px 20px; background: #112c30; border: 1px solid #80c69c; border-radius: 15px; box-shadow: 0 15px 45px #0009; }
+    .veil h2 { margin: 0 0 8px; color: #bff2bb; font-size: 24px; }
+    .veil p { margin: 0 0 15px; color: #d3e5dc; }
+    .controls, .build, .actions { display: grid; gap: 6px; margin-top: 8px; }
+    .controls { grid-template-columns: 1.65fr 1fr 1fr 1fr; }
+    .build { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .actions { grid-template-columns: repeat(2, 1fr); }
+    button { min-width: 0; min-height: 42px; padding: 7px 8px; color: #e8f7e8; font: inherit; font-weight: 700; border: 1px solid #427765; border-radius: 8px; background: #173a3e; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    button:hover:not(:disabled) { background: #22514b; }
+    button:focus-visible { outline: 2px solid #e1c17d; outline-offset: 2px; }
+    button:disabled { opacity: .46; cursor: default; }
+    button.primary { background: #377c58; border-color: #8cca98; color: #fff; }
+    button[aria-pressed="true"] { background: #346653; border-color: #d4c074; box-shadow: inset 0 -3px #dbb96a; }
+    .build button { font-size: 12px; }
+    .detail { min-height: 46px; margin: 9px 2px 0; color: #c9dad2; }
+    .status { min-height: 38px; margin: 5px 2px 0; color: #f2d88f; }
+    .help { color: #91aaa8; font-size: 12px; margin: 10px 2px 0; }
+    @media (max-width: 355px) { main { padding: 8px 7px 20px; } button { padding: 6px 4px; font-size: 12px; } .build button { font-size: 11px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Signal Garden</h1>
+  <p class="subtitle">Cultivate a defense. Protect the luminous heart through eight migrations.</p>
+  <div class="hud" aria-live="off">
+    <div class="stat"><small>Heart</small><strong id="heart">12</strong></div>
+    <div class="stat"><small>Credits</small><strong id="credits">140</strong></div>
+    <div class="stat"><small>Migration</small><strong id="wave">0 / 8</strong></div>
+    <div class="stat"><small>Score</small><strong id="score">0</strong></div>
+  </div>
+  <div class="board">
+    <canvas id="field" width="450" height="550" tabindex="0" aria-label="Defense grid. Use arrow keys to move a tile, Enter to place or select a tower."></canvas>
+    <div class="veil" id="veil">
+      <div class="veil-inner">
+        <h2 id="veilTitle">Signal Garden</h2>
+        <p id="veilText">Route wandering spores away from the heart. Place towers on open plots, then send each migration when ready.</p>
+        <button class="primary" id="veilButton" type="button">Start garden</button>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="primary" id="send" type="button" disabled>Send wave 1</button>
+    <button id="pause" type="button" disabled>Pause</button>
+    <button id="speed" type="button" disabled>Speed 1x</button>
+    <button id="mute" type="button" aria-pressed="false">Sound on</button>
+  </div>
+  <div class="build" aria-label="Tower designs">
+    <button id="pulse" type="button" aria-pressed="false">1 Pulse · 45</button>
+    <button id="frost" type="button" aria-pressed="false">2 Dew · 70</button>
+    <button id="mortar" type="button" aria-pressed="false">3 Bloom · 95</button>
+  </div>
+  <div class="actions">
+    <button id="upgrade" type="button" disabled>Upgrade (U)</button>
+    <button id="sell" type="button" disabled>Sell (X)</button>
+  </div>
+  <p class="detail" id="detail">Pulse fires quickly. Dew slows runners. Bloom splashes armor-heavy groups.</p>
+  <p class="status" id="status" role="status" aria-live="polite">Press Start garden to begin.</p>
+  <p class="help">Tap a design, then an open plot. Tap a tower to improve or sell it. Keys: 1–3 designs, arrows and Enter on the grid, N send, P pause, F speed, M sound, U upgrade, X sell, R restart, Esc deselect.</p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const W = 450, H = 550, C = 50, COLS = 9, ROWS = 11, TOTAL = 8;
+  const canvas = document.getElementById('field');
+  const ctx = canvas.getContext('2d');
+  const ui = Object.fromEntries(['heart','credits','wave','score','veil','veilTitle','veilText','veilButton','send','pause','speed','mute','pulse','frost','mortar','upgrade','sell','detail','status'].map(id => [id, document.getElementById(id)]));
+  const pathCells = [[-1,2],[7,2],[7,5],[2,5],[2,8],[8,8]];
+  const route = pathCells.map(([x,y]) => ({x:x*C+C/2, y:y*C+C/2}));
+  const blocked = new Set();
+  for (let i=0; i<pathCells.length-1; i++) {
+    const [x1,y1] = pathCells[i], [x2,y2] = pathCells[i+1];
+    const dx = Math.sign(x2-x1), dy = Math.sign(y2-y1);
+    for (let x=x1,y=y1; ; x+=dx,y+=dy) {
+      if (x>=0 && x<COLS && y>=0 && y<ROWS) blocked.add(y*COLS+x);
+      if (x===x2 && y===y2) break;
+    }
+  }
+  const designs = {
+    pulse: {name:'Pulse', cost:45, range:122, damage:15, cooldown:.58, travel:370, color:'#8ae7bf', description:'Rapid single-target fire.'},
+    frost: {name:'Dew', cost:70, range:114, damage:9, cooldown:.82, travel:310, color:'#88d5f2', description:'Chills enemies to half speed.'},
+    mortar: {name:'Bloom', cost:95, range:158, damage:32, cooldown:1.62, travel:255, color:'#f2bf80', description:'Splash damage that pierces armor.'}
+  };
+  const wavePlans = [
+    [['seed',9]],
+    [['seed',10],['runner',4]],
+    [['shell',8],['seed',9]],
+    [['runner',17],['shell',6]],
+    [['seed',16],['shell',10]],
+    [['runner',19],['shell',11]],
+    [['seed',20],['shell',13]],
+    [['shell',15],['runner',20]]
+  ];
+  let state='menu', health=12, credits=140, score=0, wave=0, sped=false, muted=false;
+  let selectedDesign=null, selectedTower=null, towers=[], enemies=[], shots=[], sparks=[];
+  let queue=[], spawnClock=0, active=false, cursor={x:4,y:3}, cursorVisible=false;
+  let audio=null, last=0, elapsed=0;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const dist2=(a,b)=>{let dx=a.x-b.x,dy=a.y-b.y;return dx*dx+dy*dy;};
+  const money=n=>String(Math.floor(n));
+
+  function sound(freq=420, length=.08, shape='sine') {
+    if (muted || !audio) return;
+    try {
+      const oscillator=audio.createOscillator(), gain=audio.createGain(), t=audio.currentTime;
+      oscillator.type=shape; oscillator.frequency.setValueAtTime(freq,t);
+      oscillator.frequency.exponentialRampToValueAtTime(Math.max(90,freq*.65),t+length);
+      gain.gain.setValueAtTime(.035,t); gain.gain.exponentialRampToValueAtTime(.001,t+length);
+      oscillator.connect(gain); gain.connect(audio.destination);
+      oscillator.start(t); oscillator.stop(t+length);
+    } catch (_) { /* Silent playback is safe when audio is unavailable. */ }
+  }
+  function gesture() {
+    if (muted || audio) return;
+    try { const Audio = window.AudioContext || window.webkitAudioContext; if (Audio) audio=new Audio(); }
+    catch (_) { /* No audio permission is required to play. */ }
+  }
+  function message(text) { ui.status.textContent=text; }
+  function updateUI() {
+    ui.heart.textContent=health; ui.credits.textContent=money(credits);
+    ui.wave.textContent=`${wave} / ${TOTAL}`; ui.score.textContent=score;
+    const playing=state==='playing', paused=state==='paused';
+    ui.send.disabled=!playing || active || wave>=TOTAL;
+    ui.send.textContent=active ? `Wave ${wave} underway` : wave>=TOTAL ? 'Final wave sent' : `Send wave ${wave+1}`;
+    ui.pause.disabled=!(playing || paused);
+    ui.pause.textContent=paused ? 'Resume' : 'Pause';
+    ui.speed.disabled=!(playing || paused); ui.speed.textContent=sped ? 'Speed 2x' : 'Speed 1x';
+    ui.mute.textContent=muted ? 'Sound off' : 'Sound on'; ui.mute.setAttribute('aria-pressed',String(muted));
+    for (const key of Object.keys(designs)) ui[key].setAttribute('aria-pressed',String(selectedDesign===key));
+    if (selectedTower && towers.includes(selectedTower) && (playing || paused)) {
+      const t=selectedTower, d=designs[t.kind], price=upgradeCost(t);
+      ui.detail.textContent=`${d.name} level ${t.level} · ${d.description} Range ${Math.round(d.range+12*(t.level-1))}.`;
+      ui.upgrade.textContent=t.level===3 ? 'Fully grown' : `Upgrade · ${price} (U)`;
+      ui.upgrade.disabled=t.level===3 || credits<price;
+      ui.sell.textContent=`Sell · ${Math.floor(t.spent*.65)} (X)`; ui.sell.disabled=false;
+    } else {
+      selectedTower=null; ui.upgrade.textContent='Upgrade (U)'; ui.sell.textContent='Sell (X)';
+      ui.upgrade.disabled=true; ui.sell.disabled=true;
+      const d=selectedDesign && designs[selectedDesign];
+      ui.detail.textContent=d ? `${d.name}: ${d.description} Cost ${d.cost}. Tap an open plot or move with arrows and press Enter.` : 'Pulse fires quickly. Dew slows runners. Bloom splashes armor-heavy groups.';
+    }
+  }
+  function overlay(title,text,button) {
+    ui.veilTitle.textContent=title; ui.veilText.textContent=text; ui.veilButton.textContent=button; ui.veil.hidden=false;
+  }
+  function reset() {
+    state='playing'; health=12; credits=140; score=0; wave=0; sped=false;
+    selectedDesign=null; selectedTower=null; towers=[]; enemies=[]; shots=[]; sparks=[];
+    queue=[]; spawnClock=0; active=false; elapsed=0; cursor={x:4,y:3}; cursorVisible=false;
+    ui.veil.hidden=true; message('Choose a tower, place it off the trail, then send wave 1.');
+    updateUI(); sound(540,.13);
+  }
+  function finish(won) {
+    state=won?'won':'lost'; active=false;
+    if (won) score+=health*100;
+    overlay(won?'Garden held':'Heart extinguished', won?`All eight migrations survived. Heart ${health} · final score ${score}.`:`You held through wave ${wave}. Try another arrangement and protect the heart.`, 'Play again');
+    message(won?'Victory! The garden holds.':'Defeat. The heart was breached.');
+    sound(won?720:160,.35,won?'sine':'triangle'); updateUI();
+  }
+  function pause() {
+    if (state==='playing') { state='paused'; overlay('Taking a breath','The migration is stopped. Your towers and credits are safe.','Resume garden'); message('Paused.'); }
+    else if (state==='paused') { state='playing'; ui.veil.hidden=true; message(active?`Wave ${wave} underway.`:'Choose a plot or send the next wave.'); }
+    updateUI();
+  }
+  function startWave() {
+    if (state!=='playing' || active || wave>=TOTAL) return;
+    const plan=wavePlans[wave]; wave++;
+    queue=[];
+    for (const [kind,count] of plan) for (let j=0;j<count;j++) queue.push(kind);
+    spawnClock=.35; active=true;
+    message(`Wave ${wave}: ${plan.map(([kind,n])=>`${n} ${kind}`).join(', ')} incoming.`);
+    sound(350,.17); updateUI();
+  }
+  function choose(kind) {
+    if (state!=='playing' && state!=='paused') return;
+    selectedTower=null; selectedDesign=selectedDesign===kind?null:kind;
+    message(selectedDesign?`${designs[kind].name} selected. Tap an open plot.`:'Tower design cleared.');
+    sound(480,.055); updateUI();
+  }
+  function upgradeCost(t) { return Math.ceil(designs[t.kind].cost*(.75+.4*(t.level-1))); }
+  function upgrade() {
+    if (!selectedTower || !towers.includes(selectedTower) || selectedTower.level===3) return;
+    const cost=upgradeCost(selectedTower);
+    if (credits<cost) { message(`Need ${cost-credits} more credits.`); return; }
+    credits-=cost; selectedTower.spent+=cost; selectedTower.level++;
+    message(`${designs[selectedTower.kind].name} grew to level ${selectedTower.level}.`);
+    sound(600,.15); updateUI();
+  }
+  function sell() {
+    if (!selectedTower || !towers.includes(selectedTower)) return;
+    const t=selectedTower, refund=Math.floor(t.spent*.65);
+    towers.splice(towers.indexOf(t),1); credits+=refund; selectedTower=null;
+    message(`Tower composted for ${refund} credits.`); sound(270,.11); updateUI();
+  }
+  function onTile(x,y) {
+    if (state!=='playing' && state!=='paused') return;
+    if (x<0 || x>=COLS || y<0 || y>=ROWS) return;
+    const t=towers.find(t=>t.cx===x && t.cy===y);
+    if (t) { selectedTower=t; selectedDesign=null; message(`${designs[t.kind].name} level ${t.level} selected.`); sound(440,.06); }
+    else if (blocked.has(y*COLS+x)) { selectedTower=null; message('The trail must stay open. Choose an empty plot.'); }
+    else if (!selectedDesign) { selectedTower=null; message('Choose a design first, then choose an open plot.'); }
+    else {
+      const d=designs[selectedDesign];
+      if (credits<d.cost) { message(`Need ${d.cost-credits} more credits for ${d.name}.`); }
+      else {
+        towers.push({cx:x,cy:y,x:x*C+C/2,y:y*C+C/2,kind:selectedDesign,level:1,spent:d.cost,clock:0});
+        credits-=d.cost; selectedTower=towers[towers.length-1]; selectedDesign=null;
+        message(`${d.name} planted. Tap it to upgrade or sell.`); sound(560,.14);
+      }
+    }
+    updateUI();
+  }
+  function spawn(kind) {
+    const n=wave-1;
+    const spec=kind==='shell' ? {hp:68+n*17,speed:45+n*3,armor:4+Math.floor(n/2),reward:15,damage:2,color:'#e8a976'}
+      :kind==='runner' ? {hp:29+n*8,speed:96+n*4,armor:0,reward:11,damage:1,color:'#f4cf8b'}
+      :{hp:25+n*11,speed:60+n*3,armor:1+Math.floor(n/3),reward:9,damage:1,color:'#a1d9a0'};
+    enemies.push({kind, x:route[0].x,y:route[0].y,leg:0, hp:spec.hp,maxHp:spec.hp,
+      speed:spec.speed,armor:spec.armor,reward:spec.reward,damage:spec.damage,color:spec.color,slow:0,alive:true});
+  }
+  function particle(x,y,color,n=5) {
+    for(let i=0;i<n;i++) { const a=Math.random()*Math.PI*2,v=20+Math.random()*70;
+      sparks.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,life:.38,color}); }
+  }
+  function hurt(enemy, damage, penetration=0) {
+    if (!enemy.alive) return;
+    enemy.hp-=Math.max(2,damage-enemy.armor*(1-penetration));
+    if (enemy.hp<=0) {
+      enemy.alive=false; credits+=enemy.reward; score+=enemy.reward*10;
+      particle(enemy.x,enemy.y,enemy.color,8); sound(230,.045);
+    }
+  }
+  function tick(dt) {
+    elapsed+=dt;
+    if (active && queue.length) {
+      spawnClock-=dt;
+      while(spawnClock<=0 && queue.length) {
+        spawn(queue.shift());
+        spawnClock+=Math.max(.43,.94-(wave-1)*.06);
+      }
+    }
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      e.slow=Math.max(0,e.slow-dt);
+      let left=e.speed*(e.slow>0?.5:1)*dt;
+      while(left>0 && e.alive) {
+        const target=route[e.leg+1];
+        if (!target) { e.alive=false; health=Math.max(0,health-e.damage); particle(e.x,e.y,'#ff9a7d',9); sound(150,.2); break; }
+        const dx=target.x-e.x,dy=target.y-e.y,len=Math.hypot(dx,dy);
+        if (len<=left+.00001) { e.x=target.x; e.y=target.y; e.leg++; left-=len; }
+        else { e.x+=dx/len*left; e.y+=dy/len*left; left=0; }
+      }
+    }
+    if (health<=0) { finish(false); return; }
+    for(const t of towers) {
+      t.clock-=dt;
+      if(t.clock>0) continue;
+      const d=designs[t.kind], range=d.range+12*(t.level-1);
+      let target=null, progress=-Infinity;
+      for(const e of enemies) if(e.alive && dist2(t,e)<=range*range) {
+        const p=e.leg*1000 + (e.x+e.y)/1000;
+        if (p>progress) {progress=p;target=e;}
+      }
+      if(target) {
+        const damage=d.damage*(1+.55*(t.level-1));
+        shots.push({x:t.x,y:t.y,target,kind:t.kind,damage,speed:d.travel,color:d.color,life:1.2});
+        t.clock=d.cooldown*Math.pow(.9,t.level-1);
+        if(t.kind==='mortar') sound(110,.09,'triangle');
+      } else t.clock=0;
+    }
+    for(const s of shots) {
+      s.life-=dt;
+      if (!s.target.alive || s.life<=0) {s.life=0;continue;}
+      const dx=s.target.x-s.x,dy=s.target.y-s.y,len=Math.hypot(dx,dy),step=s.speed*dt;
+      if(len<=step+5) {
+        s.x=s.target.x; s.y=s.target.y;
+        if(s.kind==='mortar') {
+          for(const e of enemies) if(e.alive && dist2(e,s)<=62*62) hurt(e,s.damage*(e===s.target?1:.65),.75);
+          particle(s.x,s.y,s.color,9);
+        } else { hurt(s.target,s.damage,s.kind==='frost'?.5:0);
+          if(s.kind==='frost' && s.target.alive) s.target.slow=Math.max(s.target.slow,1.8);
+          particle(s.x,s.y,s.color,3);
+        }
+        s.life=0;
+      } else {s.x+=dx/len*step;s.y+=dy/len*step;}
+    }
+    shots=shots.filter(s=>s.life>0);
+    enemies=enemies.filter(e=>e.alive);
+    for(const s of sparks) {s.x+=s.vx*dt;s.y+=s.vy*dt;s.life-=dt;}
+    sparks=sparks.filter(s=>s.life>0);
+    if(active && !queue.length && !enemies.length) {
+      active=false; const bonus=24+wave*9; credits+=bonus; score+=wave*150;
+      sound(670,.22);
+      if(wave===TOTAL) {finish(true);return;}
+      message(`Wave ${wave} cleared. Harvested ${bonus} credits. Replant before the next migration.`);
+      updateUI();
+    }
+    if(Math.floor(elapsed*5)!==Math.floor((elapsed-dt)*5)) updateUI();
+  }
+  function polygon(x,y,r,sides,offset=0) {
+    ctx.beginPath();
+    for(let i=0;i<sides;i++) {const a=offset+i*Math.PI*2/sides;ctx.lineTo(x+Math.cos(a)*r,y+Math.sin(a)*r);}
+    ctx.closePath();
+  }
+  function draw() {
+    ctx.fillStyle='#0b2227';ctx.fillRect(0,0,W,H);
+    for(let y=0;y<ROWS;y++) for(let x=0;x<COLS;x++) {
+      const px=x*C,py=y*C,onPath=blocked.has(y*COLS+x);
+      ctx.fillStyle=onPath?'#25433e':(x+y)%2?'#102a2c':'#123032';ctx.fillRect(px+1,py+1,C-2,C-2);
+      ctx.strokeStyle=onPath?'#54705b':'#245044';ctx.lineWidth=1;ctx.strokeRect(px+2.5,py+2.5,C-5,C-5);
+      if(!onPath) { ctx.fillStyle='#49866a';ctx.globalAlpha=.26;ctx.beginPath();ctx.arc(px+9+(x*13+y*7)%31,py+10+(x*5+y*17)%29,1.4,0,7);ctx.fill();ctx.globalAlpha=1; }
+    }
+    ctx.strokeStyle='#91b987';ctx.lineWidth=5;ctx.lineCap='round';ctx.lineJoin='round';ctx.globalAlpha=.45;
+    ctx.beginPath();route.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();ctx.globalAlpha=1;
+    ctx.fillStyle='#d9aa6c';ctx.font='bold 11px system-ui';ctx.fillText('IN',7,99);
+    ctx.save();ctx.translate(424,425);
+    ctx.shadowColor='#b9f9b1';ctx.shadowBlur=22;
+    ctx.strokeStyle='#e2f7ae';ctx.lineWidth=3;polygon(0,0,18,6,Math.PI/6);ctx.stroke();
+    ctx.fillStyle='#b9f7b8';ctx.beginPath();ctx.arc(0,0,8+Math.sin(elapsed*3)*2,0,7);ctx.fill();ctx.restore();
+    const inspect=selectedTower || (selectedDesign && cursorVisible?{x:cursor.x*C+C/2,y:cursor.y*C+C/2,kind:selectedDesign,level:1}:null);
+    if(inspect) {
+      const d=designs[inspect.kind];ctx.beginPath();ctx.arc(inspect.x,inspect.y,d.range+12*(inspect.level-1),0,7);
+      ctx.fillStyle=d.color+'16';ctx.fill();ctx.strokeStyle=d.color+'88';ctx.lineWidth=1.5;ctx.stroke();
+    }
+    for(const t of towers) {
+      const d=designs[t.kind], selected=t===selectedTower;
+      ctx.save();ctx.translate(t.x,t.y);
+      ctx.shadowColor=d.color;ctx.shadowBlur=selected?18:8;
+      ctx.fillStyle='#102e30';ctx.strokeStyle=selected?'#fff3c1':d.color;ctx.lineWidth=selected?3:2;
+      ctx.beginPath();ctx.arc(0,0,19,0,7);ctx.fill();ctx.stroke();
+      ctx.fillStyle=d.color;ctx.strokeStyle=d.color;ctx.lineWidth=3;
+      if(t.kind==='pulse') {polygon(0,0,10,4,Math.PI/4);ctx.fill();ctx.fillStyle='#143337';ctx.beginPath();ctx.arc(0,0,3,0,7);ctx.fill();}
+      else if(t.kind==='frost') {for(let a=0;a<6;a++){const theta=a*Math.PI/3;ctx.beginPath();ctx.moveTo(Math.cos(theta)*3,Math.sin(theta)*3);ctx.lineTo(Math.cos(theta)*13,Math.sin(theta)*13);ctx.stroke();}ctx.beginPath();ctx.arc(0,0,4,0,7);ctx.fill();}
+      else {polygon(0,0,12,6,Math.PI/6);ctx.stroke();ctx.beginPath();ctx.arc(0,0,5,0,7);ctx.fill();}
+      ctx.shadowBlur=0;ctx.fillStyle='#fff4cb';ctx.font='bold 10px system-ui';ctx.textAlign='center';ctx.fillText(String(t.level),0,29);ctx.restore();
+    }
+    for(const e of enemies) {
+      ctx.save();ctx.translate(e.x,e.y);
+      ctx.shadowColor=e.color;ctx.shadowBlur=11;
+      ctx.fillStyle=e.color;
+      if(e.kind==='runner') polygon(0,0,10,3,-Math.PI/2);
+      else if(e.kind==='shell') polygon(0,0,13,6,Math.PI/6);
+      else {ctx.beginPath();ctx.arc(0,0,10,0,7);}
+      ctx.fill();ctx.shadowBlur=0;
+      if(e.kind==='shell'){ctx.strokeStyle='#6d493f';ctx.lineWidth=2;polygon(0,0,7,6,Math.PI/6);ctx.stroke();}
+      if(e.slow>0){ctx.strokeStyle='#89e2ff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(0,0,15,0,7);ctx.stroke();}
+      ctx.fillStyle='#091c22';ctx.fillRect(-15,-19,30,4);
+      ctx.fillStyle=e.hp/e.maxHp<.35?'#f4937c':'#9cdeac';ctx.fillRect(-15,-19,30*clamp(e.hp/e.maxHp,0,1),4);
+      ctx.restore();
+    }
+    for(const s of shots){ctx.shadowColor=s.color;ctx.shadowBlur=10;ctx.fillStyle=s.color;ctx.beginPath();ctx.arc(s.x,s.y,s.kind==='mortar'?6:4,0,7);ctx.fill();}ctx.shadowBlur=0;
+    for(const s of sparks){ctx.globalAlpha=clamp(s.life/.38,0,1);ctx.fillStyle=s.color;ctx.fillRect(s.x,s.y,3,3);}ctx.globalAlpha=1;
+    if(cursorVisible && (state==='playing'||state==='paused')) {
+      ctx.strokeStyle='#f2d68e';ctx.lineWidth=3;ctx.strokeRect(cursor.x*C+3,cursor.y*C+3,C-6,C-6);
+    }
+  }
+  function frame(now) {
+    if(!last)last=now;
+    const dt=Math.min((now-last)/1000,.05);last=now;
+    if(state==='playing') tick(dt*(sped?2:1));
+    draw();requestAnimationFrame(frame);
+  }
+  canvas.addEventListener('pointerdown',e=>{
+    gesture(); const r=canvas.getBoundingClientRect();
+    const x=Math.floor((e.clientX-r.left)/r.width*W/C),y=Math.floor((e.clientY-r.top)/r.height*H/C);
+    cursor={x:clamp(x,0,COLS-1),y:clamp(y,0,ROWS-1)};cursorVisible=false;onTile(x,y);
+    canvas.focus({preventScroll:true});
+  });
+  ui.veilButton.addEventListener('click',()=>{gesture();state==='paused'?pause():reset();});
+  ui.send.addEventListener('click',()=>{gesture();startWave();});
+  ui.pause.addEventListener('click',()=>{gesture();pause();});
+  ui.speed.addEventListener('click',()=>{gesture();sped=!sped;message(`Speed ${sped?'2x':'1x'}.`);updateUI();});
+  ui.mute.addEventListener('click',()=>{muted=!muted;if(!muted)gesture();message(muted?'Sound muted.':'Sound on.');updateUI();});
+  for(const key of Object.keys(designs))ui[key].addEventListener('click',()=>{gesture();choose(key);});
+  ui.upgrade.addEventListener('click',()=>{gesture();upgrade();});
+  ui.sell.addEventListener('click',()=>{gesture();sell();});
+  window.addEventListener('keydown',e=>{
+    if(e.altKey||e.ctrlKey||e.metaKey||e.repeat) return;
+    const key=e.key.toLowerCase();
+    if(document.activeElement===canvas && ['arrowup','arrowdown','arrowleft','arrowright','enter'].includes(key)) {
+      e.preventDefault();gesture();cursorVisible=true;
+      if(key==='enter')onTile(cursor.x,cursor.y);
+      else {cursor.x=clamp(cursor.x+(key==='arrowright'?1:key==='arrowleft'?-1:0),0,COLS-1);
+        cursor.y=clamp(cursor.y+(key==='arrowdown'?1:key==='arrowup'?-1:0),0,ROWS-1);
+        message(`Plot ${cursor.x+1}, ${cursor.y+1}: ${blocked.has(cursor.y*COLS+cursor.x)?'trail':towers.some(t=>t.cx===cursor.x&&t.cy===cursor.y)?'tower':'open'}.`);}
+      return;
+    }
+    if(e.target instanceof HTMLElement && (e.target.matches('input,textarea,select') || e.target.isContentEditable))return;
+    if(['1','2','3','n','p','f','m','u','x','r','escape'].includes(key))e.preventDefault();
+    if(key==='1'||key==='2'||key==='3'){gesture();choose(['pulse','frost','mortar'][Number(key)-1]);}
+    else if(key==='n'){gesture();startWave();}
+    else if(key==='p'){gesture();pause();}
+    else if(key==='f' && (state==='playing'||state==='paused')){gesture();sped=!sped;message(`Speed ${sped?'2x':'1x'}.`);updateUI();}
+    else if(key==='m'){muted=!muted;if(!muted)gesture();message(muted?'Sound muted.':'Sound on.');updateUI();}
+    else if(key==='u'){gesture();upgrade();}
+    else if(key==='x'){gesture();sell();}
+    else if(key==='r' && (state==='won'||state==='lost')){gesture();reset();}
+    else if(key==='escape'){selectedTower=null;selectedDesign=null;message('Selection cleared.');updateUI();}
+  });
+  function scaleCanvas(){const ratio=Math.min(window.devicePixelRatio||1,2);canvas.width=W*ratio;canvas.height=H*ratio;ctx.setTransform(ratio,0,0,ratio,0,0);}
+  window.addEventListener('resize',scaleCanvas);scaleCanvas();updateUI();requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -3,6 +3,7 @@
 
 import { MASCOT_H, MASCOT_RUN_FRAMES, MASCOT_THEMES, MASCOT_W, paintFrame } from './mascot.ts';
 import { MINI_GAMES, type MiniGameHandle } from './mascot_minigames.ts';
+import { ARCADE_GAMES, type ArcadeGameId } from '../arcade_games.ts';
 
 export type ArcadeAction = 'left' | 'right' | 'duck' | 'jump' | 'punch' | 'kick' | 'aim-up';
 export interface ArcadeDebris { x: number; y: number; vx: number; vy: number; lifeMs: number; color: 'pot' | 'leaf' }
@@ -491,6 +492,8 @@ export function drawArcadeBonus(ctx: CanvasRenderingContext2D, state: ArcadeStat
 export interface ArcadeOptions {
   /** Fires synchronously when the panel opens or closes, so the host can yield the mascot to it. */
   onLayout?: (open: boolean) => void;
+  /** Opens a bundled game in the host's user-owned Preview lane, or full size in the OS browser. */
+  onOpenPreviewGame?: (id: ArcadeGameId, where: 'preview' | 'browser') => void;
 }
 
 /** Local, opt-in diversion. The caller alone decides whether an actual agent run is active. */
@@ -520,10 +523,13 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
         <button type="button" data-action="duck" aria-pressed="false">Duck</button>
         <button type="button" data-action="punch">Punch</button>
         <button type="button" data-action="kick">Kick</button>
-        <span class="agent-arcade-status" role="status">Local only. Play any time, including while the agent works.</span>
+        <span class="agent-arcade-status" role="status">Offline games. Play while the agent works, or open a secret game in Preview.</span>
       </div>
       <p class="agent-arcade-help">Arrows move · Up / Alt jump · Down duck · Ctrl punch · Down + Ctrl kick. Crate lids are solid: land on one and jump again. Duck bars and stars, smash flower pots. Five clears unlock Flycatch.</p>
       <div class="agent-arcade-alt" hidden></div>
+      ${options.onOpenPreviewGame ? `<div class="agent-arcade-preview" role="group" aria-label="Secret games in Preview">
+        <span>Secret games:</span>${Object.entries(ARCADE_GAMES).map(([id, game]) => `<span class="agent-arcade-launch"><button type="button" data-preview-game="${id}" data-where="preview" title="Play ${game.name} in the sandboxed Preview panel">${game.name}</button><button type="button" data-preview-game="${id}" data-where="browser" title="Open ${game.name} full size in your default browser" aria-label="Open ${game.name} in your browser">↗</button></span>`).join('')}
+      </div>` : ''}
     </div>`;
   host.appendChild(root);
   host.hidden = true;
@@ -836,7 +842,7 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
     reveal.hidden = true;
     reveal.setAttribute('aria-expanded', 'true');
     options.onLayout?.(true);
-    status.textContent = context ? 'Local only. Play any time, including while the agent works.' : 'Canvas is unavailable in this window.';
+    status.textContent = context ? 'Offline games. Play while the agent works, or open a secret game in Preview.' : 'Canvas is unavailable in this window.';
     start.disabled = !context;
     for (const button of controls) button.disabled = true;
     resize();
@@ -844,6 +850,14 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
   }, listenerOptions);
   start.addEventListener('click', begin, listenerOptions);
   exit.addEventListener('click', () => { close(); reveal.focus({ preventScroll: true }); }, listenerOptions);
+  for (const button of root.querySelectorAll<HTMLButtonElement>('[data-preview-game]')) {
+    button.addEventListener('click', () => {
+      const id = button.dataset.previewGame as ArcadeGameId;
+      if (!eligible || !Object.hasOwn(ARCADE_GAMES, id)) return;
+      close();
+      options.onOpenPreviewGame?.(id, button.dataset.where === 'browser' ? 'browser' : 'preview');
+    }, listenerOptions);
+  }
   chooser.addEventListener('change', () => { theme = chooser.value as ThemeId; paint(); }, listenerOptions);
   gameSelect.add(new Option('Obstacle course', 'course'));
   for (const def of MINI_GAMES) gameSelect.add(new Option(def.name, def.id));

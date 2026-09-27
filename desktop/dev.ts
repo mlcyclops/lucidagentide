@@ -96,6 +96,7 @@ import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } 
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
 import { GUIDE_FILES } from "./guides_manifest.ts";
+import { ARCADE_GAMES } from "./arcade_games.ts";
 import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
@@ -3967,6 +3968,15 @@ return Bun.serve({
         const out: Record<string, string> = {};
         for (const [id, file] of Object.entries(GUIDE_FILES)) {
           const abs = join(ROOT, "guides", file);
+          if (existsSync(abs)) out[id] = abs;
+        }
+        return json({ ok: true, data: out });
+      }
+      // P-GAME.1: only manifest-listed local games can be opened in the same opaque Preview frame.
+      if (p === "/api/arcade/games") {
+        const out: Record<string, string> = {};
+        for (const [id, game] of Object.entries(ARCADE_GAMES)) {
+          const abs = join(ROOT, "games", game.file);
           if (existsSync(abs)) out[id] = abs;
         }
         return json({ ok: true, data: out });

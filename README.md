@@ -277,6 +277,14 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 
 ---
 
+## Unreleased: a shorter Preview header
+
+The Preview panel's chrome is two rows on any width: the header keeps Reload, Device viewport, Browser (pop the local file out into your default browser), Screenshot to chat and a ⋯ menu (Browse, Markup, Capture frames, Send to phone, Games, Wheel zoom); the second row is the Yours / Agent tabs, the path field, zoom and Pan. On a narrow panel the button labels fold to icons and the zoom steps tuck away, so the tabs are always reachable. *(P-PREVIEW.20)*
+
+## Unreleased: three offline games in Preview
+
+Open **Preview > Games** for **Orbit Loom** (drop-and-merge chains), **Signal Garden** (eight-wave tower defense) or **Nebula Fusion: Voyage**, the AI Workshop gravity-well merge game rebuilt around a fifteen-mission ladder: forge each body, chain fusions, hit score marks, birth a nebula. Every mission pays a bonus and a solar wind that dissolves the smallest bodies; the collapse screen tallies your missions and finishing the ladder opens endless play. All three are single-file HTML games: keyboard and touch controls, pause, sound toggle, scoring and replay. Each row has a **Browser** chip that opens the game full size in your default browser (the local file, nothing leaves the machine). The Agent role's Arcade cabinet has the same launchers. Games run in the opaque-origin, network-blocked Preview frame; no account or external assets. For making a new game, enable the built-in **Game Design** skill under Skills: it steers small-screen loops and optional one-shot Jev critique without putting a large reference catalog into every prompt. *(P-GAME.1)*
+
 ## Unreleased: grab to pan in Yours
 
 Open a document in **Preview > Yours**, zoom in, then select **Grab to pan** and drag to move the enlarged preview. The cursor changes from grab to grabbing. Press **Escape** or toggle the button off to click, type, or select text inside the page again. Arrow keys and wheel scrolling work in pan mode; Ctrl/Meta+wheel still zooms. Pan and markup are mutually exclusive, and switching tabs, opening another Yours document, or closing Preview exits pan mode. This moves the outer zoomed viewport, not an embedded PDF viewer's internal page scroller. Available after loading the updated app. *(P-PREVIEW-YOURS-PAN)*
