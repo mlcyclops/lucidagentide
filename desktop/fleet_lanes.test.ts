@@ -163,6 +163,26 @@ test("one turn at a time per lane - an overlapping prompt is refused, not crosse
   expect(st.lanes[0]!.status).toBe("awaiting-input"); // a cancelled turn is not an error
 }, TIMEOUT);
 
+// P-FLEET.L8: the transcript holds SETTLED turns only, so a composer attached mid-turn used to land on the
+// bare prompt of a lane that had been working for minutes and read as "the spoke stopped".
+test("promote MID-TURN carries the in-flight output (tools + text); an idle lane carries none", async () => {
+  live = manager({ mode: "midturn" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const firstToken = Promise.withResolvers<void>();
+  const turn = live.prompt(r.lane!.id, "long task", (e) => { if (e.type === "token") firstToken.resolve(); });
+  await firstToken.promise; // the chunk crossing the real subprocess boundary IS the mid-turn signal
+  const mid = live.promote(r.lane!.id);
+  expect(mid.ok).toBe(true);
+  expect(mid.lane!.status).toBe("working");
+  expect(mid.transcript?.map((t) => t.role)).toEqual(["user"]); // the running turn is not settled yet
+  expect(mid.live).toEqual({ text: "so far: ", tools: ["read notes.md"] });
+  live.cancel(r.lane!.id);
+  await turn;
+  const idle = live.promote(r.lane!.id);
+  expect(idle.live).toBeUndefined();
+  expect(idle.transcript?.map((t) => t.role)).toEqual(["user", "assistant"]); // folded on settle
+}, TIMEOUT);
+
 test("a permission ask lands needs-approval and DENY resolves it fail-closed", async () => {
   live = manager({ mode: "permission" });
   const r = await live.spawn({ cwd: import.meta.dir });

@@ -33,6 +33,7 @@ import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, 
 import { isAutoPreviewPath } from "./preview_tabs.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with the main chat thread so the two cannot drift.
 import { LANE_JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
+import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new lanes open on the last lane's model
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
@@ -53,7 +54,7 @@ type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" |
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
-  /** The master agent's current model - the default for a new lane. */
+  /** The master agent's current model - a new lane's default until a lane model is remembered (P-SCROLL.1). */
   getMasterModel: () => string;
   /** The model catalog for the per-lane pickers. */
   getModelOptions: () => { value: string; label?: string }[];
@@ -1553,10 +1554,11 @@ function toggleSpawnForm(): void {
   const existing = $(".fleet-spawn-card", dock);
   if (existing) { existing.remove(); paintEmpty(); return; }
   const grid = $("#fleetGrid", dock) as HTMLElement | null; if (!grid) return;
-  const master = deps.getMasterModel();
   const options = deps.getModelOptions();
-  const all = options.some((o) => o.value === master) || !master ? options : [{ value: master, label: master }, ...options];
-  const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === master ? " selected" : ""}>${esc(o.label ?? o.value)}</option>`).join("");
+  // P-SCROLL.1 (ADR-0405): preselect the model the last lane ran, else the master's (the orbit form's rule).
+  const pick = spawnModelDefault(options, rememberedSpokeModel(), deps.getMasterModel());
+  const all = options.some((o) => o.value === pick) || !pick ? options : [{ value: pick, label: pick }, ...options];
+  const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.label ?? o.value)}</option>`).join("");
   const form = el(`<div class="fleet-card fleet-spawn-card">
     <div class="fleet-card-head">
       <span class="fleet-led" aria-hidden="true"></span>
@@ -1679,7 +1681,7 @@ async function submitSpawn(): Promise<void> {
   clearTimeout(slow);
   if (err && err.hidden === false && r?.ok) err.hidden = true; // the slow-note must not outlive a success
   if (patInput) patInput.value = ""; // never leave the plaintext sitting in the DOM
-  if (r?.ok) { form.remove(); paintEmpty(); await refresh(); return; }
+  if (r?.ok) { rememberSpokeModel(model); form.remove(); paintEmpty(); await refresh(); return; }
   if (go) { go.disabled = false; go.innerHTML = goHtml; }
   // A refusal carries the measured numbers ("system CPU has been at 93% for 34s") or the redacted git
   // failure - show it verbatim, it is the whole point of the guard.
@@ -1893,7 +1895,7 @@ function onChange(ev: Event): void {
   const run = card ? runs.get(card.dataset.lane ?? "") : null; if (!run) return;
   const next = sel.value;
   void deps.fleetSetModel(run.view.id, next)
-    .then((r) => { if (r?.ok) run.view.model = r.model ?? next; else fillModelSelect(sel, run.view.model); })
+    .then((r) => { if (r?.ok) { run.view.model = r.model ?? next; rememberSpokeModel(next); } else fillModelSelect(sel, run.view.model); })
     .catch(() => fillModelSelect(sel, run.view.model));
 }
 

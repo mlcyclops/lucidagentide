@@ -866,6 +866,9 @@ demo-P-FLEET.L20: ## P-FLEET.L20 (ADR-0402): close a spoke from where it is show
 .PHONY: demo-P-PROGRESS.1
 demo-P-PROGRESS.1: ## P-PROGRESS.1 (ADR-0404): workers say what they are doing (every tool step opens on its doing line, arguments and outcome), how far along they probably are (a history estimate that never finishes a running turn), and whether they are alive (evidence-ranked liveness with an in-place restart); turns on one folder take turns in order, visibly, with expected start times
 	$(BUN) run harness/scripts/demo_p_progress_1.ts
+.PHONY: demo-P-SCROLL.1
+demo-P-SCROLL.1: ## P-SCROLL.1 (ADR-0405): the chat follows new output until the reader scrolls up (a fast burst no longer releases it); a spoke switch lands on the newest message or, by preference, where the reader left off; the attached spoke's live turn renders in arrival order; a new spoke opens on the last spoke's model
+	$(BUN) run harness/scripts/demo_p_scroll_1.ts
 
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing

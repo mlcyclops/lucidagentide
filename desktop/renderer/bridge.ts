@@ -1013,7 +1013,7 @@ export interface LucidBridge {
   // -- P-FLEET.L8: promote a lane into the MAIN composer, and pull it back --------------------------
   /** Attach the main composer to this lane. The lane's omp child, session, cwd, and model are untouched,
    *  so this works MID-TURN. Returns the lane plus its bounded transcript to seed the thread with. */
-  fleetPromote(laneId: string): Promise<{ ok: boolean; lane?: LaneView; transcript?: { role: "user" | "assistant"; text: string }[]; reason?: string } | null>;
+  fleetPromote(laneId: string): Promise<{ ok: boolean; lane?: LaneView; transcript?: { role: "user" | "assistant"; text: string }[]; live?: { text: string; tools: string[] }; reason?: string } | null>;
   /** Release the composer back to the master session. Idempotent; laneId omitted demotes whichever lane
    *  currently holds it. */
   fleetDemote(laneId?: string): Promise<{ ok: boolean; lane?: LaneView } | null>;

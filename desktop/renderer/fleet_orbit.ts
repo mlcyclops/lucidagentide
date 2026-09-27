@@ -22,6 +22,7 @@ import { popover, showToast } from "./ui.ts";
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
+import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model
 
 export interface FleetOrbitDeps {
   fleetStatus: LucidBridge["fleetStatus"];
@@ -390,8 +391,11 @@ function paintSpawnPanel(): void {
   if (openedPanel !== "spawn" || !view || !deps) return;
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (!box) return;
-  const models = deps.getModelOptions();
-  const master = deps.getMasterModel();
+  const offered = deps.getModelOptions();
+  // P-SCROLL.1 (ADR-0405): preselect the model the last spoke ran, else the master's. A default the
+  // catalog does not list (not loaded yet) is still shown, so the form never silently lands on row one.
+  const pick = spawnModelDefault(offered, rememberedSpokeModel(), deps.getMasterModel());
+  const models = !pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered];
   box.innerHTML = `<div class="orbit-panel-h">${icon("plus", 14)}<b>New spoke</b><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>
     <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-spawnp-name placeholder="what this spoke is for (defaults to the folder name)" maxlength="64"></label>
     <label class="orbit-spawn-l">repo url <i>optional</i><input type="text" data-spawnp-repo spellcheck="false" autocomplete="off" placeholder="https://github.com/org/repo.git or git@host:org/repo"></label>
@@ -402,7 +406,7 @@ function paintSpawnPanel(): void {
     </div>
     <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
       <button class="btn-mini orbit-btn" data-spawnp-browse>${icon("folder", 12)} Browse</button></span></label>
-    <label class="orbit-spawn-l">model<select data-spawnp-model>${models.map((m) => `<option value="${esc(m.value)}"${m.value === master ? " selected" : ""}>${esc(m.label)}</option>`).join("") || `<option value="">master's model</option>`}</select></label>
+    <label class="orbit-spawn-l">model<select data-spawnp-model>${models.map((m) => `<option value="${esc(m.value)}"${m.value === pick ? " selected" : ""}>${esc(m.label)}</option>`).join("") || `<option value="">master's model</option>`}</select></label>
     <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-spawnp-go>${icon("bolt", 13)} Create spoke</button></div>
     <small class="orbit-ghost-err" data-spawnp-err></small>`;
   ($("[data-spawnp-name]", box) as HTMLInputElement | null)?.focus();
@@ -482,6 +486,7 @@ async function submitSpawnPanel(): Promise<void> {
     if (go) { go.disabled = false; go.innerHTML = `${icon("bolt", 13)} Create spoke`; }
     return;
   }
+  rememberSpokeModel(model); // the picker's value, which is what the next form matches against
   // Close; the newborn flies out of the hub on the refresh below. Only if the form is still the open
   // panel: togglePanel would otherwise REOPEN it (the user closed it, or switched to Recover, mid-clone).
   if (openedPanel === "spawn") togglePanel("spawn");

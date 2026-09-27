@@ -256,6 +256,11 @@ export interface FleetLaneDeps {
  *  seeded with the lane's conversation instead of an empty pane. */
 export interface LaneTurnRecord { role: "user" | "assistant"; text: string }
 
+/** P-FLEET.L8: what a lane's IN-FLIGHT turn has produced so far - the answer text streamed to date and
+ *  the compact titles of the tool calls it has made. Returned by promote() so a mid-turn attach shows
+ *  the work in progress; the watch then continues the same bubble from the next event. */
+export interface LaneLiveTurn { text: string; tools: string[] }
+
 /** P-PWA-FOCUS.1: one registered cross-lane observer. `sinks` holds the per-lane wrapper that was
  *  actually added to that lane's sink set, keyed by lane id, so dispose removes exactly what this
  *  observer added - never another observer's wrapper and never a live turn's own sink. */
@@ -828,14 +833,17 @@ export class FleetLaneManager {
    *  one prompt box and two attached lanes would silently send to whichever answered last.
    *
    *  Returns the lane view plus the transcript to seed the composer thread with, so the caller does not
-   *  have to make a second round trip to render history. */
-  promote(laneId: string): { ok: boolean; lane?: LaneView; transcript?: LaneTurnRecord[]; reason?: string } {
+   *  have to make a second round trip to render history. A lane MID-TURN also returns what that turn has
+   *  produced so far (`live`): the transcript holds only settled turns, so without it a composer attached
+   *  to a lane five minutes into a task landed on the bare prompt and read as "the spoke stopped". */
+  promote(laneId: string): { ok: boolean; lane?: LaneView; transcript?: LaneTurnRecord[]; live?: LaneLiveTurn; reason?: string } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
     if (lane.status === "stopped") return { ok: false, reason: "lane is stopped - respawn it before promoting" };
     for (const other of this.#lanes.values()) if (other !== lane && other.promoted) this.#setPromoted(other, false);
     this.#setPromoted(lane, true);
-    return { ok: true, lane: this.#view(lane), transcript: this.laneTranscript(laneId) };
+    const live: LaneLiveTurn | undefined = lane.busy ? { text: lane.liveText, tools: lane.liveTools.slice() } : undefined;
+    return { ok: true, lane: this.#view(lane), transcript: this.laneTranscript(laneId), ...(live ? { live } : {}) };
   }
 
   /** Release the composer back to the master session. Idempotent: demoting a lane that is not promoted
