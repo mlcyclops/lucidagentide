@@ -1170,3 +1170,7 @@ demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / A
 .PHONY: demo-P-SWITCH.1
 demo-P-SWITCH.1: ## P-SWITCH.1 (ADR-0403, issue #390): opening a session never stops the running one unless you choose to. /api/session/load and /api/newSession answer 409 while Main is busy (turn, goal loop, automation) unless force; the sidebar and New session ask first and offer Open as a spoke (session resumed in a lane, composer attached) or Stop it and switch. A session a live spoke holds attaches to that spoke instead of loading a second copy. Proves the busy predicate on the real backend over the fake agent, the switch plan, and the sheet wording.
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/session_switch.test.ts desktop/acp_backend_recovery.test.ts desktop/renderer/composer_target.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-SWITCH.2
+demo-P-SWITCH.2: demo-P-SWITCH.1 ## P-SWITCH.2 (ADR-0404, issue #390): one omp session, one owner. /api/session/load, /api/recovery/resume and /api/session/delete refuse a session a live spoke holds (409 heldBy, no override); a lane spawn or respawn refuses a session Main or another live lane holds, and creates nothing. /api/sessions stamps where each session is live and the sidebar shows it in the orbit colors. Proves the rule, the refusals against the real lane manager over the fake ACP agent, and the badge wording.
+	$(BUN) test $(TEST_IGNORES) desktop/session_owner.test.ts desktop/fleet_lanes.test.ts desktop/renderer/session_switch.test.ts harness/adr_numbering.test.ts

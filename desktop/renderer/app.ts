@@ -10,7 +10,7 @@
 
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
-import { planSessionSwitch, spokeNameFor, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403)
+import { liveBadge, planSessionSwitch, spokeNameFor, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -651,9 +651,12 @@ function sessSkeleton(): string {
 }
 let ingestExpanded = false; // P-KG-INGEST.1b: the "Knowledge Graph Ingest" group is collapsed by default
 function sessRow(s: SessionInfo, active: boolean): string {
-  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}" data-tip-side="right">
+  // P-SWITCH.2 (ADR-0404): where this session is running right now, visible before the click.
+  const badge = liveBadge(s.live);
+  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
       <div class="t">${esc(s.title)}</div>
       <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
+      ${badge ? `<div class="sess-live sess-live-${badge.tone}">${esc(badge.text)}</div>` : ""}
       <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
     </div>`;
 }
@@ -9560,6 +9563,11 @@ async function resumeSession(id: string, opts: { loaded?: boolean; force?: boole
   }
   if (!opts.loaded) {
     const r = await bridge.resumeSession(id, { force: opts.force });
+    if (r.heldBy) {
+      // P-SWITCH.2 (ADR-0404): a spoke already runs this session. Nothing was loaded; drive that spoke.
+      if (owner === turnViewEpoch) void promoteLane(r.heldBy.laneId);
+      return false;
+    }
     if (r.busy) {
       // Main started working between the check and the load (or the check never answered). Nothing was
       // stopped: go back to Main's live turn, then let the user choose.

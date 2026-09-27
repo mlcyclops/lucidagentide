@@ -105,6 +105,7 @@ export interface AgentTemplateInfo {
 import type { LocalModelDef, LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3/.6: self-hosted/custom LLM providers
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
+import type { SessionLive } from "../session_owner.ts"; // P-SWITCH.2 (ADR-0404): where a listed session is live
 export type { RestoredTurn };
 import type { ProcessView } from "../process_view.ts"; // P-INTERJECT.1: the unified Processes list rows (canonical shape - imported, never mirrored, so it cannot drift)
 export type { ProcessView };
@@ -448,7 +449,7 @@ export interface EvalReportResult { kind: string; id: string; rel: string | null
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "creator" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
-export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest" }
+export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
 export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[] }
 // P-SKILL.1 (ADR-0045): per-file result of a gated skill import (mirrors desktop/skills_import.ts).
@@ -1424,12 +1425,14 @@ async function post(path: string, body: unknown): Promise<any> {
 }
 /** P-SWITCH.1 (ADR-0403): the outcome of asking Main to open or start a session. `busy` is set only by the
  *  engine's 409 refusal; any other failure is `ok: false` without it (the caller's old best-effort path). */
-export interface SessionSwitchResult { ok: boolean; busy?: string }
+export interface SessionSwitchResult { ok: boolean; busy?: string; heldBy?: { laneId: string; name: string } }
 async function postSessionSwitch(path: string, body: unknown): Promise<SessionSwitchResult> {
   try {
     const r = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
     if (r.status === 409) {
       const j = await r.json().catch(() => null);
+      // P-SWITCH.2 (ADR-0404): a live spoke holds the session; the caller attaches to it instead.
+      if (typeof j?.heldBy?.laneId === "string") return { ok: false, heldBy: { laneId: j.heldBy.laneId, name: String(j.heldBy.name ?? "") } };
       return { ok: false, busy: typeof j?.busy === "string" && j.busy ? j.busy : "Main is busy" };
     }
     return { ok: r.ok };
