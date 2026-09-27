@@ -24,10 +24,10 @@ call :ensurepath
 
 rem --- defaults ---
 set "PROVIDER=Anthropic"
-set "MODEL=claude-opus-4-8"
+set "MODEL=claude-opus-5-5"
 set "KEYVAR=ANTHROPIC_API_KEY"
 rem  Models offered to omp's live Ctrl+P switcher (--models). Kept in sync with MODEL.
-set "MODELS=claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
+set "MODELS=claude-opus-5-5,claude-opus-5,claude-sonnet-4-6,claude-haiku-4-5"
 
 rem --- arg dispatch (non-interactive helpers) ---
 if /i "%~1"=="doctor"    ( call :doctor & exit /b 0 )
@@ -92,6 +92,8 @@ where bun >nul 2>&1 && (
   del "%TEMP%\lucid_auth.txt" >nul 2>&1
 ) || echo      ^( -- ^) bun not on PATH - cannot read omp vault
 echo.
+rem  Any Anthropic auth (OAuth login or env key) means the default model is Opus 5.5; say so.
+if defined VAULT_ANTHROPIC ( echo    Anthropic OAuth found - default model claude-opus-5-5 ) else if defined ANTHROPIC_API_KEY ( echo    Anthropic API key found - default model claude-opus-5-5 )
 rem  Only nag for a key if there's NO Anthropic auth at all (no env key AND no omp OAuth login).
 if not defined ANTHROPIC_API_KEY if not defined VAULT_ANTHROPIC (
   echo    No Anthropic auth found ^(no ANTHROPIC_API_KEY and no omp OAuth login^).
@@ -293,18 +295,20 @@ rem ===========================================================================
 :pickmodel
 echo.
 echo    Anthropic models (current):
-echo       1^)  claude-opus-4-8     most capable
-echo       2^)  claude-sonnet-4-6   balanced speed/intelligence
-echo       3^)  claude-haiku-4-5    fastest / cheapest
-echo       4^)  custom  (type any id, e.g. openai/gpt-5.2)
+echo       1^)  claude-opus-5-5     most capable (default)
+echo       2^)  claude-opus-5       prior Opus
+echo       3^)  claude-sonnet-4-6   balanced speed/intelligence
+echo       4^)  claude-haiku-4-5    fastest / cheapest
+echo       5^)  custom  (type any id, e.g. openai/gpt-6-astra)
 echo.
 set /p "M=    select: "
-if "%M%"=="1" set "MODEL=claude-opus-4-8"
-if "%M%"=="2" set "MODEL=claude-sonnet-4-6"
-if "%M%"=="3" set "MODEL=claude-haiku-4-5"
-if "%M%"=="4" ( set /p "MODEL=    enter model id: " )
+if "%M%"=="1" set "MODEL=claude-opus-5-5"
+if "%M%"=="2" set "MODEL=claude-opus-5"
+if "%M%"=="3" set "MODEL=claude-sonnet-4-6"
+if "%M%"=="4" set "MODEL=claude-haiku-4-5"
+if "%M%"=="5" ( set /p "MODEL=    enter model id: " )
 rem  put the chosen model at the head of the Ctrl+P cycle list
-set "MODELS=%MODEL%,claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
+set "MODELS=%MODEL%,claude-opus-5-5,claude-opus-5,claude-sonnet-4-6,claude-haiku-4-5"
 echo    model is now: %MODEL%
 goto :applychange
 
@@ -317,11 +321,11 @@ echo       3^)  OpenRouter  (OPENROUTER_API_KEY)
 echo       4^)  custom
 echo.
 set /p "P=    select: "
-if "%P%"=="1" ( set "PROVIDER=Anthropic"  & set "MODEL=claude-opus-4-8" )
-if "%P%"=="2" ( set "PROVIDER=OpenAI"     & set "MODEL=gpt-5.2" )
-if "%P%"=="3" ( set "PROVIDER=OpenRouter" & set "MODEL=anthropic/claude-opus-4-8" )
+if "%P%"=="1" ( set "PROVIDER=Anthropic"  & set "MODEL=claude-opus-5-5" )
+if "%P%"=="2" ( set "PROVIDER=OpenAI"     & set "MODEL=gpt-6-astra" )
+if "%P%"=="3" ( set "PROVIDER=OpenRouter" & set "MODEL=anthropic/claude-opus-5-5" )
 if "%P%"=="4" ( set /p "PROVIDER=    provider name: " )
-set "MODELS=%MODEL%,claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
+set "MODELS=%MODEL%,claude-opus-5-5,claude-opus-5,claude-sonnet-4-6,claude-haiku-4-5"
 echo    provider: %PROVIDER%   default model: %MODEL%
 echo    (omp resolves the provider from the model id + its OAuth login or API key)
 goto :applychange
@@ -407,7 +411,7 @@ echo    In THIS control panel:
 echo       1 launch omp   G desktop GUI   F fleet GUI   2 switch model   3 switch provider
 echo       4 dashboards   5 status         6 demo   7 doctor   9 install
 echo.
-echo    Models (current):  claude-opus-4-8 . claude-sonnet-4-6 . claude-haiku-4-5
+echo    Models (current):  claude-opus-5-5 . claude-opus-5 . claude-sonnet-4-6 . claude-haiku-4-5
 echo    Keys (env var):    ANTHROPIC_API_KEY . OPENAI_API_KEY . OPENROUTER_API_KEY
 echo    =====================================================================
 echo.

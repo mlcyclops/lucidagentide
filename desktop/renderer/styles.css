@@ -2030,7 +2030,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   100%{box-shadow:0 0 0 0 rgb(var(--green-rgb) / 0),0 0 8px var(--green)}}
 
 /* ───────────────────────── overlays: tooltip ───────────────────────── */
-#tip{position:fixed;z-index:260;pointer-events:none;background:var(--bg-4);border:1px solid var(--line-strong);
+#tip{position:fixed;z-index:1200;pointer-events:none;background:var(--bg-4);border:1px solid var(--line-strong);
   color:var(--txt);font-size:12px;line-height:1.45;padding:8px 11px;border-radius:10px;max-width:248px;
   box-shadow:var(--shadow-lg);background-image:var(--emboss);
   opacity:0;transform:translateY(5px) scale(.97);transform-origin:center bottom;
@@ -2876,23 +2876,45 @@ body.preview-open .thread{font-size:.9em}
 .cg-agent-sub{color:var(--txt-4);font-size:11.5px}
 /* P-PREVIEW.5b: the preview header is a compact toolbar - trim vertical padding (Settings keeps 13px) and
    keep it to ONE row (the input shrinks, buttons stay tight) so it doesn't wrap and steal height. */
-.preview-panel .set-head{padding:5px 12px;gap:8px;flex-wrap:nowrap}
-.preview-panel .set-title{min-width:0;flex:0 1 auto;font-size:13px;overflow:hidden}
-.preview-panel .set-title .set-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.preview-panel .kg-tools{gap:6px;row-gap:5px;flex:1 1 auto;justify-content:flex-end;min-width:0;flex-wrap:wrap}
+/* P-PREVIEW.20: the panel chrome is TWO rows, each one line high, on any width. The header holds the
+   title plus Reload, Screenshot and one overflow; below 520px of panel the button labels drop and the
+   icons stay (tooltips still name them), so the header never wraps into a second row. */
+.preview-panel .set-head{padding:4px 10px;gap:8px;flex-wrap:nowrap;min-height:38px;container-type:inline-size}
+.preview-panel .set-title{min-width:0;flex:1 1 auto;font-size:13px;overflow:hidden;white-space:nowrap}
+.preview-panel .set-title .set-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.preview-panel .kg-tools{gap:5px;flex:none;justify-content:flex-end;min-width:0;flex-wrap:nowrap}
+.preview-panel .btn-mini .bl{white-space:nowrap}
+#prevMoreBtn[aria-expanded="true"]{color:var(--accent);border-color:var(--accent)}
+.markup-pop.prev-more{display:flex;flex-direction:column;gap:2px;padding:5px;min-width:230px;width:max-content;max-width:min(320px,calc(100vw - 24px))}
+.prev-more .pdev-opt{width:100%}
+.prev-more .pdev-opt>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.prev-more .pdev-opt.on,.prev-more .pdev-opt[aria-pressed="true"]{color:var(--accent)}
 /* the Close (X) must always be reachable — never let it shrink or get clipped off the toolbar's edge. */
 .preview-panel .set-close{flex:none;order:99}
 /* P-PREVIEW.8: the Yours / Agent tab strip. Only the active lane's iframe is shown; both stay loaded. */
 /* P-PREVIEW.14: the strip now shares a row with the path field. The ROW owns the bottom border and the
    background; the tabs div keeps only its own layout, because renderPrevTabs() rewrites that element's
    innerHTML and must not be able to disturb the field beside it. */
-.preview-tabrow{display:flex;align-items:stretch;gap:10px;padding:0 10px;flex:none;
-  border-bottom:1px solid var(--line-soft);background:var(--bg-1);min-width:0}
-.preview-tabs{display:flex;gap:2px;flex:0 1 auto;min-width:0}
+.preview-tabrow{display:flex;align-items:stretch;gap:8px;padding:0 10px;flex:none;
+  border-bottom:1px solid var(--line-soft);background:var(--bg-1);min-width:0;container-type:inline-size}
+.preview-tabs{display:flex;gap:2px;flex:none;min-width:0;max-width:55%}
 /* The field takes the whole right side and is generous on purpose: an absolute Windows path is long, and
    invariant 11's rule against cramped labels applies to a path just as much as to a list row. It never
    drops below 260px, and the filename end stays readable because the input scrolls rather than wrapping. */
-.preview-pathbar{display:flex;align-items:center;gap:6px;flex:1 1 420px;min-width:260px;justify-content:flex-end;padding:5px 0}
+.preview-pathbar{display:flex;align-items:center;gap:6px;flex:1 1 320px;min-width:200px;justify-content:flex-end;padding:4px 0}
+.preview-pathbar .btn-mini{flex:none}
+@container (max-width:640px){
+  .preview-tabrow .btn-mini .bl{display:none}
+  .prev-tab{padding:6px 10px}
+  .preview-pathbar{flex-basis:160px;min-width:120px}
+}
+/* Very narrow: the Agent tab stays reachable ahead of zoom steps; the % button still resets and
+   Ctrl/Meta+wheel still zooms. */
+@container (max-width:560px){
+  #prevZoomOut,#prevZoomIn{display:none}
+  .prev-tab{padding:6px 8px}
+  .preview-tabrow{gap:5px;padding:0 6px}
+}
 .prev-pathin{flex:1 1 auto;min-width:0;height:26px;padding:0 9px;border:1px solid var(--line);border-radius:7px;
   background:var(--bg-0);color:var(--txt);font-size:11.5px;font-family:var(--mono,ui-monospace,monospace);
   text-overflow:ellipsis;transition:border-color var(--t) var(--ease),box-shadow var(--t) var(--ease)}
@@ -2917,18 +2939,17 @@ body.preview-open .thread{font-size:.9em}
 .prev-tab-x:hover{background:color-mix(in srgb,var(--txt) 14%,transparent);color:var(--txt)}
 /* The preview rail icon's "a lane updated" badge - the agent-dot color on the rail-dot chassis. */
 .prev-rail-dot{background:var(--accent-2);box-shadow:0 0 0 2px var(--bg-1),0 0 8px var(--accent-2);animation:prevPulse 1.3s ease-out infinite}
-.preview-zoomrow{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:5px 10px;border-bottom:1px solid var(--line-soft);flex:none;min-width:0}
-.preview-zoom{display:flex;align-items:center;gap:3px;flex:none}
-.preview-zoom .btn-mini{min-width:28px;justify-content:center;font-variant-numeric:tabular-nums}
-#prevZoomReset{min-width:52px}
-#prevPan{white-space:nowrap;flex:none}
+/* Zoom and Pan share the tab row; they sit after the path so the path keeps the slack. */
+.preview-zoom{display:flex;align-items:center;gap:2px;flex:none;align-self:center}
+.preview-zoom .btn-mini{min-width:26px;justify-content:center;font-variant-numeric:tabular-nums;padding:4px 6px}
+#prevZoomReset{min-width:46px}
+#prevPan{white-space:nowrap;flex:none;align-self:center}
 #prevPan[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
 .preview-pan-surface{position:absolute;inset:0;z-index:4;cursor:grab;touch-action:none;user-select:none}
 .preview-pan-surface[hidden]{display:none}
 .preview-pan-surface.dragging{cursor:grabbing}
-#prevWheelZoom{white-space:nowrap;flex:none}
-#prevWheelZoom[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
-.preview-zoom-hint{flex:1;min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--txt-2)}
+#prevWheelZoomState{margin-left:auto;font-style:normal;font-size:11px;color:var(--txt-2)}
+#prevWheelZoom[aria-pressed="true"] #prevWheelZoomState{color:var(--accent)}
 /* P-PREVIEW.9: device viewports — the stage holds both lane frames; device mode centers + fit-scales them. */
 .preview-stage{flex:none;min-width:0;display:flex;position:relative;margin:auto}
 .preview-viewport{position:absolute;inset:0;overflow:scroll;display:flex;align-items:flex-start;overscroll-behavior:contain}
@@ -2941,10 +2962,20 @@ body.preview-open .thread{font-size:.9em}
 .pdev-opt.on{color:var(--accent)}
 .pdev-opt svg{flex:none}
 .pdev-opt em{margin-left:auto;color:var(--txt-2);font-style:normal;font-size:11px}
+/* P-GAME.3: a game row is "play here" plus a trailing "browser" chip; the name ellipsizes, the chip never wraps. */
+.pgame-row{display:flex;align-items:center;gap:2px;min-width:0}
+.pgame-row>.pdev-opt:first-child{flex:1;min-width:0}
+.pgame-row>.pdev-opt:first-child span{overflow:hidden;text-overflow:ellipsis}
+.pgame-ext{flex:none;color:var(--txt-2);font-size:11px;padding:6px 8px}
+.pgame-ext:hover{color:var(--accent)}
 #prevDevice.on{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
 .preview-panel .kg-tools .kg-search{flex:1 1 64px;min-width:50px}
 .preview-panel .kg-tools .btn-mini{flex:none;padding:4px 8px;font-size:11px}
 .preview-panel .kg-tools .btn-mini .ic{width:13px;height:13px}
+@container (max-width:520px){
+  .preview-panel .kg-tools .btn-mini .bl{display:none}
+  .preview-panel .kg-tools .btn-mini{padding:4px 7px}
+}
 .preview-body{flex:1;min-height:0;position:relative;display:flex;background:var(--bg-0)}
 /* P-THEME.1 theme-exempt: an iframe showing a THIRD-PARTY page. Its ground is the web's own
    default white; tinting it would lie about what the user's page looks like. */
@@ -5416,6 +5447,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 }
 .agent-arcade .agent-arcade-status { padding-left:6px; font-size:10px; }
 .agent-arcade .agent-arcade-help { margin:4px 0 0; color:var(--txt-3); font-size:10px; line-height:1.4; }
+.agent-arcade .agent-arcade-preview { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:5px; border-top:1px solid var(--line); padding-top:5px; }
+.agent-arcade .agent-arcade-preview span { white-space:nowrap; color:var(--txt-3); }
+.agent-arcade .agent-arcade-launch { display:inline-flex; }
+.agent-arcade .agent-arcade-preview button { max-width:180px; overflow:hidden; text-overflow:ellipsis; border-color:var(--accent); color:var(--green-txt); }
+.agent-arcade .agent-arcade-launch button:first-child { border-radius:var(--r-sm) 0 0 var(--r-sm); }
+.agent-arcade .agent-arcade-launch button:last-child { border-radius:0 var(--r-sm) var(--r-sm) 0; border-left:0; padding:3px 7px; }
 @media (max-width:600px) {
   .agent-arcade .agent-arcade-panel { margin:3px 4px; padding:5px; }
   .agent-arcade .agent-arcade-toolbar { gap:4px; }

@@ -161,6 +161,10 @@ const RAW: Record<string, string> = {
   // P-COLLAB (ADR-0192): live session share — three nodes linked (broadcast to guests)
   share: "<circle cx='6' cy='12' r='2.4'/><circle cx='18' cy='6' r='2.4'/><circle cx='18' cy='18' r='2.4'/>"
     + P("M8.1 10.9 15.9 7.1") + P("M8.1 13.1 15.9 16.9"),
+  // horizontal ellipsis (overflow menu)
+  more: P("M6 12h.01") + P("M12 12h.01") + P("M18 12h.01"),
+  // four-way move arrows (pan)
+  move: P("M12 3v18") + P("M3 12h18") + P("M9 6l3-3 3 3") + P("M9 18l3 3 3-3") + P("M6 9l-3 3 3 3") + P("M18 9l3 3-3 3"),
   // a chain link (copy invite link)
   link: P("M9.5 14.5a3.5 3.5 0 0 1 0-5l2-2a3.5 3.5 0 0 1 5 5l-1 1")
     + P("M14.5 9.5a3.5 3.5 0 0 1 0 5l-2 2a3.5 3.5 0 0 1-5-5l1-1"),

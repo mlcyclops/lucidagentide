@@ -1,0 +1,143 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit Loom | LUCID</title>
+<style>
+  :root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#090e1b;color:#edf5ff}
+  *{box-sizing:border-box}
+  body{margin:0;min-width:280px;background:radial-gradient(circle at 50% -20%,#23334d 0%,#101a2c 38%,#090e1b 80%)}
+  .shell{width:min(100%,520px);margin:0 auto;padding:14px 12px 18px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+  .brand{min-width:0}.eyebrow{font-size:10px;font-weight:800;letter-spacing:.22em;color:#70e4dc;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  h1{font-size:clamp(23px,7vw,32px);letter-spacing:-.055em;line-height:1.08;margin:3px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .seed{max-width:110px;padding:7px 9px;border:1px solid #304057;border-radius:10px;color:#a6b8ce;font:11px ui-monospace,monospace;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hud{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-bottom:10px}
+  .metric{min-width:0;min-height:56px;border:1px solid #2b3d55;border-radius:12px;background:#142137b8;padding:8px 10px}
+  .metric span{display:block;color:#9ab1ca;font-size:10px;letter-spacing:.13em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .metric strong{display:block;margin-top:2px;font-variant-numeric:tabular-nums;font-size:20px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .metric strong.cyan{color:#75e9dc}.metric strong.amber{color:#ffd68a}
+  .stage{position:relative;border:1px solid #45647c;border-radius:16px;overflow:hidden;background:#0c1628;box-shadow:0 16px 44px #0008,inset 0 0 0 1px #ffffff0b}
+  canvas{display:block;width:100%;height:auto;aspect-ratio:360/520;touch-action:none;outline:none}
+  canvas:focus-visible{outline:3px solid #8cf7e4;outline-offset:-4px}
+  .overlay{position:absolute;inset:0;display:grid;place-items:center;padding:18px;background:#09111edc;text-align:center}
+  .overlay[hidden]{display:none}
+  .overlay-card{max-width:290px}.overlay-mark{font-size:35px;color:#8cece0;line-height:1}
+  h2{font-size:26px;letter-spacing:-.04em;margin:12px 0 8px}
+  .overlay p{color:#b2c3d6;font-size:13px;line-height:1.55;margin:0 0 17px}
+  button{font:inherit;font-weight:750;color:#e7f8ff;background:#1d3349;border:1px solid #426478;border-radius:10px;min-height:43px;padding:8px 11px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;touch-action:manipulation}
+  button:hover{background:#29445b;border-color:#78c1c7}button:focus-visible{outline:2px solid #8cf7e4;outline-offset:2px}
+  button.primary{color:#0b2430;background:#85e9d9;border-color:#a3fff0}button.primary:hover{background:#bbfff0}
+  .controls{display:grid;grid-template-columns:1fr 1.18fr 1fr;gap:7px;margin-top:10px}
+  .controls button{min-width:0}.secondary{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:7px}
+  .tierline{margin-top:13px;border:1px solid #293d52;border-radius:12px;background:#111e31;padding:10px 11px}
+  .tierhead{display:flex;justify-content:space-between;gap:8px;color:#abc0d3;font-size:11px;letter-spacing:.11em;text-transform:uppercase;white-space:nowrap}
+  .tierhead b{color:#8ce9dc;overflow:hidden;text-overflow:ellipsis}
+  .tiers{display:flex;align-items:center;justify-content:space-between;gap:2px;margin-top:10px}
+  .tier{display:flex;align-items:center;justify-content:center;width:clamp(22px,7vw,34px);height:clamp(22px,7vw,34px);border:1px solid currentColor;border-radius:50%;font-size:10px;font-weight:800;opacity:.42;flex:none}
+  .tier.reached{opacity:1;box-shadow:0 0 12px currentColor}
+  .help{color:#a6b9cc;font-size:12px;line-height:1.55;margin:11px 2px 0}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+  @media(max-width:350px){.shell{padding:10px 8px 14px}.metric{padding:7px}.metric strong{font-size:17px}.controls,.secondary{gap:5px}button{padding:7px 5px;font-size:12px}.tierline{padding:9px 7px}}
+  @media(prefers-reduced-motion:reduce){button{transition:none}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header><div class="brand"><div class="eyebrow">LUCID / FIELD GAMES</div><h1>Orbit Loom</h1></div><div class="seed" id="seed">SEED 000000</div></header>
+  <div class="hud" aria-label="Game status">
+    <div class="metric"><span>Score</span><strong id="score">0</strong></div>
+    <div class="metric"><span>Next orbit</span><strong class="cyan" id="next">01</strong></div>
+    <div class="metric"><span>Chain</span><strong class="amber" id="chain">x1</strong></div>
+  </div>
+  <div class="stage">
+    <canvas id="field" width="360" height="520" tabindex="0" role="button" aria-label="Orbit bin. Move pointer to aim, release to drop. Arrow keys aim; Space drops."></canvas>
+    <div class="overlay" id="overlay"><div class="overlay-card"><div class="overlay-mark" aria-hidden="true">◎</div><h2 id="overlay-title">Weave an orbit</h2><p id="overlay-copy">Drop matching satellites together to fuse them into larger orbits. Keep the stack below the warning line.</p><button class="primary" id="overlay-action" type="button">Start run</button></div></div>
+  </div>
+  <div class="controls"><button id="left" type="button" aria-label="Aim left">◀ Aim</button><button class="primary" id="drop" type="button">Drop orb</button><button id="right" type="button" aria-label="Aim right">Aim ▶</button></div>
+  <div class="secondary"><button id="pause" type="button">Pause</button><button id="mute" type="button" aria-pressed="false">Sound on</button><button id="restart" type="button">New run</button></div>
+  <section class="tierline" aria-label="Orbit progression"><div class="tierhead"><span>Orbit ladder</span><b id="highest">Tier 01 reached</b></div><div class="tiers" id="tiers"></div></section>
+  <p class="help">Tap or click the bin to aim and drop. Move the pointer to aim. Use ← → and Space on a keyboard; P pauses and M mutes. Matching orbs merge, and quick follow-up merges multiply your score.</p>
+  <div class="sr-only" id="announcement" aria-live="polite"></div>
+</main>
+<script>
+(() => {
+  'use strict';
+  const W=360,H=520,LEFT=19,RIGHT=341,FLOOR=498,DANGER=119,STEP=1/120;
+  const radii=[14,19,25,32,40,49,60,73];
+  const colors=['#7ee8dc','#84bff5','#b99af5','#f4a6cf','#f1b879','#e7db85','#9fe5b6','#f7f1d4'];
+  const names=['Spark','Halo','Comet','Aurora','Nova','Crown','Horizon','Zenith'];
+  const $=id=>document.getElementById(id);
+  const canvas=$('field'),ctx=canvas.getContext('2d'),overlay=$('overlay'),overlayTitle=$('overlay-title'),overlayCopy=$('overlay-copy'),overlayAction=$('overlay-action');
+  const scoreEl=$('score'),nextEl=$('next'),chainEl=$('chain'),highestEl=$('highest'),seedEl=$('seed'),announcement=$('announcement'),pauseBtn=$('pause'),muteBtn=$('mute');
+  let orbs=[],particles=[],mode='ready',score=0,highest=0,chain=0,chainTime=0,danger=0,dropWait=0,aim=W/2,next=0,seed=0,rngState=0,last=0,acc=0,muted=false,audioContext=null,serial=0;
+  const stars=Array.from({length:28},(_,i)=>({x:(i*137.507)%W,y:(i*71.93)%H,r: i%5===0?1.3:.7}));
+  const tierNodes=colors.map((color,i)=>{const node=document.createElement('span');node.className='tier';node.style.color=color;node.textContent=String(i+1).padStart(2,'0');node.title=`Tier ${i+1}: ${names[i]}`;$('tiers').append(node);return node});
+  function random(){rngState=(rngState+0x6d2b79f5)>>>0;let t=rngState;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return ((t^(t>>>14))>>>0)/4294967296}
+  function makeSeed(){const bytes=new Uint32Array(1);if(globalThis.crypto?.getRandomValues)crypto.getRandomValues(bytes);else bytes[0]=(Date.now()^Math.floor(Math.random()*0xffffffff))>>>0;return bytes[0]||1}
+  function nextTier(){const roll=random();return score>=1800 && roll>.95?3:score>=350 && roll>.82?2:roll>.66?1:0}
+  function clampAim(){aim=Math.max(LEFT+radii[next],Math.min(RIGHT-radii[next],aim))}
+  function updateHud(){scoreEl.textContent=score.toLocaleString();nextEl.textContent=`${String(next+1).padStart(2,'0')} ${names[next]}`;chainEl.textContent=`x${Math.max(1,chain)}`;highestEl.textContent=`Tier ${String(highest+1).padStart(2,'0')} reached`;tierNodes.forEach((n,i)=>n.classList.toggle('reached',i<=highest));seedEl.textContent=`SEED ${seed.toString(16).toUpperCase().padStart(8,'0')}`;pauseBtn.textContent=mode==='paused'?'Resume':'Pause';muteBtn.textContent=muted?'Sound off':'Sound on';muteBtn.setAttribute('aria-pressed',String(muted))}
+  function showOverlay(title,copy,action){overlayTitle.textContent=title;overlayCopy.textContent=copy;overlayAction.textContent=action;overlay.hidden=false}
+  function hideOverlay(){overlay.hidden=true}
+  function reset(start){seed=makeSeed();rngState=seed;orbs=[];particles=[];serial=0;score=0;highest=0;chain=0;chainTime=0;danger=0;dropWait=0;aim=W/2;next=nextTier();mode=start?'playing':'ready';acc=0;last=performance.now();updateHud();if(start){hideOverlay();announcement.textContent='New run started';tone(420,.09)}else showOverlay('Weave an orbit','Drop matching satellites together to fuse them into larger orbits. Keep the stack below the warning line.','Start run')}
+  function tone(frequency,duration,shape='sine',volume=.045){if(muted)return;try{const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;if(!audioContext)audioContext=new Audio();if(audioContext.state==='suspended')audioContext.resume();const now=audioContext.currentTime,osc=audioContext.createOscillator(),gain=audioContext.createGain();osc.type=shape;osc.frequency.setValueAtTime(frequency,now);osc.frequency.exponentialRampToValueAtTime(frequency*.74,now+duration);gain.gain.setValueAtTime(volume,now);gain.gain.exponentialRampToValueAtTime(.001,now+duration);osc.connect(gain).connect(audioContext.destination);osc.start(now);osc.stop(now+duration)}catch{}}
+  function makeOrb(x,y,tier,vx=0,vy=0){return {id:++serial,x,y,vx,vy,tier,r:radii[tier],age:0}}
+  function drop(){if(mode!=='playing'||dropWait>0)return;clampAim();orbs.push(makeOrb(aim,39,next));dropWait=.32;next=nextTier();clampAim();updateHud();tone(250+next*55,.075,'triangle',.027)}
+  function burst(x,y,tier){const count=10+tier*2;for(let i=0;i<count;i++){const angle=random()*Math.PI*2,speed=35+random()*95;particles.push({x,y,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed,life:.35+random()*.38,max:.75,color:colors[tier]})}if(particles.length>100)particles.splice(0,particles.length-100)}
+  function fuse(a,b){const tier=a.tier+1,x=(a.x+b.x)/2,y=(a.y+b.y)/2;orbs.splice(orbs.indexOf(a),1);orbs.splice(orbs.indexOf(b),1);orbs.push(makeOrb(x,y,tier,(a.vx+b.vx)*.32,(a.vy+b.vy)*.32));if(chainTime>0)chain++;else chain=1;chainTime=2.1;score+=10*(2**tier)*chain;if(tier>highest)highest=tier;burst(x,y,tier);tone(330*Math.pow(1.21,tier),.18,'sine',.055);updateHud();announcement.textContent=`${names[tier]} formed. Score ${score}. Chain ${chain}.`}
+  function constrain(a){if(a.x-a.r<LEFT){a.x=LEFT+a.r;if(a.vx<0)a.vx*=-.23}if(a.x+a.r>RIGHT){a.x=RIGHT-a.r;if(a.vx>0)a.vx*=-.23}if(a.y+a.r>FLOOR){a.y=FLOOR-a.r;if(a.vy>0)a.vy*=-.12;a.vx*=.92}if(a.y-a.r<12){a.y=12+a.r;if(a.vy<0)a.vy=0}}
+  function physics(dt){dropWait=Math.max(0,dropWait-dt);chainTime=Math.max(0,chainTime-dt);if(chainTime===0 && chain){chain=0;updateHud()}
+    for(const a of orbs){a.age+=dt;a.vy+=1050*dt;a.vx*=.999;a.x+=a.vx*dt;a.y+=a.vy*dt;constrain(a)}
+    let merge=null;
+    for(let iteration=0;iteration<4;iteration++){
+      for(let i=0;i<orbs.length;i++)for(let j=i+1;j<orbs.length;j++){
+        const a=orbs[i],b=orbs[j],dx=b.x-a.x,dy=b.y-a.y,limit=a.r+b.r,d2=dx*dx+dy*dy;if(d2>=limit*limit)continue;
+        const dist=Math.sqrt(d2)||.0001,nx=dist>.001?dx/dist:(a.id<b.id?1:-1),ny=dist>.001?dy/dist:0;
+        if(iteration===0 && !merge && a.tier===b.tier && a.tier<radii.length-1 && a.age>.08 && b.age>.08)merge=[a,b];
+        const ma=a.r*a.r,mb=b.r*b.r,wa=mb/(ma+mb),wb=ma/(ma+mb),correction=(limit-dist)*.65;
+        a.x-=nx*correction*wa;a.y-=ny*correction*wa;b.x+=nx*correction*wb;b.y+=ny*correction*wb;
+        const relative=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;
+        if(relative<0){const impulse=-relative*1.12;a.vx-=nx*impulse*wa;a.vy-=ny*impulse*wa;b.vx+=nx*impulse*wb;b.vy+=ny*impulse*wb;const tangent=(b.vx-a.vx)*-ny+(b.vy-a.vy)*nx,friction=Math.max(-22,Math.min(22,tangent*.16));a.vx-=ny*friction*wa;a.vy+=nx*friction*wa;b.vx+=ny*friction*wb;b.vy-=nx*friction*wb}
+      }
+      for(const a of orbs)constrain(a)
+    }
+    if(merge)fuse(...merge);
+    for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.life-=dt;if(p.life<=0){particles.splice(i,1);continue}p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=100*dt}
+    const overflowing=orbs.some(a=>a.age>1.05 && a.y-a.r<DANGER);
+    danger=Math.max(0,Math.min(3.5,danger+(overflowing?dt:-dt*.75)));
+    if(danger>=3.5){mode='over';chain=0;updateHud();showOverlay('Orbit lost',`The warning line held too long. Final score: ${score.toLocaleString()}. Highest orbit: ${names[highest]}.`,'Play again');announcement.textContent=`Game over. Final score ${score}.`;tone(155,.4,'sawtooth',.03)}
+  }
+  function circle(x,y,r){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2)}
+  function drawOrb(a,alpha=1){const {x,y,r,tier}=a;ctx.save();ctx.globalAlpha=alpha;ctx.shadowColor=colors[tier];ctx.shadowBlur=17;ctx.fillStyle='#0c172a';ctx.strokeStyle=colors[tier];ctx.lineWidth=2.5;circle(x,y,r-1);ctx.fill();ctx.stroke();ctx.shadowBlur=0;ctx.globalAlpha=alpha*.28;ctx.fillStyle=colors[tier];circle(x,y,r-5);ctx.fill();ctx.globalAlpha=alpha;ctx.strokeStyle=colors[tier];ctx.lineWidth=1.2;ctx.beginPath();ctx.arc(x,y,r*.58,-1.8,1.25);ctx.stroke();ctx.beginPath();ctx.arc(x,y,r*.58,1.45,4.25);ctx.stroke();ctx.fillStyle='#f2feff';circle(x+r*.37,y-r*.39,Math.max(2,r*.09));ctx.fill();ctx.fillStyle=colors[tier];ctx.font=`700 ${Math.max(10,r*.46)}px system-ui`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(tier+1),x,y+1);ctx.restore()}
+  function draw(){ctx.clearRect(0,0,W,H);ctx.fillStyle='#0d192b';ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#8ebbd4';for(const star of stars){ctx.globalAlpha=.17;circle(star.x,star.y,star.r);ctx.fill()}ctx.globalAlpha=1;
+    ctx.strokeStyle='#264457';ctx.lineWidth=1;for(let x=60;x<340;x+=40){ctx.beginPath();ctx.moveTo(x,16);ctx.lineTo(x,FLOOR);ctx.stroke()}for(let y=58;y<FLOOR;y+=44){ctx.beginPath();ctx.moveTo(LEFT,y);ctx.lineTo(RIGHT,y);ctx.stroke()}
+    ctx.fillStyle=`rgba(243,128,132,${.04+danger/3.5*.19})`;ctx.fillRect(LEFT,0,RIGHT-LEFT,DANGER);
+    ctx.strokeStyle=danger>1.5?'#ff8587':'#9d5768';ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(LEFT,DANGER);ctx.lineTo(RIGHT,DANGER);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#e695a0';ctx.font='700 10px system-ui';ctx.textAlign='left';ctx.fillText('WARNING LINE',LEFT+8,DANGER-10);
+    ctx.fillStyle='#233f53';ctx.fillRect(LEFT-6,FLOOR,RIGHT-LEFT+12,12);ctx.fillRect(LEFT-6,DANGER,6,FLOOR-DANGER+12);ctx.fillRect(RIGHT,DANGER,6,FLOOR-DANGER+12);
+    ctx.strokeStyle='#6ab7bc';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(LEFT-3,DANGER);ctx.lineTo(LEFT-3,FLOOR+3);ctx.lineTo(RIGHT+3,FLOOR+3);ctx.lineTo(RIGHT+3,DANGER);ctx.stroke();
+    if(mode==='playing' || mode==='paused'){ctx.globalAlpha=.45;ctx.strokeStyle=colors[next];ctx.lineWidth=1;ctx.setLineDash([3,7]);ctx.beginPath();ctx.moveTo(aim,37+radii[next]);ctx.lineTo(aim,DANGER-3);ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=1;drawOrb({x:aim,y:38,r:radii[next],tier:next},.68)}
+    for(const a of orbs)drawOrb(a);
+    for(const p of particles){ctx.globalAlpha=Math.max(0,p.life/p.max);ctx.fillStyle=p.color;circle(p.x,p.y,2.2);ctx.fill()}ctx.globalAlpha=1;
+    ctx.fillStyle='#172b3d';ctx.fillRect(LEFT+9,H-12,RIGHT-LEFT-18,4);ctx.fillStyle=danger>2?'#ff8587':'#80e6d9';ctx.fillRect(LEFT+9,H-12,(RIGHT-LEFT-18)*danger/3.5,4)
+  }
+  function frame(time){if(!last)last=time;const elapsed=Math.min((time-last)/1000,.1);last=time;if(mode==='playing'){acc+=elapsed;let steps=0;while(acc>=STEP && steps++<12 && mode==='playing'){physics(STEP);acc-=STEP}if(steps>=12)acc=0}else acc=0;draw();requestAnimationFrame(frame)}
+  function setAimFromPointer(event){const rect=canvas.getBoundingClientRect();aim=(event.clientX-rect.left)/rect.width*W;clampAim()}
+  canvas.addEventListener('pointermove',e=>{if(mode==='playing')setAimFromPointer(e)});
+  canvas.addEventListener('pointerdown',e=>{if(e.button!==0)return;canvas.setPointerCapture(e.pointerId);setAimFromPointer(e)});
+  canvas.addEventListener('pointerup',e=>{if(e.button!==0)return;setAimFromPointer(e);drop();canvas.focus()});
+  $('left').addEventListener('click',()=>{aim-=24;clampAim();canvas.focus()});$('right').addEventListener('click',()=>{aim+=24;clampAim();canvas.focus()});$('drop').addEventListener('click',drop);
+  function pause(){if(mode==='playing'){mode='paused';showOverlay('Orbit paused','Take a breath. Your stack will stay where it is.','Resume');announcement.textContent='Paused'}else if(mode==='paused'){mode='playing';last=performance.now();hideOverlay();announcement.textContent='Resumed'}updateHud()}
+  pauseBtn.addEventListener('click',pause);overlayAction.addEventListener('click',()=>{if(mode==='paused')pause();else reset(true)});
+  $('restart').addEventListener('click',()=>reset(true));muteBtn.addEventListener('click',()=>{muted=!muted;updateHud()});
+  window.addEventListener('keydown',e=>{if(e.altKey||e.ctrlKey||e.metaKey)return;if(e.code==='Space' && e.target instanceof HTMLButtonElement)return;if(['ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();if(e.code==='ArrowLeft'){aim-=18;clampAim()}else if(e.code==='ArrowRight'){aim+=18;clampAim()}else if(e.code==='Space'){if(mode==='ready'||mode==='over')reset(true);else if(mode==='paused')pause();else drop()}else if(e.code==='KeyP')pause();else if(e.code==='KeyM'){muted=!muted;updateHud()}else if(e.code==='KeyR')reset(true)});
+  reset(false);requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
