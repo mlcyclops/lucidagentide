@@ -2711,8 +2711,6 @@ function demoteLane(): void {
   laneWatch?.stop();
   laneWatch = null;
   laneOwnedTail = false;
-  // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
-  // no further event will ever settle.
   laneTurnLive = false;
   closeQueueChooser(); // a chooser for the lane's turn must not stage text into the master's queue
   // A prompt held for the lane's next turn would otherwise fire at the MASTER's next settle.
@@ -2723,6 +2721,8 @@ function demoteLane(): void {
     if (ta && !ta.value.trim()) { ta.value = held.item.text; autosize(ta); setSendEnabled(); }
     showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the lane's turn to end. It is back in the composer; reattach the lane to send it there.", timeout: 7000 });
   }
+  // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
+  // no further event will ever settle.
   settleLaneWatchNode();
   saveReadingSpot(was); // P-SCROLL.1: before the master thread replaces it
   // TELL THE AGENT it is back on its fleet card, BEFORE the release call, so the note lands while the
@@ -2762,6 +2762,15 @@ function onLaneWatchEvent(e: LaneEvent): void {
   // lane's grid card, or its queue). The dock dedupes, so the prompt stream reporting it too is harmless.
   if (e.type === "permission") {
     if (isLaneTarget(state.composerTarget)) noteSpokeAsk(state.composerTarget.laneId, { summary: e.summary, kind: e.kind });
+    return;
+  }
+  // The lane's own status is the authority on whether a turn is running, whoever started it. It also
+  // covers what no done/error reports: a turn that ended between the promote and this watch attaching
+  // (the engine seeds the current status), or a watch that missed the end. Without it laneTurnLive could
+  // stay set, and every send would be staged behind a turn that no longer exists.
+  if (e.type === "status") {
+    laneTurnLive = e.status === "working" || e.status === "needs-approval";
+    if (!laneTurnLive && !state.streaming && !laneOwnedTail) releaseHeldPrompt();
     return;
   }
   // Our own turn is rendering these already, and so is its lagging tail (P-SCROLL.1): the watch's own

@@ -4703,6 +4703,11 @@ return Bun.serve({
           else req.signal.addEventListener("abort", stop, { once: true });
           const seed = fleet.laneTranscript(laneId);
           if (seed.length) emit({ type: "watch-seed", turns: seed });
+          // The status as of NOW, after the observer is attached: a turn that ended between the promote
+          // response and this subscription sends no further event, and the composer would keep treating
+          // the lane as mid-turn (every send staged, nothing ever releasing it).
+          const attached = fleet.promotedLane();
+          if (attached?.id === laneId) emit({ type: "status", status: attached.status });
           await gate.promise;
         });
       }
