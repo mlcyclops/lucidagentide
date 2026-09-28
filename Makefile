@@ -1208,3 +1208,8 @@ demo-P-SWITCH.3: demo-P-SWITCH.2 ## P-SWITCH.3 (ADR-0410/0411): a new session is
 demo-P-TUI.0: ## P-TUI.0 (ADR-0416): the engine discovery seam. The engine publishes engine-discovery-<port>.json (0600, port + per-launch nonce + UI token) into LUCID_DATA_ROOT (or ~/.omp standalone) on boot and removes it on exit; a terminal client (lucid hub, docs/TUI.md) finds it and must win the ADR-0305 health handshake against the file's own nonce before trusting anything - a stale file, a recycled port or a squatter verifies dead, fail-closed. Proves it against the REAL dev.ts engine: publish, verify, two concurrent token'd clients, squatter refusal, removal on SIGTERM.
 	$(BUN) run desktop/scripts/demo_p_tui_0.ts
 	$(BUN) test $(TEST_IGNORES) desktop/engine_discovery.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.1
+demo-P-TUI.1: demo-P-TUI.0 ## P-TUI.1 part (ADR-0417): `lucid hub` - the terminal hub as a PANE MULTIPLEXER (herdr/tmux idiom, operator direction 2026-09-28). Attaches to the running engine through the discovery seam only (never a guessed port); a binary split tree of panes each hosting a capability deck (Overview, Security with audited approve/dismiss, Fleet, Sessions, Audit, Usage) over the SAME /api routes the GUI calls; | and - split, tab walks focus, z zooms, x closes, 1-6 rebinds, hostile engine strings flatten to single rows. Proves it headless against the REAL engine: attach, real facts, side-by-side split, zoom/close, honest engine-unreachable status.
+	$(BUN) run desktop/scripts/demo_p_tui_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts

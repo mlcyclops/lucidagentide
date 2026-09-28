@@ -66,10 +66,15 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
 
 ## Interaction model
 
-- **Decks.** Full-screen views that mirror the GUI's panels one to one. Number keys
-  or `g` prefixes switch decks; a persistent status line shows session, model,
-  context gauge, cost, and a red badge when a security block or lane approval is
-  pending anywhere.
+- **Panes, not pages.** The hub is a pane multiplexer in the herdr/tmux idiom: split
+  the terminal into panes, put any capability deck in any pane, move focus between
+  them, zoom one, close one. Layout is a binary split tree; `|` splits right, `-`
+  splits down, `tab` walks the focus ring, `z` zooms the focused pane, `x` closes
+  it, and a number key rebinds the focused pane to another deck. Every deck is a
+  renderer over the same engine routes, so any combination of capabilities can sit
+  side by side (chat next to Security next to Fleet). A persistent status line
+  names the attached engine and carries a red badge when a security block or lane
+  approval is pending anywhere.
 - **Palette.** `Ctrl+K` opens the same command palette the GUI has: the 39 omp slash
   commands (`/api/commands`) plus hub actions ("spawn lane", "start goal run",
   "export brief as POA&M"). The palette is the escape hatch that keeps rare actions

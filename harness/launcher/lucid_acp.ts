@@ -449,15 +449,22 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
       return await new Promise<number>((res) => proc.on("close", (c) => res(c ?? 1)));
     }
   }
+  if (sub === "hub") {
+    // P-TUI.1: the pane-multiplexer hub over the running engine (docs/TUI.md). Lazy import: pi-tui
+    // and the discovery client stay out of every other subcommand's startup path.
+    const { runHubCli } = await import("./hub_tui.ts");
+    return runHubCli(env);
+  }
   if (sub === "tui") return tui({ passthru: rest, env });
   if (sub === "acp") return acp({ isolate: rest.includes("--isolate"), env });
 
   if (sub === "-h" || sub === "--help" || sub === "help") {
     process.stderr.write(
-      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid kb [list|pages|show|search] | lucid stats [--json] | lucid check | lucid agent-firewall --conn <id>\n" +
+      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid hub | lucid kb [list|pages|show|search] | lucid stats [--json] | lucid check | lucid agent-firewall --conn <id>\n" +
         "  (default)       Bare `lucid` starts the gated TUI — same as `lucid tui`. Non-subcommand args pass through to omp (initial prompt, --model, -p, …).\n" +
         "  acp             Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
         "  tui             Start the gated Lucid agent in omp's native terminal UI (explicit alias of the default).\n" +
+        "  hub             The terminal hub: pane multiplexer over the running engine (split/focus/zoom panes; Security, Fleet, Sessions, Audit, Usage decks).\n" +
         "  stats           Print session spend + KV-cache + context metrics (--json for editors; --budgets adds rate limits).\n" +
         "  kb              Browse the knowledge graph(s): list | pages | show <id|slug> | search <query> (--json for editors, --kg <id> to target a KG).\n" +
         "  check           Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +
