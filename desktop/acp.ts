@@ -133,6 +133,9 @@ export class ACPClient {
   /** True once the child has exited or failed to spawn: the connection can never answer again. */
   get isDead(): boolean { return this.dead !== null; }
 
+  /** P-LIVENESS.1: the spawned child's pid (the root of the agent's process tree), while it runs. */
+  get pid(): number | null { return this.dead === null ? this.proc?.pid ?? null : null; }
+
   private onData(s: string): void {
     this.buf += s;
     let nl: number;
