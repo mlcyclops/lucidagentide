@@ -65,7 +65,7 @@ import { type PendingCall, type PendingView, parseTaskCall, pendingSnapshot, set
 import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
 import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
-import { WorkspaceGate, type WaitView } from "./workspace_gate.ts"; // P-PROGRESS.1: the folder lease shared with the fleet
+import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits shared with the fleet
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
@@ -585,24 +585,26 @@ class Backend {
   // long-quiet turn is still waiting on. Cleared at turn boundaries + restart.
   private openCalls = new Map<string, PendingCall>();
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
-  // -- P-PROGRESS.1: progress, estimate, and the folder lease ------------------------------------------
+  // -- P-PROGRESS.1: progress and the estimate; P-WAIT.1: the file-scoped write claims ---------------------
   /** Turn and tool lengths behind the estimate. dev.ts hands in the instance shared with the fleet lanes
    *  (seeded from the latency ledger); a backend built without one keeps its own. */
   durations = new DurationHistory();
-  /** The folder lease shared with the fleet lanes: a master turn waits behind a lane's running turn in the
-   *  same folder, and lanes wait behind the master's. */
-  workspaceGate = new WorkspaceGate();
+  /** Write claims shared with the fleet lanes: a write waits only on a file another worker's running turn
+   *  is editing. The master's claims drop when its turn ends. */
+  readonly writeClaims = new WriteClaims();
   /** Tool calls settled in the current turn. */
   private stepsDone = 0;
   /** Per-turn: the real tool name behind a toolCallId, once the tool_meta extension reported it. */
   private toolNames = new Map<string, string>();
   /** The live turn's progress emitter (set for the turn's life), so a settled call can push a fresh view. */
   private progressTick: (() => void) | null = null;
-  /** The turn is in line for its folder (workspace_gate). Nothing is running in omp, so the watchdog must
-   *  not read the silence as a stall, and the progress view says "waiting" instead. */
-  private waitingFolder = false;
-  /** Aborted by cancel() while the turn is in line, since there is nothing in omp to cancel yet. */
-  private folderWaitAbort: AbortController | null = null;
+
+  /** P-WAIT.1: one of this turn's writes waits for another worker's file (null: the wait ended). Told
+   *  to the window directly, never through the sink, so a wait never counts as activity. A bounded wait
+   *  (under omp's 30 s hook limit), far below the health watch's quiet threshold, so it needs no flag. */
+  noteWriteWait(w: WaitView | null): void {
+    if (w) { try { this.recoveryTurn?.emit({ type: "waiting", wait: w }); } catch { /* stream gone */ } }
+  }
 
   /** P-PROGRESS.1: where the master turn stands right now: elapsed, last sign of life, steps, the liveness
    *  verdict and the history-based estimate. Read-only; also served on GET /api/session-health. */
@@ -1691,7 +1693,6 @@ class Backend {
     // P-PROGRESS.1: the progress view goes to the window every PROGRESS_TICK_MS and on every settled tool
     // call, through onEvent DIRECTLY (never the sink): telling the user never counts as activity.
     let progressTimer: Timer | undefined;
-    let releaseFolder: (() => void) | null = null;
     this.stepsDone = 0;
     this.toolNames.clear();
     this.progressTick = () => { try { onEvent({ type: "progress", progress: this.progressView() }); } catch { /* stream gone */ } };
@@ -1788,27 +1789,10 @@ class Backend {
       const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
       let content: { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] =
         [{ type: "text" as const, text: body }, ...imageBlocks];
-      // P-PROGRESS.1: the folder lease. When a fleet lane is mid-turn in this workspace (or a folder
-      // inside or above it), this turn waits behind it, told what it waits on; Stop leaves the line.
-      this.folderWaitAbort = new AbortController();
-      try {
-        releaseFolder = await this.workspaceGate.acquire(
-          { id: "master", name: "Main", cwd: currentWorkspace(), etaMs: () => this.progressView().estimate.etaMs },
-          { signal: this.folderWaitAbort.signal, onWait: (w) => { this.waitingFolder = true; try { onEvent({ type: "waiting", wait: w }); } catch { /* stream gone */ } } },
-        );
-      } catch (e) {
-        // Stop while in line: nothing ran, so the turn settles quietly through the outer finally (done
-        // fires, no "agent unavailable" and no no-response notice), exactly like a cancelled turn.
-        onEvent({ type: "token", text: `[stopped: ${e instanceof Error ? e.message : String(e)}]` });
-        return;
-      } finally {
-        this.waitingFolder = false;
-        this.folderWaitAbort = null;
-      }
-      if (this.recoveryTurn !== turn) return;
+      // P-WAIT.1: no folder lease. The turn starts now; it waits only if one of its writes lands on a
+      // file another worker's running turn is editing (write_claims.ts, asked by the checkout gate hook).
       // ADR-0414: operator notes still waiting for the master (queued after the last tool step of an
-      // earlier turn, or while it was idle) open this prompt, right before the user's text. Drained here,
-      // after the folder wait, so a Stop while in line leaves them queued for the next prompt.
+      // earlier turn, or while it was idle) open this prompt, right before the user's text.
       let carried = "";
       if (this.carriedNotes) { try { carried = this.carriedNotes(); } catch { carried = ""; } }
       if (carried) content[0] = { type: "text" as const, text: `${head}${carried}\n\n${text}` };
@@ -1871,9 +1855,9 @@ class Backend {
     } finally {
       clearTimeout(slow);
       clearInterval(progressTimer);
-      releaseFolder?.();
       this.progressTick = null;
       if (this.recoveryTurn === turn) {
+      this.writeClaims.endTurn("master"); // P-WAIT.1: the files this turn wrote are free for other workers
       this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
       this.askActive = false;
       this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
@@ -2369,7 +2353,6 @@ class Backend {
     // A user Stop that reaches a running /goal loop through the plain chat cancel (the composer's turn view
     // routes Stop there) must end the LOOP, not just this iteration, or the next iteration starts at once.
     if (!opts?.forRecover && this.goalActive) this.goalCancelled = true;
-    if (this.folderWaitAbort) { this.folderWaitAbort.abort(); return; } // P-PROGRESS.1: leaving the line is the cancel
     try { if (this.acp && this.sessionId) this.acp.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* best-effort */ }
   }
 
@@ -2407,7 +2390,7 @@ class Backend {
   healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null; exhausted: boolean; dead: boolean } {
     const now = Date.now();
     const input: HealthInput = {
-      busy: this.listener !== null && !this.waitingFolder, dead: this.acp?.isDead ?? false, // P-PROGRESS.1: a folder wait is not a stall
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
     };
     const v = healthVerdict(input);
@@ -2421,7 +2404,7 @@ class Backend {
     if (this.healthBusy) return null;
     const now = Date.now();
     const input: HealthInput = {
-      busy: this.listener !== null && !this.waitingFolder, dead: this.acp?.isDead ?? false, // P-PROGRESS.1: a folder wait is not a stall
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
     };
     const v = healthVerdict(input);

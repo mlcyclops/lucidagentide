@@ -109,6 +109,7 @@ import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./f
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
 import { CheckoutRegistry, gitDirtyPaths, type CheckoutSession } from "./checkout_registry.ts"; // P-OWN.1: who is writing in which checkout
+import { WRITE_WAIT_MAX_MS, writeRefusal, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
@@ -1185,6 +1186,7 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/git/exec",           // P-SANDBOX.17 (ADR-0399): the contained agent's git shim asks the host to run git
   "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
   "/api/checkout/peers", "/api/checkout/gate", "/api/checkin", "/api/checkin/reply", // P-OWN.1: checkin_* tools + the commit gate
+  "/api/checkout/write",     // P-WAIT.1: the checkout gate hook claims a write's file (waits only on the same file)
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
@@ -1211,6 +1213,8 @@ const checkouts: CheckoutRegistry = new CheckoutRegistry({
   gitStatus: (root) => { const dir = gitCmdDir(); return gitDirtyPaths(dir ? join(dir, "git.exe") : "git", root); },
 });
 backend.onAuthoredPath = (path) => checkouts.recordWrite({ id: "master", name: "main composer" }, path, currentWorkspace());
+// P-WAIT.1: a write claim counts only while its holder's turn runs (the backstop behind endTurn).
+backend.writeClaims.isRunning = (id) => id === "master" ? backend.midTurn().busy : fleet.sessionsView().some((s) => s.id === id && s.running);
 backend.checkoutBriefing = () => checkouts.briefingFor("master", currentWorkspace());
 // P-PROGRESS.1: the estimate's history starts from the latency ledger's tail (every past chat turn's
 // length, per model), then grows live from master and lane turns alike. Fail-quiet: an unreadable ledger
@@ -1222,7 +1226,7 @@ backend.carriedNotes = () => carryPendingNotes("master"); // ADR-0414: same carr
 const fleet: FleetLaneManager = new FleetLaneManager({
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
-  gate: backend.workspaceGate, history: backend.durations, // P-PROGRESS.1: one folder lease and one estimate history with the master
+  claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
   env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
   interject: (laneId, text) => { addInterject(laneId, text); },
   carriedNotes: carryPendingNotes, // ADR-0414: notes no tool step picked up ride the lane's next prompt
@@ -4945,6 +4949,24 @@ return Bun.serve({
         if (d.block) emitSecurityEvent({ category: "exec", type: "checkout_gate", decision: "block", severity: "low", tool: "git", reason: (d.reason ?? "").slice(0, 200) });
         return json({ ok: true, data: d });
       }
+      // P-WAIT.1: a write/edit is about to run. Claim its file(s) for the caller's running turn, waiting
+      // (bounded by waitMs, under omp's 30 s hook limit) only while ANOTHER worker's running turn holds one of
+      // them. The caller's card or HUD says whom it waits for; a refusal names the holder for the model. An
+      // unknown caller is let through: this is coordination between cooperating agents, not a trust boundary.
+      if (p === "/api/checkout/write" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const cwd = String(url.searchParams.get("cwd") ?? "").trim() || currentWorkspace();
+        const paths = url.searchParams.getAll("path").map((s) => s.trim()).filter(Boolean);
+        const waitMs = Math.min(WRITE_WAIT_MAX_MS, Math.max(0, Number(url.searchParams.get("waitMs")) || 0));
+        if (!target || paths.length === 0) return json({ ok: false, error: "target and path required" });
+        const lane = target === "master" ? null : fleet.sessionsView().find((s) => s.id === target);
+        if (target !== "master" && !lane) return json({ ok: true, data: { block: false } });
+        const me = lane ? { id: lane.id, name: lane.name } : { id: "master", name: "Main" };
+        const onWait = (w: WaitView | null) => { if (lane) fleet.noteWriteWait(lane.id, w); else backend.noteWriteWait(w); };
+        const startedAt = Date.now();
+        const v = await backend.writeClaims.acquire(me, paths, cwd, { waitMs, onWait });
+        return json({ ok: true, data: v.held ? { block: true, reason: writeRefusal(v, Date.now() - startedAt) } : { block: false } });
+      }
       if (p === "/api/checkin" && req.method === "POST") {
         const b = await readBody<{ from?: unknown; to?: unknown; text?: unknown }>(req);
         const from = String(b.from ?? "").trim();
@@ -5387,6 +5409,7 @@ process.env.LUCID_CHECKIN_PEERS_URL = `http://127.0.0.1:${server.port}/api/check
 process.env.LUCID_CHECKIN_SEND_URL = `http://127.0.0.1:${server.port}/api/checkin?t=${AGENT_TOKEN}`;
 process.env.LUCID_CHECKIN_REPLY_URL = `http://127.0.0.1:${server.port}/api/checkin/reply?t=${AGENT_TOKEN}`;
 process.env.LUCID_CHECKOUT_GATE_URL = `http://127.0.0.1:${server.port}/api/checkout/gate?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKOUT_WRITE_URL = `http://127.0.0.1:${server.port}/api/checkout/write?t=${AGENT_TOKEN}`; // P-WAIT.1
 // P-BROWSER.1 (wave 2): the omp child's browser_* tools reach the agent-browser routes through this
 // token'd BASE (the extension appends /open, /capture, /scroll, /close, /shot and keeps the ?t=).
 // Gated on LUCID_MAIN_TOKEN: without the Electron main there is no window executor, so the env stays
