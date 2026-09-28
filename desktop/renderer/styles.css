@@ -5932,8 +5932,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 }
 /* ───────── P-REPO.1 (ADR-0406): which repo a session works on, and where its commits go ─────────
    One chip everywhere (titlebar, lane cards, spokes, hub, spoke banner). Each text run is its own
-   nowrap span and the chip ellipsizes as a whole (invariant 11). Green arrow = pushes to a remote;
-   amber "local only" = commits cannot leave this machine. */
+   nowrap span and the chip ellipsizes as a whole (invariant 11). The chip exists only for a repo that
+   pushes to a hosted remote; a plain folder or local-only repo shows no chip, never a warning. */
 .repo-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;overflow:hidden;
   white-space:nowrap;font-size:11.5px;color:var(--txt-2)}
 .repo-chip>.ic{flex:none;color:var(--accent-2)}
@@ -5942,10 +5942,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .repo-chip .rc-branch{flex:none;max-width:16ch;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:.92em;
   color:var(--txt-2);background:var(--bg-1);border:1px solid var(--line-soft);border-radius:5px;padding:0 5px}
 .repo-chip .rc-slug{flex:0 1 auto;min-width:6ch;overflow:hidden;text-overflow:ellipsis;color:var(--green)}
-.repo-chip.rc-remote>.ic:nth-of-type(2){color:var(--green)}
-.repo-chip .rc-local{flex:none;color:var(--amber);font-weight:600}
-.repo-chip.rc-none>.ic{color:var(--txt-4)}
-.repo-chip.rc-none .rc-name{font-weight:400;color:var(--txt-3)}
+.repo-chip>.ic:nth-of-type(2){color:var(--green)}
 .titlebar .tb-chip.repo-chip{max-width:min(460px,34vw);gap:6px}
 .titlebar .tb-chip.repo-chip.rc-on-lane{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
 /* sidebar workspace bar: the workspace on top, the repo + push target under it */
@@ -5954,7 +5951,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .ws-bar-repo{display:block;min-width:0;padding-left:22px;font-size:11px;color:var(--txt-3);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ws-bar-repo .ic{vertical-align:-1px;color:var(--green)}
-.ws-bar-repo.local .ic{color:var(--amber)}
 /* grid lane card: a full-width strip under the header */
 .fleet-repo{display:flex;width:100%;border:0;border-bottom:1px solid var(--line-soft);background:color-mix(in srgb,var(--bg-1) 70%,transparent);
   padding:3px 9px;font:inherit;font-size:10.5px;cursor:pointer;text-align:left}
@@ -5975,7 +5971,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rc-pop-row>span:first-child{color:var(--txt-4);white-space:nowrap}
 .rc-pop-row code{font-family:var(--mono);font-size:11.5px;color:var(--txt);overflow-wrap:anywhere}
 .rc-pop-row b{color:var(--green);font-weight:600}
-.rc-pop-row b.rc-warn{color:var(--amber)}
 .rc-pop-note{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-3)}
 .rc-pop-acts{display:flex;gap:6px;flex-wrap:wrap}
 /* the spoke repo picker (grid New lane card + orbit New spoke panel) */
@@ -6011,7 +6006,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .repo-pick-row .rp-sub .ic{vertical-align:-1px;color:var(--green)}
 .repo-pick-row .rp-branch{font-family:var(--mono);color:var(--txt-2)}
 .repo-pick-row .rp-slug{color:var(--green)}
-.repo-pick-row .rp-local{color:var(--amber)}
+.repo-pick-row .rp-local{color:var(--txt-4)}
 /* "Find repos": opt-in discovery (nothing runs until Search). Heading + button on one row, then one
    single-line row per source: box + ONE text span that ellipsizes, never wraps (invariant 11). */
 .repo-pick-find{display:flex;flex-direction:column;gap:2px;min-width:0;padding:4px 7px 5px;

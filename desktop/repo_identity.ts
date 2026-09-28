@@ -176,11 +176,18 @@ export function repoChip(v: RepoView): string {
   return at ? `${v.name} \u00b7 ${at}` : v.name;
 }
 
-/** The long tooltip: a title naming the repo, then every fact the chip compresses, one per line. Rendered
- *  by the app's premium tooltip (`data-tip="title|body"`), so neither part may contain a `|`. */
-export function repoTooltip(ctx: RepoContext): { title: string; body: string } {
-  const v = ctx.repo;
-  if (!v) return { title: ctx.cwd ? "Not a git repository" : "No folder", body: ctx.cwd || "This session has no folder yet." };
+/** The repo a session works in, when its commits go to a hosted remote (GitHub, GitLab, Azure DevOps, a
+ *  self-hosted server). Every repo surface (branch pill, sidebar repo line) shows ONLY for this: a folder
+ *  with no git, or git with no remote, shows nothing at all rather than a warning, because not using a
+ *  hosted repo is a normal way to work, not a mistake to flag (operator, 2026-09-27). */
+export function hostedRepo(ctx: RepoContext | null | undefined): RepoView | null {
+  const v = ctx?.repo;
+  return v?.push?.host ? v : null;
+}
+
+/** The long tooltip for a hosted repo: a title naming the repo, then every fact the chip compresses, one
+ *  per line. Rendered by the app's premium tooltip (`data-tip="title|body"`), so no part may hold a `|`. */
+export function repoTooltip(v: RepoView, ctx: RepoContext): { title: string; body: string } {
   const lines = [
     v.root,
     `Branch: ${v.branch || (v.head ? `detached at ${v.head}` : "no commits yet")}`,

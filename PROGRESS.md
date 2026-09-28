@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-REPO.1 amendment: no branch pill without a hosted repo (ADR-0406)
+- **shipped:** `hostedRepo()` gates every repo surface (titlebar pill, lane cards, spokes, hub, spoke banner, sidebar repo line): a plain folder or local-only repo shows nothing, never an amber "no git" / "local only"; the details card opens only for a hosted repo; picker "local only" rows are neutral grey.
+- **stubbed:** none. Verified live on the web GUI (fake agent): plain folder -> no pill, no tooltip; `git init` with no remote -> no pill; add a github.com origin -> pill `ws main -> acme/demo-app` with its premium tooltip, and the sidebar repo line appears.
+- **next:** a folder that BECOMES a repo is noticed only after repo_probe's 2-minute root cache (pre-existing); cut beta.11 when asked.
+
 ## Beta.10 follow-ups: Stop stops, grid-first Fleet, premium repo tooltip, no Processes pill, launcher opens the installed app
 - **shipped:** Stop no longer starts the next turn: a deliberate Stop holds the staged queue (`stopHoldsQueue`, set before the cancel so a racing `done` cannot drain it; a held pill offers **Send now** once nothing runs; the user's next Send resumes the queue), which closes the P-FLEET.L8 regression where settle drained on `stopped`; a user cancel reaching a running /goal loop also ends the loop (`acp_backend.cancel`). The Fleet button opens the GRID unless the orbit is explicitly pinned. The repo chip uses the app's premium tooltip (`repoTooltip` returns title + body, `#tip .d` keeps line breaks). The status-bar Processes pill and popover are removed (`/api/processes` stays for the phone PWA). `LucidAgentIDE.bat` G launches the installed app; the source launch moved to D.
 - **stubbed:** none. Verified live on the web GUI against the fake ACP agent (midturn): send, queue a second prompt, Stop -> trace shows prompt, cancel and no second prompt; Send now then starts it; repo chip tooltip renders in #tip; Fleet opens the grid; no Processes pill. The bat change reaches the operator's main checkout only after it pulls master.

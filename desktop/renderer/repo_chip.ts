@@ -5,16 +5,17 @@
 //
 // One look everywhere a session is named: the titlebar (whatever the composer drives, Main or an attached
 // spoke), the sidebar workspace bar, every lane card on the grid, every spoke on the orbit, the hub, and
-// the spoke banner. The chip reads `repo · branch` then the push target (`GitHub owner/repo`), or says
-// plainly that the work is local only. Clicking the titlebar chip opens the details with a link to the
-// repo's web page. Wording comes from repo_identity.ts, so every surface says the same thing.
+// the spoke banner. The chip reads `repo · branch` then the push target (`GitHub owner/repo`). It exists
+// ONLY for a repo that pushes to a hosted remote (repo_identity.hostedRepo): a plain folder, or git with no
+// remote, gets no chip at all, never a warning. Clicking the titlebar chip opens the details with a link to
+// the repo's web page. Wording comes from repo_identity.ts, so every surface says the same thing.
 
 import { $ } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { popover } from "./ui.ts";
-import type { LucidBridge, RepoContext } from "./bridge.ts";
-import { pushLabel, pushSlug, repoTooltip } from "../repo_identity.ts";
+import type { LucidBridge, RepoContext, RepoView } from "./bridge.ts";
+import { hostedRepo, pushLabel, pushSlug, repoTooltip } from "../repo_identity.ts";
 import { providerLabel } from "../git_url.ts";
 
 /** How much a chip says. `full`: repo, branch, push target. `compact`: repo and branch (tight spots that
@@ -22,62 +23,47 @@ import { providerLabel } from "../git_url.ts";
  *  whose title usually IS the repo name (a spoke named after its folder). The tooltip always says it all. */
 export type RepoChipVariant = "full" | "compact" | "push";
 
-/** The chip's inner HTML. */
-export function repoChipHtml(ctx: RepoContext | undefined | null, variant: RepoChipVariant = "full"): string {
-  const v = ctx?.repo;
-  if (!v) {
-    if (variant !== "full") return `${icon("folder", 12)}<span class="rc-local">not a git repo</span>`;
-    const folder = ctx?.cwd ? ctx.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || ctx.cwd : "no folder";
-    return `${icon("folder", 12)}<span class="rc-name">${esc(folder)}</span>${ctx?.cwd ? `<span class="rc-local">no git</span>` : ""}`;
-  }
+/** The chip's inner HTML for a hosted repo. */
+export function repoChipHtml(v: RepoView, variant: RepoChipVariant = "full"): string {
   const at = v.branch || (v.head ? `@${v.head}` : "");
   const branch = at ? `<span class="rc-branch">${esc(at)}</span>` : "";
-  const push = v.push
-    ? `${icon("arrowRight", 11)}<span class="rc-slug">${esc(v.push.host ? (v.push.provider === "other" ? `${v.push.host} ${pushSlug(v.push)}` : pushSlug(v.push)) : v.push.remote)}</span>`
-    : `<span class="rc-local">${v.remotes === 0 ? "local only" : "no push target"}</span>`;
+  const target = v.push?.host ? (v.push.provider === "other" ? `${v.push.host} ${pushSlug(v.push)}` : pushSlug(v.push)) : "";
+  const push = `${icon("arrowRight", 11)}<span class="rc-slug">${esc(target)}</span>`;
   if (variant === "push") return `${icon("git", 12)}${branch}${push}`;
   return `${icon("git", 12)}<span class="rc-name">${esc(v.name)}</span>${branch}${variant === "compact" ? "" : push}`;
 }
 
-/** The tone class: `local` when commits cannot leave this machine, so the chip reads differently. */
-export function repoChipTone(ctx: RepoContext | undefined | null): string {
-  const v = ctx?.repo;
-  if (!v) return "rc-none";
-  return v.push ? "rc-remote" : "rc-local-only";
-}
-
-/** Paint a chip element in place (skips the DOM write when nothing changed, the grid polls often). */
+/** Paint a chip element in place (skips the DOM write when nothing changed, the grid polls often). Hidden,
+ *  with nothing to hover, unless the session's repo pushes to a hosted remote. */
 export function paintRepoChip(node: HTMLElement, ctx: RepoContext | undefined | null, variant: RepoChipVariant = "full"): void {
-  const html = repoChipHtml(ctx, variant);
+  const v = hostedRepo(ctx);
+  if (!v || !ctx) {
+    node.hidden = true;
+    node.removeAttribute("data-tip");
+    return;
+  }
+  const html = repoChipHtml(v, variant);
   if (node.dataset.rcSig !== html) {
     node.innerHTML = html;
     node.dataset.rcSig = html;
-    node.classList.remove("rc-none", "rc-remote", "rc-local-only");
-    node.classList.add(repoChipTone(ctx));
   }
   // The app's premium tooltip (ui.ts initTooltips), never the OS `title` box: a title line naming the repo,
   // then one fact per line (#tip .d is pre-line).
-  const tip = ctx ? repoTooltip(ctx) : { title: "Repository", body: "Checking the repository\u2026" };
+  const tip = repoTooltip(v, ctx);
   node.removeAttribute("title");
   node.setAttribute("data-tip", `${tip.title.replaceAll("|", "/")}|${tip.body}`);
-  node.setAttribute("data-tip-icon", ctx && !ctx.repo ? "folder" : "git");
+  node.setAttribute("data-tip-icon", "git");
   node.hidden = false;
 }
 
-function detailHtml(ctx: RepoContext, subject: string): string {
-  const v = ctx.repo;
-  if (!v) {
-    return `<div class="rc-pop"><div class="rc-pop-h">${icon("folder", 14)}<b>${esc(subject)} is not in a git repository</b></div>
-      <div class="rc-pop-row"><span>Folder</span><code>${esc(ctx.cwd || "none")}</code></div>
-      <p class="rc-pop-note">Nothing here is under version control, so there is nothing to commit or push.</p></div>`;
-  }
+function detailHtml(v: RepoView, ctx: RepoContext, subject: string): string {
   const push = v.push;
   const provider = push?.host ? (providerLabel(push.provider) === "Git" ? push.host : providerLabel(push.provider)) : "";
   return `<div class="rc-pop">
     <div class="rc-pop-h">${icon("git", 14)}<b>${esc(v.name)}</b>${v.worktree ? `<span class="rc-tag">worktree</span>` : ""}<span class="rc-tag">${esc(subject)}</span></div>
     <div class="rc-pop-row"><span>Folder</span><code>${esc(v.root)}</code></div>
     <div class="rc-pop-row"><span>Branch</span><code>${esc(v.branch || (v.head ? `detached at ${v.head}` : "no commits yet"))}</code></div>
-    <div class="rc-pop-row"><span>Pushes to</span><b class="${push ? "" : "rc-warn"}">${esc(pushLabel(v))}</b></div>
+    <div class="rc-pop-row"><span>Pushes to</span><b>${esc(pushLabel(v))}</b></div>
     ${push?.host ? `<div class="rc-pop-row"><span>Remote</span><code>${esc(push.remote)} on ${esc(provider)}</code></div>` : ""}
     <p class="rc-pop-note">${ctx.source === "activity" ? "Known from the files this session changed or ran commands in." : "From the session's folder; it updates once the session changes a file."}${ctx.cwd && ctx.cwd !== v.root ? ` Session folder: ${esc(ctx.cwd)}.` : ""}</p>
     ${ctx.others.length ? `<div class="rc-pop-row"><span>Also changed</span><span>${ctx.others.map((o) => esc(o.name)).join(", ")}</span></div>` : ""}
@@ -90,7 +76,9 @@ function detailHtml(ctx: RepoContext, subject: string): string {
 
 /** Open the details card for a chip. `subject` names whose repo this is ("Main", a spoke's name). */
 export function openRepoDetails(anchor: HTMLElement, ctx: RepoContext, subject: string, openUrl: (url: string) => void): void {
-  const p = popover(anchor, detailHtml(ctx, subject));
+  const v = hostedRepo(ctx);
+  if (!v) return; // no chip is shown for it, so there is nothing to open
+  const p = popover(anchor, detailHtml(v, ctx, subject));
   p.node.addEventListener("click", (e) => {
     const t = e.target instanceof HTMLElement ? e.target : null;
     const open = t?.closest<HTMLElement>("[data-rc-open]");
@@ -146,7 +134,6 @@ export async function refreshTitlebarRepo(): Promise<void> {
   if (!lane) tbDeps.onMainContext(ctx);
   const btn = $("#tbRepo") as HTMLElement | null;
   if (!btn) return;
-  if (!ctx) { btn.hidden = true; return; }
   paintRepoChip(btn, ctx);
   btn.classList.toggle("rc-on-lane", !!lane);
 }
