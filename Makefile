@@ -884,6 +884,10 @@ demo-P-PROGRESS.3: ## P-PROGRESS.3 (ADR-0412): the beta.10 quiet footer stays th
 .PHONY: demo-P-PROGRESS.4
 demo-P-PROGRESS.4: ## P-PROGRESS.4 (ADR-0413): the turn ETA replayed against finished turns (a synthetic corpus and, read-only, this machine's latency ledger); prints the P-PROGRESS.1 baseline and the current estimator (time left given the time already run) side by side, median error and share within +/-30%, and fails unless the current one wins on the synthetic corpus
 	$(BUN) run harness/scripts/eta_backtest.ts --check
+
+.PHONY: demo-P-LIVENESS.1
+demo-P-LIVENESS.1: ## P-LIVENESS.1 (ADR-0415): an open tool call is judged on evidence (its processes' CPU and disk counters, process churn, subagent transcript writes), marked "likely stuck" after 5 min of none (12 min with a live subagent), and stopped only by the user's Stop command, which ends just the processes that call started
+	$(BUN) run harness/scripts/demo_p_liveness_1.ts
 .PHONY: demo-P-GAME.1
 demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts
 	$(BUN) test desktop/arcade_games.test.ts

@@ -5933,6 +5933,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   border-color:rgb(var(--red-rgb) / .5)}
 .hud-signal,.lane-signal{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-4)}
 .hud-restart,.lane-restart{flex:none;white-space:nowrap}
+/* P-LIVENESS.1 (ADR-0415): an open call with no CPU, disk or subagent activity for minutes is marked
+   likely stuck; the pill turns red (the quiet line reuses .hud-dead) and the Stop command sits beside it.
+   Marking only, never an action. */
+.hud-alive[data-state="stuck"],.lane-alive[data-state="stuck"]{color:var(--red-txt);background:rgb(var(--red-rgb) / .14);
+  border-color:rgb(var(--red-rgb) / .5)}
+.hud-stopcall,.lane-stopcall{flex:none;white-space:nowrap}
 .hud-queue{margin-top:5px;padding:5px 8px;border:1px solid rgb(var(--amber-rgb) / .35);border-radius:7px;
   background:rgb(var(--amber-rgb) / .07)}
 .hud-queue-head{color:var(--txt-2);margin-bottom:2px}

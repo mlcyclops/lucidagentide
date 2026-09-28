@@ -85,6 +85,11 @@ export function ringView(p: ProgressView, showEta: boolean, restart = "Restart a
     const ran = p.elapsedMs > 0 ? ` ${sofar}` : "";
     return { pct: e.percent, tone: "dead", tip: `Progress: stopped|The agent process exited. Use ${restart} below; the conversation is kept.${ran}` };
   }
+  // P-LIVENESS.1 (ADR-0415): an open call with no activity for minutes is marked in red too; the fix stays
+  // the user's (Stop command or restart), LUCID does not act on it.
+  if (p.liveness.state === "stuck") {
+    return { pct: e.percent, tone: "dead", tip: `Progress: likely stuck|The running tool call is ${p.liveness.label}. Use Stop command or ${restart} below; LUCID will not stop it on its own. ${sofar}` };
+  }
   if (e.typicalMs === null || e.percent === null) {
     return { pct: null, tone: "run", tip: `Progress|Working. This machine has not finished enough turns yet to show how far along a turn is; the ring fills in once it has. ${sofar}` };
   }

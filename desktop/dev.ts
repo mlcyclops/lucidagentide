@@ -277,7 +277,9 @@ import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_dat
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
 import { seedTrivia } from "./trivia_seed.ts"; // P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire (scanned, tool-free)
 import { detectElectronApp, electronLaunchPlan } from "./preview_electron.ts"; // P-PREVIEW.7 (ADR-0179)
-import { listSubagentRuns } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity
+import { listSubagentRuns, subagentPulse } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity; P-LIVENESS.1 pulse read
+import { listProcesses } from "./leftover_reaper.ts"; // P-LIVENESS.1 (ADR-0415): one process-table look per pulse sample
+import { PULSE_SAMPLE_MS } from "./call_pulse.ts"; // P-LIVENESS.1
 import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
 import { spawn as spawnChild } from "node:child_process";
 import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
@@ -1246,6 +1248,24 @@ if (process.env.LUCID_DATA_ROOT) {
 // the event loop is a worse bug than the stall it watches for.
 backend.startHealthWatch();
 setInterval(() => { void fleet.healthTick().catch(() => {}); }, 30_000).unref?.();
+// P-LIVENESS.1 (ADR-0415): evidence for OPEN tool calls. The watchdog above never touches a turn with an open
+// call (ADR-0263), so a hung command and a long build looked identical. While any worker has an open call
+// and has been quiet for 30 s, one process-table look per tick is folded into that worker's watch, and the
+// progress view marks the call "likely stuck" after minutes of no CPU, disk or subagent activity. Marking
+// only: stopping is the user's Stop command. No quiet open call means no look at all.
+let pulseLooking = false;
+setInterval(() => {
+  if (pulseLooking) return;
+  const master = backend.pulseTarget();
+  const lanes = fleet.pulseTargets();
+  if (!master && !lanes.length) return;
+  pulseLooking = true;
+  void listProcesses().catch(() => null).then((rows) => {
+    const at = Date.now();
+    if (master) backend.observePulse(rows, at, subagentPulse(sessionPathById(master.sessionId), master.since));
+    for (const l of lanes) fleet.observePulse(l.laneId, rows, at, subagentPulse(sessionPathById(l.sessionId), l.since));
+  }).catch(() => {}).finally(() => { pulseLooking = false; });
+}, PULSE_SAMPLE_MS).unref?.();
 // P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
 // BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
 // process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
@@ -4880,6 +4900,16 @@ return Bun.serve({
         const running = target === "master" ? backend.turnStatus()?.running === true : fleet.laneRunning(target);
         const r = addInterject(target, String(b.text ?? ""), { running, live: b.live === true });
         return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, code: r.code, error: r.reason });
+      }
+      // P-LIVENESS.1 (ADR-0415): the user's "Stop command" on a call marked likely stuck. Ends only the
+      // processes the open call started ("master" or a laneId), queues a note so the agent knows why, and
+      // leaves the turn running.
+      if (p === "/api/liveness/stop-call" && req.method === "POST") {
+        const b = await readBody<{ target?: unknown }>(req);
+        const target = String(b.target ?? "").trim();
+        if (!target) return json({ ok: false, error: "target required" });
+        const r = target === "master" ? await backend.stopOpenCall() : await fleet.stopOpenCall(target);
+        return json({ ok: true, data: r });
       }
       if (p === "/api/interject/pending" && req.method === "GET") {
         const target = String(url.searchParams.get("target") ?? "").trim();

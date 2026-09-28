@@ -63,7 +63,10 @@ import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
 import { type PendingCall, type PendingView, parseTaskCall, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
 import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
-import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { DurationHistory, PROGRESS_TICK_MS, QUIET_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { PulseTracker, oldestCallStart, pulseVerdict, stoppedCallNote, type SubagentSignal } from "./call_pulse.ts"; // P-LIVENESS.1 (ADR-0415)
+import { stopCallProcesses, workerProcesses } from "./call_pulse_proc.ts"; // P-LIVENESS.1
+import type { ProcRow } from "./leftover_reaper.ts";
 import { WorkspaceGate, type WaitView } from "./workspace_gate.ts"; // P-PROGRESS.1: the folder lease shared with the fleet
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1
 import { emitSecurityEvent } from "./audit_export.ts";
@@ -590,7 +593,46 @@ class Backend {
       stepsDone: this.stepsDone, stepsOpen: pendingSnapshot(this.openCalls, now), lastHealth: this.lastHealth,
       model: this.activeModel(), scope: this.sessionId ?? "", history: this.durations, now, // P-PROGRESS.4: the session keys its own history
       toolNameOf: (label) => { for (const [id, c] of this.openCalls) if (c.label === label) return this.toolNames.get(id); return undefined; },
+      pulse: this.openCalls.size ? this.pulse.evidence : null,
     });
+  }
+
+  // -- P-LIVENESS.1 (ADR-0415): evidence for an open call, never an action ----------------------------
+  /** The master turn's open-call watch, fed by dev.ts's process sampler. */
+  private pulse = new PulseTracker();
+
+  /** Should the sampler look at the master now? Yes while a turn has an open call and nothing has streamed
+   *  for QUIET_MS. Otherwise the watch is forgotten: a streaming or idle turn needs no evidence, and the
+   *  next quiet stretch starts a fresh one. Returns what the sampler needs for the subagent read. */
+  pulseTarget(now = Date.now()): { sessionId: string | null; since: number } | null {
+    const want = this.listener !== null && !this.waitingFolder && this.openCalls.size > 0 && this.acp?.pid != null && now - this.healthActivityAt >= QUIET_MS;
+    if (!want) { this.pulse.reset(); return null; }
+    return { sessionId: this.sessionId, since: this.turnStartedAtMs ?? now };
+  }
+
+  /** Fold one process-table look (null = the look failed) into the master's watch. */
+  observePulse(rows: ProcRow[] | null, at: number, subagent: SubagentSignal): void {
+    const pid = this.acp?.pid;
+    const oldest = oldestCallStart(this.openCalls);
+    if (pid == null || oldest === null) { this.pulse.reset(); return; }
+    this.pulse.observe({ at, work: rows ? workerProcesses(rows, pid, process.platform) : null, callStartedAt: oldest, subagent });
+    this.progressTick?.();
+  }
+
+  /** The user's "Stop command": end only the processes the oldest open call started, then tell the agent
+   *  why its call failed. The turn keeps running; this never cancels it. */
+  async stopOpenCall(): Promise<{ ok: boolean; stopped: string[]; reason: string }> {
+    const pid = this.acp?.pid;
+    const oldest = oldestCallStart(this.openCalls);
+    if (!this.listener || pid == null || oldest === null) return { ok: false, stopped: [], reason: "No tool call is running in the chat." };
+    const label = pendingSnapshot(this.openCalls, Date.now())[0]?.label ?? "the running call";
+    const ev = this.pulse.evidence;
+    const flatMs = ev ? pulseVerdict(ev, this.healthActivityAt, Date.now() - oldest).flatMs : 0;
+    const r = await stopCallProcesses(pid, oldest);
+    if (!r.stopped.length) return { ok: false, stopped: [], reason: r.failed.length ? `Could not stop ${r.failed.join(", ")}.` : "The running call has no process of its own to stop. Use Stop to end the turn." };
+    try { addInterject("master", stoppedCallNote(label, flatMs)); } catch { /* the kill already ended the call */ }
+    this.pulse.reset();
+    return { ok: true, stopped: r.stopped, reason: `Stopped ${r.stopped.join(", ")}. The agent is told why and continues.${r.failed.length ? ` Could not stop ${r.failed.join(", ")}.` : ""}` };
   }
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
@@ -1604,6 +1646,7 @@ class Backend {
   async loadSession(id: string): Promise<void> {
     this.clearTurnRecovery();
     await this.start();
+    await this.releaseOtherSession(this.acp!, id);
     await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
     this.sessionId = id;
   }
@@ -1716,6 +1759,7 @@ class Backend {
     this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
     this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
+    this.pulse.reset(); // P-LIVENESS.1: a new turn never inherits the last one's evidence
     this.recoverMark.clear(); // P-HEALTH.2: a new run never inherits a previous run's recovery marker
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
@@ -2469,6 +2513,20 @@ class Backend {
     return resumeId ? this.loadVerified(resumeId) : { ok: true };
   }
 
+  /** P-ASYNCJOBS.1: omp gives its AsyncJobManager ONLY to the first live top-level session in a process
+   *  (sdk.ts: `!AsyncJobManager.instance()`); any later one gets none. Boot's ensureSession() opens an empty
+   *  session, so a chat resumed beside it had no manager: long bash never auto-backgrounds, `async: true`
+   *  fails, `task` runs synchronously, and the turn sits silent inside one tool call for as long as the
+   *  command takes (the "waiting on 1 task, quiet for 8 min" stall). Close the session this child already
+   *  holds, including a session/new still in flight, so the chat about to be loaded becomes the owner.
+   *  A replacement child (revival) is not `this.acp` yet and holds nothing, so it is left alone. */
+  private async releaseOtherSession(acp: ACPClient, keep: string): Promise<void> {
+    if (acp !== this.acp) return;
+    await this.sessioning?.catch(() => {});
+    const prev = this.sessionId;
+    if (prev && prev !== keep) await acp.request("session/close", { sessionId: prev }, { timeoutMs: SESSION_MS }).catch(() => {});
+  }
+
   // -- P-RECOVER.1 (ADR-0385): self-recovery the user can see, and a report of every one ------------------
 
   /** `session/load` on the live master, VERIFIED: the one resume primitive the watchdog, the on-demand
@@ -2479,6 +2537,7 @@ class Backend {
     this.replaying = true;
     try {
       if (!acp) throw new Error("no agent process");
+      await this.releaseOtherSession(acp, id);
       await acp.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: RESUME_MS });
       this.sessionId = id;
       console.error("[recover] chat session resumed on the agent process");

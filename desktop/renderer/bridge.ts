@@ -1353,6 +1353,9 @@ export interface LucidBridge {
   // refuses as `idle` when the turn is not running. Never rejects: a refusal resolves with the engine's
   // typed code + reason, and a transport failure with code "unreachable", so the caller can say which.
   interject(target: string, text: string, opts?: { live?: boolean }): Promise<InterjectResult>;
+  /** P-LIVENESS.1 (ADR-0415): end only the processes the open call of `target` ("master" or a laneId)
+   *  started; the agent gets a note and the turn continues. Null on transport failure. */
+  stopCall(target: string): Promise<{ ok: boolean; stopped: string[]; reason: string } | null>;
   // -- P-RECOVER.1 (ADR-0385): self-recovery + incident reports ---------------------------------------
   /** The previous engine's master session, the current one, and the UNSEEN incidents. Null = unreachable. */
   recoveryState(): Promise<RecoveryStateView | null>;
@@ -2179,6 +2182,7 @@ export const bridge: LucidBridge = {
       return { ok: false, code: "unreachable", reason: "LUCID could not reach its engine" };
     }
   },
+  stopCall: (target) => post("/api/liveness/stop-call", { target }), // P-LIVENESS.1 (ADR-0415)
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,

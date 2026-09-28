@@ -126,6 +126,27 @@ export function transcriptStartedAt(jsonl: string): number {
   return 0;
 }
 
+/** P-LIVENESS.1 (ADR-0415): the cheap liveness read of a parent's subagent runs written since `since`:
+ *  the newest transcript write and how many runs have no result file yet. readdir + stat only, no
+ *  transcript reads, so it can run on every pulse sample. Missing dir / unreadable → nothing. */
+export function subagentPulse(sessionFile: string | null | undefined, since: number, io: SubagentIo = REAL_IO): { lastWriteAt: number; live: number } {
+  const none = { lastWriteAt: 0, live: 0 };
+  const dir = subagentArtifactsDir(sessionFile);
+  if (!dir || !io.exists(dir)) return none;
+  let entries: string[];
+  try { entries = io.list(dir); } catch { return none; }
+  let lastWriteAt = 0;
+  let live = 0;
+  for (const f of entries) {
+    if (!f.endsWith(".jsonl")) continue;
+    const at = io.mtime(join(dir, f));
+    if (at < since) continue;
+    lastWriteAt = Math.max(lastWriteAt, at);
+    if (!io.exists(join(dir, `${f.slice(0, -6)}.md`))) live++;
+  }
+  return { lastWriteAt, live };
+}
+
 /** List the live/finished subagent runs behind a parent session file. Missing dir / no runs → []
  *  (a parent that never delegated simply has no artifacts dir - that is not an error). */
 export function listSubagentRuns(sessionFile: string | null | undefined, io: SubagentIo = REAL_IO): SubagentRun[] {
