@@ -71,7 +71,7 @@ import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptim
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
-import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable)
+import { addQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
 import { delegationSettled, filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
@@ -2722,7 +2722,7 @@ function renderQueued(): void {
       ta.value = item.text; setSendEnabled(); void send();
       return;
     }
-    void pushMidTurn(item.text);
+    void pushMidTurn(item.text, i);
   }));
 }
 /** A deliberate Stop halts the staged queue as well as the turn: a prompt held behind the stopped turn stays
@@ -2766,11 +2766,28 @@ function releaseHeldPrompt(): void {
 }
 
 /** P-INTERJECT.2: interject a note into the RUNNING turn (the attached lane's, or the master's) + leave a
- *  transcript record chip. */
-async function pushMidTurn(text: string): Promise<void> {
-  const r = await bridge.interject(isLaneTarget(state.composerTarget) ? state.composerTarget.laneId : "master", text);
-  if (r) addNoteChip(`Pushed mid-turn: ${text}`);
-  else showToast({ tone: "warn", title: "Push not delivered", desc: "The note was refused - the per-turn note cap may be full, or the backend is unreachable.", timeout: 6000 });
+ *  transcript record chip.
+ *  ADR-0414: a refusal says the engine's actual reason and never loses the text. By then the caller has
+ *  already taken it out of the composer or the staged stack, so pushRecovery puts it back: sent as the
+ *  next prompt (the turn had ended), staged at `at` (its old slot in the stack), or back in the input. */
+async function pushMidTurn(text: string, at = state.queuedItems.length): Promise<void> {
+  const laneId = isLaneTarget(state.composerTarget) ? state.composerTarget.laneId : null;
+  const r = await bridge.interject(laneId ?? "master", text, { live: true });
+  if (r.ok) { addNoteChip(`Pushed mid-turn: ${text}`); return; }
+  // The engine is the authority on whether the lane's turn runs. A missed `done` on the watch left this
+  // flag set, and a send() with it set would open the chooser again for a turn that no longer exists.
+  if (r.code === "idle" && laneId) laneTurnLive = false;
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  const plan = pushRecovery(r.code, r.reason, { draft: !ta || !!ta.value.trim(), ownTurnOpen: state.streaming });
+  if (ta && plan.keep !== "stage") {
+    ta.value = text; autosize(ta); setSendEnabled();
+    if (plan.keep === "send") void send(); else ta.focus();
+  } else {
+    const i = Math.min(Math.max(0, at), state.queuedItems.length);
+    state.queuedItems = [...state.queuedItems.slice(0, i), { text, mode: "hold" }, ...state.queuedItems.slice(i)];
+    renderQueued();
+  }
+  showToast({ tone: plan.keep === "send" ? "info" : "warn", title: plan.title, desc: plan.desc, timeout: 8000 });
 }
 
 /** A quiet transcript note (the .evt chip family): one nowrap-ellipsis text span, full text in title.
@@ -3223,9 +3240,12 @@ function openCheckinCard(): void {
   ($("[data-ck-x]", card) as HTMLElement).addEventListener("click", closeCheckin);
   ($("[data-ck-ask]", card) as HTMLElement).addEventListener("click", () => {
     closeCheckin();
-    void bridge.interject("master", STATUS_ASK).then((r) => {
-      if (r) addNoteChip("Check-in sent - the agent will answer at its next tool boundary.");
-      else showToast({ tone: "warn", title: "Check-in not delivered", desc: "The note was refused - the turn may have ended or the note cap is full.", timeout: 6000 });
+    // ADR-0414: the HUD this card opens from also runs a turn the composer sends to an attached spoke, so
+    // the ask goes to the composer's target. It was hard-wired to "master", which parked it on an idle
+    // master while the spoke that was actually working never saw it.
+    void bridge.interject(isLaneTarget(state.composerTarget) ? state.composerTarget.laneId : "master", STATUS_ASK, { live: true }).then((r) => {
+      if (r.ok) addNoteChip("Check-in sent - the agent will answer at its next tool boundary.");
+      else showToast({ tone: "warn", title: "Check-in not delivered", desc: `${r.reason[0]!.toUpperCase()}${r.reason.slice(1)}.`, timeout: 6000 });
     });
   });
   // Click-away dismiss - armed a tick later so the opening click cannot instantly close it.

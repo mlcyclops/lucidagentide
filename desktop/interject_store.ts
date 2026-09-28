@@ -14,29 +14,64 @@
 //   - Notes are trimmed; empty/whitespace-only notes and notes over 4000 chars are refused.
 //   - drainInterjects returns AND clears: the single consumer is the target's omp child, so a
 //     drained note is delivered exactly once.
+//   - ADR-0414: a tool result is not the only way out. A note still waiting when the target's NEXT
+//     prompt starts (the turn it was meant for ended in prose, or the target was idle when the note was
+//     queued: the attach / release notes, a health probe) is carried into that prompt by
+//     carryPendingNotes. Before this, such notes sat here across turns until eight of them filled the cap
+//     and every later push was refused.
+//   - ADR-0414: a LIVE push (the user's Push now / Check in) names whether the target's turn is running.
+//     Not running is a typed `idle` refusal the renderer acts on (it sends the text as the next prompt),
+//     never a note parked where nothing will read it until some later turn.
+
+import { HEALTH_PROBE_NOTE } from "./health_watch.ts";
 
 const MAX_NOTES_PER_TARGET = 8;
 const MAX_NOTE_CHARS = 4000;
 
 const queues = new Map<string, string[]>();
 
+/** Why a note was not queued. The renderer maps each to what happened to the user's text. */
+export type InterjectRefusal = "no-target" | "empty" | "too-long" | "cap" | "unknown-target" | "idle";
+
 /** Queue one operator note for `target` ("master" or a laneId). Trims; refuses empty, over-long,
- *  and cap-exceeding notes with a human-readable reason. */
-export function addInterject(target: string, text: string): { ok: boolean; reason?: string } {
+ *  and cap-exceeding notes with a typed code and a human-readable reason.
+ *  `state` (ADR-0414) is the caller's view of the target: `running: null` means no such session (always
+ *  refused), `false` means no turn is running, which refuses only a `live` push (the user's own). A note
+ *  that is not live (the harness's attach / release / probe notes) is queued for the next tool result
+ *  or the next prompt, whichever comes first. */
+export function addInterject(target: string, text: string, state?: { running: boolean | null; live: boolean }): { ok: boolean; code?: InterjectRefusal; reason?: string } {
   const t = (target ?? "").trim();
-  if (!t) return { ok: false, reason: "target required" };
+  if (!t) return { ok: false, code: "no-target", reason: "target required" };
   const note = (text ?? "").trim();
-  if (!note) return { ok: false, reason: "empty note refused" };
-  if (note.length > MAX_NOTE_CHARS) return { ok: false, reason: `note too long (${note.length} chars; max ${MAX_NOTE_CHARS})` };
+  if (!note) return { ok: false, code: "empty", reason: "empty note refused" };
+  if (note.length > MAX_NOTE_CHARS) return { ok: false, code: "too-long", reason: `note too long (${note.length} chars; max ${MAX_NOTE_CHARS})` };
+  if (state && state.running === null) return { ok: false, code: "unknown-target", reason: "that session is no longer running" };
+  if (state?.live && !state.running) return { ok: false, code: "idle", reason: "the turn had already ended" };
   const q = queues.get(t) ?? [];
-  if (q.length >= MAX_NOTES_PER_TARGET) return { ok: false, reason: `too many pending notes for "${t}" (cap ${MAX_NOTES_PER_TARGET}) - wait for the agent's next tool result to drain them` };
+  if (q.length >= MAX_NOTES_PER_TARGET) return { ok: false, code: "cap", reason: `${MAX_NOTES_PER_TARGET} earlier notes are still waiting for the agent's next tool step` };
   q.push(note);
   queues.set(t, q);
   return { ok: true };
 }
 
-/** Return AND clear every pending note for `target` (FIFO order). The one consumer is the target's
- *  omp child polling from interject_extension.ts, so this is the exactly-once delivery point. */
+/** The marker a carried note opens with. Operator origin like the tool-result MARKER in
+ *  harness/omp/interject_extension.ts, and it says WHEN the note was written so the model does not
+ *  mistake an older note for part of the request that follows. */
+const CARRIED_MARKER = "[LUCID OPERATOR NOTE - sent while no tool step was running, so it is delivered with this prompt; weigh it, then handle the request below]";
+
+/** ADR-0414: drain every note still waiting for `target` into the block that opens its next prompt
+ *  ("" when none). Called by the prompt paths (acp_backend for "master", fleet_lanes for a lane) at the
+ *  moment the prompt is sent, so the note reaches the agent exactly once: either here or at a tool
+ *  result, whichever comes first. */
+export function carryPendingNotes(target: string): string {
+  // A health probe asks about the turn that went quiet. That turn is over by now, so carrying the probe
+  // would open a fresh request with a stale "Status?"; it is dropped here, and only here.
+  return drainInterjects(target).filter((n) => n !== HEALTH_PROBE_NOTE).map((n) => `${CARRIED_MARKER}\n${n}`).join("\n\n");
+}
+
+/** Return AND clear every pending note for `target` (FIFO order). The consumers are the target's omp
+ *  child polling from interject_extension.ts and carryPendingNotes at prompt start; draining is the
+ *  exactly-once delivery point for both. */
 export function drainInterjects(target: string): string[] {
   const t = (target ?? "").trim();
   const q = queues.get(t);
