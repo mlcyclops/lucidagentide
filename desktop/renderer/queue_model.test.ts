@@ -55,6 +55,57 @@ describe("addQueued", () => {
   });
 });
 
+describe("addQueued with guest extra (P-REMOTE.15)", () => {
+  const img = "data:image/png;base64,AAAA";
+
+  test("carries from and images through onto the staged item", () => {
+    const r = addQueued([], "  look at this  ", "hold", 8, { from: "Ana (phone)", images: [img] });
+    expect(r.ok).toBe(true);
+    expect(r.items).toEqual([{ text: "look at this", mode: "hold", from: "Ana (phone)", images: [img] }]);
+  });
+
+  test("from alone rides without an images key", () => {
+    const r = addQueued([], "hi", "hold", 8, { from: "Ana" });
+    expect(r.ok).toBe(true);
+    expect(r.items[0]).toEqual({ text: "hi", mode: "hold", from: "Ana" });
+    expect("images" in r.items[0]!).toBe(false);
+  });
+
+  test("an image-only prompt (empty text) is stageable; text stays empty", () => {
+    const r = addQueued([], "   ", "hold", 8, { from: "Ana", images: [img] });
+    expect(r.ok).toBe(true);
+    expect(r.items[0]!.text).toBe("");
+    expect(r.items[0]!.images).toEqual([img]);
+  });
+
+  test("two image-only prompts in a row both stage - empty texts are not a duplicate", () => {
+    const first = addQueued([], "", "hold", 8, { from: "Ana", images: [img] });
+    const second = addQueued(first.items, "", "hold", 8, { from: "Ana", images: [img] });
+    expect(second.ok).toBe(true);
+    expect(second.items.length).toBe(2);
+  });
+
+  test("empty text WITHOUT images is still refused, even with a from", () => {
+    const r = addQueued([], "  ", "hold", 8, { from: "Ana" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("empty prompt");
+  });
+
+  test("dup-of-last still refuses matching nonempty text even when images differ", () => {
+    const first = addQueued([], "same", "hold", 8, { from: "Ana", images: [img] });
+    const retry = addQueued(first.items, "same", "hold", 8, { from: "Ana", images: ["data:image/png;base64,BBBB"] });
+    expect(retry.ok).toBe(false);
+  });
+
+  test("cap still refuses, extra or not", () => {
+    let items: QueuedItem[] = [];
+    for (let i = 0; i < 8; i++) items = addQueued(items, `p${i}`, "hold").items;
+    const over = addQueued(items, "", "hold", 8, { from: "Ana", images: [img] });
+    expect(over.ok).toBe(false);
+    expect(over.reason).toContain("full");
+  });
+});
+
 describe("nextHold", () => {
   test("returns the FIRST hold item and the queue without it, order preserved", () => {
     const items = [push("p1"), hold("h1"), hold("h2"), push("p2")];

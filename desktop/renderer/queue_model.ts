@@ -12,6 +12,11 @@
 export interface QueuedItem {
   text: string;
   mode: "hold" | "push";
+  /** P-REMOTE.15: a queued GUEST prompt carries its author, so the drain can attribute the fired turn. */
+  from?: string;
+  /** P-REMOTE.15: guest image data URLs ride the queued item (NOT state.attachments) so an interleaving
+   *  local send cannot consume them; the drain stages them right before firing. */
+  images?: string[];
 }
 
 export interface AddQueuedResult {
@@ -22,14 +27,25 @@ export interface AddQueuedResult {
 
 /** Stage a prompt. Trims; refuses empty text, an exact duplicate of the LAST staged item (double-Enter
  *  protection - a deliberate repeat elsewhere in the stack is allowed), and a full queue. Never mutates
- *  `items` - the caller swaps in the returned array. */
-export function addQueued(items: QueuedItem[], text: string, mode: "hold" | "push", cap = 8): AddQueuedResult {
+ *  `items` - the caller swaps in the returned array. `extra` attaches guest provenance (P-REMOTE.15):
+ *  the author and any image data URLs ride the item itself so the drain can restore them at fire time.
+ *  A prompt WITH images and EMPTY text is stageable (a phone guest may send a screenshot alone), so the
+ *  empty-text refusal is relaxed when images are present, and the dup-of-last check only fires on
+ *  nonempty text (comparing two empty strings would wrongly refuse a second image-only prompt). */
+export function addQueued(items: QueuedItem[], text: string, mode: "hold" | "push", cap = 8, extra?: { from?: string; images?: string[] }): AddQueuedResult {
   const t = text.trim();
-  if (!t) return { items, ok: false, reason: "empty prompt" };
+  const imgN = extra?.images?.length ?? 0;
+  if (!t && !imgN) return { items, ok: false, reason: "empty prompt" };
   const last = items[items.length - 1];
-  if (last && last.text === t) return { items, ok: false, reason: "already staged (same as the last item)" };
+  if (t && last && last.text === t) return { items, ok: false, reason: "already staged (same as the last item)" };
   if (items.length >= cap) return { items, ok: false, reason: `queue is full (${cap} staged)` };
-  return { items: [...items, { text: t, mode }], ok: true };
+  const staged: QueuedItem = {
+    text: t,
+    mode,
+    ...(extra?.from ? { from: extra.from } : {}),
+    ...(imgN && extra?.images ? { images: extra.images } : {}),
+  };
+  return { items: [...items, staged], ok: true };
 }
 
 /** The prompt to auto-fire when the turn ends: the FIRST "hold" item, plus the queue without it.

@@ -19,6 +19,7 @@ import { resolveReconnect, RELAY_FILE_NAME } from "../../desktop/collab/drive_re
 import { findRelayFile, readRelayFile } from "../../desktop/collab/drive_file.ts";
 import { escapeHtml, foldEvent, renderControls, renderTranscript, renderHeader, renderLaneCard, renderProcessRow, presentedStatus, RECONNECT_GRACE_MS, buildTurnReport, renderReportHtml, reportMarkdown, type ViewItem, type TurnReport } from "../../desktop/collab/pwa_view.ts";
 import { laneRollup } from "../../desktop/collab/fleet_status.ts"; // P-PWA-FLEET.2: the SAME order/wording/counting the desktop dock pill uses
+import { mergeWelcome, openCache, pruneForCache, sealCache, PWA_CACHE_VERSION, type PwaCachePayload } from "../../desktop/collab/pwa_cache.ts"; // P-REMOTE.16: the encrypted on-device transcript cache + welcome dedupe
 import { planSync, type SyncPlan, type TargetProgress } from "../../desktop/collab/sync_state.ts"; // P-PWA-FOCUS.2: the pure unseen-per-target decision
 import { createRemoteCheckout, entitlementActive, isEntitlementDenied } from "../../desktop/collab/remote_entitlement.ts";
 import { acceptAttachment, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "../../desktop/renderer/composer_attachments.ts"; // P-REMOTE.8 (ADR-0229): pasted/attached images
@@ -66,6 +67,62 @@ function fatal(msg: string): void {
   const f = $("fatal-view");
   f.hidden = false;
   $("fatal-msg").textContent = msg;
+}
+
+// ---- P-REMOTE.16: the device store for the encrypted transcript cache (IndexedDB, opaque sealed bytes) ----
+// Everything here is fail-SOFT on purpose: the cache is a convenience layer over a live protocol, so a
+// missing or broken IndexedDB (private browsing, storage-pressure eviction) degrades to "no cache", never to
+// a broken app. The VALUE is sealed under the ROOM KEY before it gets here (pwa_cache.ts), so this store only
+// ever holds bytes that are useless without the invite fragment - the at-rest posture matches the wire.
+const IDB_NAME = "lucid-remote";
+const IDB_STORE = "transcripts";
+function idbOpen(): Promise<IDBDatabase> {
+  const { promise, resolve, reject } = Promise.withResolvers<IDBDatabase>();
+  const req = indexedDB.open(IDB_NAME, 1);
+  req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains(IDB_STORE)) req.result.createObjectStore(IDB_STORE); };
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error ?? new Error("indexeddb open failed"));
+  return promise;
+}
+async function idbGet(roomId: string): Promise<Uint8Array | null> {
+  try {
+    const db = await idbOpen();
+    try {
+      const { promise, resolve } = Promise.withResolvers<Uint8Array | null>();
+      const req = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(roomId);
+      req.onsuccess = () => resolve(req.result instanceof Uint8Array ? req.result : req.result instanceof ArrayBuffer ? new Uint8Array(req.result) : null);
+      req.onerror = () => resolve(null);
+      return await promise;
+    } finally { db.close(); }
+  } catch { return null; }
+}
+async function idbPut(roomId: string, bytes: Uint8Array): Promise<void> {
+  try {
+    const db = await idbOpen();
+    try {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).put(bytes, roomId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+      await promise;
+    } finally { db.close(); }
+  } catch { /* fail-soft: the live protocol does not need the cache */ }
+}
+async function idbDelete(roomId: string): Promise<void> {
+  try {
+    const db = await idbOpen();
+    try {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).delete(roomId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+      await promise;
+    } finally { db.close(); }
+  } catch { /* fail-soft */ }
 }
 
 // P-REMOTE.10c (ADR-0235): out-of-band reconnect. With no room in the URL (the invite link expired or was
@@ -201,6 +258,12 @@ function main(): void {
   let voiceInfo = ""; // the mode-specific explanation the "?" sheet leads with ("" = nothing decided yet)
   let voiceRisk = false; // this voice path would send audio off the phone -> the "?" button goes amber
   let voiceStatus = ""; // the one-line inline status (listening / it failed); "" hides the line entirely
+  // P-REMOTE.16: the encrypted on-device transcript cache + the screen wake lock + the turn-done buzz.
+  let cacheKey: CryptoKey | null = null; // the imported room key, reused to seal/open the cache at rest
+  let cacheRestored = false; // the ONE restore attempt per page load happened (hit or miss) - gates saves too
+  let cacheSaveTimer = 0; // debounce handle for the sealed write (0 = none scheduled)
+  let restoredBoundary = false; // a restore left unseen items -> the first welcome merge draws the boundary
+  let wakeLock: WakeLockSentinel | null = null; // held while the session view is visible; OS drops it on lock
 
   // Exactly one of the three primary views is visible at a time (fatal() takes over on a hard error).
   const show = (view: "signin" | "session" | "subscribe"): void => {
@@ -209,6 +272,35 @@ function main(): void {
     $("subscribe-view").hidden = view !== "subscribe";
     $("checkout-result-view").hidden = true;
     $("reconnect-view").hidden = true;
+    // P-REMOTE.16: hold the screen awake exactly while the SESSION view is up - watching a live agent is
+    // the one surface where the phone auto-locking mid-read is a real loss (and the lock/unlock round trip
+    // is what used to eat the transcript). Sign-in/paywall screens release it: no reason to burn battery.
+    if (view === "session") acquireWakeLock(); else releaseWakeLock();
+  };
+
+  // P-REMOTE.16: best-effort screen wake lock. Browsers may refuse (battery saver, unsupported WebKit) and
+  // the OS RELEASES it on every visibility loss, so it is silent on refusal and re-acquired on each return
+  // to visible. The app works fine without it - the screen just locks on the OS schedule, exactly as before.
+  const acquireWakeLock = (): void => {
+    if (wakeLock || document.visibilityState !== "visible" || $("session-view").hidden) return;
+    const nav = navigator as Navigator & { wakeLock?: { request(type: "screen"): Promise<WakeLockSentinel> } };
+    void nav.wakeLock?.request("screen").then((s) => {
+      wakeLock = s;
+      s.addEventListener("release", () => { if (wakeLock === s) wakeLock = null; });
+    }).catch(() => { /* refused: not fatal, the phone just keeps its lock schedule */ });
+  };
+  const releaseWakeLock = (): void => {
+    const held = wakeLock;
+    wakeLock = null;
+    void held?.release().catch(() => { /* already released */ });
+  };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") acquireWakeLock(); });
+
+  // P-REMOTE.16: a short buzz when the agent settles and is waiting on YOU. Android only by platform fact -
+  // iOS Safari ships no Vibration API - so the optional call is a silent no-op there (the wake lock above is
+  // what keeps iOS usable: a lit screen shows the turn ending).
+  const buzz = (pattern: number | number[]): void => {
+    try { (navigator as Navigator & { vibrate?: (p: number | number[]) => boolean }).vibrate?.(pattern); } catch { /* no vibration on this platform */ }
   };
 
   const signInBtn = $("signin-btn") as HTMLButtonElement;
@@ -455,6 +547,11 @@ function main(): void {
       const echo = text || `[${imgs.length} image${imgs.length === 1 ? "" : "s"}]`;
       selfEchoes.push(echo); // P-COLLAB.15: dedup the host's live broadcast of my own turn against this echo
       items = [...items, { kind: "user", text: echo }];
+      // P-REMOTE.16: a mid-turn send IS a queue (the desktop stages it and fires it when the turn ends),
+      // so SAY so where the user is looking - the button's momentary "Queue" label leaves no trace, and a
+      // silent stage reads as a swallowed prompt on a phone.
+      if (composerStreaming) items = [...items, { kind: "note", text: "Queued - sends when this turn ends" }];
+      scheduleCacheSave();
       render(guest.view());
       promptInput.value = ""; autosize();
       attachments = []; renderThumbs();
@@ -1092,9 +1189,33 @@ function main(): void {
    *  unit `seen`/`firstUnseen` are measured in, so it MUST match what render() hands renderTranscript. */
   const streamLen = (target: string): number => {
     const its = target === "master" ? items : targetItems.get(target) ?? [];
-    const pri = target === "master" ? (guest?.view().transcript ?? []) : targetPrior.get(target) ?? [];
+    // P-REMOTE.16: the master's welcome replay is MERGED into `items` (onWelcome), so master has no
+    // separate prior list any more - counting view.transcript here again would double-count every turn.
+    const pri = target === "master" ? [] : targetPrior.get(target) ?? [];
     return pri.length + its.filter((i) => i.kind !== "fleet-lanes" && i.kind !== "processes").length;
   };
+
+  // P-REMOTE.16: persist the pruned master transcript, sealed under the room key (pwa_cache.ts). Debounced
+  // behind the token flood; FORCED (saveCacheNow) at the exact moments that matter - screen lock and page
+  // hide - because a locked phone may never get another timer tick. Both are fail-soft: a failed write means
+  // the next unlock restores an older cache, and the welcome merge reconciles the difference.
+  const saveCacheNow = (): void => {
+    if (!cacheKey || !cacheRestored) return; // never write over a cache that has not been read yet
+    if (cacheSaveTimer) { clearTimeout(cacheSaveTimer); cacheSaveTimer = 0; }
+    const payload: PwaCachePayload = {
+      v: PWA_CACHE_VERSION,
+      roomId: parsed.roomId,
+      savedAt: Date.now(),
+      seen: seen.get("master") ?? 0,
+      items: pruneForCache(items),
+    };
+    void sealCache(cacheKey, payload).then((bytes) => idbPut(parsed.roomId, bytes)).catch(() => { /* fail-soft */ });
+  };
+  const scheduleCacheSave = (): void => {
+    if (!cacheKey || !cacheRestored || cacheSaveTimer) return;
+    cacheSaveTimer = window.setTimeout(() => { cacheSaveTimer = 0; saveCacheNow(); }, 1_500);
+  };
+  window.addEventListener("pagehide", saveCacheNow);
 
   /** Every conversation the phone is tracking, for planSync. Master is always present; a lane appears once
    *  it has been watched at least once (before that the phone has nothing of its stream to have missed). */
@@ -1172,7 +1293,11 @@ function main(): void {
     // or the focused lane's `lane-sync` replay + that lane's items. Everything below this line that reads
     // `items`/`view.transcript` is master-scoped on purpose (status, catch-up, report, fleet, processes).
     const shown = focus === "master" ? items : targetItems.get(focus) ?? [];
-    const prior = focus === "master" ? view.transcript : targetPrior.get(focus) ?? [];
+    // P-REMOTE.16: the MASTER renders from `items` alone - the welcome replay is merged into it (deduped)
+    // by onWelcome, so rendering view.transcript here as well would draw every prior turn twice. That double
+    // draw was in fact live before this change on every soft reconnect (hourly Cloud Run flap): welcome
+    // re-supplied turns the folded items already held. A focused lane keeps its authoritative replay list.
+    const prior = focus === "master" ? [] : targetPrior.get(focus) ?? [];
     // P-PWA-FLEET.1: fleet/process snapshots render in their strips above the transcript, never inline.
     // P-PWA-FOCUS.2: `markFrom` draws the "new since you looked away" boundary for THIS target. It is passed
     // only while it is genuinely this target's boundary, so switching focus cannot carry another
@@ -1317,7 +1442,26 @@ function main(): void {
         const key = await importRoomKey(parsed.key);
         const wsUrl = `${cfg.relayWsBase.replace(/\/+$/, "")}/r/${parsed.roomId}`;
         socket = new CollabSocket({ wsUrl, role: "guest", key, authToken: () => auth.getIdToken() });
-        items = []; thinkIntent.clear(); lastReport = null; turnStart = 0; selfEchoes.length = 0;
+        cacheKey = key; // P-REMOTE.16: the SAME imported key seals/opens the transcript cache at rest
+        // P-REMOTE.16: the folded items SURVIVE a rebuilt socket now. They used to be wiped right here,
+        // which is exactly how the transcript (thinking, tool chips, everything the plain-text welcome
+        // replay cannot carry) vanished after a long screen lock: the socket died fatally while dark,
+        // resumeConnection rebuilt it, and this reset threw the session's history away. The welcome merge
+        // below (onWelcome -> mergeWelcome) dedupes the host's replay against whatever the phone already
+        // shows, so retention cannot double a turn. A page RELOAD instead restores the sealed device cache,
+        // once, before the first welcome can land.
+        if (!cacheRestored) {
+          const cached = await idbGet(parsed.roomId).then((b) => (b ? openCache(key, b, parsed.roomId, Date.now()) : null)).catch(() => null);
+          cacheRestored = true; // hit or miss, the one restore attempt happened - saves may begin
+          if (cached && items.length === 0) {
+            items = cached.items;
+            turnStart = items.length; // run reports cover live turns, never restored history
+            seen.set("master", Math.min(cached.seen, cached.items.length));
+            // Arm the one-shot boundary on EVERY restore: whether anything is actually unseen is decided
+            // AFTER the welcome merge (turns missed while the phone was dark arrive there, not in the cache).
+            restoredBoundary = true;
+          }
+        }
         // P-PWA-FOCUS.1: a fresh guest watches the master, so the phone must agree with it. Anything else
         // would point the composer at a lane this socket never subscribed to.
         focus = "master"; targetItems.clear(); targetPrior.clear();
@@ -1326,10 +1470,40 @@ function main(): void {
         sttDecision = null; sttPosture = ""; sttCloudOk = false; pendingSttSource = null; dictatedText = "";
         applySttDecision();
         guest = new CollabGuest(socket, { name: currentEmail ?? "phone", writeToken: parsed.writeToken }, {
+          // P-REMOTE.16: fold the host's replay into what the phone already shows (cache-restored, or
+          // retained across the reconnect) - count-aware dedupe, a partially streamed answer upgraded to
+          // its authoritative text, turns missed while the screen was locked appended in order. The master
+          // transcript renders ONLY from `items` now, so the replay lands here or nowhere.
+          onWelcome: (w) => {
+            items = mergeWelcome(items, w.transcript);
+            // A run report over merged history would claim turns this phone never watched: advance the
+            // segment start unless a live turn is visibly still in flight at the tail.
+            const tail = items[items.length - 1];
+            if (!(tail && ((tail.kind === "answer" && tail.streaming) || tail.kind === "thinking"))) turnStart = items.length;
+            scheduleCacheSave();
+            // The watermark MUST be read before render(): a visible render marks everything seen, which
+            // would erase the very boundary this is about to draw.
+            const sn = seen.get("master") ?? 0;
+            render(guest!.view());
+            if (restoredBoundary) {
+              // One-shot: land the user at "new since you looked away", exactly like the cross-screen-lock
+              // sync does, instead of at the bottom with the context scrolled away.
+              restoredBoundary = false;
+              if (focus === "master" && sn > 0 && sn < streamLen("master")) {
+                markFrom = sn;
+                render(guest!.view());
+                $("transcript").querySelector("[data-sync-mark]")?.scrollIntoView({ block: "center" });
+              }
+            }
+          },
           onEvent: (e) => {
             items = foldEvent(items, e);
             // P-REMOTE.9: on turn end, build the report from this turn's items, then start the next segment.
-            if (e.type === "done") { lastReport = buildTurnReport(items.slice(turnStart), guest!.view()); turnStart = items.length; }
+            // P-REMOTE.16: `done` is also the "waiting on you" moment - buzz the phone (no-op on iOS); a
+            // gate block gets a shorter tick, because it usually needs the user too.
+            if (e.type === "done") { lastReport = buildTurnReport(items.slice(turnStart), guest!.view()); turnStart = items.length; buzz([200, 100, 200]); }
+            else if (e.type === "block") buzz(80);
+            scheduleCacheSave();
             render(guest!.view());
           },
           // P-COLLAB.15: a live user turn from the host or ANOTHER guest. The sender already echoed its own
@@ -1338,6 +1512,7 @@ function main(): void {
             const i = selfEchoes.indexOf(text);
             if (i !== -1) { selfEchoes.splice(i, 1); return; } // my own turn, already shown
             items = [...items, { kind: "user", text, from }];
+            scheduleCacheSave();
             render(guest!.view());
           },
           // P-PWA-FOCUS.1: a watched lane's events fold into THAT lane's own list. `foldEvent` is pure and
@@ -1347,6 +1522,9 @@ function main(): void {
             // `lane-error` now has its own fold case + red `lane-fail` chip in pwa_view, so a crashed lane
             // shows in its conversation in order, and never as the security gate's `block`.
             targetItems.set(laneId, foldEvent(targetItems.get(laneId) ?? [], e));
+            // P-REMOTE.16: the conversation the user is ACTIVELY driving settled - same buzz as the master.
+            // An unfocused lane stays silent: its backlog is the catch-up card's job, not the motor's.
+            if (focus === laneId && e.type === "done") buzz([200, 100, 200]);
             if (focus === laneId) render(guest!.view());
           },
           // The host's replay for a lane we just started watching. It is AUTHORITATIVE, so it replaces that
@@ -1451,7 +1629,8 @@ function main(): void {
   // P-PWA-FOCUS.2: the screen locked. Only the TIME is snapshotted; the per-target `seen` map is already the
   // record of what had been looked at, so there is nothing else to freeze.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
+    // P-REMOTE.16: the lock IS the moment to persist - a dark phone may never run the debounce timer.
+    if (document.visibilityState === "hidden") { hiddenAt = Date.now(); saveCacheNow(); return; }
     const plan = planSync(progress(), focus, hiddenAt ? Date.now() - hiddenAt : 0);
     hiddenAt = 0;
     if (!plan.totalUnseen) { catchup.hidden = true; return; } // nothing moved: no card, no scroll, no noise
@@ -1484,6 +1663,10 @@ function main(): void {
     if (!email) {
       guest?.leave("signed out");
       guest = null;
+      // P-REMOTE.16: a signed-out phone keeps NO transcript at rest (a shared or handed-over device must
+      // not carry the session home). The sealed bytes were unreadable without the fragment anyway; this
+      // removes even those.
+      void idbDelete(parsed.roomId);
       show("signin");
       return;
     }

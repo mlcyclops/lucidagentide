@@ -86,6 +86,14 @@ export function foldEvent(items: ViewItem[], e: ChatEvent): ViewItem[] {
       const text = typeof e.text === "string" && e.text ? e.text : last && last.kind === "answer" ? last.text : "";
       if (last && last.kind === "answer" && last.streaming) out[out.length - 1] = { kind: "answer", text, streaming: false };
       else if (text) out.push({ kind: "answer", text, streaming: false });
+      // P-REMOTE.16: a tool/subagent chip that interleaves mid-answer SPLITS the stream into a new trailing
+      // bubble, and the earlier fragment kept `streaming: true` forever - the turn is over, but anything
+      // derived from "is an answer still streaming?" (the phone's Queue/Send label, its Stop button) stayed
+      // stuck mid-turn for the rest of the session. `done` ends the whole turn: no answer keeps streaming.
+      for (let i = 0; i < out.length - 1; i++) {
+        const it = out[i]!;
+        if (it.kind === "answer" && it.streaming) out[i] = { ...it, streaming: false };
+      }
       return out;
     }
     case "no-response":

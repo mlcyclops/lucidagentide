@@ -2273,7 +2273,21 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     scheduleKnowledgeRefresh(); maybeListen();
     // P-TURN-RECOVERY-DRAIN: only done or deliberate Stop may release a held prompt.
     const nq = nextHold(state.queuedItems);
-    if ((terminal || stopped) && nq.item) { state.queuedItems = nq.rest; renderQueued(); const ta2 = $("#input") as HTMLTextAreaElement; if (!ta2.value.trim()) { ta2.value = nq.item.text; setSendEnabled(); void send(); } else { state.queuedItems = [nq.item, ...state.queuedItems]; renderQueued(); } }
+    if ((terminal || stopped) && nq.item) {
+      state.queuedItems = nq.rest; renderQueued();
+      const ta2 = $("#input") as HTMLTextAreaElement;
+      if (!ta2.value.trim()) {
+        // P-REMOTE.15: a queued GUEST prompt carries its author + images on the item itself; restore them
+        // here, right before firing, exactly as runGuestPromptLocally does on an idle composer.
+        if (nq.item.from) nextTurnFrom = nq.item.from;
+        if (nq.item.images?.length) {
+          state.attachments = [];
+          for (const dataUrl of nq.item.images) { const r = acceptAttachment(state.attachments, dataUrl, `att_${++attSeq}`); if (r.ok && r.attachment) state.attachments.push(r.attachment); }
+          renderComposerThumbs();
+        }
+        ta2.value = nq.item.text; setSendEnabled(); void send();
+      } else { state.queuedItems = [nq.item, ...state.queuedItems]; renderQueued(); }
+    }
   };
   const run = async (transport: typeof connect) => {
     if (!owns() || settled || connecting) return;
@@ -13432,6 +13446,17 @@ function stopRelayTokenPush(): void {
 let nextTurnFrom: string | null = null;
 function runGuestPromptLocally(text: string, from: string, images?: string[]): void {
   const imgN = images?.length ?? 0;
+  if (state.streaming) {
+    // P-REMOTE.15: a guest prompt landing MID-TURN goes straight into the hold queue. It must NEVER route
+    // through send() here - send() opens the #queueChooser desktop modal, which a remote phone guest can
+    // never click, stranding the prompt. The author + images ride the queued item itself (settle()'s drain
+    // restores them right before firing); staging state.attachments / nextTurnFrom now would let an
+    // interleaving LOCAL send consume them onto the wrong turn.
+    const r = addQueued(state.queuedItems, text, "hold", 8, { from, ...(imgN && images ? { images } : {}) });
+    if (r.ok) { state.queuedItems = r.items; renderQueued(); showToast({ title: `Queued ${from}'s prompt`, desc: "Runs when this turn ends.", timeout: 4000 }); }
+    else showToast({ tone: "warn", title: `${from}'s prompt not staged`, desc: `${r.reason ?? "refused"}.`, timeout: 5000 });
+    return;
+  }
   showToast({ title: `Running ${from}'s prompt`, desc: text.slice(0, 90) || `${imgN} image${imgN === 1 ? "" : "s"}`, timeout: 4000 });
   if (imgN && images) {
     // P-REMOTE.8 (ADR-0229): stage the guest's images as composer attachments so send() forwards them to the
@@ -13442,7 +13467,6 @@ function runGuestPromptLocally(text: string, from: string, images?: string[]): v
     renderComposerThumbs();
   }
   const ta = $("#input") as HTMLTextAreaElement | null;
-  // If a turn is already running, send() queues it - the guest's turn runs after the current one.
   if (ta) { nextTurnFrom = from; ta.value = text; autosize(ta); void send(); }
 }
 

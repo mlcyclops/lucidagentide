@@ -26,6 +26,18 @@ describe("pwa_view: foldEvent reducer", () => {
     expect(items).toEqual([{ kind: "answer", text: "abc", streaming: false }]);
   });
 
+  it("done ends EVERY streaming answer, including a fragment a tool chip split off mid-answer (P-REMOTE.16)", () => {
+    // Before the fix, the pre-chip fragment kept streaming:true forever, so the phone's composer stayed in
+    // mid-turn mode (Queue label + Stop button) for the rest of the session after any tool-interleaved turn.
+    const items = fold([
+      { type: "token", text: "part one " },
+      { type: "tool", name: "edit", detail: "auth.ts" },
+      { type: "token", text: "part two" },
+      { type: "done", text: "part one part two" },
+    ]);
+    expect(items.filter((i) => i.kind === "answer" && i.streaming)).toEqual([]);
+  });
+
   it("separates thinking from the answer and coalesces thinking deltas", () => {
     const items = fold([{ type: "thinking", text: "hm" }, { type: "thinking", text: "mm" }, { type: "token", text: "ok" }]);
     expect(items).toEqual([{ kind: "thinking", text: "hmmm" }, { kind: "answer", text: "ok", streaming: true }]);

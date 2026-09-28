@@ -535,7 +535,10 @@ function leaveCollabGuest(): void { try { collabGuest?.guest.leave("you left the
 // P-COLLAB.13 (ADR-0198): an EDIT guest's prompt/abort lands here; the HOST renderer polls this inbox and
 // runs it through its OWN composer (so omp's scan gate + exec/egress approvals fire, and the turn taps back to
 // collab). Consume-on-read. The prompt text is a remote guest's input - clamp its length defensively.
-let pendingGuestPrompt: { text: string; from: string; images?: string[]; sttSource?: SttSource } | null = null;
+// P-REMOTE.15: an ARRAY, not a single slot - the renderer polls every 2s and consumes one per read, so a
+// burst of guest prompts drains in order instead of each overwriting the last. Cap 8 mirrors addQueued's
+// queue-full refusal: a push beyond the cap drops the NEW prompt.
+const pendingGuestPrompts: Array<{ text: string; from: string; images?: string[]; sttSource?: SttSource }> = [];
 let guestAbortRequested = false;
 // P-COLLAB.14 (ADR-0228): a connected EDIT guest's model / already-used-folder pick, consumed-on-read by the
 // host renderer's guest-inbox poll and applied through its OWN picker path (applyConfig / applyWorkspace).
@@ -627,7 +630,8 @@ const collabManager = new CollabManager({
     // once the desktop's own offline transcription actually produced text (whatever the phone claimed).
     const stage = (finalText: string, src?: SttSource): void => {
       if (!finalText.trim() && !(Array.isArray(images) && images.length)) return;
-      pendingGuestPrompt = { text: finalText.slice(0, 20_000), from: guestTurnLabel(guest.name, src), ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}), ...(src ? { sttSource: src } : {}) };
+      if (pendingGuestPrompts.length >= 8) return; // cap mirrors addQueued: the NEW prompt is dropped
+      pendingGuestPrompts.push({ text: finalText.slice(0, 20_000), from: guestTurnLabel(guest.name, src), ...(Array.isArray(images) && images.length ? { images: images.slice(0, 6).map(String) } : {}), ...(src ? { sttSource: src } : {}) });
     };
     if (!audio) { stage(String(text), sttSource); return; }
     // P-REMOTE.12: a push-to-talk clip (already host-validated in CollabHost). Transcribe on the SAME
@@ -4848,7 +4852,7 @@ return Bun.serve({
         const b = await readBody<{ allowEdit?: unknown; favModels?: unknown }>(req);
         // P-REMOTE.11b: snapshot the renderer's favorite models for the guest picker (validated, capped).
         collabFavModels = Array.isArray(b.favModels) ? b.favModels.filter((x): x is string => typeof x === "string" && x.length > 0).slice(0, MAX_FAVS) : [];
-        pendingGuestPrompt = null; guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null; // fresh inbox per share
+        pendingGuestPrompts.length = 0; guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null; // fresh inbox per share
         try {
           const status = await collabManager.start({ allowEdit: b.allowEdit === true });
           // P-COLLAB.18: audit the RELAY share start (metadata only).
@@ -4859,7 +4863,7 @@ return Bun.serve({
       }
       if (p === "/api/collab/stop" && req.method === "POST") {
         const prev = collabManager.status(); // capture the roomId/access before the share is torn down
-        pendingGuestPrompt = null; guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null;
+        pendingGuestPrompts.length = 0; guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null;
         const data = collabManager.stop("host ended the session");
         if (prev.active) recordCollabShareStopped({ transport: "relay", access: prev.allowEdit ? "edit" : "view", roomId: prev.roomId, relaySource: prev.relaySource });
         return json({ ok: true, data });
@@ -4880,8 +4884,10 @@ return Bun.serve({
       if (p === "/api/collab/guest-inbox") {
         // P-COLLAB.14: also carry a guest's model / already-used-folder pick (workspace as a host-LOCAL path -
         // resolved from the opaque id here, never sent to the guest). Consume-on-read like prompt/abort.
-        const out = { prompt: pendingGuestPrompt, abort: guestAbortRequested, model: pendingGuestModel, workspace: pendingGuestWorkspace };
-        pendingGuestPrompt = null; guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null;
+        // Prompts consume ONE per read, oldest first - the renderer polls every 2s, so several queued
+        // prompts drain in order without changing the bridge response shape.
+        const out = { prompt: pendingGuestPrompts.shift() ?? null, abort: guestAbortRequested, model: pendingGuestModel, workspace: pendingGuestWorkspace };
+        guestAbortRequested = false; pendingGuestModel = null; pendingGuestWorkspace = null;
         return json({ ok: true, data: out });
       }
       // The connected GUEST drives the host (EDIT access only - CollabGuest.sendPrompt no-ops when read-only).
