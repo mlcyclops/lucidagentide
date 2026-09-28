@@ -1,0 +1,69 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
+// P-TUI.1 (part): the hub's pure keystones. The pane tree must never lose or duplicate a leaf
+// (a lost pane is a lost capability view), fitBlock must hold exact geometry (one sheared row
+// breaks every pane to its right), and deck rows must survive hostile engine strings.
+
+import { describe, expect, test } from "bun:test";
+import { closeLeaf, deckLines, fitBlock, leaves, mapLeaf, type HubData, type PaneNode } from "./hub_tui.ts";
+
+const leaf = (deck: "overview" | "security" | "fleet"): PaneNode => ({ kind: "leaf", deck });
+
+describe("pane tree", () => {
+  test("split replaces the focused leaf and keeps every other leaf in ring order", () => {
+    let tree: PaneNode = leaf("overview");
+    tree = mapLeaf(tree, 0, (l) => ({ kind: "split", dir: "v", a: l, b: leaf("security") }));
+    tree = mapLeaf(tree, 1, (l) => ({ kind: "split", dir: "h", a: l, b: leaf("fleet") }));
+    expect(leaves(tree).map((l) => l.deck)).toEqual(["overview", "security", "fleet"]);
+  });
+
+  test("closing a middle pane hands its region to the sibling; the last pane refuses", () => {
+    let tree: PaneNode = { kind: "split", dir: "v", a: leaf("overview"), b: { kind: "split", dir: "h", a: leaf("security"), b: leaf("fleet") } };
+    const closed = closeLeaf(tree, 1)!;
+    expect(leaves(closed).map((l) => l.deck)).toEqual(["overview", "fleet"]);
+    expect(closeLeaf(leaf("overview"), 0)).toBeNull();
+  });
+});
+
+describe("fitBlock", () => {
+  test("pads and clips to exact geometry, including overlong and missing rows", () => {
+    const out = fitBlock(["abc", "this row is far too long for the pane"], 10, 4);
+    expect(out).toHaveLength(4);
+    for (const row of out) expect(Bun.stringWidth(row)).toBe(10);
+    expect(out[0]).toBe("abc       ");
+    expect(out[3]).toBe(" ".repeat(10));
+  });
+});
+
+describe("deck rows", () => {
+  const data: HubData = {
+    build: { productName: "LucidAgentIDE", version: "9.9", flavor: "agent", port: 5319 },
+    security: { live: { quarantined: [{ id: "b1", tool: "write", severity: "high", findings: "zero-width×2", at: "2026-09-28T10:00:00Z" }], dismissed: [] } },
+    fleet: { lanes: [{ name: "lane-1", status: "running", turns: 2, model: "haiku" }] },
+    sessions: [{ title: "line one\nline two\ttabbed", updatedAt: "2026-09-28T10:00" }],
+    audit: { events: [] },
+    usage: { models: [] },
+  };
+
+  test("a hostile title (newline, tab) still renders as ONE physical row", () => {
+    const rows = deckLines("sessions", data, 60, -1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).not.toMatch(/[\n\t]/);
+    expect(rows[0]).toContain("line one line two tabbed");
+  });
+
+  test("security rows carry the selection cursor and never raw content", () => {
+    const rows = deckLines("security", data, 60, 0);
+    expect(rows[0]).toStartWith("▸");
+    expect(rows[0]).toContain("write");
+    expect(rows[0]).toContain("zero-width×2");
+  });
+
+  test("an off-shape engine answer degrades to '?' rows, never a crash", () => {
+    const weird = { ...data, fleet: { lanes: [{}] }, build: {} } as HubData;
+    expect(deckLines("overview", weird, 40, -1)[0]).toContain("?");
+    expect(deckLines("fleet", weird, 40, -1)).toHaveLength(1);
+    expect(deckLines("overview", null, 40, -1)).toEqual(["loading from the engine…"]);
+  });
+});
