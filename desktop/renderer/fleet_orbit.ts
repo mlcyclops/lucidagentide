@@ -49,6 +49,9 @@ export interface FleetOrbitDeps {
   demoteLane: () => void;
   /** Open the classic grid dock (the workbench: per-lane composers, queues and transcripts). */
   openGrid: () => void;
+  /** Close the grid dock. One fleet view at a time: opening the orbit, by any route, closes the grid, so
+   *  an orbit-first user never finds a grid left behind that they did not ask for. */
+  closeGrid: () => void;
   /** The REAL OS folder dialog (fleet_grid's contract). Resolves null on cancel - never re-prompt. */
   pickFolder: (opts?: { title?: string; confirm?: string }) => Promise<string | null>;
   /** The master model picker's options, for the on-orbit spawn form's model select. */
@@ -575,6 +578,7 @@ export function toggleFleetOrbit(): void {
 
 export function openFleetOrbit(): void {
   if (!deps) return;
+  deps.closeGrid();
   if (!view) view = buildView();
   if (!view.isConnected) document.body.appendChild(view);
   view.hidden = false;
