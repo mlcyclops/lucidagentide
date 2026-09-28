@@ -2801,7 +2801,11 @@ let parkedMasterThread: { role: string; text: string }[] | null = null;
  *  SEGMENTS in arrival order (reasoning, text, a tool chip, more text), so text that follows a tool call
  *  renders below that call's chip instead of growing a bubble that sits above it. `seg` is the open text
  *  segment, `buf` the whole answer (copy / save as .md). */
-interface LaneWatchBubble { node: HTMLElement; body: HTMLElement; stream: HTMLElement; seg: string; buf: string; reasoning: ReasoningWin | null; t0: number }
+interface LaneWatchBubble { node: HTMLElement; body: HTMLElement; stream: HTMLElement; seg: string; buf: string; reasoning: ReasoningWin | null; t0: number; working: LaneWorking | null }
+/** The watched turn's status line: the master turn's HUD look (pulsing bolt + phase), kept last in the
+ *  bubble for the whole turn. A spoke that is thinking or inside a long tool call streams nothing, and
+ *  without this line an attached composer showed the bare prompt of a running turn: it read as finished. */
+interface LaneWorking { el: HTMLElement; phase: HTMLElement }
 let laneWatchNode: LaneWatchBubble | null = null;
 /** P-SCROLL.1: our own lane turn's events reach the WATCH as well, on a second stream that can lag the
  *  prompt stream by a few ms. Until the watch has delivered that turn's own done/error, its content
@@ -2821,6 +2825,16 @@ const turnInFlight = (): boolean => state.streaming || (isLaneTarget(state.compo
  *  preference. Keyed "master" or by lane id; in memory only (a reload lands on the newest anyway). */
 const readingSpots = new Map<string, { atEnd: boolean; anchor: ScrollAnchor | null }>();
 const spotKey = (t: ComposerTarget): string => (isLaneTarget(t) ? `lane:${t.laneId}` : "master");
+/** Pasted / dropped images belong to the target they were pasted on. While the composer is elsewhere they
+ *  wait here, keyed like the reading spots, and come back when it returns; before this one list rode along
+ *  to every spoke and the hub, so a screenshot meant for one spoke was sent with another's prompt. */
+const parkedAttachments = new Map<string, Attachment[]>();
+function swapAttachments(from: ComposerTarget, to: ComposerTarget): void {
+  if (state.attachments.length) parkedAttachments.set(spotKey(from), state.attachments);
+  state.attachments = parkedAttachments.get(spotKey(to)) ?? [];
+  parkedAttachments.delete(spotKey(to));
+  renderComposerThumbs();
+}
 function msgBoxes(): MsgBox[] {
   const c = $("#chat");
   if (!c) return [];
@@ -2884,6 +2898,7 @@ async function promoteLane(laneId: string): Promise<void> {
   const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
   saveReadingSpot(state.composerTarget); // P-SCROLL.1: before the thread is swapped out
   parkedMasterThread = snapshotThread();
+  swapAttachments(state.composerTarget, target);
   state.composerTarget = target;
   // P-FLEET.L17: the ring, the rail and the spoke banner now speak for the LANE - the master's last
   // sample would be a lie. P-FLEET.L19: seed from the lane's OWN last measured sample (the engine keeps
@@ -2896,12 +2911,13 @@ async function promoteLane(laneId: string): Promise<void> {
   // MID-TURN: show what the running turn has done so far, in the same bubble the watch will keep filling.
   // The transcript holds settled turns only, so without this the composer landed on the bare prompt of a
   // lane that had been working for minutes and read as "the spoke stopped".
-  laneTurnLive = lane.status === "working" || lane.status === "needs-approval";
-  if (r.live && (r.live.text || r.live.tools.length)) {
-    laneTurnLive = true;
-    const live = openLaneWatchNode();
-    for (const title of r.live.tools) live.stream.before(laneToolChip(title));
-    if (r.live.text) {
+  // The engine sends `live` whenever the lane is busy, EMPTY while it thinks or waits on a long tool call;
+  // an empty snapshot is still a running turn, so the bubble and its status line show either way.
+  laneTurnLive = lane.status === "working" || lane.status === "needs-approval" || !!r.live;
+  if (laneTurnLive) {
+    const live = showLaneWorking(lane.status);
+    for (const title of r.live?.tools ?? []) live.stream.before(laneToolChip(title));
+    if (r.live?.text) {
       live.seg = r.live.text; live.buf = r.live.text;
       live.stream.innerHTML = renderMarkdown(live.seg) + `<span class="cursor"></span>`;
       (live.node as MsgNode)._md = live.buf;
@@ -2957,6 +2973,7 @@ function demoteLane(): void {
     // The composer has already detached; the fleet card may still paint as attached until it reconciles.
     showToast({ tone: "warn", title: "The lane still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
+  swapAttachments(was, MASTER_TARGET);
   state.composerTarget = MASTER_TARGET;
   state.liveUsage = null; // P-FLEET.L17: the lane's samples leave with it; the master's next turn refills.
   // Restore BEFORE the notice: renderThread clears the thread, so a notice appended first would be wiped.
@@ -2992,7 +3009,11 @@ function onLaneWatchEvent(e: LaneEvent): void {
   // stay set, and every send would be staged behind a turn that no longer exists.
   if (e.type === "status") {
     laneTurnLive = e.status === "working" || e.status === "needs-approval";
-    if (!laneTurnLive && !state.streaming && !laneOwnedTail) releaseHeldPrompt();
+    if (state.streaming || laneOwnedTail) return; // our own turn: send() renders it and its HUD
+    // A turn started elsewhere (the lane's card, its queue) shows the moment it starts, not at its first
+    // token; a turn that ended without a done this watch saw stops reading as live.
+    if (laneTurnLive) showLaneWorking(e.status);
+    else { settleLaneWatchNode(); releaseHeldPrompt(); }
     return;
   }
   // Our own turn is rendering these already, and so is its lagging tail (P-SCROLL.1): the watch's own
@@ -3079,9 +3100,13 @@ function settleLaneWatchNode(): void {
   const live = laneWatchNode;
   laneWatchNode = null;
   if (!live) return;
+  live.working?.el.remove();
   live.reasoning?.finish(Date.now() - live.t0);
   if (live.seg) renderAnswerBody(live.stream, live.seg); // P-CHAT.A sections
   else live.stream.remove();
+  // Opened only to say the turn was running, and it ended with nothing to show (stopped while thinking):
+  // no empty bubble stays behind.
+  if (!live.body.childElementCount) live.node.remove();
 }
 
 /** P-SCROLL.1: close the open text segment (frozen as a settled answer) and open a fresh one at the end of
@@ -3090,7 +3115,7 @@ function cutLaneWatchSegment(live: LaneWatchBubble): void {
   if (!live.seg) return;
   renderAnswerBody(live.stream, live.seg);
   live.stream = el(`<div class="stream"></div>`);
-  live.body.appendChild(live.stream);
+  if (live.working) live.working.el.before(live.stream); else live.body.appendChild(live.stream);
   live.seg = "";
 }
 
@@ -3100,8 +3125,24 @@ function openLaneWatchNode(): LaneWatchBubble {
   body.innerHTML = "";
   const stream = el(`<div class="stream"></div>`);
   body.appendChild(stream);
-  laneWatchNode = { node, body, stream, seg: "", buf: "", reasoning: null, t0: Date.now() };
+  laneWatchNode = { node, body, stream, seg: "", buf: "", reasoning: null, t0: Date.now(), working: null };
   return laneWatchNode;
+}
+
+/** The attached spoke has a turn running that this composer is not rendering itself: make sure its bubble
+ *  and status line are on screen, however quiet the turn is. No clock: the engine does not say when the
+ *  lane's turn began, and a clock started at attach would misstate the turn's age. */
+function showLaneWorking(status: string): LaneWatchBubble {
+  const live = laneWatchNode ?? openLaneWatchNode();
+  if (!live.working) {
+    const hud = el(`<div class="hud streaming lane-watch-status"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-phase"></span></div>`);
+    live.body.appendChild(hud);
+    live.working = { el: hud, phase: $(".hud-phase", hud) as HTMLElement };
+    if (!live.seg) live.stream.innerHTML = `<span class="cursor"></span>`;
+  }
+  live.working.phase.textContent = status === "needs-approval" ? "Waiting for your approval" : "Working";
+  scrollChat();
+  return live;
 }
 
 /** P-FLEET.L8: the attachment badge above the composer row. Invariant #11: the label is ONE text child in
