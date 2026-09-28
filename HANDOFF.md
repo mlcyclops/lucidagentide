@@ -13,10 +13,14 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-09-27, v2.3.0-beta.9 prerelease)
+## Current state (2026-09-27, v2.3.0-beta.10 prerelease)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.3.0-beta.9** (2026-09-27)
+now product increments, each with its own ADR. **v2.3.0-beta.10** (2026-09-27)
+is beta.9 made quieter on operator request: no ETAs or estimates, only the
+dead-process Restart line, the subdued Beta 8 palette, a tipping Jev scale, and
+opt-in repo discovery for new lanes (ADR-0409/0408/0406 amendments).
+**v2.3.0-beta.9** (2026-09-27)
 integrates nine branches on top of beta.8: P-PROGRESS.1/.2 (ADR-0409/0408,
 what every worker is doing and its ETA), P-SWITCH.1/.2 (ADR-0403/0404, one
 session one owner), P-OWN.1 (ADR-0407, known writers per checkout), P-REPO.1

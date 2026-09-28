@@ -528,4 +528,11 @@
 //            Preview panel gets a two-row header, a Browser pop-out and three offline games (P-PREVIEW.20/.21,
 //            P-GAME.1/.2/.3); the launcher defaults to Opus 5.5.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.9";
+// v2.3.0-beta.10 = beta.9, quieter. No ETAs or estimates anywhere (tool rows, subagents, HUD, lane cards,
+//            orbit); the only liveness shown is a dead agent process with its Restart line; step marks and
+//            folds go back to the subdued Beta 8 palette; the Jev scale tips instead of spinning
+//            (P-PROGRESS.1/.2 amendments, ADR-0409/0408). New lane / New spoke lead with a Folder field and
+//            Browse, and the local and GitHub CLI repo searches run only when checked and asked for
+//            (P-REPO.1 amendment, ADR-0406).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.10";
