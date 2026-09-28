@@ -88,7 +88,8 @@ async function handle(line: string): Promise<void> {
   // The first is "fake-session-1", which every existing assertion relies on.
   // A lane child carries LUCID_INTERJECT_TARGET=lane-<id> (dev.ts interjectChildEnv), so under the engine
   // every lane process mints ids no other process can mint, as real omp does; the master ("master") and a
-  // bare test spawn (a test run inside LUCID inherits "master" too) keep "fake-session-1". Without this a
+  // bare test spawn keep "fake-session-1". A test run from inside a LUCID lane INHERITS that lane's target,
+  // so a test asserting the literal id pins LUCID_INTERJECT_TARGET="master" in its spawn env. Without this a
   // spoke's first id equals Main's and the one-owner rule (P-SWITCH.2) routes "open session" to the spoke.
   if (method === "session/new") {
     const target = process.env.LUCID_INTERJECT_TARGET ?? "";

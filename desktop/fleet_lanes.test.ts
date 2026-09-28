@@ -457,6 +457,9 @@ test("spawn and every recovery NAME the session in the ledger; the view exposes 
     argv: () => ({ cmd: "bun", args: [FAKE] }),
     masterModel: () => "master-model-a",
     sample: async () => healthy,
+    // A bare spawn, pinned: a run from inside a LUCID lane inherits that lane's target, and the fake then
+    // tags its ids with it ("fake-session-lane-<id>-1").
+    env: () => ({ LUCID_INTERJECT_TARGET: "master" }),
     recordLaneSession: (rec) => records.push({ laneId: rec.laneId, name: rec.name, sessionId: rec.sessionId, event: rec.event }),
   });
   const r = await live.spawn({ cwd: import.meta.dir, name: "ledgered" });
