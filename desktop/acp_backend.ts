@@ -63,7 +63,7 @@ import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
 import { type PendingCall, type PendingView, parseTaskCall, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
 import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
-import { PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1: the dead-child signal
+import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
 import { WorkspaceGate, type WaitView } from "./workspace_gate.ts"; // P-PROGRESS.1: the folder lease shared with the fleet
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1
 import { emitSecurityEvent } from "./audit_export.ts";
@@ -400,7 +400,7 @@ export type ChatEvent =
   // call already streamed as `tool`. Display + report metadata only, never a gate.
   // P-PROGRESS.1: the engine's own settle report adds `elapsedMs`.
   | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
-  // P-PROGRESS.1: the turn's progress view (is the agent process alive? every PROGRESS_TICK_MS) and the
+  // P-PROGRESS.1: the turn's progress view (every PROGRESS_TICK_MS and on each settled call) and the
   // same-folder wait. Both go through onEvent directly, never the activity sink, like `slow`.
   | { type: "progress"; progress: ProgressView }
   | { type: "waiting"; wait: WaitView }
@@ -559,17 +559,36 @@ class Backend {
   // long-quiet turn is still waiting on. Cleared at turn boundaries + restart.
   private openCalls = new Map<string, PendingCall>();
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
-  // -- P-PROGRESS.1: the dead-child signal and the folder lease ----------------------------------------
+  // -- P-PROGRESS.1: progress, estimate, and the folder lease ------------------------------------------
+  /** Turn and tool lengths behind the estimate. dev.ts hands in the instance shared with the fleet lanes
+   *  (seeded from the latency ledger); a backend built without one keeps its own. */
+  durations = new DurationHistory();
   /** The folder lease shared with the fleet lanes: a master turn waits behind a lane's running turn in the
    *  same folder, and lanes wait behind the master's. */
   workspaceGate = new WorkspaceGate();
+  /** Tool calls settled in the current turn. */
+  private stepsDone = 0;
   /** Per-turn: the real tool name behind a toolCallId, once the tool_meta extension reported it. */
   private toolNames = new Map<string, string>();
+  /** The live turn's progress emitter (set for the turn's life), so a settled call can push a fresh view. */
+  private progressTick: (() => void) | null = null;
   /** The turn is in line for its folder (workspace_gate). Nothing is running in omp, so the watchdog must
-   *  not read the silence as a stall. */
+   *  not read the silence as a stall, and the progress view says "waiting" instead. */
   private waitingFolder = false;
   /** Aborted by cancel() while the turn is in line, since there is nothing in omp to cancel yet. */
   private folderWaitAbort: AbortController | null = null;
+
+  /** P-PROGRESS.1: where the master turn stands right now: elapsed, last sign of life, steps, the liveness
+   *  verdict and the history-based estimate. Read-only; also served on GET /api/session-health. */
+  progressView(now = Date.now()): ProgressView {
+    return progressView({
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
+      startedAt: this.turnStartedAtMs, lastActivityAt: this.healthActivityAt,
+      stepsDone: this.stepsDone, stepsOpen: pendingSnapshot(this.openCalls, now), lastHealth: this.lastHealth,
+      model: this.activeModel(), history: this.durations, now,
+      toolNameOf: (label) => { for (const [id, c] of this.openCalls) if (c.label === label) return this.toolNames.get(id); return undefined; },
+    });
+  }
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
   setPersona(wrapped: string | null): void { this.persona = wrapped; }
@@ -936,7 +955,7 @@ class Backend {
                 this.emit({ type: "tool", ...(callId ? { id: callId } : {}), name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}), ...(input ? { input } : {}), ...(intent ? { intent } : {}) });
                 // P-PROGRESS.1: a call that arrives already terminal never gets a tool_call_update; settle its
                 // step now so the live row does not spin forever.
-                if (callId && !this.openCalls.has(callId)) { this.emit({ type: "tool-meta", id: callId, name: String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs: 0 }); }
+                if (callId && !this.openCalls.has(callId)) { this.stepsDone++; this.emit({ type: "tool-meta", id: callId, name: String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs: 0 }); }
                 // P-LOC.4 (ADR-0211): mirror this authored write/edit into the GUI-owned AI-LOC ledger the
                 // dashboard reads. The gate ALSO records it into agent_obs.duckdb (the BI system-of-record),
                 // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
@@ -1011,7 +1030,10 @@ class Backend {
               if (wasOpen && !this.openCalls.has(settleId)) {
                 const elapsedMs = Math.max(0, Date.now() - wasOpen.startedAt);
                 const realName = this.toolNames.get(settleId);
+                this.stepsDone++;
+                this.durations.addTool(realName ?? String(u.kind ?? "tool"), elapsedMs);
                 this.emit({ type: "tool-meta", id: settleId, name: realName ?? String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs });
+                this.progressTick?.();
               }
               if (u.status === "failed" || u.status === "rejected") { this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break; }
               // P-IMG.1 (ADR-0208): surface image output from a tool result (a generated image, a rendered
@@ -1637,12 +1659,13 @@ class Backend {
     const onEvent = (e: ChatEvent) => turn.emit(e);
     let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
     let slow: Timer | undefined;
-    // P-PROGRESS.1: the progress view (is the agent process still there?) goes to the window every
-    // PROGRESS_TICK_MS, through onEvent DIRECTLY (never the sink): telling the user never counts as activity.
+    // P-PROGRESS.1: the progress view goes to the window every PROGRESS_TICK_MS and on every settled tool
+    // call, through onEvent DIRECTLY (never the sink): telling the user never counts as activity.
     let progressTimer: Timer | undefined;
     let releaseFolder: (() => void) | null = null;
+    this.stepsDone = 0;
     this.toolNames.clear();
-    const progressTick = () => { try { onEvent({ type: "progress", progress: progressView({ busy: this.listener !== null, dead: this.acp?.isDead ?? false }) }); } catch { /* stream gone */ } };
+    this.progressTick = () => { try { onEvent({ type: "progress", progress: this.progressView() }); } catch { /* stream gone */ } };
     try {
     let silentSince = Date.now();
     // While a permission is awaiting the user (Ask mode), pause the slow-notice clock \u2014 a human
@@ -1740,7 +1763,7 @@ class Backend {
       this.folderWaitAbort = new AbortController();
       try {
         releaseFolder = await this.workspaceGate.acquire(
-          { id: "master", name: "Main", cwd: currentWorkspace() },
+          { id: "master", name: "Main", cwd: currentWorkspace(), etaMs: () => this.progressView().estimate.etaMs },
           { signal: this.folderWaitAbort.signal, onWait: (w) => { this.waitingFolder = true; try { onEvent({ type: "waiting", wait: w }); } catch { /* stream gone */ } } },
         );
       } catch (e) {
@@ -1753,7 +1776,7 @@ class Backend {
         this.folderWaitAbort = null;
       }
       if (this.recoveryTurn !== turn) return;
-      progressTimer = setInterval(progressTick, PROGRESS_TICK_MS);
+      progressTimer = setInterval(this.progressTick, PROGRESS_TICK_MS);
       progressTimer.unref?.();
       arm(); // start the slow-notice clock now (covers silence BEFORE the first token)
       tSent = Date.now(); // P-EVAL.2: t_sent \u2014 the prompt is handed to the model
@@ -1813,6 +1836,7 @@ class Backend {
       clearTimeout(slow);
       clearInterval(progressTimer);
       releaseFolder?.();
+      this.progressTick = null;
       if (this.recoveryTurn === turn) {
       this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
       this.askActive = false;
@@ -1860,6 +1884,7 @@ class Backend {
     // this case self-evident in one line (no first token, 21.7k in, NOT ok), and stopReason still
     // reaches the user through the no-response event above. Adding columns is its own increment.
     const produced = sawOutput && !errored;
+    if (tSent > 0 && produced) this.durations.addTurn(this.activeModel(), Date.now() - tSent); // P-PROGRESS.1
     if (tSent > 0) recordLatency({
       model: this.activeModel(), sessionId: this.sessionId ?? undefined,
       tSent, tFirstToken, tEnd: Date.now(), ok: produced,

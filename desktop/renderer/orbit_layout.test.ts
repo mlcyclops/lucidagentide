@@ -56,17 +56,17 @@ describe("spokeGlance", () => {
   const lane = (status: Parameters<typeof spokeGlance>[0]["status"], turns = 2, queued = 0) =>
     ({ status, turns, queued: new Array(queued).fill(0) });
   test("the two human-blocking states name the user's next move", () => {
-    expect(spokeGlance(lane("needs-approval"))).toBe("needs your approval");
-    expect(spokeGlance(lane("awaiting-input"))).toBe("ready for your prompt");
+    expect(spokeGlance(lane("needs-approval"), false)).toBe("needs your approval");
+    expect(spokeGlance(lane("awaiting-input"), false)).toBe("ready for your prompt");
   });
   test("working shows the turn IN FLIGHT, not the settled count", () => {
-    expect(spokeGlance(lane("working", 2))).toBe("working \u00b7 turn 3");
+    expect(spokeGlance(lane("working", 2), false)).toBe("working \u00b7 turn 3");
   });
   test("a staged queue is visible from orbit", () => {
-    expect(spokeGlance(lane("awaiting-input", 2, 2))).toBe("ready for your prompt \u00b7 2 queued");
+    expect(spokeGlance(lane("awaiting-input", 2, 2), false)).toBe("ready for your prompt \u00b7 2 queued");
   });
   test("error tells the user the way back", () => {
-    expect(spokeGlance(lane("error"))).toContain("respawn");
+    expect(spokeGlance(lane("error"), false)).toContain("respawn");
   });
 });
 
@@ -101,11 +101,16 @@ describe("switchEntries", () => {
   });
 });
 
-// P-PROGRESS.1: a spoke in line for its folder names whom it waits for, and only while it is working.
+// P-PROGRESS.1: a spoke in line for its folder names whom it waits for; a running spoke with history shows
+// its estimated percent, labelled as an estimate, and every older glance string is unchanged.
 describe("spokeGlance (P-PROGRESS.1)", () => {
-  test("waiting names the holder on a working spoke; a settled spoke says what it did", () => {
+  test("waiting names the holder; a percent rides only a working spoke", () => {
     const base = { turns: 2, queued: [] as unknown[] };
-    expect(spokeGlance({ ...base, status: "working", waiting: { on: { name: "alpha" } } })).toBe("waiting for alpha");
-    expect(spokeGlance({ ...base, status: "done", waiting: { on: { name: "alpha" } } })).toBe("done \u00b7 2 turns");
+    expect(spokeGlance({ ...base, status: "working", waiting: { on: { name: "alpha" } } }, true)).toBe("waiting for alpha");
+    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: 40 } } }, true)).toBe("working \u00b7 turn 3 \u00b7 40% (est.)");
+    // P-PROGRESS.3: the estimate is opt-in; with it off no percent reaches the glance.
+    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: 40 } } }, false)).toBe("working \u00b7 turn 3");
+    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: null } } }, true)).toBe("working \u00b7 turn 3");
+    expect(spokeGlance({ ...base, status: "done", progress: { estimate: { percent: 40 } } }, true)).toBe("done \u00b7 2 turns");
   });
 });

@@ -90,7 +90,11 @@ export function refusedConfigKey(keys: readonly string[]): string | null {
   return keys.find((k) => !CONFIG_ALLOW.some((re) => re.test(k))) ?? null;
 }
 
+// A path that is not absolute (a drive-relative `D:x` on another drive, see argPath) has no fixed place on
+// disk, so it is never inside. Without this, `relative` resolved it against the PROCESS cwd: on a UNC cwd
+// (a repo on a network share) it came back as "D:x", which is neither ".." nor absolute, and passed.
 const within = (p: string, root: string): boolean => {
+  if (!w.isAbsolute(p)) return false;
   const rel = w.relative(root, p);
   return rel === "" || (!rel.startsWith("..") && !w.isAbsolute(rel));
 };

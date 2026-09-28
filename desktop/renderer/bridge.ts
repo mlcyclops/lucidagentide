@@ -272,8 +272,8 @@ export interface LaneView {
   lastHealth?: { action: "probe" | "recover"; reason: string; at: number };
   /** P-FLEET.L19: the lane's last MEASURED context fill, window and cost; absent until omp reports once. */
   usage?: { used: number; size: number; cost: number };
-  /** P-PROGRESS.1: is the lane's agent process alive? Present while a turn runs or the child is dead;
-   *  absent when idle. */
+  /** P-PROGRESS.1: live progress (elapsed, last signal, open steps, liveness, estimate) while a turn runs
+   *  or the child is dead; absent when idle. */
   progress?: ProgressView;
   /** P-PROGRESS.1: this lane's turn is queued behind another worker's turn in the same folder. */
   waiting?: WaitView;
@@ -336,8 +336,8 @@ export interface FleetStatusView {
     memHotMs: number;
   };
   masterModel: string;
-  /** P-PROGRESS.1: every folder with two or more workers on it (the master counts), in run order; empty
-   *  when nobody shares a folder. */
+  /** P-PROGRESS.1: every folder with two or more workers on it (the master counts), in run order with
+   *  expected start times; empty when nobody shares a folder. */
   queues: FolderQueue[];
 }
 // P-ACCT.1 (ADR-0375): the account list per provider. AccountView is single-sourced from the pure
@@ -1283,7 +1283,7 @@ export interface LucidBridge {
   // Same close POST; the stop-the-turn half happens renderer-side (the pill calls stopTurn itself).
   browserStop(): Promise<void>;
   // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
-  subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
+  subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
   systemStatus(fresh?: boolean): Promise<SystemStatusView | null>;
   // CREATOR-0 (ADR-0279): this build's identity + which Creator surfaces exist. Null in an old backend.
