@@ -115,11 +115,11 @@ import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, localPrefixSet, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
-import { buildHubSections, configuredProviderCount, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
+import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
@@ -675,7 +675,10 @@ function sessRow(s: SessionInfo, active: boolean): string {
       <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
     </div>`;
 }
+/** The session list as last painted (cache or live): the model picker ranks each family by it. */
+let lastSessionList: SessionList | null = null;
 function renderSessionList(data: SessionList): void {
+  lastSessionList = data;
   const list = $("#sessList"); if (!list) return;
   const { sessions, ingest } = data;
   if (!sessions.length && !ingest.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
@@ -17184,9 +17187,14 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // acknowledged China-cloud models could Discover their own self-hosted GLM and the picker would
   // hide it with no hint, which is the edge-first posture inverted.
   const localOk = localPrefixSet(state.localProviders ?? []);
+  // Ambient-credential providers (Bedrock, Vertex): omp lists them on the strength of a stray ~/.aws profile
+  // or ADC on the box; LUCID shows them only behind a key saved in the hub. `state.auth` unloaded = no key
+  // yet, which hides them until the first auth fetch lands (pickerRedraw repaints).
+  const keyedIds = credentialedProviderIds(state.auth);
   const visible = opt.options.filter((o) =>
     !isAuxiliaryModel(o.value) &&
     !isDeprecatedModel(o.value) &&
+    !isUnconfiguredAmbientModel(o.value, keyedIds) &&
     (govOk || !isGovModel(o.value)) &&
     (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
   // Lockdown: only the gov-gateway models are selectable.
@@ -17200,7 +17208,9 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
     seen.add(key);
     return true;
   });
-  return ensureCurrent(deduped);
+  // Within each family (groupByFamily keeps this order): what this workspace has run, most recently used
+  // first, then the curated rest, then the special-case routes (regional / non-reasoning variants) last.
+  return ensureCurrent(orderByUsage(deduped, usageFromSessions(lastSessionList?.sessions ?? [])));
 }
 const THINK_DESC: Record<string, string> = {
   off: "Fastest replies - simple edits, lookups, and quick chat.",

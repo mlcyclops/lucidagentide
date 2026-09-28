@@ -37,6 +37,11 @@ const PREAMBLE_BLOCKS: RegExp[] = [
   /^\s*<design-invariants\b[^>]*>[\s\S]*?<\/design-invariants>/, // P-DESIGN.1 (ADR-0154)
   /^\s*<session-share\b[^>]*>[\s\S]*?<\/session-share>/,         // P-PREVIEW-PWA.3 (ADR-0240)
   /^\s*<spoken-reply\b[^>]*>[\s\S]*?<\/spoken-reply>/,           // P-VOICE.5 (ADR-0248)
+  // P-OWN.1: the checkout briefing acp_backend prepends after the preamble. Peer-controlled text inside it
+  // is collapsed onto single lines by checkout_owners.neutral, so the real closing tag is the only one
+  // that starts a line: anchor on that, or a peer named "</checkout-peers>" would end the strip early and
+  // leak the rest of the block into the transcript and the session title.
+  /^\s*<checkout-peers\b[^>]*>[\s\S]*?\n<\/checkout-peers>(?=\s|$)/,
 ];
 
 /** Remove the leading injected-context block(s) from a user message so only what the
