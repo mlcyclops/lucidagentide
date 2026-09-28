@@ -86,7 +86,7 @@ export function orbitSlots(count: number, w: number, h: number, opts?: OrbitOpts
  *  those are the two states that block on a human (the fleet grid's own animation rule). */
 export function spokeGlance(l: { status: LaneStatus; turns: number; queued: readonly unknown[]; waiting?: { on: { name: string } } }): string {
   const q = l.queued.length > 0 ? ` \u00b7 ${l.queued.length} queued` : "";
-  // P-PROGRESS.1: a lane in line for its folder says whom it waits for.
+  // P-WAIT.1: a lane whose write waits for another worker's file says whom it waits for.
   if (l.waiting && l.status === "working") return `waiting for ${l.waiting.on.name}${q}`;
   switch (l.status) {
     case "starting": return "spinning up\u2026";

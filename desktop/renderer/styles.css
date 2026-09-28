@@ -5921,12 +5921,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-tchip-state[data-state="done"]::before{content:"\2713";margin-right:2px}
 .fleet-tchip-state[data-state="failed"]{color:var(--txt-3)}
 .fleet-tchip-state[data-state="failed"]::before{content:"\2717";margin-right:2px}
-.fleet-queues{grid-column:1 / -1;margin:0 0 8px;padding:7px 10px;border:1px solid rgb(var(--amber-rgb) / .35);
-  border-radius:9px;background:rgb(var(--amber-rgb) / .07);font-family:var(--mono);font-size:11px;min-width:0}
-.fleet-queue-folder + .fleet-queue-folder{margin-top:6px;padding-top:6px;border-top:1px solid var(--line-soft)}
-.fleet-queue-title{color:var(--txt-2);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-queue-row{color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-queue-row[data-state="running"]{color:var(--txt-2)}
 @media (prefers-reduced-motion: reduce){
   .ts-state[data-state="open"]::before,.fleet-tchip-state[data-state="open"]::before{animation:none;border-top-color:rgb(var(--cyan-rgb) / .35)}
 }

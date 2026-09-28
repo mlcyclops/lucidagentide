@@ -244,8 +244,8 @@ export interface ConfigOption {
 // P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
-import type { FolderQueue, WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (types only)
-export type { ProgressView, WaitView, FolderQueue };
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
+export type { ProgressView, WaitView };
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
 /** Approval scope: "once" answers only the pending ask; "session" also allows every same-kind ask for
  *  the rest of the lane's session (mirrors desktop/fleet_lanes.ts). */
@@ -275,7 +275,7 @@ export interface LaneView {
   /** P-PROGRESS.1: is the lane's agent process alive? Present while a turn runs or the child is dead;
    *  absent when idle. */
   progress?: ProgressView;
-  /** P-PROGRESS.1: this lane's turn is queued behind another worker's turn in the same folder. */
+  /** P-WAIT.1: one of this lane's writes waits for a file another worker's running turn is editing. */
   waiting?: WaitView;
   /** P-REPO.1 (ADR-0406): the repo this lane works on and where its commits go; absent until probed. */
   repo?: RepoContext;
@@ -308,7 +308,7 @@ export type LaneEvent =
   | { type: "tool"; id?: string; name: string; detail: string; code?: LaneToolCode; input?: string; intent?: string; status?: "open" | "done" | "failed"; elapsedMs?: number }
   /** P-PROGRESS.1: the lane's progress view, every few seconds while its turn runs. */
   | { type: "progress"; progress: ProgressView }
-  /** P-PROGRESS.1: the lane's turn waits for another worker's turn in the same folder. */
+  /** P-WAIT.1: a write in the lane's turn waits for a file another worker is editing. */
   | { type: "waiting"; wait: WaitView }
   | { type: "permission"; summary: string; kind: string }
   | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
@@ -336,9 +336,6 @@ export interface FleetStatusView {
     memHotMs: number;
   };
   masterModel: string;
-  /** P-PROGRESS.1: every folder with two or more workers on it (the master counts), in run order; empty
-   *  when nobody shares a folder. */
-  queues: FolderQueue[];
 }
 // P-ACCT.1 (ADR-0375): the account list per provider. AccountView is single-sourced from the pure
 // policy module (never a secret in it - keys are last4-masked server-side).

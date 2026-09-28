@@ -2473,9 +2473,9 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // P-PROGRESS.1: the engine's progress view (every few seconds). Only a dead agent process shows anything:
     // the one line with the restart action.
     else if (e.type === "progress") { deadRow.hidden = e.progress.liveness !== "dead"; }
-    // P-PROGRESS.1: this turn is in line behind another worker's turn in the same folder. Nothing is running
-    // yet; say whom it waits for and its place in line. The next real event replaces the phase.
-    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish in this folder \u00b7 ${e.wait.position === 1 ? "next in line" : `number ${e.wait.position} in line`}`); paintHud(); scrollChat(); }
+    // P-WAIT.1: one of this turn's writes waits for a file another worker's running turn is editing. Say
+    // whom it waits for and which file. The next real event replaces the phase.
+    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish with ${e.wait.file}`); paintHud(); scrollChat(); }
     // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
     // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
     else if (e.type === "judgment") {

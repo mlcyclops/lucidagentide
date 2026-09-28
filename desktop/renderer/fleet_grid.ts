@@ -43,7 +43,7 @@ import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order 
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
 import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
 import { humanMs, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
-import type { FolderQueue, WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (types only)
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
 import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
@@ -118,7 +118,7 @@ interface LaneRun {
   follow: { done: Promise<void>; stop: () => void } | null;
   /** P-PROGRESS.1: the freshest progress view (stream or poll): is the lane's agent process alive? */
   progress: ProgressView | null;
-  /** P-PROGRESS.1: the lane's turn is in line behind another worker's turn in the same folder. */
+  /** P-WAIT.1: one of the lane's writes waits for a file another worker's running turn is editing. */
   waiting: WaitView | null;
 }
 
@@ -671,31 +671,8 @@ async function refresh(): Promise<void> {
   layout = reconcile(layout, st.lanes.map((l) => l.id));
   if (grid) { applyOrder(grid); applySizes(); }
   if (hr) paintHeadroom(hr, st.resources, st.lanes.length);
-  if (grid) paintQueues(grid, st.queues ?? []); // P-PROGRESS.1: who runs and who waits, per shared folder
   paintEmpty();
   paintPill();
-}
-
-/** P-PROGRESS.1: the folder queue strip at the top of the grid: one block per folder two or more workers
- *  share, every worker on its own row in run order. Nothing when nobody shares a folder. Every row is ONE
- *  text child (invariant 11: no flex prose, no word-wrapped labels). */
-function paintQueues(grid: HTMLElement, queues: FolderQueue[]): void {
-  let strip = $(".fleet-queues", grid) as HTMLElement | null;
-  if (!queues.length) { strip?.remove(); return; }
-  if (!strip) { strip = el(`<div class="fleet-queues"></div>`); grid.prepend(strip); }
-  const now = Date.now();
-  strip.innerHTML = queues.map((q, qi) => `<div class="fleet-queue-folder" data-qf="${qi}"><div class="fleet-queue-title"></div>${q.entries.map((_, ei) => `<div class="fleet-queue-row" data-qe="${ei}"></div>`).join("")}</div>`).join("");
-  queues.forEach((q, qi) => {
-    const block = $(`[data-qf="${qi}"]`, strip!) as HTMLElement | null; if (!block) return;
-    ($(".fleet-queue-title", block) as HTMLElement).textContent = `Turns in ${q.folder}, in order:`;
-    q.entries.forEach((e, ei) => {
-      const row = $(`[data-qe="${ei}"]`, block) as HTMLElement | null; if (!row) return;
-      const when = e.state === "running" ? `running since ${humanMs(Math.max(0, now - e.sinceAt))} ago` : "waiting";
-      const line = `${e.position + 1}. ${e.name}: ${when}`;
-      row.textContent = line; row.title = line;
-      row.dataset.state = e.state;
-    });
-  });
 }
 
 /** The header HUD. There is no cap to show any more, so the numbers that matter are the two live percents
@@ -800,8 +777,8 @@ function buildCard(run: LaneRun): HTMLElement {
   </div>`);
 }
 
-/** P-PROGRESS.1: two plain lines and nothing else: the restart line when the lane's agent process is gone,
- *  and, while the lane's folder is taken, whom its turn waits for and its place in line. */
+/** P-PROGRESS.1 / P-WAIT.1: two plain lines and nothing else: the restart line when the lane's agent process is gone,
+ *  and, while one of its writes waits for a file another worker is editing, whom it waits for and the file. */
 function paintProgress(run: LaneRun): void {
   const card = run.card; if (!card) return;
   const dead = $("[data-lane-dead]", card) as HTMLElement | null;
@@ -810,7 +787,7 @@ function paintProgress(run: LaneRun): void {
   const w = run.waiting;
   wait.hidden = !w;
   if (w) {
-    const line = `Waiting for ${w.on.name} to finish in ${w.folder} \u00b7 ${w.position === 1 ? "next in line" : `number ${w.position} in line`}`;
+    const line = `Waiting for ${w.on.name} to finish with ${w.file}`;
     wait.textContent = line; wait.title = line;
   }
 }
@@ -1246,7 +1223,7 @@ function onLaneEvent(id: string, e: LaneEvent): void {
         ...(e.status ? { status: e.status } : {}), ...(e.elapsedMs !== undefined ? { elapsedMs: e.elapsedMs } : {}),
         open: false,
       });
-      run.waiting = null; // the lease was granted: the turn is running
+      run.waiting = null; // a tool event means the write wait is over
       paintOutput(run);
       // P-PREVIEW.10: a lane write worth LOOKING at (html/svg/pdf) earns the lane its own Preview panel
       // tab. P-PREVIEW.18: narrowed from "anything renderable" - a lane writing notes.md or a config.json
