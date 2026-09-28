@@ -13,10 +13,14 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-09-27, v2.3.0-beta.10 prerelease)
+## Current state (2026-09-27, v2.3.0-beta.11 prerelease)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.3.0-beta.10** (2026-09-27)
+now product increments, each with its own ADR. **v2.3.0-beta.11** (2026-09-27)
+fixes Stop (it no longer starts the staged prompt), opens Fleet on the grid,
+shows the branch pill only for a hosted repo, drops the Processes pill, and
+makes the launcher open the installed app (#403/#404/#405).
+**v2.3.0-beta.10** (2026-09-27)
 is beta.9 made quieter on operator request: no ETAs or estimates, only the
 dead-process Restart line, the subdued Beta 8 palette, a tipping Jev scale, and
 opt-in repo discovery for new lanes (ADR-0409/0408/0406 amendments).

@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## Release cut: v2.3.0-beta.11
+- **shipped:** beta.10 plus #403 (Stop halts the staged queue and a running goal loop, grid-first Fleet, premium repo tooltip, no Processes pill, launcher G opens the installed app), #404 (branch pill only for a hosted repo) and #405 (launcher names installed vs current version). Version sites bumped (package.json, version.ts, bug template, README, HANDOFF).
+- **stubbed:** nothing new; each change was verified in its PR (live web-GUI smoke against the fake agent, cmd run of the launcher block).
+- **next:** dispatch `build-desktop.yml` with `beta_release` on master, install beta.11 and confirm Stop, the grid, the pill rule and the quiet status bar on device.
+
 ## Launcher: G names the installed version and offers the current release
 - **shipped:** `LucidAgentIDE.bat` G reads the installed app's version and this checkout's (`:pkgver`), prints both, and when they differ offers the current release's download page before launching the installed app (it also self-updates on launch). The operator's main checkout was synced to origin/master; its uncommitted PWA-cache work is preserved on `backup/main-checkout-wip-2026-09-27` (local + origin).
 - **stubbed:** none. The G block was run under cmd with a scripted N: it printed installed v2.3.0-beta.9 vs current v2.3.0-beta.10, offered the page, and launched; `:pkgver` returns empty for a missing file.
