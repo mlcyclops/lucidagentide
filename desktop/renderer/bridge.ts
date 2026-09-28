@@ -260,6 +260,9 @@ export interface LaneView {
   canRetry: boolean; respawns: number;
   /** P-FLEET.L5: the omp session id behind this lane - the key into its on-disk history. */
   sessionId: string | null;
+  /** P-SWITCH.3 (ADR-0410): the master session this spoke was born under, kept for life. The orbit shows
+   *  a spoke under its own hub only; null (no master session at spawn) rides whichever hub is current. */
+  hubSessionId: string | null;
   pendingApproval?: { summary: string; kind: string };
   /** Full auto-mode: every ask is approved automatically (the security gate still scans every call). */
   autoApprove: boolean;
@@ -342,6 +345,8 @@ export interface FleetStatusView {
   /** P-PROGRESS.1: every folder with two or more workers on it (the master counts), in run order with
    *  expected start times; empty when nobody shares a folder. */
   queues: FolderQueue[];
+  /** P-SWITCH.3 (ADR-0410): the master session that is the hub right now; null before the first session. */
+  hub: string | null;
 }
 // P-ACCT.1 (ADR-0375): the account list per provider. AccountView is single-sourced from the pure
 // policy module (never a secret in it - keys are last4-masked server-side).

@@ -458,6 +458,9 @@ test("spawn and every recovery NAME the session in the ledger; the view exposes 
     argv: () => ({ cmd: "bun", args: [FAKE] }),
     masterModel: () => "master-model-a",
     sample: async () => healthy,
+    // A bare spawn, pinned: a run from inside a LUCID lane inherits that lane's target, and the fake then
+    // tags its ids with it ("fake-session-lane-<id>-1").
+    env: () => ({ LUCID_INTERJECT_TARGET: "master" }),
     recordLaneSession: (rec) => records.push({ laneId: rec.laneId, name: rec.name, sessionId: rec.sessionId, event: rec.event }),
   });
   const r = await live.spawn({ cwd: import.meta.dir, name: "ledgered" });
@@ -468,6 +471,34 @@ test("spawn and every recovery NAME the session in the ledger; the view exposes 
   expect(records.length).toBe(2);
   expect(records[1]!.event).toBe("respawn");
   expect(records[1]!.laneId).toBe(r.lane!.id); // same logical lane, whole lineage in the ledger
+}, TIMEOUT);
+
+// ── P-SWITCH.3 (ADR-0410): a spoke is born under the master session of the moment and keeps it ──────
+
+test("a spoke keeps the hub it was born under after the master starts a new session; the ledger names it", async () => {
+  const hubs: (string | undefined)[] = [];
+  let master: string | null = "sess-one";
+  delete process.env.FAKE_ACP_MODE;
+  live = new FleetLaneManager({
+    argv: () => ({ cmd: "bun", args: [FAKE] }),
+    masterModel: () => "master-model-a",
+    masterSessionId: () => master,
+    sample: async () => healthy,
+    recordLaneSession: (rec) => hubs.push(rec.hub),
+  });
+  const first = await live.spawn({ cwd: import.meta.dir, name: "under-one" });
+  expect(first.lane!.hubSessionId).toBe("sess-one");
+  master = "sess-two"; // the user started a new session: a new hub
+  const second = await live.spawn({ cwd: import.meta.dir, name: "under-two" });
+  expect(second.lane!.hubSessionId).toBe("sess-two");
+  const s = await live.status();
+  expect(s.hub).toBe("sess-two");
+  expect(s.lanes.map((l) => l.hubSessionId)).toEqual(["sess-one", "sess-two"]); // the first spoke was not reparented
+  expect(hubs).toEqual(["sess-one", "sess-two"]);
+  master = null; // no master session at all: a hubless spoke, and no hub on its ledger line
+  const third = await live.spawn({ cwd: import.meta.dir, name: "hubless" });
+  expect(third.lane!.hubSessionId).toBeNull();
+  expect(hubs[2]).toBeUndefined();
 }, TIMEOUT);
 
 // ── P-FLEET.L6: approval scopes ("allow for session") + full auto-mode ───────────────────────────────

@@ -2989,6 +2989,13 @@ let laneWatch: { done: Promise<void>; stop: () => void } | null = null;
 /** The master transcript, parked as DATA while a lane is attached. Snapshotting the rendered markdown
  *  rather than the DOM is what lets renderThread rebuild it with its copy / save-as-.md payloads intact. */
 let parkedMasterThread: { role: string; text: string }[] | null = null;
+/** ADR-0411: the master had a turn in flight when the composer left for a lane. The park holds that
+ *  bubble as it was at that moment (often empty), and the turn keeps running unobserved in the engine. If
+ *  it ENDS while the composer is away, no stream ever settles the parked bubble: a returning
+ *  recoverMasterTurn sees no running turn and, before this flag, left the stale park on screen, so the
+ *  finished reply never showed and the agent read as asleep. Consumed by recoverMasterTurn, which reloads
+ *  the thread from the session. */
+let masterThreadStale = false;
 /** The assistant node the WATCH is filling in, when the lane is streaming a turn this composer did not ask
  *  for. Null whenever we own the turn - `send()` renders that one. P-SCROLL.1: the bubble is a run of
  *  SEGMENTS in arrival order (reasoning, text, a tool chip, more text), so text that follows a tool call
@@ -3060,6 +3067,8 @@ async function promoteLane(laneId: string): Promise<void> {
   const already: ComposerTarget = { kind: "lane", laneId, name: "", cwd: "", model: "" };
   if (isLaneTarget(state.composerTarget) && sameTarget(state.composerTarget, already)) return;
   if (isLaneTarget(state.composerTarget)) demoteLane(); // one composer, one lane: leave the old one first
+  // Read BEFORE leaveTurnView clears them: a master turn left running here may end while we are away.
+  if (activeTurnView || state.streaming || goalLoopRunning) masterThreadStale = true;
   const owner = leaveTurnView();
   setRecoveryChecking(true); setSendEnabled();
   const r = await bridge.fleetPromote(laneId).catch(() => null);
@@ -9972,6 +9981,44 @@ async function adoptMasterTurn(status: TurnStatus, owner: number): Promise<void>
   if (status.sessionId) $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === status.sessionId));
   await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: page?.messages });
 }
+/** ADR-0411: the master turn that was running when the composer left for a lane has ended while the
+ *  composer was away, so the parked thread ends on a bubble nothing will ever settle. Two sources, in
+ *  order of trust. (1) The engine still holds the finished turn (`turnStatus` reports it until the next
+ *  turn or a session switch): replay its canonical snapshot through the same attach the reconnect path
+ *  uses, with the parked thread as the prior context (`priorTurnContext` drops its trailing prompt and
+ *  the unsettled bubble). Nothing on disk is involved, so a transcript that has not flushed yet cannot
+ *  blank the thread. (2) Otherwise the session transcript, re-rendered only when it says at least as much
+ *  as the screen: a shorter page (no session file, a late flush) keeps the park rather than replacing a
+ *  conversation with nothing. Found live on an agent that writes no transcript: the disk-only version
+ *  wiped the thread. The notice chips the return just added survive either way (moved, handlers kept). */
+async function settleMasterAfterReturn(status: TurnStatus | null, owner: number): Promise<void> {
+  masterThreadStale = false;
+  const chips = $$("#thread .note-chip") as HTMLElement[];
+  const restoreChips = () => {
+    const thread = $("#thread");
+    if (!thread || isLaneTarget(state.composerTarget)) return;
+    for (const chip of chips) thread.appendChild(chip);
+    if (chips.length) jumpToEnd();
+  };
+  if (status) {
+    const expect = turnViewEpoch + 1; // renderChatTurn takes the next epoch; a later navigation takes another
+    await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: snapshotThread() });
+    if (turnViewEpoch === expect) restoreChips();
+    return;
+  }
+  const sid = ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null;
+  if (!sid) return;
+  const page = await bridge.sessionMessages(sid, RESUME_TAIL).catch(() => null);
+  if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return; // the user moved on
+  if (!page) return; // the park stays: an unreachable transcript is the reconnect path's problem, not a blank thread
+  setCachedTranscript(sid, page.messages, Date.now());
+  const shown = snapshotThread();
+  if (page.messages.length < shown.length) return; // the transcript is behind the screen: never shrink
+  const freshSig = transcriptSig(page.messages) + (page.steps?.length ? `+s${page.steps.length}` : "");
+  if (freshSig === transcriptSig(shown)) return;
+  renderThread(page.messages, page.steps);
+  restoreChips();
+}
 async function recoverMasterTurn(): Promise<void> {
   if (isLaneTarget(state.composerTarget) || activeTurnView || goalLoopRunning) return;
   const owner = ++turnViewEpoch;
@@ -9987,7 +10034,14 @@ async function recoverMasterTurn(): Promise<void> {
       return;
     }
     // A reachable engine with no adoptable turn is the NORMAL fresh-open outcome: clear both surfaces.
-    if (!canAdoptTurn(status)) { setRecoveryChecking(false); state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled(); return; }
+    if (!canAdoptTurn(status)) {
+      setRecoveryChecking(false); state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled();
+      // Unless the composer just came back from a lane it left mid-turn: that turn ended unobserved, so
+      // the parked thread ends on a bubble nothing will ever settle. Show the session as it really is.
+      if (masterThreadStale) await settleMasterAfterReturn(status, owner);
+      return;
+    }
+    masterThreadStale = false; // the adopted stream re-renders the thread from the session itself
     await adoptMasterTurn(status!, owner);
   } catch (error) {
     if (owner !== turnViewEpoch) return;
@@ -10060,6 +10114,7 @@ async function settleStartupIncident(inc: IncidentView, previousId: string | nul
 async function resumeSession(id: string, opts: { loaded?: boolean; force?: boolean } = {}): Promise<boolean> {
   if (isLaneTarget(state.composerTarget)) demoteLane();
   const owner = leaveTurnView();
+  masterThreadStale = false; // this render comes from the session itself
   // Status discovery is not a running turn. Keep Send blocked without offering Stop.
   setRecoveryChecking(true); state.streaming = false; setSendEnabled();
   let status: TurnStatus | null;
@@ -15723,6 +15778,10 @@ function wire(): void {
       if (!isLaneTarget(t) || !lu) return null;
       return { used: lu.used, size: modelCtx(t.model) ?? lu.size, cost: lu.cost };
     },
+    // P-SWITCH.3 (ADR-0410): the hub core and the Hubs panel name sessions by their sidebar title, and
+    // opening another hub rides the same guarded switch as a sidebar click (a busy Main gets the sheet).
+    sessionTitle: (id) => cachedSessionInfo(id)?.title ?? null,
+    openSession: (id) => void openSession(id),
   });
   // P-REPO.1 (ADR-0406): the titlebar names the repo the composer's session works on and where it pushes.
   initTitlebarRepo({

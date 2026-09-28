@@ -8,6 +8,7 @@
 // IO-free so all three are unit-tested headless; fleet_orbit.ts owns the DOM, the SVG and the polling.
 
 import type { LaneStatus } from "./bridge.ts";
+import { LANE_ATTENTION } from "../collab/fleet_status.ts"; // P-SWITCH.3: one rule for "waiting on you", shared with the dock pill and the phone bar
 import { promoteRefusal } from "./composer_target.ts";
 
 /** One spoke's resting place, in stage coordinates relative to the hub (0,0 = stage center). `ring` is
@@ -170,6 +171,45 @@ export function switchEntries(
   ];
   for (const l of lanes) rows.push({ kind: "lane", laneId: l.id, label: l.name, status: l.status, current: l.id === currentLaneId });
   return rows;
+}
+
+// ---------------------------------------------------------------- P-SWITCH.3 (ADR-0410): one hub per session
+//
+// A spoke is born under the master session of the moment and keeps that hub for life. Starting a new
+// session (or opening another one) makes THAT session the hub: its orbit starts empty and fills with the
+// spokes spawned under it, while the previous session's spokes keep running under their own hub, one
+// switch away. Nothing is stopped, hidden for good, or reparented: every live spoke is in exactly one hub.
+
+/** The spokes the orbit shows for the current hub: those born under it, plus hubless spokes (a master
+ *  with no session at spawn time, or a lane view older than this field), which ride the current hub so
+ *  they are never unreachable. `hub` null (no master session yet) shows the hubless spokes only. */
+export function hubLanes<L extends { hubSessionId?: string | null }>(lanes: readonly L[], hub: string | null): L[] {
+  return lanes.filter((l) => !l.hubSessionId || l.hubSessionId === hub);
+}
+
+/** One OTHER hub with live spokes, for the orbit's Hubs panel. */
+export interface HubEntry {
+  sessionId: string;
+  lanes: { id: string; name: string; status: LaneStatus }[];
+  /** How many of its spokes block on a human right now (fleet_status.LANE_ATTENTION, the rollup's rule). */
+  waiting: number;
+}
+
+/** Every hub other than the current one, newest activity first, with its spokes in fleet order. */
+export function otherHubs(
+  lanes: readonly { id: string; name: string; status: LaneStatus; hubSessionId?: string | null; lastActivityAt: number }[],
+  hub: string | null,
+): HubEntry[] {
+  const byHub = new Map<string, { entry: HubEntry; latest: number }>();
+  for (const l of lanes) {
+    if (!l.hubSessionId || l.hubSessionId === hub) continue;
+    let h = byHub.get(l.hubSessionId);
+    if (!h) { h = { entry: { sessionId: l.hubSessionId, lanes: [], waiting: 0 }, latest: 0 }; byHub.set(l.hubSessionId, h); }
+    h.entry.lanes.push({ id: l.id, name: l.name, status: l.status });
+    if (LANE_ATTENTION[l.status]) h.entry.waiting++;
+    h.latest = Math.max(h.latest, l.lastActivityAt);
+  }
+  return [...byHub.values()].sort((a, b) => b.latest - a.latest).map((h) => h.entry);
 }
 
 /** P-FLEET.L17: a HISTORICAL spoke - a lane the durable ledger remembers (P-FLEET.L5 timeline) that is
