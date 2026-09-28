@@ -531,6 +531,15 @@ export class FleetLaneManager {
       } finally {
         lane.waitAbort = null;
       }
+      if (lane.waiting) {
+        // Admitted after a wait: the turn starts NOW. Time spent in line is neither this turn's length (the
+        // history would learn queue time as work, as the master's tSent already avoids) nor silence (the
+        // self-watch would probe the moment the turn begins).
+        const now = this.#deps.now();
+        lane.turnStartedAt = now;
+        lane.lastActivityAt = now;
+        lane.health = onActivity(lane.health, now);
+      }
       lane.waiting = null;
       // Unref'd: a ticker must never be the reason the engine refuses to exit.
       progressTimer = setInterval(() => this.#emit(lane, { type: "progress", progress: this.#progress(lane) }), PROGRESS_TICK_MS);
@@ -916,7 +925,7 @@ export class FleetLaneManager {
     for (const lane of this.#lanes.values()) {
       if (lane.status === "stopped") continue;
       const v = healthVerdict({
-        busy: lane.busy, dead: lane.client.isDead, lastActivityAt: lane.lastActivityAt, now,
+        busy: lane.busy && !lane.waiting, dead: lane.client.isDead, lastActivityAt: lane.lastActivityAt, now, // a folder wait is not a stall (as the master's)
         openCalls: lane.openCalls.size, episode: lane.health,
       });
       if (v.action !== "probe" && v.action !== "recover") continue;
@@ -955,7 +964,7 @@ export class FleetLaneManager {
         return { laneId: lane.id, action: "ok", silentMs: 0, reason: "You stopped this lane, so the harness leaves it alone. Respawn it to continue.", openCalls: [] };
       }
       const v = healthVerdict({
-        busy: lane.busy, dead: lane.client.isDead, lastActivityAt: lane.lastActivityAt, now,
+        busy: lane.busy && !lane.waiting, dead: lane.client.isDead, lastActivityAt: lane.lastActivityAt, now,
         openCalls: lane.openCalls.size, episode: lane.health,
       });
       return { laneId: lane.id, action: v.action, silentMs: v.silentMs, reason: v.reason, openCalls: pendingSnapshot(lane.openCalls, now) };
@@ -1320,7 +1329,9 @@ export class FleetLaneManager {
       ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary, kind: lane.pending.kind } } : {}),
       // P-PROGRESS.1: live progress while a turn runs or the child is dead; the wait while the folder is taken.
       ...(lane.busy || lane.client.isDead ? { progress: this.#progress(lane) } : {}),
-      ...(lane.waiting ? { waiting: lane.waiting } : {}),
+      // Recomputed like `progress`: the view taken when the wait began froze its "starts in" (and its place
+      // in line) for the whole wait, so the card disagreed with the folder queue beside it.
+      ...(lane.waiting ? { waiting: this.#gate.waitView(lane.id) ?? lane.waiting } : {}),
     };
   }
 }

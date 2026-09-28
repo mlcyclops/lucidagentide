@@ -115,4 +115,16 @@ describe("WorkspaceGate", () => {
     const g = new WorkspaceGate({ platform: "win32" });
     expect(g.normalize("C:\\Repo\\App\\")).toBe(g.normalize("c:/repo/app"));
   });
+
+  test("the folder a view names keeps the case the worker gave it, while the comparison stays case-folded", async () => {
+    const g = new WorkspaceGate({ platform: "win32" });
+    const a = await g.acquire({ id: "a", name: "A", cwd: "/w/FolderA" });
+    let told: WaitView | null = null;
+    const bp = g.acquire({ id: "b", name: "B", cwd: "/w/FOLDERA" }, { onWait: (w) => { told = w; } }); // same folder on NTFS
+    expect(told!.folder).toBe("FOLDERA");
+    expect(g.queues().map((q) => q.folder)).toEqual(["FolderA"]);
+    expect(g.sequenceFor("/w/folderA").map((e) => e.folder)).toEqual(["FolderA", "FOLDERA"]);
+    a();
+    (await bp)();
+  });
 });

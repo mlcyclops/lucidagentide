@@ -5107,7 +5107,7 @@ function secWorkingStatus(): string {
     <label class="set-toggle"><input type="checkbox" id="statusEta" ${statusEta() ? "checked" : ""}/>
       <span><b>Show a time estimate (experimental)</b> - how long the work probably has left, from how long your recent turns and helper runs took on this machine. It cannot see how big the task is, so treat it as a rough guess. Nothing is shown until there is enough history for a number.</span></label>
     <label class="set-toggle"><input type="checkbox" id="statusRing" ${statusRing() ? "checked" : ""}/>
-      <span><b>Show a progress ring</b> - a small ring at the right end of the working line that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
+      <span><b>Show a progress ring</b> - a small ring at the right end of the working line (and in each running fleet lane's header) that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
     <div class="set-note">${icon("info", 12)} If the agent process stops, the Restart line always appears, whichever you choose.</div>`;
   return setCard("workingStatus", "Working status", "one line · details · estimate", inner, true);
 }

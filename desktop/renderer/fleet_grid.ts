@@ -43,7 +43,7 @@ import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order 
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
 import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
 import { agedProgress, humanMs, progressLine, STREAMING_MS, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
-import { queueWhen, statusDetail, statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
+import { queueWhen, ringView, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import type { FolderQueue, WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (types only)
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
 import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
@@ -748,6 +748,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <span class="fleet-usage" data-fleet-usage data-tone="ok" hidden></span>
       <span class="fleet-health" data-fleet-health data-health-action="quiet" hidden></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
+      <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
       <select class="fleet-model" data-fleet-model aria-label="Lane model"></select>
       <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this lane from the main composer" title="Promote: point the main composer at this lane" hidden>${icon("arrowRight", 12)}</button>
       <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this lane's transcript" title="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
@@ -806,14 +807,31 @@ function buildCard(run: LaneRun): HTMLElement {
   </div>`);
 }
 
+/** P-PROGRESS.3 (ADR-0412 amendment): the master HUD's progress ring, in the lane card header beside the
+ *  lane's status chips. Shown while the lane's turn runs (and red once its process is gone) with the setting
+ *  "Show a progress ring" on; hidden while the lane is idle or done, and while the turn only waits for its
+ *  folder (the wait line says that, and an empty "Working" ring would claim otherwise). The tooltip is only
+ *  rewritten when its words change, so an open tooltip is not rebuilt on every progress tick. */
+function paintRing(card: HTMLElement, p: ProgressView | null, at: number, waiting: boolean): void {
+  const ring = $("[data-lane-ring]", card) as HTMLElement | null; if (!ring) return;
+  ring.hidden = !p || waiting || p.liveness.state === "idle" || !statusRing();
+  if (ring.hidden || !p) return;
+  const v = ringView(agedProgress(p, Math.max(0, Date.now() - at)), statusEta(), "Restart this lane");
+  ($(".hud-ring-arc", ring) as SVGCircleElement).style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
+  ring.dataset.tone = v.tone;
+  ring.dataset.empty = v.pct === null ? "1" : "0";
+  if (ring.getAttribute("data-tip") !== v.tip) ring.setAttribute("data-tip", v.tip);
+}
+
 /** P-PROGRESS.1: the progress strip: the history-estimate bar (95% at most while the turn runs), the
  *  progress line, the liveness pill (with the restart action when the child is gone), and the wait line
  *  while the turn is in line for its folder. Ages the last sample locally so the words keep moving. */
 function paintProgress(run: LaneRun): void {
   const card = run.card; if (!card) return;
-  const strip = $("[data-lane-progress]", card) as HTMLElement | null; if (!strip) return;
   const p = run.progress;
   const w = run.waiting;
+  paintRing(card, p, run.progressAt, !!w);
+  const strip = $("[data-lane-progress]", card) as HTMLElement | null; if (!strip) return;
   // P-PROGRESS.3 (ADR-0412): the quiet default (the beta.10 lane card) shows only what the user must know: the
   // process is gone (the red pill + Restart this lane), or the turn waits for its folder (the wait line).
   // "Full detail" is the whole P-PROGRESS.1 strip.
@@ -1456,12 +1474,18 @@ function runRetry(run: LaneRun): void {
     .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); });
 }
 
-/** Respawn in place (memory carried); the returned view or the next poll repaints the frame. */
+/** Respawn in place (memory carried); the returned view or the next poll repaints the frame. A refusal
+ *  (the lane's session is held elsewhere, the gate is missing) is said on the card and the poll restores
+ *  the real status: Restart this lane doing nothing visible is indistinguishable from a broken button. */
 function runRespawn(run: LaneRun): void {
   if (!deps) return;
   run.view.status = "starting"; paintFrame(run); paintPill();
   void deps.fleetRespawn(run.view.id)
-    .then((r) => { if (r?.ok && r.lane) { run.view = r.lane; } paintFrame(run); paintOutput(run); paintPill(); })
+    .then((r) => {
+      if (r?.ok && r.lane) { run.view = r.lane; paintFrame(run); paintOutput(run); paintPill(); return; }
+      setLaneNote(run, r?.reason ?? "the lane could not be restarted");
+      void refresh();
+    })
     .catch(() => { /* the next poll corrects it */ });
 }
 

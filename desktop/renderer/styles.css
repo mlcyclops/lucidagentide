@@ -5964,7 +5964,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   transform:rotate(-90deg);transform-origin:center;transition:stroke-dashoffset .6s var(--ease),stroke var(--t)}
 .hud-ring[data-empty="1"] .hud-ring-arc{visibility:hidden}
 .hud-ring[data-tone="dead"] .hud-ring-arc{stroke:var(--red)}
+/* A dead process with no history (or a lane whose turn already ended) has no arc: the track itself goes red,
+   or the ring would read grey exactly when it matters. */
+.hud-ring[data-tone="dead"] .hud-ring-track{stroke:var(--red)}
 @media (prefers-reduced-motion: reduce){.hud-ring-arc{transition:none}}
+/* The same ring in a fleet lane card header, beside the lane's status chips, while that lane's turn runs. */
+.fleet-card-head .lane-ring:not([hidden]){display:inline-flex;flex:none;line-height:0;cursor:default}
 .fleet-tchip-state{flex:none;font-size:10px;color:var(--txt-4);white-space:nowrap;display:inline-flex;align-items:center;min-width:10px}
 .fleet-tchip-state[data-state="open"]::before{content:"";width:8px;height:8px;border-radius:50%;
   border:1.5px solid rgb(var(--cyan-rgb) / .35);border-top-color:var(--cyan);animation:spin .9s linear infinite}

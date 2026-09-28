@@ -54,6 +54,10 @@ describe("ringView", () => {
     const r = ringView(view({ liveness: { state: "dead", label: "gone", detail: "" } }), false);
     expect(r.tone).toBe("dead");
     expect(r.tip).toContain("Restart agent");
+    // A lane card's ring points at the lane's own button, not the master's.
+    const lane = ringView(view({ liveness: { state: "dead", label: "gone", detail: "" } }), false, "Restart this lane");
+    expect(lane.tip).toContain("Restart this lane");
+    expect(lane.tip).not.toContain("Restart agent");
   });
   test("past the typical length the tooltip says longer than usual, never a negative time", () => {
     const r = ringView(view({ estimate: { etaMs: 0, percent: 95, basis: "model", samples: 8, typicalMs: 80_000, overrun: true } }), true);

@@ -18,7 +18,8 @@
 //    "ETA estimating" placeholder the operator objected to is never shown.
 // 3. The progress ring (on by default, beta.10 follow-up from the operator): a small green ring at the right
 //    end of the HUD line, drawn like the context ring in the status bar, with a premium tooltip. It shows how
-//    far the turn is against recent turns, never a time; it is empty until there is history.
+//    far the turn is against recent turns, never a time; it is empty until there is history. Every fleet lane
+//    card carries the same ring in its header while that lane's turn runs.
 //
 // Renderer-local view state in localStorage (the `lucid.*` convention), read once and cached: the HUD reads
 // these every second. Storage failures degrade to the defaults and never throw.
@@ -72,14 +73,17 @@ export function setStatusRing(on: boolean): void {
 /** What the progress ring shows: the arc (0-95 while a turn runs; null = no history yet, empty ring), a tone
  *  (red only when the agent process is gone), and its premium tooltip ("Title|Body"). Pure. The arc is how far
  *  this turn is against the typical length of recent turns on this machine, so it never claims a finish
- *  time; the time left joins the tooltip only when the user opted into the experimental estimate. */
+ *  time; the time left joins the tooltip only when the user opted into the experimental estimate. `restart`
+ *  names the button that revives the process where this ring sits (the HUD's, or a fleet lane card's). */
 export interface RingView { pct: number | null; tone: "run" | "dead"; tip: string }
-export function ringView(p: ProgressView, showEta: boolean): RingView {
+export function ringView(p: ProgressView, showEta: boolean, restart = "Restart agent"): RingView {
   const steps = p.stepsDone + p.stepsOpen.length;
   const sofar = `${humanMs(p.elapsedMs)} so far${steps ? `, step ${steps}` : ""}.`;
   const e = p.estimate;
   if (p.liveness.state === "dead") {
-    return { pct: e.percent, tone: "dead", tip: `Progress: stopped|The agent process exited. Use Restart agent below; the conversation is kept. ${sofar}` };
+    // A lane whose turn already ended when its process died has no elapsed time left to report.
+    const ran = p.elapsedMs > 0 ? ` ${sofar}` : "";
+    return { pct: e.percent, tone: "dead", tip: `Progress: stopped|The agent process exited. Use ${restart} below; the conversation is kept.${ran}` };
   }
   if (e.typicalMs === null || e.percent === null) {
     return { pct: null, tone: "run", tip: `Progress|Working. This machine has not finished enough turns yet to show how far along a turn is; the ring fills in once it has. ${sofar}` };
