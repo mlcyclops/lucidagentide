@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## Fleet: one view at a time; an orbit-first user never gets a grid they did not ask for
+- **shipped:** the grid stays the Fleet default (#403). Opening the orbit by any route (the grid's Orbit button, the pinned Fleet button, Ctrl+Alt+Down, the spoke switcher) now closes the grid through a new `closeGrid` orbit dep, so Grid -> Orbit -> click a spoke no longer leaves the grid dock stranded (it had jumped to a cramped top-left panel over the titlebar). With the orbit pinned, the grid opens only from the orbit's Grid button, and the next Fleet click returns to the orbit and closes it.
+- **stubbed:** none. Clicked through live on the web GUI against the fake agent with two spokes, fresh profile: grid default, Orbit closes the grid, a spoke click attaches with nothing left behind; then orbit pinned: Fleet, spoke click and Ctrl+Alt+Down never show the grid, Grid switches, Fleet returns to the orbit and closes it. No DOM harness in this repo (standing reason since ADR-0309).
+- **next:** the Fleet button's tooltip still says "hub & spoke ... the classic grid is one click away" from the orbit-first days; reword it when the grid-first default is confirmed in beta.11.
+
 ## Release cut: v2.3.0-beta.11
 - **shipped:** beta.10 plus #403 (Stop halts the staged queue and a running goal loop, grid-first Fleet, premium repo tooltip, no Processes pill, launcher G opens the installed app), #404 (branch pill only for a hosted repo) and #405 (launcher names installed vs current version). Version sites bumped (package.json, version.ts, bug template, README, HANDOFF).
 - **stubbed:** nothing new; each change was verified in its PR (live web-GUI smoke against the fake agent, cmd run of the launcher block).
