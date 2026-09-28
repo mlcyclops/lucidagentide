@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.0 (ADR-0415): the engine discovery seam - how a terminal client (`lucid hub`, docs/TUI.md)
+// P-TUI.0 (ADR-0416): the engine discovery seam - how a terminal client (`lucid hub`, docs/TUI.md)
 // finds a running engine without guessing ports or re-spawning one that already exists.
 //
 // The engine publishes one small JSON file per launch: port, per-launch nonce, the UI token, pid,

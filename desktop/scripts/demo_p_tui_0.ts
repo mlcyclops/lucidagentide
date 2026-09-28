@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-TUI.0 - the engine discovery seam (ADR-0415).
+// Increment P-TUI.0 - the engine discovery seam (ADR-0416).
 //
 // A terminal client (`lucid hub`, docs/TUI.md) must find a running engine without guessing ports,
 // and must never trust a file alone: the ADR-0305 health handshake (nonce echo) decides. This demo
@@ -25,7 +25,7 @@ function assert(cond: unknown, msg: string): void {
   console.log("  \u2713 " + msg);
 }
 
-console.log("== #ADR-0415 P-TUI.0: the engine discovery seam ==\n");
+console.log("== #ADR-0416 P-TUI.0: the engine discovery seam ==\n");
 
 const dataRoot = mkdtempSync(join(tmpdir(), "lucid-tui0-"));
 const home = mkdtempSync(join(tmpdir(), "lucid-tui0-home-"));
