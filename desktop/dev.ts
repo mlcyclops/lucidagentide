@@ -107,7 +107,7 @@ import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
-import { addInterject, addPeerNote, awaitPeerReply, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
+import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
 import { CheckoutRegistry, gitDirtyPaths, type CheckoutSession } from "./checkout_registry.ts"; // P-OWN.1: who is writing in which checkout
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
@@ -1197,12 +1197,14 @@ backend.checkoutBriefing = () => checkouts.briefingFor("master", currentWorkspac
 try {
   if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
 } catch { /* no history yet */ }
+backend.carriedNotes = () => carryPendingNotes("master"); // ADR-0414: same carry as the lanes
 const fleet: FleetLaneManager = new FleetLaneManager({
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
   gate: backend.workspaceGate, history: backend.durations, // P-PROGRESS.1: one folder lease and one estimate history with the master
   env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
   interject: (laneId, text) => { addInterject(laneId, text); },
+  carriedNotes: carryPendingNotes, // ADR-0414: notes no tool step picked up ride the lane's next prompt
   // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.
   onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
   preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
@@ -4868,15 +4870,16 @@ return Bun.serve({
       // (store enforces trim/4000-char/8-note discipline; validation here mirrors it for a crisp error).
       // GET /pending returns AND clears atomically - the single consumer is the target's omp child
       // (interject_extension.ts polls it once per tool result via the token'd LUCID_INTERJECT_URL).
+      // ADR-0414: a note for a session that does not exist is refused (`unknown-target`). `live: true`
+      // marks the USER's push (Push now, Check in), which is also refused (`idle`) when the target's turn
+      // is not running, because a push parked on an idle target is read by nothing until some later turn.
+      // Every refusal carries `code` + `error`; the renderer shows the reason and keeps the text.
       if (p === "/api/interject" && req.method === "POST") {
-        const b = await readBody<{ target?: unknown; text?: unknown }>(req);
+        const b = await readBody<{ target?: unknown; text?: unknown; live?: unknown }>(req);
         const target = String(b.target ?? "").trim();
-        const text = String(b.text ?? "").trim();
-        if (!target) return json({ ok: false, error: "target required" });
-        if (!text) return json({ ok: false, error: "text required" });
-        if (text.length > 4000) return json({ ok: false, error: "note too long (max 4000 chars)" });
-        const r = addInterject(target, text);
-        return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, error: r.reason });
+        const running = target === "master" ? backend.turnStatus()?.running === true : fleet.laneRunning(target);
+        const r = addInterject(target, String(b.text ?? ""), { running, live: b.live === true });
+        return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, code: r.code, error: r.reason });
       }
       if (p === "/api/interject/pending" && req.method === "GET") {
         const target = String(url.searchParams.get("target") ?? "").trim();

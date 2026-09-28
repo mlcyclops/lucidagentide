@@ -4,6 +4,13 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-INTERJECT.5: "Push not delivered" on an attached spoke - notes no longer strand, and a refused push keeps its text (ADR-0414)
+- **shipped:** root cause of the operator's toast: the 8-note cap counts notes WAITING for the target's next tool result, and a tool result was the only way out, so notes queued with no tool step coming (every attach and every release of a spoke queues one, plus health probes) piled up across turns; four attach/release rounds on an idle spoke filled it and the next turn refused every push. `desktop/interject_delivery.test.ts` reproduced it against the real lane manager over the fake ACP agent (failed before the fix with "too many pending notes ... (cap 8)"). Fix: `carryPendingNotes` drains what is still waiting into the target's next prompt (lanes via a `carriedNotes` dep, the master via `AcpBackend.carriedNotes`; a stale probe is dropped); `/api/interject` refuses a note for an unknown session and a `live` push to a target with no running turn, each with a typed `code`; `bridge.interject` returns the code and reason instead of collapsing every refusal to null; `queue_model.pushRecovery` sends, stages or restores the text (never drops it) and the toast quotes the reason; the fleet card's Push now keeps the staged prompt unless the push landed and says why on the card; the turn HUD's Check in ask, hard-wired to "master", now follows the composer to an attached spoke. Verified: `make demo-P-INTERJECT.5`, both typechecks, renderer rebuilt, and a headless smoke against the real dev.ts with a fake omp (idle/unknown/cap refusals typed over HTTP, master and lane prompts carrying the queued notes, served app.js carrying the new toast wording).
+- **stubbed:** a note typed into `/api/chat` while the master turn runs (other clients) still has no refusal channel; notes waiting for a lane when it is dismissed are not purged; a carried note whose prompt fails mid-send is not re-queued.
+- **next:** on device: attach and release a spoke a few times, start a long turn, Push now, and confirm the note chip; then push after the turn ends and confirm it runs as the next prompt.
+
+-----
+
 ## Release cut: v2.3.0-beta.11
 - **shipped:** beta.10 plus #403 (Stop halts the staged queue and a running goal loop, grid-first Fleet, premium repo tooltip, no Processes pill, launcher G opens the installed app), #404 (branch pill only for a hosted repo) and #405 (launcher names installed vs current version). Version sites bumped (package.json, version.ts, bug template, README, HANDOFF).
 - **stubbed:** nothing new; each change was verified in its PR (live web-GUI smoke against the fake agent, cmd run of the launcher block).

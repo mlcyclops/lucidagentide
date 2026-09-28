@@ -1196,3 +1196,7 @@ demo-P-SWITCH.1: ## P-SWITCH.1 (ADR-0403, issue #390): opening a session never s
 .PHONY: demo-P-SWITCH.2
 demo-P-SWITCH.2: demo-P-SWITCH.1 ## P-SWITCH.2 (ADR-0404, issue #390): one omp session, one owner. /api/session/load, /api/recovery/resume and /api/session/delete refuse a session a live spoke holds (409 heldBy, no override); a lane spawn or respawn refuses a session Main or another live lane holds, and creates nothing. /api/sessions stamps where each session is live and the sidebar shows it in the orbit colors. Proves the rule, the refusals against the real lane manager over the fake ACP agent, and the badge wording.
 	$(BUN) test $(TEST_IGNORES) desktop/session_owner.test.ts desktop/fleet_lanes.test.ts desktop/renderer/session_switch.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-INTERJECT.5
+demo-P-INTERJECT.5: ## P-INTERJECT.5 (ADR-0414): "Push not delivered" on an attached spoke. Notes no tool step picked up (attach / release notes on an idle spoke) now ride the target's next prompt instead of filling the 8-note cap across turns; a live push to an idle or unknown target is refused with a typed code; the toast quotes the engine's reason and the text is sent, staged or put back, never dropped. Proves it against the real lane manager over the fake ACP agent.
+	$(BUN) test $(TEST_IGNORES) desktop/interject_delivery.test.ts desktop/interject_store.test.ts desktop/renderer/queue_model.test.ts harness/adr_numbering.test.ts

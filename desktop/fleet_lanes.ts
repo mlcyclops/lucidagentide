@@ -241,6 +241,11 @@ export interface FleetLaneDeps {
    *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
    *  manager built without it simply never probes; it still escalates to recover. */
   interject?: (laneId: string, text: string) => void;
+  /** ADR-0414: the operator notes still waiting for this lane when a prompt goes out (dev.ts supplies
+   *  interject_store.carryPendingNotes, which drains them). They open the wire text, so a note queued
+   *  while the lane had no tool step running reaches the agent with its next prompt instead of sitting
+   *  in the store across turns until the cap refuses the user's next push. */
+  carriedNotes?: (laneId: string) => string;
   /** P-OWN.1: a lane's write/edit tool call named this path (absolute, resolved against the lane's cwd).
    *  dev.ts records it in the checkout ownership ledger. Metadata only: the path, never the content. */
   onWrite?: (lane: { id: string; name: string; cwd: string }, path: string) => void;
@@ -355,7 +360,7 @@ export class FleetLaneManager {
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
   readonly #observers = new Set<LaneObserver>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & Pick<FleetLaneDeps, "recordLaneSession" | "env" | "interject" | "onWrite" | "preface" | "repo"> & { masterSessionId?: () => string | null; sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & Pick<FleetLaneDeps, "recordLaneSession" | "env" | "interject" | "carriedNotes" | "onWrite" | "preface" | "repo"> & { masterSessionId?: () => string | null; sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -369,7 +374,7 @@ export class FleetLaneManager {
   constructor(deps: FleetLaneDeps) {
     this.#gate = deps.gate ?? new WorkspaceGate({ now: deps.now ?? Date.now });
     this.#durations = deps.history ?? new DurationHistory();
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}), ...(deps.repo ? { repo: deps.repo } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.carriedNotes ? { carriedNotes: deps.carriedNotes } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}), ...(deps.repo ? { repo: deps.repo } : {}) };
   }
 
   /** Spawn a lane: sustained-pressure admission first, then the gated omp + ACP handshake + model select.
@@ -550,7 +555,11 @@ export class FleetLaneManager {
       // Harness-origin like the resume preamble, and never recorded as something the user said.
       let preface = "";
       if (this.#deps.preface) { try { preface = await this.#deps.preface({ id: lane.id, name: lane.name, cwd: lane.cwd }); } catch { preface = ""; } }
-      const wireText = `${preface ? `${preface}\n\n` : ""}${lane.resumeContext ?? ""}${text}`;
+      // ADR-0414: drained AFTER the awaits above, at the last moment before the prompt is sent, so a note
+      // queued while this turn waited for its folder still rides this prompt rather than the next one.
+      let carried = "";
+      if (this.#deps.carriedNotes) { try { carried = this.#deps.carriedNotes(lane.id); } catch { carried = ""; } }
+      const wireText = `${preface ? `${preface}\n\n` : ""}${carried ? `${carried}\n\n` : ""}${lane.resumeContext ?? ""}${text}`;
       lane.resumeContext = null;
       const imageBlocks = images.filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
       const res = await lane.client.request<{ stopReason?: string }>("session/prompt", { sessionId: lane.sessionId, prompt: [{ type: "text", text: wireText }, ...imageBlocks] });
@@ -887,6 +896,13 @@ export class FleetLaneManager {
       out.push({ id: lane.id, name: lane.name, cwd: lane.cwd, task: (lane.lastPrompt ?? "").replace(/\s+/g, " ").trim().slice(0, 200), running: lane.busy });
     }
     return out;
+  }
+
+  /** ADR-0414: is a turn running on this lane right now? Null for a lane this manager does not know
+   *  (dismissed, or never existed), so a live push to it is refused by name instead of parked forever. */
+  laneRunning(laneId: string): boolean | null {
+    const lane = this.#lanes.get(laneId);
+    return lane ? lane.busy : null;
   }
 
   /** The lane the composer is attached to, if any. */

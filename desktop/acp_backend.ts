@@ -505,6 +505,9 @@ class Backend {
   onAuthoredPath: ((path: string) => void) | null = null;
   private readonly pendingWrites = new PendingWrites();
   checkoutBriefing: (() => Promise<string>) | null = null;
+  /** ADR-0414: drains the operator notes still waiting for "master" into a block that opens the next
+   *  prompt ("" when none). dev.ts wires interject_store.carryPendingNotes. */
+  carriedNotes: (() => string) | null = null;
   private lastTask = "";
   /** P-OWN.1: what this session is working on, for the other writers' briefing. */
   currentTask(): string { return this.lastTask; }
@@ -1751,7 +1754,8 @@ class Backend {
       let checkoutBlock = "";
       if (this.checkoutBriefing) { try { checkoutBlock = await this.checkoutBriefing(); } catch { checkoutBlock = ""; } }
       this.lastTask = text.replace(/\s+/g, " ").trim().slice(0, 200);
-      const body = built.preamble + (checkoutBlock ? `${checkoutBlock}\n\n` : "") + text;
+      const head = built.preamble + (checkoutBlock ? `${checkoutBlock}\n\n` : "");
+      const body = head + text;
       // P-VISION.1 (ADR-0136): user-attached images ride as ACP image content blocks after the text. omp's
       // session/prompt accepts `(text|image)[]` (same shape the preview_screenshot tool returns). Only
       // well-formed blocks (base64 data + image mime) are appended — the renderer already validated them.
@@ -1776,6 +1780,12 @@ class Backend {
         this.folderWaitAbort = null;
       }
       if (this.recoveryTurn !== turn) return;
+      // ADR-0414: operator notes still waiting for the master (queued after the last tool step of an
+      // earlier turn, or while it was idle) open this prompt, right before the user's text. Drained here,
+      // after the folder wait, so a Stop while in line leaves them queued for the next prompt.
+      let carried = "";
+      if (this.carriedNotes) { try { carried = this.carriedNotes(); } catch { carried = ""; } }
+      if (carried) content[0] = { type: "text" as const, text: `${head}${carried}\n\n${text}` };
       progressTimer = setInterval(this.progressTick, PROGRESS_TICK_MS);
       progressTimer.unref?.();
       arm(); // start the slow-notice clock now (covers silence BEFORE the first token)

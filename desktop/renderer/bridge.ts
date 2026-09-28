@@ -109,6 +109,9 @@ import type { SessionLive } from "../session_owner.ts"; // P-SWITCH.2 (ADR-0404)
 export type { RestoredTurn };
 import type { ProcessView } from "../process_view.ts"; // P-INTERJECT.1: the unified Processes list rows (canonical shape - imported, never mirrored, so it cannot drift)
 export type { ProcessView };
+import type { InterjectRefusal } from "../interject_store.ts"; // ADR-0414: the engine's refusal codes (imported, never mirrored)
+/** ADR-0414: what POST /api/interject answered. "unreachable" is the renderer's own code: no answer at all. */
+export type InterjectResult = { ok: true; pending: number } | { ok: false; code: InterjectRefusal | "unreachable"; reason: string };
 import type { SkillRoot } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097): skill source roots
 import type { TrustLabel } from "../../harness/contracts.ts"; // invariant #7: closed-set trust labels
 
@@ -1341,8 +1344,10 @@ export interface LucidBridge {
   openExternal(url: string): Promise<boolean>; // open an http(s) URL in the OS browser (OAuth); false in browser → caller falls back to window.open
   // P-INTERJECT.1/.2 (wave 2): mid-turn operator interjection - queue a note the running turn's agent
   // reads at its next tool boundary (target "master" or a laneId; the server enforces trim, the 4000-char
-  // limit, and the 8-note-per-target cap). Resolves the pending count, or null on refusal/transport failure.
-  interject(target: string, text: string): Promise<{ pending: number } | null>;
+  // limit, and the 8-note-per-target cap). ADR-0414: `live` marks the user's own push, which the engine
+  // refuses as `idle` when the turn is not running. Never rejects: a refusal resolves with the engine's
+  // typed code + reason, and a transport failure with code "unreachable", so the caller can say which.
+  interject(target: string, text: string, opts?: { live?: boolean }): Promise<InterjectResult>;
   // -- P-RECOVER.1 (ADR-0385): self-recovery + incident reports ---------------------------------------
   /** The previous engine's master session, the current one, and the UNSEEN incidents. Null = unreachable. */
   recoveryState(): Promise<RecoveryStateView | null>;
@@ -2157,7 +2162,18 @@ export const bridge: LucidBridge = {
     } catch { return { ok: false, error: "The render service did not answer." }; }
   },
   // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects.
-  interject: (target, text) => post("/api/interject", { target, text }),
+  // ADR-0414: NOT `post()`, which keeps only `data` and so turned every refusal into the same null.
+  interject: async (target, text, opts) => {
+    try {
+      const r = await fetch("/api/interject", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ target, text, ...(opts?.live ? { live: true } : {}) }) });
+      const j = await r.json() as { ok?: unknown; code?: unknown; error?: unknown; data?: { pending?: unknown } };
+      if (j?.ok === true) return { ok: true, pending: Number(j.data?.pending) || 0 };
+      const reason = typeof j?.error === "string" && j.error ? j.error : "the engine refused the note";
+      return { ok: false, code: typeof j?.code === "string" ? (j.code as InterjectRefusal) : "unreachable", reason };
+    } catch {
+      return { ok: false, code: "unreachable", reason: "LUCID could not reach its engine" };
+    }
+  },
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,

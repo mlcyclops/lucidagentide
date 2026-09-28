@@ -1889,8 +1889,13 @@ function onClick(ev: Event): void {
   if (t.closest("[data-fleet-ck-x]")) { $("[data-fleet-checkin-card]", card)?.remove(); return; }
   const ask = t.closest("[data-fleet-ask]") as HTMLButtonElement | null;
   if (ask) {
-    ask.disabled = true; ask.textContent = "Sent - answers at the next tool boundary";
-    void deps.interject(run.view.id, LANE_STATUS_ASK).catch(() => { /* the reply simply never lands */ });
+    ask.disabled = true; ask.textContent = "Sending...";
+    // ADR-0414: a refused ask says why on the card and re-arms the button, instead of claiming "Sent".
+    void deps.interject(run.view.id, LANE_STATUS_ASK, { live: true }).then((r) => {
+      if (r.ok) { ask.textContent = "Sent - answers at the next tool boundary"; return; }
+      ask.disabled = false; ask.textContent = "Ask for status";
+      setLaneNote(run, `Status ask not sent: ${r.reason}.`);
+    });
     return;
   }
   const qgo = t.closest("[data-q-go]") as HTMLElement | null;
@@ -1899,8 +1904,14 @@ function onClick(ev: Event): void {
     const item = run.view.queued[i]; if (!item) return;
     run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
     paintFrame(run);
-    void deps.interject(run.view.id, item.text).catch(() => { /* the next poll corrects it */ });
-    void deps.fleetQueueRemove(run.view.id, i).catch(() => { /* the next poll corrects it */ });
+    // ADR-0414: the staged prompt leaves the lane's queue only once the push is accepted. A refused push
+    // (the turn ended, the note cap is full) keeps it staged, so the queue still runs it next, and the
+    // card says why. It used to be removed either way, which silently dropped it.
+    void deps.interject(run.view.id, item.text, { live: true }).then((r) => {
+      if (r.ok) { void deps?.fleetQueueRemove(run.view.id, i).catch(() => { /* the next poll corrects it */ }); return; }
+      void refresh(); // repaint the chip the optimistic removal hid
+      setLaneNote(run, `Not pushed: ${r.reason}. It stays staged and runs as this lane's next prompt.`);
+    });
     return;
   }
   // P-FLEET.L3: the pasted-image strip and the staged-prompt chips.

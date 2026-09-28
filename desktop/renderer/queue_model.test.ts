@@ -4,7 +4,7 @@
 // desktop/renderer/queue_model.test.ts - P-INTERJECT.2: the staged-prompt queue's ordering rules.
 
 import { describe, expect, test } from "bun:test";
-import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts";
+import { addQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts";
 
 const hold = (text: string): QueuedItem => ({ text, mode: "hold" });
 const push = (text: string): QueuedItem => ({ text, mode: "push" });
@@ -83,5 +83,31 @@ describe("nextHold", () => {
 
   test("empty queue yields null", () => {
     expect(nextHold([]).item).toBeNull();
+  });
+});
+
+// ADR-0414: the old toast guessed ("the cap may be full, or the backend is unreachable") and the text was
+// already gone from the composer and the stack. Each refusal now keeps the text somewhere and quotes the
+// engine's reason.
+describe("pushRecovery", () => {
+  const idle = { draft: false, ownTurnOpen: false };
+  test("the turn ended: sent as the next prompt, unless a draft or this composer's own settling stream is in the way", () => {
+    expect(pushRecovery("idle", "the turn had already ended", idle).keep).toBe("send");
+    expect(pushRecovery("idle", "the turn had already ended", { draft: true, ownTurnOpen: false }).keep).toBe("stage");
+    expect(pushRecovery("idle", "the turn had already ended", { draft: false, ownTurnOpen: true }).keep).toBe("stage");
+  });
+
+  test("a full cap or no engine stages it for the next turn; a note needing the user goes back to the composer, never over a draft", () => {
+    expect(pushRecovery("cap", "8 earlier notes are still waiting", idle).keep).toBe("stage");
+    expect(pushRecovery("unreachable", "LUCID could not reach its engine", idle).keep).toBe("stage");
+    expect(pushRecovery("unknown-target", "that session is no longer running", idle).keep).toBe("composer");
+    expect(pushRecovery("too-long", "note too long (4001 chars; max 4000)", idle).keep).toBe("composer");
+    expect(pushRecovery("too-long", "note too long (4001 chars; max 4000)", { draft: true, ownTurnOpen: false }).keep).toBe("stage");
+  });
+
+  test("the toast carries the engine's reason", () => {
+    for (const code of ["idle", "cap", "unknown-target", "too-long", "unreachable"] as const) {
+      expect(pushRecovery(code, "8 earlier notes are still waiting for the agent's next tool step", idle).desc).toContain("8 earlier notes are still waiting");
+    }
   });
 });
