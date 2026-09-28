@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## Beta.10 follow-ups: Stop stops, grid-first Fleet, premium repo tooltip, no Processes pill, launcher opens the installed app
+- **shipped:** Stop no longer starts the next turn: a deliberate Stop holds the staged queue (`stopHoldsQueue`, set before the cancel so a racing `done` cannot drain it; a held pill offers **Send now** once nothing runs; the user's next Send resumes the queue), which closes the P-FLEET.L8 regression where settle drained on `stopped`; a user cancel reaching a running /goal loop also ends the loop (`acp_backend.cancel`). The Fleet button opens the GRID unless the orbit is explicitly pinned. The repo chip uses the app's premium tooltip (`repoTooltip` returns title + body, `#tip .d` keeps line breaks). The status-bar Processes pill and popover are removed (`/api/processes` stays for the phone PWA). `LucidAgentIDE.bat` G launches the installed app; the source launch moved to D.
+- **stubbed:** none. Verified live on the web GUI against the fake ACP agent (midturn): send, queue a second prompt, Stop -> trace shows prompt, cancel and no second prompt; Send now then starts it; repo chip tooltip renders in #tip; Fleet opens the grid; no Processes pill. The bat change reaches the operator's main checkout only after it pulls master.
+- **next:** cut beta.11 when the operator asks; the main checkout (14477f4, operator's uncommitted edits) needs a pull before its launcher changes.
+
 ## Release cut: v2.3.0-beta.10
 - **shipped:** beta.9 plus the operator's quiet-UI pass: no ETAs or estimates anywhere, only the dead-process Restart line; step marks and folds back to the subdued Beta 8 palette; the Jev scale tips instead of spinning (P-PROGRESS.1/.2 amendments, ADR-0409/0408); New lane / New spoke lead with Folder + Browse and repo discovery (local scan, GitHub CLI) is opt-in behind two checkboxes and a Search button (P-REPO.1 amendment, ADR-0406). Version sites bumped (package.json, version.ts, bug template, README).
 - **stubbed:** none of the three changes was clicked through in the installed app from this session; covered by unit tests, the P-PROGRESS.1/.2 and P-REPO.1 demos, a headless stylesheet check of the scale, and a grep of the rebuilt bundle.

@@ -72,14 +72,15 @@ const EXIT_MS = 420;
 
 // ---------------------------------------------------- P-FLEET.L18: which view the Fleet button opens
 //
-// The orbit is the default face of the fleet, but a grid-first user should not pay a detour every
-// open. One persisted choice, set by the pin in either view's header; app.ts routes the ctFleet
-// button through it. Shared from here (the grid imports it) so there is exactly one storage key.
+// The grid is the default face of the fleet (operator, 2026-09-27); an orbit-first user pins the orbit
+// once and is never detoured again. One persisted choice, set by the pin in either view's header;
+// app.ts routes the ctFleet button through it. Shared from here (the grid imports it) so there is
+// exactly one storage key. Only an explicit "orbit" pin opens the orbit.
 
 const HOME_KEY = "lucid.fleetHome.v1";
 
 export function fleetHome(): "orbit" | "grid" {
-  try { return localStorage.getItem(HOME_KEY) === "grid" ? "grid" : "orbit"; } catch { return "orbit"; }
+  try { return localStorage.getItem(HOME_KEY) === "orbit" ? "orbit" : "grid"; } catch { return "grid"; }
 }
 
 export function setFleetHome(v: "orbit" | "grid"): void {
@@ -623,7 +624,7 @@ function buildView(): HTMLElement {
       <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} New spoke</button>
       <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and spoke as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
       <button class="btn-mini orbit-btn" data-orbit-grid data-tip="Grid view|The classic fleet dashboard: streaming mini agent windows with per-lane composers, queues and transcripts.">${icon("layout", 13)} Grid</button>
-      <button class="btn-mini orbit-btn orbit-pin" data-orbit-pin data-tip="Default view|Make ORBIT what the Fleet button opens. The grid header has the same pin for grid-first users."></button>
+      <button class="btn-mini orbit-btn orbit-pin" data-orbit-pin data-tip="Default view|Make ORBIT what the Fleet button opens instead of the grid. The grid header has the same pin to switch back."></button>
       <button class="btn-mini orbit-btn orbit-x" data-orbit-close data-tip="Close (Esc)|The spokes keep running; this view is a map, not a lifecycle owner.">${icon("close", 13)}</button>
     </header>
     <div class="orbit-stage" data-orbit-stage>

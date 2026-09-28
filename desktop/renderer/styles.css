@@ -2057,7 +2057,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 #tip.show{opacity:1;transform:none}
 #tip .tt{display:flex;align-items:center;gap:7px;font-weight:600;margin-bottom:3px}
 #tip .tt .ic{color:var(--accent-2)}
-#tip .d{color:var(--txt-2)}
+#tip .d{color:var(--txt-2);white-space:pre-line;overflow-wrap:anywhere}
 #tip::after{content:"";position:absolute;width:9px;height:9px;background:var(--bg-4);
   border-right:1px solid var(--line-strong);border-bottom:1px solid var(--line-strong);transform:rotate(45deg)}
 #tip[data-side="top"]::after{left:var(--ax,50%);bottom:-5px;margin-left:-4px}
@@ -4888,7 +4888,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 
 /* ───────── turn controls - P-INTERJECT.2/.3/.4 (wave 2, TurnControls section) ─────────
    The composer's staged-prompt STACK + hold-or-push chooser, the HUD Check-in button and its
-   transcript card, the per-lane fleet check-in, and the status-bar Processes popover. Flex rows
+   transcript card, and the per-lane fleet check-in. Flex rows
    here hold single-text-child spans (invariant 11); card lines are BLOCK elements. */
 .queued-stack{flex-direction:column;align-items:flex-end;gap:4px}
 .q-pill .q-push{flex:none;background:none;border:1px solid var(--line);border-radius:999px;padding:0 7px;
@@ -4934,22 +4934,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-ck-line{display:block;font-size:11px;color:var(--txt-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-ck-acts{display:flex;gap:6px;margin-top:5px}
 .fleet-q-push{white-space:nowrap;font-size:9.5px}
-/* the status-bar Processes button + popover */
-.proc-seg b{white-space:nowrap}
-.proc-pop{padding:10px 12px}
-.proc-pop-head{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt-4);
-  margin-bottom:6px;white-space:nowrap}
-.proc-pop-list{display:flex;flex-direction:column;gap:3px}
-.proc-empty{font-size:11.5px;color:var(--txt-3);padding:4px 0}
-.proc-row{display:flex;align-items:center;gap:7px;min-width:0;padding:4px 5px;border-radius:7px}
-.proc-row:hover{background:var(--bg-2)}
-.proc-row .proc-ic{flex:none;color:var(--txt-3);display:grid;place-items:center}
-.proc-row .proc-label{flex:1;min-width:0;font-size:11.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.proc-row .proc-status{flex:none;font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;
-  color:var(--txt-3);border:1px solid var(--line);border-radius:4px;padding:0 4px;white-space:nowrap}
-.proc-row .proc-elapsed{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4);white-space:nowrap;min-width:44px;text-align:right}
-.proc-row .btn-mini{flex:none;white-space:nowrap}
-
 /* ── P-BROWSER.1 (wave 2): the agent-browser pill (BrowserFeature section) ──────────────────────
    Floats near the top of the chat while the agent drives its visible browser window. Invariant #11:
    ONE text child (.bp-label, nowrap+ellipsis); the icon and buttons are flex:none controls. .bp-fx is

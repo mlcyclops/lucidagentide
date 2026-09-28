@@ -2093,6 +2093,7 @@ async function send(): Promise<void> {
   if (agentTierApplying) { showToast({ title: "Confirming model change", desc: "Wait a moment for the engine to confirm the model before sending.", timeout: 2500 }); return; }
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
+  if (text || state.attachments.length) stopHoldsQueue = false; // the user sent again: the staged queue resumes after this turn
   // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
   const atts = state.attachments.slice();
   const images = promptImageBlocks(atts);
@@ -2558,8 +2559,10 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     state.streaming = false; activeTurnView = null; setSendEnabled();
     void renderSessions(); void refreshBudget(false); void syncMode(); void refresh();
     scheduleKnowledgeRefresh(); maybeListen();
-    // P-TURN-RECOVERY-DRAIN: only done or deliberate Stop may release a held prompt.
-    if (terminal || stopped) releaseHeldPrompt();
+    // P-TURN-RECOVERY-DRAIN: only a turn that finished releases a held prompt. A deliberate Stop never does
+    // (stopHoldsQueue); an interrupted connection waits for reconnect.
+    if (terminal) releaseHeldPrompt();
+    renderQueued(); // a pill still staged now offers "Send now" instead of pushing into a turn that ended
   };
   const run = async (transport: typeof connect) => {
     if (!owns() || settled || connecting) return;
@@ -2692,10 +2695,11 @@ function renderQueued(): void {
     stack = el(`<div id="queuedChip" class="queued-chip queued-stack"></div>`);
     row.before(stack); // sits above the composer row, inside .composer-wrap
   }
-  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? "Sends automatically when the current turn ends" : "Already pushed into the running turn - kept as a record"}">
+  const idle = !turnInFlight();
+  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
       <span class="q-text" data-q-i="${i}"></span>
-      ${q.mode === "hold" ? `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>` : ""}
+      ${q.mode === "hold" ? (idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>` : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>`) : ""}
       <button class="q-cancel" data-q-x="${i}" data-tip="Remove staged prompt">${icon("close", 12)}</button>
     </div>`).join("");
   // Prompt text is user content: set it as a DOM property, never interpolated into the HTML string.
@@ -2710,13 +2714,27 @@ function renderQueued(): void {
     const item = state.queuedItems[i]; if (!item) return;
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued();
+    // Nothing running (e.g. after Stop): the staged prompt becomes the next turn, unless the user has a
+    // draft in the composer, which is never clobbered (it stays staged instead).
+    if (!turnInFlight()) {
+      const ta = $("#input") as HTMLTextAreaElement | null;
+      if (!ta || ta.value.trim()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
+      ta.value = item.text; setSendEnabled(); void send();
+      return;
+    }
     void pushMidTurn(item.text);
   }));
 }
+/** A deliberate Stop halts the staged queue as well as the turn: a prompt held behind the stopped turn stays
+ *  staged (visible, pushable) instead of starting a new turn the moment this one ends. Set here, before the
+ *  cancel, so a `done` racing the cancel's reply cannot drain it; cleared by the user's next Send. */
+let stopHoldsQueue = false;
+
 /** P-ACP.4: Stop - interrupt the running turn. omp's session/cancel ends the turn, so the streaming
- *  `done`/finally path flips `streaming` off and fires any pre-staged prompt. */
+ *  `done`/finally path flips `streaming` off; the staged queue waits for the user (stopHoldsQueue). */
 async function stopTurn(): Promise<void> {
   if (!state.streaming) return;
+  stopHoldsQueue = true; renderQueued();
   if (activeTurnView) { await activeTurnView.stop(); return; }
   // P-GOAL.2: a running /goal loop is cancelled at the LOOP level (halt iterations + abort the turn);
   // an ordinary turn just cancels the turn.
@@ -2724,9 +2742,9 @@ async function stopTurn(): Promise<void> {
 }
 
 // ───────────────────────── turn controls - P-INTERJECT.2/.3/.4 (wave 2) ─────────────────────────
-// The composer's hold-or-push chooser, the mid-turn Check-in card, and the status-bar Processes
-// popover. All three ride the wave-1 plumbing: POST /api/interject (notes the running agent reads at
-// its next tool boundary) and GET /api/processes (the unified running list).
+// The composer's hold-or-push chooser and the mid-turn Check-in card. Both ride the wave-1 plumbing:
+// POST /api/interject (notes the running agent reads at its next tool boundary). The status-bar Processes
+// pill was removed on operator request (2026-09-27); /api/processes still feeds the phone PWA.
 
 const STATUS_ASK = "Please give a brief status update: what is finished, what you are doing now, what remains. Then continue.";
 
@@ -2738,6 +2756,7 @@ const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number 
  *  (then it stays staged rather than clobbering their draft). Shared by the master turn's settle and the
  *  attached lane's watch, so a prompt staged behind a lane's turn runs when THAT turn ends. */
 function releaseHeldPrompt(): void {
+  if (stopHoldsQueue) return; // the user pressed Stop: nothing starts again until they send
   const nq = nextHold(state.queuedItems);
   if (!nq.item) return;
   const ta = $("#input") as HTMLTextAreaElement | null;
@@ -3211,78 +3230,6 @@ function openCheckinCard(): void {
   });
   // Click-away dismiss - armed a tick later so the opening click cannot instantly close it.
   window.setTimeout(() => { if (checkinEl) document.addEventListener("pointerdown", checkinAway, true); }, 0);
-}
-
-// ───── the Processes popover - P-INTERJECT.4 ─────
-let procBtnEl: HTMLElement | null = null;
-let procPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
-let procTimer: number | null = null;
-const PROC_ICON: Record<string, string> = { "master-turn": "bolt", lane: "send", import: "download", browser: "eye" };
-
-/** Compact "how long has this run" readout: 42s, 7m 05s, 1h 12m. */
-function fmtProcElapsed(startedAt: number | null): string {
-  if (!startedAt) return "";
-  const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
-/** The status-bar Processes button. Created ONCE and re-adopted after every renderStatus innerHTML
- *  swap (the fleet-pill convention) so the 2.5s repaint never drops it. */
-function mountProcButton(): void {
-  if (!procBtnEl) {
-    procBtnEl = el(`<div class="seg seg-btn proc-seg" data-tip="Processes|Everything running right now: the master turn, fleet lanes, imports, and agent browser windows."><b>Processes</b></div>`);
-    procBtnEl.addEventListener("click", () => { if (procPop) procPop.close(); else void openProcPopover(); });
-  }
-  const sb = document.getElementById("statusbar");
-  if (sb && !sb.contains(procBtnEl)) sb.append(procBtnEl);
-}
-
-async function openProcPopover(): Promise<void> {
-  if (!procBtnEl) return;
-  procPop = popover(procBtnEl, `<div class="proc-pop"><div class="proc-pop-head">Running processes</div><div class="proc-pop-list"><div class="proc-empty">Loading…</div></div></div>`, () => {
-    procPop = null;
-    if (procTimer != null) { window.clearInterval(procTimer); procTimer = null; }
-  });
-  // Row actions, delegated once per open: lane Stop, master-turn Stop, browser Close (the browser
-  // seam lands with the BrowserFeature wave - optional chaining keeps this popover working without it).
-  procPop.node.addEventListener("click", (e) => {
-    const t = e.target as HTMLElement;
-    const stop = t.closest("[data-proc-stop]") as HTMLElement | null;
-    if (stop) { const id = stop.dataset.procStop ?? ""; void bridge.fleetStop(id.startsWith("lane:") ? id.slice(5) : id); window.setTimeout(() => void refreshProcPopover(), 400); return; }
-    if (t.closest("[data-proc-stopturn]")) { void stopTurn(); window.setTimeout(() => void refreshProcPopover(), 400); return; }
-    if (t.closest("[data-proc-close]")) { void (bridge as { browserClose?: () => Promise<unknown> }).browserClose?.(); window.setTimeout(() => void refreshProcPopover(), 400); return; }
-  });
-  await refreshProcPopover();
-  procTimer = window.setInterval(() => void refreshProcPopover(), 2500);
-}
-
-async function refreshProcPopover(): Promise<void> {
-  if (!procPop) return;
-  const rows = await bridge.processes();
-  if (!procPop) return; // closed while the fetch was in flight
-  const list = $(".proc-pop-list", procPop.node) as HTMLElement | null; if (!list) return;
-  if (!rows?.length) {
-    list.innerHTML = `<div class="proc-empty">${rows ? "Nothing is running right now." : "Process list unavailable - the backend did not answer."}</div>`;
-    procPop.reposition();
-    return;
-  }
-  list.innerHTML = rows.map((r, i) => {
-    const act = r.kind === "lane" ? `<button class="btn-mini danger" data-proc-stop="${esc(r.id)}">Stop</button>`
-      : r.kind === "master-turn" ? `<button class="btn-mini danger" data-proc-stopturn>Stop</button>`
-      : r.kind === "browser" ? `<button class="btn-mini danger" data-proc-close>Close</button>` : "";
-    return `<div class="proc-row"><span class="proc-ic">${icon(PROC_ICON[r.kind] ?? "bolt", 13)}</span><span class="proc-label" data-proc-label="${i}"></span><span class="proc-status" data-proc-status="${i}"></span><span class="proc-elapsed">${esc(fmtProcElapsed(r.startedAt))}</span>${act}</div>`;
-  }).join("");
-  // Labels/status are server-fed strings (lane names come from user folders): DOM properties, not HTML.
-  rows.forEach((r, i) => {
-    const lab = $(`[data-proc-label="${i}"]`, list) as HTMLElement | null;
-    if (lab) { lab.textContent = r.label; lab.title = r.detail ? `${r.label} · ${r.detail}` : r.label; }
-    const st = $(`[data-proc-status="${i}"]`, list) as HTMLElement | null;
-    if (st) st.textContent = r.status;
-  });
-  procPop.reposition();
 }
 
 // ───────────────────────── inspector ─────────────────────────
@@ -10665,7 +10612,6 @@ function renderStatus(): void {
   mountSharePill(); // P-REMOTE.11: re-adopt the minimized Share pill (it lives in the bar, right of the ticker)
   mountJoinPill(); // P-COLLAB.20: re-adopt the minimized Join pill (watching continues while minimized)
   mountFleetPill(); // P-FLEET.L2: re-adopt the minimized Fleet pill - without this the innerHTML swap above dropped it every status repaint and the next 2.5s poll put it back, which is the lower-right flicker
-  mountProcButton(); // P-INTERJECT.4: re-adopt the Processes button (same fleet-pill convention - the innerHTML swap above would drop it every 2.5s repaint)
 }
 
 // ───────────────────────── the Trivia Wire — P-TRIV.1 (ADR-0174) ─────────────────────────
