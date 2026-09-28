@@ -12625,6 +12625,33 @@ Guard red (exact shipped error) on the v1.10.3 filter, green with the exclusion 
 exclusions (onnxruntime, date-fns, lucide-react, *.map/*.d.ts/.bin) proven harmless by the same
 materialized boot+import run; final proof is the import probe inside the shipped v1.10.4 tree.
 
+### Amendment (2026-09-27) - the guard and `make typecheck` from a checkout on a network share
+
+The operator runs the repo from `\\FastNas\...` (a UNC cwd). There the guard failed both boot tests with
+`Cannot find module '@duckdb/node-api'` / `'@opentelemetry/api'`: on Windows `linkDir` made JUNCTIONS, and a
+junction cannot target a remote path - `symlinkSync(..., "junction")` returns without error and leaves
+nothing that resolves, so the sim had no node_modules at all. `linkDir` still tries a junction first (no
+privilege needed; local checkouts unchanged) and checks that it resolves; if not, the rest of the run uses
+directory symlinks (Developer Mode or an elevated shell; local-to-remote symlink evaluation is on by
+default), and a symlink that cannot be created or does not resolve throws a named reason (enable
+Developer Mode / `fsutil behavior set SymlinkEvaluation L2R:1`) instead of surfacing as a missing module.
+Rejected: building the sim next to the repo (junctions and hardlinks on an SMB share depend on the
+server) and copying the kept packages (hundreds of MB over the network per run). The exclusions stay
+materialized exactly as before. `rmSync(SIM, { recursive: true })` does not follow the links (checked on
+a throwaway tree before running it against the real node_modules).
+
+`make typecheck` had two separate UNC failures, now handled by `tools/typecheck.ts`: `bun x tsc` resolves
+the bin to `...\UNC\server\share\...\typescript\bin\tsc` (via node, and with `--bun` alike), so tsc's entry
+file is run by bun directly; and TypeScript 7's native compiler reads files under a UNC root but its
+tsconfig `include` walk matches nothing there (TS18003 "No inputs were found", reproduced on a real share
+and on `\\<host>\C$`; a `files` list works), so on Windows with a UNC cwd the run goes through cmd
+`pushd`, which maps the share to a temporary drive letter, and `popd` releases it. tsc's exit status is
+propagated (a planted type error fails the target from both paths).
+
+Reproduce without the operator's share: address a local worktree as `\\<hostname>\C$\...`. Not
+`\\localhost\C$\...`: Bun 1.4.2 reports `import.meta.dir` there as `C$\Users\...` (prefix dropped), a
+different bug that breaks every test's own paths.
+
 ## ADR-0179 - P-PREVIEW.7: the silent-white preview, explained + runnable (external Electron launch), BUILT
 
 **Date:** 2026-07-06

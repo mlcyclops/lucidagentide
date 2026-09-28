@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## UNC test harness: packaged_boot and `make typecheck` from a network-share checkout (ADR-0178 amendment)
+- **shipped:** `desktop/packaged_boot.test.ts` `linkDir` falls back from a junction (cannot target a UNC path; created silently and resolves to nothing) to a directory symlink, and throws a named reason when that is not possible; `make typecheck` runs `tools/typecheck.ts`, which runs tsc's entry under bun (no `bun x` UNC mangling) and, from a UNC cwd on Windows, inside cmd `pushd` because TypeScript 7's native compiler finds no tsconfig `include` matches under a UNC root.
+- **stubbed:** none. Verified from `\\<host>\C$\...\lucid-unc` (before: tsc MODULE_NOT_FOUND, packaged_boot 1 pass / 2 fail; after: typecheck exit 0, packaged_boot 3 pass) and from local disk (same results as before); a planted type error fails the target from both. The named-reason branch (no symlink rights) was not exercised: this machine has Developer Mode on.
+- **next:** run both from the operator's `\\FastNas` checkout once it is on a TypeScript 7 lockfile.
+
 ## Release cut: v2.3.0-beta.11
 - **shipped:** beta.10 plus #403 (Stop halts the staged queue and a running goal loop, grid-first Fleet, premium repo tooltip, no Processes pill, launcher G opens the installed app), #404 (branch pill only for a hosted repo) and #405 (launcher names installed vs current version). Version sites bumped (package.json, version.ts, bug template, README, HANDOFF).
 - **stubbed:** nothing new; each change was verified in its PR (live web-GUI smoke against the fake agent, cmd run of the launcher block).
