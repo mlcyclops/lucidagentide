@@ -109,7 +109,7 @@ import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgen
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
 import { initTitlebarRepo, refreshTitlebarRepo } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): which repo, where commits go
-import { pushLabel, repoChip } from "../repo_identity.ts";
+import { hostedRepo, pushLabel, repoChip } from "../repo_identity.ts";
 import type { RepoContext } from "./bridge.ts";
 import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
@@ -9688,13 +9688,14 @@ function renderWorkspaceBar(): void {
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
-  // inside the workspace folder) and where its commits go, so "which repo is this?" never needs a guess.
-  const r = mainRepo?.repo;
+  // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
+  // folder or a local-only repo shows just the workspace name: nothing to warn about.
+  const r = hostedRepo(mainRepo);
   const same = (a: string, b: string): boolean => a.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase() === b.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
   const repoLine = r
-    ? `<span class="ws-bar-repo${r.push ? "" : " local"}">${esc(same(r.root, w.current) ? (r.branch || r.head) : repoChip(r))} ${icon("arrowRight", 10)} ${esc(pushLabel(r))}</span>`
+    ? `<span class="ws-bar-repo">${esc(same(r.root, w.current) ? (r.branch || r.head) : repoChip(r))} ${icon("arrowRight", 10)} ${esc(pushLabel(r))}</span>`
     : "";
-  bar.innerHTML = `<span class="ws-bar-top">${icon(w.isGit || r ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}</span>${repoLine}`;
+  bar.innerHTML = `<span class="ws-bar-top">${icon(r ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}</span>${repoLine}`;
 }
 async function loadWorkspace(): Promise<void> {
   // #11 perceived-latency: the bar used to stay hidden until workspace() resolved, then
