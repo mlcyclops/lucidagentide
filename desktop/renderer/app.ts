@@ -45,8 +45,10 @@ import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (A
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { describeTool } from "./tool_describe.ts"; // P-PROGRESS.1: what a tool call is doing, in plain words
-import { humanMs } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) length words
+import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, etaPhrase, humanMs, NO_ESTIMATE, progressLine, QUIET_MS, STREAMING_MS, wholeEtaPhrase, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) progress view helpers
+import { queueWhen, ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
+import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (type only: the module itself is engine-side)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
@@ -72,7 +74,7 @@ import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable)
-import { delegationSettled, filterRunsForBatch } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
+import { delegationSettled, filterRunsForBatch, mergeRunSamples, runEta, type RunSample, type TimedRun } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
 // P-KGUI.3 (ADR-0336): the Personalization card's stat tiles, rebuilt for a user with MANY knowledge graphs.
@@ -1266,11 +1268,13 @@ interface ThoughtsWin {
   relabel(id: string, name: string): void;
   /** P-PROGRESS.1: the step's call ended: mark it done or failed, with how long it took. */
   settle(id: string, ok: boolean, elapsedMs?: number): void;
-  /** P-PROGRESS.2: age the open rows' elapsed time (called by the HUD's 1 s timer). */
+  /** P-PROGRESS.2: age the open rows' elapsed time and ETA (called by the HUD's 1 s timer). */
   tick(): void;
   /** Collapse into the final one-line summary (auto-collapse on done). */
   finish(ms: number): void;
 }
+/** P-PROGRESS.2: tool lengths seen in this app session, for an open long call's ETA ("about 8 s left"). */
+const toolLengths = new DurationHistory();
 /** omp's coarse ACP kinds: a label that is one of these never replaces a real tool name (ADR-0318). */
 const COARSE_KINDS: Record<string, true> = { edit: true, execute: true, read: true, search: true, fetch: true, think: true, other: true, tool: true, run: true, delete: true, move: true };
 function createThoughts(): ThoughtsWin {
@@ -1333,11 +1337,13 @@ function createThoughts(): ThoughtsWin {
     fold.dEl.textContent = foldSummary(fold.quick, fold.processing);
     keepInView();
   };
-  // An open row that earned its place says how long it has run.
+  // An open row that earned its place says how long it has run. P-PROGRESS.3: with the experimental estimate
+  // on, and once this session's lengths of the same tool support a number, also about how long is left.
   const paintOpen = (r: StepRow, now: number) => {
-    const ran = humanMs(now - r.at);
-    r.stateEl.textContent = ran;
-    r.stateEl.title = `running for ${ran}`;
+    const ran = now - r.at;
+    const eta = shownEta(etaPhrase(estimateFromSamples(ran, toolLengths.toolSamples(r.s.name), 2)), statusEta());
+    r.stateEl.textContent = eta ? `${humanMs(ran)} \u00b7 ${eta}` : humanMs(ran);
+    r.stateEl.title = eta ? `running for ${humanMs(ran)}; ${eta}` : `running for ${humanMs(ran)}`;
   };
   // Where a settled (or never-settling) call goes, and why it was folded when it was.
   const place = (r: StepRow, ok: boolean | undefined, elapsedMs: number | undefined) => {
@@ -1430,6 +1436,7 @@ function createThoughts(): ThoughtsWin {
       r.stateEl.textContent = took;
       r.stateEl.title = ok ? (took ? `done in ${took}` : "done") : (took ? `failed after ${took}` : "failed");
       r.row.classList.toggle("failed", !ok);
+      if (ok && elapsedMs !== undefined && elapsedMs >= 0) toolLengths.addTool(r.s.name, elapsedMs);
       // P-PROGRESS.2: a quick, failed, repeated or empty call folds (a shown row that then failed moves into
       // the fold); a long one keeps, or now takes, its own row.
       // With no length in the report, the time since the call was announced stands in.
@@ -1781,9 +1788,30 @@ function renderAnswerBody(container: HTMLElement, md: string, marks?: readonly T
   return false;
 }
 
+/** P-PROGRESS.2: finished subagent run lengths, kept across sessions so the first delegation of a day
+ *  already has an ETA. Folds in newly finished runs and returns every known length. */
+const RUN_SAMPLES_KEY = "lucid.subagentRunMs.v1";
+let runSamples: readonly RunSample[] | null = null;
+function rememberRunSamples(runs: readonly TimedRun[]): number[] {
+  if (runSamples === null) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(RUN_SAMPLES_KEY) ?? "[]") as unknown;
+      runSamples = Array.isArray(raw) ? raw.filter((s): s is RunSample => !!s && typeof s.k === "string" && typeof s.ms === "number") : [];
+    } catch { runSamples = []; }
+  }
+  const next = mergeRunSamples(runSamples, runs);
+  if (next !== runSamples) {
+    runSamples = next;
+    try { localStorage.setItem(RUN_SAMPLES_KEY, JSON.stringify(next)); } catch { /* storage full or blocked: this session still has them */ }
+  }
+  return runSamples.map((s) => s.ms);
+}
+
 interface SubagentCard {
   el: HTMLElement;
   finish: () => void;
+  /** P-PROGRESS.2: ms left per live run (null = not known yet); empty once the delegation settled. */
+  etas: () => readonly (number | null)[];
 }
 
 function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true): SubagentCard {
@@ -1794,6 +1822,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     <button class="subagent-head" type="button" aria-expanded="true">
       <span class="subagent-spin">${CLIPBOARD_SVG}</span>
       <span class="subagent-cur">Delegated to <b>${esc(e.agent)}</b>${n > 1 ? ` · ${n} subtasks` : ""}</span>
+      <span class="subagent-eta" data-state="estimating"></span>
       <span class="subagent-chev">${icon("chevron", 14)}</span>
     </button>
     <div class="subagent-body">${body}<div class="subagent-runs"></div></div>
@@ -1811,12 +1840,34 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
   const runsBox = $(".subagent-runs", win) as HTMLElement;
   const openRuns = new Set<string>(); // user-expanded rows survive re-render
   const stepIcon = (k: string): string => (k === "thinking" ? icon("spark", 11) : k === "tool" ? icon("bolt", 11) : icon("info", 11));
-  const renderRuns = (runs: { name: string; done: boolean; lastAt: number; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[]): void => {
+  const headEta = $(".subagent-eta", win) as HTMLElement;
+  let liveEtas: (number | null)[] = []; // P-PROGRESS.2: ms left per live run (null = estimating), for the HUD's whole-prompt ETA
+  const renderRuns = (runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; tools: number; steps: { kind: string; tool?: string; label: string }[] }[], samples: readonly number[]): void => {
+    // P-PROGRESS.2: every run says how long it has left against the lengths of finished runs, and the head
+    // says when the whole delegation should be done (the slowest run). Too little history: "ETA estimating".
+    const at = Date.now();
+    const etas = runs.map((r) => runEta(r, samples, at));
+    // No runs on disk yet: the delegation is still a helper whose time is unknown.
+    liveEtas = runs.length ? etas.filter((x) => x.live).map((x) => x.etaMs) : [null];
+    // P-PROGRESS.3: the head's ETA only with the experimental estimate on and a number to show.
+    const whole = liveEtas.length ? wholeEtaPhrase(null, liveEtas) : "";
+    headEta.textContent = shownEta(whole, statusEta());
+    headEta.dataset.state = whole === ETA_ESTIMATING ? "estimating" : liveEtas.length ? "known" : "done";
     if (!runs.length) return;
     win.querySelectorAll(".subagent-task").forEach((t) => t.remove()); // real runs supersede the static rows
-    runsBox.innerHTML = runs.map((r) => {
+    runsBox.innerHTML = runs.map((r, i) => {
+      const eta = etas[i]!;
+      const etaState = !eta.live ? "done" : eta.label === ETA_ESTIMATING ? "estimating" : "known";
+      // P-PROGRESS.3: a live run's ETA is opt-in; a finished run's own length ("took 1 m") is a fact and stays.
+      const etaLabel = eta.live ? shownEta(eta.label, statusEta()) : eta.label;
+      const full = statusDetail() === "full"; // the liveness words are detail, not the quiet default
       const last = r.steps[r.steps.length - 1];
       const now = last ? `${last.kind === "tool" ? `${esc(last.tool ?? "tool")} · ` : ""}${esc(last.label)}` : "starting…";
+      // P-PROGRESS.1: is this worker alive? The transcript's last line is the evidence: its age says
+      // "working" (fresh), "quiet" (past the quiet line, still not done), or "done".
+      const ageMs = r.lastAt > 0 ? Math.max(0, Date.now() - r.lastAt) : -1;
+      const alive = r.done ? "done" : ageMs < 0 ? "no activity yet" : ageMs < QUIET_MS ? `working, last step ${humanMs(ageMs)} ago` : `quiet for ${humanMs(ageMs)}`;
+      const aliveState = r.done ? "done" : ageMs >= 0 && ageMs < QUIET_MS ? "working" : "quiet";
       const steps = r.steps.map((s) =>
         `<div class="sa-step sa-${esc(s.kind)}">${stepIcon(s.kind)}<span class="sa-step-tool">${s.kind === "tool" ? esc(s.tool ?? "") : ""}</span><span class="sa-step-label">${esc(s.label)}</span></div>`).join("");
       return `<div class="sa-run${openRuns.has(r.name) ? " open" : ""}${r.done ? " done" : ""}" data-run="${esc(r.name)}">
@@ -1824,6 +1875,8 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
           <span class="sa-dot${r.done ? " done" : ""}"></span>
           <span class="sa-name">${esc(r.name)}</span>
           <span class="sa-now">${now}</span>
+          ${full ? `<span class="sa-alive" data-state="${aliveState}">${esc(alive)}</span>` : ""}
+          ${etaLabel ? `<span class="sa-eta" data-state="${etaState}">${esc(etaLabel)}</span>` : ""}
           <span class="sa-meta">${r.tools} tool${r.tools === 1 ? "" : "s"}</span>
           <span class="subagent-chev">${icon("chevron", 12)}</span>
         </button>
@@ -1849,6 +1902,9 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     // P-CHAT.B.1: keep the delegation card EXPANDED on settle so each subagent's thinking/tools stay
     // visible after the turn (P-TASK.5 collapsed it, which hid the detail); the user can still fold it.
     win.removeAttribute("data-streaming"); win.classList.add("done");
+    // P-PROGRESS.2: a settled delegation is no longer a helper the prompt waits on.
+    headEta.textContent = ""; headEta.dataset.state = "done";
+    liveEtas = [];
   };
   const refreshRuns = async (): Promise<void> => {
     const v = await bridge.subagents().catch(() => null);
@@ -1858,7 +1914,9 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     const all = (v?.runs ?? []) as Parameters<typeof renderRuns>[0];
     const mine = all.length ? filterRunsForBatch(all, { names: e.names, assignments: e.assignments, soleCard: isSoleCard() }) : [];
     if (settled) return;
-    renderRuns(mine);
+    // P-PROGRESS.2: every finished run in the session (any batch) is history for the ETA, kept across sessions.
+    const samples = rememberRunSamples(all);
+    renderRuns(mine, samples);
     if (delegationSettled(mine, turnEndedAt, Date.now())) settle();
   };
   void refreshRuns();
@@ -1866,6 +1924,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
 
   return {
     el: win,
+    etas: () => liveEtas,
     finish() {
       if (turnEndedAt !== null) return;
       turnEndedAt = Date.now();
@@ -2189,25 +2248,126 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
-  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button></div>`);
+  // P-PROGRESS.3 (ADR-0412): `hud-more` (Details) opens the progress strip for this turn in the quiet default.
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-eta" data-state="estimating"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-more" type="button" aria-expanded="false" hidden data-tip="Details|How far along the turn is, whether the agent is alive, and who else is working in this folder">Details</button><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button><span class="hud-ring" hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span></div>`);
   const streamEl = el(`<div class="stream"></div>`);
   // P-PROGRESS.1: when the agent process is gone, ONE line under the HUD says so, with the action that fixes
-  // it. Nothing is shown while the worker is alive. The note is one block; the button sits beside it.
+  // it (the beta.10 quiet footer). P-PROGRESS.3: shown whenever the strip below is closed.
   const deadRow = el(`<div class="hud-dead" hidden><span class="hud-dead-note">The agent process exited. Restart it here; the conversation is kept.</span><button class="btn-mini hud-restart" type="button">Restart agent</button></div>`);
-  textEl.append(streamEl, hud, deadRow); // status sits BELOW the line that's filling in
+  // P-PROGRESS.1: the progress strip under the HUD: a bar (the history estimate, 95% at most while the
+  // turn runs), the progress line, the liveness pill (with the restart action when the agent process is
+  // gone), and the folder queue while this turn waits its turn. Every text run is its own block.
+  // P-PROGRESS.3 (ADR-0412): closed unless Settings, Working status is "Full detail" or the user opened it
+  // with Details for this turn; the bar and every number follow the experimental-estimate switch.
+  const prog = el(`<div class="hud-progress" hidden>
+    <div class="hud-bar"><div class="hud-fill"></div></div>
+    <div class="hud-progress-line"><span class="hud-est"></span></div>
+    <div class="hud-alive-row"><span class="hud-alive" data-state="idle"></span><span class="hud-signal"></span><button class="btn-mini hud-restart" type="button" hidden>Restart agent</button></div>
+    <div class="hud-queue" hidden></div>
+  </div>`);
+  textEl.append(streamEl, hud, deadRow, prog); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
-  const progRestart = $(".hud-restart", deadRow) as HTMLButtonElement;
-  progRestart.addEventListener("click", () => {
-    // P-PROGRESS.1: the in-place recovery the watchdog performs, on demand: restart the agent process,
-    // reload the same session. The whole app never needs to restart for this.
-    progRestart.disabled = true; progRestart.textContent = "Restarting\u2026";
+  let progress: ProgressView | null = null, progressAt = 0; // the engine's last view + when it arrived (aged locally)
+  const progEst = $(".hud-est", prog) as HTMLElement, progFill = $(".hud-fill", prog) as HTMLElement, progBar = $(".hud-bar", prog) as HTMLElement;
+  const progAlive = $(".hud-alive", prog) as HTMLElement, progSignal = $(".hud-signal", prog) as HTMLElement, progRestart = $(".hud-restart", prog) as HTMLButtonElement;
+  const progQueue = $(".hud-queue", prog) as HTMLElement;
+  const hudMore = $(".hud-more", hud) as HTMLButtonElement;
+  // P-PROGRESS.3: `stripUsed` = the engine sent something the strip shows (a progress view or the folder
+  // queue); `detailOpen` = the user opened it for this turn with Details.
+  let stripUsed = false, detailOpen = false, stripSettled = false;
+  const syncStrip = () => {
+    const full = statusDetail() === "full";
+    prog.hidden = !stripUsed || !(full || detailOpen);
+    // The quiet Restart line stands in for the strip's red pill whenever the strip is closed.
+    deadRow.hidden = progress?.liveness.state !== "dead" || !prog.hidden;
+    hudMore.hidden = !stripUsed || full || stripSettled;
+    hudMore.textContent = detailOpen ? "Hide details" : "Details";
+    hudMore.setAttribute("aria-expanded", String(detailOpen));
+  };
+  hudMore.addEventListener("click", () => { if (stripSettled) return; detailOpen = !detailOpen; syncStrip(); paintProgress(); });
+  // P-PROGRESS.3 (ADR-0412 amendment): the progress ring at the right end of the HUD line, like the status
+  // bar's context ring. Shown while the turn runs (setting "Show a progress ring", on by default); the tooltip
+  // is only rewritten when its words change, so an open tooltip is not rebuilt every second.
+  const ringEl = $(".hud-ring", hud) as HTMLElement, ringArc = $(".hud-ring-arc", hud) as SVGCircleElement;
+  const paintRing = () => {
+    ringEl.hidden = !progress || stripSettled || !statusRing();
+    if (ringEl.hidden || !progress) return;
+    const v = ringView(agedProgress(progress, Math.max(0, Date.now() - progressAt)), statusEta());
+    ringArc.style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
+    ringEl.dataset.tone = v.tone;
+    ringEl.dataset.empty = v.pct === null ? "1" : "0";
+    if (ringEl.getAttribute("data-tip") !== v.tip) ringEl.setAttribute("data-tip", v.tip);
+  };
+  const paintProgress = () => {
+    if (!progress) return;
+    stripUsed = true;
+    syncStrip();
+    const p = progress;
+    // P-INTERJECT.3: the Check-in card reads the same verdict. P-PROGRESS.3: only with Full detail, or when the
+    // process is gone (the ADR-0409 amendment keeps every other liveness label out of the quiet default).
+    liveTurn.alive = statusDetail() === "full" || p.liveness.state === "dead" ? p.liveness.label : "";
+    if (prog.hidden) return; // nothing below is on screen
+    const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
+    const eta = statusEta();
+    const sampled = agedProgress(p, Math.max(0, Date.now() - progressAt));
+    const aged = eta ? sampled : withoutEstimate(sampled); // P-PROGRESS.3: the estimate is opt-in
+    progEst.textContent = progressLine(aged, eta);
+    const pct = aged.estimate.percent;
+    progBar.classList.toggle("indeterminate", pct === null && running);
+    progFill.style.width = pct === null ? "0%" : `${Math.min(95, pct)}%`;
+    progAlive.dataset.state = p.liveness.state;
+    progAlive.textContent = p.liveness.label;
+    progAlive.setAttribute("data-tip", p.liveness.detail);
+    // The age words move between engine samples; a fresh signal within the streaming window says so.
+    progSignal.textContent = running ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago${aged.lastSignalMs >= QUIET_MS && !aged.stepsOpen.length ? " (quiet)" : ""}`) : "";
+    progRestart.hidden = p.liveness.state !== "dead";
+  };
+  // P-PROGRESS.2: the whole prompt's ETA on the HUD line itself: this turn against its history plus every
+  // delegated run still working. Until the history supports a number it says "ETA estimating" (and pulses),
+  // so the line is never silent about when the work ends. Cleared when the turn settles.
+  const etaEl = $(".hud-eta", hud) as HTMLElement;
+  let etaDone = false;
+  // P-PROGRESS.3 (ADR-0412): only with the experimental estimate on, and only once there is a number: the
+  // "ETA estimating" placeholder is never shown (ADR-0408 amendment).
+  const paintEta = () => {
+    if (etaDone || !statusEta()) { etaEl.textContent = ""; etaEl.dataset.state = "done"; return; }
+    const turnEst = progress ? agedProgress(progress, Math.max(0, Date.now() - progressAt)).estimate : NO_ESTIMATE;
+    const phrase = wholeEtaPhrase(turnEst, subCards.flatMap((c) => c.etas()));
+    if (phrase === ETA_ESTIMATING || !phrase) { etaEl.textContent = ""; etaEl.dataset.state = "done"; return; }
+    etaEl.textContent = `\u00b7 ${phrase}`;
+    etaEl.dataset.state = phrase === ETA_ESTIMATING ? "estimating" : turnEst.overrun ? "long" : "known";
+    etaEl.setAttribute("data-tip", phrase === ETA_ESTIMATING
+      ? "ETA|Not enough finished turns or runs on this machine to estimate yet. A number appears as soon as there is history."
+      : "ETA|From how long recent turns and helper runs took on this machine (75th percentile). An estimate, not a promise.");
+  };
+  // P-PROGRESS.1: the in-place recovery the watchdog performs, on demand: restart the agent process, reload
+  // the same session. The whole app never needs to restart for this. P-PROGRESS.3: the quiet Restart line and
+  // the strip's pill carry the same action (only one is on screen at a time).
+  const restartButtons = [progRestart, $(".hud-restart", deadRow) as HTMLButtonElement];
+  const restartAgent = () => {
+    for (const b of restartButtons) { b.disabled = true; b.textContent = "Restarting\u2026"; }
     void bridge.recoveryRecover().then((r) => {
-      progRestart.disabled = false; progRestart.textContent = "Restart agent";
+      for (const b of restartButtons) { b.disabled = false; b.textContent = "Restart agent"; }
       if (!r || !r.ok) { showToast({ tone: "warn", title: "The agent did not restart", desc: r?.reason ?? "The engine did not answer.", timeout: 9000 }); return; }
       showToast({ tone: "ok", title: "Agent restarted", desc: r.reason, timeout: 6000 });
       void recoverMasterTurn();
     });
-  });
+  };
+  for (const b of restartButtons) b.addEventListener("click", restartAgent);
+  const clearQueue = () => { if (!progQueue.hidden) { progQueue.hidden = true; progQueue.innerHTML = ""; } };
+  const paintQueue = (w: WaitView) => {
+    stripUsed = true;
+    progQueue.hidden = false;
+    syncStrip();
+    progQueue.innerHTML = `<div class="hud-queue-head"></div>` + w.sequence.map((_, i) => `<div class="hud-queue-row" data-q="${i}"></div>`).join("");
+    ($(".hud-queue-head", progQueue) as HTMLElement).textContent = `Turns in this folder (${w.folder}), in order:`;
+    w.sequence.forEach((e, i) => {
+      const row = $(`[data-q="${i}"]`, progQueue) as HTMLElement | null;
+      if (!row) return;
+      row.textContent = `${e.position + 1}. ${e.name}: ${queueWhen(e, Date.now(), statusEta())}`;
+      row.classList.toggle("me", e.id === "master");
+    });
+  };
   // The consolidating activity window lives between the answer and the HUD; created lazily
   // on the first tool event so a pure-text turn shows nothing extra.
   let thoughts: ThoughtsWin | null = null;
@@ -2266,11 +2426,14 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // labelled "context" so it's never mistaken for the per-turn output above. Cost
     // is shown to the cent ($0.00) - the sub-cent precision read as noise.
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
-    thoughts?.tick(); // P-PROGRESS.2: open long calls age their elapsed time
+    paintProgress(); // P-PROGRESS.1: the ages move every second between engine samples
+    paintEta();
+    paintRing();
+    thoughts?.tick(); // P-PROGRESS.2: open long calls age their elapsed time and ETA
   };
   phaseEl.textContent = phase;
   // P-INTERJECT.3: reset the live-turn mirror for this turn and arm the HUD's Check-in button.
-  liveTurn.phase = phase; liveTurn.pending = []; liveTurn.pendingAt = 0;
+  liveTurn.phase = phase; liveTurn.pending = []; liveTurn.pendingAt = 0; liveTurn.alive = "";
   ($(".hud-checkin", hud) as HTMLElement | null)?.addEventListener("click", openCheckinCard);
   paintHud();
   const timer = window.setInterval(paintHud, 1000);
@@ -2282,8 +2445,18 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     if (tps.isStreaming) tps.stop(); // freeze the readout at the final avg tok/s
     const ic = $(".hud-ic", hud); if (ic) ic.innerHTML = icon("check", 12);
     hud.classList.remove("streaming"); hud.classList.add("done");
-    setPhase("Done"); paintHud();
-    deadRow.hidden = true; // P-PROGRESS.1: the dead line belongs to the running turn
+    etaDone = true; setPhase("Done"); paintHud();
+    // P-PROGRESS.1: the strip settles with the turn: a full bar, the time it took, no more ages.
+    // P-PROGRESS.3: in the quiet default the settled HUD line already says Done and how long it took, so the
+    // strip closes with the turn; Full detail keeps it, settled.
+    detailOpen = false; stripSettled = true; syncStrip(); paintRing(); // the settled line's check replaces the ring
+    if (progress) {
+      progress = null; clearQueue(); syncStrip();
+      progBar.classList.remove("indeterminate"); progFill.style.width = "100%";
+      progEst.textContent = `done in ${humanMs(Date.now() - t0)}`;
+      progAlive.dataset.state = "idle"; progAlive.textContent = "done"; progAlive.removeAttribute("data-tip");
+      progSignal.textContent = ""; progRestart.hidden = true;
+    }
     reasoning?.finish(Date.now() - t0);
     thoughts?.finish(Date.now() - t0);
     judgments?.finish(); // P-JEV.2
@@ -2415,7 +2588,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       return;
     }
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
-    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
+    if (e.type === "token") { clearQueue(); reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
     else if (e.type === "thinking") {
       // First reasoning chunk: spin up the live thinking block above the answer.
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
@@ -2437,7 +2610,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // P-PROGRESS.2: the HUD says what the call is doing ("Reading PR 398") when the call says; otherwise the
       // category line, and "Processing…" for a call that names nothing.
       const desc = describeTool({ name: e.name, kind: e.name, title: e.detail, intent: e.intent, input: e.input, path: e.code?.path });
-      sawTool = true; setPhase(desc.informative ? desc.doing : phaseForTool(e.name, e.detail)); paintHud();
+      sawTool = true; clearQueue(); setPhase(desc.informative ? desc.doing : phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
       thoughts.step({ id: e.id, name: e.name, detail: e.detail, code: e.code, input: e.input, intent: e.intent });
       // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it
@@ -2473,12 +2646,12 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       thoughts?.relabel(e.id, e.name);
       if (e.ok !== undefined) thoughts?.settle(e.id, e.ok, e.elapsedMs);
     }
-    // P-PROGRESS.1: the engine's progress view (every few seconds). Only a dead agent process shows anything:
-    // the one line with the restart action.
-    else if (e.type === "progress") { deadRow.hidden = e.progress.liveness !== "dead"; }
+    // P-PROGRESS.1: the engine's progress view (every few seconds and on every settled call). Never activity;
+    // the strip under the HUD paints it and ages it locally until the next one.
+    else if (e.type === "progress") { progress = e.progress; progressAt = Date.now(); if (e.progress.liveness.state !== "idle") clearQueue(); paintProgress(); }
     // P-PROGRESS.1: this turn is in line behind another worker's turn in the same folder. Nothing is running
-    // yet; say whom it waits for and its place in line. The next real event replaces the phase.
-    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish in this folder \u00b7 ${e.wait.position === 1 ? "next in line" : `number ${e.wait.position} in line`}`); paintHud(); scrollChat(); }
+    // yet; say so, and show the order and the expected start times. The next real event clears it.
+    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish in this folder`); paintHud(); paintQueue(e.wait); scrollChat(); }
     // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
     // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
     else if (e.type === "judgment") {
@@ -2753,7 +2926,7 @@ const STATUS_ASK = "Please give a brief status update: what is finished, what yo
 
 /** P-INTERJECT.3: renderer mirror of the live turn for the Check-in card - the phase line the HUD
  *  shows, plus the last pending-call snapshot a { type:"slow" } event carried (aged via pendingAt). */
-const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0 };
+const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0, alive: "" /* P-PROGRESS.1: the liveness label */ };
 
 /** The turn on the composer's target ended: send the first HELD prompt, unless the user has typed since
  *  (then it stays staged rather than clobbering their draft). Shared by the master turn's settle and the
@@ -3205,7 +3378,7 @@ function openCheckinCard(): void {
     const elapsed = $("[data-ck-elapsed]", card) as HTMLElement | null;
     if (elapsed) elapsed.textContent = state.streaming ? `Elapsed: ${fmtClock(Date.now() - started)}` : "The turn has ended.";
     const ph = $("[data-ck-phase]", card) as HTMLElement | null;
-    if (ph) { ph.textContent = liveTurn.phase ? `Now: ${liveTurn.phase}` : "Now: warming up"; ph.title = liveTurn.phase; }
+    if (ph) { ph.textContent = `${liveTurn.phase ? `Now: ${liveTurn.phase}` : "Now: warming up"}${liveTurn.alive ? ` (${liveTurn.alive})` : ""}`; ph.title = liveTurn.phase; }
     const pend = $("[data-ck-pending]", card) as HTMLElement | null;
     if (pend) {
       if (!liveTurn.pending.length) pend.innerHTML = `<div class="ck-sub">No slow tool calls reported yet.</div>`;
@@ -4926,6 +5099,21 @@ function secChatScroll(): string {
     <div class="set-note">${icon("info", 12)} The chat always follows new output while you are at the bottom. Scrolling up to re-read pauses it until you scroll back down or press the jump-to-newest arrow. This choice decides where you land when you switch between Main and a spoke, or from one spoke to another.</div>`;
   return setCard("chatScroll", "Chat scrolling", "follow · spoke switching", inner, true);
 }
+/** P-PROGRESS.3 (ADR-0412): the quiet footer is the default; this card opts into the P-PROGRESS.1 detail and
+ *  the experimental time estimate. Rendered from localStorage, so it paints with no fetch. */
+function secWorkingStatus(): string {
+  const v = statusDetail();
+  const opt = (val: string, label: string) => `<option value="${val}"${v === val ? " selected" : ""}>${label}</option>`;
+  const inner = `
+    <div class="goal-row"><label class="goal-lbl" for="statusDetail">While the agent works</label>
+      <select id="statusDetail" class="prov-key">${opt("line", "One status line (Details opens more)")}${opt("full", "Full detail: progress, liveness, folder queue")}</select></div>
+    <label class="set-toggle"><input type="checkbox" id="statusEta" ${statusEta() ? "checked" : ""}/>
+      <span><b>Show a time estimate (experimental)</b> - how long the work probably has left, from how long your recent turns and helper runs took on this machine. It cannot see how big the task is, so treat it as a rough guess. Nothing is shown until there is enough history for a number.</span></label>
+    <label class="set-toggle"><input type="checkbox" id="statusRing" ${statusRing() ? "checked" : ""}/>
+      <span><b>Show a progress ring</b> - a small ring at the right end of the working line (and in each running fleet lane's header) that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
+    <div class="set-note">${icon("info", 12)} If the agent process stops, the Restart line always appears, whichever you choose.</div>`;
+  return setCard("workingStatus", "Working status", "one line · details · estimate", inner, true);
+}
 
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
 // A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
@@ -5137,6 +5325,7 @@ function settingsShell(): string {
     secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
+    secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
@@ -15567,6 +15756,10 @@ function wire(): void {
     // P-APPEAR.1: chat-background mode + image upload
     if (t0.id === "bgMode") { void updateChatBg({ mode: (t0 as HTMLSelectElement).value as "off" | "ambient" | "flashlight" }); return; }
     if (t0.id === "spokeSwitchScroll") { setSpokeSwitchScroll((t0 as HTMLSelectElement).value === "resume" ? "resume" : "latest"); return; } // P-SCROLL.1
+    // P-PROGRESS.3: running HUDs, rows and lane cards repaint on their own one-second tick, so nothing else to do.
+    if (t0.id === "statusDetail") { setStatusDetail((t0 as HTMLSelectElement).value === "full" ? "full" : "line"); return; }
+    if (t0.id === "statusEta") { setStatusEta((t0 as HTMLInputElement).checked); return; }
+    if (t0.id === "statusRing") { setStatusRing((t0 as HTMLInputElement).checked); return; }
     if (t0.id === "bgFile") {
       const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
       if (f.size > 9 * 1024 * 1024) { showToast({ tone: "warn", title: "Image too large", desc: "Pick an image under ~9 MB (or compress it first).", timeout: 3400 }); return; }

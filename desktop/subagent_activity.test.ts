@@ -107,4 +107,15 @@ describe("listSubagentRuns", () => {
     expect(runs.length).toBe(1);
     expect(runs[0]!.steps.some((s) => s.label === "final write")).toBe(true);
   });
+  test("P-PROGRESS.2: a run starts at its session header, even when the tail cut drops the head; it ends at its .md", () => {
+    const header = JSON.stringify({ type: "session", version: 3, id: "x", timestamp: "2026-09-27T01:34:27.654Z", parentSession: "C:/s/2026_parent.jsonl" });
+    const pad = msg("toolResult", [{ type: "text", text: "x".repeat(1024) }]);
+    const big = [header, ...Array.from({ length: 3000 }, () => pad)].join("\n");
+    const io4: SubagentIo = { ...io, list: () => ["Big.jsonl", "Big.md"], readText: () => big, size: () => big.length,
+      exists: (p) => /2026_parent(\/Big\.md)?$/.test(p.replace(/\\/g, "/")), mtime: (p) => (p.endsWith(".md") ? 9_999 : 5_555) };
+    const [run] = listSubagentRuns("C:/s/2026_parent.jsonl", io4);
+    expect(run!.startedAt).toBe(Date.parse("2026-09-27T01:34:27.654Z"));
+    expect(run!.endedAt).toBe(9_999);
+    expect(listSubagentRuns("C:/s/2026_parent.jsonl", io)[1]!).toMatchObject({ done: false, startedAt: 0, endedAt: 0 }); // no header, still running
+  });
 });

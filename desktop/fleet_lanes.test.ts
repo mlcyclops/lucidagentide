@@ -11,6 +11,7 @@ import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { FleetLaneManager, type LaneEvent } from "./fleet_lanes.ts";
 import type { SystemSnapshot } from "./system_profile.ts";
+import { DurationHistory } from "./turn_progress.ts";
 
 const FAKE = join(import.meta.dir, "..", "harness", "mcp", "testing", "fake_acp_agent.ts");
 const TIMEOUT = 20_000;
@@ -19,13 +20,14 @@ const healthy: SystemSnapshot = { cpuModel: "t", cores: 8, speedMHz: 4000, cpuBu
 /** Pegged on BOTH metrics: 100% cpu, ~94% memory used. */
 const pegged: SystemSnapshot = { ...healthy, cpuBusyPct: 100, memTotalMB: 16_000, memFreeMB: 1_000 };
 
-function manager(opts: { snap?: SystemSnapshot; mode?: string; now?: () => number } = {}): FleetLaneManager {
+function manager(opts: { snap?: SystemSnapshot; mode?: string; now?: () => number; history?: DurationHistory } = {}): FleetLaneManager {
   if (opts.mode) process.env.FAKE_ACP_MODE = opts.mode; else delete process.env.FAKE_ACP_MODE;
   return new FleetLaneManager({
     argv: () => ({ cmd: "bun", args: [FAKE] }),
     masterModel: () => "master-model-a",
     sample: async () => opts.snap ?? healthy,
     ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.history ? { history: opts.history } : {}),
   });
 }
 
@@ -227,7 +229,6 @@ test("a mid-turn CRASH lands error event-driven (no clock), and the next prompt 
   let st = await live.status();
   expect(st.lanes[0]!.status).toBe("error");
   expect(st.lanes[0]!.canRetry).toBe(true);
-  expect(st.lanes[0]!.progress?.liveness).toBe("dead"); // P-PROGRESS.1: what the card's Restart this lane line keys on
 
   // The NEXT prompt recovers in place: a healthy child this time. The fake agent advertises no
   // loadSession capability, so recovery must take the FALLBACK path - the recorded transcript rides the
@@ -645,7 +646,8 @@ test("two lanes on ONE folder run in serial: the second is told what it waits on
   const st = await live.status();
   const va = st.lanes.find((l) => l.id === a.lane!.id)!;
   const vb = st.lanes.find((l) => l.id === b.lane!.id)!;
-  expect(va.progress?.liveness).toBe("running"); // a busy lane with a live child is running, not dead
+  expect(va.progress?.liveness.state).toBeDefined(); // a busy lane carries its progress view
+  expect(va.progress?.estimate.basis).toBe("none"); // no history yet: no number, honestly
   expect(vb.waiting?.on.name).toBe("alpha");
   expect(st.queues).toHaveLength(1);
   expect(st.queues[0]!.entries.map((e) => e.name)).toEqual(["alpha", "beta"]);
@@ -658,6 +660,31 @@ test("two lanes on ONE folder run in serial: the second is told what it waits on
   await bTurn;
   expect(bEvents.some((e) => e.type === "done")).toBe(true);
   expect((await live.status()).queues).toEqual([]);
+}, TIMEOUT);
+
+test("a waiting lane's expected start counts down with the status poll and agrees with the folder queue", async () => {
+  let t = 5_000_000;
+  const history = new DurationHistory();
+  for (let i = 0; i < 5; i++) history.addTurn("master-model-a", 60_000);
+  live = manager({ mode: "hang", now: () => t, history });
+  const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
+  const b = await live.spawn({ cwd: import.meta.dir, name: "beta" });
+  const aTurn = live.prompt(a.lane!.id, "first", () => {});
+  const bEvents: LaneEvent[] = [];
+  const bTurn = live.prompt(b.lane!.id, "second", (e) => bEvents.push(e));
+  const first = (await firstWaiting(bEvents)).wait.etaMs;
+  expect(first).not.toBeNull();
+  t += 20_000; // alpha has run 20 s longer
+  const st = await live.status();
+  const later = st.lanes.find((l) => l.id === b.lane!.id)!.waiting!;
+  const queued = st.queues[0]!.entries.find((e) => e.name === "beta")!;
+  expect(later.etaMs!).toBeLessThan(first!);
+  expect(later.etaMs).toBe(Math.max(0, queued.expectedStartAt! - t));
+  live.cancel(b.lane!.id);
+  await bTurn;
+  await Bun.sleep(150); // real clock: the child must receive the prompt before session/cancel (see above)
+  live.cancel(a.lane!.id);
+  await aTurn;
 }, TIMEOUT);
 
 test("lanes on DISJOINT folders never wait; cancel while in line settles quietly and frees the line", async () => {

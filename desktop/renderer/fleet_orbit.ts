@@ -25,6 +25,7 @@ import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEnt
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
 import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model
+import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 
 export interface FleetOrbitDeps {
   fleetStatus: LucidBridge["fleetStatus"];
@@ -878,7 +879,7 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   if (card.getAttribute("class") !== cls + keep) card.setAttribute("class", cls + keep);
   setText(card, ".orbit-name", lane.name);
   card.title = `${lane.name}\n${lane.cwd}\n${lane.model}`;
-  setText(card, ".orbit-glance", spokeGlance(lane));
+  setText(card, ".orbit-glance", spokeGlance(lane, statusEta())); // P-PROGRESS.3: the percent is opt-in
   setText(card, ".orbit-model", lane.model);
   // P-REPO.1 (ADR-0406): which repo this spoke works in and where it pushes; hidden until probed.
   const repo = card.querySelector(".orbit-repo") as HTMLElement;
