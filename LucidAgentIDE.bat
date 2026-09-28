@@ -114,7 +114,8 @@ echo  ---------------------------------------------------------------------
 echo    provider : %PROVIDER%        model : %MODEL%
 echo  ---------------------------------------------------------------------
 echo     1^)  Launch / relaunch omp   ^(terminal, with the security gate^)
-echo     G^)  Desktop GUI             ^(chat + dashboards in a window^)
+echo     G^)  Desktop GUI             ^(the installed app: your history + settings^)
+echo     D^)  Desktop GUI from source ^(dev: runs THIS checkout, whatever version it is^)
 echo     F^)  Fleet GUI               ^(project-bound window: own workspace + Knowledge^)
 echo     2^)  Switch model
 echo     3^)  Switch provider
@@ -128,7 +129,8 @@ echo     0^)  Quit
 echo.
 set /p "CH=    select: "
 if "%CH%"=="1" goto :launch
-if /i "%CH%"=="G" ( call :gui & goto :menu )
+if /i "%CH%"=="G" ( call :appgui & goto :menu )
+if /i "%CH%"=="D" ( call :gui & goto :menu )
 if /i "%CH%"=="F" ( call :fleetgui & goto :menu )
 if "%CH%"=="2" goto :pickmodel
 if "%CH%"=="3" goto :pickprovider
@@ -153,7 +155,27 @@ timeout /t 2 >nul
 goto :menu
 
 rem ===========================================================================
-rem  Launch the desktop GUI (chat + dashboards). Prefers the native Electron app
+rem  G: the INSTALLED app (%%LOCALAPPDATA%%\Programs\LucidAgentIDE), i.e. the release the user
+rem  runs every day, with its own profile, history and updater. Running the source checkout here
+rem  used to start whatever version the checkout happened to be on (a stale master opened beta.7)
+rem  on a fresh port-suffixed Electron profile and the repo as its workspace, so it looked like a
+rem  first run: the role picker and no history. Not installed yet: fall back to the source launch.
+:appgui
+echo.
+set "APPEXE=%LOCALAPPDATA%\Programs\LucidAgentIDE\LucidAgentIDE.exe"
+if not exist "%APPEXE%" (
+  echo    The installed app was not found at "%APPEXE%" - starting this checkout from source instead.
+  call :gui
+  goto :eof
+)
+echo    Launching the installed Lucid Agent IDE...
+start "" "%APPEXE%"
+echo    Done.
+echo.
+goto :eof
+
+rem ===========================================================================
+rem  D: launch the desktop GUI from THIS checkout (dev). Prefers the native Electron app
 rem  if its binary is installed; otherwise opens the browser GUI and the browser.
 :gui
 echo.

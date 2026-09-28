@@ -1274,7 +1274,7 @@ export interface LucidBridge {
   previewElectronDetect(path: string): Promise<{ electron: boolean; reasons: string[]; appDir: string; launchable: boolean; via: string | null } | null>;
   previewElectronLaunch(path: string): Promise<{ launched: boolean; via?: string; appDir?: string; reason?: string } | null>;
   // ── P-BROWSER.1 (wave 2): the agent-controlled visible browser window (BrowserFeature section) ──
-  // Status feeds the floating browser pill; close is shared with the Processes popover's Close action.
+  // Status feeds the floating browser pill; the pill's own Close button closes it.
   browserStatus(): Promise<BrowserStatusView | null>;
   // Latest capture as a data:image/png;base64 URL (null before the first shot) - the pill's auto
   // send-to-phone fetches it here rather than re-driving a capture.
@@ -1343,8 +1343,6 @@ export interface LucidBridge {
   // reads at its next tool boundary (target "master" or a laneId; the server enforces trim, the 4000-char
   // limit, and the 8-note-per-target cap). Resolves the pending count, or null on refusal/transport failure.
   interject(target: string, text: string): Promise<{ pending: number } | null>;
-  // P-INTERJECT.1: everything running right now - master turn, live lanes, import job, agent browsers.
-  processes(): Promise<ProcessView[] | null>;
   // -- P-RECOVER.1 (ADR-0385): self-recovery + incident reports ---------------------------------------
   /** The previous engine's master session, the current one, and the UNSEEN incidents. Null = unreachable. */
   recoveryState(): Promise<RecoveryStateView | null>;
@@ -2158,9 +2156,8 @@ export const bridge: LucidBridge = {
       return { ok: !!body.ok, error: body.error, run: body.data.run };
     } catch { return { ok: false, error: "The render service did not answer." }; }
   },
-  // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects + the unified Processes list.
+  // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects.
   interject: (target, text) => post("/api/interject", { target, text }),
-  processes: async () => { const d = await getData("/api/processes"); return Array.isArray((d as { processes?: unknown } | null)?.processes) ? (d as { processes: ProcessView[] }).processes : null; },
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,

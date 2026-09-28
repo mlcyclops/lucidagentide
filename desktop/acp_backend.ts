@@ -2305,6 +2305,9 @@ class Backend {
     // P-HEALTH.2: a USER Stop is never auto-resumed - stopping means stop. Only the recovery path keeps the
     // marker, and it passes `forRecover` because it cancels the wedged turn through this same method.
     if (!opts?.forRecover) this.recoverMark.clear();
+    // A user Stop that reaches a running /goal loop through the plain chat cancel (the composer's turn view
+    // routes Stop there) must end the LOOP, not just this iteration, or the next iteration starts at once.
+    if (!opts?.forRecover && this.goalActive) this.goalCancelled = true;
     if (this.folderWaitAbort) { this.folderWaitAbort.abort(); return; } // P-PROGRESS.1: leaving the line is the cancel
     try { if (this.acp && this.sessionId) this.acp.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* best-effort */ }
   }

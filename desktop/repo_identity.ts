@@ -176,12 +176,12 @@ export function repoChip(v: RepoView): string {
   return at ? `${v.name} \u00b7 ${at}` : v.name;
 }
 
-/** The long tooltip: every fact the chip compresses, one per line. */
-export function repoTooltip(ctx: RepoContext): string {
+/** The long tooltip: a title naming the repo, then every fact the chip compresses, one per line. Rendered
+ *  by the app's premium tooltip (`data-tip="title|body"`), so neither part may contain a `|`. */
+export function repoTooltip(ctx: RepoContext): { title: string; body: string } {
   const v = ctx.repo;
-  if (!v) return ctx.cwd ? `Not a git repository\n${ctx.cwd}` : "No folder";
+  if (!v) return { title: ctx.cwd ? "Not a git repository" : "No folder", body: ctx.cwd || "This session has no folder yet." };
   const lines = [
-    `Repository: ${v.name}${v.worktree ? " (worktree)" : ""}`,
     v.root,
     `Branch: ${v.branch || (v.head ? `detached at ${v.head}` : "no commits yet")}`,
     `Pushes to: ${pushLabel(v)}`,
@@ -190,7 +190,7 @@ export function repoTooltip(ctx: RepoContext): string {
   lines.push(ctx.source === "activity" ? "Known from the files this session changed" : "From the session's folder");
   if (ctx.cwd && ctx.cwd !== v.root) lines.push(`Session folder: ${ctx.cwd}`);
   if (ctx.others.length) lines.push(`Also touched: ${ctx.others.map((o) => o.name).join(", ")}`);
-  return lines.join("\n");
+  return { title: `${v.name}${v.worktree ? " (worktree)" : ""}`, body: lines.join("\n").replaceAll("|", "/") };
 }
 
 // ---------------------------------------------------------------------------------------- tool calls

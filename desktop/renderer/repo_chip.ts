@@ -55,7 +55,12 @@ export function paintRepoChip(node: HTMLElement, ctx: RepoContext | undefined | 
     node.classList.remove("rc-none", "rc-remote", "rc-local-only");
     node.classList.add(repoChipTone(ctx));
   }
-  node.title = ctx ? repoTooltip(ctx) : "Checking the repository\u2026";
+  // The app's premium tooltip (ui.ts initTooltips), never the OS `title` box: a title line naming the repo,
+  // then one fact per line (#tip .d is pre-line).
+  const tip = ctx ? repoTooltip(ctx) : { title: "Repository", body: "Checking the repository\u2026" };
+  node.removeAttribute("title");
+  node.setAttribute("data-tip", `${tip.title.replaceAll("|", "/")}|${tip.body}`);
+  node.setAttribute("data-tip-icon", ctx && !ctx.repo ? "folder" : "git");
   node.hidden = false;
 }
 
