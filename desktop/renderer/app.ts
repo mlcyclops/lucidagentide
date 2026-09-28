@@ -9770,25 +9770,42 @@ async function adoptMasterTurn(status: TurnStatus, owner: number): Promise<void>
   await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: page?.messages });
 }
 /** ADR-0411: the master turn that was running when the composer left for a lane has ended while the
- *  composer was away. Reload the thread from the session transcript, which holds the finished reply, and
- *  keep the notice chips the return just added (renderThread clears the thread; the chips are moved, so
- *  their dismiss handlers survive). Re-renders only when the transcript differs from what is on screen. */
-async function refreshMasterThread(sessionId: string | null, owner: number): Promise<void> {
-  const sid = sessionId ?? ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null;
-  if (!sid) { masterThreadStale = false; return; }
-  const page = await bridge.sessionMessages(sid, RESUME_TAIL).catch(() => null);
-  if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return; // the user moved on; the flag waits for the next return
+ *  composer was away, so the parked thread ends on a bubble nothing will ever settle. Two sources, in
+ *  order of trust. (1) The engine still holds the finished turn (`turnStatus` reports it until the next
+ *  turn or a session switch): replay its canonical snapshot through the same attach the reconnect path
+ *  uses, with the parked thread as the prior context (`priorTurnContext` drops its trailing prompt and
+ *  the unsettled bubble). Nothing on disk is involved, so a transcript that has not flushed yet cannot
+ *  blank the thread. (2) Otherwise the session transcript, re-rendered only when it says at least as much
+ *  as the screen: a shorter page (no session file, a late flush) keeps the park rather than replacing a
+ *  conversation with nothing. Found live on an agent that writes no transcript: the disk-only version
+ *  wiped the thread. The notice chips the return just added survive either way (moved, handlers kept). */
+async function settleMasterAfterReturn(status: TurnStatus | null, owner: number): Promise<void> {
   masterThreadStale = false;
+  const chips = $$("#thread .note-chip") as HTMLElement[];
+  const restoreChips = () => {
+    const thread = $("#thread");
+    if (!thread || isLaneTarget(state.composerTarget)) return;
+    for (const chip of chips) thread.appendChild(chip);
+    if (chips.length) jumpToEnd();
+  };
+  if (status) {
+    const expect = turnViewEpoch + 1; // renderChatTurn takes the next epoch; a later navigation takes another
+    await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: snapshotThread() });
+    if (turnViewEpoch === expect) restoreChips();
+    return;
+  }
+  const sid = ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null;
+  if (!sid) return;
+  const page = await bridge.sessionMessages(sid, RESUME_TAIL).catch(() => null);
+  if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return; // the user moved on
   if (!page) return; // the park stays: an unreachable transcript is the reconnect path's problem, not a blank thread
   setCachedTranscript(sid, page.messages, Date.now());
-  const shownSig = transcriptSig(snapshotThread());
+  const shown = snapshotThread();
+  if (page.messages.length < shown.length) return; // the transcript is behind the screen: never shrink
   const freshSig = transcriptSig(page.messages) + (page.steps?.length ? `+s${page.steps.length}` : "");
-  if (freshSig === shownSig) return;
-  const chips = $$("#thread .note-chip") as HTMLElement[];
+  if (freshSig === transcriptSig(shown)) return;
   renderThread(page.messages, page.steps);
-  const thread = $("#thread")!;
-  for (const chip of chips) thread.appendChild(chip);
-  if (chips.length) jumpToEnd();
+  restoreChips();
 }
 async function recoverMasterTurn(): Promise<void> {
   if (isLaneTarget(state.composerTarget) || activeTurnView || goalLoopRunning) return;
@@ -9809,7 +9826,7 @@ async function recoverMasterTurn(): Promise<void> {
       setRecoveryChecking(false); state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled();
       // Unless the composer just came back from a lane it left mid-turn: that turn ended unobserved, so
       // the parked thread ends on a bubble nothing will ever settle. Show the session as it really is.
-      if (masterThreadStale) await refreshMasterThread(status?.sessionId ?? null, owner);
+      if (masterThreadStale) await settleMasterAfterReturn(status, owner);
       return;
     }
     masterThreadStale = false; // the adopted stream re-renders the thread from the session itself

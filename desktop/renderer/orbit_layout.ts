@@ -8,6 +8,7 @@
 // IO-free so all three are unit-tested headless; fleet_orbit.ts owns the DOM, the SVG and the polling.
 
 import type { LaneStatus } from "./bridge.ts";
+import { LANE_ATTENTION } from "../collab/fleet_status.ts"; // P-SWITCH.3: one rule for "waiting on you", shared with the dock pill and the phone bar
 import { promoteRefusal } from "./composer_target.ts";
 
 /** One spoke's resting place, in stage coordinates relative to the hub (0,0 = stage center). `ring` is
@@ -186,7 +187,7 @@ export function hubLanes<L extends { hubSessionId?: string | null }>(lanes: read
 export interface HubEntry {
   sessionId: string;
   lanes: { id: string; name: string; status: LaneStatus }[];
-  /** How many of its spokes block on a human right now (needs-approval or awaiting-input). */
+  /** How many of its spokes block on a human right now (fleet_status.LANE_ATTENTION, the rollup's rule). */
   waiting: number;
 }
 
@@ -201,7 +202,7 @@ export function otherHubs(
     let h = byHub.get(l.hubSessionId);
     if (!h) { h = { entry: { sessionId: l.hubSessionId, lanes: [], waiting: 0 }, latest: 0 }; byHub.set(l.hubSessionId, h); }
     h.entry.lanes.push({ id: l.id, name: l.name, status: l.status });
-    if (l.status === "needs-approval" || l.status === "awaiting-input") h.entry.waiting++;
+    if (LANE_ATTENTION[l.status]) h.entry.waiting++;
     h.latest = Math.max(h.latest, l.lastActivityAt);
   }
   return [...byHub.values()].sort((a, b) => b.latest - a.latest).map((h) => h.entry);

@@ -311,8 +311,10 @@ function togglePanel(which: OrbitPanel): void {
 /** The other hubs from the last poll. Repainted per poll only while the panel is open. */
 let hubList: HubEntry[] = [];
 
+/** The sidebar title, else the id's TAIL: session ids are Snowflakes, so two sessions minted close together
+ *  share their leading digits and only differ at the end (found live: two hubs both read "Session fake-ses"). */
 function hubTitle(sessionId: string): string {
-  return deps?.sessionTitle(sessionId) || `Session ${sessionId.slice(0, 8)}`;
+  return deps?.sessionTitle(sessionId) || `Session \u2026${sessionId.slice(-6)}`;
 }
 
 function paintHubsBadge(): void {

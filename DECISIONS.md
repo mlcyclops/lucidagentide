@@ -24340,6 +24340,14 @@ The operator, with a screenshot of a turn footer showing "ETA estimating" twice,
 
 **Consequences.** Coming back from a spoke shows the finished reply. One extra `sessionMessages` fetch per return that left mid-turn; none otherwise. A turn that ended while away paints through `renderThread`, so its steps come from the restored-steps record rather than the live HUD, as after any resume. Renderer only.
 
+### ADR-0411 amendment: the engine's completed turn first, the disk second, and never a shorter thread (2026-09-27)
+
+**Context.** The UAT on an isolated engine with the fake agent (which writes no session transcript) blanked the thread on return: the disk reload replaced the parked conversation with an empty page. A real omp flushes late too, so the same race exists on a real session.
+
+**Decision.** `settleMasterAfterReturn` replays the engine's own completed turn when `turnStatus` still reports it (the same `attachChat` the reconnect path uses; a finished `LiveTurn` delivers its canonical snapshot then `done`), with the parked thread as the prior context. Only when the engine no longer holds the turn does it read the session transcript, and then only re-renders when the page says at least as much as the screen. The chips added on return survive both paths. `refreshMasterThread` is gone.
+
+**Consequences.** The return works with or without a transcript on disk, and a late flush can never shrink what the user was reading. A turn the engine dropped (restart, session switch) and never wrote to disk stays as the park showed it, which is the honest state.
+
 ## ADR-0410 -- P-SWITCH.3 (part): a new session is a new hub; the previous session keeps its spokes (2026-09-27)
 
 **Context.** The operator ran a hub with spokes, started a new session, opened the orbit and saw the previous session's spokes around the new session's hub. ADR-0403 (P-SWITCH.1) recorded the direction: the hub is a role (Main), spokes record the session they were born under, and switching Main never stops, reparents, or hides spokes. The fleet was still one flat list: `FleetLaneManager` knew nothing about which master session started a lane, and the orbit drew every live lane around whatever Main was.
@@ -24350,3 +24358,7 @@ The operator, with a screenshot of a turn footer showing "ETA estimating" twice,
 - Not changed: the grid (the whole-fleet workbench) still lists every lane; the Recover list stays global (a recovered spoke joins the current hub); the ledger's older lines have no hub.
 
 **Consequences.** A new session starts with an empty orbit while the previous session's spokes keep running under it, one Open away. An engine restart on the master (`restart()` mints a new session id) makes the spokes spawned before it "other hub" spokes of the old session, which is the same rule and recoverable the same way. The engine change needs the compiled engine swapped and a LUCID restart, which ends running spokes. Files: desktop/fleet_lanes.ts, dev.ts, renderer/bridge.ts, orbit_layout.ts, fleet_orbit.ts, app.ts, styles.css, with tests in fleet_lanes.test.ts and orbit_layout.test.ts. Verified against a mock engine in a browser: two hubs, Open switches, New session lands on an empty hub with the other two hubs counted.
+
+### ADR-0410 amendment: after the UAT on a real engine (2026-09-27)
+
+Three changes from the isolated-engine UAT (fake agent, master and one spoke, New session, Other hubs, Open, stop, dismiss). (1) The "waiting on you" count in `otherHubs` reuses `fleet_status.LANE_ATTENTION`, the rule the dock pill and the phone bar already share, instead of restating it. (2) A hub with no sidebar title is named by the TAIL of its id ("Session …sion-2"): session ids are Snowflakes and two minted close together differ only at the end, so two hubs both read "Session fake-ses". (3) The fake agent mints a fresh id per `session/new` and, under the engine, a per-lane id (from `LUCID_INTERJECT_TARGET=lane-…`), because with every process answering "fake-session-1" the one-owner rule (ADR-0404) sent Open to the spoke that "held" Main's session; the first bare id stays "fake-session-1" for every existing assertion. Real omp already behaves this way; the fixture did not.
