@@ -42,7 +42,7 @@ import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order 
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
 import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
-import { humanMs, progressLine, STREAMING_MS, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
+import { humanMs, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
 import type { FolderQueue, WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (types only)
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
 import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
@@ -116,10 +116,8 @@ interface LaneRun {
   /** P-FLEET.L11: the FOLLOW subscription held open while the MAIN COMPOSER drives this lane, so turns it
    *  asked for still land in this card's transcript. Null whenever the card owns the turn itself. */
   follow: { done: Promise<void>; stop: () => void } | null;
-  /** P-PROGRESS.1: the freshest progress view (stream or poll) and when it arrived, aged locally on the
-   *  card's ticker so the numbers move between samples. */
+  /** P-PROGRESS.1: the freshest progress view (stream or poll): is the lane's agent process alive? */
   progress: ProgressView | null;
-  progressAt: number;
   /** P-PROGRESS.1: the lane's turn is in line behind another worker's turn in the same folder. */
   waiting: WaitView | null;
 }
@@ -129,7 +127,7 @@ function newRun(view: LaneView): LaneRun {
     view, turns: [], pending: "", pendingThinking: "", pendingTools: [],
     streaming: false, collapsed: false, card: null, attached: [],
     seq: 0, meter: newMeter(Date.now()), follow: null,
-    progress: null, progressAt: 0, waiting: null,
+    progress: null, waiting: null,
   };
 }
 
@@ -653,7 +651,7 @@ async function refresh(): Promise<void> {
     }
     // P-PROGRESS.1: the poll's view is the truth for progress and the wait too (a stream sample between
     // polls only fills the gap; the poll's absence of either clears it).
-    run.progress = lane.progress ?? null; run.progressAt = Date.now();
+    run.progress = lane.progress ?? null;
     run.waiting = lane.waiting ?? null;
     if (grid && !run.card) { run.card = buildCard(run); grid.append(run.card); paintOutput(run); }
     paintFrame(run);
@@ -679,8 +677,8 @@ async function refresh(): Promise<void> {
 }
 
 /** P-PROGRESS.1: the folder queue strip at the top of the grid: one block per folder two or more workers
- *  share, every worker on its own row in run order with when it is expected to start. Nothing when nobody
- *  shares a folder. Every row is ONE text child (invariant 11: no flex prose, no word-wrapped labels). */
+ *  share, every worker on its own row in run order. Nothing when nobody shares a folder. Every row is ONE
+ *  text child (invariant 11: no flex prose, no word-wrapped labels). */
 function paintQueues(grid: HTMLElement, queues: FolderQueue[]): void {
   let strip = $(".fleet-queues", grid) as HTMLElement | null;
   if (!queues.length) { strip?.remove(); return; }
@@ -692,9 +690,7 @@ function paintQueues(grid: HTMLElement, queues: FolderQueue[]): void {
     ($(".fleet-queue-title", block) as HTMLElement).textContent = `Turns in ${q.folder}, in order:`;
     q.entries.forEach((e, ei) => {
       const row = $(`[data-qe="${ei}"]`, block) as HTMLElement | null; if (!row) return;
-      const when = e.state === "running"
-        ? `running since ${humanMs(Math.max(0, now - e.sinceAt))} ago${e.etaMs !== null ? `, about ${humanMs(e.etaMs)} left (est.)` : ""}`
-        : e.expectedStartAt !== null ? `waits, starts in about ${humanMs(Math.max(0, e.expectedStartAt - now))} (est.)` : "waits, start time unknown";
+      const when = e.state === "running" ? `running since ${humanMs(Math.max(0, now - e.sinceAt))} ago` : "waiting";
       const line = `${e.position + 1}. ${e.name}: ${when}`;
       row.textContent = line; row.title = line;
       row.dataset.state = e.state;
@@ -788,12 +784,8 @@ function buildCard(run: LaneRun): HTMLElement {
           <button class="btn-mini" data-fleet-respawn>${icon("bolt", 11)} Respawn</button>
         </span>
       </div>
-      <div class="lane-progress" data-lane-progress hidden>
-        <div class="lane-bar"><div class="lane-fill"></div></div>
-        <div class="lane-progress-line" data-lane-est></div>
-        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
-        <div class="lane-wait" data-lane-wait hidden></div>
-      </div>
+      <div class="lane-dead" data-lane-dead hidden><span class="lane-dead-note">The agent process exited.</span><button class="btn-mini lane-restart" data-fleet-respawn>Restart this lane</button></div>
+      <div class="lane-wait" data-lane-wait hidden></div>
       <div class="fleet-queue" data-fleet-queue hidden></div>
       <div class="fleet-attach" data-fleet-attach hidden></div>
       <div class="fleet-compose">
@@ -808,42 +800,17 @@ function buildCard(run: LaneRun): HTMLElement {
   </div>`);
 }
 
-/** P-PROGRESS.1: the progress strip: the history-estimate bar (95% at most while the turn runs), the
- *  progress line, the liveness pill (with the restart action when the child is gone), and the wait line
- *  while the turn is in line for its folder. Ages the last sample locally so the words keep moving. */
+/** P-PROGRESS.1: two plain lines and nothing else: the restart line when the lane's agent process is gone,
+ *  and, while the lane's folder is taken, whom its turn waits for and its place in line. */
 function paintProgress(run: LaneRun): void {
   const card = run.card; if (!card) return;
-  const strip = $("[data-lane-progress]", card) as HTMLElement | null; if (!strip) return;
-  const p = run.progress;
+  const dead = $("[data-lane-dead]", card) as HTMLElement | null;
+  if (dead) dead.hidden = run.progress?.liveness !== "dead";
+  const wait = $("[data-lane-wait]", card) as HTMLElement | null; if (!wait) return;
   const w = run.waiting;
-  strip.hidden = !p && !w;
-  if (!p && !w) return;
-  const bar = $(".lane-bar", strip) as HTMLElement, fill = $(".lane-fill", strip) as HTMLElement;
-  const est = $("[data-lane-est]", strip) as HTMLElement, alive = $("[data-lane-alive]", strip) as HTMLElement;
-  const signal = $("[data-lane-signal]", strip) as HTMLElement, restart = $("[data-lane-restart]", strip) as HTMLElement;
-  const wait = $("[data-lane-wait]", strip) as HTMLElement;
-  if (p) {
-    const age = Math.max(0, Date.now() - run.progressAt);
-    const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
-    const aged: ProgressView = running ? { ...p, elapsedMs: p.elapsedMs + age, lastSignalMs: p.lastSignalMs + age, estimate: p.estimate.etaMs === null ? p.estimate : { ...p.estimate, etaMs: Math.max(0, p.estimate.etaMs - age), overrun: p.estimate.overrun || p.estimate.etaMs - age <= 0 } } : p;
-    est.textContent = w ? "" : progressLine(aged);
-    bar.classList.toggle("indeterminate", aged.estimate.percent === null && running && !w);
-    fill.style.width = aged.estimate.percent === null ? "0%" : `${Math.min(95, aged.estimate.percent)}%`;
-    alive.dataset.state = w ? "waiting" : p.liveness.state;
-    alive.textContent = w ? "waiting for the folder" : p.liveness.label;
-    alive.title = w ? "Another worker's turn is running in this folder; this turn starts when it ends." : p.liveness.detail;
-    signal.textContent = running && !w ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago`) : "";
-    restart.hidden = p.liveness.state !== "dead";
-  } else {
-    est.textContent = ""; bar.classList.remove("indeterminate"); fill.style.width = "0%";
-    alive.dataset.state = "waiting"; alive.textContent = "waiting for the folder"; alive.title = "";
-    signal.textContent = ""; restart.hidden = true;
-  }
   wait.hidden = !w;
   if (w) {
-    const nth = w.position === 1 ? "next" : `${w.position}th in line`;
-    const start = w.etaMs !== null ? `starts in about ${humanMs(w.etaMs)} (est.)` : "start time unknown";
-    const line = `Waiting for ${w.on.name} to finish in ${w.folder} · ${nth} · ${start}`;
+    const line = `Waiting for ${w.on.name} to finish in ${w.folder} \u00b7 ${w.position === 1 ? "next in line" : `number ${w.position} in line`}`;
     wait.textContent = line; wait.title = line;
   }
 }
@@ -1311,7 +1278,7 @@ function onLaneEvent(id: string, e: LaneEvent): void {
     // P-PROGRESS.1: the lane's progress view, streamed every few seconds; a sample means the turn runs, so
     // any wait is over. The wait says what the turn is in line behind, and the next real event clears it.
     case "progress":
-      run.progress = e.progress; run.progressAt = Date.now(); run.waiting = null;
+      run.progress = e.progress; run.waiting = null;
       paintFrame(run);
       break;
     case "waiting":

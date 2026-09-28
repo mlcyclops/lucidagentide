@@ -84,16 +84,13 @@ export function orbitSlots(count: number, w: number, h: number, opts?: OrbitOpts
 /** The glance line under a spoke's name: one short sentence answering "what is this lane doing and does
  *  it need me". Wording is load-bearing: the amber and red states name the USER's next move, because
  *  those are the two states that block on a human (the fleet grid's own animation rule). */
-export function spokeGlance(l: { status: LaneStatus; turns: number; queued: readonly unknown[]; waiting?: { on: { name: string } }; progress?: { estimate: { percent: number | null } } }): string {
+export function spokeGlance(l: { status: LaneStatus; turns: number; queued: readonly unknown[]; waiting?: { on: { name: string } } }): string {
   const q = l.queued.length > 0 ? ` \u00b7 ${l.queued.length} queued` : "";
-  // P-PROGRESS.1: a lane in line for its folder says whom it waits for; a running one with history shows
-  // how far along it probably is (labelled as the estimate it is).
+  // P-PROGRESS.1: a lane in line for its folder says whom it waits for.
   if (l.waiting && l.status === "working") return `waiting for ${l.waiting.on.name}${q}`;
-  const pct = l.progress?.estimate.percent;
-  const est = l.status === "working" && pct !== null && pct !== undefined ? ` \u00b7 ${pct}% (est.)` : "";
   switch (l.status) {
     case "starting": return "spinning up\u2026";
-    case "working": return `working \u00b7 turn ${l.turns + 1}${est}${q}`;
+    case "working": return `working \u00b7 turn ${l.turns + 1}${q}`;
     case "needs-approval": return "needs your approval";
     case "awaiting-input": return `ready for your prompt${q}`;
     case "done": return `done \u00b7 ${l.turns} ${l.turns === 1 ? "turn" : "turns"}${q}`;

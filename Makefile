@@ -864,7 +864,7 @@ demo-P-FLEET.L20: ## P-FLEET.L20 (ADR-0402): close a spoke from where it is show
 	$(BUN) run desktop/scripts/demo_p_fleet_l20.ts
 
 .PHONY: demo-P-PROGRESS.1
-demo-P-PROGRESS.1: ## P-PROGRESS.1 (ADR-0409): workers say what they are doing (every tool step opens on its doing line, arguments and outcome), how far along they probably are (a history estimate that never finishes a running turn), and whether they are alive (evidence-ranked liveness with an in-place restart); turns on one folder take turns in order, visibly, with expected start times
+demo-P-PROGRESS.1: ## P-PROGRESS.1 (ADR-0409, amended): workers say what they are doing (every tool step opens on its doing line, arguments and outcome) and a dead agent process shows one line with an in-place restart; turns on one folder take turns in order, and a waiter is told whom it waits for and its place in line (no estimates, no ETAs)
 	$(BUN) run harness/scripts/demo_p_progress_1.ts
 .PHONY: demo-P-SCROLL.1
 demo-P-SCROLL.1: ## P-SCROLL.1 (ADR-0405): the chat follows new output until the reader scrolls up (a fast burst no longer releases it); a spoke switch lands on the newest message or, by preference, where the reader left off; the attached spoke's live turn renders in arrival order; a new spoke opens on the last spoke's model
@@ -874,7 +874,7 @@ demo-P-REPO.1: ## P-REPO.1 (ADR-0406): every session names the repo it works on 
 	$(BUN) run desktop/scripts/demo_p_repo_1.ts
 
 .PHONY: demo-P-PROGRESS.2
-demo-P-PROGRESS.2: ## P-PROGRESS.2 (ADR-0408): the activity window folds calls under 5 s into one summary line and failed, repeated or empty calls into "processing", so only long calls keep a row (with elapsed time and ETA); every running worker, subagent run and the whole prompt states an ETA, "ETA estimating" until history supports a number
+demo-P-PROGRESS.2: ## P-PROGRESS.2 (ADR-0408, amended): the activity window folds calls under 5 s into one summary line and failed, repeated or empty calls into "processing", so only long calls keep a row (with elapsed time); no ETA or estimate on any worker, subagent run or the prompt
 	$(BUN) run harness/scripts/demo_p_progress_2.ts
 .PHONY: demo-P-GAME.1
 demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts

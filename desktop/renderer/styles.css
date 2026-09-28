@@ -5888,8 +5888,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-spawn-auth input[type="password"]:focus{outline:none;border-color:var(--accent)}
 .orbit-spawn-save{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--txt-3);cursor:pointer}
 
-/* P-PROGRESS.1: tool steps say what they are doing and how they ended; the HUD and the lane cards carry a
-   progress strip (history estimate bar, liveness pill, folder wait); the grid shows the folder queues.
+/* P-PROGRESS.1: tool steps say what they are doing and how they ended; the HUD and the lane cards show one
+   line with a restart action only when the agent process is gone, and a lane card says whom it waits for
+   while its folder is taken; the grid shows the folder queues.
    Every text run sits in ONE block or ellipsizing span (invariant 11), never as loose flex prose. */
 .ts-state{flex:none;font-family:var(--mono);font-size:10.5px;color:var(--txt-4);min-width:12px;height:12px;
   display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
@@ -5910,38 +5911,15 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .tinline-doing{font-size:12px;color:var(--txt-1)}
 .tinline-tool{font-family:var(--mono);font-size:11px;color:var(--txt-4);margin-top:2px}
 
-.hud-progress{margin:6px 0 0;font-family:var(--mono);font-size:11px;color:var(--txt-3)}
-.hud-bar,.lane-bar{position:relative;height:3px;border-radius:2px;background:rgb(var(--tint-rgb) / .08);overflow:hidden}
-.hud-fill,.lane-fill{height:100%;width:0;border-radius:2px;background:var(--accent-2);
-  transition:width .6s var(--ease)}
-.hud-bar.indeterminate .hud-fill,.lane-bar.indeterminate .lane-fill{width:30%;animation:barSlide 1.6s ease-in-out infinite}
-@keyframes barSlide{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
-.hud-progress-line{margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hud-alive-row{display:flex;align-items:center;gap:8px;margin-top:3px;min-width:0}
-.hud-alive,.lane-alive{flex:none;display:inline-block;max-width:60%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  padding:1px 7px;border-radius:9px;font-size:10.5px;color:var(--txt-2);background:rgb(var(--tint-rgb) / .06);
-  border:1px solid var(--line-soft)}
-.hud-alive[data-state="streaming"],.hud-alive[data-state="working"],
-.lane-alive[data-state="streaming"],.lane-alive[data-state="working"]{color:var(--green-txt);
-  background:rgb(var(--green-rgb) / .12);border-color:rgb(var(--green-rgb) / .35)}
-.hud-alive[data-state="thinking"],.hud-alive[data-state="quiet"],.hud-alive[data-state="probing"],.hud-alive[data-state="recovering"],.hud-alive[data-state="waiting"],
-.lane-alive[data-state="thinking"],.lane-alive[data-state="quiet"],.lane-alive[data-state="probing"],.lane-alive[data-state="recovering"],.lane-alive[data-state="waiting"]{
-  color:var(--amber-txt);background:rgb(var(--amber-rgb) / .12);border-color:rgb(var(--amber-rgb) / .4)}
-.hud-alive[data-state="dead"],.lane-alive[data-state="dead"]{color:var(--red-txt);background:rgb(var(--red-rgb) / .14);
-  border-color:rgb(var(--red-rgb) / .5)}
-.hud-signal,.lane-signal{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-4)}
+.hud-dead,.lane-dead{display:flex;align-items:center;gap:8px;min-width:0;font-size:11.5px;color:var(--red-txt)}
+.hud-dead{margin:6px 0 0;padding:5px 8px;border:1px solid rgb(var(--red-rgb) / .45);border-radius:7px;
+  background:rgb(var(--red-rgb) / .08)}
+.lane-dead{padding:5px 9px;border-top:1px solid rgb(var(--red-rgb) / .45);background:rgb(var(--red-rgb) / .08)}
+.hud-dead[hidden],.lane-dead[hidden]{display:none}
+.hud-dead-note,.lane-dead-note{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hud-restart,.lane-restart{flex:none;white-space:nowrap}
-.hud-queue{margin-top:5px;padding:5px 8px;border:1px solid rgb(var(--amber-rgb) / .35);border-radius:7px;
-  background:rgb(var(--amber-rgb) / .07)}
-.hud-queue-head{color:var(--txt-2);margin-bottom:2px}
-.hud-queue-row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-3)}
-.hud-queue-row.me{color:var(--amber-txt)}
-
-.lane-progress{padding:5px 9px 6px;border-top:1px solid var(--line-soft);background:var(--bg-1);font-family:var(--mono);
-  font-size:10.5px;color:var(--txt-3);min-width:0}
-.lane-progress-line{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lane-alive-row{display:flex;align-items:center;gap:6px;margin-top:3px;min-width:0}
-.lane-wait{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--amber-txt)}
+.lane-wait{padding:5px 9px;border-top:1px solid var(--line-soft);background:var(--bg-1);font-family:var(--mono);
+  font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--amber-txt)}
 .fleet-tchip-state{flex:none;font-size:10px;color:var(--txt-4);white-space:nowrap;display:inline-flex;align-items:center;min-width:10px}
 .fleet-tchip-state[data-state="open"]::before{content:"";width:8px;height:8px;border-radius:50%;
   border:1.5px solid rgb(var(--cyan-rgb) / .35);border-top-color:var(--cyan);animation:spin .9s linear infinite}
@@ -5955,12 +5933,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-queue-title{color:var(--txt-2);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-queue-row{color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-queue-row[data-state="running"]{color:var(--green-txt)}
-.sa-alive{flex:none;font-family:var(--mono);font-size:10.5px;white-space:nowrap;color:var(--txt-4)}
-.sa-alive[data-state="working"]{color:var(--green-txt)}
-.sa-alive[data-state="quiet"]{color:var(--amber-txt)}
 @media (prefers-reduced-motion: reduce){
   .ts-state[data-state="open"]::before,.fleet-tchip-state[data-state="open"]::before{animation:none;border-top-color:rgb(var(--cyan-rgb) / .35)}
-  .hud-bar.indeterminate .hud-fill,.lane-bar.indeterminate .lane-fill{animation:none;width:0}
 }
 /* ───────── P-REPO.1 (ADR-0406): which repo a session works on, and where its commits go ─────────
    One chip everywhere (titlebar, lane cards, spokes, hub, spoke banner). Each text run is its own
@@ -6062,15 +6036,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-spawn-more{display:flex;flex-direction:column;gap:5px}
 
 /* P-PROGRESS.2: the HUD phase now carries a call's own doing line, so it ellipsizes (invariant 11) while the
-   whole-prompt ETA beside it stays on one line. "ETA estimating" breathes until history gives a number. */
+   figures beside it stay on one line. */
 .hud-phase{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hud-eta,.hud-tps,.hud-meta{flex:none;white-space:nowrap}
-.hud-eta{color:var(--txt-2);font-variant-numeric:tabular-nums}
-.hud-eta:empty{display:none}
-.hud-eta[data-state="known"]{color:var(--cyan)}
-.hud-eta[data-state="long"]{color:var(--amber-txt)}
-.hud-eta[data-state="estimating"],.sa-eta[data-state="estimating"],.subagent-eta[data-state="estimating"]{animation:etaBreath 1.8s var(--ease) infinite}
-@keyframes etaBreath{0%,100%{opacity:1}50%{opacity:.45}}
+.hud-tps,.hud-meta{flex:none;white-space:nowrap}
 /* Fold lines: quick calls summarized ("Read 3 files, 2 searches"), failed / repeated / empty calls counted as
    processing. The folded calls keep their own rows (and drilldowns) under the fold line's chevron. */
 .thoughts-step.ts-fold{display:block;padding:0}
@@ -6081,12 +6049,5 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .ts-foldlist .ts-row{padding-left:24px}
 .thoughts-step.folded[data-fold="failed"] .ts-k{color:var(--red)}
 .thoughts-step.folded[data-fold="repeat"] .ts-d,.thoughts-step.folded[data-fold="empty"] .ts-d{color:var(--txt-4)}
-/* An open long call's state carries its elapsed time and ETA next to the spinner. */
+/* An open long call's state carries its elapsed time next to the spinner. */
 .ts-state[data-state="open"]:not(:empty)::before{margin-right:5px}
-/* Subagent runs and the delegation head: the ETA of each run, and of the slowest one. */
-.sa-eta,.subagent-eta{flex:none;font-family:var(--mono);font-size:10.5px;white-space:nowrap;color:var(--txt-3)}
-.sa-eta[data-state="known"],.subagent-eta[data-state="known"]{color:var(--cyan)}
-.sa-eta[data-state="done"],.subagent-eta[data-state="done"]{color:var(--txt-4)}
-@media (prefers-reduced-motion: reduce){
-  .hud-eta[data-state="estimating"],.sa-eta[data-state="estimating"],.subagent-eta[data-state="estimating"]{animation:none}
-}
