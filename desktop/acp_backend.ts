@@ -585,7 +585,7 @@ class Backend {
       busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       startedAt: this.turnStartedAtMs, lastActivityAt: this.healthActivityAt,
       stepsDone: this.stepsDone, stepsOpen: pendingSnapshot(this.openCalls, now), lastHealth: this.lastHealth,
-      model: this.activeModel(), history: this.durations, now,
+      model: this.activeModel(), scope: this.sessionId ?? "", history: this.durations, now, // P-PROGRESS.4: the session keys its own history
       toolNameOf: (label) => { for (const [id, c] of this.openCalls) if (c.label === label) return this.toolNames.get(id); return undefined; },
     });
   }
@@ -1884,7 +1884,7 @@ class Backend {
     // this case self-evident in one line (no first token, 21.7k in, NOT ok), and stopReason still
     // reaches the user through the no-response event above. Adding columns is its own increment.
     const produced = sawOutput && !errored;
-    if (tSent > 0 && produced) this.durations.addTurn(this.activeModel(), Date.now() - tSent); // P-PROGRESS.1
+    if (tSent > 0 && produced) this.durations.addTurn(this.activeModel(), Date.now() - tSent, this.sessionId ?? ""); // P-PROGRESS.1; .4: keyed by session like the ledger line below
     if (tSent > 0) recordLatency({
       model: this.activeModel(), sessionId: this.sessionId ?? undefined,
       tSent, tFirstToken, tEnd: Date.now(), ok: produced,

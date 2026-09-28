@@ -2335,7 +2335,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     etaEl.dataset.state = phrase === ETA_ESTIMATING ? "estimating" : turnEst.overrun ? "long" : "known";
     etaEl.setAttribute("data-tip", phrase === ETA_ESTIMATING
       ? "ETA|Not enough finished turns or runs on this machine to estimate yet. A number appears as soon as there is history."
-      : "ETA|From how long recent turns and helper runs took on this machine (75th percentile). An estimate, not a promise.");
+      : "ETA|From how much longer recent turns that ran this long, and helper runs, took on this machine. An estimate, not a promise.");
   };
   // P-PROGRESS.1: the in-place recovery the watchdog performs, on demand: restart the agent process, reload
   // the same session. The whole app never needs to restart for this. P-PROGRESS.3: the quiet Restart line and

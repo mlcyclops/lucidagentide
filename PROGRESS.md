@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## P-PROGRESS.4: the turn ETA, measured and made more accurate (ADR-0413)
+- **shipped:** a backtest harness (`desktop/eta_backtest.ts`, `harness/scripts/eta_backtest.ts`, `make demo-P-PROGRESS.4`) replays finished turns and asks for the time left at 10/25/50/75% of each. `estimateTurn` now answers with the 40th percentile of what past turns that ran at least this long still took (this session and model, then the model, then every model; five such turns needed), keeping the P-PROGRESS.1 figure (`typicalEstimate`) when there is no such evidence. Real ledger (535 turns): median error 515.9 s -> 146.2 s, within +/-30% 5.9% -> 14.5%; synthetic: 269.1 s -> 41.7 s, 11.6% -> 26.4%. History samples carry the session id (engine master and lanes, and boot seeding from the ledger). Past the typical length the words name a figure only when five longer turns back it. Percent, ring and the default UI unchanged.
+- **stubbed:** none. Step counts and time since the last step (joined from the lucid-steps sidecar), workspace keying, recency windows and a densest-window estimator were measured and did not beat the adopted one on the real ledger, so none were wired; open tool calls could not be backtested (no ledger records tool end times). The estimate stays experimental and off by default: 14.5% within +/-30% is better, not yet good.
+- **next:** record tool-call end times somewhere replayable so open-call signals can be scored; revisit graduation once the within-30% share holds above a bar the operator picks.
+
 ## Launcher: G names the installed version and offers the current release
 - **shipped:** `LucidAgentIDE.bat` G reads the installed app's version and this checkout's (`:pkgver`), prints both, and when they differ offers the current release's download page before launching the installed app (it also self-updates on launch). The operator's main checkout was synced to origin/master; its uncommitted PWA-cache work is preserved on `backup/main-checkout-wip-2026-09-27` (local + origin).
 - **stubbed:** none. The G block was run under cmd with a scripted N: it printed installed v2.3.0-beta.9 vs current v2.3.0-beta.10, offered the page, and launched; `:pkgver` returns empty for a missing file.
