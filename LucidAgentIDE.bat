@@ -168,10 +168,32 @@ if not exist "%APPEXE%" (
   call :gui
   goto :eof
 )
+rem  Say which version will open. When the install is older than this checkout (the current release),
+rem  offer the download page: the app also updates itself from the beta feed, but only after it starts.
+call :pkgver "%LOCALAPPDATA%\Programs\LucidAgentIDE\resources\repo\desktop\package.json" APPVER
+call :pkgver "%REPO%\desktop\package.json" CURVER
+if not defined APPVER set "APPVER=unknown"
+echo    Installed app: v!APPVER!    current release: v!CURVER!
+if defined CURVER if /i not "!APPVER!"=="!CURVER!" (
+  echo    The installed app is not on the current version. It updates itself on launch, or install
+  echo    v!CURVER! now from https://github.com/mlcyclops/lucidagentide/releases/tag/v!CURVER!
+  set "UPD="
+  set /p "UPD=    Open that download page now? (Y/N): "
+  if /i "!UPD!"=="Y" start "" "https://github.com/mlcyclops/lucidagentide/releases/tag/v!CURVER!"
+)
 echo    Launching the installed Lucid Agent IDE...
 start "" "%APPEXE%"
 echo    Done.
 echo.
+goto :eof
+
+rem  %1 = a package.json, %2 = the variable that receives its "version" (unset when unreadable).
+:pkgver
+set "%~2="
+if not exist "%~1" goto :eof
+for /f "usebackq tokens=2 delims=:," %%V in (`findstr /c:"\"version\"" "%~1"`) do if not defined %~2 set "%~2=%%~V"
+if defined %~2 set "%~2=!%~2: =!"
+if defined %~2 set "%~2=!%~2:"=!"
 goto :eof
 
 rem ===========================================================================

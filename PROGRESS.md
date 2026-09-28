@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## Launcher: G names the installed version and offers the current release
+- **shipped:** `LucidAgentIDE.bat` G reads the installed app's version and this checkout's (`:pkgver`), prints both, and when they differ offers the current release's download page before launching the installed app (it also self-updates on launch). The operator's main checkout was synced to origin/master; its uncommitted PWA-cache work is preserved on `backup/main-checkout-wip-2026-09-27` (local + origin).
+- **stubbed:** none. The G block was run under cmd with a scripted N: it printed installed v2.3.0-beta.9 vs current v2.3.0-beta.10, offered the page, and launched; `:pkgver` returns empty for a missing file.
+- **next:** install beta.10 (or let the app self-update), then cut beta.11 for the Stop / grid / pill fixes when asked.
+
 ## P-REPO.1 amendment: no branch pill without a hosted repo (ADR-0406)
 - **shipped:** `hostedRepo()` gates every repo surface (titlebar pill, lane cards, spokes, hub, spoke banner, sidebar repo line): a plain folder or local-only repo shows nothing, never an amber "no git" / "local only"; the details card opens only for a hosted repo; picker "local only" rows are neutral grey.
 - **stubbed:** none. Verified live on the web GUI (fake agent): plain folder -> no pill, no tooltip; `git init` with no remote -> no pill; add a github.com origin -> pill `ws main -> acme/demo-app` with its premium tooltip, and the sidebar repo line appears.
