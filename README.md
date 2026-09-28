@@ -138,11 +138,11 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
 - **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
 
-The per-beta details are in [What's new in v2.3.0-beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+The per-beta details are in [What's new in v2.3.0-beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
 
 ### Get the beta
 
-1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.10](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.10)).
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.11](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.11)).
 2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
 
@@ -276,6 +276,18 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > leave the host.
 
 ---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.11 (prerelease)
+
+> **🛑 Stop means stop, and less to wonder about.** Beta.11 fixes Stop, opens Fleet on the grid, and only shows a branch pill when your work actually goes to a hosted repo.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.11](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.11). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🛑 Stop stops** - pressing Stop no longer sends the prompt you had queued for the next turn; it stays staged with a **Send now** button until you choose. A Stop that reaches a running /goal loop ends the loop, not just the current step.
+- **🗂 Fleet opens on the grid** - the Fleet button shows the grid of lanes; pin the orbit in its header if you prefer the hub-and-spoke map.
+- **🌿 A branch pill only when there is a repo to show** - the titlebar, lane cards, spokes and the sidebar name the branch and where commits go only for a folder that pushes to GitHub, GitLab, Azure DevOps or another hosted remote, with the same rich tooltip as the rest of the app. A plain folder shows nothing, never a "no git" warning. *(P-REPO.1 amendment, [ADR-0406](DECISIONS.md))*
+- **🧹 Quieter status bar** - the Processes pill is gone from the lower right.
+- **🚀 The launcher opens your installed app** - `LucidAgentIDE.bat` option G starts the installed LUCID with your history and settings, says which version it is next to the current release and offers the download when they differ; running from source moved to option D.
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.10 (prerelease)
 

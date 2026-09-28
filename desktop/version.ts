@@ -535,4 +535,11 @@
 //            Browse, and the local and GitHub CLI repo searches run only when checked and asked for
 //            (P-REPO.1 amendment, ADR-0406).
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.10";
+// v2.3.0-beta.11 = beta.10 plus the operator's follow-ups. Stop stops: a deliberate Stop no longer starts
+//            the staged next prompt (a P-FLEET.L8 regression) and ends a running /goal loop; a held prompt
+//            offers Send now. The Fleet button opens the grid unless the orbit is pinned. The branch pill
+//            appears only for a repo that pushes to a hosted remote, with the premium tooltip, and never as
+//            an amber "no git" warning (P-REPO.1 amendment, ADR-0406). The status-bar Processes pill is
+//            gone. LucidAgentIDE.bat G opens the installed app and names installed vs current versions.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.11";
