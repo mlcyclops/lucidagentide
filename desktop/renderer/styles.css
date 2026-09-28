@@ -890,6 +890,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .judgments.idle .thoughts-head:hover{background:transparent}
 .judgments.idle .thoughts-spin{color:var(--txt-4)}
 .judgments.open .thoughts-body{max-height:70vh}
+/* A live judgment tips its scale: the beam rocks about the post and each pan rides its end up and down
+   (beam half-span to a pan is 5 units, so 10deg lifts it ~0.87). Never the generic thoughts spin. */
+.thoughts[data-streaming] .thoughts-spin .ic.ic-scale{animation:none}
+.ic-scale .jv-beam{transform-box:view-box;transform-origin:12px 7.5px}
+.thoughts[data-streaming] .ic-scale .jv-beam{animation:jv-tip 1.6s ease-in-out infinite}
+.thoughts[data-streaming] .ic-scale .jv-pan-l{animation:jv-pan-l 1.6s ease-in-out infinite}
+.thoughts[data-streaming] .ic-scale .jv-pan-r{animation:jv-pan-r 1.6s ease-in-out infinite}
+@keyframes jv-tip{0%,50%,100%{transform:rotate(0)}25%{transform:rotate(10deg)}75%{transform:rotate(-10deg)}}
+@keyframes jv-pan-l{0%,50%,100%{transform:translateY(0)}25%{transform:translateY(-.87px)}75%{transform:translateY(.87px)}}
+@keyframes jv-pan-r{0%,50%,100%{transform:translateY(0)}25%{transform:translateY(.87px)}75%{transform:translateY(-.87px)}}
+@media (prefers-reduced-motion: reduce){.thoughts[data-streaming] .ic-scale path{animation:none}}
 .jd{border-top:1px solid var(--line-soft);padding:8px 11px 10px;font-size:12px;color:var(--txt-3)}
 .jd-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-family:var(--mono);font-size:11.5px;margin-bottom:6px}
 .jd-head>span{white-space:nowrap}
@@ -5891,17 +5902,17 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* P-PROGRESS.1: tool steps say what they are doing and how they ended; the HUD and the lane cards show one
    line with a restart action only when the agent process is gone, and a lane card says whom it waits for
    while its folder is taken; the grid shows the folder queues.
-   Every text run sits in ONE block or ellipsizing span (invariant 11), never as loose flex prose. */
+   Every text run sits in ONE block or ellipsizing span (invariant 11), never as loose flex prose.
+   Step marks are neutral (operator, 2026-09-27: back to the subdued Beta 8 palette): the glyph says done or
+   failed, the toolbox badge still counts failures, and colour is kept for the dead-process line. */
 .ts-state{flex:none;font-family:var(--mono);font-size:10.5px;color:var(--txt-4);min-width:12px;height:12px;
   display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
 .ts-state[data-state="open"]::before{content:"";width:9px;height:9px;border-radius:50%;
   border:1.5px solid rgb(var(--cyan-rgb) / .35);border-top-color:var(--cyan);animation:spin .9s linear infinite}
-.ts-state[data-state="done"]{color:var(--green)}
 .ts-state[data-state="done"]::before{content:"\2713";margin-right:3px}
-.ts-state[data-state="failed"]{color:var(--red)}
+.ts-state[data-state="failed"]{color:var(--txt-3)}
 .ts-state[data-state="failed"]::before{content:"\2717";margin-right:3px}
 .ts-state[data-state="unknown"]{color:var(--txt-4)}
-.thoughts-step.failed .ts-k{color:var(--red)}
 .ts-doing{padding:6px 12px 2px;font-size:12px;color:var(--txt-1)}
 .ts-name{padding:0 12px 6px;font-family:var(--mono);font-size:11px;color:var(--txt-4)}
 .ts-args{margin:0;padding:8px 12px;font-family:var(--mono);font-size:11.5px;line-height:1.5;color:var(--txt-2);
@@ -5923,16 +5934,15 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-tchip-state{flex:none;font-size:10px;color:var(--txt-4);white-space:nowrap;display:inline-flex;align-items:center;min-width:10px}
 .fleet-tchip-state[data-state="open"]::before{content:"";width:8px;height:8px;border-radius:50%;
   border:1.5px solid rgb(var(--cyan-rgb) / .35);border-top-color:var(--cyan);animation:spin .9s linear infinite}
-.fleet-tchip-state[data-state="done"]{color:var(--green)}
 .fleet-tchip-state[data-state="done"]::before{content:"\2713";margin-right:2px}
-.fleet-tchip-state[data-state="failed"]{color:var(--red)}
+.fleet-tchip-state[data-state="failed"]{color:var(--txt-3)}
 .fleet-tchip-state[data-state="failed"]::before{content:"\2717";margin-right:2px}
 .fleet-queues{grid-column:1 / -1;margin:0 0 8px;padding:7px 10px;border:1px solid rgb(var(--amber-rgb) / .35);
   border-radius:9px;background:rgb(var(--amber-rgb) / .07);font-family:var(--mono);font-size:11px;min-width:0}
 .fleet-queue-folder + .fleet-queue-folder{margin-top:6px;padding-top:6px;border-top:1px solid var(--line-soft)}
 .fleet-queue-title{color:var(--txt-2);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-queue-row{color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-queue-row[data-state="running"]{color:var(--green-txt)}
+.fleet-queue-row[data-state="running"]{color:var(--txt-2)}
 @media (prefers-reduced-motion: reduce){
   .ts-state[data-state="open"]::before,.fleet-tchip-state[data-state="open"]::before{animation:none;border-top-color:rgb(var(--cyan-rgb) / .35)}
 }
@@ -6042,12 +6052,10 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* Fold lines: quick calls summarized ("Read 3 files, 2 searches"), failed / repeated / empty calls counted as
    processing. The folded calls keep their own rows (and drilldowns) under the fold line's chevron. */
 .thoughts-step.ts-fold{display:block;padding:0}
-.ts-fold>.ts-row .ts-k{color:var(--green)}
 .ts-fold[data-kind="processing"]>.ts-row .ts-k{color:var(--txt-4)}
 .ts-fold.open>.ts-row .ts-chev{transform:rotate(90deg)}
 .ts-foldlist{border-top:1px solid var(--line-soft);background:var(--bg-0)}
 .ts-foldlist .ts-row{padding-left:24px}
-.thoughts-step.folded[data-fold="failed"] .ts-k{color:var(--red)}
 .thoughts-step.folded[data-fold="repeat"] .ts-d,.thoughts-step.folded[data-fold="empty"] .ts-d{color:var(--txt-4)}
 /* An open long call's state carries its elapsed time next to the spinner. */
 .ts-state[data-state="open"]:not(:empty)::before{margin-right:5px}
