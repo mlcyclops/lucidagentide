@@ -1574,16 +1574,15 @@ function toggleSpawnForm(): void {
       <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-lane form" title="Close">${icon("close", 12)}</button>
     </div>
     <div class="fleet-spawn">
-      <label class="fleet-spawn-lbl">Repository</label>
+      <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
+      <div class="fleet-spawn-row">
+        <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
+        <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
+      </div>
       ${repoPickerHtml()}
       <div class="fleet-spawn-note" data-spawn-repo-note hidden></div>
       <details class="fleet-spawn-more" data-spawn-more>
-        <summary>Other folder or clone URL</summary>
-        <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
-        <div class="fleet-spawn-row">
-          <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
-          <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
-        </div>
+        <summary>Clone from a URL</summary>
         <label class="fleet-spawn-lbl">Repo URL <span class="fleet-spawn-opt">optional</span></label>
         <input class="fleet-spawn-in" data-spawn-repo type="text" spellcheck="false" autocomplete="off" aria-label="A GitHub, GitLab or Azure DevOps repository URL to clone" placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git" />
       </details>
@@ -1602,8 +1601,9 @@ function toggleSpawnForm(): void {
   grid.prepend(form);
   paintEmpty();
   paintRepoHint(form);
-  // P-REPO.1 (ADR-0406): pick a repo instead of typing. The pick fills the same folder / URL fields the
-  // form always submitted, so the spawn path and its clone rules are unchanged.
+  // P-REPO.1 (ADR-0406): the Folder field (prefilled, with Browse) is enough to spawn; "Find repos" is
+  // opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the form
+  // always submitted, so the spawn path and its clone rules are unchanged, and Spawn never waits on a search.
   const cwdIn = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
   const repoIn = $("[data-spawn-repo]", form) as HTMLInputElement | null;
   const nameIn = $("[data-spawn-name]", form) as HTMLInputElement | null;
@@ -1619,7 +1619,7 @@ function toggleSpawnForm(): void {
     const auth = $("[data-spawn-auth]", form) as HTMLElement | null;
     if (signIn && note) { note.textContent = signIn; note.className = "fleet-spawn-note"; if (auth) auth.hidden = true; }
   });
-  ($("[data-repo-q]", form) as HTMLInputElement | null)?.focus();
+  cwdIn?.focus();
 }
 
 /** The REAL OS dialog (Explorer / Finder / zenity), where the user can also CREATE the folder. A cancel

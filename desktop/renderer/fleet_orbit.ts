@@ -405,13 +405,12 @@ function paintSpawnPanel(): void {
   const pick = spawnModelDefault(offered, rememberedSpokeModel(), deps.getMasterModel());
   const models = !pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered];
   box.innerHTML = `<div class="orbit-panel-h">${icon("plus", 14)}<b>New spoke</b><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>
-    <div class="orbit-spawn-l">repository</div>
+    <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
+      <button class="btn-mini orbit-btn" data-spawnp-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button></span></label>
     ${repoPickerHtml()}
     <small class="orbit-spawn-note" data-spawnp-repo-note hidden></small>
     <details class="orbit-spawn-more">
-      <summary>Other folder or clone URL</summary>
-      <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
-        <button class="btn-mini orbit-btn" data-spawnp-browse>${icon("folder", 12)} Browse</button></span></label>
+      <summary>Clone from a URL</summary>
       <label class="orbit-spawn-l">repo url <i>optional</i><input type="text" data-spawnp-repo spellcheck="false" autocomplete="off" placeholder="https://github.com/org/repo.git or git@host:org/repo"></label>
     </details>
     <div class="orbit-spawn-auth" data-spawnp-auth hidden>
@@ -422,7 +421,9 @@ function paintSpawnPanel(): void {
     <label class="orbit-spawn-l">model<select data-spawnp-model>${models.map((m) => `<option value="${esc(m.value)}"${m.value === pick ? " selected" : ""}>${esc(m.label)}</option>`).join("") || `<option value="">master's model</option>`}</select></label>
     <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-spawnp-go>${icon("bolt", 13)} Create spoke</button></div>
     <small class="orbit-ghost-err" data-spawnp-err></small>`;
-  // P-REPO.1 (ADR-0406): the pick fills the same folder / URL fields the panel always submitted.
+  // P-REPO.1 (ADR-0406): the folder field (prefilled, with Browse) is enough to create a spoke; "Find repos"
+  // is opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the
+  // panel always submitted, and Create spoke never waits on a search.
   const cwdIn = $("[data-spawnp-cwd]", box) as HTMLInputElement | null;
   const repoIn = $("[data-spawnp-repo]", box) as HTMLInputElement | null;
   const nameIn = $("[data-spawnp-name]", box) as HTMLInputElement | null;
@@ -438,7 +439,7 @@ function paintSpawnPanel(): void {
     const auth = $("[data-spawnp-auth]", box) as HTMLElement | null;
     if (signIn && note) { note.textContent = signIn; note.classList.remove("bad"); if (auth) auth.hidden = true; }
   });
-  ($("[data-repo-q]", box) as HTMLInputElement | null)?.focus();
+  cwdIn?.focus();
 }
 
 /** P-FLEET.L18: the live hint under the repo field - what was recognized, where the clone lands, and

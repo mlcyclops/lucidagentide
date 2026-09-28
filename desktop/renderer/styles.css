@@ -6044,6 +6044,18 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .repo-pick-row .rp-branch{font-family:var(--mono);color:var(--txt-2)}
 .repo-pick-row .rp-slug{color:var(--green)}
 .repo-pick-row .rp-local{color:var(--amber)}
+/* "Find repos": opt-in discovery (nothing runs until Search). Heading + button on one row, then one
+   single-line row per source: box + ONE text span that ellipsizes, never wraps (invariant 11). */
+.repo-pick-find{display:flex;flex-direction:column;gap:2px;min-width:0;padding:4px 7px 5px;
+  border:1px solid var(--line-soft);border-radius:8px}
+.repo-pick-find-h{display:flex;align-items:center;gap:6px;min-width:0}
+.repo-pick-find-t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--txt-4)}
+.repo-pick-go{flex:none;white-space:nowrap}
+.repo-pick-src{display:flex;align-items:center;gap:6px;min-width:0;padding:1px 0;font-size:11px;color:var(--txt-3);cursor:pointer;
+  letter-spacing:normal;text-transform:none}
+.repo-pick-src input{flex:none;margin:0;accent-color:var(--accent)}
+.repo-pick-src span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-spawn-more,.orbit-spawn-more{border:1px solid var(--line-soft);border-radius:8px;padding:4px 8px}
 .fleet-spawn-more>summary,.orbit-spawn-more>summary{cursor:pointer;font-size:11px;color:var(--txt-3);white-space:nowrap;padding:2px 0}
 .fleet-spawn-more[open]>summary,.orbit-spawn-more[open]>summary{margin-bottom:4px}
