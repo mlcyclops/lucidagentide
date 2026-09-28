@@ -13,10 +13,19 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-09-27, v2.3.0-beta.11 prerelease)
+## Current state (2026-09-28, v2.3.0-beta.12 prerelease)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.3.0-beta.11** (2026-09-27)
+now product increments, each with its own ADR. **v2.3.0-beta.12** (2026-09-28)
+merges six reviewed branches (#407 P-PROGRESS.3, #409 P-PROGRESS.4, #410
+P-INTERJECT.5, #411 orbit closes the grid, #412 P-SWITCH.3, #414 P-FLEET.L8)
+plus two operator fixes: session titles no longer show the checkout-peers
+briefing, and Bedrock / Vertex models appear only behind a key saved in LUCID
+with each picker family listing what you run first. Each branch was reviewed
+against a headless engine on a separate port (master vs head) before merge; #408
+(UNC test harness) was sent back for a cmd argument-injection fix and #351
+(dependabot) is held (TypeScript 7 empties the symbol graph).
+**v2.3.0-beta.11** (2026-09-27)
 fixes Stop (it no longer starts the staged prompt), opens Fleet on the grid,
 shows the branch pill only for a hosted repo, drops the Processes pill, and
 makes the launcher open the installed app (#403/#404/#405).

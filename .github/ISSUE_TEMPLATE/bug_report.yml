@@ -15,7 +15,7 @@ body:
     attributes:
       label: LUCID version
       description: Click the About button at the bottom of the left rail.
-      placeholder: 2.3.0-beta.11
+      placeholder: 2.3.0-beta.12
     validations:
       required: true
 

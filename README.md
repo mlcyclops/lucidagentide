@@ -138,11 +138,11 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
 - **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
 
-The per-beta details are in [What's new in v2.3.0-beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+The per-beta details are in [What's new in v2.3.0-beta.12](#-whats-new-in-v230-beta12-prerelease), [beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
 
 ### Get the beta
 
-1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.11](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.11)).
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.12](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.12)).
 2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
 
@@ -276,6 +276,20 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > leave the host.
 
 ---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.12 (prerelease)
+
+> **🧭 The fixes you asked for, each proven before merge.** Beta.12 carries six reviewed branches, each reproduced on the previous build and verified fixed on a headless engine before it went in, plus two operator fixes for session titles and the model picker.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.12](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.12). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🤫 One status line by default, detail when you want it** - Settings > Appearance > Working status offers "One status line" or "Full detail", an experimental time estimate (off by default; shows a number or nothing, never "estimating") and a green progress ring beside Check in and on every lane card. The estimate is backtested: time left is conditioned on how long the turn has already run. Also in this branch: a folder queue keeps the case of your folder names, a waiting lane counts down live, time spent waiting in line no longer counts as turn time, and a fail-open in the git broker (a drive-relative path from a network-share checkout counted as inside the workspace) is closed. *(P-PROGRESS.3/.4, [ADR-0412](DECISIONS.md), [ADR-0413](DECISIONS.md))*
+- **📨 A push reaches the agent or says why** - "Push not delivered" on an attached spoke is fixed: notes no tool step picked up ride the agent's next prompt instead of filling the cap, a push to an idle or gone target is refused with a reason, and your text is sent, staged for the next turn or put back in the composer, never dropped. *(P-INTERJECT.5, [ADR-0414](DECISIONS.md))*
+- **🗂 One Fleet view at a time** - opening the orbit closes the grid by every route; with the orbit pinned the grid appears only when you ask for it.
+- **🆕 A new session is a new hub** - spokes remember the session they were born under; the orbit draws the current session's spokes and lists your other hubs. A reply that finished while you were on a spoke shows in full when you come back. *(P-SWITCH.3, [ADR-0410](DECISIONS.md), [ADR-0411](DECISIONS.md))*
+- **👀 Attaching to a working spoke shows it working** - the running turn's bubble and a pulsing Working line appear the moment you attach, and an image you paste on a spoke stays with that spoke. *(P-FLEET.L8)*
+- **🏷 Session titles are your words again** - the checkout-peers briefing no longer shows up as a session title or as the first message of a restored chat.
+- **🎯 A cleaner model picker** - Amazon Bedrock and Google Vertex models appear only after you save a key for that provider in the Provider Hub (a stray `~/.aws` profile no longer adds six regional Claude rows that fail on send); Amazon Bedrock is now a provider card. Inside each family, the models you actually run come first, most recently used to least used, with regional and non-reasoning variants at the bottom.
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.11 (prerelease)
 

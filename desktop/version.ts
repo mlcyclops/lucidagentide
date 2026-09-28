@@ -542,4 +542,13 @@
 //            an amber "no git" warning (P-REPO.1 amendment, ADR-0406). The status-bar Processes pill is
 //            gone. LucidAgentIDE.bat G opens the installed app and names installed vs current versions.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.11";
+// v2.3.0-beta.12 = beta.11 plus six reviewed branches and two operator fixes. Quiet one-line status by
+//            default with detail, a time estimate and a green ring as opt-ins (P-PROGRESS.3/.4, ADR-0412/0413,
+//            incl. the git_broker UNC fail-open fix); a push reaches the agent or says why and the text is
+//            never lost (P-INTERJECT.5, ADR-0414); the orbit closes the grid; a new session is a new hub and
+//            a reply finished while on a spoke shows on return (P-SWITCH.3, ADR-0410/0411); an attached
+//            spoke's running turn always shows and pasted images stay with their spoke (P-FLEET.L8).
+//            Session titles no longer show the checkout-peers briefing; Bedrock and Vertex models appear
+//            only behind a key saved in LUCID, and each picker family lists what you run first.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.12";
