@@ -11,6 +11,14 @@
 // length the view says "longer than usual" instead of inventing a new finish time. No samples means no
 // number (basis "none"), not a made-up one.
 //
+// P-PROGRESS.4 (ADR-0413): the time LEFT is conditioned on how long the turn has already run. Of the past
+// turns that ran at least this long (this session and model first, then the model, then every model), the
+// 40th percentile of what they still had to go is the figure. Replayed against the real latency ledger
+// (desktop/eta_backtest.ts) this cut the median error by more than two thirds against "p75 minus elapsed".
+// With fewer than MIN_SURVIVORS such turns there is no evidence and the P-PROGRESS.1 figure stands, so
+// past the typical length with nothing longer on record the view still says "longer than usual". The
+// percent and the ring keep meaning "elapsed over the typical length".
+//
 // Liveness is EVIDENCE, and only evidence: the last streamed event, the open tool calls, the watchdog's last
 // action, and whether the child process is gone. It is the visible companion of health_watch.ts (which acts)
 // and never acts itself. The two agree on "activity" because both read the same lastActivityAt the sink
@@ -36,6 +44,13 @@ const HISTORY_CAP = 200;
 const MIN_MODEL_SAMPLES = 3;
 /** Pooled samples (any model) needed before any estimate is shown. */
 const MIN_ANY_SAMPLES = 5;
+/** P-PROGRESS.4: past turns longer than the running one needed before their remainders count as evidence. */
+const MIN_SURVIVORS = 5;
+/** P-PROGRESS.4: the percentile of those remainders reported as time left. Heavy-tailed turn lengths make the
+ *  median overshoot most turns; 0.4 scored best on both halves of the real ledger (ADR-0413). */
+const LEFT_QUANTILE = 0.4;
+/** Characters of a scope key kept per sample, so a history of 200 stays small whatever the caller passes. */
+const SCOPE_CAP = 128;
 
 export type LivenessState = "idle" | "streaming" | "working" | "thinking" | "quiet" | "probing" | "recovering" | "dead";
 
@@ -48,7 +63,8 @@ export interface Liveness {
 }
 
 export interface TurnEstimate {
-  /** Ms until the typical length is reached; 0 once past it; null with no history. */
+  /** Ms left: what past turns that ran at least this long still took (P-PROGRESS.4), else until the typical
+   *  length is reached. 0 once past it with no longer turn on record; null with no history. Never negative. */
   etaMs: number | null;
   /** 0 to 95 while running; null with no history. */
   percent: number | null;
@@ -57,7 +73,7 @@ export interface TurnEstimate {
   samples: number;
   /** The 75th percentile of the sampled turn lengths, in ms. */
   typicalMs: number | null;
-  /** The turn has run longer than the typical length. */
+  /** The turn has run longer than the typical length. etaMs above 0 then comes from longer past turns. */
   overrun: boolean;
 }
 
@@ -78,7 +94,9 @@ export interface ProgressView {
   estimate: TurnEstimate;
 }
 
-export interface TurnSample { model: string; totalMs: number }
+/** P-PROGRESS.4: `scope` narrows history below the model; the engine passes the session id (the key the
+ *  latency ledger records), "" when unknown. */
+export interface TurnSample { model: string; totalMs: number; scope: string }
 
 /** Recent turn and tool lengths, bounded. Seeded from the latency ledger at boot and fed live. */
 export class DurationHistory {
@@ -88,9 +106,9 @@ export class DurationHistory {
 
   constructor(cap = HISTORY_CAP) { this.#cap = usableCount(cap) || HISTORY_CAP; }
 
-  addTurn(model: string, totalMs: number): void {
+  addTurn(model: string, totalMs: number, scope = ""): void {
     if (!usable(totalMs) || totalMs === 0) return;
-    this.#turns.push({ model: (model || "").trim(), totalMs });
+    this.#turns.push({ model: (model || "").trim(), totalMs, scope: (scope || "").trim().slice(0, SCOPE_CAP) });
     if (this.#turns.length > this.#cap) this.#turns.splice(0, this.#turns.length - this.#cap);
   }
 
@@ -103,27 +121,18 @@ export class DurationHistory {
     this.#tools.set(key, arr);
   }
 
-  /** Feed the desktop/latency_log.ts JSONL lines ({model, totalMs, ok}). Only ok turns with a real length
-   *  count; a malformed line is skipped, never thrown. */
+  /** Feed the desktop/latency_log.ts JSONL lines (see ledgerTurns). Returns the turns taken. */
   seedFromLatencyLines(lines: Iterable<string>): number {
     let n = 0;
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t) continue;
-      try {
-        const o = JSON.parse(t) as { model?: unknown; totalMs?: unknown; ok?: unknown };
-        if (o.ok === false || typeof o.model !== "string" || typeof o.totalMs !== "number") continue;
-        const before = this.#turns.length;
-        this.addTurn(o.model, o.totalMs);
-        if (this.#turns.length !== before || this.#turns.length === this.#cap) n++;
-      } catch { /* a bad line is not history */ }
-    }
+    for (const t of ledgerTurns(lines)) { this.addTurn(t.model, t.totalMs, t.scope); n++; }
     return n;
   }
 
-  turnSamples(model?: string): number[] {
+  /** Turn lengths, oldest first, narrowed to a model and a scope when given ("" or omitted = any). */
+  turnSamples(model?: string, scope?: string): number[] {
     const m = (model ?? "").trim();
-    return this.#turns.filter((t) => !m || t.model === m).map((t) => t.totalMs);
+    const s = (scope ?? "").trim().slice(0, SCOPE_CAP);
+    return this.#turns.filter((t) => (!m || t.model === m) && (!s || t.scope === s)).map((t) => t.totalMs);
   }
 
   /** P-PROGRESS.2: this tool's sampled lengths (for estimateFromSamples on an open call). */
@@ -141,15 +150,31 @@ export class DurationHistory {
   get size(): number { return this.#turns.length; }
 }
 
+/** The desktop/latency_log.ts JSONL lines ({model, totalMs, ok, sessionId}) as turns, in ledger order. Only
+ *  ok turns with a real length count; a malformed line is skipped, never thrown. Pure. */
+export function* ledgerTurns(lines: Iterable<string>): Generator<TurnSample> {
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    let o: { model?: unknown; totalMs?: unknown; ok?: unknown; sessionId?: unknown };
+    try { o = JSON.parse(t) as typeof o; } catch { continue; } // a bad line is not history
+    if (!o || o.ok === false || typeof o.model !== "string" || typeof o.totalMs !== "number" || !usable(o.totalMs) || o.totalMs === 0) continue;
+    yield { model: o.model.trim(), totalMs: o.totalMs, scope: typeof o.sessionId === "string" ? o.sessionId.trim().slice(0, SCOPE_CAP) : "" };
+  }
+}
+
 export interface EstimateInput {
   elapsedMs: number;
   model: string;
+  /** P-PROGRESS.4: the session the turn runs in ("" or omitted when unknown). */
+  scope?: string;
   history: DurationHistory;
 }
 
-/** Elapsed against the typical length of this model's recent turns (or every model's, when this one has
- *  too few). Pure. */
-export function estimateTurn(i: EstimateInput): TurnEstimate {
+/** P-PROGRESS.1: elapsed against the typical length (p75) of this model's recent turns (or every model's,
+ *  when this one has too few), time left = typical minus elapsed. The percent, the ring and "longer than
+ *  usual" still come from here; P-PROGRESS.4 keeps it as the backtest baseline. Pure. */
+export function typicalEstimate(i: EstimateInput): TurnEstimate {
   let samples = i.history.turnSamples(i.model);
   let basis: TurnEstimate["basis"] = "model";
   if (samples.length < MIN_MODEL_SAMPLES) {
@@ -158,6 +183,23 @@ export function estimateTurn(i: EstimateInput): TurnEstimate {
     if (samples.length < MIN_ANY_SAMPLES) return NO_ESTIMATE;
   }
   return estimateFromSamples(i.elapsedMs, samples, 1, basis);
+}
+
+/** The typical-length estimate with its time left conditioned on the time already run (P-PROGRESS.4,
+ *  ADR-0413): of the past turns longer than this one so far, narrowest history first (this session and
+ *  model, the model, every model), the LEFT_QUANTILE of what they still had to go. Fewer than
+ *  MIN_SURVIVORS at every level is no evidence, and the typical-length figure stands. Pure. */
+export function estimateTurn(i: EstimateInput): TurnEstimate {
+  const e = typicalEstimate(i);
+  if (e.typicalMs === null) return e;
+  const scope = (i.scope ?? "").trim();
+  const levels: [string, string][] = scope ? [[i.model, scope], [i.model, ""], ["", ""]] : [[i.model, ""], ["", ""]];
+  for (const [model, s] of levels) {
+    const left: number[] = [];
+    for (const total of i.history.turnSamples(model, s)) if (total > i.elapsedMs) left.push(total - i.elapsedMs);
+    if (left.length >= MIN_SURVIVORS) return { ...e, etaMs: percentile(left, LEFT_QUANTILE) };
+  }
+  return e;
 }
 
 /** No history, no number. */
@@ -178,10 +220,12 @@ export function estimateFromSamples(elapsedMs: number, samples: readonly number[
 
 /** P-PROGRESS.2: the ETA words for a running worker. With history: "about 1 m left (est.)" or "longer than
  *  usual (typically 2 m)". Without: "ETA estimating", said plainly so a missing number reads as "not known
- *  yet" rather than as nothing at all. Pure. */
+ *  yet" rather than as nothing at all. P-PROGRESS.4: past the typical length a figure is named only when
+ *  longer past turns back it ("longer than usual, about 3 m left (est.)"). Pure. */
 export function etaPhrase(e: TurnEstimate): string {
   if (e.typicalMs === null) return ETA_ESTIMATING;
-  return e.overrun ? `longer than usual (typically ${humanMs(e.typicalMs)})` : `about ${humanMs(e.etaMs ?? 0)} left (est.)`;
+  if (!e.overrun) return `about ${humanMs(e.etaMs ?? 0)} left (est.)`;
+  return e.etaMs ? `longer than usual, about ${humanMs(e.etaMs)} left (est.)` : `longer than usual (typically ${humanMs(e.typicalMs)})`;
 }
 
 /** What a running worker with no usable history shows in place of a number. */
@@ -194,7 +238,7 @@ export const ETA_ESTIMATING = "ETA estimating";
  *  "" when nothing is running. Pure. */
 export function wholeEtaPhrase(turn: TurnEstimate | null, helpers: readonly (number | null)[]): string {
   if (!helpers.length) return turn ? etaPhrase(turn) : "";
-  const parts = turn ? [...helpers, turn.typicalMs === null || turn.overrun ? null : turn.etaMs] : [...helpers];
+  const parts = turn ? [...helpers, turn.typicalMs === null || (turn.overrun && !turn.etaMs) ? null : turn.etaMs] : [...helpers];
   const known = parts.filter((p): p is number => p !== null && usable(p));
   if (!known.length) return ETA_ESTIMATING;
   const most = humanMs(Math.max(...known));
@@ -243,6 +287,8 @@ export interface ProgressInput {
   stepsOpen: readonly PendingView[];
   lastHealth?: { action: "probe" | "recover"; at: number } | null;
   model: string;
+  /** P-PROGRESS.4: the session the turn runs in, so its own history is tried first. */
+  scope?: string;
   history: DurationHistory;
   /** The real tool name behind a pending label, when known (tool-meta), so the typical length keys on it. */
   toolNameOf?: (label: string) => string | undefined;
@@ -264,7 +310,7 @@ export function progressView(i: ProgressInput): ProgressView {
     stepsDone: usableCount(i.stepsDone),
     stepsOpen,
     liveness: livenessVerdict({ busy: i.busy, dead: i.dead, lastSignalMs, stepsOpen, lastHealth: i.lastHealth, now: i.now }),
-    estimate: i.busy ? estimateTurn({ elapsedMs, model: i.model, history: i.history }) : NO_ESTIMATE,
+    estimate: i.busy ? estimateTurn({ elapsedMs, model: i.model, scope: i.scope, history: i.history }) : NO_ESTIMATE,
   };
 }
 
@@ -290,7 +336,9 @@ export function agedProgress(p: ProgressView, ageMs: number): ProgressView {
     ...p,
     elapsedMs: p.elapsedMs + ageMs,
     lastSignalMs: p.lastSignalMs + ageMs,
-    estimate: e.etaMs === null ? e : { ...e, etaMs: Math.max(0, e.etaMs - ageMs), overrun: e.overrun || e.etaMs - ageMs <= 0 },
+    // P-PROGRESS.4: the time left no longer ends exactly at the typical length, so "longer than usual" waits
+    // for the elapsed time to pass it rather than for the figure to run out.
+    estimate: e.etaMs === null || e.typicalMs === null ? e : { ...e, etaMs: Math.max(0, e.etaMs - ageMs), overrun: e.overrun || p.elapsedMs + ageMs > e.typicalMs },
   };
 }
 

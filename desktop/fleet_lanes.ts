@@ -561,7 +561,7 @@ export class FleetLaneManager {
         this.#setStatus(lane, "awaiting-input");
       } else {
         lane.turns++;
-        if (lane.turnStartedAt !== null) this.#durations.addTurn(lane.model, this.#deps.now() - lane.turnStartedAt); // P-PROGRESS.1: a finished turn is history
+        if (lane.turnStartedAt !== null) this.#durations.addTurn(lane.model, this.#deps.now() - lane.turnStartedAt, lane.sessionId ?? ""); // P-PROGRESS.1: a finished turn is history; .4: keyed by its session
         this.#setStatus(lane, "done");
       }
       this.#emit(lane, { type: "done" });
@@ -587,7 +587,7 @@ export class FleetLaneManager {
     return progressView({
       busy: lane.busy, dead: lane.client.isDead, startedAt: lane.turnStartedAt, lastActivityAt: lane.lastActivityAt,
       stepsDone: lane.stepsDone, stepsOpen: pendingSnapshot(lane.openCalls, now), lastHealth: lane.lastHealth,
-      model: lane.model, history: this.#durations, now,
+      model: lane.model, scope: lane.sessionId ?? "", history: this.#durations, now, // P-PROGRESS.4
     });
   }
 
