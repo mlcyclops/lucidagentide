@@ -14,10 +14,10 @@ import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: u
 import type { JudgmentReport } from "../../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the judgment trace (DOM-free)
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (DOM-free)
 import type { TurnSnapshot } from "../turn_recovery.ts";
-import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure progress + liveness view
+import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: is the agent process alive?
 import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1: the same-folder wait view
 export type { TurnStatus, TurnSnapshot } from "../turn_recovery.ts";
-export type { ProgressView, Liveness, LivenessState, TurnEstimate, OpenStep } from "../turn_progress.ts";
+export type { ProgressView, LivenessState } from "../turn_progress.ts";
 export type { WaitView, SequenceEntry, FolderQueue } from "../workspace_gate.ts";
 
 /** P-PWA-FLEET.1: one fleet lane's status as mirrored to phone guests. `cwd` carries only the folder
@@ -46,8 +46,8 @@ export type ChatEvent =
   // `tool`, self-reported from inside omp where the hook API does have it. Display + report metadata.
   // P-PROGRESS.1: `elapsedMs` rides the settling report (ok defined), so the step can show how long it took.
   | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
-  // P-PROGRESS.1: the worker's progress view, every PROGRESS_TICK_MS while a turn runs (and once on every
-  // tool call settle). Goes through onEvent directly, like `slow`: telling the user never counts as activity.
+  // P-PROGRESS.1: the worker's progress view (is its agent process alive?), every PROGRESS_TICK_MS while a
+  // turn runs. Goes through onEvent directly, like `slow`: telling the user never counts as activity.
   | { type: "progress"; progress: ProgressView }
   // P-PROGRESS.1: this turn is waiting for another worker's turn in the same folder (workspace_gate.ts).
   // Emitted once when the wait begins; the next real event means the lease was granted.

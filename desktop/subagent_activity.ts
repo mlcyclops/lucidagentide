@@ -38,8 +38,6 @@ export interface SubagentRun {
   name: string;         // the generated subtask name (transcript filename minus .jsonl)
   done: boolean;        // the sibling <name>.md output exists
   lastAt: number;       // transcript mtime (ms)
-  startedAt: number;    // P-PROGRESS.2: the transcript's `session` line timestamp (ms); 0 when unreadable
-  endedAt: number;      // P-PROGRESS.2: the <name>.md mtime (ms) once done; 0 while running
   assignment: string;   // the subtask's own first user message (its assignment), clipped
   model: string | null;
   tools: number;        // total tool calls so far
@@ -111,21 +109,6 @@ export function parseSubagentTranscript(jsonl: string, maxSteps = STEP_CAP): { a
   return { assignment, model, tools, steps };
 }
 
-/** P-PROGRESS.2: when the run began, from omp's `session` header line (one of the first few lines). Only
- *  the head is scanned, so a big transcript costs nothing extra. 0 when absent or unparsable. */
-export function transcriptStartedAt(jsonl: string): number {
-  for (const ln of jsonl.slice(0, 16 * 1024).split("\n", 8)) {
-    if (!ln.includes("\"session\"")) continue;
-    try {
-      const o = JSON.parse(ln) as { type?: string; timestamp?: unknown };
-      if (o.type !== "session" || typeof o.timestamp !== "string") continue;
-      const t = Date.parse(o.timestamp);
-      return Number.isFinite(t) ? t : 0;
-    } catch { /* a torn head line is not a start time */ }
-  }
-  return 0;
-}
-
 /** List the live/finished subagent runs behind a parent session file. Missing dir / no runs → []
  *  (a parent that never delegated simply has no artifacts dir - that is not an error). */
 export function listSubagentRuns(sessionFile: string | null | undefined, io: SubagentIo = REAL_IO): SubagentRun[] {
@@ -140,7 +123,6 @@ export function listSubagentRuns(sessionFile: string | null | undefined, io: Sub
     const name = f.slice(0, -6);
     try {
       let text = io.readText(file);
-      const startedAt = transcriptStartedAt(text); // before the tail cut: the header line is at the top
       // Tail-read big transcripts: drop everything before the last TAIL_BYTES, then skip the first
       // (possibly torn) line. The parser tolerates the missing head - assignment may be absent then.
       if (io.size(file) > TAIL_BYTES && text.length > TAIL_BYTES) {
@@ -148,9 +130,7 @@ export function listSubagentRuns(sessionFile: string | null | undefined, io: Sub
         text = text.slice(text.indexOf("\n") + 1);
       }
       const parsed = parseSubagentTranscript(text);
-      const md = join(dir, `${name}.md`);
-      const done = io.exists(md);
-      runs.push({ name, done, lastAt: io.mtime(file), startedAt, endedAt: done ? io.mtime(md) : 0, ...parsed });
+      runs.push({ name, done: io.exists(join(dir, `${name}.md`)), lastAt: io.mtime(file), ...parsed });
     } catch { /* unreadable transcript - skip the run, never the list */ }
   }
   return runs.sort((a, b) => a.name.localeCompare(b.name));

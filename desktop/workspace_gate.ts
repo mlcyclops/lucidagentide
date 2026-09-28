@@ -7,8 +7,8 @@
 // lanes, or a lane and the master chat, point at the same folder (or one at a parent of the other), their
 // edits and git operations interleave with nobody watching. The fix is boring: a turn on a folder is a
 // LEASE. A turn whose folder overlaps a running lease waits, first come first served, and the user is shown
-// the sequence (who runs, who waits, in what order, and when each is expected to start, from the
-// turn_progress estimate of the holders ahead).
+// the plain fact: whom it waits for and its place in line. No expected start times: an estimate of when
+// another worker finishes is a guess the user would only ask about (ADR-0409 amendment).
 //
 // Overlap is the only test: same normalized folder, or ancestor/descendant. Disjoint folders never wait.
 // A waiter that is cancelled leaves the line at once; a holder's release admits every waiter it was
@@ -20,8 +20,6 @@ export interface GateHolder {
   id: string;
   name: string;
   cwd: string;
-  /** Ms until this holder's turn is expected to end, from its progress estimate; null when unknown. */
-  etaMs?: () => number | null;
 }
 
 export interface SequenceEntry {
@@ -34,10 +32,6 @@ export interface SequenceEntry {
   position: number;
   /** Epoch ms the holder started running, or the waiter joined the line. */
   sinceAt: number;
-  /** The holder's own expected remaining ms (running) or expected turn length (waiting); null when unknown. */
-  etaMs: number | null;
-  /** Epoch ms this entry is expected to start; null when any holder ahead has no estimate. Running = sinceAt. */
-  expectedStartAt: number | null;
 }
 
 /** A shared folder with more than one worker on it: the strip the fleet grid and the HUD show. `folder`
@@ -49,7 +43,6 @@ export interface WaitView {
   /** The running holder this waiter is directly behind. */
   on: { id: string; name: string };
   position: number;
-  etaMs: number | null;
   /** Basename only (see SequenceEntry). */
   folder: string;
   sequence: SequenceEntry[];
@@ -100,31 +93,19 @@ export class WorkspaceGate {
     const running = blockers.find((b) => b.state === "running") ?? blockers[0]!;
     const seq = this.sequenceFor(lease.folder);
     const me = seq.find((e) => e.id === id);
-    return { on: { id: running.holder.id, name: running.holder.name }, position: me?.position ?? blockers.length, etaMs: me?.expectedStartAt !== null && me?.expectedStartAt !== undefined ? Math.max(0, me.expectedStartAt - this.#now()) : null, folder: shown(lease.folder), sequence: seq };
+    return { on: { id: running.holder.id, name: running.holder.name }, position: me?.position ?? blockers.length, folder: shown(lease.folder), sequence: seq };
   }
 
-  /** Every holder whose folder overlaps `folder`, running first, then waiters in line order, with the time
-   *  each is expected to start (running: when it started; waiting: after every entry ahead of it ends). */
+  /** Every holder whose folder overlaps `folder`, running first, then waiters in line order. */
   sequenceFor(folder: string): SequenceEntry[] {
     const f = this.normalize(folder);
-    const now = this.#now();
     const rel = this.#leases.filter((l) => overlaps(l.folder, f));
     const running = rel.filter((l) => l.state === "running");
     const waiting = rel.filter((l) => l.state === "waiting");
-    const out: SequenceEntry[] = [];
-    let horizon: number | null = now;
-    for (const l of running) {
-      const eta = l.holder.etaMs?.() ?? null;
-      const end = eta === null ? null : now + eta;
-      horizon = horizon === null || end === null ? null : Math.max(horizon, end);
-      out.push({ id: l.holder.id, name: l.holder.name, folder: shown(l.folder), state: "running", position: 0, sinceAt: l.sinceAt, etaMs: eta, expectedStartAt: l.sinceAt });
-    }
-    waiting.forEach((l, i) => {
-      const eta = l.holder.etaMs?.() ?? null;
-      out.push({ id: l.holder.id, name: l.holder.name, folder: shown(l.folder), state: "waiting", position: i + 1, sinceAt: l.sinceAt, etaMs: eta, expectedStartAt: horizon });
-      horizon = horizon === null || eta === null ? null : horizon + eta;
-    });
-    return out;
+    return [
+      ...running.map((l): SequenceEntry => ({ id: l.holder.id, name: l.holder.name, folder: shown(l.folder), state: "running", position: 0, sinceAt: l.sinceAt })),
+      ...waiting.map((l, i): SequenceEntry => ({ id: l.holder.id, name: l.holder.name, folder: shown(l.folder), state: "waiting", position: i + 1, sinceAt: l.sinceAt })),
+    ];
   }
 
   /** Every folder with two or more workers on it right now. */

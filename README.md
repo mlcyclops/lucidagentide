@@ -138,11 +138,11 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
 - **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
 
-The per-beta details are in [What's new in v2.3.0-beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+The per-beta details are in [What's new in v2.3.0-beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
 
 ### Get the beta
 
-1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.9](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.9)).
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.10](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.10)).
 2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
 
@@ -276,6 +276,16 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > leave the host.
 
 ---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.10 (prerelease)
+
+> **🤫 Quieter by default.** Beta.10 keeps what beta.9 made readable (what each tool step is doing, folds for quick calls, one owner per session) and removes the reporting that raised more questions than it answered.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.10](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.10). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🧘 No ETAs, no estimates** - the "ETA estimating" labels, the estimate bar, "longer than usual", the last-signal age and the liveness pill are gone from the HUD, tool rows, delegation cards, lane cards and the orbit. The one thing still reported on its own is a dead agent process, as a single line with **Restart agent** (or **Restart this lane**). Two turns on one folder still take turns, and the waiter is told whom it waits for and its place in line. *(P-PROGRESS.1/.2 amendments, [ADR-0409](DECISIONS.md), [ADR-0408](DECISIONS.md))*
+- **🎨 The subdued Beta 8 palette** - tool step checks and crosses are neutral again, fold lines keep the same cyan as every tool name, and failed steps are no longer painted red (the toolbox badge still counts them). While Jev judges, its scale now tips side to side instead of spinning.
+- **📁 Lanes open without a repo search** - New lane and New spoke lead with a Folder field and **Browse**. Searching this machine or your GitHub repos (GitHub CLI) is opt-in: tick either box and press **Search**; nothing runs until you do, and spawning never waits on it. *(P-REPO.1 amendment, [ADR-0406](DECISIONS.md))*
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.9 (prerelease)
 

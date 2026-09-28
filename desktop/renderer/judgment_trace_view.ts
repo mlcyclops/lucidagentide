@@ -28,10 +28,17 @@ function rowHtml(id: string, q: TraceQuestion, a: TraceAnswer | undefined): stri
   </tr>`;
 }
 
+/** The Jev scale, built with its beam and pans as separate parts so a live judgment can TIP the scale (beam
+ *  rocks about the post, each pan rides its end up and down) instead of spinning the whole glyph. The same
+ *  outline as icons.ts `scale`; the `ic-scale` class opts it out of the thoughts spinner's rotation. */
+function scaleIcon(size: number): string {
+  return `<svg class="ic ic-scale" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5v15"/><path d="M9 19.5h6"/><path class="jv-beam" d="M5 7.5h14"/><path class="jv-pan-l" d="M7 7.5 4 13.5a3 3 0 0 0 6 0z"/><path class="jv-pan-r" d="M17 7.5 14 13.5a3 3 0 0 0 6 0z"/></svg>`;
+}
+
 export function createJudgments(): JudgmentsWin {
   const win = el(`<div class="thoughts judgments open" data-streaming="1">
     <button class="thoughts-head" type="button" aria-expanded="true">
-      <span class="thoughts-spin">${icon("scale", 13)}</span>
+      <span class="thoughts-spin">${scaleIcon(13)}</span>
       <span class="thoughts-cur">Judging\u2026</span>
       <span class="thoughts-count" hidden>0</span>
       <span class="thoughts-chev">${icon("chevron", 14)}</span>
@@ -85,6 +92,6 @@ export function createJudgments(): JudgmentsWin {
  *  about it. */
 export function judgmentIdleNote(): HTMLElement {
   return el(`<div class="thoughts judgments done idle" data-tip="Jev not consulted|${esc(JEV_IDLE_REASON)}" data-tip-icon="scale">
-    <div class="thoughts-head jd-idle"><span class="thoughts-spin">${icon("scale", 13)}</span><span class="thoughts-cur">Jev not consulted this turn</span></div>
+    <div class="thoughts-head jd-idle"><span class="thoughts-spin">${scaleIcon(13)}</span><span class="thoughts-cur">Jev not consulted this turn</span></div>
   </div>`);
 }

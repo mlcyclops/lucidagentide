@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/workspace_gate.test.ts - P-PROGRESS.1: overlapping folders take turns in order, disjoint ones
-// never wait, a cancelled waiter leaves the line, and the sequence carries expected start times.
+// never wait, a cancelled waiter leaves the line, and a waiter is told whom it waits for and its place.
 
 import { describe, expect, test } from "bun:test";
 import { overlaps, WorkspaceGate, type WaitView } from "./workspace_gate.ts";
@@ -34,13 +34,12 @@ describe("WorkspaceGate", () => {
 
   test("a second turn on the same folder waits, is told what it waits on, and runs after the release", async () => {
     const { g } = gate();
-    const a = await g.acquire({ id: "a", name: "A", cwd: "/w/repo", etaMs: () => 60_000 });
+    const a = await g.acquire({ id: "a", name: "A", cwd: "/w/repo" });
     let told: WaitView | null = null;
-    const bp = g.acquire({ id: "b", name: "B", cwd: "/w/repo/sub", etaMs: () => 30_000 }, { onWait: (w) => { told = w; } });
+    const bp = g.acquire({ id: "b", name: "B", cwd: "/w/repo/sub" }, { onWait: (w) => { told = w; } });
     expect(g.waitView("b")?.on.id).toBeDefined();
     expect(told!.on).toEqual({ id: "a", name: "A" });
     expect(told!.position).toBe(1);
-    expect(told!.etaMs).toBe(60_000);
     expect(told!.sequence.map((e) => [e.id, e.state, e.position])).toEqual([["a", "running", 0], ["b", "waiting", 1]]);
     a();
     const b = await bp;
@@ -49,14 +48,14 @@ describe("WorkspaceGate", () => {
     expect(g.queues()).toEqual([]);
   });
 
-  test("waiters are admitted in line order, and expected starts accumulate the estimates ahead", async () => {
+  test("waiters are admitted in line order, and each is told its place", async () => {
     const { g } = gate();
-    const a = await g.acquire({ id: "a", name: "A", cwd: "/w/repo", etaMs: () => 10_000 });
+    const a = await g.acquire({ id: "a", name: "A", cwd: "/w/repo" });
     const order: string[] = [];
-    const bp = g.acquire({ id: "b", name: "B", cwd: "/w/repo", etaMs: () => 20_000 }).then((r) => { order.push("b"); return r; });
-    const cp = g.acquire({ id: "c", name: "C", cwd: "/w/repo", etaMs: () => 5_000 }).then((r) => { order.push("c"); return r; });
-    const seq = g.sequenceFor("/w/repo");
-    expect(seq.map((e) => e.expectedStartAt)).toEqual([1_000_000, 1_010_000, 1_030_000]);
+    const bp = g.acquire({ id: "b", name: "B", cwd: "/w/repo" }).then((r) => { order.push("b"); return r; });
+    const cp = g.acquire({ id: "c", name: "C", cwd: "/w/repo" }).then((r) => { order.push("c"); return r; });
+    expect(g.sequenceFor("/w/repo").map((e) => [e.id, e.position])).toEqual([["a", 0], ["b", 1], ["c", 2]]);
+    expect(g.waitView("c")!.position).toBe(2);
     expect(g.queues()).toHaveLength(1);
     a();
     const b = await bp;
@@ -65,16 +64,6 @@ describe("WorkspaceGate", () => {
     const c = await cp;
     expect(order).toEqual(["b", "c"]);
     c();
-  });
-
-  test("an unknown estimate ahead makes every later expected start unknown, not zero", async () => {
-    const { g } = gate();
-    const a = await g.acquire({ id: "a", name: "A", cwd: "/w/repo" });
-    void g.acquire({ id: "b", name: "B", cwd: "/w/repo", etaMs: () => 1_000 });
-    const seq = g.sequenceFor("/w/repo");
-    expect(seq[1]!.expectedStartAt).toBeNull();
-    expect(g.waitView("b")!.etaMs).toBeNull();
-    a();
   });
 
   test("a waiter behind a parent-folder holder does not block a sibling folder", async () => {

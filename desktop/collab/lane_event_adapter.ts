@@ -71,8 +71,8 @@ export function laneEventToChatEvent(e: LaneEvent): ChatEvent | null {
     case "error":
       return { type: "lane-error", message: e.message };
 
-    // P-PROGRESS.1: the lane's progress view and its folder wait are the same shapes the master stream
-    // carries (pure, path-free except the wait's folder, which the guest renders by its basename).
+    // P-PROGRESS.1: the lane's progress view (is its agent process alive?) and its folder wait are the same
+    // shapes the master stream carries (pure, path-free except the wait's folder, a basename).
     case "progress":
       return { type: "progress", progress: e.progress };
 

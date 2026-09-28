@@ -227,6 +227,7 @@ test("a mid-turn CRASH lands error event-driven (no clock), and the next prompt 
   let st = await live.status();
   expect(st.lanes[0]!.status).toBe("error");
   expect(st.lanes[0]!.canRetry).toBe(true);
+  expect(st.lanes[0]!.progress?.liveness).toBe("dead"); // P-PROGRESS.1: what the card's Restart this lane line keys on
 
   // The NEXT prompt recovers in place: a healthy child this time. The fake agent advertises no
   // loadSession capability, so recovery must take the FALLBACK path - the recorded transcript rides the
@@ -644,8 +645,7 @@ test("two lanes on ONE folder run in serial: the second is told what it waits on
   const st = await live.status();
   const va = st.lanes.find((l) => l.id === a.lane!.id)!;
   const vb = st.lanes.find((l) => l.id === b.lane!.id)!;
-  expect(va.progress?.liveness.state).toBeDefined(); // a busy lane carries its progress view
-  expect(va.progress?.estimate.basis).toBe("none"); // no history yet: no number, honestly
+  expect(va.progress?.liveness).toBe("running"); // a busy lane with a live child is running, not dead
   expect(vb.waiting?.on.name).toBe("alpha");
   expect(st.queues).toHaveLength(1);
   expect(st.queues[0]!.entries.map((e) => e.name)).toEqual(["alpha", "beta"]);
