@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.0 (ADR-0415): the engine discovery seam. What must stay true forever:
+// P-TUI.0 (ADR-0416): the engine discovery seam. What must stay true forever:
 // a written file round-trips 0600; anything off-shape reads as null (never a guess);
 // listing surfaces only parseable files, newest launch first; and verification is
 // fail-closed - only a live engine echoing THIS file's nonce counts as ours.

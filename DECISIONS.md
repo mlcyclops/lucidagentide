@@ -24477,7 +24477,7 @@ Three changes from the isolated-engine UAT (fake agent, master and one spoke, Ne
 
 **Consequences.** A long build that uses CPU reads "active" (Full detail) instead of "quiet"; a command waiting on a server that never answers reads "likely stuck" after 5 min with a one-click way out that keeps the conversation and the turn. A legitimately idle wait (a `sleep 600`, a server that answers after 7 min) is also marked likely stuck; the wording says "likely" and names the network blind spot, and nothing happens unless the user clicks. An in-process hang (fetch, browser) has no process to stop, so only Stop or Restart end it. The sampler costs one PowerShell `Get-CimInstance Win32_Process` (about 150 ms) per 15 s, only while some worker has a quiet open call. Not done: network activity is not measured (would need ETW or per-connection stats with admin rights), and POSIX gets no verdict.
 
-## ADR-0415 -- P-TUI.0: the engine discovery seam for terminal clients (2026-09-28)
+## ADR-0416 -- P-TUI.0: the engine discovery seam for terminal clients (2026-09-28)
 
 **Context.** docs/TUI.md reimagines the app as a terminal UI (`lucid hub`) that is a THIRD client of the one dev.ts engine, alongside the Electron renderer and the browser build - capability parity by construction, gate untouched in the omp child (invariant 4). The first missing piece is mechanical: a terminal client has no way to find a running engine. The renderer gets the port and token from main.ts over IPC; the browser build is told its URL by the human. A client that guesses ports repeats the ADR-0305 incident (a squatter answering /api/health was rendered inside trusted chrome for days), and a client that always spawns its own engine forks state the desktop app already owns.
 
