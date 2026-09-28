@@ -144,10 +144,14 @@ export class WorkspaceGate {
   }
 
   /** Path normalization shared by every comparison: resolved, forward slashes, no trailing slash, and
-   *  case-folded on Windows (NTFS is case-insensitive; C:\Repo and c:\repo are one folder). */
+   *  case-folded on Windows (NTFS is case-insensitive; C:\Repo and c:\repo are one folder). The
+   *  separator conversion follows the INJECTED platform, not the host: a win32-configured gate must
+   *  treat backslashes as separators even when the test (or a remote view) runs on posix, where the
+   *  host `sep` is "/" and `resolve` leaves "\\" untouched. */
   normalize(p: string): string {
-    let s = resolve((p || "").trim() || ".").split(sep).join("/").replace(/\/+$/, "");
-    if (this.#platform === "win32") s = s.toLowerCase();
+    let s = resolve((p || "").trim() || ".").split(sep).join("/");
+    if (this.#platform === "win32") s = s.replace(/\\/g, "/").toLowerCase();
+    s = s.replace(/\/+$/, "");
     return s || "/";
   }
 
