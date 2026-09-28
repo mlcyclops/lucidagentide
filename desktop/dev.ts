@@ -15,6 +15,7 @@ import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
 import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
+import { discoveryDir, discoveryPath, removeDiscovery, writeDiscovery } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0415)
 import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -5386,6 +5387,27 @@ return Bun.serve({
   process.exit(ENGINE_EXIT_PORT_BUSY);
 }
 }
+
+// P-TUI.0 (ADR-0415): publish this launch's coordinates for terminal clients (`lucid hub`, docs/TUI.md).
+// One 0600 file per bound port under userData (or ~/.omp standalone): port, per-launch nonce, UI token,
+// pid, version, flavor. A client must still win the ADR-0305 health handshake against the file's nonce
+// before trusting anything, so a stale or squatted-over file is inert. Standalone runs (no Electron main)
+// mint the nonce here - /api/health reads process.env each request, and the nonce is deliberately
+// non-secret (it proves launch identity, gates nothing else). Removed on every exit path the whisper/fleet
+// handlers already cover (SIGINT/SIGTERM re-enter process.exit, which fires "exit").
+if (!process.env.LUCID_ENGINE_NONCE) process.env.LUCID_ENGINE_NONCE = randomBytes(16).toString("hex");
+const ENGINE_PORT = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
+const DISCOVERY_PATH = discoveryPath(discoveryDir(process.env), ENGINE_PORT);
+try {
+  writeDiscovery(DISCOVERY_PATH, {
+    v: 1, pid: process.pid, port: ENGINE_PORT, nonce: process.env.LUCID_ENGINE_NONCE,
+    token: TOKEN, version: APP_VERSION, flavor: BUILD.flavor, startedAt: new Date().toISOString(),
+  });
+} catch (err) {
+  // Advisory seam: a client that finds no file falls back to spawning its own engine. Never fatal.
+  console.error(`[discovery] could not publish ${DISCOVERY_PATH}: ${String(err)}`);
+}
+process.on("exit", () => removeDiscovery(DISCOVERY_PATH));
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
