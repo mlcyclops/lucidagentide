@@ -878,7 +878,7 @@ demo-P-PROGRESS.2: ## P-PROGRESS.2 (ADR-0408, amended): the activity window fold
 	$(BUN) run harness/scripts/demo_p_progress_2.ts
 
 .PHONY: demo-P-PROGRESS.3
-demo-P-PROGRESS.3: ## P-PROGRESS.3 (ADR-0412): the beta.10 quiet footer stays the default; the progress detail (per turn with Details, or always with Settings > Working status > Full detail) and the experimental time estimate are opt-ins; estimate off means no number on any surface, and on never shows the "ETA estimating" placeholder
+demo-P-PROGRESS.3: ## P-PROGRESS.3 (ADR-0412): the beta.10 quiet footer stays the default; the progress detail (per turn with Details, or always with Settings > Working status > Full detail) and the experimental time estimate are opt-ins; estimate off means no number on any surface, and on never shows the "ETA estimating" placeholder; a green progress ring (on by default) sits beside the one line, empty without history, red only when the process is gone
 	$(BUN) run harness/scripts/demo_p_progress_3.ts
 .PHONY: demo-P-GAME.1
 demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts

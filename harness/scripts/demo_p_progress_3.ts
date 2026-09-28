@@ -9,7 +9,8 @@
 //   [1] the defaults: quiet (one line), no estimate, and both choices persist;
 //   [2] estimate off: the progress line, the tool-row / subagent / HUD ETA and the folder queue carry no number;
 //   [3] estimate on: a number appears once history supports one, labelled as an estimate, and the
-//       "ETA estimating" placeholder the operator objected to never reaches the user.
+//       "ETA estimating" placeholder the operator objected to never reaches the user;
+//   [4] the progress ring (on by default): the arc is the percent, empty without history, red when dead.
 // (The orbit glance takes the same switch; orbit_layout.test.ts covers it. It is not imported here because it
 // pulls the DOM-typed bridge into the root, DOM-free typecheck.)
 //
@@ -61,5 +62,12 @@ ok(prefs.shownEta(wholeEtaPhrase(on.estimate, []), true) === "about 48 s left (e
 const fresh = etaPhrase(estimateFromSamples(5_000, [], 2));
 ok(fresh === ETA_ESTIMATING && prefs.shownEta(fresh, true) === "", "without history the placeholder is suppressed, not shown");
 ok(prefs.queueWhen(waiter, now, true) === "waits, starts in about 50 s (est.)", "a folder waiter gets its expected start");
+
+console.log("\n[4] the progress ring");
+ok(prefs.statusRing() === true, "the ring is on by default");
+const r = prefs.ringView(on, false);
+ok(r.pct === p.estimate.percent && r.tone === "run" && !r.tip.includes("left"), `it fills to ${r.pct}% with the estimate off, and its tooltip names no time`);
+ok(prefs.ringView(withoutEstimate(on), false).pct === null, "without history it stays empty");
+ok(prefs.ringView({ ...on, liveness: { state: "dead", label: "gone", detail: "" } }, false).tone === "dead", "a dead process turns it red");
 
 console.log("\nP-PROGRESS.3 demo: all checks passed.");

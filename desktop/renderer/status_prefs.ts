@@ -16,20 +16,25 @@
 //    and runs, blind to task size. Off means no number anywhere: no "left (est.)", no percent, no expected
 //    start time, and the bar runs indeterminate. On shows a number only once history supports one: the
 //    "ETA estimating" placeholder the operator objected to is never shown.
+// 3. The progress ring (on by default, beta.10 follow-up from the operator): a small green ring at the right
+//    end of the HUD line, drawn like the context ring in the status bar, with a premium tooltip. It shows how
+//    far the turn is against recent turns, never a time; it is empty until there is history.
 //
 // Renderer-local view state in localStorage (the `lucid.*` convention), read once and cached: the HUD reads
 // these every second. Storage failures degrade to the defaults and never throw.
 
-import { ETA_ESTIMATING, humanMs } from "../turn_progress.ts";
+import { ETA_ESTIMATING, humanMs, type ProgressView } from "../turn_progress.ts";
 import type { SequenceEntry } from "../workspace_gate.ts";
 
 export type StatusDetail = "line" | "full";
 
 const DETAIL_KEY = "lucid.status-detail";
 const ETA_KEY = "lucid.status-eta";
+const RING_KEY = "lucid.status-ring";
 
 let detail: StatusDetail | null = null;
 let eta: boolean | null = null;
+let ring: boolean | null = null;
 
 function read(key: string): string {
   try { return localStorage.getItem(key) ?? ""; } catch { return ""; }
@@ -53,6 +58,37 @@ export function statusEta(): boolean {
 export function setStatusEta(on: boolean): void {
   eta = on;
   write(ETA_KEY, on ? "1" : "0");
+}
+
+/** The progress ring beside the HUD line is shown (on unless the user turned it off). */
+export function statusRing(): boolean {
+  return ring ??= read(RING_KEY) !== "0";
+}
+export function setStatusRing(on: boolean): void {
+  ring = on;
+  write(RING_KEY, on ? "1" : "0");
+}
+
+/** What the progress ring shows: the arc (0-95 while a turn runs; null = no history yet, empty ring), a tone
+ *  (red only when the agent process is gone), and its premium tooltip ("Title|Body"). Pure. The arc is how far
+ *  this turn is against the typical length of recent turns on this machine, so it never claims a finish
+ *  time; the time left joins the tooltip only when the user opted into the experimental estimate. */
+export interface RingView { pct: number | null; tone: "run" | "dead"; tip: string }
+export function ringView(p: ProgressView, showEta: boolean): RingView {
+  const steps = p.stepsDone + p.stepsOpen.length;
+  const sofar = `${humanMs(p.elapsedMs)} so far${steps ? `, step ${steps}` : ""}.`;
+  const e = p.estimate;
+  if (p.liveness.state === "dead") {
+    return { pct: e.percent, tone: "dead", tip: `Progress: stopped|The agent process exited. Use Restart agent below; the conversation is kept. ${sofar}` };
+  }
+  if (e.typicalMs === null || e.percent === null) {
+    return { pct: null, tone: "run", tip: `Progress|Working. This machine has not finished enough turns yet to show how far along a turn is; the ring fills in once it has. ${sofar}` };
+  }
+  if (e.overrun) {
+    return { pct: e.percent, tone: "run", tip: `Progress: longer than usual|This turn is running longer than your recent turns (typically ${humanMs(e.typicalMs)}). That is often fine for a bigger task. ${sofar}` };
+  }
+  const left = showEta && e.etaMs !== null ? ` About ${humanMs(e.etaMs)} left (experimental estimate).` : "";
+  return { pct: e.percent, tone: "run", tip: `Progress: about ${e.percent}%|Measured against how long your recent turns took on this machine, so it is a guide, not a promise.${left} ${sofar}` };
 }
 
 /** An ETA phrase as the user may see it. Pure. "" with the estimate off, and "" for the no-history

@@ -5953,6 +5953,18 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .lane-progress.quiet .lane-alive-row,.lane-progress.quiet .lane-wait{margin-top:0}
 .lane-alive[hidden]{display:none}
 .sa-eta:empty,.subagent-eta:empty{display:none}
+/* P-PROGRESS.3 (ADR-0412 amendment): the progress ring right after the HUD line (beside Check in), drawn like the status
+   bar's context ring (.ctx-ring): a track and a green arc (pathLength 100). Red only for a dead process. Empty
+   (track only) until there is history. Streaming only; the settled line's check replaces it. */
+.hud .hud-ring{display:none}
+.hud.streaming .hud-ring:not([hidden]){display:inline-flex;flex:none;margin-left:8px;line-height:0;cursor:default}
+.hud-ring svg{display:block}
+.hud-ring-track{fill:none;stroke:var(--line-strong);stroke-width:2.6}
+.hud-ring-arc{fill:none;stroke:var(--green);stroke-width:2.6;stroke-linecap:round;stroke-dasharray:100;stroke-dashoffset:100;
+  transform:rotate(-90deg);transform-origin:center;transition:stroke-dashoffset .6s var(--ease),stroke var(--t)}
+.hud-ring[data-empty="1"] .hud-ring-arc{visibility:hidden}
+.hud-ring[data-tone="dead"] .hud-ring-arc{stroke:var(--red)}
+@media (prefers-reduced-motion: reduce){.hud-ring-arc{transition:none}}
 .fleet-tchip-state{flex:none;font-size:10px;color:var(--txt-4);white-space:nowrap;display:inline-flex;align-items:center;min-width:10px}
 .fleet-tchip-state[data-state="open"]::before{content:"";width:8px;height:8px;border-radius:50%;
   border:1.5px solid rgb(var(--cyan-rgb) / .35);border-top-color:var(--cyan);animation:spin .9s linear infinite}

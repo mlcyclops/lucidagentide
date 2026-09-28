@@ -46,7 +46,7 @@ import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { describeTool } from "./tool_describe.ts"; // P-PROGRESS.1: what a tool call is doing, in plain words
 import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, etaPhrase, humanMs, NO_ESTIMATE, progressLine, QUIET_MS, STREAMING_MS, wholeEtaPhrase, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) progress view helpers
-import { queueWhen, setStatusDetail, setStatusEta, shownEta, statusDetail, statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
+import { queueWhen, ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
 import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (type only: the module itself is engine-side)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
@@ -2246,7 +2246,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
   // P-PROGRESS.3 (ADR-0412): `hud-more` (Details) opens the progress strip for this turn in the quiet default.
-  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-eta" data-state="estimating"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-more" type="button" aria-expanded="false" hidden data-tip="Details|How far along the turn is, whether the agent is alive, and who else is working in this folder">Details</button><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button></div>`);
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-eta" data-state="estimating"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-more" type="button" aria-expanded="false" hidden data-tip="Details|How far along the turn is, whether the agent is alive, and who else is working in this folder">Details</button><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button><span class="hud-ring" hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span></div>`);
   const streamEl = el(`<div class="stream"></div>`);
   // P-PROGRESS.1: when the agent process is gone, ONE line under the HUD says so, with the action that fixes
   // it (the beta.10 quiet footer). P-PROGRESS.3: shown whenever the strip below is closed.
@@ -2282,6 +2282,19 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     hudMore.setAttribute("aria-expanded", String(detailOpen));
   };
   hudMore.addEventListener("click", () => { if (stripSettled) return; detailOpen = !detailOpen; syncStrip(); paintProgress(); });
+  // P-PROGRESS.3 (ADR-0412 amendment): the progress ring at the right end of the HUD line, like the status
+  // bar's context ring. Shown while the turn runs (setting "Show a progress ring", on by default); the tooltip
+  // is only rewritten when its words change, so an open tooltip is not rebuilt every second.
+  const ringEl = $(".hud-ring", hud) as HTMLElement, ringArc = $(".hud-ring-arc", hud) as SVGCircleElement;
+  const paintRing = () => {
+    ringEl.hidden = !progress || stripSettled || !statusRing();
+    if (ringEl.hidden || !progress) return;
+    const v = ringView(agedProgress(progress, Math.max(0, Date.now() - progressAt)), statusEta());
+    ringArc.style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
+    ringEl.dataset.tone = v.tone;
+    ringEl.dataset.empty = v.pct === null ? "1" : "0";
+    if (ringEl.getAttribute("data-tip") !== v.tip) ringEl.setAttribute("data-tip", v.tip);
+  };
   const paintProgress = () => {
     if (!progress) return;
     stripUsed = true;
@@ -2412,6 +2425,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
     paintProgress(); // P-PROGRESS.1: the ages move every second between engine samples
     paintEta();
+    paintRing();
     thoughts?.tick(); // P-PROGRESS.2: open long calls age their elapsed time and ETA
   };
   phaseEl.textContent = phase;
@@ -2432,7 +2446,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // P-PROGRESS.1: the strip settles with the turn: a full bar, the time it took, no more ages.
     // P-PROGRESS.3: in the quiet default the settled HUD line already says Done and how long it took, so the
     // strip closes with the turn; Full detail keeps it, settled.
-    detailOpen = false; stripSettled = true; syncStrip();
+    detailOpen = false; stripSettled = true; syncStrip(); paintRing(); // the settled line's check replaces the ring
     if (progress) {
       progress = null; clearQueue(); syncStrip();
       progBar.classList.remove("indeterminate"); progFill.style.width = "100%";
@@ -5092,6 +5106,8 @@ function secWorkingStatus(): string {
       <select id="statusDetail" class="prov-key">${opt("line", "One status line (Details opens more)")}${opt("full", "Full detail: progress, liveness, folder queue")}</select></div>
     <label class="set-toggle"><input type="checkbox" id="statusEta" ${statusEta() ? "checked" : ""}/>
       <span><b>Show a time estimate (experimental)</b> - how long the work probably has left, from how long your recent turns and helper runs took on this machine. It cannot see how big the task is, so treat it as a rough guess. Nothing is shown until there is enough history for a number.</span></label>
+    <label class="set-toggle"><input type="checkbox" id="statusRing" ${statusRing() ? "checked" : ""}/>
+      <span><b>Show a progress ring</b> - a small ring at the right end of the working line that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
     <div class="set-note">${icon("info", 12)} If the agent process stops, the Restart line always appears, whichever you choose.</div>`;
   return setCard("workingStatus", "Working status", "one line · details · estimate", inner, true);
 }
@@ -15740,6 +15756,7 @@ function wire(): void {
     // P-PROGRESS.3: running HUDs, rows and lane cards repaint on their own one-second tick, so nothing else to do.
     if (t0.id === "statusDetail") { setStatusDetail((t0 as HTMLSelectElement).value === "full" ? "full" : "line"); return; }
     if (t0.id === "statusEta") { setStatusEta((t0 as HTMLInputElement).checked); return; }
+    if (t0.id === "statusRing") { setStatusRing((t0 as HTMLInputElement).checked); return; }
     if (t0.id === "bgFile") {
       const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
       if (f.size > 9 * 1024 * 1024) { showToast({ tone: "warn", title: "Image too large", desc: "Pick an image under ~9 MB (or compress it first).", timeout: 3400 }); return; }
