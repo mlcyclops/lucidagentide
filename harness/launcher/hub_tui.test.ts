@@ -47,8 +47,8 @@ describe("deck rows", () => {
     usage: { models: [] },
     whitelist: [{ id: "wl_1", kind: "domain", pattern: WL_HOST, zone: "internal", scope: "always" }],
     posture: { allowAll: true, allowWebSearch: true },
-    kg: { kgs: [{ kg_id: "kg1", name: "My Knowledge" }, { kg_id: "kg2", name: "Research" }], activeId: "kg1" },
-    kgGraph: { kgId: "kg1", totalPages: 2, totalLinks: 1, pages: [{ page_id: "p1", title: "Fail-closed gate", slug: "gate", degree: 1 }, { page_id: "p2", title: "Prompt prefix", slug: "prefix", degree: 1 }], links: [{ from_page_id: "p1", to_page_id: "p2", relation: "links" }] },
+    kg: { kgs: [{ kg_id: "kg1", name: "My Knowledge", source_kind: "manual", provenance: "default" }, { kg_id: "kg2", name: "Research", source_kind: "pack", provenance: "ArXiv pack", read_only: true }], activeId: "kg1" },
+    kgGraph: { kgId: "kg1", totalPages: 2, totalLinks: 1, pages: [{ page_id: "p1", title: "Fail-closed gate", slug: "gate", degree: 1, trust_label: "trusted" }, { page_id: "p2", title: "Prompt prefix", slug: "prefix", degree: 1, trust_label: "untrusted" }], links: [{ from_page_id: "p1", to_page_id: "p2", relation: "links" }] },
     config: [{ id: "model", value: "glm-5.3-flash", options: [{ value: "glm-5.3-flash", name: "GLM 5.3 Flash" }, { value: "claude-haiku-4-5", name: "Claude Haiku 4.5" }] }],
   };
 
@@ -102,20 +102,21 @@ describe("knowledge deck", () => {
   const kgData = {
     build: {}, security: {}, fleet: { lanes: [] }, sessions: [], audit: {}, usage: {},
     whitelist: [], posture: {}, config: [],
-    kg: { kgs: [{ kg_id: "kg1", name: "My Knowledge" }, { kg_id: "kg2", name: "Research" }], activeId: "kg1" },
+    kg: { kgs: [{ kg_id: "kg1", name: "My Knowledge", source_kind: "manual", provenance: "default" }, { kg_id: "kg2", name: "Research", source_kind: "pack", provenance: "ArXiv pack", read_only: true }], activeId: "kg1" },
     kgGraph: {
       kgId: "kg1", totalPages: 2, totalLinks: 1,
-      pages: [{ page_id: "p1", title: "Fail-closed gate", slug: "gate", degree: 1 }, { page_id: "p2", title: "Prompt prefix", slug: "prefix", degree: 1 }],
+      pages: [{ page_id: "p1", title: "Fail-closed gate", slug: "gate", degree: 1, trust_label: "trusted" }, { page_id: "p2", title: "Prompt prefix", slug: "prefix", degree: 1, trust_label: "untrusted" }],
       links: [{ from_page_id: "p1", to_page_id: "p2", relation: "links" }],
     },
   } as unknown as HubData; // fixture: only the kg slices matter here
 
   test("lists KGs with the active marker, pages with outgoing links, and filters live", () => {
     const rows = deckLines("kg", kgData, 100, 0);
-    expect(rows.some((l) => l.includes("● My Knowledge") && l.includes("  Research"))).toBe(true);
+    expect(rows.some((l) => l.includes("● My Knowledge") && l.includes("written by you"))).toBe(true);
+    expect(rows.some((l) => l.includes("Research") && l.includes("installed pack · ArXiv pack · read-only"))).toBe(true);
     expect(rows.some((l) => l.includes("2 pages · 1 link"))).toBe(true);
     const sel = rows.find((l) => l.startsWith("▸"))!;
-    expect(sel).toContain("Fail-closed gate (1)");
+    expect(sel).toContain("[trusted] Fail-closed gate (1)");
     expect(sel).toContain("→  Prompt prefix");
     const filtered = deckLines("kg", kgData, 100, 0, "prefix");
     expect(filtered.some((l) => l.includes("Prompt prefix"))).toBe(true);
