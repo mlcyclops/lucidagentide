@@ -718,6 +718,7 @@ export class HubComponent implements Component {
       ["  ⏎ on Sessions", "resume that session as a live agent"],
       ["  ⏎ on an agent", "type a prompt · ⏎ sends · esc cancels"],
       ["  y / s / d", "answer a parked ask: once / session / deny"],
+      ["  m", "switch the agent's model (picker)"],
       ["", ""],
       ["Security", ""],
       ["  a", "approve the selected block (audited release)"],
