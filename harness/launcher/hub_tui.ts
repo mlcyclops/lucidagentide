@@ -1,34 +1,51 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.1 (part) - `lucid hub`: the terminal hub as a PANE MULTIPLEXER (docs/TUI.md).
+// P-TUI.1 (part) - `lucid hub`: the terminal hub as a PANE MULTIPLEXER (docs/TUI.md, ADR-0417).
 //
-// The operator's model is herdr/tmux, not a single switched view: split the terminal into panes,
-// put any capability deck in any pane, move focus between them, zoom one, close one. Every deck is
-// a thin renderer over the SAME engine /api the desktop renderer calls (capability parity by
-// construction); the engine is found and proven through the P-TUI.0 discovery seam (ADR-0416),
-// never guessed. The gate stays in the engine's omp child - this client scans nothing, releases
-// nothing by itself, and only calls the same human-only routes the GUI's Security panel calls.
+// The operator's model is herdr/cmux, not a page switcher: a branded chrome (top bar, deck sidebar
+// with live badges, status bar), panes split out of a binary tree, any capability deck in any pane.
+// Every deck is a thin renderer over the SAME engine /api the desktop renderer calls (capability
+// parity by construction). The engine is found and proven through the P-TUI.0 discovery seam
+// (ADR-0416) - and when none is running the hub SPAWNS its own headless engine and owns its
+// lifetime, so `lucid hub` is one command with no setup. The gate stays in the engine's omp child:
+// this client scans nothing and releases nothing by itself; the Security deck's a/i call the same
+// audited human-only routes as the GUI panel.
 //
-// Layout is a binary split tree (pure, tested): leaves hold decks, splits are equal halves with a
-// one-cell border. Keys: | split right, - split down, tab/shift+tab focus, z zoom, x close pane,
-// 1-6 put a deck in the focused pane, j/k select rows, a approve / i dismiss (Security), r refresh,
-// q quit. Resize-to-ratio, chat deck, palette and spawn-own-engine are the rest of P-TUI.1.
+// Keys: | split right, - split down, tab/shift+tab focus ring, z zoom, x close, b sidebar,
+// 1-6 rebind the focused pane, j/k select rows, a approve / i dismiss (Security), r refresh, q quit.
+// Chat deck, palette and directional focus/resize are the rest of P-TUI.1.
+//
+// The colors are the desktop design system (styles.css → the P-THEME.1 palette), so the hub and the
+// gated `lucid tui` read as one product: LUCID magenta chrome, cyan focus, the styles.css status hues.
 
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { matchesKey, ProcessTerminal, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
+import { join } from "node:path";
 import { discoveryDir, listDiscoveries, verifyDiscovery, type EngineDiscovery } from "../../desktop/engine_discovery.ts";
+
+// styles.css palette (desktop/renderer/styles.css) - the single source of the brand.
+const ACCENT = chalk.hex("#c64bd6");   // --accent: LUCID magenta
+const ACCENT_2 = chalk.hex("#e07bf0"); // --accent-2
+const CYAN = chalk.hex("#46c8dc");     // --cyan: focus
+const TXT = chalk.hex("#edeff6");      // --txt
+const TXT_3 = chalk.hex("#727a90");    // --txt-3: chrome, hints
+const LINE = chalk.hex("#252a3a");     // --line: unfocused borders
+const GREEN = chalk.hex("#46d27e");
+const AMBER = chalk.hex("#e8b23c");
+const RED = chalk.hex("#ef5f5f");
 
 // ---- decks -------------------------------------------------------------------------------------
 
-export type DeckId = "overview" | "security" | "fleet" | "sessions" | "audit" | "usage";
-export const DECKS: readonly { id: DeckId; key: string; title: string }[] = [
-  { id: "overview", key: "1", title: "Overview" },
-  { id: "security", key: "2", title: "Security" },
-  { id: "fleet", key: "3", title: "Fleet" },
-  { id: "sessions", key: "4", title: "Sessions" },
-  { id: "audit", key: "5", title: "Audit" },
-  { id: "usage", key: "6", title: "Usage" },
+export type DeckId = "overview" | "security" | "fleet" | "sessions" | "audit" | "usage" | "network";
+export const DECKS: readonly { id: DeckId; key: string; title: string; icon: string }[] = [
+  { id: "overview", key: "1", title: "Overview", icon: "◆" },
+  { id: "security", key: "2", title: "Security", icon: "⛨" },
+  { id: "fleet", key: "3", title: "Fleet", icon: "⛬" },
+  { id: "sessions", key: "4", title: "Sessions", icon: "≡" },
+  { id: "audit", key: "5", title: "Audit", icon: "✎" },
+  { id: "usage", key: "6", title: "Usage", icon: "$" },
+  { id: "network", key: "7", title: "Network", icon: "⇄" },
 ];
 
 /** The engine payload slices the decks draw. Fetched as unknown, narrowed field by field:
@@ -39,6 +56,8 @@ export interface HubData {
   fleet: Record<string, unknown>;
   sessions: unknown[];
   audit: Record<string, unknown>;
+  whitelist: unknown[];
+  posture: Record<string, unknown>;
   usage: Record<string, unknown>;
 }
 
@@ -47,7 +66,11 @@ const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const rec = (v: unknown): Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
-/** Pure deck bodies: plain rows (no ANSI - the pane frame styles them), each row already truncated. */
+export function quarantineOf(data: HubData | null): Record<string, unknown>[] {
+  return data ? arr(rec(data.security.live).quarantined).map(rec) : [];
+}
+
+/** Pure deck bodies: plain rows (no ANSI - styling is a later pass), each row one physical line. */
 export function deckLines(deck: DeckId, data: HubData | null, width: number, selected: number): string[] {
   if (!data) return ["loading from the engine…"];
   const w = Math.max(8, width);
@@ -57,62 +80,144 @@ export function deckLines(deck: DeckId, data: HubData | null, width: number, sel
   switch (deck) {
     case "overview": {
       const b = data.build;
-      const live = rec(data.security.live);
       const lanes = arr(data.fleet.lanes);
       return [
-        t(`engine   ${str(b.productName)} v${str(b.version)} (${str(b.flavor)}) on :${str(b.port)}`),
-        t(`workspace ${str(b.workspace ?? b.dataRoot ?? "")}`),
-        t(`blocks   ${arr(live.quarantined).length} quarantined · ${arr(live.dismissed).length} dismissed`),
-        t(`fleet    ${lanes.length} lane${lanes.length === 1 ? "" : "s"}`),
-        t(`sessions ${data.sessions.length} on disk`),
+        "",
+        t(`  engine    ${str(b.productName)} v${str(b.version)}`),
+        t(`  flavor    ${str(b.flavor)} · port ${str(b.port)}`),
+        t(`  blocks    ${quarantineOf(data).length} quarantined`),
+        t(`  fleet     ${lanes.length} lane${lanes.length === 1 ? "" : "s"}`),
+        t(`  sessions  ${data.sessions.length} on disk`),
       ];
     }
     case "security": {
-      const live = rec(data.security.live);
-      const q = arr(live.quarantined).map(rec);
+      const q = quarantineOf(data);
       if (q.length === 0) return ["no active blocks - the gate is quiet"];
       return q.map((blk, i) =>
-        t(`${i === selected ? "▸" : " "} ${str(blk.at).slice(11, 19)} ${str(blk.tool)} [${str(blk.severity)}] ${str(blk.findings) || str(blk.reason)}`),
+        t(`${i === selected ? "▸" : " "} ${str(blk.at).slice(11, 19)}  ${str(blk.tool).padEnd(16)} ${str(blk.severity).padEnd(6)} ${str(blk.findings) || str(blk.reason)}`),
       );
     }
     case "fleet": {
       const lanes = arr(data.fleet.lanes).map(rec);
-      if (lanes.length === 0) return ["no lanes - spawn one from the composer or /api/fleet/spawn"];
-      return lanes.map((l) =>
-        t(`${str(l.status).padEnd(8)} ${str(l.name)} · ${str(l.turns)} turn${str(l.turns) === "1" ? "" : "s"} · ${str(l.model)}${rec(l.pendingApproval).summary ? " · WAITING ON YOU" : ""}`),
+      if (lanes.length === 0) return ["", "  no agents running", "", "  n  spawn a new agent in this workspace", "  ⏎  open the selected agent in this pane"];
+      return lanes.map((l, i) =>
+        t(`${i === selected ? "▸" : " "} ${str(l.status).padEnd(9)} ${str(l.name)} · ${str(l.turns)} turn${str(l.turns) === "1" ? "" : "s"} · ${str(l.model)}${rec(l.pendingApproval).summary ? " · WAITING ON YOU" : ""}`),
       );
     }
     case "sessions": {
       const s = data.sessions.map(rec);
       if (s.length === 0) return ["no sessions yet"];
-      return s.slice(0, 50).map((x) => t(`${str(x.updatedAt ?? x.mtime).slice(0, 16)} ${str(x.title ?? x.id)}`));
+      return s.slice(0, 100).map((x, i) =>
+        t(`${i === selected ? "▸" : " "} ${fmtAgo(Number(x.updatedAt ?? 0)).padStart(7)}  ${String(str(x.turns)).padStart(3)}⛁  ${str(x.title ?? x.id)}`),
+      );
     }
     case "audit": {
       const events = arr(data.audit.events).map(rec);
       if (events.length === 0) return ["no security events recorded"];
-      return events.slice(0, 100).map((e) => t(`${str(e.at ?? e.ts).slice(11, 19)} ${str(e.category)}/${str(e.type)} ${str(e.decision)}`));
+      return events.slice(0, 200).map((e) => t(`${str(e.at ?? e.ts).slice(11, 19)}  ${str(e.category)}/${str(e.type)}  ${str(e.decision)}`));
     }
     case "usage": {
-      const models = arr(data.usage.models ?? data.usage.rows).map(rec);
+      // The ledger's real shape (tools/memory_data.ts UsageLedger): nested cost/tokens objects.
+      const models = arr(data.usage.models).map(rec);
       if (models.length === 0) return ["no usage recorded yet"];
-      return models.map((m) => t(`${str(m.model ?? m.id)} · $${str(m.costUsd ?? m.cost)} · ${str(m.turns ?? m.calls)} turns`));
+      const totals = rec(data.usage.totals);
+      const cost = (v: unknown) => { const n = Number(rec(v).total ?? v); return Number.isFinite(n) ? `$${n.toFixed(2)}` : "$0.00"; };
+      const tok = (v: unknown) => { const n = Number(rec(v).total ?? 0); return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}k` : String(n); };
+      const head = t(`  ${"model".padEnd(34)} ${"cost".padStart(8)} ${"tokens".padStart(8)} ${"turns".padStart(6)}  cache`);
+      const rows = models.slice(0, 40).map((m) => {
+        const hit = Number(m.cacheHitRate);
+        return t(`  ${truncateToWidth(str(m.model), 34).padEnd(34)} ${cost(m.cost).padStart(8)} ${tok(m.tokens).padStart(8)} ${str(m.turns).padStart(6)}  ${Number.isFinite(hit) ? `${Math.round(hit * 100)}%` : "-"}`);
+      });
+      const sum = t(`  ${"all models".padEnd(34)} ${`$${Number(totals.cost ?? 0).toFixed(2)}`.padStart(8)} ${tok({ total: totals.tokens }).padStart(8)} ${str(totals.turns).padStart(6)}`);
+      return ["", head, "", ...rows, "", sum];
+    }
+    case "network": {
+      const posture = data.posture;
+      const entries = data.whitelist.map(rec);
+      const head = [
+        "",
+        t(`  allow-all ${posture.allowAll === true ? "ON  - every site + local LAN allowed; the whitelist is standing exceptions" : "OFF - ONLY whitelisted hosts pass"}${posture.managedLocked === true ? " (locked by policy)" : ""}`),
+        t(`  web-search ${posture.allowWebSearch === true ? "ON" : "OFF"}`),
+        "",
+        t(`  ${"host / pattern".padEnd(38)} ${"kind".padEnd(7)} ${"zone".padEnd(9)} scope`),
+        "",
+      ];
+      if (entries.length === 0) return [...head, "  no whitelist entries - w adds one (subprocess egress denials land here)"];
+      return [...head, ...entries.map((e, i) =>
+        t(`${i === selected ? "▸" : " "} ${truncateToWidth(str(e.pattern), 38).padEnd(38)} ${str(e.kind).padEnd(7)} ${str(e.zone).padEnd(9)} ${str(e.scope)}`),
+      )];
     }
   }
 }
 
+/** The status-bar teaching line, per focused surface: what THIS pane responds to right now. */
+export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
+  overview: "| - split · tab focus · 1-6 decks",
+  security: "j/k select · a approve · i dismiss",
+  fleet: "n new agent · j/k select · ⏎ open agent here",
+  sessions: "j/k select · ⏎ resume session as a live agent",
+  audit: "j/k scroll · r refresh",
+  usage: "r refresh",
+  network: "w whitelist a host · j/k select · D remove · t toggle allow-all",
+  agent: "⏎ prompt · j/k scroll · G live tail · y/s/d answer an ask · x close",
+  prompting: "type your prompt · ⏎ send · esc cancel",
+};
+
+/** Style one plain deck row (widths already fixed - only color changes here, never geometry). */
+export function colorizeRow(deck: DeckId, row: string): string {
+  if (deck === "security") return row.replace(/\b(high|critical)\b/, (m) => RED(m)).replace(/\bmedium\b/, (m) => AMBER(m));
+  if (deck === "fleet")
+    return row
+      .replace(/^(running|working)\b/, (m) => GREEN(m))
+      .replace(/^(failed|dead|stopped)\b/, (m) => RED(m))
+      .replace(/WAITING ON YOU/, (m) => AMBER(m));
+  if (deck === "audit") return row.replace(/\bblock\b/, (m) => RED(m)).replace(/\ballow\b/, (m) => GREEN(m));
+  return row;
+}
+
+/** Relative timestamps for the Sessions deck - "2h ago" reads; raw epoch millis never do. */
+export function fmtAgo(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "?";
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86_400)}d ago`;
+}
+
+/** Greedy word wrap for agent transcript text (pane bodies are physical rows). */
+export function wrapText(text: string, width: number): string[] {
+  const out: string[] = [];
+  for (const raw of text.split("\n")) {
+    let line = raw.replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/g, " ");
+    if (line === "") { out.push(""); continue; }
+    while (Bun.stringWidth(line) > width) {
+      let cut = width;
+      const slice = line.slice(0, width + 1);
+      const space = slice.lastIndexOf(" ");
+      if (space > width * 0.5) cut = space;
+      out.push(line.slice(0, cut));
+      line = line.slice(cut).trimStart();
+    }
+    out.push(line);
+  }
+  return out;
+}
+
 // ---- pane tree (pure) --------------------------------------------------------------------------
 
-export type PaneNode =
-  | { kind: "leaf"; deck: DeckId }
-  | { kind: "split"; dir: "h" | "v"; a: PaneNode; b: PaneNode };
+/** A leaf is a capability deck, or a live AGENT pane bound to a fleet lane. */
+export type PaneDeck = DeckId | "agent";
+export interface PaneLeaf { kind: "leaf"; deck: PaneDeck; lane?: string; laneName?: string }
+export type PaneNode = PaneLeaf | { kind: "split"; dir: "h" | "v"; a: PaneNode; b: PaneNode };
 
 /** In-order leaves - the focus ring. */
-export function leaves(node: PaneNode): { kind: "leaf"; deck: DeckId }[] {
+export function leaves(node: PaneNode): PaneLeaf[] {
   return node.kind === "leaf" ? [node] : [...leaves(node.a), ...leaves(node.b)];
 }
 
 /** Replace the `index`-th leaf via `f` (split it, retitle it) - returns a new tree. */
-export function mapLeaf(node: PaneNode, index: number, f: (leaf: { kind: "leaf"; deck: DeckId }) => PaneNode): PaneNode {
+export function mapLeaf(node: PaneNode, index: number, f: (leaf: PaneLeaf) => PaneNode): PaneNode {
   let seen = 0;
   const walk = (n: PaneNode): PaneNode => {
     if (n.kind === "leaf") return seen++ === index ? f(n) : n;
@@ -152,25 +257,38 @@ export function fitBlock(lines: readonly string[], w: number, h: number): string
 interface HubUi { requestRender(): void; terminal: { rows: number } }
 
 const POLL_MS = 2000;
+const SIDEBAR_W = 20;
 
 export class HubComponent implements Component {
   readonly #ui: HubUi;
   readonly #base: string;
   readonly #token: string;
   readonly #engine: EngineDiscovery;
+  readonly #spawned: boolean;
   readonly #done = Promise.withResolvers<void>();
   #tree: PaneNode = { kind: "leaf", deck: "overview" };
   #focus = 0;
   #zoom = false;
+  #sidebar = true;
+  #help = false;
   #selected = 0;
+  #scroll = 0; // agent-pane scrollback offset, lines up from the live tail (0 = follow)
+  #transcripts: Record<string, { role: string; text: string }[]> = {};
+  /** Mid-turn state per open agent pane, fed by the /api/fleet/watch NDJSON stream (token deltas,
+   *  tool calls, status flips) - what makes a working model VISIBLE instead of a frozen pane. */
+  #live: Record<string, { text: string; thinking: string; tools: string[]; working: boolean; trimmed?: boolean }> = {};
+  #watchers: Record<string, AbortController> = {};
+  #prompt: { lane: string; text: string } | null = null;
+  #promptKind: "agent" | "wl-add" = "agent";
   #data: HubData | null = null;
   #status = "";
   #timer: NodeJS.Timeout | undefined;
   #disposed = false;
 
-  constructor(ui: HubUi, engine: EngineDiscovery) {
+  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean } = {}) {
     this.#ui = ui;
     this.#engine = engine;
+    this.#spawned = !!opts.spawned;
     this.#base = `http://127.0.0.1:${engine.port}`;
     this.#token = engine.token;
   }
@@ -184,6 +302,8 @@ export class HubComponent implements Component {
   dispose(): void {
     this.#disposed = true;
     clearInterval(this.#timer);
+    for (const ctl of Object.values(this.#watchers)) ctl.abort();
+    this.#watchers = {};
   }
 
   async #get(path: string): Promise<unknown> {
@@ -193,45 +313,142 @@ export class HubComponent implements Component {
     return body.data ?? body;
   }
 
-  async #post(path: string, payload: Record<string, unknown>): Promise<void> {
-    await fetch(`${this.#base}${path}`, {
+  async #post(path: string, payload: Record<string, unknown>): Promise<unknown> {
+    const res = await fetch(`${this.#base}${path}`, {
       method: "POST",
       headers: { "x-lucid-token": this.#token, "content-type": "application/json" },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(15_000), // a spawn boots an omp child; give it room
     });
+    const body = rec(await res.json().catch(() => null));
+    if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+    return body.data ?? body;
   }
 
   async refresh(): Promise<void> {
     try {
-      const [build, security, fleet, sessions, audit, usage] = await Promise.all([
+      const [build, security, fleet, sessions, audit, usage, whitelist, posture] = await Promise.all([
         this.#get("/api/build-info"), this.#get("/api/security"), this.#get("/api/fleet/status"),
         this.#get("/api/sessions"), this.#get("/api/audit"), this.#get("/api/usage"),
+        this.#get("/api/whitelist"), this.#get("/api/whitelist/posture"),
       ]);
       if (this.#disposed) return;
       this.#data = {
         build: rec(build), security: rec(security), fleet: rec(fleet),
         sessions: arr(rec(sessions).sessions ?? sessions), audit: rec(audit), usage: rec(usage),
+        whitelist: arr(whitelist), posture: rec(posture),
       };
-      this.#status = "";
+      // Live transcripts for every open agent pane, same poll tick.
+      const laneIds = [...new Set(leaves(this.#tree).flatMap((l) => (l.deck === "agent" && l.lane ? [l.lane] : [])))];
+      const fetched = await Promise.all(laneIds.map(async (id) => {
+        try {
+          const r = rec(await this.#get(`/api/fleet/transcript?laneId=${encodeURIComponent(id)}`));
+          return [id, arr(r.turns).map(rec).map((x) => ({ role: str(x.role), text: str(x.text) }))] as const;
+        } catch { return [id, this.#transcripts[id] ?? []] as const; }
+      }));
+      this.#transcripts = Object.fromEntries(fetched);
+      this.#syncWatchers(laneIds);
+      // Only an unreachable-engine banner self-clears on recovery; action messages stay until the next action.
+      if (this.#status.startsWith("engine unreachable")) this.#status = "";
     } catch (err) {
       this.#status = `engine unreachable: ${err instanceof Error ? err.message : String(err)}`;
     }
     this.#ui.requestRender();
   }
 
-  #focusedDeck(): DeckId {
-    return leaves(this.#tree)[this.#focus]?.deck ?? "overview";
+  /** One long-lived watch stream per open agent pane; panes that closed lose theirs. A stream that
+   *  drops (engine restart) is simply restarted by the next poll tick - never a tight loop. */
+  #syncWatchers(laneIds: string[]): void {
+    for (const id of laneIds) if (!this.#watchers[id]) this.#watch(id);
+    for (const id of Object.keys(this.#watchers)) if (!laneIds.includes(id)) { this.#watchers[id]!.abort(); delete this.#watchers[id]; delete this.#live[id]; }
+  }
+
+  #watch(lane: string): void {
+    const ctl = new AbortController();
+    this.#watchers[lane] = ctl;
+    void (async () => {
+      try {
+        const res = await fetch(`${this.#base}/api/fleet/watch`, {
+          method: "POST",
+          headers: { "x-lucid-token": this.#token, "content-type": "application/json" },
+          body: JSON.stringify({ laneId: lane }),
+          signal: ctl.signal,
+        });
+        const reader = res.body?.getReader();
+        if (!reader) return;
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (line) this.#liveEvent(lane, line);
+          }
+        }
+      } catch { /* aborted or engine gone - the poll tick restarts live streams */ }
+      if (this.#watchers[lane] === ctl) delete this.#watchers[lane];
+    })();
+  }
+
+  #liveEvent(lane: string, line: string): void {
+    let e: Record<string, unknown>;
+    try { e = rec(JSON.parse(line)); } catch { return; }
+    const s = this.#live[lane] ?? (this.#live[lane] = { text: "", thinking: "", tools: [], working: false });
+    if (e.type === "token") { s.text += str(e.text); s.working = true; }
+    // Whole-turn retention: the START of the reasoning is what gets inspected after the fact, so the
+    // cap exists only to bound a runaway stream, not to trim a real turn. 500k chars ≈ well past any
+    // real thinking phase; a turn that exceeds it keeps its tail and the pane says nothing false.
+    else if (e.type === "thinking") {
+      const grown = s.thinking + str(e.text);
+      s.trimmed = s.trimmed || grown.length > 500_000;
+      s.thinking = grown.slice(-500_000);
+      s.working = true;
+    }
+    else if (e.type === "tool") { s.tools.push(str(e.name)); if (s.tools.length > 6) s.tools.shift(); s.working = true; }
+    else if (e.type === "status") s.working = str(e.status) === "working";
+    // A settled turn clears the streamed reply text (the transcript now carries it) but KEEPS the
+    // thinking and tool trail visible until the NEXT prompt - a reply must never clobber the
+    // reasoning that produced it (field report 2026-09-28). #sendPrompt does the real reset.
+    else if (e.type === "done") { s.text = ""; s.working = false; void this.refresh(); return; }
+    this.#ui.requestRender();
+  }
+
+  #focusedLeaf(): PaneLeaf {
+    return leaves(this.#tree)[this.#focus] ?? { kind: "leaf", deck: "overview" };
+  }
+
+  #focusedDeck(): PaneDeck {
+    return this.#focusedLeaf().deck;
   }
 
   handleInput(data: string): void {
+    if (this.#help) { if (data === "\r" || data === "\n") return; this.#help = false; this.#ui.requestRender(); if (data === "q" || matchesKey(data, "ctrl+c")) this.#done.resolve(); return; }
+    // Prompt mode: the focused agent pane owns the keyboard until Enter (send) or Esc (cancel).
+    // Pasted/chunked input arrives as one string, so walk it char by char; a newline inside a
+    // chunk submits what was typed before it (terminal paste semantics).
+    if (this.#prompt) {
+      if (matchesKey(data, "escape")) { this.#prompt = null; this.#promptKind = "agent"; this.#ui.requestRender(); return; }
+      if (matchesKey(data, "backspace")) { this.#prompt.text = this.#prompt.text.slice(0, -1); this.#ui.requestRender(); return; }
+      for (const ch of data) {
+        if (ch === "\r" || ch === "\n") { void this.#sendPrompt(); return; }
+        if (ch >= " " && ch !== "\u007f") this.#prompt.text += ch;
+      }
+      this.#ui.requestRender();
+      return;
+    }
     if (matchesKey(data, "ctrl+c") || data === "q") { this.#done.resolve(); return; }
+    if (data === "?") { this.#help = true; this.#ui.requestRender(); return; }
     const count = leaves(this.#tree).length;
-    if (data === "|") this.#tree = mapLeaf(this.#tree, this.#focus, (l) => ({ kind: "split", dir: "v", a: l, b: { kind: "leaf", deck: l.deck } }));
-    else if (data === "-") this.#tree = mapLeaf(this.#tree, this.#focus, (l) => ({ kind: "split", dir: "h", a: l, b: { kind: "leaf", deck: l.deck } }));
-    else if (matchesKey(data, "tab")) { this.#focus = (this.#focus + 1) % count; this.#selected = 0; }
-    else if (matchesKey(data, "shift+tab")) { this.#focus = (this.#focus + count - 1) % count; this.#selected = 0; }
+    if (data === "|") this.#tree = mapLeaf(this.#tree, this.#focus, (l) => ({ kind: "split", dir: "v", a: l, b: { ...l } }));
+    else if (data === "-") this.#tree = mapLeaf(this.#tree, this.#focus, (l) => ({ kind: "split", dir: "h", a: l, b: { ...l } }));
+    else if (matchesKey(data, "tab")) { this.#focus = (this.#focus + 1) % count; this.#selected = 0; this.#scroll = 0; }
+    else if (matchesKey(data, "shift+tab")) { this.#focus = (this.#focus + count - 1) % count; this.#selected = 0; this.#scroll = 0; }
     else if (data === "z") this.#zoom = !this.#zoom;
+    else if (data === "b") this.#sidebar = !this.#sidebar;
     else if (data === "x") {
       const next = closeLeaf(this.#tree, this.#focus);
       if (next) { this.#tree = next; this.#focus = Math.min(this.#focus, leaves(next).length - 1); this.#zoom = false; }
@@ -239,19 +456,149 @@ export class HubComponent implements Component {
     } else if (DECKS.some((d) => d.key === data)) {
       const deck = DECKS.find((d) => d.key === data)!.id;
       this.#tree = mapLeaf(this.#tree, this.#focus, () => ({ kind: "leaf", deck }));
-      this.#selected = 0;
-    } else if (data === "j" || matchesKey(data, "down")) this.#selected++;
-    else if (data === "k" || matchesKey(data, "up")) this.#selected = Math.max(0, this.#selected - 1);
+      this.#selected = 0; this.#scroll = 0;
+    } else if (data === "j" || matchesKey(data, "down")) {
+      if (this.#focusedDeck() === "agent") this.#scroll = Math.max(0, this.#scroll - 1);
+      else this.#selected++;
+    } else if (data === "k" || matchesKey(data, "up")) {
+      if (this.#focusedDeck() === "agent") this.#scroll++;
+      else this.#selected = Math.max(0, this.#selected - 1);
+    } else if (matchesKey(data, "ctrl+u") && this.#focusedDeck() === "agent") this.#scroll += 10;
+    else if (matchesKey(data, "ctrl+d") && this.#focusedDeck() === "agent") this.#scroll = Math.max(0, this.#scroll - 10);
+    else if (data === "G" && this.#focusedDeck() === "agent") this.#scroll = 0;
     else if (data === "r") { void this.refresh(); return; }
     else if (data === "a" || data === "i") { void this.#judge(data === "a"); return; }
+    else if (data === "n") { void this.#spawnAgent(null); return; }
+    else if (data === "w" && this.#focusedDeck() === "network") { this.#promptKind = "wl-add"; this.#prompt = { lane: "", text: "" }; }
+    else if (data === "D" && this.#focusedDeck() === "network") { void this.#removeWhitelistEntry(); return; }
+    else if (data === "t" && this.#focusedDeck() === "network") { void this.#togglePosture(); return; }
+    else if ((data === "y" || data === "s" || data === "d") && this.#pendingApprovalLane()) { void this.#answerApproval(data); return; }
+    else if (data === "\r" || data === "\n") { void this.#enter(); return; }
     this.#ui.requestRender();
+  }
+
+  /** The focused agent pane's lane id, when its lane is parked on a tool approval. */
+  #pendingApprovalLane(): string | null {
+    const leaf = this.#focusedLeaf();
+    if (leaf.deck !== "agent" || !leaf.lane) return null;
+    const lane = arr(this.#data?.fleet.lanes).map(rec).find((l) => str(l.id) === leaf.lane);
+    return lane && rec(lane.pendingApproval).summary ? leaf.lane : null;
+  }
+
+  /** Answer the lane's parked ask through the SAME route the GUI's lane card drives: y = allow once,
+   *  s = allow for the whole session (this ask kind stops asking), d = deny. The in-omp security gate
+   *  still scans every call either way - this answers the HUMAN ask only (P-FLEET.L6 discipline). */
+  async #answerApproval(key: string): Promise<void> {
+    const lane = this.#pendingApprovalLane();
+    if (!lane) return;
+    const allow = key !== "d";
+    await this.#post("/api/fleet/answer", { laneId: lane, allow, ...(key === "s" ? { scope: "session" } : allow ? { scope: "once" } : {}) });
+    this.#status = key === "d" ? "denied the tool call" : key === "s" ? "allowed - and for the rest of this session" : "allowed once";
+    await this.refresh();
+  }
+
+  /** Enter, by pane kind: Fleet opens the selected agent HERE; Sessions RESUMES the selected session
+   *  as a live agent (fleet spawn with sessionId - the engine replays its memory); an agent pane
+   *  starts prompt mode. The whole herdr loop: spawn, open, talk, watch. */
+  async #enter(): Promise<void> {
+    const leaf = this.#focusedLeaf();
+    if (leaf.deck === "agent" && leaf.lane) {
+      // A parked ask owns the pane: opening the composer here is how "y + enter" became a prompt
+      // named "y" (field report 2026-09-28). Answer first; the composer comes back after.
+      if (this.#pendingApprovalLane()) { this.#status = "this agent is waiting on the ask above - answer it: y allow once · s allow for session · d deny"; this.#ui.requestRender(); return; }
+      this.#promptKind = "agent"; this.#prompt = { lane: leaf.lane, text: "" }; this.#scroll = 0; this.#ui.requestRender(); return;
+    }
+    if (leaf.deck === "fleet" && this.#data) {
+      const lanes = arr(this.#data.fleet.lanes).map(rec);
+      const lane = lanes[Math.min(this.#selected, lanes.length - 1)];
+      if (!lane) { this.#status = "no agent selected - n spawns one"; this.#ui.requestRender(); return; }
+      this.#tree = mapLeaf(this.#tree, this.#focus, () => ({ kind: "leaf", deck: "agent", lane: str(lane.id), laneName: str(lane.name) }));
+      await this.refresh();
+      return;
+    }
+    if (leaf.deck === "sessions" && this.#data) {
+      const s = this.#data.sessions.map(rec);
+      const sess = s[Math.min(this.#selected, s.length - 1)];
+      if (!sess) { this.#status = "no session selected"; this.#ui.requestRender(); return; }
+      await this.#spawnAgent(str(sess.id));
+      return;
+    }
+    this.#ui.requestRender();
+  }
+
+  /** Spawn a lane (optionally resuming a session) and open it in the focused pane. Refusals (a held
+   *  session, lane cap) surface verbatim in the status bar - the engine's answer, not a guess. */
+  async #spawnAgent(sessionId: string | null): Promise<void> {
+    this.#status = "spawning agent…";
+    this.#ui.requestRender();
+    try {
+      // A lane needs a real folder to work in: the engine's CURRENT workspace, asked for, never guessed.
+      const ws = rec(await this.#get("/api/workspace"));
+      const body: Record<string, unknown> = { cwd: str(ws.current), ...(sessionId ? { sessionId } : {}) };
+      const reply = rec(await this.#post("/api/fleet/spawn", body));
+      const lane = rec(reply.lane);
+      const id = str(lane.id);
+      if (id === "?") { this.#status = `spawn refused: ${str(reply.reason ?? reply.error ?? reply.detail ?? "no lane in reply")}`; this.#ui.requestRender(); return; }
+      this.#tree = mapLeaf(this.#tree, this.#focus, () => ({ kind: "leaf", deck: "agent", lane: id, laneName: str(lane.name) }));
+      this.#status = sessionId ? `resumed session as agent ${str(lane.name)}` : `spawned agent ${str(lane.name)}`;
+      await this.refresh();
+    } catch (err) {
+      this.#status = `spawn failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.#ui.requestRender();
+    }
+  }
+
+  async #sendPrompt(): Promise<void> {
+    const p = this.#prompt;
+    if (!p) return;
+    const kind = this.#promptKind;
+    this.#promptKind = "agent";
+    const text = p.text.trim();
+    this.#prompt = null;
+    if (!text) { this.#ui.requestRender(); return; }
+    try {
+      if (kind === "wl-add") {
+        // Same audited whitelist route the GUI settings panel drives (P-NETWL.2). IP/CIDR-looking
+        // input files as an ip entry; anything else is a domain pattern. Internal zone, standing.
+        const isIp = /^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(text);
+        await this.#post("/api/whitelist", { kind: isIp ? "ip" : "domain", pattern: text, zone: "internal", scope: "always" });
+        this.#status = `whitelisted ${text} (internal, standing) - revocable here with D`;
+      } else {
+        // A fresh turn begins: NOW the previous turn's thinking/tool trail makes way.
+        this.#live[p.lane] = { text: "", thinking: "", tools: [], working: true };
+        await this.#post("/api/fleet/prompt", { laneId: p.lane, text });
+        this.#status = "prompt sent";
+      }
+    } catch (err) {
+      this.#status = `${kind === "wl-add" ? "whitelist" : "prompt"} failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    await this.refresh();
+  }
+
+  /** Remove the selected whitelist entry - standing access leaves the ledger the moment you say so. */
+  async #removeWhitelistEntry(): Promise<void> {
+    const entries = (this.#data?.whitelist ?? []).map(rec);
+    const e = entries[Math.min(this.#selected, entries.length - 1)];
+    if (!e) { this.#status = "no entry selected"; this.#ui.requestRender(); return; }
+    await this.#post("/api/whitelist/remove", { id: str(e.id) });
+    this.#status = `removed ${str(e.pattern)} from the whitelist`;
+    await this.refresh();
+  }
+
+  /** Flip allow-all. The engine clamps under managed policy (managedLocked), so this can only ever
+   *  TIGHTEN when an enterprise ceiling says so - the refusal comes back in the posture we redraw. */
+  async #togglePosture(): Promise<void> {
+    const cur = this.#data?.posture.allowAll === true;
+    await this.#post("/api/whitelist/posture", { allowAll: !cur });
+    this.#status = `allow-all ${!cur ? "ON" : "OFF (whitelist-only egress)"}`;
+    await this.refresh();
   }
 
   /** Security deck actions: the SAME audited human-only routes the GUI panel calls. Approve releases
    *  one quarantined call (ADR-0019 C); dismiss acknowledges without releasing. Nothing local. */
   async #judge(approve: boolean): Promise<void> {
     if (this.#focusedDeck() !== "security" || !this.#data) return;
-    const q = arr(rec(this.#data.security.live).quarantined).map(rec);
+    const q = quarantineOf(this.#data);
     const blk = q[Math.min(this.#selected, q.length - 1)];
     if (!blk) { this.#status = "no block selected"; this.#ui.requestRender(); return; }
     await this.#post(approve ? "/api/security/approve" : "/api/security/dismiss", { id: str(blk.id) });
@@ -261,18 +608,173 @@ export class HubComponent implements Component {
 
   // -- render ------------------------------------------------------------------------------------
 
-  #pane(deck: DeckId, w: number, h: number, focused: boolean): string[] {
-    const title = DECKS.find((d) => d.id === deck)!.title;
-    const body = fitBlock(deckLines(deck, this.#data, w - 2, focused ? this.#selected : -1), w - 2, h - 2);
-    const bar = truncateToWidth(` ${title} `, Math.max(0, w - 2));
-    const top = `┌${bar}${"─".repeat(Math.max(0, w - 2 - Bun.stringWidth(bar)))}┐`;
-    const bottom = `└${"─".repeat(Math.max(0, w - 2))}┘`;
-    const paint = focused ? chalk.cyan : chalk.dim;
-    return [paint(top), ...body.map((l) => paint("│") + l + paint("│")), paint(bottom)];
+  #badge(id: DeckId): string {
+    if (!this.#data) return "";
+    if (id === "security") { const n = quarantineOf(this.#data).length; return n ? RED(String(n)) : GREEN("0"); }
+    if (id === "fleet") return TXT_3(String(arr(this.#data.fleet.lanes).length));
+    if (id === "sessions") return TXT_3(String(this.#data.sessions.length));
+    return "";
+  }
+
+  #sidebarBlock(h: number): string[] {
+    const w = SIDEBAR_W;
+    const visible = new Set(leaves(this.#tree).map((l) => l.deck));
+    const focused = this.#focusedDeck();
+    const rows: string[] = ["", TXT_3.bold("  DECKS"), "", ...DECKS.map((d) => {
+      const badge = this.#badge(d.id);
+      const label = `  ${TXT_3(d.key)}  ${d.icon} ${d.title}`;
+      const pad = Math.max(1, w - 2 - Bun.stringWidth(label) - Bun.stringWidth(badge));
+      const line = `${label}${" ".repeat(pad)}${badge}`;
+      if (d.id === focused) return ACCENT("▎") + TXT.bold(line.slice(1));
+      if (visible.has(d.id)) return " " + TXT(line.slice(1));
+      return " " + TXT_3(line.slice(1));
+    })];
+    const body = [...rows, ...Array(Math.max(0, h - rows.length)).fill("")].slice(0, h);
+    return body.map((line) => {
+      // Exact track width or the whole pane column to the right shears (invariant 11's spirit).
+      const cut = truncateToWidth(line, w - 1);
+      const pad = Math.max(0, w - 1 - Bun.stringWidth(cut));
+      return cut + " ".repeat(pad) + LINE("│");
+    });
+  }
+
+  /** The `?` overlay: every key, grouped, centered in the pane region. Rendered INSTEAD of the
+   *  panes (never spliced into styled rows), so it is always legible at any size. */
+  #helpBlock(w: number, h: number): string[] {
+    const entries: [string, string][] = [
+      ["Panes", ""],
+      ["  |", "split the focused pane to the right"],
+      ["  -", "split the focused pane downward"],
+      ["  tab / shift+tab", "move focus around the ring"],
+      ["  z", "zoom the focused pane (again to unzoom)"],
+      ["  x", "close the focused pane"],
+      ["  b", "show / hide the deck sidebar"],
+      ["", ""],
+      ["Decks", ""],
+      ["  1-6", "put that deck in the focused pane"],
+      ["  j / k or ↓ / ↑", "move the row selection"],
+      ["", ""],
+      ["Agents", ""],
+      ["  n", "spawn a NEW agent (on the Fleet deck)"],
+      ["  ⏎ on Fleet", "open the selected agent in this pane"],
+      ["  ⏎ on Sessions", "resume that session as a live agent"],
+      ["  ⏎ on an agent", "type a prompt · ⏎ sends · esc cancels"],
+      ["  y / s / d", "answer a parked ask: once / session / deny"],
+      ["", ""],
+      ["Security", ""],
+      ["  a", "approve the selected block (audited release)"],
+      ["  i", "dismiss the selected block (acknowledge only)"],
+      ["", ""],
+      ["General", ""],
+      ["  r", "refresh now (auto-refreshes every 2s)"],
+      ["  ?", "this help · any key closes it"],
+      ["  q", "quit (a hub-spawned engine exits too)"],
+    ];
+    const boxW = Math.min(64, w - 4);
+    const lines = entries.map(([k, v]) =>
+      v === "" ? ACCENT_2.bold(` ${k}`) : `  ${CYAN(k.padEnd(18))}${TXT(truncateToWidth(v, boxW - 24))}`,
+    );
+    const inner = fitBlock([""].concat(lines.map((l) => l), [""]), boxW - 2, Math.min(lines.length + 2, h - 2));
+    const top = ACCENT("╭─") + ACCENT_2.bold(" ◆ LUCID HUB · keys ") + ACCENT("─".repeat(Math.max(0, boxW - 23)) + "╮");
+    const box = [top, ...inner.map((l) => ACCENT("│") + l + ACCENT("│")), ACCENT("╰" + "─".repeat(boxW - 2) + "╯")];
+    const padTop = Math.max(0, Math.floor((h - box.length) / 2));
+    const padLeft = " ".repeat(Math.max(0, Math.floor((w - boxW) / 2)));
+    const out = [...Array(padTop).fill(""), ...box.map((l) => padLeft + l)];
+    return fitBlock(out, w, h).map((l) => l); // exact geometry like any pane region
+  }
+
+  /** A live AGENT pane: settled transcript, then the CURRENT turn streaming in (token deltas, tool
+   *  activity, thinking tail) from /api/fleet/watch; model + status + spinner in the title; a
+   *  composer line at the bottom in prompt mode. */
+  #agentPane(leaf: PaneLeaf, w: number, h: number, focused: boolean): string[] {
+    const lane = arr(this.#data?.fleet.lanes).map(rec).find((l) => str(l.id) === leaf.lane);
+    const status = lane ? str(lane.status) : "gone";
+    const live = this.#live[leaf.lane ?? ""];
+    const working = status === "working" || !!live?.working;
+    const turns = this.#transcripts[leaf.lane ?? ""] ?? [];
+    const innerW = w - 4;
+    const lines: string[] = [];
+    for (const turn of turns) {
+      lines.push("");
+      for (const [j, row] of wrapText(turn.text, innerW - 2).entries())
+        lines.push(turn.role === "user" ? (j === 0 ? `› ${row}` : `  ${row}`) : `  ${row}`);
+    }
+    // The turn's reasoning trail: thinking + tool activity while working, and STILL there after the
+    // reply settles (a labeled dim block above the incoming text), until the next prompt resets it.
+    if (live && (live.text || live.thinking || live.tools.length || working)) {
+      lines.push("");
+      if (live.thinking) {
+        if (live.trimmed) lines.push("\u0001  … the earliest thinking exceeded the 500k retention cap and was trimmed");
+        lines.push(`\u0001thinking${working && !live.text ? "" : " (this turn)"}`);
+        for (const row of wrapText(live.thinking, innerW - 4)) lines.push(`\u0001  ${row}`);
+      }
+      if (live.tools.length) lines.push(`\u0001⚙ ${live.tools.join(" · ")}`);
+      if (live.text) for (const row of wrapText(live.text, innerW - 2)) lines.push(`  ${row}`);
+      else if (working) lines.push("\u0001… the model is working");
+    }
+    // The parked ask, impossible to miss: what the agent wants, and the keys that answer it.
+    const ask = lane ? rec(lane.pendingApproval) : {};
+    if (ask.summary) {
+      lines.push("");
+      lines.push(`\u0002⚠ approval needed (${str(ask.kind)})`);
+      for (const row of wrapText(str(ask.summary), innerW - 4)) lines.push(`\u0002  ${row}`);
+      lines.push(`\u0002  y allow once · s allow for this session · d deny`);
+    }
+    if (lines.length === 0) lines.push("", status === "gone" ? "  this agent is gone (x closes the pane)" : "  no turns yet - press ⏎ and type to talk to this agent");
+    const promptOn = focused && this.#prompt?.lane === leaf.lane;
+    const bodyH = h - 2 - (promptOn ? 1 : 0);
+    // Scrollback: #scroll is the offset UP from the live tail (0 = follow). Clamped so the top of
+    // history is the ceiling; a "more below" marker replaces the last row while scrolled.
+    const maxScroll = Math.max(0, lines.length - bodyH);
+    const scroll = focused ? Math.min(this.#scroll, maxScroll) : 0;
+    if (focused) this.#scroll = scroll; // keep the clamp, or k past the top would bank phantom offset
+    const end = lines.length - scroll;
+    const tail = lines.slice(Math.max(0, end - bodyH), end);
+    if (scroll > 0 && tail.length > 0) tail[tail.length - 1] = `\u0001── ${scroll} line${scroll === 1 ? "" : "s"} below · j follows down · G jumps to live ──`;
+    const body = fitBlock(tail, innerW, bodyH);
+    const paint = focused ? CYAN : LINE;
+    const spin = working ? ` ${"⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(Date.now() / 200) % 10]}` : "";
+    const model = lane ? str(lane.model) : "";
+    const title = ` ▶ ${leaf.laneName ?? leaf.lane}${model && model !== "?" ? ` · ${model}` : ""} · ${status}${spin}${lane && rec(lane.pendingApproval).summary ? " · WAITING" : ""} `;
+    const titlePainted = focused ? ACCENT_2.bold(title) : TXT_3(title);
+    const dashes = Math.max(0, w - 2 - Bun.stringWidth(title) - 1);
+    const top = paint("╭─") + titlePainted + paint("─".repeat(dashes) + "╮");
+    const bottom = paint("╰" + "─".repeat(Math.max(0, w - 2)) + "╯");
+    const rows = body.map((line) => {
+      // \u0001 marks a dim "activity" row (thinking / tools / working note); stripped before paint.
+      const painted = line.startsWith("\u0002") ? AMBER(line.slice(1)) : line.startsWith("\u0001") ? TXT_3(line.slice(1)) : line.startsWith("›") ? ACCENT_2(line) : TXT(line);
+      return paint("│") + " " + painted + " " + paint("│");
+    });
+    if (promptOn) {
+      const p = truncateToWidth(this.#prompt!.text, innerW - 4);
+      const promptRow = ACCENT.bold("› ") + TXT(p) + ACCENT("▌") + " ".repeat(Math.max(0, innerW - 3 - Bun.stringWidth(p)));
+      rows.push(paint("│") + " " + promptRow + " " + paint("│"));
+    }
+    return [top, ...rows, bottom];
+  }
+
+  #pane(leaf: PaneLeaf, w: number, h: number, focused: boolean): string[] {
+    if (leaf.deck === "agent") return this.#agentPane(leaf, w, h, focused);
+    const deck = leaf.deck;
+    const meta = DECKS.find((d) => d.id === deck)!;
+    const badge = deck === "security" ? quarantineOf(this.#data).length : deck === "fleet" ? arr(this.#data?.fleet.lanes).length : deck === "sessions" ? this.#data?.sessions.length ?? 0 : 0;
+    const body = fitBlock(deckLines(deck, this.#data, w - 4, focused ? this.#selected : -1), w - 4, h - 2);
+    const paint = focused ? CYAN : LINE;
+    const title = ` ${meta.icon} ${meta.title}${badge ? ` · ${badge}` : ""} `;
+    const titlePainted = focused ? ACCENT_2.bold(title) : TXT_3(title);
+    const dashes = Math.max(0, w - 2 - Bun.stringWidth(title) - 1);
+    const top = paint("╭─") + titlePainted + paint("─".repeat(dashes) + "╮");
+    const bottom = paint("╰" + "─".repeat(Math.max(0, w - 2)) + "╯");
+    const rows = body.map((line) => {
+      const isSel = focused && line.startsWith("▸");
+      const painted = isSel ? chalk.inverse(TXT(line)) : colorizeRow(deck, line);
+      return paint("│") + " " + painted + " " + paint("│");
+    });
+    return [top, ...rows, bottom];
   }
 
   #renderNode(node: PaneNode, w: number, h: number, ring: { i: number }): string[] {
-    if (node.kind === "leaf") return this.#pane(node.deck, w, h, ring.i++ === this.#focus);
+    if (node.kind === "leaf") return this.#pane(node, w, h, ring.i++ === this.#focus);
     if (node.dir === "v") {
       const wa = Math.floor(w / 2);
       const a = this.#renderNode(node.a, wa, h, ring);
@@ -283,20 +785,31 @@ export class HubComponent implements Component {
     return [...this.#renderNode(node.a, w, ha, ring), ...this.#renderNode(node.b, w, h - ha, ring)];
   }
 
+  #topBar(width: number): string {
+    const q = this.#data ? quarantineOf(this.#data).length : 0;
+    const alert = q > 0 ? RED.bold(` ⛨ ${q} blocked `) : "";
+    const brand = ACCENT.bold(" ◆ LUCID ") + TXT("HUB") + TXT_3(this.#spawned ? "  ·  engine spawned by hub" : "  ·  attached to running engine");
+    const right = `${alert}${TXT_3(`:${this.#engine.port} · v${this.#engine.version} `)}`;
+    const pad = Math.max(1, width - Bun.stringWidth(brand) - Bun.stringWidth(right));
+    return brand + " ".repeat(pad) + right;
+  }
+
   render(width: number): readonly string[] {
-    const height = Math.max(8, this.#ui.terminal.rows);
-    const bodyH = height - 1;
-    const tree: PaneNode = this.#zoom ? { kind: "leaf", deck: this.#focusedDeck() } : this.#tree;
-    const ring = { i: 0 };
-    if (this.#zoom) ring.i = this.#focus; // the zoomed pane is the focused one
-    const body = this.#renderNode(tree, width, bodyH, ring);
-    const hints = "| split · - split down · tab focus · z zoom · x close · 1-6 deck · j/k select · a/i approve/dismiss · r refresh · q quit";
-    // The right label (which engine this hub is attached to) always survives; the hints truncate.
-    const rightPlain = `lucid hub → :${this.#engine.port} v${this.#engine.version} `;
-    const leftPlain = truncateToWidth(this.#status ? ` ${this.#status}` : ` ${hints}`, Math.max(0, width - Bun.stringWidth(rightPlain) - 1));
+    const height = Math.max(10, this.#ui.terminal.rows);
+    const bodyH = height - 2;
+    const sidebarOn = this.#sidebar && width >= 72;
+    const paneW = sidebarOn ? width - SIDEBAR_W : width;
+    const tree: PaneNode = this.#zoom ? this.#focusedLeaf() : this.#tree;
+    const ring = { i: this.#zoom ? this.#focus : 0 };
+    const panes = this.#help ? this.#helpBlock(paneW, bodyH) : this.#renderNode(tree, paneW, bodyH, ring);
+    const body = sidebarOn ? this.#sidebarBlock(bodyH).map((s, i) => s + (panes[i] ?? "")) : panes;
+    const rightPlain = `${this.#engine.flavor} engine · lucid hub `;
+    const composing = this.#prompt && this.#promptKind === "wl-add" ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)` : "";
+    const hint = this.#help ? " any key closes help" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#focusedDeck()]} · ? help`;
+    const leftPlain = truncateToWidth(composing || (this.#status ? ` ${this.#status}` : hint), Math.max(0, width - Bun.stringWidth(rightPlain) - 1));
     const pad = Math.max(1, width - Bun.stringWidth(leftPlain) - Bun.stringWidth(rightPlain));
-    const left = this.#status ? chalk.yellow(leftPlain) : chalk.dim(leftPlain);
-    return [...body, `${left}${" ".repeat(pad)}${chalk.dim(rightPlain)}`];
+    const statusBar = (this.#status ? AMBER(leftPlain) : TXT_3(leftPlain)) + " ".repeat(pad) + TXT_3(rightPlain);
+    return [this.#topBar(width), ...body, statusBar];
   }
 }
 
@@ -310,18 +823,42 @@ export async function findEngine(env: Readonly<Record<string, string | undefined
   return null;
 }
 
-/** `lucid hub` - attach to the running engine and run the pane multiplexer until quit. */
+export interface AttachedEngine { engine: EngineDiscovery; spawned: boolean; child: Bun.Subprocess | null }
+
+/** Attach to a running engine, or SPAWN a headless one and wait for its discovery file. The spawned
+ *  child belongs to the hub: quit the hub, the engine goes with it (and removes its own file). */
+export async function attachOrSpawnEngine(env: Readonly<Record<string, string | undefined>>): Promise<AttachedEngine | null> {
+  const running = await findEngine(env);
+  if (running) return { engine: running, spawned: false, child: null };
+  const repo = join(import.meta.dir, "..", "..");
+  const child = Bun.spawn([process.execPath, join(repo, "desktop", "dev.ts")], {
+    cwd: repo,
+    env: { ...env } as Record<string, string | undefined>,
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  const deadline = Date.now() + 45_000;
+  while (Date.now() < deadline) {
+    const engine = await findEngine(env);
+    if (engine) return { engine, spawned: true, child };
+    if (child.exitCode !== null) break; // engine died (port busy, missing deps) - fail honestly
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 250);
+    await promise;
+  }
+  try { child.kill(); } catch { /* already gone */ }
+  return null;
+}
+
+/** `lucid hub` - attach or spawn, then run the pane multiplexer until quit. */
 export async function runHubCli(env: Readonly<Record<string, string | undefined>> = process.env): Promise<number> {
-  const engine = await findEngine(env);
-  if (!engine) {
-    process.stderr.write(
-      "[lucid hub] no running engine found (or none passed the nonce handshake).\n" +
-      "Start one first - the desktop app, or: bun desktop/dev.ts - then rerun `lucid hub`.\n",
-    );
+  const attached = await attachOrSpawnEngine(env);
+  if (!attached) {
+    process.stderr.write("[lucid hub] no engine: none running, and spawning one failed (port busy or missing deps). Try `bun desktop/dev.ts` to see why.\n");
     return 1;
   }
   const ui = new TUI(new ProcessTerminal());
-  const component = new HubComponent(ui, engine);
+  const component = new HubComponent(ui, attached.engine, { spawned: attached.spawned });
   const overlay = ui.showOverlay(component, { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: false });
   ui.setFocus(component);
   ui.start();
@@ -331,6 +868,7 @@ export async function runHubCli(env: Readonly<Record<string, string | undefined>
     component.dispose();
     overlay.hide();
     ui.stop();
+    if (attached.child) { try { attached.child.kill("SIGTERM"); } catch { /* gone */ } await attached.child.exited; }
   }
   return 0;
 }

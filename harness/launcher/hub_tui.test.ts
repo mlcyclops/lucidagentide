@@ -37,6 +37,7 @@ describe("fitBlock", () => {
 });
 
 describe("deck rows", () => {
+  const WL_HOST = "glm-box.tailnet-test.ts.net";
   const data: HubData = {
     build: { productName: "LucidAgentIDE", version: "9.9", flavor: "agent", port: 5319 },
     security: { live: { quarantined: [{ id: "b1", tool: "write", severity: "high", findings: "zero-width×2", at: "2026-09-28T10:00:00Z" }], dismissed: [] } },
@@ -44,6 +45,8 @@ describe("deck rows", () => {
     sessions: [{ title: "line one\nline two\ttabbed", updatedAt: "2026-09-28T10:00" }],
     audit: { events: [] },
     usage: { models: [] },
+    whitelist: [{ id: "wl_1", kind: "domain", pattern: WL_HOST, zone: "internal", scope: "always" }],
+    posture: { allowAll: true, allowWebSearch: true },
   };
 
   test("a hostile title (newline, tab) still renders as ONE physical row", () => {
@@ -60,9 +63,18 @@ describe("deck rows", () => {
     expect(rows[0]).toContain("zero-width×2");
   });
 
+  test("the network deck lists posture and the whitelist entry with a cursor", () => {
+    const rows = deckLines("network", data, 90, 0);
+    expect(rows.some((r) => r.includes("allow-all ON"))).toBe(true);
+    const entry = rows.find((r) => r.includes(WL_HOST))!;
+    expect(entry).toStartWith("▸");
+    expect(entry).toContain("internal");
+    expect(entry).toContain("always");
+  });
+
   test("an off-shape engine answer degrades to '?' rows, never a crash", () => {
     const weird = { ...data, fleet: { lanes: [{}] }, build: {} } as HubData;
-    expect(deckLines("overview", weird, 40, -1)[0]).toContain("?");
+    expect(deckLines("overview", weird, 40, -1)[1]).toContain("?");
     expect(deckLines("fleet", weird, 40, -1)).toHaveLength(1);
     expect(deckLines("overview", null, 40, -1)).toEqual(["loading from the engine…"]);
   });
