@@ -884,6 +884,10 @@ demo-P-PROGRESS.3: ## P-PROGRESS.3 (ADR-0412): the beta.10 quiet footer stays th
 .PHONY: demo-P-PROGRESS.4
 demo-P-PROGRESS.4: ## P-PROGRESS.4 (ADR-0413): the turn ETA replayed against finished turns (a synthetic corpus and, read-only, this machine's latency ledger); prints the P-PROGRESS.1 baseline and the current estimator (time left given the time already run) side by side, median error and share within +/-30%, and fails unless the current one wins on the synthetic corpus
 	$(BUN) run harness/scripts/eta_backtest.ts --check
+
+.PHONY: demo-P-LIVENESS.1
+demo-P-LIVENESS.1: ## P-LIVENESS.1 (ADR-0418): an open tool call is judged on evidence (its processes' CPU and disk counters, process churn, subagent transcript writes), marked "likely stuck" after 5 min of none (12 min with a live subagent), and stopped only by the user's Stop command, which ends just the processes that call started
+	$(BUN) run harness/scripts/demo_p_liveness_1.ts
 .PHONY: demo-P-GAME.1
 demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts
 	$(BUN) test desktop/arcade_games.test.ts
@@ -1212,3 +1216,13 @@ demo-P-BROWSER.4: ## P-BROWSER.4 (ADR-0415): the agent's visible browser came up
 .PHONY: demo-P-SWITCH.3
 demo-P-SWITCH.3: demo-P-SWITCH.2 ## P-SWITCH.3 (ADR-0410/0411): a new session is a new hub. Every spoke records the master session it was born under and keeps it for life; the orbit draws only the current session's spokes (plus hubless ones, so none is unreachable) and lists the other hubs. Proves the stamp against the real lane manager over the fake ACP agent (whose lane children mint their own session ids), the hub filter and the hub list.
 	$(BUN) test $(TEST_IGNORES) desktop/fleet_lanes.test.ts desktop/renderer/orbit_layout.test.ts harness/mcp/agent_firewall.integration.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.0
+demo-P-TUI.0: ## P-TUI.0 (ADR-0419): the engine discovery seam. The engine publishes engine-discovery-<port>.json (0600, port + per-launch nonce + UI token) into LUCID_DATA_ROOT (or ~/.omp standalone) on boot and removes it on exit; a terminal client (lucid hub, docs/TUI.md) finds it and must win the ADR-0305 health handshake against the file's own nonce before trusting anything - a stale file, a recycled port or a squatter verifies dead, fail-closed. Proves it against the REAL dev.ts engine: publish, verify, two concurrent token'd clients, squatter refusal, removal on SIGTERM.
+	$(BUN) run desktop/scripts/demo_p_tui_0.ts
+	$(BUN) test $(TEST_IGNORES) desktop/engine_discovery.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.1
+demo-P-TUI.1: demo-P-TUI.0 ## P-TUI.1 part (ADR-0420): `lucid hub` - the terminal hub as a PANE MULTIPLEXER (herdr/tmux idiom, operator direction 2026-09-28). Attaches to the running engine through the discovery seam only (never a guessed port); a binary split tree of panes each hosting a capability deck (Overview, Security with audited approve/dismiss, Fleet, Sessions, Audit, Usage) over the SAME /api routes the GUI calls; | and - split, tab walks focus, z zooms, x closes, 1-6 rebinds, hostile engine strings flatten to single rows. Proves it headless against the REAL engine: attach, real facts, side-by-side split, zoom/close, honest engine-unreachable status.
+	$(BUN) run desktop/scripts/demo_p_tui_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts

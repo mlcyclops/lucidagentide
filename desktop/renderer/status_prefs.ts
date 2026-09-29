@@ -25,7 +25,6 @@
 // these every second. Storage failures degrade to the defaults and never throw.
 
 import { ETA_ESTIMATING, humanMs, type ProgressView } from "../turn_progress.ts";
-import type { SequenceEntry } from "../workspace_gate.ts";
 
 export type StatusDetail = "line" | "full";
 
@@ -85,6 +84,11 @@ export function ringView(p: ProgressView, showEta: boolean, restart = "Restart a
     const ran = p.elapsedMs > 0 ? ` ${sofar}` : "";
     return { pct: e.percent, tone: "dead", tip: `Progress: stopped|The agent process exited. Use ${restart} below; the conversation is kept.${ran}` };
   }
+  // P-LIVENESS.1 (ADR-0418): an open call with no activity for minutes is marked in red too; the fix stays
+  // the user's (Stop command or restart), LUCID does not act on it.
+  if (p.liveness.state === "stuck") {
+    return { pct: e.percent, tone: "dead", tip: `Progress: likely stuck|The running tool call is ${p.liveness.label}. Use Stop command or ${restart} below; LUCID will not stop it on its own. ${sofar}` };
+  }
   if (e.typicalMs === null || e.percent === null) {
     return { pct: null, tone: "run", tip: `Progress|Working. This machine has not finished enough turns yet to show how far along a turn is; the ring fills in once it has. ${sofar}` };
   }
@@ -101,12 +105,3 @@ export function shownEta(phrase: string, showEta: boolean): string {
   return showEta && phrase !== ETA_ESTIMATING ? phrase : "";
 }
 
-/** One folder-queue entry's timing words. Pure. With the estimate off, no expected time is ever printed. */
-export function queueWhen(e: SequenceEntry, now: number, showEta: boolean): string {
-  if (e.state === "running") {
-    const since = `running since ${humanMs(Math.max(0, now - e.sinceAt))} ago`;
-    return showEta && e.etaMs !== null ? `${since}, about ${humanMs(e.etaMs)} left (est.)` : since;
-  }
-  if (!showEta) return "waits its turn";
-  return e.expectedStartAt !== null ? `waits, starts in about ${humanMs(Math.max(0, e.expectedStartAt - now))} (est.)` : "waits, start time unknown";
-}

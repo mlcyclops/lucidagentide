@@ -46,9 +46,9 @@ import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { describeTool } from "./tool_describe.ts"; // P-PROGRESS.1: what a tool call is doing, in plain words
 import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, etaPhrase, humanMs, NO_ESTIMATE, progressLine, QUIET_MS, STREAMING_MS, wholeEtaPhrase, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) progress view helpers
-import { queueWhen, ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
+import { ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
-import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (type only: the module itself is engine-side)
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (type only: the module itself is engine-side)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
@@ -2254,32 +2254,35 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   // P-PROGRESS.1: when the agent process is gone, ONE line under the HUD says so, with the action that fixes
   // it (the beta.10 quiet footer). P-PROGRESS.3: shown whenever the strip below is closed.
   const deadRow = el(`<div class="hud-dead" hidden><span class="hud-dead-note">The agent process exited. Restart it here; the conversation is kept.</span><button class="btn-mini hud-restart" type="button">Restart agent</button></div>`);
+  // P-LIVENESS.1 (ADR-0418): the same quiet line for an open tool call marked likely stuck (no CPU, disk or
+  // subagent activity for minutes). It offers the user the two ways out; LUCID takes neither on its own.
+  const stuckRow = el(`<div class="hud-dead hud-stuck" hidden><span class="hud-dead-note"></span><button class="btn-mini hud-stopcall" type="button" hidden data-tip="Stop command|Ends only the processes this tool call started. The agent is told why and continues; the turn keeps running.">Stop command</button><button class="btn-mini hud-restart" type="button">Restart agent</button></div>`);
   // P-PROGRESS.1: the progress strip under the HUD: a bar (the history estimate, 95% at most while the
   // turn runs), the progress line, the liveness pill (with the restart action when the agent process is
-  // gone), and the folder queue while this turn waits its turn. Every text run is its own block.
+  // gone). Every text run is its own block.
   // P-PROGRESS.3 (ADR-0412): closed unless Settings, Working status is "Full detail" or the user opened it
   // with Details for this turn; the bar and every number follow the experimental-estimate switch.
   const prog = el(`<div class="hud-progress" hidden>
     <div class="hud-bar"><div class="hud-fill"></div></div>
     <div class="hud-progress-line"><span class="hud-est"></span></div>
-    <div class="hud-alive-row"><span class="hud-alive" data-state="idle"></span><span class="hud-signal"></span><button class="btn-mini hud-restart" type="button" hidden>Restart agent</button></div>
-    <div class="hud-queue" hidden></div>
+    <div class="hud-alive-row"><span class="hud-alive" data-state="idle"></span><span class="hud-signal"></span><button class="btn-mini hud-stopcall" type="button" hidden data-tip="Stop command|Ends only the processes this tool call started. The agent is told why and continues; the turn keeps running.">Stop command</button><button class="btn-mini hud-restart" type="button" hidden>Restart agent</button></div>
   </div>`);
-  textEl.append(streamEl, hud, deadRow, prog); // status sits BELOW the line that's filling in
+  textEl.append(streamEl, hud, deadRow, stuckRow, prog); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
   let progress: ProgressView | null = null, progressAt = 0; // the engine's last view + when it arrived (aged locally)
   const progEst = $(".hud-est", prog) as HTMLElement, progFill = $(".hud-fill", prog) as HTMLElement, progBar = $(".hud-bar", prog) as HTMLElement;
   const progAlive = $(".hud-alive", prog) as HTMLElement, progSignal = $(".hud-signal", prog) as HTMLElement, progRestart = $(".hud-restart", prog) as HTMLButtonElement;
-  const progQueue = $(".hud-queue", prog) as HTMLElement;
+  const stopCallButtons = [$(".hud-stopcall", prog) as HTMLButtonElement, $(".hud-stopcall", stuckRow) as HTMLButtonElement]; // P-LIVENESS.1
   const hudMore = $(".hud-more", hud) as HTMLButtonElement;
-  // P-PROGRESS.3: `stripUsed` = the engine sent something the strip shows (a progress view or the folder
-  // queue); `detailOpen` = the user opened it for this turn with Details.
+  // P-PROGRESS.3: `stripUsed` = the engine sent something the strip shows (a progress view); `detailOpen` =
+  // the user opened it for this turn with Details.
   let stripUsed = false, detailOpen = false, stripSettled = false;
   const syncStrip = () => {
     const full = statusDetail() === "full";
     prog.hidden = !stripUsed || !(full || detailOpen);
     // The quiet Restart line stands in for the strip's red pill whenever the strip is closed.
     deadRow.hidden = progress?.liveness.state !== "dead" || !prog.hidden;
+    stuckRow.hidden = progress?.liveness.state !== "stuck" || !prog.hidden; // P-LIVENESS.1: same rule
     hudMore.hidden = !stripUsed || full || stripSettled;
     hudMore.textContent = detailOpen ? "Hide details" : "Details";
     hudMore.setAttribute("aria-expanded", String(detailOpen));
@@ -2305,7 +2308,17 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     const p = progress;
     // P-INTERJECT.3: the Check-in card reads the same verdict. P-PROGRESS.3: only with Full detail, or when the
     // process is gone (the ADR-0409 amendment keeps every other liveness label out of the quiet default).
-    liveTurn.alive = statusDetail() === "full" || p.liveness.state === "dead" ? p.liveness.label : "";
+    liveTurn.alive = statusDetail() === "full" || p.liveness.state === "dead" || p.liveness.state === "stuck" ? p.liveness.label : "";
+    liveTurn.open = p.liveness.state !== "idle" && p.liveness.state !== "dead" ? p.stepsOpen.length : 0;
+    // P-LIVENESS.1 (ADR-0418): a call marked likely stuck shows in the quiet default too, with its way out.
+    const stuck = p.liveness.state === "stuck";
+    for (const b of stopCallButtons) b.hidden = !(stuck && p.liveness.canStopCall);
+    if (stuck) {
+      const note = $(".hud-dead-note", stuckRow) as HTMLElement;
+      const line = `The running tool call is ${p.liveness.label}. It may be waiting on something that will never answer.`;
+      if (note.textContent !== line) note.textContent = line;
+      if (stuckRow.getAttribute("data-tip") !== p.liveness.detail) stuckRow.setAttribute("data-tip", p.liveness.detail);
+    }
     if (prog.hidden) return; // nothing below is on screen
     const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
     const eta = statusEta();
@@ -2320,7 +2333,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     progAlive.setAttribute("data-tip", p.liveness.detail);
     // The age words move between engine samples; a fresh signal within the streaming window says so.
     progSignal.textContent = running ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago${aged.lastSignalMs >= QUIET_MS && !aged.stepsOpen.length ? " (quiet)" : ""}`) : "";
-    progRestart.hidden = p.liveness.state !== "dead";
+    progRestart.hidden = p.liveness.state !== "dead" && !stuck;
   };
   // P-PROGRESS.2: the whole prompt's ETA on the HUD line itself: this turn against its history plus every
   // delegated run still working. Until the history supports a number it says "ETA estimating" (and pulses),
@@ -2343,7 +2356,18 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   // P-PROGRESS.1: the in-place recovery the watchdog performs, on demand: restart the agent process, reload
   // the same session. The whole app never needs to restart for this. P-PROGRESS.3: the quiet Restart line and
   // the strip's pill carry the same action (only one is on screen at a time).
-  const restartButtons = [progRestart, $(".hud-restart", deadRow) as HTMLButtonElement];
+  const restartButtons = [progRestart, $(".hud-restart", deadRow) as HTMLButtonElement, $(".hud-restart", stuckRow) as HTMLButtonElement];
+  // P-LIVENESS.1 (ADR-0418): the user's Stop command, from the quiet line or the open strip.
+  const stopCall = () => {
+    for (const b of stopCallButtons) { b.disabled = true; b.textContent = "Stopping\u2026"; }
+    void bridge.stopCall("master").then((r) => {
+      for (const b of stopCallButtons) { b.disabled = false; b.textContent = "Stop command"; }
+      if (!r || !r.ok) { showToast({ tone: "warn", title: "Nothing was stopped", desc: r?.reason ?? "The engine did not answer.", timeout: 9000 }); return; }
+      for (const b of stopCallButtons) b.hidden = true;
+      showToast({ tone: "ok", title: "Command stopped", desc: r.reason, timeout: 6000 });
+    });
+  };
+  for (const b of stopCallButtons) b.addEventListener("click", stopCall);
   const restartAgent = () => {
     for (const b of restartButtons) { b.disabled = true; b.textContent = "Restarting\u2026"; }
     void bridge.recoveryRecover().then((r) => {
@@ -2354,20 +2378,6 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     });
   };
   for (const b of restartButtons) b.addEventListener("click", restartAgent);
-  const clearQueue = () => { if (!progQueue.hidden) { progQueue.hidden = true; progQueue.innerHTML = ""; } };
-  const paintQueue = (w: WaitView) => {
-    stripUsed = true;
-    progQueue.hidden = false;
-    syncStrip();
-    progQueue.innerHTML = `<div class="hud-queue-head"></div>` + w.sequence.map((_, i) => `<div class="hud-queue-row" data-q="${i}"></div>`).join("");
-    ($(".hud-queue-head", progQueue) as HTMLElement).textContent = `Turns in this folder (${w.folder}), in order:`;
-    w.sequence.forEach((e, i) => {
-      const row = $(`[data-q="${i}"]`, progQueue) as HTMLElement | null;
-      if (!row) return;
-      row.textContent = `${e.position + 1}. ${e.name}: ${queueWhen(e, Date.now(), statusEta())}`;
-      row.classList.toggle("me", e.id === "master");
-    });
-  };
   // The consolidating activity window lives between the answer and the HUD; created lazily
   // on the first tool event so a pure-text turn shows nothing extra.
   let thoughts: ThoughtsWin | null = null;
@@ -2451,11 +2461,12 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // strip closes with the turn; Full detail keeps it, settled.
     detailOpen = false; stripSettled = true; syncStrip(); paintRing(); // the settled line's check replaces the ring
     if (progress) {
-      progress = null; clearQueue(); syncStrip();
+      progress = null; syncStrip();
       progBar.classList.remove("indeterminate"); progFill.style.width = "100%";
       progEst.textContent = `done in ${humanMs(Date.now() - t0)}`;
       progAlive.dataset.state = "idle"; progAlive.textContent = "done"; progAlive.removeAttribute("data-tip");
       progSignal.textContent = ""; progRestart.hidden = true;
+      for (const b of stopCallButtons) b.hidden = true; // P-LIVENESS.1
     }
     reasoning?.finish(Date.now() - t0);
     thoughts?.finish(Date.now() - t0);
@@ -2588,7 +2599,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       return;
     }
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
-    if (e.type === "token") { clearQueue(); reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
+    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
     else if (e.type === "thinking") {
       // First reasoning chunk: spin up the live thinking block above the answer.
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
@@ -2610,7 +2621,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // P-PROGRESS.2: the HUD says what the call is doing ("Reading PR 398") when the call says; otherwise the
       // category line, and "Processing…" for a call that names nothing.
       const desc = describeTool({ name: e.name, kind: e.name, title: e.detail, intent: e.intent, input: e.input, path: e.code?.path });
-      sawTool = true; clearQueue(); setPhase(desc.informative ? desc.doing : phaseForTool(e.name, e.detail)); paintHud();
+      sawTool = true; setPhase(desc.informative ? desc.doing : phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
       thoughts.step({ id: e.id, name: e.name, detail: e.detail, code: e.code, input: e.input, intent: e.intent });
       // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it
@@ -2648,10 +2659,10 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     }
     // P-PROGRESS.1: the engine's progress view (every few seconds and on every settled call). Never activity;
     // the strip under the HUD paints it and ages it locally until the next one.
-    else if (e.type === "progress") { progress = e.progress; progressAt = Date.now(); if (e.progress.liveness.state !== "idle") clearQueue(); paintProgress(); }
-    // P-PROGRESS.1: this turn is in line behind another worker's turn in the same folder. Nothing is running
-    // yet; say so, and show the order and the expected start times. The next real event clears it.
-    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish in this folder`); paintHud(); paintQueue(e.wait); scrollChat(); }
+    else if (e.type === "progress") { progress = e.progress; progressAt = Date.now(); paintProgress(); }
+    // P-WAIT.1: one of this turn's writes waits for a file another worker's running turn is editing. Say
+    // whom it waits for and which file. The next real event replaces the phase.
+    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish with ${e.wait.file}`); paintHud(); scrollChat(); }
     // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
     // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
     else if (e.type === "judgment") {
@@ -2926,7 +2937,7 @@ const STATUS_ASK = "Please give a brief status update: what is finished, what yo
 
 /** P-INTERJECT.3: renderer mirror of the live turn for the Check-in card - the phase line the HUD
  *  shows, plus the last pending-call snapshot a { type:"slow" } event carried (aged via pendingAt). */
-const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0, alive: "" /* P-PROGRESS.1: the liveness label */ };
+const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0, alive: "" /* P-PROGRESS.1: the liveness label */, open: 0 /* P-LIVENESS.1: open tool calls in the last progress view */ };
 
 /** The turn on the composer's target ended: send the first HELD prompt, unless the user has typed since
  *  (then it stays staged rather than clobbering their draft). Shared by the master turn's settle and the
@@ -3470,7 +3481,11 @@ function openCheckinCard(): void {
     // the ask goes to the composer's target. It was hard-wired to "master", which parked it on an idle
     // master while the spoke that was actually working never saw it.
     void bridge.interject(isLaneTarget(state.composerTarget) ? state.composerTarget.laneId : "master", STATUS_ASK, { live: true }).then((r) => {
-      if (r.ok) addNoteChip("Check-in sent - the agent will answer at its next tool boundary.");
+      // P-LIVENESS.1: with a call open the note cannot land until that call returns; say so, so silence
+      // after a Check-in is not read as a dead agent.
+      if (r.ok) addNoteChip(!isLaneTarget(state.composerTarget) && liveTurn.open > 0
+        ? "Check-in queued - the agent is inside a running tool call and reads it when that call returns."
+        : "Check-in sent - the agent will answer at its next tool boundary.");
       else showToast({ tone: "warn", title: "Check-in not delivered", desc: `${r.reason[0]!.toUpperCase()}${r.reason.slice(1)}.`, timeout: 6000 });
     });
   });
@@ -15757,6 +15772,7 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
+    stopCall: bridge.stopCall, // P-LIVENESS.1: Stop command on a lane call marked likely stuck
     repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New lane form picks a repo instead of typing
     repoGithub: bridge.repoGithub,
     openUrl: (url) => void openAuthUrl(url),

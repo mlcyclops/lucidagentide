@@ -37,8 +37,11 @@ import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
 import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
-import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
-import { WorkspaceGate, type FolderQueue, type WaitView } from "./workspace_gate.ts"; // P-PROGRESS.1
+import { DurationHistory, PROGRESS_TICK_MS, QUIET_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { PulseTracker, oldestCallStart, pulseVerdict, stoppedCallNote, type SubagentSignal } from "./call_pulse.ts"; // P-LIVENESS.1 (ADR-0418)
+import { stopCallProcesses, workerProcesses } from "./call_pulse_proc.ts"; // P-LIVENESS.1
+import type { ProcRow } from "./leftover_reaper.ts";
+import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
 import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import type { RepoContext } from "./repo_identity.ts";
@@ -101,7 +104,7 @@ export interface LaneView {
   /** P-PROGRESS.1: the lane's live progress view (elapsed, last signal, open steps, liveness, estimate).
    *  Present while a turn runs or the child is dead; absent when idle. Computed at status time. */
   progress?: ProgressView;
-  /** P-PROGRESS.1: the lane's turn is queued behind another worker's turn in the same folder. */
+  /** P-WAIT.1: one of the lane's writes waits for a file another worker's running turn is editing. */
   waiting?: WaitView;
   /** P-REPO.1 (ADR-0406): the repo this lane works on and where its commits go. Absent until the first
    *  background probe lands (the status poll never waits on git). */
@@ -128,7 +131,7 @@ export type LaneEvent =
   | { type: "tool"; id?: string; name: string; detail: string; code?: LaneToolCode; input?: string; intent?: string; status?: "open" | "done" | "failed"; elapsedMs?: number }
   /** P-PROGRESS.1: the lane's progress view, every PROGRESS_TICK_MS while its turn runs. Never activity. */
   | { type: "progress"; progress: ProgressView }
-  /** P-PROGRESS.1: this turn waits for another worker's turn in the same folder (workspace_gate.ts). */
+  /** P-WAIT.1: a write in this turn waits for a file another worker is editing (write_claims.ts). */
   | { type: "waiting"; wait: WaitView }
   | { type: "permission"; summary: string; kind: string }
   /** P-FLEET.L6: an ask was granted WITHOUT a human - full auto-mode or a standing session allow. */
@@ -159,9 +162,6 @@ export interface FleetStatusData {
     memHotMs: number;
   };
   masterModel: string;
-  /** P-PROGRESS.1: every folder with two or more workers on it right now (the master counts as one), in
-   *  run order with expected start times. Empty when nobody shares a folder. */
-  queues: FolderQueue[];
   /** P-SWITCH.3 (ADR-0410): the master session that is the hub RIGHT NOW. The orbit shows the spokes
    *  whose `hubSessionId` is this (or null); every other live spoke stays under its own hub, listed in
    *  the orbit's Hubs panel. null when the master has no session yet. */
@@ -268,9 +268,10 @@ export interface FleetLaneDeps {
    *  writing in its checkout, their task and dirty files). "" when the lane is alone. Best-effort: a
    *  rejected promise sends the prompt without it. */
   preface?: (lane: { id: string; name: string; cwd: string }) => Promise<string>;
-  /** P-PROGRESS.1: the folder lease shared with the master session, so a lane and the master (or two
-   *  lanes) never run turns in one folder at once. Absent means a gate of this manager's own. */
-  gate?: WorkspaceGate;
+  /** P-WAIT.1: the write claims shared with the master session, so two workers never write the same
+   *  file in overlapping turns. A lane's claims drop when its turn ends. Absent means claims of this
+   *  manager's own. */
+  claims?: WriteClaims;
   /** P-PROGRESS.1: turn and tool lengths shared with the master, for the estimate. */
   history?: DurationHistory;
   /** P-REPO.1 (ADR-0406): the repo tracker (repo_probe.ts). `observe` sees every tool_call, `peek` is a
@@ -357,21 +358,22 @@ interface Lane {
   /** P-FLEET.L3: staged prompts, drained FIFO when the lane goes idle. One turn at a time stands. */
   queue: { text: string; images: LaneImage[] }[];
   // -- P-PROGRESS.1 progress state ------------------------------------------------------------------
-  /** Epoch ms the current turn started (the lease request, before any wait); null when idle. */
+  /** Epoch ms the current turn started; null when idle. */
   turnStartedAt: number | null;
   /** Tool calls settled in the current turn. */
   stepsDone: number;
-  /** Set while the turn waits for the folder lease; cancel() aborts it. */
-  waitAbort: AbortController | null;
-  /** What the lane waits on, while it does. */
+  // -- P-WAIT.1 write-wait state -----------------------------------------------------------------
+  /** What one of the lane's writes waits on, while it does. */
   waiting: WaitView | null;
+  /** P-LIVENESS.1 (ADR-0418): the open-call watch, fed by the engine's process sampler. */
+  pulse: PulseTracker;
 }
 
 export class FleetLaneManager {
   readonly #lanes = new Map<string, Lane>();
   /** P-OWN.1: write/edit calls waiting for their terminal update, keyed lane id + NUL + toolCallId. */
   readonly #pendingWrites = new PendingWrites(1024);
-  readonly #gate: WorkspaceGate;
+  readonly #claims: WriteClaims;
   readonly #durations: DurationHistory;
   /** P-PWA-FOCUS.1: persistent cross-lane observers, present AND future lanes. Held here rather than in
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
@@ -389,7 +391,7 @@ export class FleetLaneManager {
   #autoDefault = false;
 
   constructor(deps: FleetLaneDeps) {
-    this.#gate = deps.gate ?? new WorkspaceGate({ now: deps.now ?? Date.now });
+    this.#claims = deps.claims ?? new WriteClaims({ now: deps.now ?? Date.now });
     this.#durations = deps.history ?? new DurationHistory();
     this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.carriedNotes ? { carriedNotes: deps.carriedNotes } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}), ...(deps.repo ? { repo: deps.repo } : {}) };
   }
@@ -469,8 +471,8 @@ export class FleetLaneManager {
       lastImages: [],
       turnStartedAt: null,
       stepsDone: 0,
-      waitAbort: null,
       waiting: null,
+      pulse: new PulseTracker(),
       canLoadSession: false,
       resumeContext: null,
       respawns: 0,
@@ -538,37 +540,11 @@ export class FleetLaneManager {
     lane.stepsDone = 0;
     this.#record(lane, { role: "user", text: images.length ? `${text}\n[attached ${images.length} image${images.length === 1 ? "" : "s"}]` : text });
     this.#setStatus(lane, "working");
-    // P-PROGRESS.1: the folder lease. A lane whose folder overlaps another worker's running turn WAITS its
-    // turn here, told what it waits on; cancel() aborts the wait. The lease is held until the turn settles.
-    let release: (() => void) | null = null;
+    // P-WAIT.1: no folder lease. The turn starts now, beside any other worker in the same folder; only
+    // a write to a file another worker's running turn is editing waits (write_claims.ts, via noteWriteWait).
     let progressTimer: ReturnType<typeof setInterval> | null = null;
     try {
-      lane.waitAbort = new AbortController();
-      try {
-        release = await this.#gate.acquire(
-          { id: lane.id, name: lane.name, cwd: lane.cwd, etaMs: () => this.#progress(lane).estimate.etaMs },
-          { signal: lane.waitAbort.signal, onWait: (w) => { lane.waiting = w; this.#emit(lane, { type: "waiting", wait: w }); } },
-        );
-      } catch (e) {
-        // Cancelled while waiting: nothing ran, so this is the ordinary cancelled outcome, not an error.
-        lane.waiting = null;
-        this.#foldLiveTurn(lane, e instanceof Error ? e.message : String(e));
-        this.#setStatus(lane, "awaiting-input");
-        this.#emit(lane, { type: "done" });
-        return;
-      } finally {
-        lane.waitAbort = null;
-      }
-      if (lane.waiting) {
-        // Admitted after a wait: the turn starts NOW. Time spent in line is neither this turn's length (the
-        // history would learn queue time as work, as the master's tSent already avoids) nor silence (the
-        // self-watch would probe the moment the turn begins).
-        const now = this.#deps.now();
-        lane.turnStartedAt = now;
-        lane.lastActivityAt = now;
-        lane.health = onActivity(lane.health, now);
-      }
-      lane.waiting = null;
+
       // Unref'd: a ticker must never be the reason the engine refuses to exit.
       progressTimer = setInterval(() => this.#emit(lane, { type: "progress", progress: this.#progress(lane) }), PROGRESS_TICK_MS);
       progressTimer.unref?.();
@@ -604,11 +580,13 @@ export class FleetLaneManager {
       if (/cancel/i.test(why)) { this.#setStatus(lane, "awaiting-input"); this.#emit(lane, { type: "done" }); }
       else { this.#setStatus(lane, "error"); this.#emit(lane, { type: "error", message: why }); }
     } finally {
-      if (progressTimer) clearInterval(progressTimer);
-      release?.();
+      clearInterval(progressTimer ?? undefined);
+      this.#claims.endTurn(lane.id); // P-WAIT.1: this turn's files are free for other workers
+      lane.waiting = null;
       lane.busy = false;
       lane.turnStartedAt = null;
       lane.openCalls.clear();
+      lane.pulse.reset(); // P-LIVENESS.1: the next turn starts a fresh watch
       lane.sinks.delete(sink);
     }
   }
@@ -620,7 +598,51 @@ export class FleetLaneManager {
       busy: lane.busy, dead: lane.client.isDead, startedAt: lane.turnStartedAt, lastActivityAt: lane.lastActivityAt,
       stepsDone: lane.stepsDone, stepsOpen: pendingSnapshot(lane.openCalls, now), lastHealth: lane.lastHealth,
       model: lane.model, scope: lane.sessionId ?? "", history: this.#durations, now, // P-PROGRESS.4
+      pulse: lane.openCalls.size ? lane.pulse.evidence : null,
     });
+  }
+
+  // -- P-LIVENESS.1 (ADR-0418): open-call evidence per lane, never an action ------------------------
+
+  /** Lanes the process sampler should look at now: a turn with an open call and nothing streamed for
+   *  QUIET_MS. Every other lane forgets its watch, so the next quiet stretch starts fresh. */
+  pulseTargets(): { laneId: string; sessionId: string | null; since: number }[] {
+    const now = this.#deps.now();
+    const out: { laneId: string; sessionId: string | null; since: number }[] = [];
+    for (const lane of this.#lanes.values()) {
+      const want = lane.busy && !lane.waiting && lane.openCalls.size > 0 && lane.client.pid != null && now - lane.lastActivityAt >= QUIET_MS;
+      if (!want) { lane.pulse.reset(); continue; }
+      out.push({ laneId: lane.id, sessionId: lane.sessionId, since: lane.turnStartedAt ?? now });
+    }
+    return out;
+  }
+
+  /** Fold one process-table look (null = the look failed) into a lane's watch, and repaint its card. */
+  observePulse(laneId: string, rows: ProcRow[] | null, at: number, subagent: SubagentSignal): void {
+    const lane = this.#lanes.get(laneId);
+    const pid = lane?.client.pid;
+    const oldest = lane ? oldestCallStart(lane.openCalls) : null;
+    if (!lane || pid == null || oldest === null) { lane?.pulse.reset(); return; }
+    lane.pulse.observe({ at, work: rows ? workerProcesses(rows, pid, process.platform) : null, callStartedAt: oldest, subagent });
+    this.#emit(lane, { type: "progress", progress: this.#progress(lane) });
+  }
+
+  /** The user's "Stop command" on a lane: end only what the oldest open call started, tell the agent why,
+   *  and leave the turn running. */
+  async stopOpenCall(laneId: string): Promise<{ ok: boolean; stopped: string[]; reason: string }> {
+    const lane = this.#lanes.get(laneId);
+    const pid = lane?.client.pid;
+    const oldest = lane ? oldestCallStart(lane.openCalls) : null;
+    if (!lane || !lane.busy || pid == null || oldest === null) return { ok: false, stopped: [], reason: "No tool call is running in this lane." };
+    const now = this.#deps.now();
+    const label = pendingSnapshot(lane.openCalls, now)[0]?.label ?? "the running call";
+    const ev = lane.pulse.evidence;
+    const flatMs = ev ? pulseVerdict(ev, lane.lastActivityAt, now - oldest).flatMs : 0;
+    const r = await stopCallProcesses(pid, oldest);
+    if (!r.stopped.length) return { ok: false, stopped: [], reason: r.failed.length ? `Could not stop ${r.failed.join(", ")}.` : "The running call has no process of its own to stop. Use Stop to end the turn." };
+    try { this.#deps.interject?.(lane.id, stoppedCallNote(label, flatMs)); } catch { /* the kill already ended the call */ }
+    lane.pulse.reset();
+    return { ok: true, stopped: r.stopped, reason: `Stopped ${r.stopped.join(", ")}. The agent is told why and continues.${r.failed.length ? ` Could not stop ${r.failed.join(", ")}.` : ""}` };
   }
 
   /** Re-send the lane's last prompt + its images (recovering first if the lane is in error). No recorded
@@ -728,9 +750,6 @@ export class FleetLaneManager {
   cancel(laneId: string): { ok: boolean } {
     const lane = this.#lanes.get(laneId);
     if (!lane?.sessionId) return { ok: false };
-    // P-PROGRESS.1: a turn still waiting for its folder has nothing in omp to cancel; leaving the line IS
-    // the cancel.
-    if (lane.waitAbort) { lane.waitAbort.abort(); return { ok: true }; }
     lane.client.notify("session/cancel", { sessionId: lane.sessionId });
     return { ok: true };
   }
@@ -819,9 +838,17 @@ export class FleetLaneManager {
         memHotMs: a.memHotMs,
       },
       masterModel: this.#deps.masterModel(),
-      queues: this.#gate.queues(), // P-PROGRESS.1
       hub: this.#hub(),
     };
+  }
+
+  /** P-WAIT.1: one of `laneId`'s writes waits for another worker's file (null: the wait ended). The
+   *  card reads it from the status view and the event; a quiet no-op for an unknown or idle lane. */
+  noteWriteWait(laneId: string, w: WaitView | null): void {
+    const lane = this.#lanes.get(laneId);
+    if (!lane?.busy) return;
+    lane.waiting = w;
+    if (w) this.#emit(lane, { type: "waiting", wait: w });
   }
 
   /** How many lanes are actually carrying work right now (metadata; nothing gates on it). */
@@ -1368,11 +1395,10 @@ export class FleetLaneManager {
       ...(lane.lastHealth ? { lastHealth: { ...lane.lastHealth } } : {}),
       ...(lane.lastUsage ? { usage: { ...lane.lastUsage } } : {}),
       ...(lane.pending ? { pendingApproval: { summary: lane.pending.summary, kind: lane.pending.kind } } : {}),
-      // P-PROGRESS.1: live progress while a turn runs or the child is dead; the wait while the folder is taken.
+      // P-PROGRESS.1: live progress while a turn runs or the child is dead; P-WAIT.1: the file one of its
+      // writes waits for, while it does.
       ...(lane.busy || lane.client.isDead ? { progress: this.#progress(lane) } : {}),
-      // Recomputed like `progress`: the view taken when the wait began froze its "starts in" (and its place
-      // in line) for the whole wait, so the card disagreed with the folder queue beside it.
-      ...(lane.waiting ? { waiting: this.#gate.waitView(lane.id) ?? lane.waiting } : {}),
+      ...(lane.waiting ? { waiting: lane.waiting } : {}),
     };
   }
 }
