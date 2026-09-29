@@ -1991,6 +1991,14 @@ function setRecoveryChecking(on: boolean): void {
   window.clearTimeout(recoveryCheckTimer);
   recoveryCheckTimer = on ? window.setTimeout(() => { setRecoveryChecking(false); setSendEnabled(); }, RECOVERY_CHECK_MAX_MS) : 0;
 }
+// Startup grace: the engine is still coming up for the first minute after the window opens, so a probe
+// that fails then is expected, not a fault. The amber composer button (quiet reconnect) would read as
+// "broken" to a user who just launched the app. Within the grace the probe retries silently; the button
+// appears only when the engine is still not answering after the grace has passed.
+const STARTUP_GRACE_MS = 60_000;
+const STARTUP_RETRY_MS = 3_000;
+const windowOpenedAt = Date.now();
+let startupRetryTimer = 0;
 function leaveTurnView(): number {
   ++turnViewEpoch;
   activeTurnView?.detach(); activeTurnView = null;
@@ -10073,6 +10081,7 @@ async function settleMasterAfterReturn(status: TurnStatus | null, owner: number)
 }
 async function recoverMasterTurn(): Promise<void> {
   if (isLaneTarget(state.composerTarget) || activeTurnView || goalLoopRunning) return;
+  window.clearTimeout(startupRetryTimer); startupRetryTimer = 0; // a newer probe supersedes a scheduled retry
   const owner = ++turnViewEpoch;
   $("#turnReconnect")?.remove();
   // Status discovery is not a running turn. Keep Send blocked without offering Stop.
@@ -10102,6 +10111,12 @@ async function recoverMasterTurn(): Promise<void> {
     // because there the user needs to know their history may be out of date before they send again.
     if (!$("#thread")?.querySelector(".turn, .msg, .asst, .user")) {
       setRecoveryChecking(false); setSendEnabled();
+      // Inside the startup grace the engine is probably still booting: retry quietly, no amber button.
+      if (Date.now() - windowOpenedAt < STARTUP_GRACE_MS) {
+        hideQuietReconnect();
+        startupRetryTimer = window.setTimeout(() => { if (owner === turnViewEpoch) void recoverMasterTurn(); }, STARTUP_RETRY_MS);
+        return;
+      }
       showQuietReconnect(() => void recoverMasterTurn());
       return;
     }
