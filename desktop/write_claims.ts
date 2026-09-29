@@ -18,7 +18,7 @@
 // once for the second one (deadlock), never left to time out. Pure decisions over two small tables; the
 // only timer is the caller's own wait bound.
 
-import { basename, isAbsolute, resolve } from "node:path";
+import { posix, win32 } from "node:path";
 import { normalizeCheckoutPath } from "./checkout_owners.ts";
 
 /** The longest one write may wait in the engine. omp fails a tool_call hook that runs past 30 s (and fails
@@ -57,8 +57,12 @@ export class WriteClaims {
    *  it waits for the other. `onWait` fires with the view when the wait starts or its holder changes, and
    *  once with null when a wait that was announced ends (either way). */
   async acquire(me: Claimant, paths: string[], cwd: string, opts: { waitMs: number; onWait?: (w: WaitView | null) => void }): Promise<WriteVerdict> {
-    // One key per file: resolved against `cwd`, forward slashes, case-folded on Windows.
-    const keys = [...new Set(paths.map((p) => normalizeCheckoutPath(isAbsolute(p) ? resolve(p) : resolve(cwd, p), this.#platform)))];
+    // One key per file: resolved against `cwd`, forward slashes, case-folded on Windows. Resolution
+    // follows the INJECTED platform, not the host: a win32-configured instance must read "C:\\Repo"
+    // as absolute even in a test running on darwin/linux, where the host isAbsolute() says no and
+    // resolve() would silently prefix the test runner's cwd (the workspace_gate.ts bug, refound here).
+    const path = this.#platform === "win32" ? win32 : posix;
+    const keys = [...new Set(paths.map((p) => normalizeCheckoutPath(path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p), this.#platform)))];
     const deadline = this.#now() + Math.max(0, opts.waitMs);
     let announced: string | null = null;
     try {
@@ -75,7 +79,7 @@ export class WriteClaims {
           return { held: false };
         }
         const on = this.#claims.get(heldKey)!;
-        const file = basename(heldKey) || heldKey;
+        const file = posix.basename(heldKey) || heldKey; // keys are already forward-slash normalized
         if (this.#reaches(on.id, me.id)) return { held: true, on: { ...on }, file, why: "deadlock" };
         const left = deadline - this.#now();
         if (left <= 0) return { held: true, on: { ...on }, file, why: "busy" };
