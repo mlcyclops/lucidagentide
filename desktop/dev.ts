@@ -15,7 +15,7 @@ import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
 import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
-import { discoveryDir, discoveryPath, removeDiscovery, writeDiscovery } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0416)
+import { discoveryDir, discoveryPath, removeDiscovery, writeDiscovery } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419)
 import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -5390,7 +5390,7 @@ return Bun.serve({
 }
 }
 
-// P-TUI.0 (ADR-0416): publish this launch's coordinates for terminal clients (`lucid hub`, docs/TUI.md).
+// P-TUI.0 (ADR-0419): publish this launch's coordinates for terminal clients (`lucid hub`, docs/TUI.md).
 // One 0600 file per bound port under userData (or ~/.omp standalone): port, per-launch nonce, UI token,
 // pid, version, flavor. A client must still win the ADR-0305 health handshake against the file's nonce
 // before trusting anything, so a stale or squatted-over file is inert. Standalone runs (no Electron main)

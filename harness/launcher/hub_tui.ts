@@ -1,13 +1,13 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.1 (part) - `lucid hub`: the terminal hub as a PANE MULTIPLEXER (docs/TUI.md, ADR-0417).
+// P-TUI.1 (part) - `lucid hub`: the terminal hub as a PANE MULTIPLEXER (docs/TUI.md, ADR-0420).
 //
 // The operator's model is herdr/cmux, not a page switcher: a branded chrome (top bar, deck sidebar
 // with live badges, status bar), panes split out of a binary tree, any capability deck in any pane.
 // Every deck is a thin renderer over the SAME engine /api the desktop renderer calls (capability
 // parity by construction). The engine is found and proven through the P-TUI.0 discovery seam
-// (ADR-0416) - and when none is running the hub SPAWNS its own headless engine and owns its
+// (ADR-0419) - and when none is running the hub SPAWNS its own headless engine and owns its
 // lifetime, so `lucid hub` is one command with no setup. The gate stays in the engine's omp child:
 // this client scans nothing and releases nothing by itself; the Security deck's a/i call the same
 // audited human-only routes as the GUI panel.
