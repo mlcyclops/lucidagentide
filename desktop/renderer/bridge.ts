@@ -356,13 +356,19 @@ export type AccountsSnapshot = Record<string, AccountView[]>;
 /** P-JEV.1 (ADR-0374): mirrors judgment_policy.ResolvedJudgmentProvider. `stored` is the user's choice;
  *  `effective` is what omp is told (lockdown pins "llm"); `clamped` says they differ because of the lock. */
 export interface JudgmentView {
-  stored: "auto" | "typesafe" | "llm";
-  effective: "auto" | "typesafe" | "llm";
+  stored: "none" | "auto" | "typesafe" | "llm";
+  effective: "none" | "auto" | "typesafe" | "llm";
   clamped: boolean;
   locked: boolean;
   /** P-JEV.2 (ADR-0377): can Jev answer a judgment in the running child (effective mode + a saved key).
    *  Gates the per-turn "Jev not consulted" note. */
   configured: boolean;
+  /** P-JEV.5 (ADR-0416): the judge candidates omp is told at the next spawn, in order (`provider/model`).
+   *  Empty = no judge model (omp still asks the session's own chat model for the effort pick under
+   *  Thinking: Auto). */
+  chain: string[];
+  /** P-JEV.5: local models no longer asked after failing more than once, until reset. */
+  bans: { label: string; failures: number; lastError: string; lastAt: number }[];
 }
 // P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
 export interface VoiceSettingsView {
@@ -857,6 +863,8 @@ export interface LucidBridge {
   /** P-JEV.1 (ADR-0374): the judgment backend (omp `providers.judgmentProvider`), stored vs effective. */
   judgment(): Promise<JudgmentView | null>;
   setJudgment(mode: JudgmentView["stored"]): Promise<JudgmentView | null>;
+  /** P-JEV.5 (ADR-0416): forget every local-judge failure; the engine restarts the child when a ban was live. */
+  judgmentResetBans(): Promise<JudgmentView | null>;
   // P-ACCT.1 (ADR-0375): named multi-account per provider. Every mutation returns the refreshed
   // snapshot (providerId -> accounts) so the UI repaints from the server's truth, never a client guess.
   accounts(): Promise<AccountsSnapshot | null>;
@@ -1633,6 +1641,7 @@ export const bridge: LucidBridge = {
   setVoiceSettings: (patch) => post("/api/voice-settings", patch),
   judgment: () => getData("/api/judgment"), // P-JEV.1 (ADR-0374)
   setJudgment: (mode) => post("/api/judgment", { mode }), // P-JEV.1: server clamps + restarts omp when the pin changes
+  judgmentResetBans: () => post("/api/judgment/bans/reset", {}), // P-JEV.5
   // P-ACCT.1 (ADR-0375): named provider accounts. Mutations answer with the refreshed snapshot.
   accounts: () => getData("/api/accounts"),
   accountAdd: (providerId, name, key) => post("/api/accounts/add", { providerId, name, key }),

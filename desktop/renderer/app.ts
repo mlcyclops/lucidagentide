@@ -4740,30 +4740,41 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
     <div class="set-note" id="voiceNote"></div>`;
   return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
 }
-// P-JEV.1 (ADR-0374): the Judgment card. Jev (TypeSafe System One) answers omp's typed judgments (choice /
-// yes-no / score) instead of a chat model. The key rides the same provCard plumbing as ElevenLabs; the mode
-// select drives omp's `providers.judgmentProvider`. The SERVER owns the lockdown clamp: under AskSage lockdown
-// `effective` is always "llm" and the select is disabled, with the stored choice shown so lifting the lock
-// visibly restores it. Nothing here ever enters the model picker (TypeSafe has no chat models).
+// P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416): the Judgment card. omp answers typed judgments (choice / yes-no /
+// score) through its `judge` model role; LUCID owns that role's chain (desktop/judgment_policy.ts). The
+// default is None: judging is opt-in. The key rides the same provCard plumbing as ElevenLabs. The SERVER
+// owns the lockdown clamp: under AskSage lockdown `effective` is `llm` (or `none`) and the select is disabled,
+// with the stored choice shown so lifting the lock visibly restores it. Nothing here ever enters the model
+// picker (TypeSafe has no chat models). The card also shows the chain omp is told and the local models
+// banned after failing more than once, with the one Reset that forgets those failures.
 function secJudgment(auth: AuthStatus | null, j: JudgmentView | null): string {
   const tsKey = (auth?.others ?? []).find((p) => p.id === "typesafe");
   const keyCard = tsKey ? provCard(tsKey) : "";
-  const stored = j?.stored ?? "auto";
+  const stored = j?.stored ?? "none";
   const sel = (v: boolean) => (v ? " selected" : "");
-  const lockNote = j?.locked
-    ? `<div class="set-note danger" id="judgmentLockNote">${icon("shield", 12)} <b>AskSage lockdown is on:</b> judgments are pinned to the <b>LLM chain</b> (your gov-routed models). A judgment carries conversation text and tool output to the judge, so TypeSafe's public endpoint is CUI backflow under lockdown. Your saved choice (<b>${esc(stored)}</b>) is kept and takes effect again when lockdown is turned off.</div>`
+  const lockNote = j?.locked && j.clamped
+    ? `<div class="set-note danger" id="judgmentLockNote">${icon("shield", 12)} <b>AskSage lockdown is on:</b> judgments are pinned to the <b>chat model</b> (your gov-routed models). A judgment carries conversation text and tool output to the judge, so TypeSafe's public endpoint is CUI backflow under lockdown. Your saved choice (<b>${esc(stored)}</b>) is kept and takes effect again when lockdown is turned off.</div>`
+    : "";
+  const chain = j?.chain ?? [];
+  const chainText = chain.length ? chain.map((m) => `<code>${esc(m)}</code>`).join(" \u2192 ") : "<b>no judge model</b>";
+  const bans = j?.bans ?? [];
+  const banRows = bans.map((b) => `<div class="judge-ban"><code>${esc(b.label)}</code><span class="abadge warn">${b.failures} failed</span><span class="judge-ban-why">${esc(b.lastError)}</span></div>`).join("");
+  const banBlock = bans.length
+    ? `<div class="set-note warn" id="judgmentBans">${icon("info", 12)} <span><b>Not asked any more</b> (a local model that failed more than once):</span>${banRows}<div class="prov-row"><button class="btn-mini" id="judgmentBansReset" type="button" data-tip="Forget these failures|The models are asked again from the next agent start.">${icon("refresh", 12)} Ask them again</button></div></div>`
     : "";
   const body = `${keyCard}
-    <div class="set-note">${icon("info", 12)} <b>Judgments</b> are the small typed questions LUCID's agent loop asks about its own work (yes/no checks, choices, scores). <b>Jev</b> is TypeSafe AI's hosted System One model built for exactly that; without it, omp asks a chat model. In <b>Auto</b>, a saved TypeSafe key routes judgments to Jev; a failed TypeSafe call falls back to the online chat-model chain (omp's rule, not a LUCID choice).</div>
+    <div class="set-note">${icon("info", 12)} <b>Judgments</b> are the small typed questions LUCID's agent loop asks about its own work (the per-turn thinking-effort pick under Thinking: Auto, the unexpected-stop check, the agent's own <code>judge()</code> calls). They are <b>off by default</b>: with <b>None</b> no separate judge model is consulted, and the one pick omp cannot skip (the effort pick) is answered by the chat model already in use. Opt in to route them to <b>Jev</b> (TypeSafe's hosted System One model, built for exactly this) or to your own models: your local providers first, then the chat model. A local model that fails more than once is not asked again until you reset it here.</div>
     <div class="voice-row"><label class="voice-lbl" for="judgmentMode">Judgment backend</label>
       <select id="judgmentMode" class="prov-key" data-judgment-set="mode"${j?.locked ? " disabled" : ""}>
-        <option value="auto"${sel(stored === "auto")}>Auto - Jev when a TypeSafe key is saved, else chat model</option>
+        <option value="none"${sel(stored === "none")}>None - no judge model (default)</option>
+        <option value="auto"${sel(stored === "auto")}>Auto - Jev if a TypeSafe key is saved, else your models</option>
         <option value="typesafe"${sel(stored === "typesafe")}>Jev (TypeSafe) - always try Jev first</option>
-        <option value="llm"${sel(stored === "llm")}>Chat model only - never TypeSafe</option>
+        <option value="llm"${sel(stored === "llm")}>Your models - local providers, then the chat model</option>
       </select></div>
     ${lockNote}
-    <div class="set-note" id="judgmentEffective">${icon("check", 12)} omp is told <b>${esc(j?.effective ?? "auto")}</b>${j?.clamped ? " (clamped by lockdown)" : ""}. Changing the backend restarts the omp child; the next turn uses it.</div>`;
-  return setCard("judgment", "Judgment", "Jev · TypeSafe System One", body, true);
+    <div class="set-note" id="judgmentEffective">${icon("check", 12)} <span>omp is told <b>${esc(j?.effective ?? "none")}</b>${j?.clamped ? " (clamped by lockdown)" : ""}: judge chain ${chainText}. Changing the backend restarts the agent; the next turn uses it.</span></div>
+    ${banBlock}`;
+  return setCard("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", body, true);
 }
 // P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
 // picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
@@ -5391,7 +5402,7 @@ function settingsShell(): string {
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
-    setSkel("judgment", "Judgment", "Jev · TypeSafe System One", true), // P-JEV.1 (ADR-0374)
+    setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
     secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
@@ -15934,7 +15945,7 @@ function wire(): void {
       const next = await bridge.setJudgment((t0 as HTMLSelectElement).value as JudgmentView["stored"]).catch(() => null);
       if (!next) { showToast({ tone: "warn", title: "Couldn't save judgment backend", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
       fillSec("judgment", secJudgment(state.auth, next));
-      showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the LLM chain until it is turned off." : "omp restarts with it; the next turn uses it.", timeout: 4000 });
+      showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the chat model until it is turned off." : next.chain.length ? "omp restarts with it; the next turn uses it." : "No judge model: the chat model answers the one pick omp cannot skip.", timeout: 4000 });
       return;
     }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
@@ -16020,6 +16031,14 @@ function wire(): void {
       return;
     }
     if (t.closest("[data-whisper-stop]")) { await bridge.whisperStop().catch(() => null); await hydrateWhisper(); return; }
+    // P-JEV.5 (ADR-0416): forget the local-judge failures; the engine restarts the agent when a ban was live.
+    if (t.closest("#judgmentBansReset")) {
+      const next = await bridge.judgmentResetBans().catch(() => null);
+      if (!next) { showToast({ tone: "warn", title: "Couldn't reset", desc: "The engine didn't answer; the bans stand.", timeout: 4000 }); return; }
+      fillSec("judgment", secJudgment(state.auth, next));
+      showToast({ title: "Local judges reset", desc: "They are asked again from the next agent start.", timeout: 4000 });
+      return;
+    }
     // P-STT.6 (ADR-0267): delete a downloaded model's weights (the running tier is refused server-side).
     const wrm = t.closest("[data-whisper-remove]") as HTMLElement | null;
     if (wrm) {

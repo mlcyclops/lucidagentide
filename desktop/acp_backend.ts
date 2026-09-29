@@ -40,8 +40,9 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentProvider, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
-import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
+import { asksageOnly, attribution, checkerModel, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
+import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed } from "./managed_config.ts";
 import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
@@ -54,7 +55,7 @@ import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type Grant
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
-import { providerAuth, type ProviderAuth } from "./auth_status.ts";
+import { providerAuth, typesafeKeySet, type ProviderAuth } from "./auth_status.ts";
 import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
@@ -219,10 +220,28 @@ const ACP_CONFIG = repoAsset("harness", "omp", "acp_config.yml");
  *  lockdown is CUI backflow, so "could not pin" must never degrade to "unpinned". */
 function ompConfigArgs(): string[] {
   const args = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
-  const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
   const overlay = judgmentOverlayFile();
-  writeJudgmentOverlay(overlay, r.effective); // throws -> the caller's spawn rejects, named
+  const plan = judgePlan();
+  writeJudgmentOverlay(overlay, plan.chain); // throws -> the caller's spawn rejects, named
+  // P-JEV.5 (ADR-0416): the judgment extension in the child skips a banned local judge in-process and counts
+  // new failures against the same list; children inherit process.env, so this is set here, at every spawn.
+  Object.assign(process.env, judgeBanEnv(plan.localProviders, plan.banned));
   return [...args, "--config", overlay];
+}
+
+/** P-JEV.5 (ADR-0416): everything the judge chain is built from, read live: the stored choice under the
+ *  lock state, the TypeSafe key, the enabled LUCID local providers' models minus the banned ones, and the
+ *  session's chat model. One place, so the spawn overlay and the Settings card say the same chain. */
+export interface JudgePlan { resolved: ResolvedJudgmentProvider; chain: string[]; keySet: boolean; localProviders: string[]; banned: string[] }
+export function judgePlan(): JudgePlan {
+  const resolved = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
+  const keySet = typesafeKeySet();
+  const providers = listLocalProviders();
+  const localProviders = providers.map((p) => p.ompProvider);
+  const banned = bannedJudges(judgeFailures());
+  const locals = providers.filter((p) => p.enabled).flatMap((p) => p.models.map((m) => `${p.ompProvider}/${m.id}`)).filter((l) => !banned.includes(l));
+  const chain = judgeChain({ effective: resolved.effective, keySet, locals, chatModel: lastModel() });
+  return { resolved, chain, keySet, localProviders, banned };
 }
 
 // P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md (if any) and wrap it as standing design-invariant
@@ -356,6 +375,10 @@ function errText(e: unknown): string {
 
 /** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
 export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal };
+
+/** The resolved omp spawn: the command (omp itself, or a sandbox wrapper around it), its args, the env
+ *  overlay for this child only, and whether the command is the Windows AppContainer helper (P-BROWSER.4). */
+export type SpawnPlan = { cmd: string; args: string[]; env: Record<string, string>; contained: boolean };
 
 /** A composed abort: fires after `ms`, or as soon as `parent` aborts. dispose() clears the timer. */
 export type Deadline = { readonly signal: AbortSignal; dispose(): void };
@@ -731,7 +754,10 @@ class Backend {
    *  P-SANDBOX.2 (ADR-0166): on an ISOLATING backend, egress is routed through the mediated proxy — its
    *  HTTP(S)_PROXY env rides back in `env` (applied to the child only, never process.env). If the proxy
    *  can't start, `wrap` falls back to network-off (fail-closed). Async because starting the proxy is. */
-  private async resolveSandboxPlan(argv: string[]): Promise<{ cmd: string; args: string[]; env: Record<string, string> }> {
+  // P-BROWSER.4 (ADR-0415): `contained` = the command is the AppContainer helper. That spawn stays console-less
+  // (CREATE_NO_WINDOW, the helper's own rule when it has no console); only a passthrough omp shares the
+  // engine's hidden console. Whether a contained omp can attach to a console it inherits is not proven.
+  private async resolveSandboxPlan(argv: string[]): Promise<SpawnPlan> {
     const at = new Date().toISOString(); // P-SANDBOX.5 (ADR-0169): surface the posture in the Security panel
     // P-SANDBOX.7 (ADR-0173): the packaged Windows helper ships at <repo>/bin/lucid-appcontainer.exe
     // (bin/** rides the `repo` extraResources), resolved through repo_root — NEVER import.meta.dir
@@ -765,7 +791,7 @@ class Backend {
       this.sandboxExecBlock = res.reason;
       setSandboxState({ backend: null, isolated: false, disclosed: false, platform: process.platform, execBlocked: res.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${res.reason} - exec is BLOCKED for this session (ADR-0157).`);
-      return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+      return { cmd: argv[0]!, args: argv.slice(1), env: {}, contained: false };
     }
     let proxy: SandboxProxy | undefined;
     if (res.backend.isolates && profileCaps.canNetwork) {
@@ -792,7 +818,7 @@ class Backend {
       this.sandboxExecBlock = d.reason;
       setSandboxState({ backend: res.backend.name, isolated: res.backend.isolates, disclosed: res.disclosed, platform: process.platform, execBlocked: d.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${d.reason} - exec is BLOCKED for this session (ADR-0157).`);
-      return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+      return { cmd: argv[0]!, args: argv.slice(1), env: {}, contained: false };
     }
     // P-SANDBOX.10 (ADR-0387): presence and a stdio round trip are not "chat works". Before committing
     // to the AppContainer, prove the REAL runtime boots through the SAME wrap. A failure keeps chat up on
@@ -806,7 +832,7 @@ class Backend {
         this.sandboxExecBlock = requireIso ? `managed policy requires runtime isolation, but ${verdict.reason}` : null;
         setSandboxState({ backend: requireIso ? null : "noop", isolated: false, disclosed: !requireIso, platform: process.platform, execBlocked: this.sandboxExecBlock, proxied: false, at });
         if (!requireIso) console.error(sandboxDisclosure());
-        return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+        return { cmd: argv[0]!, args: argv.slice(1), env: {}, contained: false };
       }
     }
     this.sandboxExecBlock = null;
@@ -815,7 +841,7 @@ class Backend {
     // P-SANDBOX.17 (ADR-0399): Git for Windows cannot start inside the AppContainer, so the contained agent's
     // `git` is the broker shim (tools/git-broker/git.cmd), which asks the engine to run the real git.
     const gitShim = res.backend.name === "appcontainer" ? prependPathOverlay(process.env, join(resolvedRepo().root, "tools", "git-broker")) : {};
-    return { cmd: d.plan.cmd, args: d.plan.args, env: { ...d.plan.env, ...gitShim } };
+    return { cmd: d.plan.cmd, args: d.plan.args, env: { ...d.plan.env, ...gitShim }, contained: res.backend.name === "appcontainer" };
   }
 
   private async start(): Promise<void> {
@@ -885,7 +911,7 @@ class Backend {
         // shim, P-SANDBOX.17).
         const planSetsPath = Object.keys(spawnPlan.env).some((k) => k.toUpperCase() === "PATH");
         const gitEnv = process.platform === "win32" && !planSetsPath ? prependPathOverlay(process.env, gitCmdDir()) : {};
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") });
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") }, spawnPlan.contained ? { windowsHide: true } : {});
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
