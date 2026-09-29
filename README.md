@@ -138,11 +138,11 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
 - **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
 
-The per-beta details are in [What's new in v2.3.0-beta.12](#-whats-new-in-v230-beta12-prerelease), [beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+The per-beta details are in [What's new in v2.3.0-beta.13](#-whats-new-in-v230-beta13-prerelease), [beta.12](#-whats-new-in-v230-beta12-prerelease), [beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
 
 ### Get the beta
 
-1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.12](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.12)).
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.13](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.13)).
 2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
 
@@ -276,6 +276,21 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > leave the host.
 
 ---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.13 (prerelease)
+
+> **🧰 A browser you can see, a judge that stays quiet, and a terminal hub.** Beta.13 lands the reviewed surgery train (#424 to #430) plus the judge fixes: the agent's browser window is visible again, judgments are off unless you opt in and never retry a model that cannot answer, workers only wait for each other on the same file, and `lucid hub` puts the app's panels in your terminal.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.13](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.13). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🪟 The agent's browser is a real window** - `browser.open({ headed: true })` used to come up as a white, frameless rectangle you could not close. The engine now owns a hidden console at boot so the agent's Chrome is no longer born hidden; the sandboxed helper spawn is unchanged. *(P-BROWSER.4, [ADR-0415](DECISIONS.md))*
+- **⚖️ Judgments are off by default, and a dead judge is not asked twice** - Settings > Judgment now defaults to **None**; opt in to Jev or your own models. LUCID writes omp's judge role itself, so a local model can no longer be picked by pattern and time out every turn. A local judge that fails more than once, or any model your account says does not exist (the `gpt-5.3-codex-spark` 404 on API-key OpenAI accounts), is left out of the chain and refused in-process until you reset it. *(P-JEV.5/.6, [ADR-0416](DECISIONS.md), [ADR-0421](DECISIONS.md))*
+- **🧵 Workers wait only on the same file** - a spoke in Main's folder no longer sits on "Waiting for Main to finish in this folder"; a wait happens only when two workers touch the same file, bounded at 20 s. *(P-WAIT.1, [ADR-0417](DECISIONS.md))*
+- **🩺 Stuck or busy, you can tell** - an open tool call is judged on evidence (its process tree, output, time) and marked "likely stuck" with a Stop command button; the harness never kills it for you. Background jobs survive a session resume. *(P-LIVENESS.1, P-ASYNCJOBS.1, [ADR-0418](DECISIONS.md))*
+- **🖥 `lucid hub`, the terminal hub** - a tmux-style pane multiplexer over the running engine: Overview, Security (audited approve/dismiss), Fleet, Sessions, Audit, Usage, Network and Knowledge decks, plus a live agent pane; `|` and `-` split, tab walks focus, `z` zooms. It finds the engine through a signed discovery file and verifies it with the health handshake, or spawns its own. *(P-TUI.0/.1, [ADR-0419](DECISIONS.md), [ADR-0420](DECISIONS.md))*
+- **⏳ No reconnect button during the first minute** - on a fresh open the composer stays plain while the engine boots; the amber Reconnect appears only if the engine still does not answer after 60 s. *(P-RECOVER.2)*
+- **🎯 Lane pickers use the curated list** - the Fleet grid form, the orbit spawn form and every lane card offer the same model list as the composer (Bedrock/Vertex only behind a saved key, families ranked by use), so a spoke cannot start on a model your account cannot run.
+- **🧪 Test harness from a network share** - typecheck and the packaged-boot test work from a UNC checkout, with the cmd argument-injection path closed. *(ADR-0178 amendment)*
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.12 (prerelease)
 
