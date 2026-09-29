@@ -787,11 +787,16 @@ export class HubComponent implements Component {
 
   #topBar(width: number): string {
     const q = this.#data ? quarantineOf(this.#data).length : 0;
-    const alert = q > 0 ? RED.bold(` ⛨ ${q} blocked `) : "";
-    const brand = ACCENT.bold(" ◆ LUCID ") + TXT("HUB") + TXT_3(this.#spawned ? "  ·  engine spawned by hub" : "  ·  attached to running engine");
-    const right = `${alert}${TXT_3(`:${this.#engine.port} · v${this.#engine.version} `)}`;
-    const pad = Math.max(1, width - Bun.stringWidth(brand) - Bun.stringWidth(right));
-    return brand + " ".repeat(pad) + right;
+    // Everything that names THIS hub's engine lives in one labeled cluster on the left; the right
+    // edge belongs to the alert alone. A bare ":5319" floating after a field of padding reads as
+    // debris (operator report 2026-09-28), so the port never appears without its label.
+    const brand =
+      ACCENT.bold(" ◆ LUCID ") + TXT("HUB") +
+      TXT_3(`  ·  engine 127.0.0.1:${this.#engine.port} · v${this.#engine.version}${this.#spawned ? " · spawned by hub" : ""}`);
+    const right = q > 0 ? RED.bold(`⛨ ${q} blocked `) : "";
+    const brandCut = truncateToWidth(brand, Math.max(0, width - Bun.stringWidth(right) - 1));
+    const pad = Math.max(1, width - Bun.stringWidth(brandCut) - Bun.stringWidth(right));
+    return brandCut + " ".repeat(pad) + right;
   }
 
   render(width: number): readonly string[] {
