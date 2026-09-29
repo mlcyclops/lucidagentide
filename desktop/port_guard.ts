@@ -212,8 +212,8 @@ function parsePosixProbe(text: string): SquatterInfo | null {
   const pid = Number(m[1]);
   if (!Number.isInteger(pid)) return null;
   // Collapse ps's column padding (e.g. "Aug  7") so the incident block reads cleanly.
-  const startedAt = m[2].replace(/\s+/g, " ");
-  const command = m[3].trim();
+  const startedAt = m[2]!.replace(/\s+/g, " "); // groups 2/3 always exist when POSIX_PS_LINE matches
+  const command = m[3]!.trim();
   // ps gives no separate name column; the basename of the command's first word is the closest
   // equivalent to Windows' ProcessName ("bun" from "/usr/local/bin/bun server.ts").
   const first = command.split(/\s+/)[0] ?? "";
