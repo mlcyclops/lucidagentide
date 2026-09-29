@@ -6,7 +6,7 @@
 // breaks every pane to its right), and deck rows must survive hostile engine strings.
 
 import { describe, expect, test } from "bun:test";
-import { closeLeaf, deckLines, fitBlock, leaves, mapLeaf, type HubData, type PaneNode } from "./hub_tui.ts";
+import { closeLeaf, deckLines, modelCatalog, fitBlock, leaves, mapLeaf, type HubData, type PaneNode } from "./hub_tui.ts";
 
 const leaf = (deck: "overview" | "security" | "fleet"): PaneNode => ({ kind: "leaf", deck });
 
@@ -47,6 +47,7 @@ describe("deck rows", () => {
     usage: { models: [] },
     whitelist: [{ id: "wl_1", kind: "domain", pattern: WL_HOST, zone: "internal", scope: "always" }],
     posture: { allowAll: true, allowWebSearch: true },
+    config: [{ id: "model", value: "glm-5.3-flash", options: [{ value: "glm-5.3-flash", name: "GLM 5.3 Flash" }, { value: "claude-haiku-4-5", name: "Claude Haiku 4.5" }] }],
   };
 
   test("a hostile title (newline, tab) still renders as ONE physical row", () => {
@@ -77,5 +78,20 @@ describe("deck rows", () => {
     expect(deckLines("overview", weird, 40, -1)[1]).toContain("?");
     expect(deckLines("fleet", weird, 40, -1)).toHaveLength(1);
     expect(deckLines("overview", null, 40, -1)).toEqual(["loading from the engine…"]);
+  });
+});
+
+describe("modelCatalog", () => {
+  test("finds the model entry, maps options, reports the current pick; off-shape is empty", () => {
+    const cfg = [
+      { id: "thinking", options: [{ value: "high" }] },
+      { id: "model", value: "glm-5.3-flash", options: [{ value: "glm-5.3-flash", name: "GLM 5.3 Flash" }, { value: "haiku" }] },
+    ];
+    const { models, current } = modelCatalog(cfg);
+    expect(models.map((m) => m.value)).toEqual(["glm-5.3-flash", "haiku"]);
+    expect(models[1]!.name).toBe("haiku"); // name falls back to the value
+    expect(current).toBe("glm-5.3-flash");
+    expect(modelCatalog([])).toEqual({ models: [], current: "" });
+    expect(modelCatalog([null, 4, "x"])).toEqual({ models: [], current: "" });
   });
 });
