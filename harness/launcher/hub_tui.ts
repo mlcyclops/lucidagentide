@@ -59,6 +59,8 @@ export interface HubData {
   whitelist: unknown[];
   posture: Record<string, unknown>;
   usage: Record<string, unknown>;
+  /** omp's raw configOptions (the model entry carries the catalog + the current pick). */
+  config: unknown[];
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "?");
@@ -150,6 +152,21 @@ export function deckLines(deck: DeckId, data: HubData | null, width: number, sel
   }
 }
 
+/** Pull the model catalog out of omp's raw configOptions: the entry that owns a model list, its
+ *  options as {value,name}, and the currently-active value. Fail-soft: no catalog is an empty list
+ *  (the picker explains), never a crash on a shape from an older/newer omp. */
+export interface ModelOption { value: string; name: string }
+export function modelCatalog(config: unknown[]): { models: ModelOption[]; current: string } {
+  for (const raw of config.map(rec)) {
+    if (!/model/i.test(str(raw.id))) continue;
+    const models = arr(raw.options).map(rec)
+      .map((o) => ({ value: str(o.value), name: str(o.name ?? o.value) }))
+      .filter((m) => m.value !== "?");
+    if (models.length) return { models, current: str(raw.value ?? raw.currentValue ?? "") };
+  }
+  return { models: [], current: "" };
+}
+
 /** The status-bar teaching line, per focused surface: what THIS pane responds to right now. */
 export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
   overview: "| - split · tab focus · 1-6 decks",
@@ -159,7 +176,7 @@ export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
   audit: "j/k scroll · r refresh",
   usage: "r refresh",
   network: "w whitelist a host · j/k select · D remove · t toggle allow-all",
-  agent: "⏎ prompt · j/k scroll · G live tail · y/s/d answer an ask · x close",
+  agent: "⏎ prompt · m model · j/k scroll · G live · y/s/d answer ask · x close",
   prompting: "type your prompt · ⏎ send · esc cancel",
 };
 
@@ -279,6 +296,7 @@ export class HubComponent implements Component {
   #live: Record<string, { text: string; thinking: string; tools: string[]; working: boolean; trimmed?: boolean }> = {};
   #watchers: Record<string, AbortController> = {};
   #prompt: { lane: string; text: string } | null = null;
+  #picker: { lane: string; models: ModelOption[]; sel: number } | null = null;
   #promptKind: "agent" | "wl-add" = "agent";
   #data: HubData | null = null;
   #status = "";
@@ -327,16 +345,16 @@ export class HubComponent implements Component {
 
   async refresh(): Promise<void> {
     try {
-      const [build, security, fleet, sessions, audit, usage, whitelist, posture] = await Promise.all([
+      const [build, security, fleet, sessions, audit, usage, whitelist, posture, config] = await Promise.all([
         this.#get("/api/build-info"), this.#get("/api/security"), this.#get("/api/fleet/status"),
         this.#get("/api/sessions"), this.#get("/api/audit"), this.#get("/api/usage"),
-        this.#get("/api/whitelist"), this.#get("/api/whitelist/posture"),
+        this.#get("/api/whitelist"), this.#get("/api/whitelist/posture"), this.#get("/api/config"),
       ]);
       if (this.#disposed) return;
       this.#data = {
         build: rec(build), security: rec(security), fleet: rec(fleet),
         sessions: arr(rec(sessions).sessions ?? sessions), audit: rec(audit), usage: rec(usage),
-        whitelist: arr(whitelist), posture: rec(posture),
+        whitelist: arr(whitelist), posture: rec(posture), config: arr(config),
       };
       // Live transcripts for every open agent pane, same poll tick.
       const laneIds = [...new Set(leaves(this.#tree).flatMap((l) => (l.deck === "agent" && l.lane ? [l.lane] : [])))];
@@ -440,6 +458,16 @@ export class HubComponent implements Component {
       this.#ui.requestRender();
       return;
     }
+    // Model picker: owns the keyboard until enter (switch) or esc.
+    if (this.#picker) {
+      const pk = this.#picker;
+      if (matchesKey(data, "escape")) this.#picker = null;
+      else if (data === "j" || matchesKey(data, "down")) pk.sel = Math.min(pk.models.length - 1, pk.sel + 1);
+      else if (data === "k" || matchesKey(data, "up")) pk.sel = Math.max(0, pk.sel - 1);
+      else if (data === "\r" || data === "\n") { void this.#applyModel(); return; }
+      this.#ui.requestRender();
+      return;
+    }
     if (matchesKey(data, "ctrl+c") || data === "q") { this.#done.resolve(); return; }
     if (data === "?") { this.#help = true; this.#ui.requestRender(); return; }
     const count = leaves(this.#tree).length;
@@ -474,7 +502,37 @@ export class HubComponent implements Component {
     else if (data === "t" && this.#focusedDeck() === "network") { void this.#togglePosture(); return; }
     else if ((data === "y" || data === "s" || data === "d") && this.#pendingApprovalLane()) { void this.#answerApproval(data); return; }
     else if (data === "\r" || data === "\n") { void this.#enter(); return; }
+    else if (data === "m") { this.#openModelPicker(); return; }
     this.#ui.requestRender();
+  }
+
+  /** `m` on an agent pane: the model catalog from omp's configOptions, current pick preselected. */
+  #openModelPicker(): void {
+    const leaf = this.#focusedLeaf();
+    if (leaf.deck !== "agent" || !leaf.lane) { this.#status = "m switches an AGENT pane's model - open one first (Fleet, ⏎)"; this.#ui.requestRender(); return; }
+    const { models, current } = modelCatalog(this.#data?.config ?? []);
+    if (models.length === 0) { this.#status = "the engine reports no model catalog yet - it warms up with the first session"; this.#ui.requestRender(); return; }
+    const lane = arr(this.#data?.fleet.lanes).map(rec).find((l) => str(l.id) === leaf.lane);
+    const active = (lane && str(lane.model)) || current;
+    const sel = Math.max(0, models.findIndex((m) => m.value === active || m.name === active));
+    this.#picker = { lane: leaf.lane, models, sel };
+    this.#ui.requestRender();
+  }
+
+  /** Switch the lane's model through the engine (fleet.setModel) - the same seam the GUI uses. */
+  async #applyModel(): Promise<void> {
+    const pk = this.#picker;
+    this.#picker = null;
+    if (!pk) return;
+    const pick = pk.models[pk.sel];
+    if (!pick) { this.#ui.requestRender(); return; }
+    try {
+      const r = rec(await this.#post("/api/fleet/model", { laneId: pk.lane, model: pick.value }));
+      this.#status = r.ok === false ? `model switch refused: ${str(r.reason ?? r.error ?? "engine said no")}` : `model → ${pick.name}`;
+    } catch (err) {
+      this.#status = `model switch failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    await this.refresh();
   }
 
   /** The focused agent pane's lane id, when its lane is parked on a tool approval. */
@@ -734,7 +792,8 @@ export class HubComponent implements Component {
     const body = fitBlock(tail, innerW, bodyH);
     const paint = focused ? CYAN : LINE;
     const spin = working ? ` ${"⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(Date.now() / 200) % 10]}` : "";
-    const model = lane ? str(lane.model) : "";
+    // The lane's own model, else the engine's current default - the pane always names its model.
+    const model = (lane && str(lane.model)) || modelCatalog(this.#data?.config ?? []).current;
     const title = ` ▶ ${leaf.laneName ?? leaf.lane}${model && model !== "?" ? ` · ${model}` : ""} · ${status}${spin}${lane && rec(lane.pendingApproval).summary ? " · WAITING" : ""} `;
     const titlePainted = focused ? ACCENT_2.bold(title) : TXT_3(title);
     const dashes = Math.max(0, w - 2 - Bun.stringWidth(title) - 1);
@@ -752,6 +811,29 @@ export class HubComponent implements Component {
     }
     return [top, ...rows, bottom];
   }
+  /** The model picker, centered like help: catalog rows, current pick marked, selection inverted. */
+  #pickerBlock(w: number, h: number): string[] {
+    const pk = this.#picker!;
+    const current = modelCatalog(this.#data?.config ?? []).current;
+    const boxW = Math.min(70, w - 4);
+    const maxRows = Math.max(3, h - 6);
+    const from = Math.max(0, Math.min(pk.sel - Math.floor(maxRows / 2), pk.models.length - maxRows));
+    const slice = pk.models.slice(from, from + maxRows);
+    const rows = slice.map((m, i) => {
+      const idx = from + i;
+      const mark = m.value === current || m.name === current ? " ●" : "";
+      const plain = truncateToWidth(` ${m.name}${mark}`, boxW - 4);
+      const padded = plain + " ".repeat(Math.max(0, boxW - 4 - Bun.stringWidth(plain)));
+      return idx === pk.sel ? chalk.inverse(TXT(padded)) : TXT_3(padded);
+    });
+    const title = " ⇅ switch model · ⏎ apply · esc cancel ";
+    const top = ACCENT("╭─") + ACCENT_2.bold(title) + ACCENT("─".repeat(Math.max(0, boxW - 3 - Bun.stringWidth(title))) + "╮");
+    const box = [top, ...rows.map((r) => ACCENT("│") + " " + r + " " + ACCENT("│")), ACCENT("╰" + "─".repeat(boxW - 2) + "╯")];
+    const padTop = Math.max(0, Math.floor((h - box.length) / 2));
+    const padLeft = " ".repeat(Math.max(0, Math.floor((w - boxW) / 2)));
+    return fitBlock([...Array(padTop).fill(""), ...box.map((l) => padLeft + l)], w, h);
+  }
+
 
   #pane(leaf: PaneLeaf, w: number, h: number, focused: boolean): string[] {
     if (leaf.deck === "agent") return this.#agentPane(leaf, w, h, focused);
@@ -806,7 +888,7 @@ export class HubComponent implements Component {
     const paneW = sidebarOn ? width - SIDEBAR_W : width;
     const tree: PaneNode = this.#zoom ? this.#focusedLeaf() : this.#tree;
     const ring = { i: this.#zoom ? this.#focus : 0 };
-    const panes = this.#help ? this.#helpBlock(paneW, bodyH) : this.#renderNode(tree, paneW, bodyH, ring);
+    const panes = this.#picker ? this.#pickerBlock(paneW, bodyH) : this.#help ? this.#helpBlock(paneW, bodyH) : this.#renderNode(tree, paneW, bodyH, ring);
     const body = sidebarOn ? this.#sidebarBlock(bodyH).map((s, i) => s + (panes[i] ?? "")) : panes;
     const rightPlain = `${this.#engine.flavor} engine · lucid hub `;
     const composing = this.#prompt && this.#promptKind === "wl-add" ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)` : "";
