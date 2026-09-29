@@ -15,10 +15,10 @@ import type { JudgmentReport } from "../../harness/judgment/trace.ts"; // P-JEV.
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (DOM-free)
 import type { TurnSnapshot } from "../turn_recovery.ts";
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure progress + liveness view
-import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1: the same-folder wait view
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1: the same-file write wait view
 export type { TurnStatus, TurnSnapshot } from "../turn_recovery.ts";
 export type { ProgressView, Liveness, LivenessState, TurnEstimate, OpenStep } from "../turn_progress.ts";
-export type { WaitView, SequenceEntry, FolderQueue } from "../workspace_gate.ts";
+export type { WaitView } from "../write_claims.ts";
 
 /** P-PWA-FLEET.1: one fleet lane's status as mirrored to phone guests. `cwd` carries only the folder
  *  BASENAME (the frames.ts "no file paths" invariant - a full path never crosses the wire). */
@@ -49,8 +49,8 @@ export type ChatEvent =
   // P-PROGRESS.1: the worker's progress view, every PROGRESS_TICK_MS while a turn runs (and once on every
   // tool call settle). Goes through onEvent directly, like `slow`: telling the user never counts as activity.
   | { type: "progress"; progress: ProgressView }
-  // P-PROGRESS.1: this turn is waiting for another worker's turn in the same folder (workspace_gate.ts).
-  // Emitted once when the wait begins; the next real event means the lease was granted.
+  // P-WAIT.1: a write in this turn waits for a file another worker's running turn is editing
+  // (write_claims.ts). Emitted when the wait begins or its holder changes; the next real event ends it.
   | { type: "waiting"; wait: WaitView }
   // P-JEV.2 (ADR-0377): one typed judgment (Jev / chat model) the omp child answered during this turn,
   // self-reported by the judgment extension with the question, the answers and which backend answered.

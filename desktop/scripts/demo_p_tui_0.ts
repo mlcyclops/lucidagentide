@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-TUI.0 - the engine discovery seam (ADR-0416).
+// Increment P-TUI.0 - the engine discovery seam (ADR-0419).
 //
 // A terminal client (`lucid hub`, docs/TUI.md) must find a running engine without guessing ports,
 // and must never trust a file alone: the ADR-0305 health handshake (nonce echo) decides. This demo
@@ -11,7 +11,9 @@
 //   [2] a client verifies it via /api/health + the file's nonce (healthVerdict "ours")
 //   [3] TWO clients share the one engine: the file's token opens a token-gated route for both
 //   [4] a squatter on the recorded port fails verification (stale file is inert, fail-closed)
-//   [5] SIGTERM removes the file - a clean exit leaves nothing behind
+//   [5] a clean exit removes the file: SIGTERM on POSIX; on Windows, where kill() is TerminateProcess and
+//       no handler runs, the parent watch (LUCID_MAIN_PID, the path the Electron launch really uses),
+//       which exits through process.exit(0) and so runs the "exit" handler
 //
 // Run with: bun run desktop/scripts/demo_p_tui_0.ts
 
@@ -25,7 +27,7 @@ function assert(cond: unknown, msg: string): void {
   console.log("  \u2713 " + msg);
 }
 
-console.log("== #ADR-0416 P-TUI.0: the engine discovery seam ==\n");
+console.log("== #ADR-0419 P-TUI.0: the engine discovery seam ==\n");
 
 const dataRoot = mkdtempSync(join(tmpdir(), "lucid-tui0-"));
 const home = mkdtempSync(join(tmpdir(), "lucid-tui0-home-"));
@@ -37,6 +39,8 @@ const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Respo
 const enginePort = probe.port!;
 probe.stop(true);
 
+// Windows: a process the engine watches as its "main" (parent_watch.ts); killing it is the clean exit.
+const parent = process.platform === "win32" ? Bun.spawn(["bun", "-e", "setInterval(() => {}, 1_000_000)"], { stdout: "ignore", stderr: "ignore" }) : null;
 const engine = Bun.spawn(["bun", join(repo, "desktop", "dev.ts")], {
   cwd: repo,
   env: {
@@ -44,6 +48,7 @@ const engine = Bun.spawn(["bun", join(repo, "desktop", "dev.ts")], {
     PORT: String(enginePort), // the discovery file, not this script's knowledge, is what a client reads
     LUCID_DATA_ROOT: dataRoot,
     HOME: home, // scratch settings/ledgers; nothing of the operator's ~/.omp is touched
+    ...(parent ? { LUCID_MAIN_PID: String(parent.pid), LUCID_PARENT_WATCH_MS: "250" } : {}),
   },
   stdout: "pipe",
   stderr: "pipe",
@@ -80,7 +85,7 @@ try {
   assert(noToken.status === 403, "without the token the same route stays forbidden (the file is the handshake, not a bypass)");
 
   console.log("\n[4] a stale file pointing at a squatted port fails verification");
-  engine.kill("SIGTERM");
+  if (parent) parent.kill(); else engine.kill("SIGTERM");
   await engine.exited;
   const squatter = Bun.serve({
     port: discovery.port,
@@ -94,11 +99,12 @@ try {
   }
 
   console.log("\n[5] a clean exit removed the file");
-  assert(listDiscoveries(dataRoot).length === 0, "SIGTERM ran the exit handler; no discovery file is left behind");
+  assert(listDiscoveries(dataRoot).length === 0, `${parent ? "the parent watch" : "SIGTERM"} ran the exit handler; no discovery file is left behind`);
 
   console.log("\nP-TUI.0 demo: PASS");
 } finally {
   try { engine.kill(); } catch { /* already gone */ }
+  try { parent?.kill(); } catch { /* already gone */ }
   rmSync(dataRoot, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 }

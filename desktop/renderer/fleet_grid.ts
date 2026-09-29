@@ -43,8 +43,8 @@ import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order 
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
 import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
 import { agedProgress, humanMs, progressLine, STREAMING_MS, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
-import { queueWhen, ringView, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
-import type { FolderQueue, WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (types only)
+import { ringView, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
 import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
@@ -53,7 +53,7 @@ import type { ChipKind } from "./answer_chips.ts";
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "repoChoices" | "repoGithub">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -121,7 +121,7 @@ interface LaneRun {
    *  card's ticker so the numbers move between samples. */
   progress: ProgressView | null;
   progressAt: number;
-  /** P-PROGRESS.1: the lane's turn is in line behind another worker's turn in the same folder. */
+  /** P-WAIT.1: one of the lane's writes waits for a file another worker's running turn is editing. */
   waiting: WaitView | null;
 }
 
@@ -674,31 +674,10 @@ async function refresh(): Promise<void> {
   layout = reconcile(layout, st.lanes.map((l) => l.id));
   if (grid) { applyOrder(grid); applySizes(); }
   if (hr) paintHeadroom(hr, st.resources, st.lanes.length);
-  if (grid) paintQueues(grid, st.queues ?? []); // P-PROGRESS.1: who runs and who waits, per shared folder
   paintEmpty();
   paintPill();
 }
 
-/** P-PROGRESS.1: the folder queue strip at the top of the grid: one block per folder two or more workers
- *  share, every worker on its own row in run order with when it is expected to start. Nothing when nobody
- *  shares a folder. Every row is ONE text child (invariant 11: no flex prose, no word-wrapped labels). */
-function paintQueues(grid: HTMLElement, queues: FolderQueue[]): void {
-  let strip = $(".fleet-queues", grid) as HTMLElement | null;
-  if (!queues.length) { strip?.remove(); return; }
-  if (!strip) { strip = el(`<div class="fleet-queues"></div>`); grid.prepend(strip); }
-  const now = Date.now();
-  strip.innerHTML = queues.map((q, qi) => `<div class="fleet-queue-folder" data-qf="${qi}"><div class="fleet-queue-title"></div>${q.entries.map((_, ei) => `<div class="fleet-queue-row" data-qe="${ei}"></div>`).join("")}</div>`).join("");
-  queues.forEach((q, qi) => {
-    const block = $(`[data-qf="${qi}"]`, strip!) as HTMLElement | null; if (!block) return;
-    ($(".fleet-queue-title", block) as HTMLElement).textContent = `Turns in ${q.folder}, in order:`;
-    q.entries.forEach((e, ei) => {
-      const row = $(`[data-qe="${ei}"]`, block) as HTMLElement | null; if (!row) return;
-      const line = `${e.position + 1}. ${e.name}: ${queueWhen(e, now, statusEta())}`;
-      row.textContent = line; row.title = line;
-      row.dataset.state = e.state;
-    });
-  });
-}
 
 /** The header HUD. There is no cap to show any more, so the numbers that matter are the two live percents
  *  and - when one of them is over the line - HOW LONG it has been over: `93% 12s/30s` is a burst you can
@@ -790,7 +769,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <div class="lane-progress" data-lane-progress hidden>
         <div class="lane-bar"><div class="lane-fill"></div></div>
         <div class="lane-progress-line" data-lane-est></div>
-        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
+        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-stopcall" data-lane-stopcall hidden title="Ends only the processes this tool call started. The agent is told why and continues.">Stop command</button><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
         <div class="lane-wait" data-lane-wait hidden></div>
       </div>
       <div class="fleet-queue" data-fleet-queue hidden></div>
@@ -809,12 +788,12 @@ function buildCard(run: LaneRun): HTMLElement {
 
 /** P-PROGRESS.3 (ADR-0412 amendment): the master HUD's progress ring, in the lane card header beside the
  *  lane's status chips. Shown while the lane's turn runs (and red once its process is gone) with the setting
- *  "Show a progress ring" on; hidden while the lane is idle or done, and while the turn only waits for its
- *  folder (the wait line says that, and an empty "Working" ring would claim otherwise). The tooltip is only
- *  rewritten when its words change, so an open tooltip is not rebuilt on every progress tick. */
-function paintRing(card: HTMLElement, p: ProgressView | null, at: number, waiting: boolean): void {
+ *  "Show a progress ring" on; hidden while the lane is idle or done. A write waiting for another worker's
+ *  file (P-WAIT.1) is still a running turn, so the ring stays. The tooltip is only rewritten when its words
+ *  change, so an open tooltip is not rebuilt on every progress tick. */
+function paintRing(card: HTMLElement, p: ProgressView | null, at: number): void {
   const ring = $("[data-lane-ring]", card) as HTMLElement | null; if (!ring) return;
-  ring.hidden = !p || waiting || p.liveness.state === "idle" || !statusRing();
+  ring.hidden = !p || p.liveness.state === "idle" || !statusRing();
   if (ring.hidden || !p) return;
   const v = ringView(agedProgress(p, Math.max(0, Date.now() - at)), statusEta(), "Restart this lane");
   ($(".hud-ring-arc", ring) as SVGCircleElement).style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
@@ -825,25 +804,28 @@ function paintRing(card: HTMLElement, p: ProgressView | null, at: number, waitin
 
 /** P-PROGRESS.1: the progress strip: the history-estimate bar (95% at most while the turn runs), the
  *  progress line, the liveness pill (with the restart action when the child is gone), and the wait line
- *  while the turn is in line for its folder. Ages the last sample locally so the words keep moving. */
+ *  while one of the turn's writes waits for a file another worker is editing (P-WAIT.1). Ages the last
+ *  sample locally so the words keep moving. */
 function paintProgress(run: LaneRun): void {
   const card = run.card; if (!card) return;
   const p = run.progress;
   const w = run.waiting;
-  paintRing(card, p, run.progressAt, !!w);
+  paintRing(card, p, run.progressAt);
   const strip = $("[data-lane-progress]", card) as HTMLElement | null; if (!strip) return;
   // P-PROGRESS.3 (ADR-0412): the quiet default (the beta.10 lane card) shows only what the user must know: the
-  // process is gone (the red pill + Restart this lane), or the turn waits for its folder (the wait line).
+  // process is gone (the red pill + Restart this lane), or a write waits for another worker's file (the wait line).
   // "Full detail" is the whole P-PROGRESS.1 strip.
   const full = statusDetail() === "full";
-  const dead = p?.liveness.state === "dead";
-  strip.hidden = (!p && !w) || (!full && !dead && !w);
+  // P-LIVENESS.1 (ADR-0418): a call marked likely stuck is something the user must know too.
+  const urgent = p?.liveness.state === "dead" || p?.liveness.state === "stuck";
+  strip.hidden = (!p && !w) || (!full && !urgent && !w);
   strip.classList.toggle("quiet", !full);
   if (strip.hidden) return;
   const bar = $(".lane-bar", strip) as HTMLElement, fill = $(".lane-fill", strip) as HTMLElement;
   const est = $("[data-lane-est]", strip) as HTMLElement, alive = $("[data-lane-alive]", strip) as HTMLElement;
   const signal = $("[data-lane-signal]", strip) as HTMLElement, restart = $("[data-lane-restart]", strip) as HTMLElement;
   const wait = $("[data-lane-wait]", strip) as HTMLElement;
+  const stopCall = $("[data-lane-stopcall]", strip) as HTMLButtonElement;
   if (p) {
     const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
     const eta = statusEta();
@@ -852,22 +834,23 @@ function paintProgress(run: LaneRun): void {
     est.textContent = w ? "" : progressLine(aged, eta);
     bar.classList.toggle("indeterminate", aged.estimate.percent === null && running && !w);
     fill.style.width = aged.estimate.percent === null ? "0%" : `${Math.min(95, aged.estimate.percent)}%`;
-    alive.hidden = !full && !dead; // quiet: the pill appears only for a dead process
+    alive.hidden = !full && !urgent; // quiet: the pill appears only for a dead process or a likely-stuck call
     alive.dataset.state = w ? "waiting" : p.liveness.state;
-    alive.textContent = w ? "waiting for the folder" : p.liveness.label;
-    alive.title = w ? "Another worker's turn is running in this folder; this turn starts when it ends." : p.liveness.detail;
+    alive.textContent = w ? "waiting for a file" : p.liveness.label;
+    alive.title = w ? "Another worker's running turn is editing this file; the write goes through when it ends." : p.liveness.detail;
     signal.textContent = running && !w ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago`) : "";
-    restart.hidden = p.liveness.state !== "dead";
+    // P-LIVENESS.1 (ADR-0418): a call marked likely stuck offers its two ways out; LUCID takes neither.
+    restart.hidden = !urgent;
+    stopCall.hidden = !(p.liveness.state === "stuck" && p.liveness.canStopCall);
+    if (stopCall.hidden && !stopCall.disabled) stopCall.textContent = "Stop command";
   } else {
     est.textContent = ""; bar.classList.remove("indeterminate"); fill.style.width = "0%";
-    alive.hidden = !full; alive.dataset.state = "waiting"; alive.textContent = "waiting for the folder"; alive.title = "";
-    signal.textContent = ""; restart.hidden = true;
+    alive.hidden = !full; alive.dataset.state = "waiting"; alive.textContent = "waiting for a file"; alive.title = "";
+    signal.textContent = ""; restart.hidden = true; stopCall.hidden = true;
   }
   wait.hidden = !w;
   if (w) {
-    const nth = w.position === 1 ? "next" : `${w.position}th in line`;
-    const start = !statusEta() ? "" : w.etaMs !== null ? ` · starts in about ${humanMs(w.etaMs)} (est.)` : " · start time unknown";
-    const line = `Waiting for ${w.on.name} to finish in ${w.folder} · ${nth}${start}`;
+    const line = `Waiting for ${w.on.name} to finish with ${w.file}`;
     wait.textContent = line; wait.title = line;
   }
 }
@@ -1303,7 +1286,7 @@ function onLaneEvent(id: string, e: LaneEvent): void {
         ...(e.status ? { status: e.status } : {}), ...(e.elapsedMs !== undefined ? { elapsedMs: e.elapsedMs } : {}),
         open: false,
       });
-      run.waiting = null; // the lease was granted: the turn is running
+      run.waiting = null; // a tool event means the write wait is over
       paintOutput(run);
       // P-PREVIEW.10: a lane write worth LOOKING at (html/svg/pdf) earns the lane its own Preview panel
       // tab. P-PREVIEW.18: narrowed from "anything renderable" - a lane writing notes.md or a config.json
@@ -1335,7 +1318,8 @@ function onLaneEvent(id: string, e: LaneEvent): void {
     // P-PROGRESS.1: the lane's progress view, streamed every few seconds; a sample means the turn runs, so
     // any wait is over. The wait says what the turn is in line behind, and the next real event clears it.
     case "progress":
-      run.progress = e.progress; run.progressAt = Date.now(); run.waiting = null;
+      // P-WAIT.1: the turn keeps ticking while a write waits, so a tick does not end the wait; the poll does.
+      run.progress = e.progress; run.progressAt = Date.now();
       paintFrame(run);
       break;
     case "waiting":
@@ -1883,6 +1867,17 @@ function onClick(ev: Event): void {
   if (t.closest("[data-fleet-deny]")) { answer(run, false); return; }
   if (t.closest("[data-fleet-retry]")) { runRetry(run); return; }
   if (t.closest("[data-fleet-respawn]")) { runRespawn(run); return; }
+  // P-LIVENESS.1 (ADR-0418): the user's Stop command on a call marked likely stuck.
+  const stopCallBtn = t.closest("[data-lane-stopcall]") as HTMLButtonElement | null;
+  if (stopCallBtn) {
+    stopCallBtn.disabled = true; stopCallBtn.textContent = "Stopping...";
+    void deps.stopCall(run.view.id).then((r) => {
+      stopCallBtn.disabled = false; stopCallBtn.textContent = "Stop command";
+      if (r?.ok) stopCallBtn.hidden = true;
+      setLaneNote(run, r?.reason ?? "Stop command: the engine did not answer.");
+    });
+    return;
+  }
   // P-INTERJECT.2/.3: the per-lane Check in card + its actions (before the generic chip handlers so
   // clicks inside the card never fall through to them).
   if (t.closest("[data-fleet-checkin]")) { toggleLaneCheckin(run); return; }
@@ -1892,7 +1887,8 @@ function onClick(ev: Event): void {
     ask.disabled = true; ask.textContent = "Sending...";
     // ADR-0414: a refused ask says why on the card and re-arms the button, instead of claiming "Sent".
     void deps.interject(run.view.id, LANE_STATUS_ASK, { live: true }).then((r) => {
-      if (r.ok) { ask.textContent = "Sent - answers at the next tool boundary"; return; }
+      // P-LIVENESS.1: inside an open call the note waits for that call to return; say so.
+      if (r.ok) { ask.textContent = run.progress?.stepsOpen.length ? "Queued - lands when the running call returns" : "Sent - answers at the next tool boundary"; return; }
       ask.disabled = false; ask.textContent = "Ask for status";
       setLaneNote(run, `Status ask not sent: ${r.reason}.`);
     });

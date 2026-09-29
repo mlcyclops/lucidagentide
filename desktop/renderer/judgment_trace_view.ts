@@ -35,6 +35,15 @@ function scaleIcon(size: number): string {
   return `<svg class="ic ic-scale" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5v15"/><path d="M9 19.5h6"/><path class="jv-beam" d="M5 7.5h14"/><path class="jv-pan-l" d="M7 7.5 4 13.5a3 3 0 0 0 6 0z"/><path class="jv-pan-r" d="M17 7.5 14 13.5a3 3 0 0 0 6 0z"/></svg>`;
 }
 
+/** P-JEV.5 (ADR-0416): what a failed judgment means, honestly. omp moves to the next judge in the chain on
+ *  an ordinary error, but a TIMEOUT ends the whole judgment (the previous thinking level stands); a local
+ *  model that failed more than once is not asked again (Settings > Judgment). Pure, for the test. */
+export function failureNote(error: string, timedOut: boolean): string {
+  return timedOut
+    ? `Timed out: ${error}. A timeout ends this judgment (omp keeps the previous thinking level). A local model that times out more than once is not asked again.`
+    : `Failed: ${error}. omp tries the next judge in the chain; the next row is that attempt.`;
+}
+
 export function createJudgments(): JudgmentsWin {
   const win = el(`<div class="thoughts judgments open" data-streaming="1">
     <button class="thoughts-head" type="button" aria-expanded="true">
@@ -58,12 +67,13 @@ export function createJudgments(): JudgmentsWin {
       reports.push(report);
       countEl.hidden = false; countEl.textContent = String(reports.length);
       const who = backendLabel(report);
-      curEl.textContent = report.error ? `${who} failed, falling back\u2026` : `${judgmentPurpose(report)} \u00b7 ${who}`;
+      const timedOut = !!report.error && /abort|timed? ?out/i.test(report.error);
+      curEl.textContent = report.error ? (timedOut ? `${who} timed out` : `${who} failed, trying the next judge\u2026`) : `${judgmentPurpose(report)} \u00b7 ${who}`;
       const rows = Object.entries(report.questions).map(([id, q]) => rowHtml(id, q, report.answers?.[id])).join("");
       const stateNote = `Judged state \u00b7 ${fmtNum(report.stateChars)} chars${report.stateTruncated ? " (preview truncated)" : ""}`;
       body.appendChild(el(`<div class="jd${report.error ? " failed" : ""}">
         <div class="jd-head"><span class="jd-purpose">${esc(judgmentPurpose(report))}</span><span class="jd-who">${esc(who)}</span><span class="jd-ms">${fmtNum(report.ms)} ms</span>${report.usage ? `<span class="jd-ms">${fmtNum(report.usage.input)} in \u00b7 ${fmtNum(report.usage.output)} out</span>` : ""}</div>
-        ${report.error ? `<div class="jd-err">${icon("info", 12)} <span>Failed: ${esc(report.error)}. omp falls back to the chat-model chain; the next row is that fallback.</span></div>` : ""}
+        ${report.error ? `<div class="jd-err">${icon("info", 12)} <span>${esc(failureNote(report.error, timedOut))}</span></div>` : ""}
         ${rows ? `<div class="jd-wrap"><table class="jd-table"><thead><tr><th>Question</th><th>Answer</th><th>Confidence</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="jd-err">${icon("info", 12)} <span>No displayable questions in this request.</span></div>`}
         <details class="jd-state"><summary>${esc(stateNote)}</summary><pre>${esc(report.state)}</pre></details>
       </div>`));

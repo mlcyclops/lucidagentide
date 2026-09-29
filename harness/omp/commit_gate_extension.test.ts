@@ -7,9 +7,9 @@
 // refusal prefix; a dead engine or a torn payload fails OPEN with one stderr notice.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import commitGateExtension, { REFUSAL_PREFIX, checkoutGateUrl, mentionsGit, parseGateVerdict } from "./commit_gate_extension.ts";
+import commitGateExtension, { REFUSAL_PREFIX, WRITE_WAIT_MS, checkoutGateUrl, mentionsGit, parseGateVerdict, writeTargets } from "./commit_gate_extension.ts";
 
-const ENV_KEYS = ["LUCID_INTERJECT_TARGET", "LUCID_CHECKOUT_GATE_URL"] as const;
+const ENV_KEYS = ["LUCID_INTERJECT_TARGET", "LUCID_CHECKOUT_GATE_URL", "LUCID_CHECKOUT_WRITE_URL"] as const;
 const inherited: Record<string, string | undefined> = {};
 for (const k of ENV_KEYS) inherited[k] = process.env[k];
 const realFetch = globalThis.fetch;
@@ -119,6 +119,30 @@ describe("tool_call handler", () => {
     const r = await install()!(bash("git status"));
     expect(r).toBeUndefined();
     expect(urls[0]).toContain(`&cwd=${encodeURIComponent(process.cwd())}&command=git%20status`);
+  });
+
+  test("P-WAIT.1: a write/edit asks the WRITE url with its file(s) and the wait bound; a hold blocks with the reason", async () => {
+    process.env.LUCID_INTERJECT_TARGET = "lane-1";
+    process.env.LUCID_CHECKOUT_WRITE_URL = "http://127.0.0.1:9/api/checkout/write?t=tok";
+    const reason = "a.ts is being edited by \"Main\" (session id \"master\"), whose turn is still running (waited 20 s).";
+    const urls = stubFetch({ ok: true, data: { block: true, reason } });
+    const handler = install()!;
+    const r = await handler({ type: "tool_call", toolCallId: "1", toolName: "edit", input: { path: "src/a.ts", paths: ["src/a.ts", "src/b.ts"] } });
+    expect(urls).toEqual([
+      `http://127.0.0.1:9/api/checkout/write?t=tok&target=lane-1&cwd=${encodeURIComponent(process.cwd())}&path=src%2Fa.ts&path=src%2Fb.ts&waitMs=${WRITE_WAIT_MS}`,
+    ]);
+    expect(r).toEqual({ block: true, reason: `${REFUSAL_PREFIX}${reason}` });
+    // Without the commit-gate url, a git command costs no round trip; a read never does.
+    expect(await handler(bash("git add -A"))).toBeUndefined();
+    expect(await handler({ type: "tool_call", toolCallId: "2", toolName: "read", input: { path: "src/a.ts" } })).toBeUndefined();
+    expect(urls.length).toBe(1);
+  });
+
+  test("writeTargets: path plus derived paths, deduped; only write and edit name targets", () => {
+    expect(writeTargets("write", { path: " a.ts ", content: "x" })).toEqual(["a.ts"]);
+    expect(writeTargets("edit", { paths: ["a.ts", "b.ts", "a.ts"] })).toEqual(["a.ts", "b.ts"]);
+    expect(writeTargets("edit", { input: "no header" })).toEqual([]);
+    expect(writeTargets("bash", { path: "a.ts" })).toEqual([]);
   });
 
   test("fails OPEN on a dead engine, a non-200, or a torn body: undefined plus one stderr line each", async () => {

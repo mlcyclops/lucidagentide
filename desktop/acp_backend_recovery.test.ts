@@ -235,6 +235,31 @@ describe("verified resume (POST /api/recovery/resume)", () => {
     expect(incidents()).toEqual([]);
   }, 30_000);
 
+  // P-ASYNCJOBS.1: omp gives its background-job manager only to the FIRST live top-level session in a
+  // process. A chat loaded beside the boot session had none, so long bash ran in the foreground and the
+  // turn went silent for the whole command. The other session must be closed before the load, on the
+  // same child, so the loaded chat is the owner.
+  for (const [label, resume] of [
+    ["resumeSession", () => backend.resumeSession("prev-session-9")],
+    ["loadSession", () => backend.loadSession("prev-session-9")],
+  ] as const) {
+    test(`${label} beside a live session closes that session before the load`, async () => {
+      process.env.FAKE_ACP_MODE = "clean";
+      await backend.prompt("hello", () => {}); // the boot/current session on this child
+      const booted = backend.currentSessionId();
+      expect(booted).toBeTruthy();
+      await resume();
+      expect(backend.currentSessionId()).toBe("prev-session-9");
+      await until(() => trace().some((t) => t.method === "session/load" && t.sessionId === "prev-session-9"));
+      const t = trace();
+      const close = t.findIndex((x) => x.method === "session/close" && x.sessionId === booted);
+      const load = t.findIndex((x) => x.method === "session/load" && x.sessionId === "prev-session-9");
+      expect(close).toBeGreaterThanOrEqual(0);
+      expect(close).toBeLessThan(load);
+      expect(t[close]!.pid).toBe(t[load]!.pid);
+    }, 30_000);
+  }
+
   test("a session/load the agent rejects is a failure with an incident, and leaves no session", async () => {
     process.env.FAKE_LOAD_FAIL = "1";
     const r = await backend.resumeSession("prev-session-9");

@@ -1,10 +1,10 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-TUI.1 (part) - `lucid hub`, the pane-multiplexer terminal hub (ADR-0417).
+// Increment P-TUI.1 (part) - `lucid hub`, the pane-multiplexer terminal hub (ADR-0420).
 //
 // Proves the hub against the REAL engine, headless (the component renders rows; no tty needed):
-//   [1] findEngine attaches through the P-TUI.0 discovery seam (ADR-0416), never a guessed port
+//   [1] findEngine attaches through the P-TUI.0 discovery seam (ADR-0419), never a guessed port
 //   [2] the Overview deck renders THIS engine's real facts (version, port)
 //   [3] `|` splits into two panes side by side; deck key rebinds the focused pane
 //   [4] the focus ring, close and zoom keep every capability view reachable
@@ -22,7 +22,7 @@ function assert(cond: unknown, msg: string): void {
   console.log("  \u2713 " + msg);
 }
 
-console.log("== #ADR-0417 P-TUI.1 (part): the lucid hub pane multiplexer ==\n");
+console.log("== #ADR-0420 P-TUI.1 (part): the lucid hub pane multiplexer ==\n");
 
 const dataRoot = mkdtempSync(join(tmpdir(), "lucid-tui1-"));
 const home = mkdtempSync(join(tmpdir(), "lucid-tui1-home-"));
