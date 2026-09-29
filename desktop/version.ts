@@ -551,4 +551,15 @@
 //            Session titles no longer show the checkout-peers briefing; Bedrock and Vertex models appear
 //            only behind a key saved in LUCID, and each picker family lists what you run first.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.12";
+// v2.3.0-beta.13 = beta.12 plus the surgery train and the judge fixes. The agent's visible browser is shown
+//            (the engine owns a hidden console so omp's Chrome is not born SW_HIDE, P-BROWSER.4, ADR-0415);
+//            judgments are off by default, LUCID writes omp's judge role itself, a local judge that fails
+//            twice or a model the account cannot call is not asked again (P-JEV.5/.6, ADR-0416/0421);
+//            workers wait for each other only on the same file, never the whole folder (P-WAIT.1,
+//            ADR-0417); an open tool call is judged on evidence, marked "likely stuck", stopped only by you,
+//            and background jobs survive a resume (P-LIVENESS.1/P-ASYNCJOBS.1, ADR-0418); `lucid hub`, the
+//            terminal pane multiplexer over the running engine (P-TUI.0/.1, ADR-0419/0420); no reconnect
+//            button during the first minute after launch (P-RECOVER.2); lane pickers offer the composer's
+//            curated model list; the test harness works from a UNC checkout, injection-safe.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.13";
