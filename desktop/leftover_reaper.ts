@@ -47,6 +47,11 @@ export interface ProcRow {
   command: string | null;
   /** Creation time, epoch ms. POSIX `lstart` has one-second resolution. */
   startedAt: number | null;
+  /** P-LIVENESS.1: cumulative CPU time (kernel + user), ms. win32 only; absent when not reported. */
+  cpuMs?: number;
+  /** P-LIVENESS.1: cumulative disk/pipe I/O bytes (read + write + other). win32 only. Socket traffic is
+   *  NOT counted by Windows, so this never proves network activity. */
+  ioBytes?: number;
 }
 
 export type EngineVerdict = "no-record" | "alive-ours" | "gone" | "pid-reused";
@@ -191,6 +196,7 @@ export function processListSpec(platform: string, pid?: number): { cmd: string; 
       `$ErrorActionPreference = 'SilentlyContinue'; ` +
       `Get-CimInstance Win32_Process${filter} | ForEach-Object { [pscustomobject]@{ ` +
       `p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; ` +
+      `t = [long](($_.KernelModeTime + $_.UserModeTime) / 10000); b = [long]($_.ReadTransferCount + $_.WriteTransferCount + $_.OtherTransferCount); ` +
       `c = $(if ($_.CreationDate) { ([DateTimeOffset]($_.CreationDate)).ToUnixTimeMilliseconds() } else { $null }) } } | ConvertTo-Json -Compress`;
     return { cmd: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", script] };
   }
@@ -213,14 +219,18 @@ export function parseProcessList(platform: string, stdout: string): ProcRow[] {
       if (typeof item !== "object" || item === null) continue;
       const r = item as Record<string, unknown>;
       if (typeof r.p !== "number" || typeof r.pp !== "number") continue;
-      rows.push({
+      const row: ProcRow = {
         pid: r.p,
         ppid: r.pp,
         name: typeof r.n === "string" ? r.n : "",
         exe: typeof r.x === "string" && r.x.length > 0 ? r.x : null,
         command: null,
         startedAt: typeof r.c === "number" && Number.isFinite(r.c) && r.c > 0 ? r.c : null,
-      });
+      };
+      // P-LIVENESS.1: cumulative counters, present only when the OS reported them.
+      if (typeof r.t === "number" && Number.isFinite(r.t) && r.t >= 0) row.cpuMs = r.t;
+      if (typeof r.b === "number" && Number.isFinite(r.b) && r.b >= 0) row.ioBytes = r.b;
+      rows.push(row);
     }
     return rows;
   }

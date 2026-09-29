@@ -64,8 +64,11 @@ import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
 import { type PendingCall, type PendingView, parseTaskCall, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
 import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
-import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
-import { WorkspaceGate, type WaitView } from "./workspace_gate.ts"; // P-PROGRESS.1: the folder lease shared with the fleet
+import { DurationHistory, PROGRESS_TICK_MS, QUIET_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { PulseTracker, oldestCallStart, pulseVerdict, stoppedCallNote, type SubagentSignal } from "./call_pulse.ts"; // P-LIVENESS.1 (ADR-0418)
+import { stopCallProcesses, workerProcesses } from "./call_pulse_proc.ts"; // P-LIVENESS.1
+import type { ProcRow } from "./leftover_reaper.ts";
+import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits shared with the fleet
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
@@ -585,24 +588,26 @@ class Backend {
   // long-quiet turn is still waiting on. Cleared at turn boundaries + restart.
   private openCalls = new Map<string, PendingCall>();
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
-  // -- P-PROGRESS.1: progress, estimate, and the folder lease ------------------------------------------
+  // -- P-PROGRESS.1: progress and the estimate; P-WAIT.1: the file-scoped write claims ---------------------
   /** Turn and tool lengths behind the estimate. dev.ts hands in the instance shared with the fleet lanes
    *  (seeded from the latency ledger); a backend built without one keeps its own. */
   durations = new DurationHistory();
-  /** The folder lease shared with the fleet lanes: a master turn waits behind a lane's running turn in the
-   *  same folder, and lanes wait behind the master's. */
-  workspaceGate = new WorkspaceGate();
+  /** Write claims shared with the fleet lanes: a write waits only on a file another worker's running turn
+   *  is editing. The master's claims drop when its turn ends. */
+  readonly writeClaims = new WriteClaims();
   /** Tool calls settled in the current turn. */
   private stepsDone = 0;
   /** Per-turn: the real tool name behind a toolCallId, once the tool_meta extension reported it. */
   private toolNames = new Map<string, string>();
   /** The live turn's progress emitter (set for the turn's life), so a settled call can push a fresh view. */
   private progressTick: (() => void) | null = null;
-  /** The turn is in line for its folder (workspace_gate). Nothing is running in omp, so the watchdog must
-   *  not read the silence as a stall, and the progress view says "waiting" instead. */
-  private waitingFolder = false;
-  /** Aborted by cancel() while the turn is in line, since there is nothing in omp to cancel yet. */
-  private folderWaitAbort: AbortController | null = null;
+
+  /** P-WAIT.1: one of this turn's writes waits for another worker's file (null: the wait ended). Told
+   *  to the window directly, never through the sink, so a wait never counts as activity. A bounded wait
+   *  (under omp's 30 s hook limit), far below the health watch's quiet threshold, so it needs no flag. */
+  noteWriteWait(w: WaitView | null): void {
+    if (w) { try { this.recoveryTurn?.emit({ type: "waiting", wait: w }); } catch { /* stream gone */ } }
+  }
 
   /** P-PROGRESS.1: where the master turn stands right now: elapsed, last sign of life, steps, the liveness
    *  verdict and the history-based estimate. Read-only; also served on GET /api/session-health. */
@@ -613,7 +618,46 @@ class Backend {
       stepsDone: this.stepsDone, stepsOpen: pendingSnapshot(this.openCalls, now), lastHealth: this.lastHealth,
       model: this.activeModel(), scope: this.sessionId ?? "", history: this.durations, now, // P-PROGRESS.4: the session keys its own history
       toolNameOf: (label) => { for (const [id, c] of this.openCalls) if (c.label === label) return this.toolNames.get(id); return undefined; },
+      pulse: this.openCalls.size ? this.pulse.evidence : null,
     });
+  }
+
+  // -- P-LIVENESS.1 (ADR-0418): evidence for an open call, never an action ----------------------------
+  /** The master turn's open-call watch, fed by dev.ts's process sampler. */
+  private pulse = new PulseTracker();
+
+  /** Should the sampler look at the master now? Yes while a turn has an open call and nothing has streamed
+   *  for QUIET_MS. Otherwise the watch is forgotten: a streaming or idle turn needs no evidence, and the
+   *  next quiet stretch starts a fresh one. Returns what the sampler needs for the subagent read. */
+  pulseTarget(now = Date.now()): { sessionId: string | null; since: number } | null {
+    const want = this.listener !== null && this.openCalls.size > 0 && this.acp?.pid != null && now - this.healthActivityAt >= QUIET_MS;
+    if (!want) { this.pulse.reset(); return null; }
+    return { sessionId: this.sessionId, since: this.turnStartedAtMs ?? now };
+  }
+
+  /** Fold one process-table look (null = the look failed) into the master's watch. */
+  observePulse(rows: ProcRow[] | null, at: number, subagent: SubagentSignal): void {
+    const pid = this.acp?.pid;
+    const oldest = oldestCallStart(this.openCalls);
+    if (pid == null || oldest === null) { this.pulse.reset(); return; }
+    this.pulse.observe({ at, work: rows ? workerProcesses(rows, pid, process.platform) : null, callStartedAt: oldest, subagent });
+    this.progressTick?.();
+  }
+
+  /** The user's "Stop command": end only the processes the oldest open call started, then tell the agent
+   *  why its call failed. The turn keeps running; this never cancels it. */
+  async stopOpenCall(): Promise<{ ok: boolean; stopped: string[]; reason: string }> {
+    const pid = this.acp?.pid;
+    const oldest = oldestCallStart(this.openCalls);
+    if (!this.listener || pid == null || oldest === null) return { ok: false, stopped: [], reason: "No tool call is running in the chat." };
+    const label = pendingSnapshot(this.openCalls, Date.now())[0]?.label ?? "the running call";
+    const ev = this.pulse.evidence;
+    const flatMs = ev ? pulseVerdict(ev, this.healthActivityAt, Date.now() - oldest).flatMs : 0;
+    const r = await stopCallProcesses(pid, oldest);
+    if (!r.stopped.length) return { ok: false, stopped: [], reason: r.failed.length ? `Could not stop ${r.failed.join(", ")}.` : "The running call has no process of its own to stop. Use Stop to end the turn." };
+    try { addInterject("master", stoppedCallNote(label, flatMs)); } catch { /* the kill already ended the call */ }
+    this.pulse.reset();
+    return { ok: true, stopped: r.stopped, reason: `Stopped ${r.stopped.join(", ")}. The agent is told why and continues.${r.failed.length ? ` Could not stop ${r.failed.join(", ")}.` : ""}` };
   }
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
@@ -1630,6 +1674,7 @@ class Backend {
   async loadSession(id: string): Promise<void> {
     this.clearTurnRecovery();
     await this.start();
+    await this.releaseOtherSession(this.acp!, id);
     await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
     this.sessionId = id;
   }
@@ -1691,7 +1736,6 @@ class Backend {
     // P-PROGRESS.1: the progress view goes to the window every PROGRESS_TICK_MS and on every settled tool
     // call, through onEvent DIRECTLY (never the sink): telling the user never counts as activity.
     let progressTimer: Timer | undefined;
-    let releaseFolder: (() => void) | null = null;
     this.stepsDone = 0;
     this.toolNames.clear();
     this.progressTick = () => { try { onEvent({ type: "progress", progress: this.progressView() }); } catch { /* stream gone */ } };
@@ -1742,6 +1786,7 @@ class Backend {
     this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
     this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
+    this.pulse.reset(); // P-LIVENESS.1: a new turn never inherits the last one's evidence
     this.recoverMark.clear(); // P-HEALTH.2: a new run never inherits a previous run's recovery marker
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
@@ -1788,27 +1833,10 @@ class Backend {
       const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
       let content: { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] =
         [{ type: "text" as const, text: body }, ...imageBlocks];
-      // P-PROGRESS.1: the folder lease. When a fleet lane is mid-turn in this workspace (or a folder
-      // inside or above it), this turn waits behind it, told what it waits on; Stop leaves the line.
-      this.folderWaitAbort = new AbortController();
-      try {
-        releaseFolder = await this.workspaceGate.acquire(
-          { id: "master", name: "Main", cwd: currentWorkspace(), etaMs: () => this.progressView().estimate.etaMs },
-          { signal: this.folderWaitAbort.signal, onWait: (w) => { this.waitingFolder = true; try { onEvent({ type: "waiting", wait: w }); } catch { /* stream gone */ } } },
-        );
-      } catch (e) {
-        // Stop while in line: nothing ran, so the turn settles quietly through the outer finally (done
-        // fires, no "agent unavailable" and no no-response notice), exactly like a cancelled turn.
-        onEvent({ type: "token", text: `[stopped: ${e instanceof Error ? e.message : String(e)}]` });
-        return;
-      } finally {
-        this.waitingFolder = false;
-        this.folderWaitAbort = null;
-      }
-      if (this.recoveryTurn !== turn) return;
+      // P-WAIT.1: no folder lease. The turn starts now; it waits only if one of its writes lands on a
+      // file another worker's running turn is editing (write_claims.ts, asked by the checkout gate hook).
       // ADR-0414: operator notes still waiting for the master (queued after the last tool step of an
-      // earlier turn, or while it was idle) open this prompt, right before the user's text. Drained here,
-      // after the folder wait, so a Stop while in line leaves them queued for the next prompt.
+      // earlier turn, or while it was idle) open this prompt, right before the user's text.
       let carried = "";
       if (this.carriedNotes) { try { carried = this.carriedNotes(); } catch { carried = ""; } }
       if (carried) content[0] = { type: "text" as const, text: `${head}${carried}\n\n${text}` };
@@ -1871,9 +1899,9 @@ class Backend {
     } finally {
       clearTimeout(slow);
       clearInterval(progressTimer);
-      releaseFolder?.();
       this.progressTick = null;
       if (this.recoveryTurn === turn) {
+      this.writeClaims.endTurn("master"); // P-WAIT.1: the files this turn wrote are free for other workers
       this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
       this.askActive = false;
       this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
@@ -2369,7 +2397,6 @@ class Backend {
     // A user Stop that reaches a running /goal loop through the plain chat cancel (the composer's turn view
     // routes Stop there) must end the LOOP, not just this iteration, or the next iteration starts at once.
     if (!opts?.forRecover && this.goalActive) this.goalCancelled = true;
-    if (this.folderWaitAbort) { this.folderWaitAbort.abort(); return; } // P-PROGRESS.1: leaving the line is the cancel
     try { if (this.acp && this.sessionId) this.acp.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* best-effort */ }
   }
 
@@ -2407,7 +2434,7 @@ class Backend {
   healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null; exhausted: boolean; dead: boolean } {
     const now = Date.now();
     const input: HealthInput = {
-      busy: this.listener !== null && !this.waitingFolder, dead: this.acp?.isDead ?? false, // P-PROGRESS.1: a folder wait is not a stall
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
     };
     const v = healthVerdict(input);
@@ -2421,7 +2448,7 @@ class Backend {
     if (this.healthBusy) return null;
     const now = Date.now();
     const input: HealthInput = {
-      busy: this.listener !== null && !this.waitingFolder, dead: this.acp?.isDead ?? false, // P-PROGRESS.1: a folder wait is not a stall
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
     };
     const v = healthVerdict(input);
@@ -2495,6 +2522,20 @@ class Backend {
     return resumeId ? this.loadVerified(resumeId) : { ok: true };
   }
 
+  /** P-ASYNCJOBS.1: omp gives its AsyncJobManager ONLY to the first live top-level session in a process
+   *  (sdk.ts: `!AsyncJobManager.instance()`); any later one gets none. Boot's ensureSession() opens an empty
+   *  session, so a chat resumed beside it had no manager: long bash never auto-backgrounds, `async: true`
+   *  fails, `task` runs synchronously, and the turn sits silent inside one tool call for as long as the
+   *  command takes (the "waiting on 1 task, quiet for 8 min" stall). Close the session this child already
+   *  holds, including a session/new still in flight, so the chat about to be loaded becomes the owner.
+   *  A replacement child (revival) is not `this.acp` yet and holds nothing, so it is left alone. */
+  private async releaseOtherSession(acp: ACPClient, keep: string): Promise<void> {
+    if (acp !== this.acp) return;
+    await this.sessioning?.catch(() => {});
+    const prev = this.sessionId;
+    if (prev && prev !== keep) await acp.request("session/close", { sessionId: prev }, { timeoutMs: SESSION_MS }).catch(() => {});
+  }
+
   // -- P-RECOVER.1 (ADR-0385): self-recovery the user can see, and a report of every one ------------------
 
   /** `session/load` on the live master, VERIFIED: the one resume primitive the watchdog, the on-demand
@@ -2505,6 +2546,7 @@ class Backend {
     this.replaying = true;
     try {
       if (!acp) throw new Error("no agent process");
+      await this.releaseOtherSession(acp, id);
       await acp.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: RESUME_MS });
       this.sessionId = id;
       console.error("[recover] chat session resumed on the agent process");

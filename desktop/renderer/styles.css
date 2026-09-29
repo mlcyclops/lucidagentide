@@ -5943,11 +5943,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   border-color:rgb(var(--red-rgb) / .5)}
 .hud-signal,.lane-signal{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-4)}
 .hud-restart,.lane-restart{flex:none;white-space:nowrap}
-.hud-queue{margin-top:5px;padding:5px 8px;border:1px solid rgb(var(--amber-rgb) / .35);border-radius:7px;
-  background:rgb(var(--amber-rgb) / .07)}
-.hud-queue-head{color:var(--txt-2);margin-bottom:2px}
-.hud-queue-row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-3)}
-.hud-queue-row.me{color:var(--amber-txt)}
+/* P-LIVENESS.1 (ADR-0418): an open call with no CPU, disk or subagent activity for minutes is marked
+   likely stuck; the pill turns red (the quiet line reuses .hud-dead) and the Stop command sits beside it.
+   Marking only, never an action. */
+.hud-alive[data-state="stuck"],.lane-alive[data-state="stuck"]{color:var(--red-txt);background:rgb(var(--red-rgb) / .14);
+  border-color:rgb(var(--red-rgb) / .5)}
+.hud-stopcall,.lane-stopcall{flex:none;white-space:nowrap}
 
 .lane-progress{padding:5px 9px 6px;border-top:1px solid var(--line-soft);background:var(--bg-1);font-family:var(--mono);
   font-size:10.5px;color:var(--txt-3);min-width:0}
@@ -5995,12 +5996,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-tchip-state[data-state="done"]::before{content:"\2713";margin-right:2px}
 .fleet-tchip-state[data-state="failed"]{color:var(--txt-3)}
 .fleet-tchip-state[data-state="failed"]::before{content:"\2717";margin-right:2px}
-.fleet-queues{grid-column:1 / -1;margin:0 0 8px;padding:7px 10px;border:1px solid rgb(var(--amber-rgb) / .35);
-  border-radius:9px;background:rgb(var(--amber-rgb) / .07);font-family:var(--mono);font-size:11px;min-width:0}
-.fleet-queue-folder + .fleet-queue-folder{margin-top:6px;padding-top:6px;border-top:1px solid var(--line-soft)}
-.fleet-queue-title{color:var(--txt-2);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-queue-row{color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-queue-row[data-state="running"]{color:var(--txt-2)}
 .sa-alive{flex:none;font-family:var(--mono);font-size:10.5px;white-space:nowrap;color:var(--txt-4)}
 .sa-alive[data-state="working"]{color:var(--txt-3)}
 .sa-alive[data-state="quiet"]{color:var(--amber-txt)}
