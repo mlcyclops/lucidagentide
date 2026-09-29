@@ -12648,6 +12648,18 @@ and on `\\<host>\C$`; a `files` list works), so on Windows with a UNC cwd the ru
 `pushd`, which maps the share to a temporary drive letter, and `popd` releases it. tsc's exit status is
 propagated (a planted type error fails the target from both paths).
 
+Review (2026-09-28, CodeQL #75) found the first cut spliced argv into the `cmd /c` line unescaped, so an
+argument carrying `&` ran a second command, and a `%` in the cwd was expanded. Landed version: nothing
+user-controlled is on a cmd command line. The cwd, the bun path, the tsc entry and a tsc response file
+(`@file`, one quoted argument per line; a `"` in an argument is refused, tsc's parser has no escape) reach a
+generated batch file as ENVIRONMENT VARIABLES; cmd expands `%VAR%` once per line and never re-scans the
+result, delayed expansion stays off, and `%errorlevel%` on its own line is tsc's real status. Verified over
+`\\<host>\C$`: the injection string is one tsc argument (TS5112, nothing runs), a junction named `pct%OS%x`
+typechecks (exit 0), a planted TS2322 exits 1, and `packaged_boot` passes 3/3 in about 60 s. One confound
+worth knowing: a checkout (or `node_modules`) under OneDrive read over SMB reports Files-on-Demand
+placeholders with an unknown dirent type, so the sim copy skips them and the engine fails to boot with a
+missing module; that is the folder, not the harness.
+
 Reproduce without the operator's share: address a local worktree as `\\<hostname>\C$\...`. Not
 `\\localhost\C$\...`: Bun 1.4.2 reports `import.meta.dir` there as `C$\Users\...` (prefix dropped), a
 different bug that breaks every test's own paths.
