@@ -87,9 +87,9 @@ export function orbitSlots(count: number, w: number, h: number, opts?: OrbitOpts
  *  those are the two states that block on a human (the fleet grid's own animation rule). */
 export function spokeGlance(l: { status: LaneStatus; turns: number; queued: readonly unknown[]; waiting?: { on: { name: string } }; progress?: { estimate: { percent: number | null } } }, showEstimate: boolean): string {
   const q = l.queued.length > 0 ? ` \u00b7 ${l.queued.length} queued` : "";
-  // P-PROGRESS.1: a lane in line for its folder says whom it waits for; a running one with history shows
-  // how far along it probably is (labelled as the estimate it is). P-PROGRESS.3: only when the user opted
-  // into the experimental estimate.
+  // P-WAIT.1: a lane whose write waits for another worker's file says whom it waits for; a running one
+  // with history shows how far along it probably is (labelled as the estimate it is). P-PROGRESS.3: only
+  // when the user opted into the experimental estimate.
   if (l.waiting && l.status === "working") return `waiting for ${l.waiting.on.name}${q}`;
   const pct = showEstimate ? l.progress?.estimate.percent : null;
   const est = l.status === "working" && pct !== null && pct !== undefined ? ` \u00b7 ${pct}% (est.)` : "";

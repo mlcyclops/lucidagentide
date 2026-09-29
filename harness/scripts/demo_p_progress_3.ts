@@ -17,7 +17,6 @@
 // Run: bun run harness/scripts/demo_p_progress_3.ts
 
 import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, etaPhrase, progressLine, progressView, wholeEtaPhrase, withoutEstimate } from "../../desktop/turn_progress.ts";
-import type { SequenceEntry } from "../../desktop/workspace_gate.ts";
 import * as prefs from "../../desktop/renderer/status_prefs.ts";
 
 const fail = (m: string): never => { console.error(`FAIL: ${m}`); process.exit(1); };
@@ -52,8 +51,6 @@ const off = withoutEstimate(agedProgress(p, 2_000));
 ok(progressLine(off, false) === "32 s \u00b7 step 2", `the progress line reads: ${progressLine(off, false)}`);
 ok(off.estimate.percent === null, "no percent, so the bar runs indeterminate");
 ok(prefs.shownEta(etaPhrase(p.estimate), false) === "", "the HUD, tool-row and subagent ETA spans stay empty");
-const waiter: SequenceEntry = { id: "b", name: "docs", folder: "repo", state: "waiting", position: 1, sinceAt: now, etaMs: 20_000, expectedStartAt: now + 50_000 };
-ok(prefs.queueWhen(waiter, now, false) === "waits its turn", "a folder waiter gets no expected start time");
 
 console.log("\n[3] estimate on: a number or nothing");
 const on = agedProgress(p, 2_000);
@@ -61,7 +58,6 @@ ok(progressLine(on, true) === "32 s \u00b7 step 2 \u00b7 about 48 s left (est.)"
 ok(prefs.shownEta(wholeEtaPhrase(on.estimate, []), true) === "about 48 s left (est.)", "the HUD line carries the whole-prompt ETA");
 const fresh = etaPhrase(estimateFromSamples(5_000, [], 2));
 ok(fresh === ETA_ESTIMATING && prefs.shownEta(fresh, true) === "", "without history the placeholder is suppressed, not shown");
-ok(prefs.queueWhen(waiter, now, true) === "waits, starts in about 50 s (est.)", "a folder waiter gets its expected start");
 
 console.log("\n[4] the progress ring");
 ok(prefs.statusRing() === true, "the ring is on by default");

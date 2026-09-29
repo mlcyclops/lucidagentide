@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { FleetLaneManager, type LaneEvent } from "./fleet_lanes.ts";
 import type { SystemSnapshot } from "./system_profile.ts";
 import { DurationHistory } from "./turn_progress.ts";
+import { WriteClaims } from "./write_claims.ts";
 
 const FAKE = join(import.meta.dir, "..", "harness", "mcp", "testing", "fake_acp_agent.ts");
 const TIMEOUT = 20_000;
@@ -20,7 +21,7 @@ const healthy: SystemSnapshot = { cpuModel: "t", cores: 8, speedMHz: 4000, cpuBu
 /** Pegged on BOTH metrics: 100% cpu, ~94% memory used. */
 const pegged: SystemSnapshot = { ...healthy, cpuBusyPct: 100, memTotalMB: 16_000, memFreeMB: 1_000 };
 
-function manager(opts: { snap?: SystemSnapshot; mode?: string; now?: () => number; history?: DurationHistory } = {}): FleetLaneManager {
+function manager(opts: { snap?: SystemSnapshot; mode?: string; now?: () => number; history?: DurationHistory; claims?: WriteClaims } = {}): FleetLaneManager {
   if (opts.mode) process.env.FAKE_ACP_MODE = opts.mode; else delete process.env.FAKE_ACP_MODE;
   return new FleetLaneManager({
     argv: () => ({ cmd: "bun", args: [FAKE] }),
@@ -28,6 +29,7 @@ function manager(opts: { snap?: SystemSnapshot; mode?: string; now?: () => numbe
     sample: async () => opts.snap ?? healthy,
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.history ? { history: opts.history } : {}),
+    ...(opts.claims ? { claims: opts.claims } : {}),
   });
 }
 
@@ -651,96 +653,58 @@ test("laneTranscript hands out a COPY of the lane's memory, and [] for an unknow
   expect(again[0]).toEqual({ role: "user", text: "remember: OTTER" });
 }, TIMEOUT);
 
-// ── P-PROGRESS.1: same-folder lanes take turns, and a busy lane reports progress ────────────────────
+// ── P-WAIT.1: workers in one folder run at once; only a write to the same file waits ─────────────
 
-/** The event the waiter receives, resolved as soon as it arrives (no guessed sleep). */
-function firstWaiting(events: LaneEvent[]): Promise<Extract<LaneEvent, { type: "waiting" }>> {
-  return new Promise((res) => {
-    const seen = () => events.find((e): e is Extract<LaneEvent, { type: "waiting" }> => e.type === "waiting");
-    const tick = () => { const w = seen(); if (w) res(w); else setTimeout(tick, 10); };
-    tick();
-  });
+/** Resolves once `events` holds one matching `pred` (no guessed sleep). */
+function firstEvent<T extends LaneEvent>(events: LaneEvent[], pred: (e: LaneEvent) => e is T): Promise<T> {
+  const { promise, resolve } = Promise.withResolvers<T>();
+  const tick = () => { const hit = events.find(pred); if (hit) resolve(hit); else setTimeout(tick, 10); };
+  tick();
+  return promise;
 }
+const isOutput = (e: LaneEvent): e is Extract<LaneEvent, { type: "token" }> => e.type === "token";
 
-test("two lanes on ONE folder run in serial: the second is told what it waits on, and runs after the first", async () => {
-  live = manager({ mode: "hang" });
+test("two lanes on ONE folder both reach their agent at once: no folder lease, no waiting", async () => {
+  // `midturn`: each child streams output as soon as its prompt arrives, then keeps the turn open. Under the
+  // old folder lease, beta's prompt never left the engine while alpha's turn was open.
+  live = manager({ mode: "midturn" });
   const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
-  const b = await live.spawn({ cwd: join(import.meta.dir, "renderer"), name: "beta" }); // a folder INSIDE alpha's
-  const aEvents: LaneEvent[] = [];
-  const bEvents: LaneEvent[] = [];
-  const aTurn = live.prompt(a.lane!.id, "first", (e) => aEvents.push(e)); // hangs until cancel
-  const bTurn = live.prompt(b.lane!.id, "second", (e) => bEvents.push(e));
-  const w = await firstWaiting(bEvents);
-  expect(w.wait.on).toEqual({ id: a.lane!.id, name: "alpha" });
-  expect(w.wait.position).toBe(1);
-  expect(w.wait.sequence.map((e) => [e.name, e.state])).toEqual([["alpha", "running"], ["beta", "waiting"]]);
-  const st = await live.status();
-  const va = st.lanes.find((l) => l.id === a.lane!.id)!;
-  const vb = st.lanes.find((l) => l.id === b.lane!.id)!;
-  expect(va.progress?.liveness.state).toBeDefined(); // a busy lane carries its progress view
-  expect(va.progress?.estimate.basis).toBe("none"); // no history yet: no number, honestly
-  expect(vb.waiting?.on.name).toBe("alpha");
-  expect(st.queues).toHaveLength(1);
-  expect(st.queues[0]!.entries.map((e) => e.name)).toEqual(["alpha", "beta"]);
-  live.cancel(a.lane!.id); // alpha's turn ends: beta is admitted and its prompt reaches the child
-  await aTurn;
-  expect(aEvents.some((e) => e.type === "done")).toBe(true);
-  // Beta's turn now hangs in omp (not in line): cancel goes to the child and settles it.
-  await Bun.sleep(150); // real clock: the child must receive the prompt before session/cancel (see above)
-  live.cancel(b.lane!.id);
-  await bTurn;
-  expect(bEvents.some((e) => e.type === "done")).toBe(true);
-  expect((await live.status()).queues).toEqual([]);
-}, TIMEOUT);
 
-test("a waiting lane's expected start counts down with the status poll and agrees with the folder queue", async () => {
-  let t = 5_000_000;
-  const history = new DurationHistory();
-  for (let i = 0; i < 5; i++) history.addTurn("master-model-a", 60_000);
-  live = manager({ mode: "hang", now: () => t, history });
-  const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
-  const b = await live.spawn({ cwd: import.meta.dir, name: "beta" });
-  const aTurn = live.prompt(a.lane!.id, "first", () => {});
-  const bEvents: LaneEvent[] = [];
-  const bTurn = live.prompt(b.lane!.id, "second", (e) => bEvents.push(e));
-  const first = (await firstWaiting(bEvents)).wait.etaMs;
-  expect(first).not.toBeNull();
-  t += 20_000; // alpha has run 20 s longer
-  const st = await live.status();
-  const later = st.lanes.find((l) => l.id === b.lane!.id)!.waiting!;
-  const queued = st.queues[0]!.entries.find((e) => e.name === "beta")!;
-  expect(later.etaMs!).toBeLessThan(first!);
-  expect(later.etaMs).toBe(Math.max(0, queued.expectedStartAt! - t));
-  live.cancel(b.lane!.id);
-  await bTurn;
-  await Bun.sleep(150); // real clock: the child must receive the prompt before session/cancel (see above)
-  live.cancel(a.lane!.id);
-  await aTurn;
-}, TIMEOUT);
-
-test("lanes on DISJOINT folders never wait; cancel while in line settles quietly and frees the line", async () => {
-  live = manager({ mode: "hang" });
-  const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
-  const c = await live.spawn({ cwd: join(import.meta.dir, "..", "harness"), name: "gamma" });
   const b = await live.spawn({ cwd: import.meta.dir, name: "beta" });
   const aEvents: LaneEvent[] = [];
-  const cEvents: LaneEvent[] = [];
   const bEvents: LaneEvent[] = [];
   const aTurn = live.prompt(a.lane!.id, "first", (e) => aEvents.push(e));
-  const cTurn = live.prompt(c.lane!.id, "elsewhere", (e) => cEvents.push(e));
   const bTurn = live.prompt(b.lane!.id, "second", (e) => bEvents.push(e));
-  await firstWaiting(bEvents);
-  expect(cEvents.some((e) => e.type === "waiting")).toBe(false);
-  expect((await live.status()).lanes.find((l) => l.id === c.lane!.id)!.waiting).toBeUndefined();
-  live.cancel(b.lane!.id); // still in line: leaving it IS the cancel
-  await bTurn;
-  expect(bEvents.some((e) => e.type === "done")).toBe(true);
-  expect(bEvents.some((e) => e.type === "error")).toBe(false);
-  expect((await live.status()).lanes.find((l) => l.id === b.lane!.id)!.status).toBe("awaiting-input");
-  expect((await live.status()).queues).toEqual([]);
-  await Bun.sleep(150);
-  live.cancel(a.lane!.id); live.cancel(c.lane!.id);
-  await Promise.all([aTurn, cTurn]);
+  await Promise.all([firstEvent(aEvents, isOutput), firstEvent(bEvents, isOutput)]);
+  const st = await live.status();
+  expect(st.lanes.filter((l) => l.status === "working").map((l) => l.name).sort()).toEqual(["alpha", "beta"]);
+  expect([...aEvents, ...bEvents].some((e) => e.type === "waiting")).toBe(false);
+  expect(st.lanes.every((l) => l.waiting === undefined)).toBe(true);
+  live.cancel(a.lane!.id); live.cancel(b.lane!.id);
+  await Promise.all([aTurn, bTurn]);
+}, TIMEOUT);
+
+test("a lane's write wait shows on its card, and its turn end frees its files and clears the wait", async () => {
+  const claims = new WriteClaims();
+  live = manager({ mode: "midturn", claims });
+  const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
+  const aEvents: LaneEvent[] = [];
+  const aTurn = live.prompt(a.lane!.id, "first", (e) => aEvents.push(e));
+  await firstEvent(aEvents, isOutput);
+  // Alpha's running turn claims a file; Main's write to that file waits on it.
+  expect(await claims.acquire({ id: a.lane!.id, name: "alpha" }, ["shared.ts"], import.meta.dir, { waitMs: 0 })).toEqual({ held: false });
+  const mainWrite = claims.acquire({ id: "master", name: "Main" }, ["shared.ts"], import.meta.dir, { waitMs: 10_000 });
+  // The engine route reports an alpha-side wait the same way; the card reads it from status and the event.
+  live.noteWriteWait(a.lane!.id, { on: { id: "master", name: "Main" }, file: "other.ts" });
+  const waited = await firstEvent(aEvents, (e): e is Extract<LaneEvent, { type: "waiting" }> => e.type === "waiting");
+  expect(waited.wait).toEqual({ on: { id: "master", name: "Main" }, file: "other.ts" });
+  expect((await live.status()).lanes[0]!.waiting?.file).toBe("other.ts");
+  live.cancel(a.lane!.id);
+  await aTurn;
+  expect(await mainWrite).toEqual({ held: false }); // alpha's turn ended: Main's write goes through
+  expect((await live.status()).lanes[0]!.waiting).toBeUndefined();
+  live.noteWriteWait(a.lane!.id, { on: { id: "master", name: "Main" }, file: "late.ts" }); // idle lane: ignored
+  expect((await live.status()).lanes[0]!.waiting).toBeUndefined();
 }, TIMEOUT);
 
 test("a code-less tool call carries the command, its intent, and settles its own step", async () => {
