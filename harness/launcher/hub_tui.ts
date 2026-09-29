@@ -37,7 +37,7 @@ const RED = chalk.hex("#ef5f5f");
 
 // ---- decks -------------------------------------------------------------------------------------
 
-export type DeckId = "overview" | "security" | "fleet" | "sessions" | "audit" | "usage" | "network";
+export type DeckId = "overview" | "security" | "fleet" | "sessions" | "audit" | "usage" | "network" | "kg";
 export const DECKS: readonly { id: DeckId; key: string; title: string; icon: string }[] = [
   { id: "overview", key: "1", title: "Overview", icon: "◆" },
   { id: "security", key: "2", title: "Security", icon: "⛨" },
@@ -46,6 +46,7 @@ export const DECKS: readonly { id: DeckId; key: string; title: string; icon: str
   { id: "audit", key: "5", title: "Audit", icon: "✎" },
   { id: "usage", key: "6", title: "Usage", icon: "$" },
   { id: "network", key: "7", title: "Network", icon: "⇄" },
+  { id: "kg", key: "8", title: "Knowledge", icon: "◈" },
 ];
 
 /** The engine payload slices the decks draw. Fetched as unknown, narrowed field by field:
@@ -61,6 +62,10 @@ export interface HubData {
   usage: Record<string, unknown>;
   /** omp's raw configOptions (the model entry carries the catalog + the current pick). */
   config: unknown[];
+  /** /api/kb/list: the KG registry ({kgs, activeId}) - always cheap. */
+  kg: Record<string, unknown>;
+  /** /api/kb/graph for the ACTIVE KG - fetched only while a Knowledge pane is open. */
+  kgGraph: Record<string, unknown> | null;
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "?");
@@ -72,8 +77,15 @@ export function quarantineOf(data: HubData | null): Record<string, unknown>[] {
   return data ? arr(rec(data.security.live).quarantined).map(rec) : [];
 }
 
+/** The Knowledge deck's selectable page rows: the graph's pages under the type-to-filter. */
+export function kgPages(data: HubData | null, filter: string): Record<string, unknown>[] {
+  const pages = arr(rec(data?.kgGraph).pages).map(rec);
+  const f = filter.trim().toLowerCase();
+  return f ? pages.filter((p) => str(p.title).toLowerCase().includes(f) || str(p.slug).toLowerCase().includes(f)) : pages;
+}
+
 /** Pure deck bodies: plain rows (no ANSI - styling is a later pass), each row one physical line. */
-export function deckLines(deck: DeckId, data: HubData | null, width: number, selected: number): string[] {
+export function deckLines(deck: DeckId, data: HubData | null, width: number, selected: number, filter = ""): string[] {
   if (!data) return ["loading from the engine…"];
   const w = Math.max(8, width);
   // One row is ONE physical line: engine strings (session titles, findings) can carry newlines,
@@ -149,6 +161,28 @@ export function deckLines(deck: DeckId, data: HubData | null, width: number, sel
         t(`${i === selected ? "▸" : " "} ${truncateToWidth(str(e.pattern), 38).padEnd(38)} ${str(e.kind).padEnd(7)} ${str(e.zone).padEnd(9)} ${str(e.scope)}`),
       )];
     }
+    case "kg": {
+      const kgs = arr(data.kg.kgs).map(rec);
+      if (kgs.length === 0) return ["no knowledge graphs yet - build one in the GUI or `lucid kb`"];
+      const activeId = str(data.kg.activeId);
+      const head = ["", t(`  ${kgs.map((k) => `${str(k.kg_id) === activeId ? "● " : "  "}${str(k.name)}`).join("   ")}`), ""];
+      const g = data.kgGraph;
+      if (!g) return [...head, "  loading the graph…"];
+      const pages = kgPages(data, filter);
+      const titleOf = new Map(arr(g.pages).map(rec).map((p) => [str(p.page_id), str(p.title)]));
+      const linksFrom = new Map<string, string[]>();
+      for (const l of arr(g.links).map(rec)) {
+        const from = str(l.from_page_id);
+        (linksFrom.get(from) ?? linksFrom.set(from, []).get(from)!).push(titleOf.get(str(l.to_page_id)) ?? "?");
+      }
+      const stats = t(`  ${str(g.totalPages)} page${str(g.totalPages) === "1" ? "" : "s"} · ${str(g.totalLinks)} link${str(g.totalLinks) === "1" ? "" : "s"}${filter ? ` · filter: ${filter}` : ""}`);
+      if (pages.length === 0) return [...head, stats, "", filter ? "  nothing matches the filter (/ edits, esc clears)" : "  this knowledge graph is empty"];
+      return [...head, stats, "", ...pages.map((p, i) => {
+        const out = linksFrom.get(str(p.page_id)) ?? [];
+        const arrow = out.length ? `  →  ${out.slice(0, 4).join(" · ")}${out.length > 4 ? ` · +${out.length - 4}` : ""}` : "";
+        return t(`${i === selected ? "▸" : " "} ${str(p.title)} (${str(p.degree)})${arrow}`);
+      })];
+    }
   }
 }
 
@@ -182,6 +216,7 @@ export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
   audit: "j/k scroll · r refresh",
   usage: "r refresh",
   network: "w whitelist a host · j/k select · D remove · t toggle allow-all",
+  kg: "j/k select · ⏎ read page · / filter · c switch KG",
   agent: "⏎ prompt · m model · j/k scroll · G live · y/s/d answer ask · x close",
   prompting: "type your prompt · ⏎ send · esc cancel",
 };
@@ -303,7 +338,9 @@ export class HubComponent implements Component {
   #watchers: Record<string, AbortController> = {};
   #prompt: { lane: string; text: string } | null = null;
   #picker: { lane: string; models: ModelOption[]; sel: number; filter: string; busy?: boolean } | null = null;
-  #promptKind: "agent" | "wl-add" = "agent";
+  #promptKind: "agent" | "wl-add" | "kg-filter" = "agent";
+  #kgFilter = "";
+  #reader: { title: string; rows: string[] } | null = null;
   #data: HubData | null = null;
   #status = "";
   #timer: NodeJS.Timeout | undefined;
@@ -351,16 +388,21 @@ export class HubComponent implements Component {
 
   async refresh(): Promise<void> {
     try {
-      const [build, security, fleet, sessions, audit, usage, whitelist, posture, config] = await Promise.all([
+      const kgVisible = leaves(this.#tree).some((l) => l.deck === "kg");
+      const [build, security, fleet, sessions, audit, usage, whitelist, posture, config, kg, kgGraph] = await Promise.all([
         this.#get("/api/build-info"), this.#get("/api/security"), this.#get("/api/fleet/status"),
         this.#get("/api/sessions"), this.#get("/api/audit"), this.#get("/api/usage"),
         this.#get("/api/whitelist"), this.#get("/api/whitelist/posture"), this.#get("/api/config"),
+        this.#get("/api/kb/list"),
+        // The graph opens one DuckDB per KG - only paid while a Knowledge pane is actually open.
+        kgVisible ? this.#get("/api/kb/graph").catch(() => null) : Promise.resolve(this.#data?.kgGraph ?? null),
       ]);
       if (this.#disposed) return;
       this.#data = {
         build: rec(build), security: rec(security), fleet: rec(fleet),
         sessions: arr(rec(sessions).sessions ?? sessions), audit: rec(audit), usage: rec(usage),
         whitelist: arr(whitelist), posture: rec(posture), config: arr(config),
+        kg: rec(kg), kgGraph: kgGraph === null ? null : rec(kgGraph),
       };
       // Live transcripts for every open agent pane, same poll tick.
       const laneIds = [...new Set(leaves(this.#tree).flatMap((l) => (l.deck === "agent" && l.lane ? [l.lane] : [])))];
@@ -454,21 +496,41 @@ export class HubComponent implements Component {
     // matching silently killed the key on CRLF terminals (field report 2026-09-28).
     const isEnter = data === "\r" || data === "\n" || data === "\r\n" || matchesKey(data, "enter");
     if (this.#help) { if (isEnter) return; this.#help = false; this.#ui.requestRender(); if (data === "q" || matchesKey(data, "ctrl+c")) this.#done.resolve(); return; }
+    // Page reader: a fullscreen read view anchored at the TOP; j/k move down/up, esc or q closes.
+    if (this.#reader) {
+      if (matchesKey(data, "escape") || data === "q") { this.#reader = null; this.#scroll = 0; }
+      else if (data === "j" || matchesKey(data, "down")) this.#scroll++;
+      else if (data === "k" || matchesKey(data, "up")) this.#scroll = Math.max(0, this.#scroll - 1);
+      else if (matchesKey(data, "ctrl+d")) this.#scroll += 10;
+      else if (matchesKey(data, "ctrl+u")) this.#scroll = Math.max(0, this.#scroll - 10);
+      this.#ui.requestRender();
+      return;
+    }
     // Prompt mode: the focused agent pane owns the keyboard until Enter (send) or Esc (cancel).
     // Pasted/chunked input arrives as one string, so walk it char by char; a newline inside a
     // chunk submits what was typed before it (terminal paste semantics). An EMPTY enter is a
     // no-op that keeps the composer open - it used to close it, dumping the next keystrokes onto
     // the global keymap ("-" split a pane mid-sentence).
     if (this.#prompt) {
-      if (matchesKey(data, "escape")) { this.#prompt = null; this.#promptKind = "agent"; this.#ui.requestRender(); return; }
-      if (matchesKey(data, "backspace")) { this.#prompt.text = this.#prompt.text.slice(0, -1); this.#ui.requestRender(); return; }
+      const isKgFilter = this.#promptKind === "kg-filter";
+      if (matchesKey(data, "escape")) {
+        if (isKgFilter) { this.#kgFilter = ""; this.#selected = 0; }
+        this.#prompt = null; this.#promptKind = "agent"; this.#ui.requestRender(); return;
+      }
+      if (matchesKey(data, "backspace")) {
+        this.#prompt.text = this.#prompt.text.slice(0, -1);
+        if (isKgFilter) { this.#kgFilter = this.#prompt.text; this.#selected = 0; }
+        this.#ui.requestRender(); return;
+      }
       for (const ch of data) {
         if (ch === "\r" || ch === "\n") {
+          if (isKgFilter) { this.#prompt = null; this.#promptKind = "agent"; this.#ui.requestRender(); return; } // filter stays applied
           if (this.#prompt.text.trim()) { void this.#sendPrompt(); return; }
           continue; // empty enter: stay in the composer
         }
         if (ch >= " " && ch !== "\u007f") this.#prompt.text += ch;
       }
+      if (isKgFilter) { this.#kgFilter = this.#prompt.text; this.#selected = 0; } // LIVE: the deck narrows as you type
       this.#ui.requestRender();
       return;
     }
@@ -518,6 +580,8 @@ export class HubComponent implements Component {
     else if (data === "w" && this.#focusedDeck() === "network") { this.#promptKind = "wl-add"; this.#prompt = { lane: "", text: "" }; }
     else if (data === "D" && this.#focusedDeck() === "network") { void this.#removeWhitelistEntry(); return; }
     else if (data === "t" && this.#focusedDeck() === "network") { void this.#togglePosture(); return; }
+    else if (data === "/" && this.#focusedDeck() === "kg") { this.#promptKind = "kg-filter"; this.#prompt = { lane: "", text: this.#kgFilter }; }
+    else if (data === "c" && this.#focusedDeck() === "kg") { void this.#cycleKg(); return; }
     else if ((data === "y" || data === "s" || data === "d") && this.#pendingApprovalLane()) { void this.#answerApproval(data); return; }
     else if (isEnter) { void this.#enter(); return; }
     else if (data === "m") { this.#openModelPicker(); return; }
@@ -603,7 +667,40 @@ export class HubComponent implements Component {
       await this.#spawnAgent(str(sess.id));
       return;
     }
+    if (leaf.deck === "kg" && this.#data) {
+      const pages = kgPages(this.#data, this.#kgFilter);
+      const page = pages[Math.min(this.#selected, pages.length - 1)];
+      if (!page) { this.#status = "no page selected"; this.#ui.requestRender(); return; }
+      await this.#openKgPage(str(rec(this.#data.kgGraph).kgId), str(page.page_id));
+      return;
+    }
     this.#ui.requestRender();
+  }
+
+  /** Fetch one knowledge page and open the fullscreen reader. Content renders as wrapped text. */
+  async #openKgPage(kgId: string, pageId: string): Promise<void> {
+    try {
+      const page = rec(await this.#get(`/api/kb/page?kgId=${encodeURIComponent(kgId)}&pageId=${encodeURIComponent(pageId)}`));
+      const body = str(page.content ?? page.body ?? page.markdown ?? "");
+      this.#reader = { title: str(page.title), rows: body === "?" || !body ? ["(this page has no readable body)"] : body.split("\n") };
+      this.#scroll = 0;
+    } catch (err) {
+      this.#status = `could not load the page: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    this.#ui.requestRender();
+  }
+
+  /** `c`: activate the NEXT KG in the registry - same /api/kb/activate the GUI picker calls. */
+  async #cycleKg(): Promise<void> {
+    const kgs = arr(this.#data?.kg.kgs).map(rec);
+    if (kgs.length < 2) { this.#status = kgs.length === 0 ? "no knowledge graphs" : "only one knowledge graph"; this.#ui.requestRender(); return; }
+    const activeId = str(this.#data?.kg.activeId);
+    const idx = Math.max(0, kgs.findIndex((k) => str(k.kg_id) === activeId));
+    const next = kgs[(idx + 1) % kgs.length]!;
+    await this.#post("/api/kb/activate", { kgId: str(next.kg_id) });
+    this.#kgFilter = ""; this.#selected = 0;
+    this.#status = `knowledge graph → ${str(next.name)}`;
+    await this.refresh();
   }
 
   /** Spawn a lane (optionally resuming a session) and open it in the focused pane. Refusals (a held
@@ -742,6 +839,11 @@ export class HubComponent implements Component {
       ["  y / s / d", "answer a parked ask: once / session / deny"],
       ["  m", "switch the agent's model (picker)"],
       ["", ""],
+      ["Knowledge (deck 8)", ""],
+      ["  ⏎", "read the selected page"],
+      ["  /", "filter pages as you type"],
+      ["  c", "switch the active knowledge graph"],
+      ["", ""],
       ["Security", ""],
       ["  a", "approve the selected block (audited release)"],
       ["  i", "dismiss the selected block (acknowledge only)"],
@@ -868,7 +970,7 @@ export class HubComponent implements Component {
     const deck = leaf.deck;
     const meta = DECKS.find((d) => d.id === deck)!;
     const badge = deck === "security" ? quarantineOf(this.#data).length : deck === "fleet" ? arr(this.#data?.fleet.lanes).length : deck === "sessions" ? this.#data?.sessions.length ?? 0 : 0;
-    const body = fitBlock(deckLines(deck, this.#data, w - 4, focused ? this.#selected : -1), w - 4, h - 2);
+    const body = fitBlock(deckLines(deck, this.#data, w - 4, focused ? this.#selected : -1, this.#kgFilter), w - 4, h - 2);
     const paint = focused ? CYAN : LINE;
     const title = ` ${meta.icon} ${meta.title}${badge ? ` · ${badge}` : ""} `;
     const titlePainted = focused ? ACCENT_2.bold(title) : TXT_3(title);
@@ -909,6 +1011,22 @@ export class HubComponent implements Component {
     return brandCut + " ".repeat(pad) + right;
   }
 
+  /** The fullscreen page reader: wrapped body, top-anchored scroll, LUCID-accent frame. */
+  #readerBlock(w: number, h: number): string[] {
+    const rd = this.#reader!;
+    const innerW = Math.max(20, w - 6);
+    const wrapped = rd.rows.flatMap((row) => (row === "" ? [""] : wrapText(row, innerW)));
+    const maxScroll = Math.max(0, wrapped.length - (h - 2));
+    this.#scroll = Math.min(this.#scroll, maxScroll);
+    const view = wrapped.slice(this.#scroll, this.#scroll + h - 2);
+    const pos = maxScroll > 0 ? ` · ${Math.round((this.#scroll / maxScroll) * 100)}%` : "";
+    const title = ` ◈ ${truncateToWidth(rd.title, w - 30)}${pos} `;
+    const top = ACCENT("╭─") + ACCENT_2.bold(title) + ACCENT("─".repeat(Math.max(0, w - 3 - Bun.stringWidth(title))) + "╮");
+    const bottom = ACCENT("╰" + "─".repeat(Math.max(0, w - 2)) + "╯");
+    const rows = fitBlock(view, w - 4, h - 2).map((line) => ACCENT("│") + " " + TXT(line) + " " + ACCENT("│"));
+    return [top, ...rows, bottom];
+  }
+
   render(width: number): readonly string[] {
     const height = Math.max(10, this.#ui.terminal.rows);
     const bodyH = height - 2;
@@ -916,11 +1034,15 @@ export class HubComponent implements Component {
     const paneW = sidebarOn ? width - SIDEBAR_W : width;
     const tree: PaneNode = this.#zoom ? this.#focusedLeaf() : this.#tree;
     const ring = { i: this.#zoom ? this.#focus : 0 };
-    const panes = this.#picker ? this.#pickerBlock(paneW, bodyH) : this.#help ? this.#helpBlock(paneW, bodyH) : this.#renderNode(tree, paneW, bodyH, ring);
+    const panes = this.#reader ? this.#readerBlock(paneW, bodyH) : this.#picker ? this.#pickerBlock(paneW, bodyH) : this.#help ? this.#helpBlock(paneW, bodyH) : this.#renderNode(tree, paneW, bodyH, ring);
     const body = sidebarOn ? this.#sidebarBlock(bodyH).map((s, i) => s + (panes[i] ?? "")) : panes;
     const rightPlain = `${this.#engine.flavor} engine · lucid hub `;
-    const composing = this.#prompt && this.#promptKind === "wl-add" ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)` : "";
-    const hint = this.#help ? " any key closes help" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#focusedDeck()]} · ? help`;
+    const composing = this.#prompt && this.#promptKind === "wl-add"
+      ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
+      : this.#prompt && this.#promptKind === "kg-filter"
+        ? ` filter pages: ${this.#prompt.text}▌  (live · ⏎ keep · esc clear)`
+        : "";
+    const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#focusedDeck()]} · ? help`;
     const leftPlain = truncateToWidth(composing || (this.#status ? ` ${this.#status}` : hint), Math.max(0, width - Bun.stringWidth(rightPlain) - 1));
     const pad = Math.max(1, width - Bun.stringWidth(leftPlain) - Bun.stringWidth(rightPlain));
     const statusBar = (this.#status ? AMBER(leftPlain) : TXT_3(leftPlain)) + " ".repeat(pad) + TXT_3(rightPlain);

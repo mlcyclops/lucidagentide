@@ -6,7 +6,7 @@
 // breaks every pane to its right), and deck rows must survive hostile engine strings.
 
 import { describe, expect, test } from "bun:test";
-import { closeLeaf, deckLines, modelCatalog, fitBlock, leaves, mapLeaf, type HubData, type PaneNode } from "./hub_tui.ts";
+import { closeLeaf, deckLines, kgPages, modelCatalog, fitBlock, leaves, mapLeaf, type HubData, type PaneNode } from "./hub_tui.ts";
 
 const leaf = (deck: "overview" | "security" | "fleet"): PaneNode => ({ kind: "leaf", deck });
 
@@ -47,6 +47,8 @@ describe("deck rows", () => {
     usage: { models: [] },
     whitelist: [{ id: "wl_1", kind: "domain", pattern: WL_HOST, zone: "internal", scope: "always" }],
     posture: { allowAll: true, allowWebSearch: true },
+    kg: { kgs: [{ kg_id: "kg1", name: "My Knowledge" }, { kg_id: "kg2", name: "Research" }], activeId: "kg1" },
+    kgGraph: { kgId: "kg1", totalPages: 2, totalLinks: 1, pages: [{ page_id: "p1", title: "Fail-closed gate", slug: "gate", degree: 1 }, { page_id: "p2", title: "Prompt prefix", slug: "prefix", degree: 1 }], links: [{ from_page_id: "p1", to_page_id: "p2", relation: "links" }] },
     config: [{ id: "model", value: "glm-5.3-flash", options: [{ value: "glm-5.3-flash", name: "GLM 5.3 Flash" }, { value: "claude-haiku-4-5", name: "Claude Haiku 4.5" }] }],
   };
 
@@ -93,5 +95,31 @@ describe("modelCatalog", () => {
     expect(current).toBe("glm-5.3-flash");
     expect(modelCatalog([])).toEqual({ models: [], current: "" });
     expect(modelCatalog([null, 4, "x"])).toEqual({ models: [], current: "" });
+  });
+});
+
+describe("knowledge deck", () => {
+  const kgData = {
+    build: {}, security: {}, fleet: { lanes: [] }, sessions: [], audit: {}, usage: {},
+    whitelist: [], posture: {}, config: [],
+    kg: { kgs: [{ kg_id: "kg1", name: "My Knowledge" }, { kg_id: "kg2", name: "Research" }], activeId: "kg1" },
+    kgGraph: {
+      kgId: "kg1", totalPages: 2, totalLinks: 1,
+      pages: [{ page_id: "p1", title: "Fail-closed gate", slug: "gate", degree: 1 }, { page_id: "p2", title: "Prompt prefix", slug: "prefix", degree: 1 }],
+      links: [{ from_page_id: "p1", to_page_id: "p2", relation: "links" }],
+    },
+  } as unknown as HubData; // fixture: only the kg slices matter here
+
+  test("lists KGs with the active marker, pages with outgoing links, and filters live", () => {
+    const rows = deckLines("kg", kgData, 100, 0);
+    expect(rows.some((l) => l.includes("● My Knowledge") && l.includes("  Research"))).toBe(true);
+    expect(rows.some((l) => l.includes("2 pages · 1 link"))).toBe(true);
+    const sel = rows.find((l) => l.startsWith("▸"))!;
+    expect(sel).toContain("Fail-closed gate (1)");
+    expect(sel).toContain("→  Prompt prefix");
+    const filtered = deckLines("kg", kgData, 100, 0, "prefix");
+    expect(filtered.some((l) => l.includes("Prompt prefix"))).toBe(true);
+    expect(filtered.some((l) => l.includes("Fail-closed gate ("))).toBe(false);
+    expect(kgPages(kgData, "gate").map((p) => p.page_id)).toEqual(["p1"]);
   });
 });
