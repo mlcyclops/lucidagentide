@@ -4768,8 +4768,9 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
 // default is None: judging is opt-in. The key rides the same provCard plumbing as ElevenLabs. The SERVER
 // owns the lockdown clamp: under AskSage lockdown `effective` is `llm` (or `none`) and the select is disabled,
 // with the stored choice shown so lifting the lock visibly restores it. Nothing here ever enters the model
-// picker (TypeSafe has no chat models). The card also shows the chain omp is told and the local models
-// banned after failing more than once, with the one Reset that forgets those failures.
+// picker (TypeSafe has no chat models). The card also shows the chain omp is told and the models no longer
+// asked (a local one that failed more than once, or one the account cannot call), with the one Reset that
+// forgets those failures.
 function secJudgment(auth: AuthStatus | null, j: JudgmentView | null): string {
   const tsKey = (auth?.others ?? []).find((p) => p.id === "typesafe");
   const keyCard = tsKey ? provCard(tsKey) : "";
@@ -4783,7 +4784,7 @@ function secJudgment(auth: AuthStatus | null, j: JudgmentView | null): string {
   const bans = j?.bans ?? [];
   const banRows = bans.map((b) => `<div class="judge-ban"><code>${esc(b.label)}</code><span class="abadge warn">${b.failures} failed</span><span class="judge-ban-why">${esc(b.lastError)}</span></div>`).join("");
   const banBlock = bans.length
-    ? `<div class="set-note warn" id="judgmentBans">${icon("info", 12)} <span><b>Not asked any more</b> (a local model that failed more than once):</span>${banRows}<div class="prov-row"><button class="btn-mini" id="judgmentBansReset" type="button" data-tip="Forget these failures|The models are asked again from the next agent start.">${icon("refresh", 12)} Ask them again</button></div></div>`
+    ? `<div class="set-note warn" id="judgmentBans">${icon("info", 12)} <span><b>Not asked any more</b> (a local model that failed more than once, or a model your account cannot call):</span>${banRows}<div class="prov-row"><button class="btn-mini" id="judgmentBansReset" type="button" data-tip="Forget these failures|The models are asked again from the next agent start.">${icon("refresh", 12)} Ask them again</button></div></div>`
     : "";
   const body = `${keyCard}
     <div class="set-note">${icon("info", 12)} <b>Judgments</b> are the small typed questions LUCID's agent loop asks about its own work (the per-turn thinking-effort pick under Thinking: Auto, the unexpected-stop check, the agent's own <code>judge()</code> calls). They are <b>off by default</b>: with <b>None</b> no separate judge model is consulted, and the one pick omp cannot skip (the effort pick) is answered by the chat model already in use. Opt in to route them to <b>Jev</b> (TypeSafe's hosted System One model, built for exactly this) or to your own models: your local providers first, then the chat model. A local model that fails more than once is not asked again until you reset it here.</div>

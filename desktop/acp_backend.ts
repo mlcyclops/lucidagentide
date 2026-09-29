@@ -243,7 +243,10 @@ export function judgePlan(): JudgePlan {
   const localProviders = providers.map((p) => p.ompProvider);
   const banned = bannedJudges(judgeFailures());
   const locals = providers.filter((p) => p.enabled).flatMap((p) => p.models.map((m) => `${p.ompProvider}/${m.id}`)).filter((l) => !banned.includes(l));
-  const chain = judgeChain({ effective: resolved.effective, keySet, locals, chatModel: lastModel() });
+  // P-JEV.6 (ADR-0421): a banned model is never NAMED in the chain, the chat model included (omp still
+  // appends the live session model itself for the effort pick; the breaker refuses that call in-process).
+  const chatModel = lastModel();
+  const chain = judgeChain({ effective: resolved.effective, keySet, locals, chatModel: banned.includes(chatModel) ? "" : chatModel });
   return { resolved, chain, keySet, localProviders, banned };
 }
 

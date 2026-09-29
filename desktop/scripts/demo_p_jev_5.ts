@@ -26,7 +26,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { formatModelStringWithRouting, resolveRoleChain } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { judgeChain, judgmentOverlayYaml } from "../judgment_policy.ts";
 import { bannedJudges, noteJudgeOutcome } from "../../harness/judgment/judge_bans.ts";
-import { LocalJudgeBreaker, traceJudgePrototype, type JudgeLike } from "../../harness/omp/judgment_extension.ts";
+import { JudgeBreaker, traceJudgePrototype, type JudgeLike } from "../../harness/omp/judgment_extension.ts";
 
 let failures = 0;
 const check = (cond: boolean, msg: string) => { console.log(`  ${cond ? "ok  " : "FAIL"} ${msg}`); if (!cond) failures++; };
@@ -81,7 +81,7 @@ try {
   }
   class Local extends Fake {}
   class Cloud extends Fake {}
-  const breaker = new LocalJudgeBreaker(["dgx-spark"], []);
+  const breaker = new JudgeBreaker(["dgx-spark"], []);
   traceJudgePrototype(Local.prototype, "text", "master", async () => {}, breaker);
   traceJudgePrototype(Cloud.prototype, "text", "master", async () => {}, breaker);
   const dead = new Local(LOCAL, new Error("The operation was aborted."));

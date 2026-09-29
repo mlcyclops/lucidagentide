@@ -78,7 +78,8 @@ export interface GuiSettings {
   // lockdown; the stored choice is kept so lifting the lock restores it. Absent = "none" (judging is opt-in).
   judgmentProvider?: JudgmentProvider; // absent = "none"; explicit "none" is never written
   // P-JEV.5 (ADR-0416): failed judgments per LOCAL judge label (`provider/model`); two or more = banned
-  // until reset. Fed by the judgment trace, read at every omp spawn. Never holds cloud models.
+  // until reset. P-JEV.6 (ADR-0421): a judge of ANY provider whose account said the model does not exist
+  // is banned outright. Fed by the judgment trace, read at every omp spawn.
   judgeFailures?: JudgeFailureLedger;
   // P-ACCT.1 (ADR-0375): named provider accounts. Key accounts carry their secret here (same 0600-file
   // posture as `keys`); oauth records exist only to carry a rename of an identity that lives in omp's
@@ -807,7 +808,7 @@ export function noteJudgeFailure(report: { label: string; error?: string }, loca
   if (next !== (s.judgeFailures ?? {})) { s.judgeFailures = next; save(s); }
   return bannedJudges(next);
 }
-/** Forget every local-judge failure (Settings > Judgment > Reset). */
+/** Forget every judge failure (Settings > Judgment > Reset). */
 export function resetJudgeBans(): GuiSettings {
   const s = load();
   delete s.judgeFailures;
