@@ -15,7 +15,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HubComponent, findEngine } from "../../harness/launcher/hub_tui.ts";
+import { HubComponent, attachOrSpawnEngine, findEngine } from "../../harness/launcher/hub_tui.ts";
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) { console.error("  \u2717 " + msg); process.exit(1); }
@@ -67,11 +67,11 @@ try {
   const split = hub.render(100);
   const row = split.find((l) => l.includes("Overview")) ?? "";
   assert(row.includes("Overview") && split.some((l) => l.includes("Fleet")), "left pane Overview, right pane Fleet");
-  assert(split.some((l) => l.includes("┐┌")), "the two frames share the row - a real side-by-side split, not stacked text");
+  assert(split.some((l) => l.includes("╮╭")), "the two frames share the row - a real side-by-side split, not stacked text");
 
   console.log("\n[4] zoom, close, and the focus ring never lose a view");
   hub.handleInput("z");
-  assert(hub.render(100).filter((l) => l.includes("┌")).length === 1, "zoom shows only the focused pane");
+  assert(hub.render(100).filter((l) => l.includes("╭")).length === 1, "zoom shows only the focused pane");
   hub.handleInput("z");
   hub.handleInput("x");
   assert(hub.render(100).join("\n").includes("Overview"), "closing the Fleet pane hands the region back to Overview");
@@ -81,6 +81,18 @@ try {
   await engineProc.exited;
   await hub.refresh();
   assert(hub.render(100).join("\n").includes("engine unreachable"), "the status line says the engine is gone (fail-closed read)");
+
+  console.log("\n[6] no engine anywhere -> the hub SPAWNS its own and owns its lifetime");
+  const spawnRoot = mkdtempSync(join(tmpdir(), "lucid-tui1-spawn-"));
+  try {
+    const attached = await attachOrSpawnEngine({ ...process.env, LUCID_DATA_ROOT: spawnRoot, PORT: String(enginePort), HOME: home });
+    assert(attached !== null && attached.spawned, "attachOrSpawnEngine booted a headless engine and verified it via the handshake");
+    attached!.child!.kill("SIGTERM");
+    await attached!.child!.exited;
+    assert((await findEngine({ LUCID_DATA_ROOT: spawnRoot })) === null, "quitting the hub takes its spawned engine (and the discovery file) with it");
+  } finally {
+    rmSync(spawnRoot, { recursive: true, force: true });
+  }
 
   hub.dispose();
   console.log("\nP-TUI.1 demo: PASS");
