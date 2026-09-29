@@ -15762,7 +15762,10 @@ function wire(): void {
     openUrl: (url) => void openAuthUrl(url),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
-    getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
+    // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
+    // gates, deprecated and auxiliary rows pruned, lockdown, unavailable providers): omp's raw catalog lists
+    // the whole Bedrock range on the strength of a stray ~/.aws profile, and a lane on one of those fails.
+    getModelOptions: () => modelOptions().map((o) => ({ value: o.value, label: o.name ?? o.value })),
     getMasterCwd: () => state.workspace?.current ?? "",
     // P-FLEET.L2: the same real OS dialog every other folder pick in the app uses (Electron dialog ->
     // local-backend Explorer/Finder/zenity -> in-app browser), so a lane folder can be browsed to or
@@ -15806,7 +15809,7 @@ function wire(): void {
     openGrid: () => openFleetGrid(),
     closeGrid: () => closeFleetGrid(),
     pickFolder: (opts) => pickFolderDialog(opts ?? {}), // the same real OS dialog the grid form uses
-    getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
+    getModelOptions: () => modelOptions().map((o) => ({ value: o.value, label: o.name ?? o.value })), // the composer's curated list, as above
     // P-FLEET.L18: the on-orbit form clones too - identical vault path as the grid form's deps above.
     saveGitToken: async ({ host, token, label }) => {
       if (!bridge.isElectron || !bridge.credStore) return { ok: false, error: "the encrypted vault needs the LUCID desktop app" };
