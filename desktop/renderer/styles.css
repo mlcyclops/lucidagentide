@@ -3345,6 +3345,16 @@ body.preview-open .thread{font-size:.9em}
 .set-note.ok{color:var(--txt-2);border-color:color-mix(in srgb,var(--green) 30%,var(--line-soft));
   background:color-mix(in srgb,var(--green-dim) 60%,var(--bg-2))}
 .set-note code{font-family:var(--mono);color:var(--accent-2);font-size:11px}
+/* P-JEV.5 (ADR-0416): the Judgment card's ban list. Each row is a grid (label, badge, reason), the reason
+   ellipsizes on one line (invariant #11), and the note's icon is absolute so the prose never flexes. */
+.set-note.warn{border-color:color-mix(in srgb,var(--amber) 40%,var(--line-soft));background:color-mix(in srgb,var(--amber-dim) 50%,var(--bg-2))}
+.set-note.warn>.ic:first-child{color:var(--amber)}
+.set-note.warn>span{display:block}
+.judge-ban{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:8px;align-items:center;margin-top:6px}
+.judge-ban code{white-space:nowrap}
+.judge-ban .abadge{white-space:nowrap}
+.judge-ban-why{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-3)}
+.set-note.warn .prov-row{margin-top:8px}
 .set-toggle{display:flex;gap:9px;align-items:flex-start;margin-top:10px;padding:7px 9px;margin-left:-9px;
   border-radius:9px;font-size:12.5px;color:var(--txt-2);line-height:1.55;cursor:pointer;user-select:none;
   transition:background var(--t-fast)}

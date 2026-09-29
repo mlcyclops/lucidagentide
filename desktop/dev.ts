@@ -102,7 +102,7 @@ import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECA
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
-import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from "./acp_backend.ts";
+import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
@@ -138,6 +138,7 @@ import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type Bo
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
+import { ensureHiddenConsole } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
@@ -296,8 +297,19 @@ import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
 import { asksageOnly, sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode; ADR-0217: the AskSage lockdown flag
 import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // ADR-0221: BYO-embeddings config
-import { judgmentProvider, setJudgmentProvider } from "./settings_store.ts"; // P-JEV.1 (ADR-0374): the judgment backend choice
+import { judgeFailures, judgmentProvider, noteJudgeFailure, resetJudgeBans, setJudgmentProvider } from "./settings_store.ts"; // P-JEV.1 (ADR-0374): the judgment backend choice; P-JEV.5: the local-judge ledger
 import { jevActive, resolveJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1: the lockdown clamp; P-JEV.2: the Jev-active rule
+import { JUDGE_BAN_FAILURES, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416)
+/** P-JEV.5 (ADR-0416): the Settings > Judgment card's answer (renderer/bridge.ts JudgmentView). */
+function judgmentView(plan: JudgePlan) {
+  const ledger = judgeFailures();
+  return {
+    ...plan.resolved,
+    configured: jevActive(plan.resolved.effective, plan.keySet),
+    chain: plan.chain,
+    bans: plan.banned.map((label) => ({ label, failures: ledger[label]?.failures ?? JUDGE_BAN_FAILURES, lastError: ledger[label]?.lastError ?? "", lastAt: ledger[label]?.lastAt ?? 0 })),
+  };
+}
 import { activeAccountId, addKeyAccount, providerAccounts, removeAccount, renameAccount, setActiveAccount } from "./settings_store.ts"; // P-ACCT.1 (ADR-0375)
 import { activateOauthIdentity, disconnectOauthIdentity, listOauthRows, parkAllOauth } from "./auth_vault.ts"; // P-ACCT.1: omp-vault appliers
 import { deriveAccounts, LEGACY_KEY_ACCOUNT_ID, type AccountView } from "./account_policy.ts"; // P-ACCT.1: pure derivation
@@ -1148,6 +1160,15 @@ const TOKEN = process.env.LUCID_MAIN_TOKEN || randomBytes(32).toString("hex");
 // child or fleet lane (they inherit process.env) ever holds the UI token.
 const HAS_MAIN = !!process.env.LUCID_MAIN_TOKEN;
 delete process.env.LUCID_MAIN_TOKEN;
+// P-BROWSER.4 (ADR-0415): before any omp child spawns, own a HIDDEN console window so those children can
+// attach to it (acp.ts spawns them with windowsHide only when there is none). omp decides from its own
+// console whether ITS children (the shared headed Chromium, the Python kernel, hub daemons) are spawned
+// with SW_HIDE; without this the agent's visible browser came up as a white, unclosable rectangle.
+{
+  const con = ensureHiddenConsole();
+  if (con.allocated) console.error(`[console] hidden console window allocated for the agent's children${con.hidden ? "" : " (WARNING: it could not be hidden)"}`);
+  else if (process.platform === "win32" && !con.window) console.error(`[console] no console window for the agent's children (${con.reason ?? "unknown"}): windows the agent opens may stay hidden`);
+}
 // P-SANDBOX.15 (ADR-0396): the omp children's OWN token. Every LUCID_*_URL handed to a child carries this,
 // never TOKEN, and the engine accepts it only on AGENT_ROUTES (below), so the agent cannot reach human-only
 // routes such as /api/security/approve or the sandbox switch.
@@ -2697,24 +2718,41 @@ return Bun.serve({
       // P-JEV.2 (ADR-0377): both answers also carry `configured`: can Jev answer a judgment in the running
       // child (effective mode + a saved TypeSafe key). The chat's per-turn "Jev not consulted" note is gated
       // on it, so a user who never set Jev up is never told about it.
+      // P-JEV.5 (ADR-0416): the answer also carries the judge CHAIN omp is told at the next spawn and the
+      // local judges banned after failing more than once; the reset forgets those failures and restarts.
       if (p === "/api/judgment") {
         if (req.method === "POST") {
           const b = await readBody<{ mode?: unknown }>(req);
-          const before = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective;
+          const before = judgePlan().chain.join(",");
           setJudgmentProvider(b.mode);
-          const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
-          if (r.effective !== before) backend.restart();
-          return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+          const plan = judgePlan();
+          if (plan.chain.join(",") !== before) backend.restart();
+          return json({ ok: true, data: judgmentView(plan) });
         }
-        const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
-        return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+        return json({ ok: true, data: judgmentView(judgePlan()) });
+      }
+      if (p === "/api/judgment/bans/reset" && req.method === "POST") {
+        const had = judgePlan().banned.length > 0;
+        resetJudgeBans();
+        if (had) backend.restart(); // the running child holds the ban in memory; a fresh spawn reads the ledger
+        return json({ ok: true, data: judgmentView(judgePlan()) });
       }
       // P-JEV.2 (ADR-0377): the omp child reports each typed judgment here (the judgment extension wraps
       // pi-ai's judge classes in-process and AWAITS this POST, so the chat has the row before omp acts on the
       // answer). Same token'd self-report shape as /api/tool/meta. Parsed at this boundary, never trusted
       // because it was JSON; an unparseable body is ignored, never an error the child could stall on.
+      // P-JEV.5 (ADR-0416): a FAILED judgment by a local model counts against it; from the second failure the
+      // model is banned (left out of the chain at the next spawn; the child skips it at once).
       if (p === "/api/judgment/trace" && req.method === "POST") {
         const report = parseJudgmentReport(await readBody<unknown>(req));
+        if (report?.error) {
+          const before = judgePlan().banned.length;
+          const banned = noteJudgeFailure(report, judgePlan().localProviders);
+          if (banned.length > before) {
+            console.error(`[judgment] ${report.label} failed ${JUDGE_BAN_FAILURES} judgments (${report.error.slice(0, 120)}); it is no longer asked (Settings > Judgment resets this)`);
+            Object.assign(process.env, judgeBanEnv(judgePlan().localProviders, banned));
+          }
+        }
         return json({ ok: true, data: { noted: !!report && backend.noteJudgment(report) } });
       }
       // P-VOICE.1 + P-VOICE.2 (ADR-0247): list the selectable voices for ONE engine, so the picker works for
