@@ -37,7 +37,10 @@ import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
 import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
-import { DurationHistory, PROGRESS_TICK_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { DurationHistory, PROGRESS_TICK_MS, QUIET_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { PulseTracker, oldestCallStart, pulseVerdict, stoppedCallNote, type SubagentSignal } from "./call_pulse.ts"; // P-LIVENESS.1 (ADR-0418)
+import { stopCallProcesses, workerProcesses } from "./call_pulse_proc.ts"; // P-LIVENESS.1
+import type { ProcRow } from "./leftover_reaper.ts";
 import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
 import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
@@ -362,6 +365,8 @@ interface Lane {
   // -- P-WAIT.1 write-wait state -----------------------------------------------------------------
   /** What one of the lane's writes waits on, while it does. */
   waiting: WaitView | null;
+  /** P-LIVENESS.1 (ADR-0418): the open-call watch, fed by the engine's process sampler. */
+  pulse: PulseTracker;
 }
 
 export class FleetLaneManager {
@@ -467,6 +472,7 @@ export class FleetLaneManager {
       turnStartedAt: null,
       stepsDone: 0,
       waiting: null,
+      pulse: new PulseTracker(),
       canLoadSession: false,
       resumeContext: null,
       respawns: 0,
@@ -580,6 +586,7 @@ export class FleetLaneManager {
       lane.busy = false;
       lane.turnStartedAt = null;
       lane.openCalls.clear();
+      lane.pulse.reset(); // P-LIVENESS.1: the next turn starts a fresh watch
       lane.sinks.delete(sink);
     }
   }
@@ -591,7 +598,51 @@ export class FleetLaneManager {
       busy: lane.busy, dead: lane.client.isDead, startedAt: lane.turnStartedAt, lastActivityAt: lane.lastActivityAt,
       stepsDone: lane.stepsDone, stepsOpen: pendingSnapshot(lane.openCalls, now), lastHealth: lane.lastHealth,
       model: lane.model, scope: lane.sessionId ?? "", history: this.#durations, now, // P-PROGRESS.4
+      pulse: lane.openCalls.size ? lane.pulse.evidence : null,
     });
+  }
+
+  // -- P-LIVENESS.1 (ADR-0418): open-call evidence per lane, never an action ------------------------
+
+  /** Lanes the process sampler should look at now: a turn with an open call and nothing streamed for
+   *  QUIET_MS. Every other lane forgets its watch, so the next quiet stretch starts fresh. */
+  pulseTargets(): { laneId: string; sessionId: string | null; since: number }[] {
+    const now = this.#deps.now();
+    const out: { laneId: string; sessionId: string | null; since: number }[] = [];
+    for (const lane of this.#lanes.values()) {
+      const want = lane.busy && !lane.waiting && lane.openCalls.size > 0 && lane.client.pid != null && now - lane.lastActivityAt >= QUIET_MS;
+      if (!want) { lane.pulse.reset(); continue; }
+      out.push({ laneId: lane.id, sessionId: lane.sessionId, since: lane.turnStartedAt ?? now });
+    }
+    return out;
+  }
+
+  /** Fold one process-table look (null = the look failed) into a lane's watch, and repaint its card. */
+  observePulse(laneId: string, rows: ProcRow[] | null, at: number, subagent: SubagentSignal): void {
+    const lane = this.#lanes.get(laneId);
+    const pid = lane?.client.pid;
+    const oldest = lane ? oldestCallStart(lane.openCalls) : null;
+    if (!lane || pid == null || oldest === null) { lane?.pulse.reset(); return; }
+    lane.pulse.observe({ at, work: rows ? workerProcesses(rows, pid, process.platform) : null, callStartedAt: oldest, subagent });
+    this.#emit(lane, { type: "progress", progress: this.#progress(lane) });
+  }
+
+  /** The user's "Stop command" on a lane: end only what the oldest open call started, tell the agent why,
+   *  and leave the turn running. */
+  async stopOpenCall(laneId: string): Promise<{ ok: boolean; stopped: string[]; reason: string }> {
+    const lane = this.#lanes.get(laneId);
+    const pid = lane?.client.pid;
+    const oldest = lane ? oldestCallStart(lane.openCalls) : null;
+    if (!lane || !lane.busy || pid == null || oldest === null) return { ok: false, stopped: [], reason: "No tool call is running in this lane." };
+    const now = this.#deps.now();
+    const label = pendingSnapshot(lane.openCalls, now)[0]?.label ?? "the running call";
+    const ev = lane.pulse.evidence;
+    const flatMs = ev ? pulseVerdict(ev, lane.lastActivityAt, now - oldest).flatMs : 0;
+    const r = await stopCallProcesses(pid, oldest);
+    if (!r.stopped.length) return { ok: false, stopped: [], reason: r.failed.length ? `Could not stop ${r.failed.join(", ")}.` : "The running call has no process of its own to stop. Use Stop to end the turn." };
+    try { this.#deps.interject?.(lane.id, stoppedCallNote(label, flatMs)); } catch { /* the kill already ended the call */ }
+    lane.pulse.reset();
+    return { ok: true, stopped: r.stopped, reason: `Stopped ${r.stopped.join(", ")}. The agent is told why and continues.${r.failed.length ? ` Could not stop ${r.failed.join(", ")}.` : ""}` };
   }
 
   /** Re-send the lane's last prompt + its images (recovering first if the lane is in error). No recorded

@@ -53,7 +53,7 @@ import type { ChipKind } from "./answer_chips.ts";
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "repoChoices" | "repoGithub">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -769,7 +769,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <div class="lane-progress" data-lane-progress hidden>
         <div class="lane-bar"><div class="lane-fill"></div></div>
         <div class="lane-progress-line" data-lane-est></div>
-        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
+        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-stopcall" data-lane-stopcall hidden title="Ends only the processes this tool call started. The agent is told why and continues.">Stop command</button><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
         <div class="lane-wait" data-lane-wait hidden></div>
       </div>
       <div class="fleet-queue" data-fleet-queue hidden></div>
@@ -816,14 +816,16 @@ function paintProgress(run: LaneRun): void {
   // process is gone (the red pill + Restart this lane), or a write waits for another worker's file (the wait line).
   // "Full detail" is the whole P-PROGRESS.1 strip.
   const full = statusDetail() === "full";
-  const dead = p?.liveness.state === "dead";
-  strip.hidden = (!p && !w) || (!full && !dead && !w);
+  // P-LIVENESS.1 (ADR-0418): a call marked likely stuck is something the user must know too.
+  const urgent = p?.liveness.state === "dead" || p?.liveness.state === "stuck";
+  strip.hidden = (!p && !w) || (!full && !urgent && !w);
   strip.classList.toggle("quiet", !full);
   if (strip.hidden) return;
   const bar = $(".lane-bar", strip) as HTMLElement, fill = $(".lane-fill", strip) as HTMLElement;
   const est = $("[data-lane-est]", strip) as HTMLElement, alive = $("[data-lane-alive]", strip) as HTMLElement;
   const signal = $("[data-lane-signal]", strip) as HTMLElement, restart = $("[data-lane-restart]", strip) as HTMLElement;
   const wait = $("[data-lane-wait]", strip) as HTMLElement;
+  const stopCall = $("[data-lane-stopcall]", strip) as HTMLButtonElement;
   if (p) {
     const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
     const eta = statusEta();
@@ -832,16 +834,19 @@ function paintProgress(run: LaneRun): void {
     est.textContent = w ? "" : progressLine(aged, eta);
     bar.classList.toggle("indeterminate", aged.estimate.percent === null && running && !w);
     fill.style.width = aged.estimate.percent === null ? "0%" : `${Math.min(95, aged.estimate.percent)}%`;
-    alive.hidden = !full && !dead; // quiet: the pill appears only for a dead process
+    alive.hidden = !full && !urgent; // quiet: the pill appears only for a dead process or a likely-stuck call
     alive.dataset.state = w ? "waiting" : p.liveness.state;
     alive.textContent = w ? "waiting for a file" : p.liveness.label;
     alive.title = w ? "Another worker's running turn is editing this file; the write goes through when it ends." : p.liveness.detail;
     signal.textContent = running && !w ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago`) : "";
-    restart.hidden = p.liveness.state !== "dead";
+    // P-LIVENESS.1 (ADR-0418): a call marked likely stuck offers its two ways out; LUCID takes neither.
+    restart.hidden = !urgent;
+    stopCall.hidden = !(p.liveness.state === "stuck" && p.liveness.canStopCall);
+    if (stopCall.hidden && !stopCall.disabled) stopCall.textContent = "Stop command";
   } else {
     est.textContent = ""; bar.classList.remove("indeterminate"); fill.style.width = "0%";
     alive.hidden = !full; alive.dataset.state = "waiting"; alive.textContent = "waiting for a file"; alive.title = "";
-    signal.textContent = ""; restart.hidden = true;
+    signal.textContent = ""; restart.hidden = true; stopCall.hidden = true;
   }
   wait.hidden = !w;
   if (w) {
@@ -1862,6 +1867,17 @@ function onClick(ev: Event): void {
   if (t.closest("[data-fleet-deny]")) { answer(run, false); return; }
   if (t.closest("[data-fleet-retry]")) { runRetry(run); return; }
   if (t.closest("[data-fleet-respawn]")) { runRespawn(run); return; }
+  // P-LIVENESS.1 (ADR-0418): the user's Stop command on a call marked likely stuck.
+  const stopCallBtn = t.closest("[data-lane-stopcall]") as HTMLButtonElement | null;
+  if (stopCallBtn) {
+    stopCallBtn.disabled = true; stopCallBtn.textContent = "Stopping...";
+    void deps.stopCall(run.view.id).then((r) => {
+      stopCallBtn.disabled = false; stopCallBtn.textContent = "Stop command";
+      if (r?.ok) stopCallBtn.hidden = true;
+      setLaneNote(run, r?.reason ?? "Stop command: the engine did not answer.");
+    });
+    return;
+  }
   // P-INTERJECT.2/.3: the per-lane Check in card + its actions (before the generic chip handlers so
   // clicks inside the card never fall through to them).
   if (t.closest("[data-fleet-checkin]")) { toggleLaneCheckin(run); return; }
@@ -1871,7 +1887,8 @@ function onClick(ev: Event): void {
     ask.disabled = true; ask.textContent = "Sending...";
     // ADR-0414: a refused ask says why on the card and re-arms the button, instead of claiming "Sent".
     void deps.interject(run.view.id, LANE_STATUS_ASK, { live: true }).then((r) => {
-      if (r.ok) { ask.textContent = "Sent - answers at the next tool boundary"; return; }
+      // P-LIVENESS.1: inside an open call the note waits for that call to return; say so.
+      if (r.ok) { ask.textContent = run.progress?.stepsOpen.length ? "Queued - lands when the running call returns" : "Sent - answers at the next tool boundary"; return; }
       ask.disabled = false; ask.textContent = "Ask for status";
       setLaneNote(run, `Status ask not sent: ${r.reason}.`);
     });

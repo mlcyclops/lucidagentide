@@ -27,6 +27,7 @@
 // Pure: DOM-free, IO-free, global-free. Time always arrives as `now`.
 
 import type { PendingView } from "./turn_pending.ts";
+import { pulseVerdict, type PulseEvidence } from "./call_pulse.ts";
 
 /** The polling cadence of the engine's `progress` event during a turn. */
 export const PROGRESS_TICK_MS = 5_000;
@@ -52,7 +53,7 @@ const LEFT_QUANTILE = 0.4;
 /** Characters of a scope key kept per sample, so a history of 200 stays small whatever the caller passes. */
 const SCOPE_CAP = 128;
 
-export type LivenessState = "idle" | "streaming" | "working" | "thinking" | "quiet" | "probing" | "recovering" | "dead";
+export type LivenessState = "idle" | "streaming" | "working" | "thinking" | "quiet" | "stuck" | "probing" | "recovering" | "dead";
 
 export interface Liveness {
   state: LivenessState;
@@ -60,6 +61,9 @@ export interface Liveness {
   label: string;
   /** The sentence under it: what the evidence is and what happens next. */
   detail: string;
+  /** P-LIVENESS.1: `stuck` and the open call started processes of its own, so "Stop command" can end just
+   *  them. Never set outside `stuck`: the harness only offers the stop, the user decides. */
+  canStopCall?: boolean;
 }
 
 export interface TurnEstimate {
@@ -252,6 +256,8 @@ export interface LivenessInput {
   lastSignalMs: number;
   stepsOpen: readonly OpenStep[];
   lastHealth?: { action: "probe" | "recover"; at: number } | null;
+  /** P-LIVENESS.1: what the open call's processes and subagents did between the engine's looks. */
+  pulse?: PulseEvidence | null;
   now: number;
 }
 
@@ -272,7 +278,32 @@ export function livenessVerdict(i: LivenessInput): Liveness {
   const longest = i.stepsOpen[0];
   if (longest) {
     const typ = longest.typicalMs !== undefined ? ` (usually about ${humanMs(longest.typicalMs)})` : "";
-    return { state: "working", label: `waiting on ${shortLabel(longest.label)} for ${humanMs(longest.elapsedMs)}`, detail: `A tool call is running${typ}. Silence while it runs is normal; the watchdog never interrupts an open call.` };
+    const waiting = `waiting on ${shortLabel(longest.label)} for ${humanMs(longest.elapsedMs)}`;
+    // P-LIVENESS.1 (ADR-0418): the open call no longer explains silence on its own; its processes and
+    // subagents are the evidence. The verdict only MARKS a call; nothing here or in the watchdog stops it.
+    const ev = i.pulse;
+    if (ev && usable(silent)) {
+      const v = pulseVerdict(ev, i.now - silent, longest.elapsedMs);
+      if (v.stuck) {
+        const sub = ev.liveSubagents > 0 ? ", no subagent has written anything," : "";
+        const stop = ev.callProcs.length
+          ? ` Stop command ends only what this call started (${ev.callProcs.slice(0, 3).join(", ")}); the agent sees the failure and carries on.`
+          : " This call started no process of its own, so only Stop (the whole turn) or Restart agent can end it.";
+        return {
+          state: "stuck",
+          label: `likely stuck: no activity for ${humanMs(v.flatMs)}`,
+          detail: `${shortLabel(longest.label)} has been open ${humanMs(longest.elapsedMs)}. Nothing it started has used CPU or disk for ${humanMs(v.flatMs)}${sub} and the agent has sent nothing. A command waiting on a server that never answers looks exactly like this (network waits do not show in these counters). LUCID will not stop it on its own.${stop}`,
+          canStopCall: ev.callProcs.length > 0,
+        };
+      }
+      if (v.active) {
+        return { state: "working", label: `${waiting} · ${ev.mover ?? "its processes"} active`, detail: `A tool call is running${typ}. ${ev.mover ?? "Its processes"} used CPU or disk ${humanMs(i.now - ev.lastActiveAt)} ago, so it is alive.` };
+      }
+      if (ev.measurable && v.flatMs >= QUIET_MS) {
+        return { state: "working", label: `${waiting} · no activity for ${humanMs(v.flatMs)}`, detail: `A tool call is running${typ}. Nothing it started has used CPU or disk for ${humanMs(v.flatMs)}. At ${humanMs(v.thresholdMs)} with no activity LUCID marks it likely stuck and offers to stop it; it never stops it on its own.` };
+      }
+    }
+    return { state: "working", label: waiting, detail: `A tool call is running${typ}. Silence while it runs is normal; the watchdog never interrupts an open call.` };
   }
   if (silent < QUIET_MS) return { state: "thinking", label: `waiting for the model (${humanMs(silent)})`, detail: "No tool call is open; the model has not sent anything for a moment." };
   return { state: "quiet", label: `no sign of life for ${humanMs(silent)}`, detail: "Nothing streamed and no tool call is open. The watchdog asks for status after 3 minutes and recovers the session after 7." };
@@ -292,6 +323,8 @@ export interface ProgressInput {
   history: DurationHistory;
   /** The real tool name behind a pending label, when known (tool-meta), so the typical length keys on it. */
   toolNameOf?: (label: string) => string | undefined;
+  /** P-LIVENESS.1: the worker's open-call evidence (PulseTracker.evidence). */
+  pulse?: PulseEvidence | null;
   now: number;
 }
 
@@ -309,7 +342,7 @@ export function progressView(i: ProgressInput): ProgressView {
     lastSignalMs,
     stepsDone: usableCount(i.stepsDone),
     stepsOpen,
-    liveness: livenessVerdict({ busy: i.busy, dead: i.dead, lastSignalMs, stepsOpen, lastHealth: i.lastHealth, now: i.now }),
+    liveness: livenessVerdict({ busy: i.busy, dead: i.dead, lastSignalMs, stepsOpen, lastHealth: i.lastHealth, pulse: i.pulse, now: i.now }),
     estimate: i.busy ? estimateTurn({ elapsedMs, model: i.model, scope: i.scope, history: i.history }) : NO_ESTIMATE,
   };
 }
