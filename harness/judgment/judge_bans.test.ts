@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // P-JEV.5 (ADR-0416): a LOCAL model that failed as a judge more than once is not asked again.
+// P-JEV.6 (ADR-0421): a judge whose account says the model does not exist is not asked again, cloud or local.
 
 import { describe, expect, test } from "bun:test";
-import { bannedJudges, isLocalJudge, JUDGE_BAN_FAILURES, judgeBanEnv, noteJudgeOutcome, parseCommaList } from "./judge_bans.ts";
+import { bannedJudges, isLocalJudge, isMissingModelError, JUDGE_BAN_FAILURES, judgeBanEnv, noteJudgeOutcome, parseCommaList } from "./judge_bans.ts";
 
 const LOCALS = ["dgx-spark", "ollama"];
 
@@ -30,6 +31,24 @@ describe("noteJudgeOutcome + bannedJudges", () => {
     const l = { "dgx-spark/glm-5.3-flash": { failures: 1, lastAt: 1, lastError: "x" } };
     expect(noteJudgeOutcome(l, { label: "dgx-spark/glm-5.3-flash" }, LOCALS, 2)).toBe(l);
     expect(noteJudgeOutcome(l, { label: "anthropic/claude-haiku-4-5", error: "overloaded" }, LOCALS, 2)).toBe(l);
+  });
+  // P-JEV.6 (ADR-0421): the operator's screenshot, verbatim: omp's smol pattern picked openai/gpt-5.3-codex-spark
+  // under an API-key account that has no such model, and every judgment paid that 404 first.
+  const MISSING = "404 The model `gpt-5.3-codex-spark` does not exist or you do not have access to it. (type=invalid_request_error param=model_not_found)";
+  test("a judge whose account says the model does not exist is banned from ONE answer, cloud or local", () => {
+    const cloud = noteJudgeOutcome({}, { label: "openai/gpt-5.3-codex-spark", error: MISSING }, LOCALS, 7);
+    expect(bannedJudges(cloud)).toEqual(["openai/gpt-5.3-codex-spark"]);
+    expect(cloud["openai/gpt-5.3-codex-spark"]!.failures).toBe(JUDGE_BAN_FAILURES);
+    const local = noteJudgeOutcome({}, { label: "ollama/qwen3", error: 'model "qwen3" not found, try pulling it first' }, LOCALS, 8);
+    expect(bannedJudges(local)).toEqual(["ollama/qwen3"]);
+  });
+  test("isMissingModelError: provider wording for a missing model, never a transient", () => {
+    for (const e of [MISSING, '{"type":"error","error":{"type":"not_found_error","message":"model: claude-x"}}', "unknown model: foo", "No such model: bar", "The model `x` is not available"]) {
+      expect(isMissingModelError(e)).toBe(true);
+    }
+    for (const e of ["overloaded", "429 rate limit exceeded", "502 Bad Gateway", "The operation was aborted.", "401 invalid api key", "", undefined]) {
+      expect(isMissingModelError(e)).toBe(false);
+    }
   });
   test("bans list oldest first and the env carries both lists", () => {
     let l = noteJudgeOutcome({}, { label: "ollama/qwen3", error: "e" }, LOCALS, 5);

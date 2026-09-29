@@ -2769,14 +2769,15 @@ return Bun.serve({
       // answer). Same token'd self-report shape as /api/tool/meta. Parsed at this boundary, never trusted
       // because it was JSON; an unparseable body is ignored, never an error the child could stall on.
       // P-JEV.5 (ADR-0416): a FAILED judgment by a local model counts against it; from the second failure the
-      // model is banned (left out of the chain at the next spawn; the child skips it at once).
+      // model is banned (left out of the chain at the next spawn; the child skips it at once). P-JEV.6
+      // (ADR-0421): a judge whose account says the model does not exist is banned from that one answer.
       if (p === "/api/judgment/trace" && req.method === "POST") {
         const report = parseJudgmentReport(await readBody<unknown>(req));
         if (report?.error) {
           const before = judgePlan().banned.length;
           const banned = noteJudgeFailure(report, judgePlan().localProviders);
           if (banned.length > before) {
-            console.error(`[judgment] ${report.label} failed ${JUDGE_BAN_FAILURES} judgments (${report.error.slice(0, 120)}); it is no longer asked (Settings > Judgment resets this)`);
+            console.error(`[judgment] ${report.label} is no longer asked as a judge (${report.error.slice(0, 120)}); Settings > Judgment resets this`);
             Object.assign(process.env, judgeBanEnv(judgePlan().localProviders, banned));
           }
         }
