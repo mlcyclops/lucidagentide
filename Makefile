@@ -810,8 +810,8 @@ kg-pack-all: ## Build every KG pack in the catalog, sequentially (long — one m
 # ---------------------------------------------------------------------------
 
 .PHONY: typecheck
-typecheck: ## TS typecheck (no emit)
-	$(BUN) x tsc --noEmit
+typecheck: ## TS typecheck (no emit); tools/typecheck.ts also works from a checkout on a network share
+	$(BUN) tools/typecheck.ts
 
 .PHONY: license-headers
 license-headers: ## Apply the BUSL-1.1 SPDX header to first-party source (idempotent)

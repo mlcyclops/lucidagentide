@@ -14,7 +14,8 @@
 // so the package-subtree half of the filter was silently unenforced.
 //
 // This version is honest: it MATERIALIZES a filtered installation in a temp dir -
-//   - every kept node_modules package is linked in (junction/symlink; excluded packages are ABSENT),
+//   - every kept node_modules package is linked in (junction, or a directory symlink when the checkout is
+//     on a network share - see linkDir; excluded packages are ABSENT),
 //   - the in-process-imported @oh-my-pi packages are hardlink-copied and the filter's file-type
 //     exclusions (*.md, *.map, *.d.ts) are ACTUALLY DELETED from the copy,
 //   - the repo source files ship like extraResources ships them -
@@ -25,7 +26,7 @@
 
 import { afterAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -53,7 +54,24 @@ function linkTreeFiltered(src: string, dst: string, dropSuffixes: string[], keep
   }
 }
 
-const linkDir = (target: string, path: string): void => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+/** Link a kept package into the sim. On Windows a junction needs no privilege but can only target a LOCAL
+ *  volume: for a checkout on a network share (a UNC path) it is created without error and resolves to
+ *  nothing, so the sim silently had no node_modules (ADR-0178 amendment). Such a checkout gets a real
+ *  directory symlink instead (Developer Mode or admin; local-to-remote evaluation is on by default), and a
+ *  link that still does not resolve fails the build with the reason rather than as a missing module. */
+let winLink: "junction" | "dir" = "junction";
+function linkDir(target: string, path: string): void {
+  if (process.platform !== "win32") return symlinkSync(target, path, "dir");
+  if (winLink === "junction") {
+    symlinkSync(target, path, "junction");
+    if (existsSync(path)) return;
+    rmdirSync(path); // a junction to a remote target: present, resolving to nothing
+    winLink = "dir";
+  }
+  try { symlinkSync(target, path, "dir"); }
+  catch (e) { throw new Error(`packaged_boot: the checkout ${REPO} is on a network share, which a junction cannot target, and a directory symlink needs Windows Developer Mode or an elevated shell (${String(e)}). Enable Developer Mode or run from a local-disk checkout.`); }
+  if (!existsSync(path)) throw new Error(`packaged_boot: directory symlink ${path} -> ${target} does not resolve; a checkout on a network share needs local-to-remote symlink evaluation (fsutil behavior set SymlinkEvaluation L2R:1).`);
+}
 
 /** Copy the desktop repo sources the way the `to:"repo"` extraResources filter ships them: EVERY
  *  `desktop/**\/*.ts` (any depth), the whole `desktop/renderer/**`, and desktop/package.json - so a new
