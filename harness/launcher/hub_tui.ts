@@ -165,7 +165,14 @@ export function deckLines(deck: DeckId, data: HubData | null, width: number, sel
       const kgs = arr(data.kg.kgs).map(rec);
       if (kgs.length === 0) return ["no knowledge graphs yet - build one in the GUI or `lucid kb`"];
       const activeId = str(data.kg.activeId);
-      const head = ["", t(`  ${kgs.map((k) => `${str(k.kg_id) === activeId ? "● " : "  "}${str(k.name)}`).join("   ")}`), ""];
+      // Every KG names WHERE its knowledge comes from: the source kind (chat export / obsidian
+      // vault / installed pack / manual) plus its free-text origin, and a lock for read-only packs.
+      const sourceLabel: Record<string, string> = { chat: "AI chat export", obsidian: "Obsidian vault", pack: "installed pack", manual: "written by you / your agents" };
+      const head = ["", ...kgs.map((k) => {
+        const prov = str(k.provenance);
+        const origin = prov !== "?" && prov && prov !== "default" ? ` · ${prov}` : "";
+        return t(`  ${str(k.kg_id) === activeId ? "●" : " "} ${str(k.name)}  ·  ${sourceLabel[str(k.source_kind)] ?? str(k.source_kind)}${origin}${k.read_only === true ? " · read-only" : ""}`);
+      }), ""];
       const g = data.kgGraph;
       if (!g) return [...head, "  loading the graph…"];
       const pages = kgPages(data, filter);
@@ -180,7 +187,8 @@ export function deckLines(deck: DeckId, data: HubData | null, width: number, sel
       return [...head, stats, "", ...pages.map((p, i) => {
         const out = linksFrom.get(str(p.page_id)) ?? [];
         const arrow = out.length ? `  →  ${out.slice(0, 4).join(" · ")}${out.length > 4 ? ` · +${out.length - 4}` : ""}` : "";
-        return t(`${i === selected ? "▸" : " "} ${str(p.title)} (${str(p.degree)})${arrow}`);
+        const trust = str(p.trust_label);
+        return t(`${i === selected ? "▸" : " "} [${trust}] ${str(p.title)} (${str(p.degree)})${arrow}`);
       })];
     }
   }
@@ -230,6 +238,11 @@ export function colorizeRow(deck: DeckId, row: string): string {
       .replace(/^(failed|dead|stopped)\b/, (m) => RED(m))
       .replace(/WAITING ON YOU/, (m) => AMBER(m));
   if (deck === "audit") return row.replace(/\bblock\b/, (m) => RED(m)).replace(/\ballow\b/, (m) => GREEN(m));
+  if (deck === "kg")
+    return row
+      .replace(/\[trusted\]/, (m) => GREEN(m))
+      .replace(/\[(untrusted|suspicious)\]/, (m) => AMBER(m))
+      .replace(/\[quarantined\]/, (m) => RED(m));
   return row;
 }
 
@@ -681,8 +694,10 @@ export class HubComponent implements Component {
   async #openKgPage(kgId: string, pageId: string): Promise<void> {
     try {
       const page = rec(await this.#get(`/api/kb/page?kgId=${encodeURIComponent(kgId)}&pageId=${encodeURIComponent(pageId)}`));
-      const body = str(page.content ?? page.body ?? page.markdown ?? "");
-      this.#reader = { title: str(page.title), rows: body === "?" || !body ? ["(this page has no readable body)"] : body.split("\n") };
+      const body = str(page.body_md ?? page.content ?? page.body ?? "");
+      // Lead with provenance: what this page IS, how far it is trusted, where it sits, and when.
+      const meta = `${str(page.kind)} · trust: ${str(page.trust_label)}${str(page.classification) !== "?" && page.classification ? ` · ${str(page.classification)}` : ""} · updated ${str(page.updated_at).slice(0, 10)}`;
+      this.#reader = { title: str(page.title), rows: [meta, "", ...(body === "?" || !body ? ["(this page has no readable body)"] : body.split("\n"))] };
       this.#scroll = 0;
     } catch (err) {
       this.#status = `could not load the page: ${err instanceof Error ? err.message : String(err)}`;

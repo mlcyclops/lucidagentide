@@ -1524,7 +1524,9 @@ async function readBody<T>(req: Request): Promise<T> {
 // active id, plus an optional `error` a mutation attaches instead of nulling the list.
 function kgListView(error?: string) {
   return {
-    kgs: listKgs().map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, source_kind: k.source_kind })),
+    // P-TUI (2026-09-29): `provenance` rides along so terminal clients can answer "where is this
+    // knowledge FROM" without a second route. Additive; the GUI ignores unknown fields.
+    kgs: listKgs().map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, source_kind: k.source_kind, provenance: k.provenance })),
     activeId: activeKgId(),
     ...(error ? { error } : {}),
   };
