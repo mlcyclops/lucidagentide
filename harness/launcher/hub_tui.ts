@@ -167,6 +167,12 @@ export function modelCatalog(config: unknown[]): { models: ModelOption[]; curren
   return { models: [], current: "" };
 }
 
+/** The picker's visible rows under its type-ahead filter (name OR id substring, case-blind). */
+export function pickerMatches(pk: { models: ModelOption[]; filter: string }): ModelOption[] {
+  const f = pk.filter.trim().toLowerCase();
+  return f ? pk.models.filter((m) => m.name.toLowerCase().includes(f) || m.value.toLowerCase().includes(f)) : pk.models;
+}
+
 /** The status-bar teaching line, per focused surface: what THIS pane responds to right now. */
 export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
   overview: "| - split · tab focus · 1-6 decks",
@@ -296,7 +302,7 @@ export class HubComponent implements Component {
   #live: Record<string, { text: string; thinking: string; tools: string[]; working: boolean; trimmed?: boolean }> = {};
   #watchers: Record<string, AbortController> = {};
   #prompt: { lane: string; text: string } | null = null;
-  #picker: { lane: string; models: ModelOption[]; sel: number } | null = null;
+  #picker: { lane: string; models: ModelOption[]; sel: number; filter: string; busy?: boolean } | null = null;
   #promptKind: "agent" | "wl-add" = "agent";
   #data: HubData | null = null;
   #status = "";
@@ -444,27 +450,39 @@ export class HubComponent implements Component {
   }
 
   handleInput(data: string): void {
-    if (this.#help) { if (data === "\r" || data === "\n") return; this.#help = false; this.#ui.requestRender(); if (data === "q" || matchesKey(data, "ctrl+c")) this.#done.resolve(); return; }
+    // Enter arrives as \r, \n or \r\n depending on the terminal's line discipline; byte-exact
+    // matching silently killed the key on CRLF terminals (field report 2026-09-28).
+    const isEnter = data === "\r" || data === "\n" || data === "\r\n" || matchesKey(data, "enter");
+    if (this.#help) { if (isEnter) return; this.#help = false; this.#ui.requestRender(); if (data === "q" || matchesKey(data, "ctrl+c")) this.#done.resolve(); return; }
     // Prompt mode: the focused agent pane owns the keyboard until Enter (send) or Esc (cancel).
     // Pasted/chunked input arrives as one string, so walk it char by char; a newline inside a
-    // chunk submits what was typed before it (terminal paste semantics).
+    // chunk submits what was typed before it (terminal paste semantics). An EMPTY enter is a
+    // no-op that keeps the composer open - it used to close it, dumping the next keystrokes onto
+    // the global keymap ("-" split a pane mid-sentence).
     if (this.#prompt) {
       if (matchesKey(data, "escape")) { this.#prompt = null; this.#promptKind = "agent"; this.#ui.requestRender(); return; }
       if (matchesKey(data, "backspace")) { this.#prompt.text = this.#prompt.text.slice(0, -1); this.#ui.requestRender(); return; }
       for (const ch of data) {
-        if (ch === "\r" || ch === "\n") { void this.#sendPrompt(); return; }
+        if (ch === "\r" || ch === "\n") {
+          if (this.#prompt.text.trim()) { void this.#sendPrompt(); return; }
+          continue; // empty enter: stay in the composer
+        }
         if (ch >= " " && ch !== "\u007f") this.#prompt.text += ch;
       }
       this.#ui.requestRender();
       return;
     }
-    // Model picker: owns the keyboard until enter (switch) or esc.
+    // Model picker: type to filter, arrows move, enter applies, esc clears the filter then closes.
     if (this.#picker) {
+      if (this.#picker.busy) return; // parked until the engine answers - keys cannot leak
       const pk = this.#picker;
-      if (matchesKey(data, "escape")) this.#picker = null;
-      else if (data === "j" || matchesKey(data, "down")) pk.sel = Math.min(pk.models.length - 1, pk.sel + 1);
-      else if (data === "k" || matchesKey(data, "up")) pk.sel = Math.max(0, pk.sel - 1);
-      else if (data === "\r" || data === "\n") { void this.#applyModel(); return; }
+      if (matchesKey(data, "escape")) {
+        if (pk.filter) { pk.filter = ""; pk.sel = 0; } else this.#picker = null;
+      } else if (matchesKey(data, "backspace")) { pk.filter = pk.filter.slice(0, -1); pk.sel = 0; }
+      else if (matchesKey(data, "down")) pk.sel = Math.min(Math.max(0, pickerMatches(pk).length - 1), pk.sel + 1);
+      else if (matchesKey(data, "up")) pk.sel = Math.max(0, pk.sel - 1);
+      else if (isEnter) { void this.#applyModel(); return; }
+      else { for (const ch of data) if (ch >= " " && ch !== "\u007f") pk.filter += ch; pk.sel = 0; }
       this.#ui.requestRender();
       return;
     }
@@ -501,7 +519,7 @@ export class HubComponent implements Component {
     else if (data === "D" && this.#focusedDeck() === "network") { void this.#removeWhitelistEntry(); return; }
     else if (data === "t" && this.#focusedDeck() === "network") { void this.#togglePosture(); return; }
     else if ((data === "y" || data === "s" || data === "d") && this.#pendingApprovalLane()) { void this.#answerApproval(data); return; }
-    else if (data === "\r" || data === "\n") { void this.#enter(); return; }
+    else if (isEnter) { void this.#enter(); return; }
     else if (data === "m") { this.#openModelPicker(); return; }
     this.#ui.requestRender();
   }
@@ -515,23 +533,27 @@ export class HubComponent implements Component {
     const lane = arr(this.#data?.fleet.lanes).map(rec).find((l) => str(l.id) === leaf.lane);
     const active = (lane && str(lane.model)) || current;
     const sel = Math.max(0, models.findIndex((m) => m.value === active || m.name === active));
-    this.#picker = { lane: leaf.lane, models, sel };
+    this.#picker = { lane: leaf.lane, models, sel, filter: "" };
     this.#ui.requestRender();
   }
 
-  /** Switch the lane's model through the engine (fleet.setModel) - the same seam the GUI uses. */
+  /** Switch the lane's model through the engine (fleet.setModel) - the same seam the GUI uses.
+   *  The picker stays up (busy, input parked) until the engine answers, so keystrokes during the
+   *  switch can never leak onto the global keymap. */
   async #applyModel(): Promise<void> {
     const pk = this.#picker;
-    this.#picker = null;
-    if (!pk) return;
-    const pick = pk.models[pk.sel];
-    if (!pick) { this.#ui.requestRender(); return; }
+    if (!pk || pk.busy) return;
+    const pick = pickerMatches(pk)[pk.sel];
+    if (!pick) { this.#status = "no model matches that filter"; this.#ui.requestRender(); return; }
+    pk.busy = true;
+    this.#ui.requestRender();
     try {
       const r = rec(await this.#post("/api/fleet/model", { laneId: pk.lane, model: pick.value }));
       this.#status = r.ok === false ? `model switch refused: ${str(r.reason ?? r.error ?? "engine said no")}` : `model → ${pick.name}`;
     } catch (err) {
       this.#status = `model switch failed: ${err instanceof Error ? err.message : String(err)}`;
     }
+    this.#picker = null;
     await this.refresh();
   }
 
@@ -816,20 +838,25 @@ export class HubComponent implements Component {
   #pickerBlock(w: number, h: number): string[] {
     const pk = this.#picker!;
     const current = modelCatalog(this.#data?.config ?? []).current;
+    const matches = pickerMatches(pk);
+    pk.sel = Math.min(pk.sel, Math.max(0, matches.length - 1));
     const boxW = Math.min(70, w - 4);
-    const maxRows = Math.max(3, h - 6);
-    const from = Math.max(0, Math.min(pk.sel - Math.floor(maxRows / 2), pk.models.length - maxRows));
-    const slice = pk.models.slice(from, from + maxRows);
-    const rows = slice.map((m, i) => {
-      const idx = from + i;
-      const mark = m.value === current || m.name === current ? " ●" : "";
-      const plain = truncateToWidth(` ${m.name}${mark}`, boxW - 4);
-      const padded = plain + " ".repeat(Math.max(0, boxW - 4 - Bun.stringWidth(plain)));
-      return idx === pk.sel ? chalk.inverse(TXT(padded)) : TXT_3(padded);
-    });
-    const title = " ⇅ switch model · ⏎ apply · esc cancel ";
+    const maxRows = Math.max(3, h - 8);
+    const from = Math.max(0, Math.min(pk.sel - Math.floor(maxRows / 2), matches.length - maxRows));
+    const slice = matches.slice(from, from + maxRows);
+    const pad4 = (plain: string) => plain + " ".repeat(Math.max(0, boxW - 4 - Bun.stringWidth(plain)));
+    const filterRow = ACCENT.bold("› ") + TXT(truncateToWidth(pk.filter, boxW - 8)) + ACCENT("▌") + " ".repeat(Math.max(0, boxW - 7 - Bun.stringWidth(truncateToWidth(pk.filter, boxW - 8))));
+    const rows = slice.length
+      ? slice.map((m, i) => {
+          const idx = from + i;
+          const mark = m.value === current || m.name === current ? " ●" : "";
+          const padded = pad4(truncateToWidth(` ${m.name}${mark}`, boxW - 4));
+          return idx === pk.sel ? chalk.inverse(TXT(padded)) : TXT_3(padded);
+        })
+      : [TXT_3(pad4("  nothing matches - backspace edits, esc clears"))];
+    const title = pk.busy ? " switching model… " : " type to filter · ⇅ move · ⏎ apply · esc ";
     const top = ACCENT("╭─") + ACCENT_2.bold(title) + ACCENT("─".repeat(Math.max(0, boxW - 3 - Bun.stringWidth(title))) + "╮");
-    const box = [top, ...rows.map((r) => ACCENT("│") + " " + r + " " + ACCENT("│")), ACCENT("╰" + "─".repeat(boxW - 2) + "╯")];
+    const box = [top, ACCENT("│") + " " + filterRow + " " + ACCENT("│"), ...rows.map((r) => ACCENT("│") + " " + r + " " + ACCENT("│")), ACCENT("╰" + "─".repeat(boxW - 2) + "╯")];
     const padTop = Math.max(0, Math.floor((h - box.length) / 2));
     const padLeft = " ".repeat(Math.max(0, Math.floor((w - boxW) / 2)));
     return fitBlock([...Array(padTop).fill(""), ...box.map((l) => padLeft + l)], w, h);
