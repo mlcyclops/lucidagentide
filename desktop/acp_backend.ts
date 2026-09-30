@@ -1302,6 +1302,9 @@ class Backend {
           await acp.request("initialize", { protocolVersion: 1, clientCapabilities: ACP_INTERACTIVE_CLIENT_CAPS }, { timeoutMs: HANDSHAKE_MS });
         } catch (e) {
           try { acp.stop(); } catch { /* ignore */ }
+          // P-SANDBOX.18 (ADR-0424): say WHERE the agent failed to start. A contained handshake failure read
+          // exactly like a model or network fault, and the only way anyone found the sandbox was by turning it off.
+          if (/lucid-appcontainer(\.exe)?$/i.test(spawnPlan.cmd)) throw new Error(`${errText(e)} (inside the Windows AppContainer sandbox)`);
           throw e;
         }
         // P-RECOVER.1: log the death the moment it happens (main tees stderr into engine.log). The revival
@@ -2113,7 +2116,7 @@ class Backend {
         const sig = stallSignature(verdict.reason);
         stallCount = sig && sig === lastSig ? stallCount + 1 : 1;
         lastSig = sig;
-        if (stallCount >= 3) { terminalReason = `stopped: not converging — the same blocker held for ${stallCount} rounds (${verdict.reason})`; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
+        if (stallCount >= 3) { terminalReason = `stopped: not converging; the same blocker held for ${stallCount} rounds (${verdict.reason})`; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
 
         noProgress = actedThisIter ? 0 : noProgress + 1;
         if (noProgress >= 2) { terminalReason = "stopped: two iterations with no actions and the condition still unmet"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, "stopped: no progress for two iterations"); return; }

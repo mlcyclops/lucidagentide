@@ -81,9 +81,9 @@ export async function createUserCommand(draft: unknown, workspace: string = curr
   ]);
   if (leaks.length) {
     const where = leaks.map((l) => l.where).join(", ");
-    recordBlock({ tool: "slash_command_create", severity: "high", findings: String(leaks.length), reason: `/${cmd.name} blocked — embeds a secret in ${where}` });
+    recordBlock({ tool: "slash_command_create", severity: "high", findings: String(leaks.length), reason: `/${cmd.name} blocked: embeds a secret in ${where}` });
     emitCommandEvent("command_rejected", { name: cmd.name, reason: "embedded-secret" });
-    return { ok: false, name: cmd.name, blocked: true, reason: `embeds a secret in ${where} — keep credentials in the vault, not a command body` };
+    return { ok: false, name: cmd.name, blocked: true, reason: `embeds a secret in ${where}. Keep credentials in the vault, not a command body` };
   }
 
   // Fail-closed Unicode scan of the command's free text (scanner dead/malformed/timeout ⇒ blocked).
@@ -91,12 +91,12 @@ export async function createUserCommand(draft: unknown, workspace: string = curr
   try {
     decision = await scanAndDecide(getScanner(), `${cmd.name}\n${cmd.description}\n${cmd.body}`, DEFAULT_POLICY);
   } catch (e) {
-    recordBlock({ tool: "slash_command_create", severity: "high", findings: "scanner-unavailable", reason: `/${cmd.name} blocked — scanner unavailable` });
+    recordBlock({ tool: "slash_command_create", severity: "high", findings: "scanner-unavailable", reason: `/${cmd.name} blocked: scanner unavailable` });
     emitCommandEvent("command_rejected", { name: cmd.name, reason: "scanner-unavailable" });
     return { ok: false, name: cmd.name, blocked: true, reason: `scanner unavailable: ${e instanceof Error ? e.message : String(e)}` };
   }
   if (decision.block) {
-    recordBlock({ tool: "slash_command_create", severity: decision.trustLabel === "quarantined" ? "high" : "medium", findings: String(decision.findings.length), reason: `/${cmd.name} blocked — ${decision.reason}` });
+    recordBlock({ tool: "slash_command_create", severity: decision.trustLabel === "quarantined" ? "high" : "medium", findings: String(decision.findings.length), reason: `/${cmd.name} blocked: ${decision.reason}` });
     emitCommandEvent("command_rejected", { name: cmd.name, reason: decision.reason });
     return { ok: false, name: cmd.name, blocked: true, reason: decision.reason, trustLabel: decision.trustLabel, findings: decision.findings.length };
   }

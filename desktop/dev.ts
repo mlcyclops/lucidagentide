@@ -142,7 +142,8 @@ import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type Bo
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
-import { ensureHiddenConsole } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
+import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
+import { setDefaultWindowsHide } from "./acp.ts";
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
@@ -278,6 +279,8 @@ import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
+import { NetProbe } from "./net_probe.ts"; // P-NETSTAT.1 (ADR-0423): the status-bar network indicator's probe
+import { probeTargetFor } from "./renderer/net_status.ts"; // P-NETSTAT.1: fixed model -> provider-host table (pure)
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
 import { seedTrivia } from "./trivia_seed.ts"; // P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire (scanned, tool-free)
@@ -755,6 +758,8 @@ setInterval(() => {
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
 let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
+// P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
+const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
 // and they run on the server's single event loop — so overlapping polls pile up and stall model streaming
 // (the "replies slow coming back" symptom). Memoize with SINGLE-FLIGHT (concurrent polls share one in-flight
@@ -1172,6 +1177,7 @@ delete process.env.LUCID_MAIN_TOKEN;
 // with SW_HIDE; without this the agent's visible browser came up as a white, unclosable rectangle.
 {
   const con = ensureHiddenConsole();
+  setDefaultWindowsHide(ompWindowsHide); // omp children attach to the (hidden) console from here on
   if (con.allocated) console.error(`[console] hidden console window allocated for the agent's children${con.hidden ? "" : " (WARNING: it could not be hidden)"}`);
   else if (process.platform === "win32" && !con.window) console.error(`[console] no console window for the agent's children (${con.reason ?? "unknown"}): windows the agent opens may stay hidden`);
 }
@@ -2359,8 +2365,8 @@ return Bun.serve({
         try {
           const hdr = { headers: { "X-Figma-Token": pat } };
           const fileRes = await fetch(`${FIGMA_API}/files/${key}?depth=2`, { ...hdr, signal: AbortSignal.timeout(20000) });
-          if (fileRes.status === 403) return fail("Figma rejected the token (403) — check the PAT and that it can read this file.");
-          if (fileRes.status === 404) return fail("Figma file not found (404) — check the file URL/key.");
+          if (fileRes.status === 403) return fail("Figma rejected the token (403). Check the PAT and that it can read this file.");
+          if (fileRes.status === 404) return fail("Figma file not found (404). Check the file URL/key.");
           if (!fileRes.ok) return fail(`Figma API error ${fileRes.status}.`);
           const file = (await fileRes.json()) as { name?: string; document?: unknown };
           const fileName = String(file?.name ?? "Figma file").slice(0, 200); // bound the network-derived title we persist
@@ -2402,7 +2408,7 @@ return Bun.serve({
           const hasDesign = existsSync(designDocPath(currentWorkspace()));
           return json({ ok: true, data: { path: outPath, fileName, frames: board.length, hasDesign } });
         } catch (e) {
-          return fail(clientError(e, "Couldn't import the Figma file — check the file URL/key and that your token can read it."));
+          return fail(clientError(e, "Couldn't import the Figma file. Check the file URL/key and that your token can read it."));
         }
       }
       // P-FIGMA.2 / P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md so the renderer can pop it out in the
@@ -2422,7 +2428,7 @@ return Bun.serve({
           const r = await fetch(target, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(4500) });
           return json({ ok: true, data: { reachable: true, status: r.status, authed: r.status === 401 || r.status === 403 } });
         } catch (e) {
-          return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable — check the URL and that the endpoint is up") } });
+          return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable: check the URL and that the endpoint is up") } });
         }
       }
       // P-LOCAL.6: ASK THE SERVER. `GET <baseUrl>/models` is the same list omp's own discovery reads, so a
@@ -2611,7 +2617,7 @@ return Bun.serve({
         if (!loadSpecFile(currentWorkspace(), id)) return json({ ok: false, error: "unknown agent id", data: { error: "unknown agent id" } });
         const cur = loadSpecTrust(currentWorkspace(), id);
         if (cur.trustLabel === "quarantined") {
-          const msg = "this agent is quarantined (flagged content) — it cannot be approved; fix the source and re-import";
+          const msg = "this agent is quarantined (flagged content). It cannot be approved; fix the source and re-import";
           return json({ ok: false, error: msg, data: { error: msg } });
         }
         saveSpecTrust(currentWorkspace(), id, { trustLabel: "trusted", reason: "approved by the user after review", reviewed_at: Date.now() });
@@ -2810,7 +2816,7 @@ return Bun.serve({
         const key = process.env.ELEVENLABS_API_KEY;
         if (!key) return json({ ok: true, data: { ...base, voices: [], note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
         try { return json({ ok: true, data: { ...base, voices: await listElevenVoices({ apiKey: key }) } }); }
-        catch (e) { return json({ ok: true, data: { ...base, voices: [], note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
+        catch (e) { return json({ ok: true, data: { ...base, voices: [], note: clientError(e, "Could not list voices. Check the provider key/URL.") } }); }
       }
       // P-VOICE.7: portable voice endpoints. GET scans the handoff mailbox then lists; import is the
       // manual-upload fallback (the renderer posts the file's text); activate makes an endpoint THE
@@ -2929,7 +2935,7 @@ return Bun.serve({
           const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
           return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });
         } catch (e) {
-          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: clientError(e, "TTS failed — check the provider key/URL.") } });
+          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: clientError(e, "TTS failed. Check the provider key/URL.") } });
         }
       }
       // In-app folder browser (works in the browser build AND Electron). Full-tree traversal
@@ -3009,7 +3015,7 @@ return Bun.serve({
         // every preview pill was dark. Emitted BEFORE the await so the pill shows during the wait.
         backend.notePreviewActivity("inspect");
         const { id, promise } = inspectRelay.enqueue({ selector: url.searchParams.get("selector") ?? undefined, what: url.searchParams.get("what") ?? undefined });
-        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then inspect it" }), 8000);
+        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond). Open a preview first, then inspect it" }), 8000);
         const result = await promise; clearTimeout(t);
         return json({ ok: true, data: { result } });
       }
@@ -3018,7 +3024,7 @@ return Bun.serve({
       if (p === "/api/preview/act") {
         backend.notePreviewActivity("act"); // P-PREVIEW.11b (ADR-0308): as above, before the await
         const { id, promise } = inspectRelay.enqueue({ action: url.searchParams.get("action") ?? undefined, selector: url.searchParams.get("selector") ?? undefined, value: url.searchParams.get("value") ?? undefined });
-        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then act on it" }), 8000);
+        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond). Open a preview first, then act on it" }), 8000);
         const result = await promise; clearTimeout(t);
         return json({ ok: true, data: { result } });
       }
@@ -4915,6 +4921,14 @@ return Bun.serve({
       if (p === "/api/session-health/tick" && req.method === "POST") {
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });
+      }
+      // P-NETSTAT.1 (ADR-0423): the network indicator's feed. `model` only SELECTS a row of the fixed
+      // provider-host table (probeTargetFor), so a caller can never make the engine fetch a URL of its
+      // choosing; LUCID_NET_PROBE_URL is the operator's override for air-gapped or proxied networks.
+      if (p === "/api/net-status") {
+        const model = url.searchParams.get("model") || backend.activeModelName();
+        const target = probeTargetFor(model, { override: process.env.LUCID_NET_PROBE_URL, asksageBase: asksageConfig().base });
+        return json({ ok: true, data: await netProbe.check(target) });
       }
       // P-RECOVER.1 (ADR-0385): self-recovery the user can see. Behind the same token gate as every /api
       // route above. Every body field is type- and shape-checked before it reaches the backend or the

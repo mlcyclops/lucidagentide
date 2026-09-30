@@ -249,6 +249,8 @@ export interface ConfigOption {
 // P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
+import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0423): the network indicator's view (owned there)
+export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 export type { ProgressView, WaitView };
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -1060,6 +1062,9 @@ export interface LucidBridge {
   } | null>;
   /** Force one ladder step now instead of waiting for the next tick. */
   healthTick(): Promise<{ master: { action: string; reason: string } | null; lanes: { laneId: string; action: string; reason: string }[] } | null>;
+  /** P-NETSTAT.1 (ADR-0423): the engine's latency probe of the provider host `model` routes to. null when
+   *  the engine itself did not answer (which the indicator reports as "Connecting to the LUCID engine"). */
+  netStatus(model: string): Promise<NetView | null>;
   commands(): Promise<OmpCommand[]>;
   skills(): Promise<SkillView[] | null>;
   // P-SKILL.4 (ADR-0097): the directory's per-skill management menu (all confined, all additive).
@@ -1783,6 +1788,8 @@ export const bridge: LucidBridge = {
   // unauthenticated and registered first, so it would shadow this and leak session telemetry ungated.
   health: () => getData("/api/session-health"),
   healthTick: () => post("/api/session-health/tick", {}),
+  // Bounded above the engine's own 4s probe timeout, so a dead engine reads as null, never a hang.
+  netStatus: (model) => getTimed(`/api/net-status?model=${encodeURIComponent(model)}`, 8_000) as Promise<NetView | null>,
   commands: async () => (await getData("/api/commands")) ?? [],
   skills: () => getData("/api/skills"),
   userCommands: async () => (await getData("/api/usercommand")) ?? [], // P-CMD.1

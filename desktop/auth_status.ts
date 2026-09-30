@@ -55,7 +55,7 @@ export const MAJORS: Provider[] = [
   // expose that project field here to make Enterprise OAuth work (personal accounts leave it blank).
   { id: "google", name: "Google · Gemini", env: "GEMINI_API_KEY", oauthId: "google-gemini-cli", canOauth: true,
     fields: [
-      { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID (Workspace / Enterprise OAuth)", placeholder: "my-project-123 — required for non-personal Google accounts" },
+      { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID (Workspace / Enterprise OAuth)", placeholder: "my-project-123 (required for non-personal Google accounts)" },
     ] },
   { id: "anthropic", name: "Anthropic · Claude", env: "ANTHROPIC_API_KEY", oauthId: "anthropic", canOauth: true },
   { id: "xai", name: "xAI · Grok", env: "XAI_API_KEY", oauthId: "xai-oauth", canOauth: true },
@@ -95,7 +95,7 @@ export const MAJORS: Provider[] = [
     fields: [
       { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID", placeholder: "my-project-123" },
       { env: "GOOGLE_CLOUD_LOCATION", label: "Location", placeholder: "us-central1 (or global)" },
-      { env: "GOOGLE_APPLICATION_CREDENTIALS", label: "Service-account JSON (blank = gcloud OAuth / ADC)", placeholder: "/path/to/sa.json — or run: gcloud auth application-default login" },
+      { env: "GOOGLE_APPLICATION_CREDENTIALS", label: "Service-account JSON (blank = gcloud OAuth / ADC)", placeholder: "/path/to/sa.json, or run: gcloud auth application-default login" },
       { env: "NODE_EXTRA_CA_CERTS", label: "Private CA bundle (air-gapped / GDC zone CA)", placeholder: "/path/to/zone-ca.pem, trust for private Gemini endpoints (GDC air-gapped, NIPRNet+)" },
     ] },
   // Perplexity (Sonar) is U.S.-based. omp supports OAuth too, but its login is interactive email-OTP /

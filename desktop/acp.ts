@@ -13,7 +13,13 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, constants, fstatSync, ftruncateSync, mkdtempSync, openSync, readSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): share the engine's hidden console
+
+// P-BROWSER.4 (ADR-0415): the `windowsHide` a spawn uses when its caller does not pass one. This module is
+// also bundled into the Node-hosted VS Code extension, so it must not import console_host.ts (bun:ffi):
+// the engine installs console_host's `ompWindowsHide` here at boot (dev.ts, after ensureHiddenConsole), and
+// every other host keeps CREATE_NO_WINDOW, the contract from before the hidden console existed.
+let defaultWindowsHide: () => boolean = () => true;
+export function setDefaultWindowsHide(fn: () => boolean): void { defaultWindowsHide = fn; }
 
 // Support diagnosability (the "agent process exited (code 1)" support ticket): every omp child's stderr
 // is appended to ONE rolling log so a fresh-install failure leaves evidence a human can send in. The
@@ -115,7 +121,7 @@ export class ACPClient {
   private errTail = "";
 
   start(): void {
-    const windowsHide = this.spawnOpts.windowsHide ?? ompWindowsHide();
+    const windowsHide = this.spawnOpts.windowsHide ?? defaultWindowsHide();
     this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide, env: { ...process.env, ...this.env } });
     acpLog(`\n[acp spawn ${new Date().toISOString()} cmd=${this.cmd} cwd=${this.cwd}]\n`);
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
