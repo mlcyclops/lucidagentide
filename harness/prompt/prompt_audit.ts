@@ -173,7 +173,7 @@ async function createAuditSession(opts: {
   const model = createEchoModel();
   const tmp = mkdtempSync(join(tmpdir(), "prompt-audit-"));
   const authStorage = await AuthStorage.create(join(tmp, "auth.db"));
-  authStorage.setRuntimeApiKey("echo", "test-key");
+  authStorage.keys.setRuntime("echo", "test-key");
   // Unchecked cast, deliberately: a rejecting stand-in for fetch so model discovery can never
   // reach the network. Same shape harness/testing/echo.ts uses; no runtime check is possible.
   const offlineFetch = (() => Promise.reject(new Error("prompt-audit is offline"))) as unknown as typeof fetch;

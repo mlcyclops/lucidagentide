@@ -18,6 +18,7 @@ import { load, save } from "./settings_store.ts";
 import { cloneRepo, currentWorkspace, isGitRepo, wsName } from "./workspace.ts";
 import { buildRepoActivity, parseRemoteUrl, type PrStatus, type RemoteRef, type RepoActivity, type RepoRaw } from "../harness/brief/repo_activity.ts";
 import { emitSecurityEvent, type SecurityEventInput } from "./audit_export.ts";
+import { gitExe } from "../harness/runs/sandbox_exec.ts";
 
 export interface ReportRepo { path: string; name: string; isGit: boolean; remoteUrl: string; host: string; isGitHub: boolean; lastActive: number }
 export interface CollectOptions { fetch: boolean; prs: boolean; window: number }
@@ -32,7 +33,7 @@ const GIT_TIMEOUT_MS = 8_000; // local read ops
 // while a report generated). Non-blocking spawn keeps the server responsive; timeout-bounded via kill().
 async function gitOut(repo: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<{ ok: boolean; out: string; err: string }> {
   try {
-    const p = Bun.spawn(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawn([gitExe(), ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
     const timer = setTimeout(() => { try { p.kill(); } catch { /* already exited */ } }, timeoutMs);
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     clearTimeout(timer);
@@ -45,7 +46,7 @@ async function gitOut(repo: string, args: string[], timeoutMs = GIT_TIMEOUT_MS):
  *  picker took 10-15s to appear with a dozen repos. Timeout-bounded like the sync gitOut. */
 async function remoteUrlAsync(repo: string): Promise<string> {
   try {
-    const p = Bun.spawn(["git", "remote", "get-url", "origin"], { cwd: repo, stdout: "pipe", stderr: "ignore" });
+    const p = Bun.spawn([gitExe(), "remote", "get-url", "origin"], { cwd: repo, stdout: "pipe", stderr: "ignore" });
     const timer = setTimeout(() => { try { p.kill(); } catch { /* already exited */ } }, GIT_TIMEOUT_MS);
     const code = await p.exited;
     clearTimeout(timer);

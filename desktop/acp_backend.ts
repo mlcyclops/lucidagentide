@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_doc.ts"; // P-DESIGN.1/.2 (ADR-0154): honor DESIGN.md + detect writes
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ACPClient } from "./acp.ts";
+import { ACPClient, acpLogPath } from "./acp.ts";
 import { LiveTurn, type TurnAttachment, type TurnSnapshot, type TurnStatus } from "./turn_recovery.ts";
 import { engineIncident, logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
@@ -45,7 +45,7 @@ import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type Resolve
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed } from "./managed_config.ts";
-import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -55,6 +55,7 @@ import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type Grant
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
+import { providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
 import { providerAuth, typesafeKeySet, type ProviderAuth } from "./auth_status.ts";
 import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -210,6 +211,12 @@ const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
 // for them: the extension wraps pi-ai's TypeSafeJudge / TextJudge in-process. Observability only, fail-soft,
 // self-skips when LUCID_JUDGMENT_URL is absent.
 const JUDGMENT_EXT = repoAsset("harness", "omp", "judgment_extension.ts");
+// P-HEALTH.3: a liveness beat while the model streams a tool call's arguments, which omp's ACP mapper never
+// forwards, so the stall watchdog stops reading a long write as a wedged session. Master AND lanes; each
+// beat names its omp session id, so the engine credits the right one. Fail-soft, self-skips when
+// LUCID_STREAM_BEAT_URL is absent.
+const STREAM_BEAT_EXT = repoAsset("harness", "omp", "stream_beat_extension.ts");
+const STREAM_BEAT_ARGS: readonly string[] = existsSync(STREAM_BEAT_EXT) ? ["-e", STREAM_BEAT_EXT] : [];
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = repoAsset("harness", "omp", "acp_config.yml");
@@ -330,7 +337,7 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
   const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -470,7 +477,7 @@ export type ChatEvent =
   // P-HEALTH.1: the harness acted on this session BY ITSELF - it probed a silent turn with the canned
   // status ask, or cancelled and resumed a wedged one in place. Kept in parity with the renderer's
   // chat_events.ts union (the two are mirrored at this one boundary, like every other variant here).
-  | { type: "health"; action: "probe" | "recover"; reason: string }
+  | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
 // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in). Preview +
@@ -496,7 +503,8 @@ class Backend {
   }
   private persistSession: ((id: string) => void) | null = null;
   private incidentsDir = incidentDir();
-  private acpLogPath = join(homedir(), ".omp", "lucid-acp.log");
+  /** Test override of the log an incident quotes; null reads the one acp.ts writes (acpLogPath). */
+  private acpLogOverride: string | null = null;
   /** P-RECOVER.1: the session a DEAD master was holding. start() resumes it on the replacement child, and
    *  keeps it across a failed spawn so the next attempt still resumes rather than starting fresh. */
   private reviveId: string | null = null;
@@ -730,6 +738,15 @@ class Backend {
     return true;
   }
 
+  /** P-HEALTH.3: stream_beat_extension says the model is still writing a tool call's arguments in
+   *  `sessionId`. Credited only to THIS session's running turn (a lane's beat must never hide a master
+   *  stall), through the same `arm` every ACP update uses, so the slow notice and the watchdog agree. */
+  noteStreaming(sessionId: string): boolean {
+    if (!sessionId || sessionId !== this.sessionId || !this.streamArm) return false;
+    this.streamArm();
+    return true;
+  }
+
   /** P-JEV.2 (ADR-0377): relay one traced judgment into the live chat stream. Only the MASTER child's
    *  reports belong to the chat turn this backend streams; a fleet lane's report (target = lane id) is
    *  dropped here rather than drawn under the wrong reply. Returns false when it was not delivered so the
@@ -950,7 +967,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -1787,6 +1804,7 @@ class Backend {
     };
     this.listener = sink;
     this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
+    this.streamArm = arm; // P-HEALTH.3: a tool-call streaming beat is activity, exactly like an ACP update
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
     this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.pulse.reset(); // P-LIVENESS.1: a new turn never inherits the last one's evidence
@@ -1868,7 +1886,7 @@ class Backend {
           const v = resumeVerdict({ recovered: true, sessionAlive: !!this.sessionId, resumesSoFar: resumes });
           this.turnDiag(`prompt.recovered session=${this.sessionId} resumes=${resumes} resume=${v.resume} silentMs=${rec.silentMs}`);
           // Either way the user is TOLD, through the same health channel the recovery itself reports on.
-          onEvent({ type: "health", action: "recover", reason: v.reason });
+          onEvent({ type: "health", action: "recover", reason: v.reason, needsUser: !v.resume });
           if (!v.resume) throw err;
           resumes++;
           // `restart()` nulls the listener and clears askActive. Without re-asserting both, the resumed run
@@ -1915,6 +1933,7 @@ class Backend {
       }
       if (this.listener === sink) { this.listener = null; this.turnStartedAtMs = null; }
       if (this.turnSink === sink) this.turnSink = null;
+      if (this.streamArm === arm) this.streamArm = null;
     }
     if (this.recoveryTurn !== turn) return;
     // P-NORESP.1: the turn produced NO content at all (no token/thinking/tool) — either a silent empty
@@ -2145,13 +2164,13 @@ class Backend {
   /** P-GOAL.9: the current HEAD commit, or null when the workspace isn't a git repo / git is absent.
    *  Best-effort and quick (5s cap); a missing baseline just means the report shows "LOC n/a". */
   private gitHead(): string | null {
-    try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
+    try { return execFileSync(gitExe(), ["rev-parse", "HEAD"], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
     catch { return null; }
   }
   /** P-GOAL.9: parsed `git diff --numstat <ref>` for the working tree vs `ref` (tracked changes,
    *  staged + unstaged + committed-since). Null on any git failure — LOC tracking is best-effort. */
   private gitDiffVs(ref: string): LocStat | null {
-    try { return parseNumstat(execFileSync("git", ["diff", "--numstat", ref], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
+    try { return parseNumstat(execFileSync(gitExe(), ["diff", "--numstat", ref], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
     catch { return null; }
   }
 
@@ -2171,7 +2190,7 @@ class Backend {
 
   /** P-GOAL.12 (ADR-0057): the branches + worktrees the Pre-Flight Audit offers as loop scope. Best-effort. */
   private gitLines(args: string[]): string[] {
-    try { return execFileSync("git", args, { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((s) => s.trim()).filter(Boolean); }
+    try { return execFileSync(gitExe(), args, { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((s) => s.trim()).filter(Boolean); }
     catch { return []; }
   }
   loopScopes(): { current: string; branches: string[]; worktrees: string[] } {
@@ -2332,6 +2351,9 @@ class Backend {
     const opt = this.configOptions.find((c) => c?.id === "model");
     const list = Array.isArray(opt?.options) ? opt!.options : [];
     let models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    // P-MODEL.6: the same platform rule the picker applies (omp's on-device `apple` on darwin only), so the
+    // startup default and the checker recommendation can never pick a model the picker would not list.
+    models = models.filter((m: ModelOption) => providerAllowedOnPlatform(providerPrefixOf(m.value), process.platform));
     // P-GOAL.6.1: when the AskSage lock is on, the checker must use a model routed through the AskSage gateway.
     // Fail-safe: only narrow if such models exist (never empty the list, which would drop the picker / the
     // recommendation to the maker model). ADR-0217: match on the `asksage` provider prefix - real gov ids like
@@ -2416,6 +2438,8 @@ class Backend {
   // Only a DEAD child overrides, and that is evidence rather than a guess about how long work may take.
   private healthEpisode: HealthEpisode = newEpisode(Date.now());
   private healthActivityAt = Date.now();
+  /** P-HEALTH.3: the running turn's activity clock (its `arm`), so a streaming beat can reset it. */
+  private streamArm: (() => void) | null = null;
   private healthTimer: Timer | null = null;
   private healthBusy = false;
   /** The last self-action, surfaced in status so the user can see the harness handled it. */
@@ -2567,7 +2591,7 @@ class Backend {
    *  children's shared stderr log, redacted by the store before it touches disk and never part of the
    *  public issue body. `summary`/`events` are harness-authored: never prompts, transcripts or model text. */
   private recordRecovery(kind: IncidentKind, outcome: IncidentOutcome, summary: string, events: IncidentEvent[]): string | undefined {
-    const tail = logTail(this.acpLogPath);
+    const tail = logTail(this.acpLogOverride ?? acpLogPath());
     const meta = recordIncident(engineIncident(kind, outcome, summary, events, tail ? [{ name: "lucid-acp.log", text: tail }] : undefined), this.incidentsDir);
     if (meta) console.error(`[recover] incident ${meta.id} recorded (${kind}, ${outcome})`);
     return meta?.id;
@@ -2626,7 +2650,7 @@ class Backend {
   configureRecovery(opts: { persistSession?: (id: string) => void; incidentDir?: string; acpLog?: string }): void {
     if (opts.persistSession) this.persistSession = opts.persistSession;
     if (opts.incidentDir) this.incidentsDir = opts.incidentDir;
-    if (opts.acpLog) this.acpLogPath = opts.acpLog;
+    if (opts.acpLog) this.acpLogOverride = opts.acpLog;
   }
 
   /** POST /api/recovery/resume: a VERIFIED resume of `id` as the master session. Unlike loadSession (the

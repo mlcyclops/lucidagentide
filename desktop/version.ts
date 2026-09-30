@@ -562,4 +562,9 @@
 //            button during the first minute after launch (P-RECOVER.2); lane pickers offer the composer's
 //            curated model list; the test harness works from a UNC checkout, injection-safe.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// next beta (not cut yet; APP_VERSION below is unchanged until the release bump): MODELS: omp pinned
+//            18.2.10 -> 18.4.4, whose catalog carries Claude Sonnet 5.5 (claude-sonnet-5-5, $2/$10 per Mtok,
+//            1M context); LUCID adds its price row, 1M window, card and a default rank above Sonnet 5 and
+//            below every flagship. StepFun (new `stepfun` provider) sits behind the China-origin ACKNOWLEDGE
+//            gate; omp's on-device `apple` provider lists on macOS only (P-MODEL.6, ADR-0422).
 export const APP_VERSION = "2.3.0-beta.13";

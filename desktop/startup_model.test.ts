@@ -108,4 +108,14 @@ describe("resolveStartupModel - P-MODEL.2 curated default", () => {
     const r = resolveStartupModel({ lastUsed: "", current: "anthropic/claude-opus-4-8", options: [...FRESH, opt("anthropic/claude-opus-5-5")], isConfigured: configuredBy("anthropic/", "openai-codex/") });
     expect(r).toEqual({ value: "anthropic/claude-opus-5-5", source: "best-configured" });
   });
+  it("P-MODEL.6: omp 18.4.4's catalog (Opus 5.5 + Sonnet 5.5) still opens on Opus 5.5; Sonnet 5.5 is not a flagship", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "", options: [...FRESH, opt("anthropic/claude-opus-5-5"), opt("anthropic/claude-sonnet-5-5")], isConfigured: configuredBy("anthropic/") });
+    expect(r).toEqual({ value: "anthropic/claude-opus-5-5", source: "best-configured" });
+  });
+  it("P-MODEL.6: a StepFun-only configuration never auto-picks StepFun (China-origin gate), direct or resold", () => {
+    const step = [...OPTIONS, opt("stepfun/step-5-preview"), opt("stepfun/step-3.7-flash"), opt("openrouter/stepfun/step-3.7-flash")];
+    expect(resolveStartupModel({ lastUsed: "", current: "", options: step, isConfigured: configuredBy("stepfun/") })).toBeNull();
+    const r = resolveStartupModel({ lastUsed: "", current: "", options: step, isConfigured: configuredBy("stepfun/", "openrouter/") });
+    expect(r).toBeNull(); // openrouter here carries only the StepFun resale
+  });
 });

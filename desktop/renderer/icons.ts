@@ -34,6 +34,8 @@ const RAW: Record<string, string> = {
   search: P("M11 4.5a6 6 0 1 0 0 12 6 6 0 0 0 0-12z") + P("M20 20l-4.4-4.4"),
   // send (paper plane)
   send: P("M5 12 20 5l-4.5 14.5-3.8-5.7z") + P("M11.7 13.8 20 5"),
+  // P-TUI.2: a terminal window with a prompt (the Fleet view's Terminal hub button)
+  terminal: P("M4 5.5h16v13H4z") + P("M7.5 10l3 2.5-3 2.5") + P("M12.5 15.5h4"),
   // plus
   plus: P("M12 5v14") + P("M5 12h14"),
   // chevron right (rotate via CSS)
