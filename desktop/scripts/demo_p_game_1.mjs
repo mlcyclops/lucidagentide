@@ -91,14 +91,19 @@ console.log(`Signal Garden: hand planting, ${grown.done} missions over ${grown.w
 const voyage = await launch('nebula-fusion.html', 460, 760);
 voyage.node('btnStart').click();
 assert.equal(voyage.node('goalN').textContent, 'GOAL 1/15');
-for (let i = 0; i < 60; i++) { voyage.key('Space'); voyage.advance(.65); }
-const reached = Number(/GOAL (\d+)/.exec(voyage.node('goalN').textContent)?.[1]);
-assert.ok(reached >= 3, `missions must advance from center drops, got ${voyage.node('goalN').textContent}`);
+// Space on the collapse screen starts a new voyage, so stop dropping once the run ends (its mission tally is
+// written then) and count missions from that tally; otherwise a collapsed seed is measured as a fresh run.
+for (let i = 0; i < 60 && !voyage.node('overGoals').textContent; i++) { voyage.key('Space'); voyage.advance(.65); }
+const tally = voyage.node('overGoals').textContent;
+const reached = tally ? Number(tally.split('/')[0]) : Number(/GOAL (\d+)/.exec(voyage.node('goalN').textContent)?.[1]) - 1;
+assert.ok(reached >= 2, `missions must advance from center drops, got ${tally || voyage.node('goalN').textContent}`);
 assert.ok(Number(voyage.node('scoreV').textContent.replaceAll(',', '')) > 0);
 voyage.key('KeyP');
 voyage.key('KeyR');
+// A collapse begun by the last drops ignores keys until its screen shows; let it finish, then R restarts from there.
+if (voyage.node('goalN').textContent !== 'GOAL 1/15') { voyage.advance(8); voyage.key('KeyR'); }
 assert.equal(voyage.node('goalN').textContent, 'GOAL 1/15', 'restart resets the voyage');
-console.log(`Nebula Fusion: Voyage: missions advanced to ${reached}, restart resets`);
+console.log(`Nebula Fusion: Voyage: ${reached} missions done${tally ? ' before the well collapsed' : ''}, restart resets`);
 const brigade = await launch('brick-brigade.html', 400, 720);
 brigade.advance(2); // the attract demo plays behind the title panel and never ends the run
 assert.equal(brigade.node('ovTitle').textContent, 'BRICK BRIGADE');
