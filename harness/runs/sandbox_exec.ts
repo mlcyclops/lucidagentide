@@ -322,6 +322,20 @@ export function gitCmdDir(env: Record<string, string | undefined> = process.env)
   return root ? win32Path.join(root, "cmd") : null;
 }
 
+let gitExeCache: string | undefined;
+/** The host git executable for the ENGINE's own git calls: on Windows the git gitCmdDir discovers (MinGit,
+ *  scoop, GitHub Desktop's copy - none of which put themselves on PATH), else PATH's `git`. Every engine
+ *  spawn of git goes through this rather than a bare "git": the installed app's PATH commonly has no git,
+ *  and a bare spawn then throws ENOENT. The engine's own PATH is deliberately left alone, because the
+ *  contained agent inherits it behind its git broker shim (P-SANDBOX.17) and a real git.exe there would let
+ *  a PATHEXT-less lookup (libuv searches .com/.exe only) step past the broker's git.cmd. */
+export function gitExe(): string {
+  if (gitExeCache !== undefined) return gitExeCache;
+  const dir = process.platform === "win32" ? gitCmdDir() : null;
+  gitExeCache = dir ? win32Path.join(dir, "git.exe") : "git";
+  return gitExeCache;
+}
+
 /** PURE: the PATH overlay that puts `dir` first (a discovered git's `cmd` dir, or the contained agent's git
  *  broker shim, P-SANDBOX.17), keyed by the env's OWN spelling of PATH (Windows env names are
  *  case-insensitive, so a second `PATH` beside `Path` is ambiguous at spawn). Empty when there is no dir or

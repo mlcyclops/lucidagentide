@@ -11,7 +11,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): share the engine's hidden console
 
@@ -19,15 +19,28 @@ import { ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): s
 // is appended to ONE rolling log so a fresh-install failure leaves evidence a human can send in. The
 // write is best-effort - diagnostics must never break the client - and the file is bounded: past 512KB
 // it is rewritten keeping the newest 256KB.
-const ACP_LOG = join(homedir(), ".omp", "lucid-acp.log");
+//
+// The recovery incident report quotes this log's tail as its only evidence, so it must hold the operator's
+// real omp children and nothing else. Every suite that drives the fake ACP agent spawns through this
+// client; resolved to the real home, a full `bun test` run filled the tail with `[fake-acp] ready` lines
+// and pushed the real omp stderr out of the report. So under `bun test` (NODE_ENV=test) it NEVER resolves
+// to the real log (the security_log.ts rule). `LUCID_ACP_LOG` gives a test a deterministic file. Resolved
+// per call, never at import: import order must not decide where a line lands.
+export function acpLogPath(): string {
+  const override = process.env.LUCID_ACP_LOG?.trim();
+  if (override) return override;
+  if (process.env.NODE_ENV === "test") return join(tmpdir(), `lucid-acp-test-${process.pid}.log`);
+  return join(homedir(), ".omp", "lucid-acp.log");
+}
 const ACP_LOG_MAX = 512 * 1024;
 const ACP_LOG_KEEP = 256 * 1024;
 function acpLog(text: string): void {
   try {
-    appendFileSync(ACP_LOG, text);
-    if (statSync(ACP_LOG).size > ACP_LOG_MAX) {
-      const tail = readFileSync(ACP_LOG, "utf8").slice(-ACP_LOG_KEEP);
-      writeFileSync(ACP_LOG, tail);
+    const file = acpLogPath();
+    appendFileSync(file, text);
+    if (statSync(file).size > ACP_LOG_MAX) {
+      const tail = readFileSync(file, "utf8").slice(-ACP_LOG_KEEP);
+      writeFileSync(file, tail);
     }
   } catch { /* best-effort; never break the client over a log line */ }
 }

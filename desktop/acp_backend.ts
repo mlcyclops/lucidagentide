@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_doc.ts"; // P-DESIGN.1/.2 (ADR-0154): honor DESIGN.md + detect writes
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ACPClient } from "./acp.ts";
+import { ACPClient, acpLogPath } from "./acp.ts";
 import { LiveTurn, type TurnAttachment, type TurnSnapshot, type TurnStatus } from "./turn_recovery.ts";
 import { engineIncident, logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
@@ -45,7 +45,7 @@ import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type Resolve
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed } from "./managed_config.ts";
-import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -502,7 +502,8 @@ class Backend {
   }
   private persistSession: ((id: string) => void) | null = null;
   private incidentsDir = incidentDir();
-  private acpLogPath = join(homedir(), ".omp", "lucid-acp.log");
+  /** Test override of the log an incident quotes; null reads the one acp.ts writes (acpLogPath). */
+  private acpLogOverride: string | null = null;
   /** P-RECOVER.1: the session a DEAD master was holding. start() resumes it on the replacement child, and
    *  keeps it across a failed spawn so the next attempt still resumes rather than starting fresh. */
   private reviveId: string | null = null;
@@ -2162,13 +2163,13 @@ class Backend {
   /** P-GOAL.9: the current HEAD commit, or null when the workspace isn't a git repo / git is absent.
    *  Best-effort and quick (5s cap); a missing baseline just means the report shows "LOC n/a". */
   private gitHead(): string | null {
-    try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
+    try { return execFileSync(gitExe(), ["rev-parse", "HEAD"], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
     catch { return null; }
   }
   /** P-GOAL.9: parsed `git diff --numstat <ref>` for the working tree vs `ref` (tracked changes,
    *  staged + unstaged + committed-since). Null on any git failure — LOC tracking is best-effort. */
   private gitDiffVs(ref: string): LocStat | null {
-    try { return parseNumstat(execFileSync("git", ["diff", "--numstat", ref], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
+    try { return parseNumstat(execFileSync(gitExe(), ["diff", "--numstat", ref], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
     catch { return null; }
   }
 
@@ -2188,7 +2189,7 @@ class Backend {
 
   /** P-GOAL.12 (ADR-0057): the branches + worktrees the Pre-Flight Audit offers as loop scope. Best-effort. */
   private gitLines(args: string[]): string[] {
-    try { return execFileSync("git", args, { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((s) => s.trim()).filter(Boolean); }
+    try { return execFileSync(gitExe(), args, { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((s) => s.trim()).filter(Boolean); }
     catch { return []; }
   }
   loopScopes(): { current: string; branches: string[]; worktrees: string[] } {
@@ -2586,7 +2587,7 @@ class Backend {
    *  children's shared stderr log, redacted by the store before it touches disk and never part of the
    *  public issue body. `summary`/`events` are harness-authored: never prompts, transcripts or model text. */
   private recordRecovery(kind: IncidentKind, outcome: IncidentOutcome, summary: string, events: IncidentEvent[]): string | undefined {
-    const tail = logTail(this.acpLogPath);
+    const tail = logTail(this.acpLogOverride ?? acpLogPath());
     const meta = recordIncident(engineIncident(kind, outcome, summary, events, tail ? [{ name: "lucid-acp.log", text: tail }] : undefined), this.incidentsDir);
     if (meta) console.error(`[recover] incident ${meta.id} recorded (${kind}, ${outcome})`);
     return meta?.id;
@@ -2645,7 +2646,7 @@ class Backend {
   configureRecovery(opts: { persistSession?: (id: string) => void; incidentDir?: string; acpLog?: string }): void {
     if (opts.persistSession) this.persistSession = opts.persistSession;
     if (opts.incidentDir) this.incidentsDir = opts.incidentDir;
-    if (opts.acpLog) this.acpLogPath = opts.acpLog;
+    if (opts.acpLog) this.acpLogOverride = opts.acpLog;
   }
 
   /** POST /api/recovery/resume: a VERIFIED resume of `id` as the master session. Unlike loadSession (the

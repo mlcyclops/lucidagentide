@@ -272,7 +272,7 @@ function whisperDeps(): WhisperRuntimeDeps {
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
 import { planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
-import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
 import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
@@ -1216,7 +1216,7 @@ const checkouts: CheckoutRegistry = new CheckoutRegistry({
     { id: "master", name: "main composer", cwd: currentWorkspace(), task: backend.currentTask(), running: backend.midTurn().busy },
     ...fleet.sessionsView(),
   ],
-  gitStatus: (root) => { const dir = gitCmdDir(); return gitDirtyPaths(dir ? join(dir, "git.exe") : "git", root); },
+  gitStatus: (root) => gitDirtyPaths(gitExe(), root),
 });
 backend.onAuthoredPath = (path) => checkouts.recordWrite({ id: "master", name: "main composer" }, path, currentWorkspace());
 // P-WAIT.1: a write claim counts only while its holder's turn runs (the backstop behind endTurn).
@@ -1605,7 +1605,7 @@ function listAgentTemplates(): AgentTemplateSummary[] {
 // working tree. Fail-soft: any git error → empty strings (the annex then reports "no changes detected").
 function gitOut(repo: string, args: string[]): string {
   try {
-    const r = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "ignore", timeout: 8000 });
+    const r = Bun.spawnSync([gitExe(), ...args], { cwd: repo, stdout: "pipe", stderr: "ignore", timeout: 8000 });
     return r.exitCode === 0 ? r.stdout.toString() : "";
   } catch { return ""; }
 }

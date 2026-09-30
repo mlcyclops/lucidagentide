@@ -23,7 +23,7 @@ import { randomBytes } from "node:crypto";
 import { rmdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { gitExe } from "./repo_probe.ts";
+import { gitExe } from "../harness/runs/sandbox_exec.ts";
 
 const GIT_TIMEOUT_MS = 60_000;
 const FORCED = ["-c", "safe.directory=*", "-c", "core.fsmonitor=false"];
