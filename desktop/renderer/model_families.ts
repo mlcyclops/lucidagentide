@@ -50,6 +50,60 @@ export function providerPrefixOf(value: string): string {
   return i === -1 ? "" : value.slice(0, i);
 }
 
+// omp providers whose transport self-resolves an AMBIENT credential chain (a stray ~/.aws profile, an
+// instance role). omp lists their whole catalog on that mere possibility, so a machine with an unrelated AWS
+// CLI setup grows six regional Claude rows that all fail on the first turn. The LUCID descriptor id is what
+// "configured" means to LUCID (auth_status.ts MAJORS "amazon-bedrock"); until it is, the rows stay hidden.
+// google-vertex is the same shape: Application Default Credentials on the box make omp list its catalog.
+const AMBIENT_PROVIDERS: Record<string, string> = { "amazon-bedrock": "amazon-bedrock", "bedrock-mantle": "amazon-bedrock", "google-vertex": "google-vertex" };
+
+/** True when `value` comes from an ambient-credential provider whose LUCID descriptor holds NO credential
+ *  (`credentialedProviderIds`: a key, an OAuth login or a secret field, never a bare project id / region). */
+export function isUnconfiguredAmbientModel(value: string, credentialedProviderIds: ReadonlySet<string>): boolean {
+  const owner = AMBIENT_PROVIDERS[providerPrefixOf(value)];
+  return owner !== undefined && !credentialedProviderIds.has(owner);
+}
+
+// ── Picker order inside a family: what you use, then the rest, then the special-case routes ──────
+/** When a model was last run and how many sessions ran it, from the session list. Keys are the ids as
+ *  the session index records them (`provider/model`, or a bare id on older rows). */
+export interface ModelUsage { lastUsedAt: number; uses: number }
+export function usageFromSessions(sessions: readonly { model: string; updatedAt: number }[]): Map<string, ModelUsage> {
+  const out = new Map<string, ModelUsage>();
+  for (const s of sessions) {
+    if (!s.model || s.model === "-") continue;
+    const u = out.get(s.model);
+    if (u) { u.uses++; if (s.updatedAt > u.lastUsedAt) u.lastUsedAt = s.updatedAt; }
+    else out.set(s.model, { lastUsedAt: s.updatedAt, uses: 1 });
+  }
+  return out;
+}
+/** A special-case route of a model rather than the model itself: a regional / cross-region inference
+ *  profile (Bedrock `au.`/`eu.`/`us-gov.`… ids, "(EU)"-style name tags) or an explicit non-reasoning
+ *  variant. They exist for a compliance or latency reason, so they sit at the bottom of their family. */
+export function isSpecialVariantModel(m: ModelOption): boolean {
+  const id = m.value.slice(m.value.indexOf("/") + 1).toLowerCase();
+  if (/^(?:au|eu|jp|apac|us|us-gov|global|ca|in)\./.test(id)) return true;
+  if (/non-reasoning/.test(id)) return true;
+  return /\((?:AU|EU|JP|APAC|US|CA|IN|GovCloud|Global)\)\s*$/i.test(m.name);
+}
+
+/** Reorder a curated list (family grouping preserves this relative order): models this workspace has
+ *  run come first, most recently used to least used; then the rest in their curated order; then the
+ *  special-case routes, used or not. Stable, so ties keep the caller's order. */
+export function orderByUsage(models: readonly ModelOption[], usage: ReadonlyMap<string, ModelUsage>): ModelOption[] {
+  const used: { m: ModelOption; u: ModelUsage }[] = [];
+  const rest: ModelOption[] = [];
+  const special: ModelOption[] = [];
+  for (const m of models) {
+    if (isSpecialVariantModel(m)) { special.push(m); continue; }
+    const u = usage.get(m.value) ?? usage.get(m.value.slice(m.value.indexOf("/") + 1)); // older rows: bare id
+    if (u) used.push({ m, u }); else rest.push(m);
+  }
+  used.sort((a, b) => (b.u.lastUsedAt - a.u.lastUsedAt) || (b.u.uses - a.u.uses));
+  return [...used.map((x) => x.m), ...rest, ...special];
+}
+
 /** The omp provider prefixes of the ENABLED local providers. */
 export function localPrefixSet(providers: readonly LocalProviderRef[]): Set<string> {
   return new Set(providers.filter((p) => p.enabled && p.ompProvider).map((p) => p.ompProvider));

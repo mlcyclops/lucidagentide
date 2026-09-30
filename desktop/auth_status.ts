@@ -102,6 +102,18 @@ export const MAJORS: Provider[] = [
   // the macOS app token — neither works through our non-interactive broker spawn — so we expose the
   // API-key path. canOauth:false hides the dead OAuth button.
   { id: "perplexity", name: "Perplexity · Sonar", env: "PERPLEXITY_API_KEY", oauthId: "perplexity", canOauth: false },
+  // Amazon Bedrock: omp's transport self-resolves the AWS credential chain, so a stray ~/.aws profile makes
+  // omp list EVERY Bedrock model (six regional Claude variants and more) while nothing in LUCID was ever
+  // configured, and each one fails on the first turn. This descriptor is what "configured" means to LUCID:
+  // a Bedrock bearer token or an explicit access-key pair saved HERE (a ~/.aws profile is exactly the ambient
+  // case, so it is not offered). The picker hides amazon-bedrock/* until a key is set (renderer
+  // curatedModels via credentialedProviderIds). Region is optional: omp derives it from the inference profile.
+  { id: "amazon-bedrock", name: "Amazon · Bedrock", env: "AWS_BEARER_TOKEN_BEDROCK", oauthId: "", canOauth: false,
+    fields: [
+      { env: "AWS_ACCESS_KEY_ID", label: "Access key ID", placeholder: "AKIA…", secret: true },
+      { env: "AWS_SECRET_ACCESS_KEY", label: "Secret access key", placeholder: "wJalr…", secret: true },
+      { env: "AWS_REGION", label: "Region (optional)", placeholder: "us-east-1" },
+    ] },
 ];
 // More providers (third-party / non-U.S. / custom aggregators) - gated behind a typed acknowledgement
 // in the UI because they route to servers outside U.S. jurisdiction or aggregate many origins.

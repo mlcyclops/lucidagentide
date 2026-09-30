@@ -345,13 +345,16 @@ function M._fmt_statusline(session, prefix)
   if not session then
     return ""
   end
-  return string.format(
+  local s = string.format(
     "%s $%.2f · cache %s · ctx %s",
     prefix or "Lucid",
     session.cost or 0,
     M._pct((session.cache or {}).hit or 0),
     M._pct(session.contextFill or 0)
   )
+  -- lualine function components are spliced verbatim; escape % so Vim's statusline
+  -- parser doesn't read "cache 87%" as a format item (E539: Illegal character).
+  return (s:gsub("%%", "%%%%"))
 end
 
 --- Lines for the :LucidStats float from a `lucid stats --json --budgets` payload (nil-safe).

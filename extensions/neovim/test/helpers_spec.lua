@@ -49,11 +49,12 @@ eq(lucid._bar(0.5, 4), "[##--]", "bar: half")
 eq(lucid._bar(0, 4), "[----]", "bar: empty")
 eq(lucid._bar(1, 4), "[####]", "bar: full")
 
--- _fmt_statusline: compact spend/cache/ctx line (nil-safe).
+-- _fmt_statusline: compact spend/cache/ctx line (nil-safe); % is escaped to %% so lualine's
+-- verbatim function-component splice stays a valid statusline (raw % -> E539 Illegal character).
 eq(lucid._fmt_statusline(nil), "", "statusline: nil session -> empty")
 eq(
   lucid._fmt_statusline({ cost = 0.42, cache = { hit = 0.87 }, contextFill = 0.34 }, "Lucid"),
-  "Lucid $0.42 · cache 87% · ctx 34%",
+  "Lucid $0.42 · cache 87%% · ctx 34%%",
   "statusline: spend + cache% + ctx%"
 )
 

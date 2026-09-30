@@ -38,8 +38,9 @@ export const LANE_STATUS_WORDS: Readonly<Record<string, string>> = {
 };
 
 /** The states that mean a human is BLOCKING the lane. The only ones allowed to animate, on either surface,
- *  so "something is moving" always means "something wants you". */
-const ATTENTION: Readonly<Record<string, true>> = { "needs-approval": true, "awaiting-input": true };
+ *  so "something is moving" always means "something wants you". Exported so every "waiting on you" count
+ *  (the orbit's Other hubs badge, P-SWITCH.3) reads the same rule instead of restating it. */
+export const LANE_ATTENTION: Readonly<Record<string, true>> = { "needs-approval": true, "awaiting-input": true };
 /** The states that mean the lane is making progress on its own. */
 const BUSY: Readonly<Record<string, true>> = { working: true, starting: true };
 
@@ -93,7 +94,7 @@ export function laneRollup(lanes: ReadonlyArray<{ status: string; name?: string;
   for (const status of ordered) {
     const names = byStatus.get(status);
     if (!names?.length) continue;
-    const isAttention = ATTENTION[status] === true;
+    const isAttention = LANE_ATTENTION[status] === true;
     attention ||= isAttention;
     busy ||= BUSY[status] === true;
     counts.push({ status, count: names.length, names, attention: isAttention });

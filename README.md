@@ -138,11 +138,11 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
 - **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
 
-The per-beta details are in [What's new in v2.3.0-beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+The per-beta details are in [What's new in v2.3.0-beta.13](#-whats-new-in-v230-beta13-prerelease), [beta.12](#-whats-new-in-v230-beta12-prerelease), [beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
 
 ### Get the beta
 
-1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.9](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.9)).
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.13](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.13)).
 2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
 
@@ -276,6 +276,57 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > leave the host.
 
 ---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.13 (prerelease)
+
+> **🧰 A browser you can see, a judge that stays quiet, and a terminal hub.** Beta.13 lands the reviewed surgery train (#424 to #430) plus the judge fixes: the agent's browser window is visible again, judgments are off unless you opt in and never retry a model that cannot answer, workers only wait for each other on the same file, and `lucid hub` puts the app's panels in your terminal.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.13](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.13). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🪟 The agent's browser is a real window** - `browser.open({ headed: true })` used to come up as a white, frameless rectangle you could not close. The engine now owns a hidden console at boot so the agent's Chrome is no longer born hidden; the sandboxed helper spawn is unchanged. *(P-BROWSER.4, [ADR-0415](DECISIONS.md))*
+- **⚖️ Judgments are off by default, and a dead judge is not asked twice** - Settings > Judgment now defaults to **None**; opt in to Jev or your own models. LUCID writes omp's judge role itself, so a local model can no longer be picked by pattern and time out every turn. A local judge that fails more than once, or any model your account says does not exist (the `gpt-5.3-codex-spark` 404 on API-key OpenAI accounts), is left out of the chain and refused in-process until you reset it. *(P-JEV.5/.6, [ADR-0416](DECISIONS.md), [ADR-0421](DECISIONS.md))*
+- **🧵 Workers wait only on the same file** - a spoke in Main's folder no longer sits on "Waiting for Main to finish in this folder"; a wait happens only when two workers touch the same file, bounded at 20 s. *(P-WAIT.1, [ADR-0417](DECISIONS.md))*
+- **🩺 Stuck or busy, you can tell** - an open tool call is judged on evidence (its process tree, output, time) and marked "likely stuck" with a Stop command button; the harness never kills it for you. Background jobs survive a session resume. *(P-LIVENESS.1, P-ASYNCJOBS.1, [ADR-0418](DECISIONS.md))*
+- **🖥 `lucid hub`, the terminal hub** - a tmux-style pane multiplexer over the running engine: Overview, Security (audited approve/dismiss), Fleet, Sessions, Audit, Usage, Network and Knowledge decks, plus a live agent pane; `|` and `-` split, tab walks focus, `z` zooms. It finds the engine through a signed discovery file and verifies it with the health handshake, or spawns its own. *(P-TUI.0/.1, [ADR-0419](DECISIONS.md), [ADR-0420](DECISIONS.md))*
+- **⏳ No reconnect button during the first minute** - on a fresh open the composer stays plain while the engine boots; the amber Reconnect appears only if the engine still does not answer after 60 s. *(P-RECOVER.2)*
+- **🎯 Lane pickers use the curated list** - the Fleet grid form, the orbit spawn form and every lane card offer the same model list as the composer (Bedrock/Vertex only behind a saved key, families ranked by use), so a spoke cannot start on a model your account cannot run.
+- **🧪 Test harness from a network share** - typecheck and the packaged-boot test work from a UNC checkout, with the cmd argument-injection path closed. *(ADR-0178 amendment)*
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.12 (prerelease)
+
+> **🧭 The fixes you asked for, each proven before merge.** Beta.12 carries six reviewed branches, each reproduced on the previous build and verified fixed on a headless engine before it went in, plus two operator fixes for session titles and the model picker.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.12](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.12). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🤫 One status line by default, detail when you want it** - Settings > Appearance > Working status offers "One status line" or "Full detail", an experimental time estimate (off by default; shows a number or nothing, never "estimating") and a green progress ring beside Check in and on every lane card. The estimate is backtested: time left is conditioned on how long the turn has already run. Also in this branch: a folder queue keeps the case of your folder names, a waiting lane counts down live, time spent waiting in line no longer counts as turn time, and a fail-open in the git broker (a drive-relative path from a network-share checkout counted as inside the workspace) is closed. *(P-PROGRESS.3/.4, [ADR-0412](DECISIONS.md), [ADR-0413](DECISIONS.md))*
+- **📨 A push reaches the agent or says why** - "Push not delivered" on an attached spoke is fixed: notes no tool step picked up ride the agent's next prompt instead of filling the cap, a push to an idle or gone target is refused with a reason, and your text is sent, staged for the next turn or put back in the composer, never dropped. *(P-INTERJECT.5, [ADR-0414](DECISIONS.md))*
+- **🗂 One Fleet view at a time** - opening the orbit closes the grid by every route; with the orbit pinned the grid appears only when you ask for it.
+- **🆕 A new session is a new hub** - spokes remember the session they were born under; the orbit draws the current session's spokes and lists your other hubs. A reply that finished while you were on a spoke shows in full when you come back. *(P-SWITCH.3, [ADR-0410](DECISIONS.md), [ADR-0411](DECISIONS.md))*
+- **👀 Attaching to a working spoke shows it working** - the running turn's bubble and a pulsing Working line appear the moment you attach, and an image you paste on a spoke stays with that spoke. *(P-FLEET.L8)*
+- **🏷 Session titles are your words again** - the checkout-peers briefing no longer shows up as a session title or as the first message of a restored chat.
+- **🎯 A cleaner model picker** - Amazon Bedrock and Google Vertex models appear only after you save a key for that provider in the Provider Hub (a stray `~/.aws` profile no longer adds six regional Claude rows that fail on send); Amazon Bedrock is now a provider card. Inside each family, the models you actually run come first, most recently used to least used, with regional and non-reasoning variants at the bottom.
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.11 (prerelease)
+
+> **🛑 Stop means stop, and less to wonder about.** Beta.11 fixes Stop, opens Fleet on the grid, and only shows a branch pill when your work actually goes to a hosted repo.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.11](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.11). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🛑 Stop stops** - pressing Stop no longer sends the prompt you had queued for the next turn; it stays staged with a **Send now** button until you choose. A Stop that reaches a running /goal loop ends the loop, not just the current step.
+- **🗂 Fleet opens on the grid** - the Fleet button shows the grid of lanes; pin the orbit in its header if you prefer the hub-and-spoke map.
+- **🌿 A branch pill only when there is a repo to show** - the titlebar, lane cards, spokes and the sidebar name the branch and where commits go only for a folder that pushes to GitHub, GitLab, Azure DevOps or another hosted remote, with the same rich tooltip as the rest of the app. A plain folder shows nothing, never a "no git" warning. *(P-REPO.1 amendment, [ADR-0406](DECISIONS.md))*
+- **🧹 Quieter status bar** - the Processes pill is gone from the lower right.
+- **🚀 The launcher opens your installed app** - `LucidAgentIDE.bat` option G starts the installed LUCID with your history and settings, says which version it is next to the current release and offers the download when they differ; running from source moved to option D.
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.10 (prerelease)
+
+> **🤫 Quieter by default.** Beta.10 keeps what beta.9 made readable (what each tool step is doing, folds for quick calls, one owner per session) and removes the reporting that raised more questions than it answered.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.10](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.10). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🧘 No ETAs, no estimates** - the "ETA estimating" labels, the estimate bar, "longer than usual", the last-signal age and the liveness pill are gone from the HUD, tool rows, delegation cards, lane cards and the orbit. The one thing still reported on its own is a dead agent process, as a single line with **Restart agent** (or **Restart this lane**). Two turns on one folder still take turns, and the waiter is told whom it waits for and its place in line. *(P-PROGRESS.1/.2 amendments, [ADR-0409](DECISIONS.md), [ADR-0408](DECISIONS.md))*
+- **🎨 The subdued Beta 8 palette** - tool step checks and crosses are neutral again, fold lines keep the same cyan as every tool name, and failed steps are no longer painted red (the toolbox badge still counts them). While Jev judges, its scale now tips side to side instead of spinning.
+- **📁 Lanes open without a repo search** - New lane and New spoke lead with a Folder field and **Browse**. Searching this machine or your GitHub repos (GitHub CLI) is opt-in: tick either box and press **Search**; nothing runs until you do, and spawning never waits on it. *(P-REPO.1 amendment, [ADR-0406](DECISIONS.md))*
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.9 (prerelease)
 

@@ -17,7 +17,8 @@ import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
-import { parseJudgmentProvider, type JudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
+import { DEFAULT_JUDGMENT_PROVIDER, parseJudgmentProvider, type JudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5
+import { bannedJudges, noteJudgeOutcome, type JudgeFailureLedger } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416)
 import { validAccountName, type StoredAccount } from "./account_policy.ts"; // P-ACCT.1 (ADR-0375)
 import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
@@ -72,10 +73,14 @@ export interface GuiSettings {
   // (spillage protection); a "search" session allows web search (the user affirmed no CUI datasets). Absent/
   // unknown ⇒ "cui" (fail-closed). Keyed by omp session id; pruned to a bounded size.
   sessionModes?: Record<string, "cui" | "search">;
-  // P-JEV.1 (ADR-0374): omp's `providers.judgmentProvider` (auto | typesafe | llm) as the USER chose it. The
-  // value omp is told comes from judgment_policy.resolveJudgmentProvider, which pins `llm` under lockdown; the
-  // stored choice is kept so lifting the lock restores it. Absent = "auto" (omp's default).
-  judgmentProvider?: "auto" | "typesafe" | "llm";
+  // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416): the judgment backend (none | auto | typesafe | llm) as the USER
+  // chose it. The value omp is told comes from judgment_policy.resolveJudgmentProvider, which pins `llm` under
+  // lockdown; the stored choice is kept so lifting the lock restores it. Absent = "none" (judging is opt-in).
+  judgmentProvider?: JudgmentProvider; // absent = "none"; explicit "none" is never written
+  // P-JEV.5 (ADR-0416): failed judgments per LOCAL judge label (`provider/model`); two or more = banned
+  // until reset. P-JEV.6 (ADR-0421): a judge of ANY provider whose account said the model does not exist
+  // is banned outright. Fed by the judgment trace, read at every omp spawn.
+  judgeFailures?: JudgeFailureLedger;
   // P-ACCT.1 (ADR-0375): named provider accounts. Key accounts carry their secret here (same 0600-file
   // posture as `keys`); oauth records exist only to carry a rename of an identity that lives in omp's
   // vault. `activeAccount` maps providerId -> accountId ("key:<uuid>" | "oauth:<identityKey>").
@@ -789,7 +794,24 @@ export function judgmentProvider(): JudgmentProvider { return parseJudgmentProvi
 export function setJudgmentProvider(mode: unknown): GuiSettings {
   const s = load();
   const m = parseJudgmentProvider(mode);
-  if (m === "auto") delete s.judgmentProvider; else s.judgmentProvider = m;
+  if (m === DEFAULT_JUDGMENT_PROVIDER) delete s.judgmentProvider; else s.judgmentProvider = m;
+  save(s);
+  return s;
+}
+/** P-JEV.5 (ADR-0416): the local-judge failure ledger (judge_bans.ts). */
+export function judgeFailures(): JudgeFailureLedger { return load().judgeFailures ?? {}; }
+/** Record one judgment report. Returns the labels banned AFTER it (unchanged when the report was not a
+ *  local failure, so a caller can diff before/after to notice a fresh ban). */
+export function noteJudgeFailure(report: { label: string; error?: string }, localProviders: readonly string[], now = Date.now()): string[] {
+  const s = load();
+  const next = noteJudgeOutcome(s.judgeFailures ?? {}, report, localProviders, now);
+  if (next !== (s.judgeFailures ?? {})) { s.judgeFailures = next; save(s); }
+  return bannedJudges(next);
+}
+/** Forget every judge failure (Settings > Judgment > Reset). */
+export function resetJudgeBans(): GuiSettings {
+  const s = load();
+  delete s.judgeFailures;
   save(s);
   return s;
 }

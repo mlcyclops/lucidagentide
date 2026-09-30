@@ -27,11 +27,15 @@
 //   badmodel    → refuses session/set_config_option with omp's "Unknown ACP model" error (a spawn that
 //                 fails in the handshake must create no lane).
 //
+// Every mode: session/new mints "fake-session-1", "-2", ... per process (a closed-and-reopened master session
+// changes id, as with a real agent), and a prompt containing "[slow Ns]" is answered after N seconds.
+//
 // stdout is reserved for ACP JSON-RPC; logs go to stderr.
 
 const MODE = process.env.FAKE_ACP_MODE ?? "clean";
 const ZWSP = String.fromCodePoint(0x200b);
 let hangingPromptId: number | undefined;
+let sessions = 0;
 let buf = "";
 let nextId = 9000;
 const pending = new Map<number, (result: unknown) => void>();
@@ -79,10 +83,27 @@ async function handle(line: string): Promise<void> {
 
   const { id, method, params } = msg;
   if (method === "initialize") { write({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentCapabilities: {} } }); return; }
-  if (method === "session/new") { write({ jsonrpc: "2.0", id, result: { sessionId: "fake-session-1" } }); return; }
+  // A fresh id per session/new, like a real agent: a client that closes its session and opens another
+  // (the master's New session) must see the id change, or a hub-per-session check cannot tell them apart.
+  // The first is "fake-session-1", which every existing assertion relies on.
+  // A lane child carries LUCID_INTERJECT_TARGET=lane-<id> (dev.ts interjectChildEnv), so under the engine
+  // every lane process mints ids no other process can mint, as real omp does; the master ("master") and a
+  // bare test spawn keep "fake-session-1". A test run from inside a LUCID lane INHERITS that lane's target,
+  // so a test asserting the literal id pins LUCID_INTERJECT_TARGET="master" in its spawn env. Without this a
+  // spoke's first id equals Main's and the one-owner rule (P-SWITCH.2) routes "open session" to the spoke.
+  if (method === "session/new") {
+    const target = process.env.LUCID_INTERJECT_TARGET ?? "";
+    const tag = target.startsWith("lane-") ? `${target}-` : "";
+    write({ jsonrpc: "2.0", id, result: { sessionId: `fake-session-${tag}${++sessions}` } });
+    return;
+  }
   if (method === "session/prompt") {
     const sessionId = params?.sessionId ?? "fake-session-1";
     const promptText = extractText(params?.prompt);
+    // A prompt carrying "[slow Ns]" is answered after N seconds, so a live check can leave a turn running
+    // and come back to its finished reply. Env-free: the marker rides the prompt the check types.
+    const slow = /\[slow (\d+)s\]/.exec(promptText);
+    if (slow) { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, Number(slow[1]) * 1000); await promise; }
     if (MODE === "hang") { hangingPromptId = id; return; } // never answer - the client's deadline must fire
     if (MODE === "midturn") {
       // P-FLEET.L8: a turn caught IN FLIGHT - one tool call and some answer text already out, then the

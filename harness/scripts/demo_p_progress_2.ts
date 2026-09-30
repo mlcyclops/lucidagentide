@@ -6,7 +6,8 @@
 // P-PROGRESS.2 (ADR-0408): the activity window shows what matters and every worker says when it will be done.
 //   [1] quick calls fold into one summary line; failed, repeated and empty calls are "processing";
 //   [2] a call's doing line names its subject even when its arguments arrive as an object;
-//   [3] a running worker always states an ETA, "ETA estimating" until history supports a number;
+//   [3] with the estimate opted in (P-PROGRESS.3, ADR-0412) a running worker states an ETA once history
+//       supports a number, and never the "ETA estimating" placeholder; by default it states none;
 //   [4] the whole prompt's ETA is its slowest part, a floor while any part is unknown;
 //   [5] each subagent run gets an ETA from finished runs, which are counted once and kept across sessions.
 //
@@ -39,14 +40,15 @@ const d = describeTool({ name: "read", input: JSON.stringify({ path: "desktop/tu
 ok(d.doing === "Reading desktop/turn_progress.ts" && d.informative, "an object argument names its path, not its brace");
 ok(!describeTool({ name: "tool", title: "tool" }).informative, "a bare \"tool\" call is flagged as saying nothing");
 
-console.log("\n[3] a running worker always states an ETA");
+console.log("\n[3] the ETA is opt-in and never a placeholder");
 const now = 1_000_000;
 const none = progressView({ busy: true, dead: false, startedAt: now - 9_000, lastActivityAt: now - 500, stepsDone: 2, stepsOpen: [], model: "m", history: new DurationHistory(), now });
-ok(progressLine(none).endsWith(ETA_ESTIMATING), `no history: ${progressLine(none)}`);
+ok(progressLine(none, true) === "9 s \u00b7 step 2" && !progressLine(none, true).includes(ETA_ESTIMATING), `no history, estimate on: ${progressLine(none, true)}`);
 const h = new DurationHistory();
 for (const ms of [30_000, 30_000, 30_000, 30_000, 30_000]) h.addTurn("m", ms);
 const some = progressView({ busy: true, dead: false, startedAt: now - 9_000, lastActivityAt: now - 500, stepsDone: 2, stepsOpen: [], model: "m", history: h, now });
-ok(progressLine(some) === "9 s \u00b7 step 2 \u00b7 about 21 s left (est.)", `with history: ${progressLine(some)}`);
+ok(progressLine(some, true) === "9 s \u00b7 step 2 \u00b7 about 21 s left (est.)", `with history, estimate on: ${progressLine(some, true)}`);
+ok(progressLine(some, false) === "9 s \u00b7 step 2", "estimate off (the default): no number");
 
 console.log("\n[4] the whole prompt");
 const turn = estimateFromSamples(10_000, [40_000, 40_000], 2);

@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "bun:test";
 import type { AuthStatus, ProviderAuth } from "./bridge.ts";
-import { buildHubSections, configuredProviderCount, providerConfigured } from "./provider_hub.ts";
+import { buildHubSections, configuredProviderCount, credentialedProviderIds, providerConfigured } from "./provider_hub.ts";
 
 function prov(id: string, over: Partial<ProviderAuth> = {}): ProviderAuth {
   return { id, name: id, env: `${id.toUpperCase()}_KEY`, oauthId: "", canOauth: false, oauthActive: false, keySet: false, ...over };
@@ -65,5 +65,21 @@ describe("configuredProviderCount", () => {
     // openai (oauth) configured; anthropic not; qwen/zai/minimax not; elevenlabs (keySet) EXCLUDED.
     expect(configuredProviderCount(auth)).toBe(1);
     expect(configuredProviderCount(null)).toBe(0);
+  });
+});
+
+describe("credentialedProviderIds - a key, an OAuth login or a secret field; never a bare config field", () => {
+  it("counts keys, OAuth and secret fields, and ignores project ids / regions", () => {
+    const auth: AuthStatus = {
+      gateway: [], others: [],
+      majors: [
+        prov("anthropic", { oauthActive: true }),
+        prov("amazon-bedrock", { fields: [{ env: "AWS_ACCESS_KEY_ID", label: "k", secret: true, set: true }, { env: "AWS_REGION", label: "r", set: true }] }),
+        prov("google-vertex", { fields: [{ env: "GOOGLE_CLOUD_PROJECT", label: "p", set: true }] }),
+        prov("openai", { keySet: true }),
+      ],
+    };
+    expect([...credentialedProviderIds(auth)].sort()).toEqual(["amazon-bedrock", "anthropic", "openai"]);
+    expect(credentialedProviderIds(null).size).toBe(0);
   });
 });

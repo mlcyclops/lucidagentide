@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_sandbox_18.ts
 //
-// P-SANDBOX.18 (ADR-0411): the AppContainer helper stops re-walking every file it already granted.
+// P-SANDBOX.18 (ADR-0423): the AppContainer helper stops re-walking every file it already granted.
 //   [1] the effect check reads the two-ACE form Windows stores for one inheritable grant;
 //   [2] (Windows) a real grant on a throwaway tree of 4000 files: the first spawn writes the ACL, the
 //       second finds it in place, writes nothing and starts in a fraction of the time; then the grant is
@@ -19,7 +19,7 @@ import { aclAlreadyGrants } from "../../tools/appcontainer/lucid_appcontainer.ts
 const fail = (m: string): never => { console.error(`FAIL: ${m}`); process.exit(1); };
 const ok = (cond: boolean, m: string) => { if (!cond) fail(m); console.log(`  ok  ${m}`); };
 
-console.log("== #ADR-0411 P-SANDBOX.18: a granted folder is not re-granted on every spawn ==\n");
+console.log("== #ADR-0423 P-SANDBOX.18: a granted folder is not re-granted on every spawn ==\n");
 
 console.log("[1] the effect check");
 const SID = Uint8Array.from([1, 2, 0, 0, 0, 0, 0, 15, 2, 0, 0, 0, 3, 0, 0, 0]);

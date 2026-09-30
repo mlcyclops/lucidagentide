@@ -890,6 +890,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .judgments.idle .thoughts-head:hover{background:transparent}
 .judgments.idle .thoughts-spin{color:var(--txt-4)}
 .judgments.open .thoughts-body{max-height:70vh}
+/* A live judgment tips its scale: the beam rocks about the post and each pan rides its end up and down
+   (beam half-span to a pan is 5 units, so 10deg lifts it ~0.87). Never the generic thoughts spin. */
+.thoughts[data-streaming] .thoughts-spin .ic.ic-scale{animation:none}
+.ic-scale .jv-beam{transform-box:view-box;transform-origin:12px 7.5px}
+.thoughts[data-streaming] .ic-scale .jv-beam{animation:jv-tip 1.6s ease-in-out infinite}
+.thoughts[data-streaming] .ic-scale .jv-pan-l{animation:jv-pan-l 1.6s ease-in-out infinite}
+.thoughts[data-streaming] .ic-scale .jv-pan-r{animation:jv-pan-r 1.6s ease-in-out infinite}
+@keyframes jv-tip{0%,50%,100%{transform:rotate(0)}25%{transform:rotate(10deg)}75%{transform:rotate(-10deg)}}
+@keyframes jv-pan-l{0%,50%,100%{transform:translateY(0)}25%{transform:translateY(-.87px)}75%{transform:translateY(.87px)}}
+@keyframes jv-pan-r{0%,50%,100%{transform:translateY(0)}25%{transform:translateY(.87px)}75%{transform:translateY(-.87px)}}
+@media (prefers-reduced-motion: reduce){.thoughts[data-streaming] .ic-scale path{animation:none}}
 .jd{border-top:1px solid var(--line-soft);padding:8px 11px 10px;font-size:12px;color:var(--txt-3)}
 .jd-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-family:var(--mono);font-size:11.5px;margin-bottom:6px}
 .jd-head>span{white-space:nowrap}
@@ -2046,7 +2057,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 #tip.show{opacity:1;transform:none}
 #tip .tt{display:flex;align-items:center;gap:7px;font-weight:600;margin-bottom:3px}
 #tip .tt .ic{color:var(--accent-2)}
-#tip .d{color:var(--txt-2)}
+#tip .d{color:var(--txt-2);white-space:pre-line;overflow-wrap:anywhere}
 #tip::after{content:"";position:absolute;width:9px;height:9px;background:var(--bg-4);
   border-right:1px solid var(--line-strong);border-bottom:1px solid var(--line-strong);transform:rotate(45deg)}
 #tip[data-side="top"]::after{left:var(--ax,50%);bottom:-5px;margin-left:-4px}
@@ -3334,6 +3345,16 @@ body.preview-open .thread{font-size:.9em}
 .set-note.ok{color:var(--txt-2);border-color:color-mix(in srgb,var(--green) 30%,var(--line-soft));
   background:color-mix(in srgb,var(--green-dim) 60%,var(--bg-2))}
 .set-note code{font-family:var(--mono);color:var(--accent-2);font-size:11px}
+/* P-JEV.5 (ADR-0416): the Judgment card's ban list. Each row is a grid (label, badge, reason), the reason
+   ellipsizes on one line (invariant #11), and the note's icon is absolute so the prose never flexes. */
+.set-note.warn{border-color:color-mix(in srgb,var(--amber) 40%,var(--line-soft));background:color-mix(in srgb,var(--amber-dim) 50%,var(--bg-2))}
+.set-note.warn>.ic:first-child{color:var(--amber)}
+.set-note.warn>span{display:block}
+.judge-ban{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:8px;align-items:center;margin-top:6px}
+.judge-ban code{white-space:nowrap}
+.judge-ban .abadge{white-space:nowrap}
+.judge-ban-why{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-3)}
+.set-note.warn .prov-row{margin-top:8px}
 .set-toggle{display:flex;gap:9px;align-items:flex-start;margin-top:10px;padding:7px 9px;margin-left:-9px;
   border-radius:9px;font-size:12.5px;color:var(--txt-2);line-height:1.55;cursor:pointer;user-select:none;
   transition:background var(--t-fast)}
@@ -3641,7 +3662,7 @@ body.preview-open .thread{font-size:.9em}
 .noresp-sr{opacity:.6;font-family:var(--mono);font-size:11px}
 .noresp-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .noresp-note{opacity:.6;font-size:10px;margin-left:6px;font-weight:400}
-/* P-NETSTAT.1 (ADR-0410): the status-bar network indicator, its popover, and the "stand by" card that
+/* P-NETSTAT.1 (ADR-0422): the status-bar network indicator, its popover, and the "stand by" card that
    replaces the switch-model card when a turn died on the network. Each text run is its own element. */
 .net-seg{gap:6px;min-width:0;max-width:360px}
 .net-seg .net-txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
@@ -4924,7 +4945,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 
 /* ───────── turn controls - P-INTERJECT.2/.3/.4 (wave 2, TurnControls section) ─────────
    The composer's staged-prompt STACK + hold-or-push chooser, the HUD Check-in button and its
-   transcript card, the per-lane fleet check-in, and the status-bar Processes popover. Flex rows
+   transcript card, and the per-lane fleet check-in. Flex rows
    here hold single-text-child spans (invariant 11); card lines are BLOCK elements. */
 .queued-stack{flex-direction:column;align-items:flex-end;gap:4px}
 .q-pill .q-push{flex:none;background:none;border:1px solid var(--line);border-radius:999px;padding:0 7px;
@@ -4970,22 +4991,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-ck-line{display:block;font-size:11px;color:var(--txt-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-ck-acts{display:flex;gap:6px;margin-top:5px}
 .fleet-q-push{white-space:nowrap;font-size:9.5px}
-/* the status-bar Processes button + popover */
-.proc-seg b{white-space:nowrap}
-.proc-pop{padding:10px 12px}
-.proc-pop-head{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt-4);
-  margin-bottom:6px;white-space:nowrap}
-.proc-pop-list{display:flex;flex-direction:column;gap:3px}
-.proc-empty{font-size:11.5px;color:var(--txt-3);padding:4px 0}
-.proc-row{display:flex;align-items:center;gap:7px;min-width:0;padding:4px 5px;border-radius:7px}
-.proc-row:hover{background:var(--bg-2)}
-.proc-row .proc-ic{flex:none;color:var(--txt-3);display:grid;place-items:center}
-.proc-row .proc-label{flex:1;min-width:0;font-size:11.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.proc-row .proc-status{flex:none;font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;
-  color:var(--txt-3);border:1px solid var(--line);border-radius:4px;padding:0 4px;white-space:nowrap}
-.proc-row .proc-elapsed{flex:none;font-family:var(--mono);font-size:10px;color:var(--txt-4);white-space:nowrap;min-width:44px;text-align:right}
-.proc-row .btn-mini{flex:none;white-space:nowrap}
-
 /* ── P-BROWSER.1 (wave 2): the agent-browser pill (BrowserFeature section) ──────────────────────
    Floats near the top of the chat while the agent drives its visible browser window. Invariant #11:
    ONE text child (.bp-label, nowrap+ellipsis); the icon and buttons are flex:none controls. .bp-fx is
@@ -5622,6 +5627,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-hub-mark svg{width:22px;height:22px}
 .orbit-hub-model{font-family:var(--mono);font-size:9.5px;color:var(--txt-3);max-width:120px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-SWITCH.3 (ADR-0410): the hub names its session; one text child, ellipsized (invariant #11). */
+.orbit-hub-sess{font-size:10.5px;color:var(--txt-2);max-width:124px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .orbit-hub-here{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-4)}
 .orbit-hub.here .orbit-hub-here{color:var(--accent-2)}
 .orbit-hub-ping{position:absolute;width:148px;height:148px;border-radius:50%;pointer-events:none;
@@ -5887,6 +5894,13 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-spawn-row input{flex:1;min-width:0}
 .orbit-spawn-go{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
 .orbit-panel .orbit-ghost-err{padding:2px 6px}
+/* P-SWITCH.3 (ADR-0410): the Other hubs panel. A hub row (title, count, Open), then its spokes as pips
+   on their own line so the row's label never shares a flex track with prose. */
+.orbit-hubrow{display:flex;align-items:center;gap:9px;padding:7px 9px 3px;border-radius:9px 9px 0 0}
+.orbit-hubrow-lanes{display:flex;flex-wrap:wrap;gap:5px;padding:0 9px 8px 9px;margin-bottom:4px;
+  border-bottom:1px solid var(--line)}
+.orbit-hubrow-lanes .fleet-pip{font-size:11px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.orbit-btn.waiting .orbit-ghost-n{color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14)}
 
 /* P-FLEET.L17: the grid card header is now a takeover surface too (click = the orbit's spoke click;
    the grip alone keeps the reorder gesture). The pointer cursor says so; controls override it. */
@@ -5942,12 +5956,10 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
 .ts-state[data-state="open"]::before{content:"";width:9px;height:9px;border-radius:50%;
   border:1.5px solid rgb(var(--cyan-rgb) / .35);border-top-color:var(--cyan);animation:spin .9s linear infinite}
-.ts-state[data-state="done"]{color:var(--green)}
 .ts-state[data-state="done"]::before{content:"\2713";margin-right:3px}
-.ts-state[data-state="failed"]{color:var(--red)}
+.ts-state[data-state="failed"]{color:var(--txt-3)}
 .ts-state[data-state="failed"]::before{content:"\2717";margin-right:3px}
 .ts-state[data-state="unknown"]{color:var(--txt-4)}
-.thoughts-step.failed .ts-k{color:var(--red)}
 .ts-doing{padding:6px 12px 2px;font-size:12px;color:var(--txt-1)}
 .ts-name{padding:0 12px 6px;font-family:var(--mono);font-size:11px;color:var(--txt-4)}
 .ts-args{margin:0;padding:8px 12px;font-family:var(--mono);font-size:11.5px;line-height:1.5;color:var(--txt-2);
@@ -5978,32 +5990,61 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   border-color:rgb(var(--red-rgb) / .5)}
 .hud-signal,.lane-signal{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-4)}
 .hud-restart,.lane-restart{flex:none;white-space:nowrap}
-.hud-queue{margin-top:5px;padding:5px 8px;border:1px solid rgb(var(--amber-rgb) / .35);border-radius:7px;
-  background:rgb(var(--amber-rgb) / .07)}
-.hud-queue-head{color:var(--txt-2);margin-bottom:2px}
-.hud-queue-row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt-3)}
-.hud-queue-row.me{color:var(--amber-txt)}
+/* P-LIVENESS.1 (ADR-0418): an open call with no CPU, disk or subagent activity for minutes is marked
+   likely stuck; the pill turns red (the quiet line reuses .hud-dead) and the Stop command sits beside it.
+   Marking only, never an action. */
+.hud-alive[data-state="stuck"],.lane-alive[data-state="stuck"]{color:var(--red-txt);background:rgb(var(--red-rgb) / .14);
+  border-color:rgb(var(--red-rgb) / .5)}
+.hud-stopcall,.lane-stopcall{flex:none;white-space:nowrap}
 
 .lane-progress{padding:5px 9px 6px;border-top:1px solid var(--line-soft);background:var(--bg-1);font-family:var(--mono);
   font-size:10.5px;color:var(--txt-3);min-width:0}
 .lane-progress-line{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lane-alive-row{display:flex;align-items:center;gap:6px;margin-top:3px;min-width:0}
 .lane-wait{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--amber-txt)}
+/* P-PROGRESS.3 (ADR-0412): the beta.10 quiet footer is the default. The HUD's dead-process line is the one
+   coloured state; the Details pill (a quiet outline like Check in, streaming only) opens the strip for the
+   turn; a quiet lane strip shows only the dead pill + restart, or the folder wait line. Every number is
+   behind the experimental-estimate switch, so empty ETA spans take no room and never animate. */
+.hud-dead{display:flex;align-items:center;gap:8px;min-width:0;font-size:11.5px;color:var(--red-txt);margin:6px 0 0;
+  padding:5px 8px;border:1px solid rgb(var(--red-rgb) / .45);border-radius:7px;background:rgb(var(--red-rgb) / .08)}
+.hud-dead[hidden]{display:none}
+.hud-dead-note{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hud .hud-more{display:none}
+.hud.streaming .hud-more:not([hidden]){display:inline-flex;align-items:center;flex:none;margin-left:6px;background:none;
+  border:1px solid var(--line);border-radius:999px;padding:0 8px;font-size:10px;line-height:16px;
+  color:var(--txt-3);cursor:pointer;white-space:nowrap}
+.hud.streaming .hud-more:hover{color:var(--txt);border-color:var(--line-strong);background:var(--bg-2)}
+.lane-progress.quiet .lane-bar,.lane-progress.quiet .lane-progress-line,.lane-progress.quiet .lane-signal{display:none}
+.lane-progress.quiet .lane-alive-row:has(.lane-alive[hidden]){display:none}
+.lane-progress.quiet .lane-alive-row,.lane-progress.quiet .lane-wait{margin-top:0}
+.lane-alive[hidden]{display:none}
+.sa-eta:empty,.subagent-eta:empty{display:none}
+/* P-PROGRESS.3 (ADR-0412 amendment): the progress ring right after the HUD line (beside Check in), drawn like the status
+   bar's context ring (.ctx-ring): a track and a green arc (pathLength 100). Red only for a dead process. Empty
+   (track only) until there is history. Streaming only; the settled line's check replaces it. */
+.hud .hud-ring{display:none}
+.hud.streaming .hud-ring:not([hidden]){display:inline-flex;flex:none;margin-left:8px;line-height:0;cursor:default}
+.hud-ring svg{display:block}
+.hud-ring-track{fill:none;stroke:var(--line-strong);stroke-width:2.6}
+.hud-ring-arc{fill:none;stroke:var(--green);stroke-width:2.6;stroke-linecap:round;stroke-dasharray:100;stroke-dashoffset:100;
+  transform:rotate(-90deg);transform-origin:center;transition:stroke-dashoffset .6s var(--ease),stroke var(--t)}
+.hud-ring[data-empty="1"] .hud-ring-arc{visibility:hidden}
+.hud-ring[data-tone="dead"] .hud-ring-arc{stroke:var(--red)}
+/* A dead process with no history (or a lane whose turn already ended) has no arc: the track itself goes red,
+   or the ring would read grey exactly when it matters. */
+.hud-ring[data-tone="dead"] .hud-ring-track{stroke:var(--red)}
+@media (prefers-reduced-motion: reduce){.hud-ring-arc{transition:none}}
+/* The same ring in a fleet lane card header, beside the lane's status chips, while that lane's turn runs. */
+.fleet-card-head .lane-ring:not([hidden]){display:inline-flex;flex:none;line-height:0;cursor:default}
 .fleet-tchip-state{flex:none;font-size:10px;color:var(--txt-4);white-space:nowrap;display:inline-flex;align-items:center;min-width:10px}
 .fleet-tchip-state[data-state="open"]::before{content:"";width:8px;height:8px;border-radius:50%;
   border:1.5px solid rgb(var(--cyan-rgb) / .35);border-top-color:var(--cyan);animation:spin .9s linear infinite}
-.fleet-tchip-state[data-state="done"]{color:var(--green)}
 .fleet-tchip-state[data-state="done"]::before{content:"\2713";margin-right:2px}
-.fleet-tchip-state[data-state="failed"]{color:var(--red)}
+.fleet-tchip-state[data-state="failed"]{color:var(--txt-3)}
 .fleet-tchip-state[data-state="failed"]::before{content:"\2717";margin-right:2px}
-.fleet-queues{grid-column:1 / -1;margin:0 0 8px;padding:7px 10px;border:1px solid rgb(var(--amber-rgb) / .35);
-  border-radius:9px;background:rgb(var(--amber-rgb) / .07);font-family:var(--mono);font-size:11px;min-width:0}
-.fleet-queue-folder + .fleet-queue-folder{margin-top:6px;padding-top:6px;border-top:1px solid var(--line-soft)}
-.fleet-queue-title{color:var(--txt-2);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-queue-row{color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-queue-row[data-state="running"]{color:var(--green-txt)}
 .sa-alive{flex:none;font-family:var(--mono);font-size:10.5px;white-space:nowrap;color:var(--txt-4)}
-.sa-alive[data-state="working"]{color:var(--green-txt)}
+.sa-alive[data-state="working"]{color:var(--txt-3)}
 .sa-alive[data-state="quiet"]{color:var(--amber-txt)}
 @media (prefers-reduced-motion: reduce){
   .ts-state[data-state="open"]::before,.fleet-tchip-state[data-state="open"]::before{animation:none;border-top-color:rgb(var(--cyan-rgb) / .35)}
@@ -6011,8 +6052,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 }
 /* ───────── P-REPO.1 (ADR-0406): which repo a session works on, and where its commits go ─────────
    One chip everywhere (titlebar, lane cards, spokes, hub, spoke banner). Each text run is its own
-   nowrap span and the chip ellipsizes as a whole (invariant 11). Green arrow = pushes to a remote;
-   amber "local only" = commits cannot leave this machine. */
+   nowrap span and the chip ellipsizes as a whole (invariant 11). The chip exists only for a repo that
+   pushes to a hosted remote; a plain folder or local-only repo shows no chip, never a warning. */
 .repo-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;overflow:hidden;
   white-space:nowrap;font-size:11.5px;color:var(--txt-2)}
 .repo-chip>.ic{flex:none;color:var(--accent-2)}
@@ -6021,10 +6062,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .repo-chip .rc-branch{flex:none;max-width:16ch;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:.92em;
   color:var(--txt-2);background:var(--bg-1);border:1px solid var(--line-soft);border-radius:5px;padding:0 5px}
 .repo-chip .rc-slug{flex:0 1 auto;min-width:6ch;overflow:hidden;text-overflow:ellipsis;color:var(--green)}
-.repo-chip.rc-remote>.ic:nth-of-type(2){color:var(--green)}
-.repo-chip .rc-local{flex:none;color:var(--amber);font-weight:600}
-.repo-chip.rc-none>.ic{color:var(--txt-4)}
-.repo-chip.rc-none .rc-name{font-weight:400;color:var(--txt-3)}
+.repo-chip>.ic:nth-of-type(2){color:var(--green)}
 .titlebar .tb-chip.repo-chip{max-width:min(460px,34vw);gap:6px}
 .titlebar .tb-chip.repo-chip.rc-on-lane{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
 /* sidebar workspace bar: the workspace on top, the repo + push target under it */
@@ -6033,7 +6071,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .ws-bar-repo{display:block;min-width:0;padding-left:22px;font-size:11px;color:var(--txt-3);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ws-bar-repo .ic{vertical-align:-1px;color:var(--green)}
-.ws-bar-repo.local .ic{color:var(--amber)}
 /* grid lane card: a full-width strip under the header */
 .fleet-repo{display:flex;width:100%;border:0;border-bottom:1px solid var(--line-soft);background:color-mix(in srgb,var(--bg-1) 70%,transparent);
   padding:3px 9px;font:inherit;font-size:10.5px;cursor:pointer;text-align:left}
@@ -6054,7 +6091,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rc-pop-row>span:first-child{color:var(--txt-4);white-space:nowrap}
 .rc-pop-row code{font-family:var(--mono);font-size:11.5px;color:var(--txt);overflow-wrap:anywhere}
 .rc-pop-row b{color:var(--green);font-weight:600}
-.rc-pop-row b.rc-warn{color:var(--amber)}
 .rc-pop-note{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-3)}
 .rc-pop-acts{display:flex;gap:6px;flex-wrap:wrap}
 /* the spoke repo picker (grid New lane card + orbit New spoke panel) */
@@ -6090,7 +6126,19 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .repo-pick-row .rp-sub .ic{vertical-align:-1px;color:var(--green)}
 .repo-pick-row .rp-branch{font-family:var(--mono);color:var(--txt-2)}
 .repo-pick-row .rp-slug{color:var(--green)}
-.repo-pick-row .rp-local{color:var(--amber)}
+.repo-pick-row .rp-local{color:var(--txt-4)}
+/* "Find repos": opt-in discovery (nothing runs until Search). Heading + button on one row, then one
+   single-line row per source: box + ONE text span that ellipsizes, never wraps (invariant 11). */
+.repo-pick-find{display:flex;flex-direction:column;gap:2px;min-width:0;padding:4px 7px 5px;
+  border:1px solid var(--line-soft);border-radius:8px}
+.repo-pick-find-h{display:flex;align-items:center;gap:6px;min-width:0}
+.repo-pick-find-t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--txt-4)}
+.repo-pick-go{flex:none;white-space:nowrap}
+.repo-pick-src{display:flex;align-items:center;gap:6px;min-width:0;padding:1px 0;font-size:11px;color:var(--txt-3);cursor:pointer;
+  letter-spacing:normal;text-transform:none}
+.repo-pick-src input{flex:none;margin:0;accent-color:var(--accent)}
+.repo-pick-src span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-spawn-more,.orbit-spawn-more{border:1px solid var(--line-soft);border-radius:8px;padding:4px 8px}
 .fleet-spawn-more>summary,.orbit-spawn-more>summary{cursor:pointer;font-size:11px;color:var(--txt-3);white-space:nowrap;padding:2px 0}
 .fleet-spawn-more[open]>summary,.orbit-spawn-more[open]>summary{margin-bottom:4px}
@@ -6109,12 +6157,10 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* Fold lines: quick calls summarized ("Read 3 files, 2 searches"), failed / repeated / empty calls counted as
    processing. The folded calls keep their own rows (and drilldowns) under the fold line's chevron. */
 .thoughts-step.ts-fold{display:block;padding:0}
-.ts-fold>.ts-row .ts-k{color:var(--green)}
 .ts-fold[data-kind="processing"]>.ts-row .ts-k{color:var(--txt-4)}
 .ts-fold.open>.ts-row .ts-chev{transform:rotate(90deg)}
 .ts-foldlist{border-top:1px solid var(--line-soft);background:var(--bg-0)}
 .ts-foldlist .ts-row{padding-left:24px}
-.thoughts-step.folded[data-fold="failed"] .ts-k{color:var(--red)}
 .thoughts-step.folded[data-fold="repeat"] .ts-d,.thoughts-step.folded[data-fold="empty"] .ts-d{color:var(--txt-4)}
 /* An open long call's state carries its elapsed time and ETA next to the spinner. */
 .ts-state[data-state="open"]:not(:empty)::before{margin-right:5px}

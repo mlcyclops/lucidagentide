@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/net_status.ts - P-NETSTAT.1 (ADR-0410). Pure, DOM-free network verdicts shared by the
+// desktop/renderer/net_status.ts - P-NETSTAT.1 (ADR-0422). Pure, DOM-free network verdicts shared by the
 // engine (which probes the active provider's host and summarizes the samples) and the renderer (which
 // paints the status-bar indicator and decides whether a failed turn is the network's fault or the
 // model's). No fetch, no timers, no DOM: every function here is a total function of its inputs.

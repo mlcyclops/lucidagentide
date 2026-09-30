@@ -114,7 +114,8 @@ echo  ---------------------------------------------------------------------
 echo    provider : %PROVIDER%        model : %MODEL%
 echo  ---------------------------------------------------------------------
 echo     1^)  Launch / relaunch omp   ^(terminal, with the security gate^)
-echo     G^)  Desktop GUI             ^(chat + dashboards in a window^)
+echo     G^)  Desktop GUI             ^(the installed app: your history + settings^)
+echo     D^)  Desktop GUI from source ^(dev: runs THIS checkout, whatever version it is^)
 echo     F^)  Fleet GUI               ^(project-bound window: own workspace + Knowledge^)
 echo     2^)  Switch model
 echo     3^)  Switch provider
@@ -128,7 +129,8 @@ echo     0^)  Quit
 echo.
 set /p "CH=    select: "
 if "%CH%"=="1" goto :launch
-if /i "%CH%"=="G" ( call :gui & goto :menu )
+if /i "%CH%"=="G" ( call :appgui & goto :menu )
+if /i "%CH%"=="D" ( call :gui & goto :menu )
 if /i "%CH%"=="F" ( call :fleetgui & goto :menu )
 if "%CH%"=="2" goto :pickmodel
 if "%CH%"=="3" goto :pickprovider
@@ -153,7 +155,49 @@ timeout /t 2 >nul
 goto :menu
 
 rem ===========================================================================
-rem  Launch the desktop GUI (chat + dashboards). Prefers the native Electron app
+rem  G: the INSTALLED app (%%LOCALAPPDATA%%\Programs\LucidAgentIDE), i.e. the release the user
+rem  runs every day, with its own profile, history and updater. Running the source checkout here
+rem  used to start whatever version the checkout happened to be on (a stale master opened beta.7)
+rem  on a fresh port-suffixed Electron profile and the repo as its workspace, so it looked like a
+rem  first run: the role picker and no history. Not installed yet: fall back to the source launch.
+:appgui
+echo.
+set "APPEXE=%LOCALAPPDATA%\Programs\LucidAgentIDE\LucidAgentIDE.exe"
+if not exist "%APPEXE%" (
+  echo    The installed app was not found at "%APPEXE%" - starting this checkout from source instead.
+  call :gui
+  goto :eof
+)
+rem  Say which version will open. When the install is older than this checkout (the current release),
+rem  offer the download page: the app also updates itself from the beta feed, but only after it starts.
+call :pkgver "%LOCALAPPDATA%\Programs\LucidAgentIDE\resources\repo\desktop\package.json" APPVER
+call :pkgver "%REPO%\desktop\package.json" CURVER
+if not defined APPVER set "APPVER=unknown"
+echo    Installed app: v!APPVER!    current release: v!CURVER!
+if defined CURVER if /i not "!APPVER!"=="!CURVER!" (
+  echo    The installed app is not on the current version. It updates itself on launch, or install
+  echo    v!CURVER! now from https://github.com/mlcyclops/lucidagentide/releases/tag/v!CURVER!
+  set "UPD="
+  set /p "UPD=    Open that download page now? (Y/N): "
+  if /i "!UPD!"=="Y" start "" "https://github.com/mlcyclops/lucidagentide/releases/tag/v!CURVER!"
+)
+echo    Launching the installed Lucid Agent IDE...
+start "" "%APPEXE%"
+echo    Done.
+echo.
+goto :eof
+
+rem  %1 = a package.json, %2 = the variable that receives its "version" (unset when unreadable).
+:pkgver
+set "%~2="
+if not exist "%~1" goto :eof
+for /f "usebackq tokens=2 delims=:," %%V in (`findstr /c:"\"version\"" "%~1"`) do if not defined %~2 set "%~2=%%~V"
+if defined %~2 set "%~2=!%~2: =!"
+if defined %~2 set "%~2=!%~2:"=!"
+goto :eof
+
+rem ===========================================================================
+rem  D: launch the desktop GUI from THIS checkout (dev). Prefers the native Electron app
 rem  if its binary is installed; otherwise opens the browser GUI and the browser.
 :gui
 echo.

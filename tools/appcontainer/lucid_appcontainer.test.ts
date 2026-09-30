@@ -236,7 +236,7 @@ test("--pick-folder speaks the engine's picker markers, so parseWinPick reads it
   if (process.platform !== "win32") expect(main(["--pick-folder", "t"])).toBe(3);
 });
 
-// ── P-SANDBOX.18 (ADR-0411): an existing grant is not re-propagated on every spawn ──────────────────
+// ── P-SANDBOX.18 (ADR-0423): an existing grant is not re-propagated on every spawn ──────────────────
 // Fixtures follow the real DACL read off a granted workspace on Windows 11: one GENERIC_ALL inheritable
 // grant is stored as a mapped effective ACE (flags 0, 0x1F01FF) plus an INHERIT_ONLY generic copy (0x0B).
 const CONTAINER_SID = Uint8Array.from([1, 2, 0, 0, 0, 0, 0, 15, 2, 0, 0, 0, 3, 0, 0, 0]); // S-1-15-2-3 shape

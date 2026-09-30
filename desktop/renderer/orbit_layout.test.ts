@@ -7,7 +7,7 @@
 // the glance wording names the USER's next move in the two states that block on a human.
 
 import { describe, expect, test } from "bun:test";
-import { ORBIT_NODE_W, orbitSlots, spokeClose, spokeGlance, switchEntries } from "./orbit_layout.ts";
+import { ORBIT_NODE_W, hubLanes, orbitSlots, otherHubs, spokeClose, spokeGlance, switchEntries } from "./orbit_layout.ts";
 
 const W = 1600, H = 900;
 
@@ -56,17 +56,17 @@ describe("spokeGlance", () => {
   const lane = (status: Parameters<typeof spokeGlance>[0]["status"], turns = 2, queued = 0) =>
     ({ status, turns, queued: new Array(queued).fill(0) });
   test("the two human-blocking states name the user's next move", () => {
-    expect(spokeGlance(lane("needs-approval"))).toBe("needs your approval");
-    expect(spokeGlance(lane("awaiting-input"))).toBe("ready for your prompt");
+    expect(spokeGlance(lane("needs-approval"), false)).toBe("needs your approval");
+    expect(spokeGlance(lane("awaiting-input"), false)).toBe("ready for your prompt");
   });
   test("working shows the turn IN FLIGHT, not the settled count", () => {
-    expect(spokeGlance(lane("working", 2))).toBe("working \u00b7 turn 3");
+    expect(spokeGlance(lane("working", 2), false)).toBe("working \u00b7 turn 3");
   });
   test("a staged queue is visible from orbit", () => {
-    expect(spokeGlance(lane("awaiting-input", 2, 2))).toBe("ready for your prompt \u00b7 2 queued");
+    expect(spokeGlance(lane("awaiting-input", 2, 2), false)).toBe("ready for your prompt \u00b7 2 queued");
   });
   test("error tells the user the way back", () => {
-    expect(spokeGlance(lane("error"))).toContain("respawn");
+    expect(spokeGlance(lane("error"), false)).toContain("respawn");
   });
 });
 
@@ -106,9 +106,40 @@ describe("switchEntries", () => {
 describe("spokeGlance (P-PROGRESS.1)", () => {
   test("waiting names the holder; a percent rides only a working spoke", () => {
     const base = { turns: 2, queued: [] as unknown[] };
-    expect(spokeGlance({ ...base, status: "working", waiting: { on: { name: "alpha" } } })).toBe("waiting for alpha");
-    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: 40 } } })).toBe("working \u00b7 turn 3 \u00b7 40% (est.)");
-    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: null } } })).toBe("working \u00b7 turn 3");
-    expect(spokeGlance({ ...base, status: "done", progress: { estimate: { percent: 40 } } })).toBe("done \u00b7 2 turns");
+    expect(spokeGlance({ ...base, status: "working", waiting: { on: { name: "alpha" } } }, true)).toBe("waiting for alpha");
+    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: 40 } } }, true)).toBe("working \u00b7 turn 3 \u00b7 40% (est.)");
+    // P-PROGRESS.3: the estimate is opt-in; with it off no percent reaches the glance.
+    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: 40 } } }, false)).toBe("working \u00b7 turn 3");
+    expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: null } } }, true)).toBe("working \u00b7 turn 3");
+    expect(spokeGlance({ ...base, status: "done", progress: { estimate: { percent: 40 } } }, true)).toBe("done \u00b7 2 turns");
+  });
+});
+
+// P-SWITCH.3 (ADR-0410): a new session is a new hub; the previous session keeps its spokes.
+describe("hubLanes / otherHubs", () => {
+  const lanes = [
+    { id: "a", name: "api", status: "working" as const, hubSessionId: "s1", lastActivityAt: 10 },
+    { id: "b", name: "docs", status: "needs-approval" as const, hubSessionId: "s1", lastActivityAt: 50 },
+    { id: "c", name: "tests", status: "awaiting-input" as const, hubSessionId: "s2", lastActivityAt: 30 },
+    { id: "d", name: "old", status: "done" as const, hubSessionId: null, lastActivityAt: 5 },
+  ];
+  test("a fresh session's orbit shows none of the previous session's spokes", () => {
+    expect(hubLanes(lanes, "s3").map((l) => l.id)).toEqual(["d"]); // only the hubless legacy spoke rides along
+  });
+  test("each hub shows exactly its own spokes, and hubless spokes ride the current hub", () => {
+    expect(hubLanes(lanes, "s1").map((l) => l.id)).toEqual(["a", "b", "d"]);
+    expect(hubLanes(lanes, "s2").map((l) => l.id)).toEqual(["c", "d"]);
+    expect(hubLanes(lanes, null).map((l) => l.id)).toEqual(["d"]);
+  });
+  test("the other hubs keep every live spoke, newest activity first, counting the ones that wait on a human", () => {
+    const others = otherHubs(lanes, "s3");
+    expect(others.map((h) => h.sessionId)).toEqual(["s1", "s2"]);
+    expect(others[0]!.lanes.map((l) => l.id)).toEqual(["a", "b"]);
+    expect(others[0]!.waiting).toBe(1);
+    expect(others[1]!.waiting).toBe(1);
+    expect(otherHubs(lanes, "s1").map((h) => h.sessionId)).toEqual(["s2"]); // the current hub is never "other"
+  });
+  test("hubless spokes never form a hub of their own", () => {
+    expect(otherHubs([lanes[3]!], "s1")).toEqual([]);
   });
 });

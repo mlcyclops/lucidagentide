@@ -15,6 +15,7 @@ import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
 import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
+import { discoveryDir, discoveryPath, removeDiscovery, writeDiscovery } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419)
 import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -102,13 +103,14 @@ import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECA
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
-import { backend, fleetLaneArgv, interjectChildEnv, TURN_ALREADY_RUNNING } from "./acp_backend.ts";
+import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
-import { addInterject, addPeerNote, awaitPeerReply, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
+import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
 import { CheckoutRegistry, gitDirtyPaths, type CheckoutSession } from "./checkout_registry.ts"; // P-OWN.1: who is writing in which checkout
+import { WRITE_WAIT_MAX_MS, writeRefusal, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
@@ -138,6 +140,7 @@ import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type Bo
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
+import { ensureHiddenConsole } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
@@ -273,13 +276,15 @@ import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
-import { NetProbe } from "./net_probe.ts"; // P-NETSTAT.1 (ADR-0410): the status-bar network indicator's probe
+import { NetProbe } from "./net_probe.ts"; // P-NETSTAT.1 (ADR-0422): the status-bar network indicator's probe
 import { probeTargetFor } from "./renderer/net_status.ts"; // P-NETSTAT.1: fixed model -> provider-host table (pure)
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
 import { seedTrivia } from "./trivia_seed.ts"; // P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire (scanned, tool-free)
 import { detectElectronApp, electronLaunchPlan } from "./preview_electron.ts"; // P-PREVIEW.7 (ADR-0179)
-import { listSubagentRuns } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity
+import { listSubagentRuns, subagentPulse } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity; P-LIVENESS.1 pulse read
+import { listProcesses } from "./leftover_reaper.ts"; // P-LIVENESS.1 (ADR-0418): one process-table look per pulse sample
+import { PULSE_SAMPLE_MS } from "./call_pulse.ts"; // P-LIVENESS.1
 import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
 import { spawn as spawnChild } from "node:child_process";
 import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
@@ -298,8 +303,19 @@ import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
 import { asksageOnly, sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode; ADR-0217: the AskSage lockdown flag
 import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // ADR-0221: BYO-embeddings config
-import { judgmentProvider, setJudgmentProvider } from "./settings_store.ts"; // P-JEV.1 (ADR-0374): the judgment backend choice
+import { judgeFailures, judgmentProvider, noteJudgeFailure, resetJudgeBans, setJudgmentProvider } from "./settings_store.ts"; // P-JEV.1 (ADR-0374): the judgment backend choice; P-JEV.5: the local-judge ledger
 import { jevActive, resolveJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1: the lockdown clamp; P-JEV.2: the Jev-active rule
+import { JUDGE_BAN_FAILURES, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416)
+/** P-JEV.5 (ADR-0416): the Settings > Judgment card's answer (renderer/bridge.ts JudgmentView). */
+function judgmentView(plan: JudgePlan) {
+  const ledger = judgeFailures();
+  return {
+    ...plan.resolved,
+    configured: jevActive(plan.resolved.effective, plan.keySet),
+    chain: plan.chain,
+    bans: plan.banned.map((label) => ({ label, failures: ledger[label]?.failures ?? JUDGE_BAN_FAILURES, lastError: ledger[label]?.lastError ?? "", lastAt: ledger[label]?.lastAt ?? 0 })),
+  };
+}
 import { activeAccountId, addKeyAccount, providerAccounts, removeAccount, renameAccount, setActiveAccount } from "./settings_store.ts"; // P-ACCT.1 (ADR-0375)
 import { activateOauthIdentity, disconnectOauthIdentity, listOauthRows, parkAllOauth } from "./auth_vault.ts"; // P-ACCT.1: omp-vault appliers
 import { deriveAccounts, LEGACY_KEY_ACCOUNT_ID, type AccountView } from "./account_policy.ts"; // P-ACCT.1: pure derivation
@@ -739,7 +755,7 @@ setInterval(() => {
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
 let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
-// P-NETSTAT.1 (ADR-0410): one probe window per engine, shared by every renderer that polls it.
+// P-NETSTAT.1 (ADR-0422): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
 // and they run on the server's single event loop — so overlapping polls pile up and stall model streaming
@@ -1152,6 +1168,15 @@ const TOKEN = process.env.LUCID_MAIN_TOKEN || randomBytes(32).toString("hex");
 // child or fleet lane (they inherit process.env) ever holds the UI token.
 const HAS_MAIN = !!process.env.LUCID_MAIN_TOKEN;
 delete process.env.LUCID_MAIN_TOKEN;
+// P-BROWSER.4 (ADR-0415): before any omp child spawns, own a HIDDEN console window so those children can
+// attach to it (acp.ts spawns them with windowsHide only when there is none). omp decides from its own
+// console whether ITS children (the shared headed Chromium, the Python kernel, hub daemons) are spawned
+// with SW_HIDE; without this the agent's visible browser came up as a white, unclosable rectangle.
+{
+  const con = ensureHiddenConsole();
+  if (con.allocated) console.error(`[console] hidden console window allocated for the agent's children${con.hidden ? "" : " (WARNING: it could not be hidden)"}`);
+  else if (process.platform === "win32" && !con.window) console.error(`[console] no console window for the agent's children (${con.reason ?? "unknown"}): windows the agent opens may stay hidden`);
+}
 // P-SANDBOX.15 (ADR-0396): the omp children's OWN token. Every LUCID_*_URL handed to a child carries this,
 // never TOKEN, and the engine accepts it only on AGENT_ROUTES (below), so the agent cannot reach human-only
 // routes such as /api/security/approve or the sandbox switch.
@@ -1168,6 +1193,7 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/git/exec",           // P-SANDBOX.17 (ADR-0399): the contained agent's git shim asks the host to run git
   "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
   "/api/checkout/peers", "/api/checkout/gate", "/api/checkin", "/api/checkin/reply", // P-OWN.1: checkin_* tools + the commit gate
+  "/api/checkout/write",     // P-WAIT.1: the checkout gate hook claims a write's file (waits only on the same file)
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
@@ -1194,6 +1220,8 @@ const checkouts: CheckoutRegistry = new CheckoutRegistry({
   gitStatus: (root) => { const dir = gitCmdDir(); return gitDirtyPaths(dir ? join(dir, "git.exe") : "git", root); },
 });
 backend.onAuthoredPath = (path) => checkouts.recordWrite({ id: "master", name: "main composer" }, path, currentWorkspace());
+// P-WAIT.1: a write claim counts only while its holder's turn runs (the backstop behind endTurn).
+backend.writeClaims.isRunning = (id) => id === "master" ? backend.midTurn().busy : fleet.sessionsView().some((s) => s.id === id && s.running);
 backend.checkoutBriefing = () => checkouts.briefingFor("master", currentWorkspace());
 // P-PROGRESS.1: the estimate's history starts from the latency ledger's tail (every past chat turn's
 // length, per model), then grows live from master and lane turns alike. Fail-quiet: an unreadable ledger
@@ -1201,12 +1229,14 @@ backend.checkoutBriefing = () => checkouts.briefingFor("master", currentWorkspac
 try {
   if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
 } catch { /* no history yet */ }
+backend.carriedNotes = () => carryPendingNotes("master"); // ADR-0414: same carry as the lanes
 const fleet: FleetLaneManager = new FleetLaneManager({
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
-  gate: backend.workspaceGate, history: backend.durations, // P-PROGRESS.1: one folder lease and one estimate history with the master
+  claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
   env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
   interject: (laneId, text) => { addInterject(laneId, text); },
+  carriedNotes: carryPendingNotes, // ADR-0414: notes no tool step picked up ride the lane's next prompt
   // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.
   onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
   preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
@@ -1248,6 +1278,24 @@ if (process.env.LUCID_DATA_ROOT) {
 // the event loop is a worse bug than the stall it watches for.
 backend.startHealthWatch();
 setInterval(() => { void fleet.healthTick().catch(() => {}); }, 30_000).unref?.();
+// P-LIVENESS.1 (ADR-0418): evidence for OPEN tool calls. The watchdog above never touches a turn with an open
+// call (ADR-0263), so a hung command and a long build looked identical. While any worker has an open call
+// and has been quiet for 30 s, one process-table look per tick is folded into that worker's watch, and the
+// progress view marks the call "likely stuck" after minutes of no CPU, disk or subagent activity. Marking
+// only: stopping is the user's Stop command. No quiet open call means no look at all.
+let pulseLooking = false;
+setInterval(() => {
+  if (pulseLooking) return;
+  const master = backend.pulseTarget();
+  const lanes = fleet.pulseTargets();
+  if (!master && !lanes.length) return;
+  pulseLooking = true;
+  void listProcesses().catch(() => null).then((rows) => {
+    const at = Date.now();
+    if (master) backend.observePulse(rows, at, subagentPulse(sessionPathById(master.sessionId), master.since));
+    for (const l of lanes) fleet.observePulse(l.laneId, rows, at, subagentPulse(sessionPathById(l.sessionId), l.since));
+  }).catch(() => {}).finally(() => { pulseLooking = false; });
+}, PULSE_SAMPLE_MS).unref?.();
 // P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
 // BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
 // process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
@@ -1480,7 +1528,9 @@ async function readBody<T>(req: Request): Promise<T> {
 // active id, plus an optional `error` a mutation attaches instead of nulling the list.
 function kgListView(error?: string) {
   return {
-    kgs: listKgs().map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, source_kind: k.source_kind })),
+    // P-TUI (2026-09-29): `provenance` rides along so terminal clients can answer "where is this
+    // knowledge FROM" without a second route. Additive; the GUI ignores unknown fields.
+    kgs: listKgs().map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, source_kind: k.source_kind, provenance: k.provenance })),
     activeId: activeKgId(),
     ...(error ? { error } : {}),
   };
@@ -2699,24 +2749,42 @@ return Bun.serve({
       // P-JEV.2 (ADR-0377): both answers also carry `configured`: can Jev answer a judgment in the running
       // child (effective mode + a saved TypeSafe key). The chat's per-turn "Jev not consulted" note is gated
       // on it, so a user who never set Jev up is never told about it.
+      // P-JEV.5 (ADR-0416): the answer also carries the judge CHAIN omp is told at the next spawn and the
+      // local judges banned after failing more than once; the reset forgets those failures and restarts.
       if (p === "/api/judgment") {
         if (req.method === "POST") {
           const b = await readBody<{ mode?: unknown }>(req);
-          const before = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective;
+          const before = judgePlan().chain.join(",");
           setJudgmentProvider(b.mode);
-          const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
-          if (r.effective !== before) backend.restart();
-          return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+          const plan = judgePlan();
+          if (plan.chain.join(",") !== before) backend.restart();
+          return json({ ok: true, data: judgmentView(plan) });
         }
-        const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
-        return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+        return json({ ok: true, data: judgmentView(judgePlan()) });
+      }
+      if (p === "/api/judgment/bans/reset" && req.method === "POST") {
+        const had = judgePlan().banned.length > 0;
+        resetJudgeBans();
+        if (had) backend.restart(); // the running child holds the ban in memory; a fresh spawn reads the ledger
+        return json({ ok: true, data: judgmentView(judgePlan()) });
       }
       // P-JEV.2 (ADR-0377): the omp child reports each typed judgment here (the judgment extension wraps
       // pi-ai's judge classes in-process and AWAITS this POST, so the chat has the row before omp acts on the
       // answer). Same token'd self-report shape as /api/tool/meta. Parsed at this boundary, never trusted
       // because it was JSON; an unparseable body is ignored, never an error the child could stall on.
+      // P-JEV.5 (ADR-0416): a FAILED judgment by a local model counts against it; from the second failure the
+      // model is banned (left out of the chain at the next spawn; the child skips it at once). P-JEV.6
+      // (ADR-0421): a judge whose account says the model does not exist is banned from that one answer.
       if (p === "/api/judgment/trace" && req.method === "POST") {
         const report = parseJudgmentReport(await readBody<unknown>(req));
+        if (report?.error) {
+          const before = judgePlan().banned.length;
+          const banned = noteJudgeFailure(report, judgePlan().localProviders);
+          if (banned.length > before) {
+            console.error(`[judgment] ${report.label} is no longer asked as a judge (${report.error.slice(0, 120)}); Settings > Judgment resets this`);
+            Object.assign(process.env, judgeBanEnv(judgePlan().localProviders, banned));
+          }
+        }
         return json({ ok: true, data: { noted: !!report && backend.noteJudgment(report) } });
       }
       // P-VOICE.1 + P-VOICE.2 (ADR-0247): list the selectable voices for ONE engine, so the picker works for
@@ -4828,7 +4896,7 @@ return Bun.serve({
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });
       }
-      // P-NETSTAT.1 (ADR-0410): the network indicator's feed. `model` only SELECTS a row of the fixed
+      // P-NETSTAT.1 (ADR-0422): the network indicator's feed. `model` only SELECTS a row of the fixed
       // provider-host table (probeTargetFor), so a caller can never make the engine fetch a URL of its
       // choosing; LUCID_NET_PROBE_URL is the operator's override for air-gapped or proxied networks.
       if (p === "/api/net-status") {
@@ -4880,15 +4948,26 @@ return Bun.serve({
       // (store enforces trim/4000-char/8-note discipline; validation here mirrors it for a crisp error).
       // GET /pending returns AND clears atomically - the single consumer is the target's omp child
       // (interject_extension.ts polls it once per tool result via the token'd LUCID_INTERJECT_URL).
+      // ADR-0414: a note for a session that does not exist is refused (`unknown-target`). `live: true`
+      // marks the USER's push (Push now, Check in), which is also refused (`idle`) when the target's turn
+      // is not running, because a push parked on an idle target is read by nothing until some later turn.
+      // Every refusal carries `code` + `error`; the renderer shows the reason and keeps the text.
       if (p === "/api/interject" && req.method === "POST") {
-        const b = await readBody<{ target?: unknown; text?: unknown }>(req);
+        const b = await readBody<{ target?: unknown; text?: unknown; live?: unknown }>(req);
         const target = String(b.target ?? "").trim();
-        const text = String(b.text ?? "").trim();
+        const running = target === "master" ? backend.turnStatus()?.running === true : fleet.laneRunning(target);
+        const r = addInterject(target, String(b.text ?? ""), { running, live: b.live === true });
+        return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, code: r.code, error: r.reason });
+      }
+      // P-LIVENESS.1 (ADR-0418): the user's "Stop command" on a call marked likely stuck. Ends only the
+      // processes the open call started ("master" or a laneId), queues a note so the agent knows why, and
+      // leaves the turn running.
+      if (p === "/api/liveness/stop-call" && req.method === "POST") {
+        const b = await readBody<{ target?: unknown }>(req);
+        const target = String(b.target ?? "").trim();
         if (!target) return json({ ok: false, error: "target required" });
-        if (!text) return json({ ok: false, error: "text required" });
-        if (text.length > 4000) return json({ ok: false, error: "note too long (max 4000 chars)" });
-        const r = addInterject(target, text);
-        return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, error: r.reason });
+        const r = target === "master" ? await backend.stopOpenCall() : await fleet.stopOpenCall(target);
+        return json({ ok: true, data: r });
       }
       if (p === "/api/interject/pending" && req.method === "GET") {
         const target = String(url.searchParams.get("target") ?? "").trim();
@@ -4915,6 +4994,24 @@ return Bun.serve({
         const d = await checkouts.gate(target, cwd, command);
         if (d.block) emitSecurityEvent({ category: "exec", type: "checkout_gate", decision: "block", severity: "low", tool: "git", reason: (d.reason ?? "").slice(0, 200) });
         return json({ ok: true, data: d });
+      }
+      // P-WAIT.1: a write/edit is about to run. Claim its file(s) for the caller's running turn, waiting
+      // (bounded by waitMs, under omp's 30 s hook limit) only while ANOTHER worker's running turn holds one of
+      // them. The caller's card or HUD says whom it waits for; a refusal names the holder for the model. An
+      // unknown caller is let through: this is coordination between cooperating agents, not a trust boundary.
+      if (p === "/api/checkout/write" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const cwd = String(url.searchParams.get("cwd") ?? "").trim() || currentWorkspace();
+        const paths = url.searchParams.getAll("path").map((s) => s.trim()).filter(Boolean);
+        const waitMs = Math.min(WRITE_WAIT_MAX_MS, Math.max(0, Number(url.searchParams.get("waitMs")) || 0));
+        if (!target || paths.length === 0) return json({ ok: false, error: "target and path required" });
+        const lane = target === "master" ? null : fleet.sessionsView().find((s) => s.id === target);
+        if (target !== "master" && !lane) return json({ ok: true, data: { block: false } });
+        const me = lane ? { id: lane.id, name: lane.name } : { id: "master", name: "Main" };
+        const onWait = (w: WaitView | null) => { if (lane) fleet.noteWriteWait(lane.id, w); else backend.noteWriteWait(w); };
+        const startedAt = Date.now();
+        const v = await backend.writeClaims.acquire(me, paths, cwd, { waitMs, onWait });
+        return json({ ok: true, data: v.held ? { block: true, reason: writeRefusal(v, Date.now() - startedAt) } : { block: false } });
       }
       if (p === "/api/checkin" && req.method === "POST") {
         const b = await readBody<{ from?: unknown; to?: unknown; text?: unknown }>(req);
@@ -5306,6 +5403,27 @@ return Bun.serve({
 }
 }
 
+// P-TUI.0 (ADR-0419): publish this launch's coordinates for terminal clients (`lucid hub`, docs/TUI.md).
+// One 0600 file per bound port under userData (or ~/.omp standalone): port, per-launch nonce, UI token,
+// pid, version, flavor. A client must still win the ADR-0305 health handshake against the file's nonce
+// before trusting anything, so a stale or squatted-over file is inert. Standalone runs (no Electron main)
+// mint the nonce here - /api/health reads process.env each request, and the nonce is deliberately
+// non-secret (it proves launch identity, gates nothing else). Removed on every exit path the whisper/fleet
+// handlers already cover (SIGINT/SIGTERM re-enter process.exit, which fires "exit").
+if (!process.env.LUCID_ENGINE_NONCE) process.env.LUCID_ENGINE_NONCE = randomBytes(16).toString("hex");
+const ENGINE_PORT = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
+const DISCOVERY_PATH = discoveryPath(discoveryDir(process.env), ENGINE_PORT);
+try {
+  writeDiscovery(DISCOVERY_PATH, {
+    v: 1, pid: process.pid, port: ENGINE_PORT, nonce: process.env.LUCID_ENGINE_NONCE,
+    token: TOKEN, version: APP_VERSION, flavor: BUILD.flavor, startedAt: new Date().toISOString(),
+  });
+} catch (err) {
+  // Advisory seam: a client that finds no file falls back to spawning its own engine. Never fatal.
+  console.error(`[discovery] could not publish ${DISCOVERY_PATH}: ${String(err)}`);
+}
+process.on("exit", () => removeDiscovery(DISCOVERY_PATH));
+
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
 // THIS process) and inherits process.env, so setting it here — after the server binds — is enough; no
@@ -5358,6 +5476,7 @@ process.env.LUCID_CHECKIN_PEERS_URL = `http://127.0.0.1:${server.port}/api/check
 process.env.LUCID_CHECKIN_SEND_URL = `http://127.0.0.1:${server.port}/api/checkin?t=${AGENT_TOKEN}`;
 process.env.LUCID_CHECKIN_REPLY_URL = `http://127.0.0.1:${server.port}/api/checkin/reply?t=${AGENT_TOKEN}`;
 process.env.LUCID_CHECKOUT_GATE_URL = `http://127.0.0.1:${server.port}/api/checkout/gate?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKOUT_WRITE_URL = `http://127.0.0.1:${server.port}/api/checkout/write?t=${AGENT_TOKEN}`; // P-WAIT.1
 // P-BROWSER.1 (wave 2): the omp child's browser_* tools reach the agent-browser routes through this
 // token'd BASE (the extension appends /open, /capture, /scroll, /close, /shot and keeps the ?t=).
 // Gated on LUCID_MAIN_TOKEN: without the Electron main there is no window executor, so the env stays

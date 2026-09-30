@@ -13,6 +13,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): share the engine's hidden console
 
 // Support diagnosability (the "agent process exited (code 1)" support ticket): every omp child's stderr
 // is appended to ONE rolling log so a fresh-install failure leaves evidence a human can send in. The
@@ -78,14 +79,19 @@ export class ACPClient {
   // only — the mediated-egress proxy sets HTTP(S)_PROXY here so the omp child (and its bash/pip children)
   // tunnel through the proxy, WITHOUT polluting the desktop process's own environment. Default {} ⇒ the
   // child inherits process.env exactly as before.
-  constructor(private cmd: string, private args: string[], private cwd: string, private env: Record<string, string> = {}) {}
+  // `spawnOpts.windowsHide` (P-BROWSER.4, ADR-0415): by default the child attaches to this process's hidden
+  // console when there is one (console_host.ts), so omp sees a console and spawns ITS children, the visible
+  // browser above all, without SW_HIDE. Passing `true` keeps the child console-less (CREATE_NO_WINDOW), the
+  // AppContainer helper's contract.
+  constructor(private cmd: string, private args: string[], private cwd: string, private env: Record<string, string> = {}, private spawnOpts: { windowsHide?: boolean } = {}) {}
 
   /** Newest stderr bytes from THIS child (bounded). A non-zero exit quotes the last line so the UI
    *  error names the actual failure instead of a bare exit code. */
   private errTail = "";
 
   start(): void {
-    this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, ...this.env } });
+    const windowsHide = this.spawnOpts.windowsHide ?? ompWindowsHide();
+    this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide, env: { ...process.env, ...this.env } });
     acpLog(`\n[acp spawn ${new Date().toISOString()} cmd=${this.cmd} cwd=${this.cwd}]\n`);
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
     this.proc.stderr!.on("data", (d) => {
@@ -126,6 +132,9 @@ export class ACPClient {
 
   /** True once the child has exited or failed to spawn: the connection can never answer again. */
   get isDead(): boolean { return this.dead !== null; }
+
+  /** P-LIVENESS.1: the spawned child's pid (the root of the agent's process tree), while it runs. */
+  get pid(): number | null { return this.dead === null ? this.proc?.pid ?? null : null; }
 
   private onData(s: string): void {
     this.buf += s;

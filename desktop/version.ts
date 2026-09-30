@@ -528,4 +528,38 @@
 //            Preview panel gets a two-row header, a Browser pop-out and three offline games (P-PREVIEW.20/.21,
 //            P-GAME.1/.2/.3); the launcher defaults to Opus 5.5.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.9";
+// v2.3.0-beta.10 = beta.9, quieter. No ETAs or estimates anywhere (tool rows, subagents, HUD, lane cards,
+//            orbit); the only liveness shown is a dead agent process with its Restart line; step marks and
+//            folds go back to the subdued Beta 8 palette; the Jev scale tips instead of spinning
+//            (P-PROGRESS.1/.2 amendments, ADR-0409/0408). New lane / New spoke lead with a Folder field and
+//            Browse, and the local and GitHub CLI repo searches run only when checked and asked for
+//            (P-REPO.1 amendment, ADR-0406).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.11 = beta.10 plus the operator's follow-ups. Stop stops: a deliberate Stop no longer starts
+//            the staged next prompt (a P-FLEET.L8 regression) and ends a running /goal loop; a held prompt
+//            offers Send now. The Fleet button opens the grid unless the orbit is pinned. The branch pill
+//            appears only for a repo that pushes to a hosted remote, with the premium tooltip, and never as
+//            an amber "no git" warning (P-REPO.1 amendment, ADR-0406). The status-bar Processes pill is
+//            gone. LucidAgentIDE.bat G opens the installed app and names installed vs current versions.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.12 = beta.11 plus six reviewed branches and two operator fixes. Quiet one-line status by
+//            default with detail, a time estimate and a green ring as opt-ins (P-PROGRESS.3/.4, ADR-0412/0413,
+//            incl. the git_broker UNC fail-open fix); a push reaches the agent or says why and the text is
+//            never lost (P-INTERJECT.5, ADR-0414); the orbit closes the grid; a new session is a new hub and
+//            a reply finished while on a spoke shows on return (P-SWITCH.3, ADR-0410/0411); an attached
+//            spoke's running turn always shows and pasted images stay with their spoke (P-FLEET.L8).
+//            Session titles no longer show the checkout-peers briefing; Bedrock and Vertex models appear
+//            only behind a key saved in LUCID, and each picker family lists what you run first.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.13 = beta.12 plus the surgery train and the judge fixes. The agent's visible browser is shown
+//            (the engine owns a hidden console so omp's Chrome is not born SW_HIDE, P-BROWSER.4, ADR-0415);
+//            judgments are off by default, LUCID writes omp's judge role itself, a local judge that fails
+//            twice or a model the account cannot call is not asked again (P-JEV.5/.6, ADR-0416/0421);
+//            workers wait for each other only on the same file, never the whole folder (P-WAIT.1,
+//            ADR-0417); an open tool call is judged on evidence, marked "likely stuck", stopped only by you,
+//            and background jobs survive a resume (P-LIVENESS.1/P-ASYNCJOBS.1, ADR-0418); `lucid hub`, the
+//            terminal pane multiplexer over the running engine (P-TUI.0/.1, ADR-0419/0420); no reconnect
+//            button during the first minute after launch (P-RECOVER.2); lane pickers offer the composer's
+//            curated model list; the test harness works from a UNC checkout, injection-safe.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.13";

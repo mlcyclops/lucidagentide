@@ -45,9 +45,10 @@ import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (A
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { describeTool } from "./tool_describe.ts"; // P-PROGRESS.1: what a tool call is doing, in plain words
-import { DurationHistory, ETA_ESTIMATING, estimateFromSamples, etaPhrase, humanMs, progressLine, QUIET_MS, STREAMING_MS, wholeEtaPhrase, type ProgressView, type TurnEstimate } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) progress view helpers
+import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, etaPhrase, humanMs, NO_ESTIMATE, progressLine, QUIET_MS, STREAMING_MS, wholeEtaPhrase, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free) progress view helpers
+import { ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
-import type { WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (type only: the module itself is engine-side)
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (type only: the module itself is engine-side)
 import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
@@ -72,7 +73,7 @@ import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptim
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
-import { addQueued, nextHold, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable)
+import { addQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
 import { delegationSettled, filterRunsForBatch, mergeRunSamples, runEta, type RunSample, type TimedRun } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
@@ -104,25 +105,25 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
 import { fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
 import { initTitlebarRepo, refreshTitlebarRepo } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): which repo, where commits go
-import { pushLabel, repoChip } from "../repo_identity.ts";
+import { hostedRepo, pushLabel, repoChip } from "../repo_identity.ts";
 import type { RepoContext } from "./bridge.ts";
 import { formatImportLine } from "./import_progress.ts";
-import { mountNetSeg, netBooting, netSnapshot, onNetChange, renderNetStandby, setNetReady, startNetMonitor } from "./net_monitor.ts"; // P-NETSTAT.1 (ADR-0410)
+import { mountNetSeg, netBooting, netSnapshot, onNetChange, renderNetStandby, setNetReady, startNetMonitor } from "./net_monitor.ts"; // P-NETSTAT.1 (ADR-0422)
 import { classifyTurnFailure, effectiveState, type FailureCause } from "./net_status.ts"; // P-NETSTAT.1: pure verdicts
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, localPrefixSet, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
-import { buildHubSections, configuredProviderCount, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
+import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
@@ -678,7 +679,10 @@ function sessRow(s: SessionInfo, active: boolean): string {
       <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
     </div>`;
 }
+/** The session list as last painted (cache or live): the model picker ranks each family by it. */
+let lastSessionList: SessionList | null = null;
 function renderSessionList(data: SessionList): void {
+  lastSessionList = data;
   const list = $("#sessList"); if (!list) return;
   const { sessions, ingest } = data;
   if (!sessions.length && !ingest.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
@@ -1335,13 +1339,13 @@ function createThoughts(): ThoughtsWin {
     fold.dEl.textContent = foldSummary(fold.quick, fold.processing);
     keepInView();
   };
-  // An open row that earned its place says how long it has run and, from this session's lengths of the same
-  // tool, about how long is left; with too few samples it says so ("ETA estimating").
+  // An open row that earned its place says how long it has run. P-PROGRESS.3: with the experimental estimate
+  // on, and once this session's lengths of the same tool support a number, also about how long is left.
   const paintOpen = (r: StepRow, now: number) => {
     const ran = now - r.at;
-    const eta = etaPhrase(estimateFromSamples(ran, toolLengths.toolSamples(r.s.name), 2));
-    r.stateEl.textContent = `${humanMs(ran)} \u00b7 ${eta}`;
-    r.stateEl.title = `running for ${humanMs(ran)}; ${eta}`;
+    const eta = shownEta(etaPhrase(estimateFromSamples(ran, toolLengths.toolSamples(r.s.name), 2)), statusEta());
+    r.stateEl.textContent = eta ? `${humanMs(ran)} \u00b7 ${eta}` : humanMs(ran);
+    r.stateEl.title = eta ? `running for ${humanMs(ran)}; ${eta}` : `running for ${humanMs(ran)}`;
   };
   // Where a settled (or never-settling) call goes, and why it was folded when it was.
   const place = (r: StepRow, ok: boolean | undefined, elapsedMs: number | undefined) => {
@@ -1820,7 +1824,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     <button class="subagent-head" type="button" aria-expanded="true">
       <span class="subagent-spin">${CLIPBOARD_SVG}</span>
       <span class="subagent-cur">Delegated to <b>${esc(e.agent)}</b>${n > 1 ? ` · ${n} subtasks` : ""}</span>
-      <span class="subagent-eta" data-state="estimating">${esc(ETA_ESTIMATING)}</span>
+      <span class="subagent-eta" data-state="estimating"></span>
       <span class="subagent-chev">${icon("chevron", 14)}</span>
     </button>
     <div class="subagent-body">${body}<div class="subagent-runs"></div></div>
@@ -1847,14 +1851,18 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     const etas = runs.map((r) => runEta(r, samples, at));
     // No runs on disk yet: the delegation is still a helper whose time is unknown.
     liveEtas = runs.length ? etas.filter((x) => x.live).map((x) => x.etaMs) : [null];
-    const whole = liveEtas.length ? wholeEtaPhrase(null, liveEtas) : "all runs finished";
-    headEta.textContent = whole;
+    // P-PROGRESS.3: the head's ETA only with the experimental estimate on and a number to show.
+    const whole = liveEtas.length ? wholeEtaPhrase(null, liveEtas) : "";
+    headEta.textContent = shownEta(whole, statusEta());
     headEta.dataset.state = whole === ETA_ESTIMATING ? "estimating" : liveEtas.length ? "known" : "done";
     if (!runs.length) return;
     win.querySelectorAll(".subagent-task").forEach((t) => t.remove()); // real runs supersede the static rows
     runsBox.innerHTML = runs.map((r, i) => {
       const eta = etas[i]!;
       const etaState = !eta.live ? "done" : eta.label === ETA_ESTIMATING ? "estimating" : "known";
+      // P-PROGRESS.3: a live run's ETA is opt-in; a finished run's own length ("took 1 m") is a fact and stays.
+      const etaLabel = eta.live ? shownEta(eta.label, statusEta()) : eta.label;
+      const full = statusDetail() === "full"; // the liveness words are detail, not the quiet default
       const last = r.steps[r.steps.length - 1];
       const now = last ? `${last.kind === "tool" ? `${esc(last.tool ?? "tool")} · ` : ""}${esc(last.label)}` : "starting…";
       // P-PROGRESS.1: is this worker alive? The transcript's last line is the evidence: its age says
@@ -1869,8 +1877,8 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
           <span class="sa-dot${r.done ? " done" : ""}"></span>
           <span class="sa-name">${esc(r.name)}</span>
           <span class="sa-now">${now}</span>
-          <span class="sa-alive" data-state="${aliveState}">${esc(alive)}</span>
-          <span class="sa-eta" data-state="${etaState}">${esc(eta.label)}</span>
+          ${full ? `<span class="sa-alive" data-state="${aliveState}">${esc(alive)}</span>` : ""}
+          ${etaLabel ? `<span class="sa-eta" data-state="${etaState}">${esc(etaLabel)}</span>` : ""}
           <span class="sa-meta">${r.tools} tool${r.tools === 1 ? "" : "s"}</span>
           <span class="subagent-chev">${icon("chevron", 12)}</span>
         </button>
@@ -1897,7 +1905,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     // visible after the turn (P-TASK.5 collapsed it, which hid the detail); the user can still fold it.
     win.removeAttribute("data-streaming"); win.classList.add("done");
     // P-PROGRESS.2: a settled delegation is no longer a helper the prompt waits on.
-    if (liveEtas.length) { headEta.textContent = "no longer running"; headEta.dataset.state = "done"; }
+    headEta.textContent = ""; headEta.dataset.state = "done";
     liveEtas = [];
   };
   const refreshRuns = async (): Promise<void> => {
@@ -1931,7 +1939,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
  *  assistant bubble that names the provider and offers concrete fallbacks — a lower model in the same
  *  family and/or an equivalent from another provider — each one-click to switch + re-send the same prompt. */
 function renderNoResponseNotice(container: HTMLElement, model: string, stopReason?: string, reason?: string, forceModel = false): void {
-  // P-NETSTAT.1 (ADR-0410): a turn that died on the WIRE (offline, unstable link, DNS/socket error, or
+  // P-NETSTAT.1 (ADR-0422): a turn that died on the WIRE (offline, unstable link, DNS/socket error, or
   // omp's startup handshake timing out on a fresh update) is not the model's fault, and switching models
   // cannot fix it. Those get the stand-by card; only a healthy-link failure blames the provider.
   if (!forceModel) {
@@ -1972,7 +1980,7 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   });
 }
 
-/** P-NETSTAT.1 (ADR-0410): automatic resends already spent on one prompt, so a flapping link (or a local
+/** P-NETSTAT.1 (ADR-0422): automatic resends already spent on one prompt, so a flapping link (or a local
  *  server that is simply down) ends at the switch-model card instead of resending forever. Cleared by the
  *  next turn that produces output. */
 let netResend: { prompt: string; attempts: number } | null = null;
@@ -1999,7 +2007,7 @@ function showNetStandby(container: HTMLElement, cause: Exclude<FailureCause, "mo
   });
 }
 
-/** P-SANDBOX.18 (ADR-0411): the agent process kept failing to start. Names where it failed (the engine
+/** P-SANDBOX.18 (ADR-0423): the agent process kept failing to start. Names where it failed (the engine
  *  tags a contained handshake failure "inside the Windows AppContainer sandbox") and offers the in-place
  *  restart; never a model switch, which cannot help. */
 function renderStartupFailed(container: HTMLElement, reason?: string): void {
@@ -2047,6 +2055,14 @@ function setRecoveryChecking(on: boolean): void {
   window.clearTimeout(recoveryCheckTimer);
   recoveryCheckTimer = on ? window.setTimeout(() => { setRecoveryChecking(false); setSendEnabled(); }, RECOVERY_CHECK_MAX_MS) : 0;
 }
+// Startup grace: the engine is still coming up for the first minute after the window opens, so a probe
+// that fails then is expected, not a fault. The amber composer button (quiet reconnect) would read as
+// "broken" to a user who just launched the app. Within the grace the probe retries silently; the button
+// appears only when the engine is still not answering after the grace has passed.
+const STARTUP_GRACE_MS = 60_000;
+const STARTUP_RETRY_MS = 3_000;
+const windowOpenedAt = Date.now();
+let startupRetryTimer = 0;
 function leaveTurnView(): number {
   ++turnViewEpoch;
   activeTurnView?.detach(); activeTurnView = null;
@@ -2211,6 +2227,7 @@ async function send(): Promise<void> {
   if (agentTierApplying) { showToast({ title: "Confirming model change", desc: "Wait a moment for the engine to confirm the model before sending.", timeout: 2500 }); return; }
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
+  if (text || state.attachments.length) stopHoldsQueue = false; // the user sent again: the staged queue resumes after this turn
   // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
   const atts = state.attachments.slice();
   const images = promptImageBlocks(atts);
@@ -2254,7 +2271,7 @@ async function send(): Promise<void> {
   // a second prompt with a lone error the composer never showed, which left the bubble on "Connection
   // lost" and muted the watch: the lane looked dead while it was working.
   if (turnInFlight()) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
-  // P-NETSTAT.1 (ADR-0410): with no network at all, sending would only manufacture an error that blames
+  // P-NETSTAT.1 (ADR-0422): with no network at all, sending would only manufacture an error that blames
   // the model. Hold the prompt in the transcript behind a stand-by card; it goes out once the link is
   // stable (or on "Send now"). Main only: a lane's turn runs in its own process with its own recovery.
   const ns = netSnapshot();
@@ -2316,85 +2333,136 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   const textEl = $(".text", node) as HTMLElement;
   textEl.innerHTML = "";
   // P10.1 response activity HUD: live MM:SS timer + semantic phase + running token-cost.
-  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-eta" data-state="estimating"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button></div>`);
+  // P-PROGRESS.3 (ADR-0412): `hud-more` (Details) opens the progress strip for this turn in the quiet default.
+  const hud = el(`<div class="hud streaming"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-t">00:00</span><span class="hud-sep">·</span><span class="hud-phase"></span><span class="hud-eta" data-state="estimating"></span><span class="hud-tps"></span><span class="hud-meta"></span><button class="hud-more" type="button" aria-expanded="false" hidden data-tip="Details|How far along the turn is, whether the agent is alive, and who else is working in this folder">Details</button><button class="hud-checkin" data-tip="Check in|A quick status card: elapsed time, current phase, pending work, staged prompts">Check in</button><span class="hud-ring" hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span></div>`);
   const streamEl = el(`<div class="stream"></div>`);
+  // P-PROGRESS.1: when the agent process is gone, ONE line under the HUD says so, with the action that fixes
+  // it (the beta.10 quiet footer). P-PROGRESS.3: shown whenever the strip below is closed.
+  const deadRow = el(`<div class="hud-dead" hidden><span class="hud-dead-note">The agent process exited. Restart it here; the conversation is kept.</span><button class="btn-mini hud-restart" type="button">Restart agent</button></div>`);
+  // P-LIVENESS.1 (ADR-0418): the same quiet line for an open tool call marked likely stuck (no CPU, disk or
+  // subagent activity for minutes). It offers the user the two ways out; LUCID takes neither on its own.
+  const stuckRow = el(`<div class="hud-dead hud-stuck" hidden><span class="hud-dead-note"></span><button class="btn-mini hud-stopcall" type="button" hidden data-tip="Stop command|Ends only the processes this tool call started. The agent is told why and continues; the turn keeps running.">Stop command</button><button class="btn-mini hud-restart" type="button">Restart agent</button></div>`);
   // P-PROGRESS.1: the progress strip under the HUD: a bar (the history estimate, 95% at most while the
   // turn runs), the progress line, the liveness pill (with the restart action when the agent process is
-  // gone), and the folder queue while this turn waits its turn. Every text run is its own block.
+  // gone). Every text run is its own block.
+  // P-PROGRESS.3 (ADR-0412): closed unless Settings, Working status is "Full detail" or the user opened it
+  // with Details for this turn; the bar and every number follow the experimental-estimate switch.
   const prog = el(`<div class="hud-progress" hidden>
     <div class="hud-bar"><div class="hud-fill"></div></div>
     <div class="hud-progress-line"><span class="hud-est"></span></div>
-    <div class="hud-alive-row"><span class="hud-alive" data-state="idle"></span><span class="hud-signal"></span><button class="btn-mini hud-restart" type="button" hidden>Restart agent</button></div>
-    <div class="hud-queue" hidden></div>
+    <div class="hud-alive-row"><span class="hud-alive" data-state="idle"></span><span class="hud-signal"></span><button class="btn-mini hud-stopcall" type="button" hidden data-tip="Stop command|Ends only the processes this tool call started. The agent is told why and continues; the turn keeps running.">Stop command</button><button class="btn-mini hud-restart" type="button" hidden>Restart agent</button></div>
   </div>`);
-  textEl.append(streamEl, hud, prog); // status sits BELOW the line that's filling in
+  textEl.append(streamEl, hud, deadRow, stuckRow, prog); // status sits BELOW the line that's filling in
   streamEl.innerHTML = `<span class="cursor"></span>`;
   let progress: ProgressView | null = null, progressAt = 0; // the engine's last view + when it arrived (aged locally)
   const progEst = $(".hud-est", prog) as HTMLElement, progFill = $(".hud-fill", prog) as HTMLElement, progBar = $(".hud-bar", prog) as HTMLElement;
   const progAlive = $(".hud-alive", prog) as HTMLElement, progSignal = $(".hud-signal", prog) as HTMLElement, progRestart = $(".hud-restart", prog) as HTMLButtonElement;
-  const progQueue = $(".hud-queue", prog) as HTMLElement;
+  const stopCallButtons = [$(".hud-stopcall", prog) as HTMLButtonElement, $(".hud-stopcall", stuckRow) as HTMLButtonElement]; // P-LIVENESS.1
+  const hudMore = $(".hud-more", hud) as HTMLButtonElement;
+  // P-PROGRESS.3: `stripUsed` = the engine sent something the strip shows (a progress view); `detailOpen` =
+  // the user opened it for this turn with Details.
+  let stripUsed = false, detailOpen = false, stripSettled = false;
+  const syncStrip = () => {
+    const full = statusDetail() === "full";
+    prog.hidden = !stripUsed || !(full || detailOpen);
+    // The quiet Restart line stands in for the strip's red pill whenever the strip is closed.
+    deadRow.hidden = progress?.liveness.state !== "dead" || !prog.hidden;
+    stuckRow.hidden = progress?.liveness.state !== "stuck" || !prog.hidden; // P-LIVENESS.1: same rule
+    hudMore.hidden = !stripUsed || full || stripSettled;
+    hudMore.textContent = detailOpen ? "Hide details" : "Details";
+    hudMore.setAttribute("aria-expanded", String(detailOpen));
+  };
+  hudMore.addEventListener("click", () => { if (stripSettled) return; detailOpen = !detailOpen; syncStrip(); paintProgress(); });
+  // P-PROGRESS.3 (ADR-0412 amendment): the progress ring at the right end of the HUD line, like the status
+  // bar's context ring. Shown while the turn runs (setting "Show a progress ring", on by default); the tooltip
+  // is only rewritten when its words change, so an open tooltip is not rebuilt every second.
+  const ringEl = $(".hud-ring", hud) as HTMLElement, ringArc = $(".hud-ring-arc", hud) as SVGCircleElement;
+  const paintRing = () => {
+    ringEl.hidden = !progress || stripSettled || !statusRing();
+    if (ringEl.hidden || !progress) return;
+    const v = ringView(agedProgress(progress, Math.max(0, Date.now() - progressAt)), statusEta());
+    ringArc.style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
+    ringEl.dataset.tone = v.tone;
+    ringEl.dataset.empty = v.pct === null ? "1" : "0";
+    if (ringEl.getAttribute("data-tip") !== v.tip) ringEl.setAttribute("data-tip", v.tip);
+  };
   const paintProgress = () => {
     if (!progress) return;
-    prog.hidden = false;
-    const age = Math.max(0, Date.now() - progressAt);
+    stripUsed = true;
+    syncStrip();
     const p = progress;
+    // P-INTERJECT.3: the Check-in card reads the same verdict. P-PROGRESS.3: only with Full detail, or when the
+    // process is gone (the ADR-0409 amendment keeps every other liveness label out of the quiet default).
+    liveTurn.alive = statusDetail() === "full" || p.liveness.state === "dead" || p.liveness.state === "stuck" ? p.liveness.label : "";
+    liveTurn.open = p.liveness.state !== "idle" && p.liveness.state !== "dead" ? p.stepsOpen.length : 0;
+    // P-LIVENESS.1 (ADR-0418): a call marked likely stuck shows in the quiet default too, with its way out.
+    const stuck = p.liveness.state === "stuck";
+    for (const b of stopCallButtons) b.hidden = !(stuck && p.liveness.canStopCall);
+    if (stuck) {
+      const note = $(".hud-dead-note", stuckRow) as HTMLElement;
+      const line = `The running tool call is ${p.liveness.label}. It may be waiting on something that will never answer.`;
+      if (note.textContent !== line) note.textContent = line;
+      if (stuckRow.getAttribute("data-tip") !== p.liveness.detail) stuckRow.setAttribute("data-tip", p.liveness.detail);
+    }
+    if (prog.hidden) return; // nothing below is on screen
     const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
-    const aged: ProgressView = running ? { ...p, elapsedMs: p.elapsedMs + age, lastSignalMs: p.lastSignalMs + age, estimate: p.estimate.etaMs === null ? p.estimate : { ...p.estimate, etaMs: Math.max(0, p.estimate.etaMs - age), overrun: p.estimate.overrun || p.estimate.etaMs - age <= 0 } } : p;
-    progEst.textContent = progressLine(aged);
+    const eta = statusEta();
+    const sampled = agedProgress(p, Math.max(0, Date.now() - progressAt));
+    const aged = eta ? sampled : withoutEstimate(sampled); // P-PROGRESS.3: the estimate is opt-in
+    progEst.textContent = progressLine(aged, eta);
     const pct = aged.estimate.percent;
     progBar.classList.toggle("indeterminate", pct === null && running);
     progFill.style.width = pct === null ? "0%" : `${Math.min(95, pct)}%`;
     progAlive.dataset.state = p.liveness.state;
     progAlive.textContent = p.liveness.label;
     progAlive.setAttribute("data-tip", p.liveness.detail);
-    liveTurn.alive = p.liveness.label; // P-INTERJECT.3: the Check-in card reads the same verdict
     // The age words move between engine samples; a fresh signal within the streaming window says so.
     progSignal.textContent = running ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago${aged.lastSignalMs >= QUIET_MS && !aged.stepsOpen.length ? " (quiet)" : ""}`) : "";
-    progRestart.hidden = p.liveness.state !== "dead";
+    progRestart.hidden = p.liveness.state !== "dead" && !stuck;
   };
   // P-PROGRESS.2: the whole prompt's ETA on the HUD line itself: this turn against its history plus every
   // delegated run still working. Until the history supports a number it says "ETA estimating" (and pulses),
   // so the line is never silent about when the work ends. Cleared when the turn settles.
   const etaEl = $(".hud-eta", hud) as HTMLElement;
   let etaDone = false;
+  // P-PROGRESS.3 (ADR-0412): only with the experimental estimate on, and only once there is a number: the
+  // "ETA estimating" placeholder is never shown (ADR-0408 amendment).
   const paintEta = () => {
-    if (etaDone) { etaEl.textContent = ""; etaEl.dataset.state = "done"; return; }
-    const e = progress?.estimate;
-    const age = Math.max(0, Date.now() - progressAt);
-    const turnEst: TurnEstimate = !e ? { etaMs: null, percent: null, basis: "none", samples: 0, typicalMs: null, overrun: false }
-      : e.etaMs === null ? e : { ...e, etaMs: Math.max(0, e.etaMs - age), overrun: e.overrun || e.etaMs - age <= 0 };
+    if (etaDone || !statusEta()) { etaEl.textContent = ""; etaEl.dataset.state = "done"; return; }
+    const turnEst = progress ? agedProgress(progress, Math.max(0, Date.now() - progressAt)).estimate : NO_ESTIMATE;
     const phrase = wholeEtaPhrase(turnEst, subCards.flatMap((c) => c.etas()));
+    if (phrase === ETA_ESTIMATING || !phrase) { etaEl.textContent = ""; etaEl.dataset.state = "done"; return; }
     etaEl.textContent = `\u00b7 ${phrase}`;
     etaEl.dataset.state = phrase === ETA_ESTIMATING ? "estimating" : turnEst.overrun ? "long" : "known";
     etaEl.setAttribute("data-tip", phrase === ETA_ESTIMATING
       ? "ETA|Not enough finished turns or runs on this machine to estimate yet. A number appears as soon as there is history."
-      : "ETA|From how long recent turns and helper runs took on this machine (75th percentile). An estimate, not a promise.");
+      : "ETA|From how much longer recent turns that ran this long, and helper runs, took on this machine. An estimate, not a promise.");
   };
-  progRestart.addEventListener("click", () => {
-    // P-PROGRESS.1: the in-place recovery the watchdog performs, on demand: restart the agent process,
-    // reload the same session. The whole app never needs to restart for this.
-    progRestart.disabled = true; progRestart.textContent = "Restarting\u2026";
+  // P-PROGRESS.1: the in-place recovery the watchdog performs, on demand: restart the agent process, reload
+  // the same session. The whole app never needs to restart for this. P-PROGRESS.3: the quiet Restart line and
+  // the strip's pill carry the same action (only one is on screen at a time).
+  const restartButtons = [progRestart, $(".hud-restart", deadRow) as HTMLButtonElement, $(".hud-restart", stuckRow) as HTMLButtonElement];
+  // P-LIVENESS.1 (ADR-0418): the user's Stop command, from the quiet line or the open strip.
+  const stopCall = () => {
+    for (const b of stopCallButtons) { b.disabled = true; b.textContent = "Stopping\u2026"; }
+    void bridge.stopCall("master").then((r) => {
+      for (const b of stopCallButtons) { b.disabled = false; b.textContent = "Stop command"; }
+      if (!r || !r.ok) { showToast({ tone: "warn", title: "Nothing was stopped", desc: r?.reason ?? "The engine did not answer.", timeout: 9000 }); return; }
+      for (const b of stopCallButtons) b.hidden = true;
+      showToast({ tone: "ok", title: "Command stopped", desc: r.reason, timeout: 6000 });
+    });
+  };
+  for (const b of stopCallButtons) b.addEventListener("click", stopCall);
+  const restartAgent = () => {
+    for (const b of restartButtons) { b.disabled = true; b.textContent = "Restarting\u2026"; }
     void bridge.recoveryRecover().then((r) => {
-      progRestart.disabled = false; progRestart.textContent = "Restart agent";
+      for (const b of restartButtons) { b.disabled = false; b.textContent = "Restart agent"; }
       if (!r || !r.ok) { showToast({ tone: "warn", title: "The agent did not restart", desc: r?.reason ?? "The engine did not answer.", timeout: 9000 }); return; }
       showToast({ tone: "ok", title: "Agent restarted", desc: r.reason, timeout: 6000 });
       void recoverMasterTurn();
     });
-  });
-  const clearQueue = () => { if (!progQueue.hidden) { progQueue.hidden = true; progQueue.innerHTML = ""; } };
-  const paintQueue = (w: WaitView) => {
-    prog.hidden = false;
-    progQueue.hidden = false;
-    progQueue.innerHTML = `<div class="hud-queue-head"></div>` + w.sequence.map((_, i) => `<div class="hud-queue-row" data-q="${i}"></div>`).join("");
-    ($(".hud-queue-head", progQueue) as HTMLElement).textContent = `Turns in this folder (${w.folder}), in order:`;
-    w.sequence.forEach((e, i) => {
-      const row = $(`[data-q="${i}"]`, progQueue) as HTMLElement | null;
-      if (!row) return;
-      const when = e.state === "running" ? `running since ${humanMs(Math.max(0, Date.now() - e.sinceAt))} ago${e.etaMs !== null ? `, about ${humanMs(e.etaMs)} left (est.)` : ""}` : e.expectedStartAt !== null ? `waits, starts in about ${humanMs(Math.max(0, e.expectedStartAt - Date.now()))} (est.)` : "waits, start time unknown";
-      row.textContent = `${e.position + 1}. ${e.name}: ${when}`;
-      row.classList.toggle("me", e.id === "master");
-    });
   };
+  for (const b of restartButtons) b.addEventListener("click", restartAgent);
   // The consolidating activity window lives between the answer and the HUD; created lazily
   // on the first tool event so a pure-text turn shows nothing extra.
   let thoughts: ThoughtsWin | null = null;
@@ -2455,6 +2523,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
     paintProgress(); // P-PROGRESS.1: the ages move every second between engine samples
     paintEta();
+    paintRing();
     thoughts?.tick(); // P-PROGRESS.2: open long calls age their elapsed time and ETA
   };
   phaseEl.textContent = phase;
@@ -2473,12 +2542,16 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     hud.classList.remove("streaming"); hud.classList.add("done");
     etaDone = true; setPhase("Done"); paintHud();
     // P-PROGRESS.1: the strip settles with the turn: a full bar, the time it took, no more ages.
+    // P-PROGRESS.3: in the quiet default the settled HUD line already says Done and how long it took, so the
+    // strip closes with the turn; Full detail keeps it, settled.
+    detailOpen = false; stripSettled = true; syncStrip(); paintRing(); // the settled line's check replaces the ring
     if (progress) {
-      progress = null; clearQueue();
+      progress = null; syncStrip();
       progBar.classList.remove("indeterminate"); progFill.style.width = "100%";
       progEst.textContent = `done in ${humanMs(Date.now() - t0)}`;
       progAlive.dataset.state = "idle"; progAlive.textContent = "done"; progAlive.removeAttribute("data-tip");
       progSignal.textContent = ""; progRestart.hidden = true;
+      for (const b of stopCallButtons) b.hidden = true; // P-LIVENESS.1
     }
     reasoning?.finish(Date.now() - t0);
     thoughts?.finish(Date.now() - t0);
@@ -2611,7 +2684,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       return;
     }
     p2pTeeEvent(e); // P-COLLAB.17: mirror the live event into a direct-P2P share, if one is hosting
-    if (e.type === "token") { clearQueue(); reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
+    if (e.type === "token") { reasoning?.finish(Date.now() - t0); buf += e.text; countDelta(e.text); if (!sawTool) setPhase(writeLine); streamEl.innerHTML = renderMarkdown(buf) + `<span class="cursor"></span>`; paintHud(); scrollChat(); speechFeed(buf, false); /* P-VOICE.2: speak each finished sentence while the rest is still being written */ }
     else if (e.type === "thinking") {
       // First reasoning chunk: spin up the live thinking block above the answer.
       if (!reasoning) { reasoning = createReasoning(); streamEl.before(reasoning.el); }
@@ -2633,7 +2706,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // P-PROGRESS.2: the HUD says what the call is doing ("Reading PR 398") when the call says; otherwise the
       // category line, and "Processing…" for a call that names nothing.
       const desc = describeTool({ name: e.name, kind: e.name, title: e.detail, intent: e.intent, input: e.input, path: e.code?.path });
-      sawTool = true; clearQueue(); setPhase(desc.informative ? desc.doing : phaseForTool(e.name, e.detail)); paintHud();
+      sawTool = true; setPhase(desc.informative ? desc.doing : phaseForTool(e.name, e.detail)); paintHud();
       if (!thoughts) { thoughts = createThoughts(); streamEl.after(thoughts.el); } // window sits below the answer
       thoughts.step({ id: e.id, name: e.name, detail: e.detail, code: e.code, input: e.input, intent: e.intent });
       // P-CHAT.B (ADR-0189): also record the call as a mark anchored at the current answer-buffer length, so it
@@ -2671,10 +2744,10 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     }
     // P-PROGRESS.1: the engine's progress view (every few seconds and on every settled call). Never activity;
     // the strip under the HUD paints it and ages it locally until the next one.
-    else if (e.type === "progress") { progress = e.progress; progressAt = Date.now(); if (e.progress.liveness.state !== "idle") clearQueue(); paintProgress(); }
-    // P-PROGRESS.1: this turn is in line behind another worker's turn in the same folder. Nothing is running
-    // yet; say so, and show the order and the expected start times. The next real event clears it.
-    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish in this folder`); paintHud(); paintQueue(e.wait); scrollChat(); }
+    else if (e.type === "progress") { progress = e.progress; progressAt = Date.now(); paintProgress(); }
+    // P-WAIT.1: one of this turn's writes waits for a file another worker's running turn is editing. Say
+    // whom it waits for and which file. The next real event replaces the phase.
+    else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish with ${e.wait.file}`); paintHud(); scrollChat(); }
     // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
     // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
     else if (e.type === "judgment") {
@@ -2759,8 +2832,10 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     state.streaming = false; activeTurnView = null; setSendEnabled();
     void renderSessions(); void refreshBudget(false); void syncMode(); void refresh();
     scheduleKnowledgeRefresh(); maybeListen();
-    // P-TURN-RECOVERY-DRAIN: only done or deliberate Stop may release a held prompt.
-    if (terminal || stopped) releaseHeldPrompt();
+    // P-TURN-RECOVERY-DRAIN: only a turn that finished releases a held prompt. A deliberate Stop never does
+    // (stopHoldsQueue); an interrupted connection waits for reconnect.
+    if (terminal) releaseHeldPrompt();
+    renderQueued(); // a pill still staged now offers "Send now" instead of pushing into a turn that ended
   };
   const run = async (transport: typeof connect) => {
     if (!owns() || settled || connecting) return;
@@ -2893,10 +2968,11 @@ function renderQueued(): void {
     stack = el(`<div id="queuedChip" class="queued-chip queued-stack"></div>`);
     row.before(stack); // sits above the composer row, inside .composer-wrap
   }
-  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? "Sends automatically when the current turn ends" : "Already pushed into the running turn - kept as a record"}">
+  const idle = !turnInFlight();
+  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
       <span class="q-text" data-q-i="${i}"></span>
-      ${q.mode === "hold" ? `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>` : ""}
+      ${q.mode === "hold" ? (idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>` : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>`) : ""}
       <button class="q-cancel" data-q-x="${i}" data-tip="Remove staged prompt">${icon("close", 12)}</button>
     </div>`).join("");
   // Prompt text is user content: set it as a DOM property, never interpolated into the HTML string.
@@ -2911,13 +2987,27 @@ function renderQueued(): void {
     const item = state.queuedItems[i]; if (!item) return;
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued();
-    void pushMidTurn(item.text);
+    // Nothing running (e.g. after Stop): the staged prompt becomes the next turn, unless the user has a
+    // draft in the composer, which is never clobbered (it stays staged instead).
+    if (!turnInFlight()) {
+      const ta = $("#input") as HTMLTextAreaElement | null;
+      if (!ta || ta.value.trim()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
+      ta.value = item.text; setSendEnabled(); void send();
+      return;
+    }
+    void pushMidTurn(item.text, i);
   }));
 }
+/** A deliberate Stop halts the staged queue as well as the turn: a prompt held behind the stopped turn stays
+ *  staged (visible, pushable) instead of starting a new turn the moment this one ends. Set here, before the
+ *  cancel, so a `done` racing the cancel's reply cannot drain it; cleared by the user's next Send. */
+let stopHoldsQueue = false;
+
 /** P-ACP.4: Stop - interrupt the running turn. omp's session/cancel ends the turn, so the streaming
- *  `done`/finally path flips `streaming` off and fires any pre-staged prompt. */
+ *  `done`/finally path flips `streaming` off; the staged queue waits for the user (stopHoldsQueue). */
 async function stopTurn(): Promise<void> {
   if (!state.streaming) return;
+  stopHoldsQueue = true; renderQueued();
   if (activeTurnView) { await activeTurnView.stop(); return; }
   // P-GOAL.2: a running /goal loop is cancelled at the LOOP level (halt iterations + abort the turn);
   // an ordinary turn just cancels the turn.
@@ -2925,20 +3015,21 @@ async function stopTurn(): Promise<void> {
 }
 
 // ───────────────────────── turn controls - P-INTERJECT.2/.3/.4 (wave 2) ─────────────────────────
-// The composer's hold-or-push chooser, the mid-turn Check-in card, and the status-bar Processes
-// popover. All three ride the wave-1 plumbing: POST /api/interject (notes the running agent reads at
-// its next tool boundary) and GET /api/processes (the unified running list).
+// The composer's hold-or-push chooser and the mid-turn Check-in card. Both ride the wave-1 plumbing:
+// POST /api/interject (notes the running agent reads at its next tool boundary). The status-bar Processes
+// pill was removed on operator request (2026-09-27); /api/processes still feeds the phone PWA.
 
 const STATUS_ASK = "Please give a brief status update: what is finished, what you are doing now, what remains. Then continue.";
 
 /** P-INTERJECT.3: renderer mirror of the live turn for the Check-in card - the phase line the HUD
  *  shows, plus the last pending-call snapshot a { type:"slow" } event carried (aged via pendingAt). */
-const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0, alive: "" /* P-PROGRESS.1: the liveness label */ };
+const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number }[], pendingAt: 0, alive: "" /* P-PROGRESS.1: the liveness label */, open: 0 /* P-LIVENESS.1: open tool calls in the last progress view */ };
 
 /** The turn on the composer's target ended: send the first HELD prompt, unless the user has typed since
  *  (then it stays staged rather than clobbering their draft). Shared by the master turn's settle and the
  *  attached lane's watch, so a prompt staged behind a lane's turn runs when THAT turn ends. */
 function releaseHeldPrompt(): void {
+  if (stopHoldsQueue) return; // the user pressed Stop: nothing starts again until they send
   const nq = nextHold(state.queuedItems);
   if (!nq.item) return;
   const ta = $("#input") as HTMLTextAreaElement | null;
@@ -2948,11 +3039,28 @@ function releaseHeldPrompt(): void {
 }
 
 /** P-INTERJECT.2: interject a note into the RUNNING turn (the attached lane's, or the master's) + leave a
- *  transcript record chip. */
-async function pushMidTurn(text: string): Promise<void> {
-  const r = await bridge.interject(isLaneTarget(state.composerTarget) ? state.composerTarget.laneId : "master", text);
-  if (r) addNoteChip(`Pushed mid-turn: ${text}`);
-  else showToast({ tone: "warn", title: "Push not delivered", desc: "The note was refused - the per-turn note cap may be full, or the backend is unreachable.", timeout: 6000 });
+ *  transcript record chip.
+ *  ADR-0414: a refusal says the engine's actual reason and never loses the text. By then the caller has
+ *  already taken it out of the composer or the staged stack, so pushRecovery puts it back: sent as the
+ *  next prompt (the turn had ended), staged at `at` (its old slot in the stack), or back in the input. */
+async function pushMidTurn(text: string, at = state.queuedItems.length): Promise<void> {
+  const laneId = isLaneTarget(state.composerTarget) ? state.composerTarget.laneId : null;
+  const r = await bridge.interject(laneId ?? "master", text, { live: true });
+  if (r.ok) { addNoteChip(`Pushed mid-turn: ${text}`); return; }
+  // The engine is the authority on whether the lane's turn runs. A missed `done` on the watch left this
+  // flag set, and a send() with it set would open the chooser again for a turn that no longer exists.
+  if (r.code === "idle" && laneId) laneTurnLive = false;
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  const plan = pushRecovery(r.code, r.reason, { draft: !ta || !!ta.value.trim(), ownTurnOpen: state.streaming });
+  if (ta && plan.keep !== "stage") {
+    ta.value = text; autosize(ta); setSendEnabled();
+    if (plan.keep === "send") void send(); else ta.focus();
+  } else {
+    const i = Math.min(Math.max(0, at), state.queuedItems.length);
+    state.queuedItems = [...state.queuedItems.slice(0, i), { text, mode: "hold" }, ...state.queuedItems.slice(i)];
+    renderQueued();
+  }
+  showToast({ tone: plan.keep === "send" ? "info" : "warn", title: plan.title, desc: plan.desc, timeout: 8000 });
 }
 
 /** A quiet transcript note (the .evt chip family): one nowrap-ellipsis text span, full text in title.
@@ -2978,12 +3086,23 @@ let laneWatch: { done: Promise<void>; stop: () => void } | null = null;
 /** The master transcript, parked as DATA while a lane is attached. Snapshotting the rendered markdown
  *  rather than the DOM is what lets renderThread rebuild it with its copy / save-as-.md payloads intact. */
 let parkedMasterThread: { role: string; text: string }[] | null = null;
+/** ADR-0411: the master had a turn in flight when the composer left for a lane. The park holds that
+ *  bubble as it was at that moment (often empty), and the turn keeps running unobserved in the engine. If
+ *  it ENDS while the composer is away, no stream ever settles the parked bubble: a returning
+ *  recoverMasterTurn sees no running turn and, before this flag, left the stale park on screen, so the
+ *  finished reply never showed and the agent read as asleep. Consumed by recoverMasterTurn, which reloads
+ *  the thread from the session. */
+let masterThreadStale = false;
 /** The assistant node the WATCH is filling in, when the lane is streaming a turn this composer did not ask
  *  for. Null whenever we own the turn - `send()` renders that one. P-SCROLL.1: the bubble is a run of
  *  SEGMENTS in arrival order (reasoning, text, a tool chip, more text), so text that follows a tool call
  *  renders below that call's chip instead of growing a bubble that sits above it. `seg` is the open text
  *  segment, `buf` the whole answer (copy / save as .md). */
-interface LaneWatchBubble { node: HTMLElement; body: HTMLElement; stream: HTMLElement; seg: string; buf: string; reasoning: ReasoningWin | null; t0: number }
+interface LaneWatchBubble { node: HTMLElement; body: HTMLElement; stream: HTMLElement; seg: string; buf: string; reasoning: ReasoningWin | null; t0: number; working: LaneWorking | null }
+/** The watched turn's status line: the master turn's HUD look (pulsing bolt + phase), kept last in the
+ *  bubble for the whole turn. A spoke that is thinking or inside a long tool call streams nothing, and
+ *  without this line an attached composer showed the bare prompt of a running turn: it read as finished. */
+interface LaneWorking { el: HTMLElement; phase: HTMLElement }
 let laneWatchNode: LaneWatchBubble | null = null;
 /** P-SCROLL.1: our own lane turn's events reach the WATCH as well, on a second stream that can lag the
  *  prompt stream by a few ms. Until the watch has delivered that turn's own done/error, its content
@@ -3003,6 +3122,16 @@ const turnInFlight = (): boolean => state.streaming || (isLaneTarget(state.compo
  *  preference. Keyed "master" or by lane id; in memory only (a reload lands on the newest anyway). */
 const readingSpots = new Map<string, { atEnd: boolean; anchor: ScrollAnchor | null }>();
 const spotKey = (t: ComposerTarget): string => (isLaneTarget(t) ? `lane:${t.laneId}` : "master");
+/** Pasted / dropped images belong to the target they were pasted on. While the composer is elsewhere they
+ *  wait here, keyed like the reading spots, and come back when it returns; before this one list rode along
+ *  to every spoke and the hub, so a screenshot meant for one spoke was sent with another's prompt. */
+const parkedAttachments = new Map<string, Attachment[]>();
+function swapAttachments(from: ComposerTarget, to: ComposerTarget): void {
+  if (state.attachments.length) parkedAttachments.set(spotKey(from), state.attachments);
+  state.attachments = parkedAttachments.get(spotKey(to)) ?? [];
+  parkedAttachments.delete(spotKey(to));
+  renderComposerThumbs();
+}
 function msgBoxes(): MsgBox[] {
   const c = $("#chat");
   if (!c) return [];
@@ -3049,6 +3178,8 @@ async function promoteLane(laneId: string): Promise<void> {
   const already: ComposerTarget = { kind: "lane", laneId, name: "", cwd: "", model: "" };
   if (isLaneTarget(state.composerTarget) && sameTarget(state.composerTarget, already)) return;
   if (isLaneTarget(state.composerTarget)) demoteLane(); // one composer, one lane: leave the old one first
+  // Read BEFORE leaveTurnView clears them: a master turn left running here may end while we are away.
+  if (activeTurnView || state.streaming || goalLoopRunning) masterThreadStale = true;
   const owner = leaveTurnView();
   setRecoveryChecking(true); setSendEnabled();
   const r = await bridge.fleetPromote(laneId).catch(() => null);
@@ -3066,6 +3197,7 @@ async function promoteLane(laneId: string): Promise<void> {
   const target: ComposerTarget = { kind: "lane", laneId: lane.id, name: lane.name, cwd: lane.cwd, model: lane.model };
   saveReadingSpot(state.composerTarget); // P-SCROLL.1: before the thread is swapped out
   parkedMasterThread = snapshotThread();
+  swapAttachments(state.composerTarget, target);
   state.composerTarget = target;
   // P-FLEET.L17: the ring, the rail and the spoke banner now speak for the LANE - the master's last
   // sample would be a lie. P-FLEET.L19: seed from the lane's OWN last measured sample (the engine keeps
@@ -3078,12 +3210,13 @@ async function promoteLane(laneId: string): Promise<void> {
   // MID-TURN: show what the running turn has done so far, in the same bubble the watch will keep filling.
   // The transcript holds settled turns only, so without this the composer landed on the bare prompt of a
   // lane that had been working for minutes and read as "the spoke stopped".
-  laneTurnLive = lane.status === "working" || lane.status === "needs-approval";
-  if (r.live && (r.live.text || r.live.tools.length)) {
-    laneTurnLive = true;
-    const live = openLaneWatchNode();
-    for (const title of r.live.tools) live.stream.before(laneToolChip(title));
-    if (r.live.text) {
+  // The engine sends `live` whenever the lane is busy, EMPTY while it thinks or waits on a long tool call;
+  // an empty snapshot is still a running turn, so the bubble and its status line show either way.
+  laneTurnLive = lane.status === "working" || lane.status === "needs-approval" || !!r.live;
+  if (laneTurnLive) {
+    const live = showLaneWorking(lane.status);
+    for (const title of r.live?.tools ?? []) live.stream.before(laneToolChip(title));
+    if (r.live?.text) {
       live.seg = r.live.text; live.buf = r.live.text;
       live.stream.innerHTML = renderMarkdown(live.seg) + `<span class="cursor"></span>`;
       (live.node as MsgNode)._md = live.buf;
@@ -3139,6 +3272,7 @@ function demoteLane(): void {
     // The composer has already detached; the fleet card may still paint as attached until it reconciles.
     showToast({ tone: "warn", title: "The lane still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
+  swapAttachments(was, MASTER_TARGET);
   state.composerTarget = MASTER_TARGET;
   state.liveUsage = null; // P-FLEET.L17: the lane's samples leave with it; the master's next turn refills.
   // Restore BEFORE the notice: renderThread clears the thread, so a notice appended first would be wiped.
@@ -3174,7 +3308,11 @@ function onLaneWatchEvent(e: LaneEvent): void {
   // stay set, and every send would be staged behind a turn that no longer exists.
   if (e.type === "status") {
     laneTurnLive = e.status === "working" || e.status === "needs-approval";
-    if (!laneTurnLive && !state.streaming && !laneOwnedTail) releaseHeldPrompt();
+    if (state.streaming || laneOwnedTail) return; // our own turn: send() renders it and its HUD
+    // A turn started elsewhere (the lane's card, its queue) shows the moment it starts, not at its first
+    // token; a turn that ended without a done this watch saw stops reading as live.
+    if (laneTurnLive) showLaneWorking(e.status);
+    else { settleLaneWatchNode(); releaseHeldPrompt(); }
     return;
   }
   // Our own turn is rendering these already, and so is its lagging tail (P-SCROLL.1): the watch's own
@@ -3261,9 +3399,13 @@ function settleLaneWatchNode(): void {
   const live = laneWatchNode;
   laneWatchNode = null;
   if (!live) return;
+  live.working?.el.remove();
   live.reasoning?.finish(Date.now() - live.t0);
   if (live.seg) renderAnswerBody(live.stream, live.seg); // P-CHAT.A sections
   else live.stream.remove();
+  // Opened only to say the turn was running, and it ended with nothing to show (stopped while thinking):
+  // no empty bubble stays behind.
+  if (!live.body.childElementCount) live.node.remove();
 }
 
 /** P-SCROLL.1: close the open text segment (frozen as a settled answer) and open a fresh one at the end of
@@ -3272,7 +3414,7 @@ function cutLaneWatchSegment(live: LaneWatchBubble): void {
   if (!live.seg) return;
   renderAnswerBody(live.stream, live.seg);
   live.stream = el(`<div class="stream"></div>`);
-  live.body.appendChild(live.stream);
+  if (live.working) live.working.el.before(live.stream); else live.body.appendChild(live.stream);
   live.seg = "";
 }
 
@@ -3282,8 +3424,24 @@ function openLaneWatchNode(): LaneWatchBubble {
   body.innerHTML = "";
   const stream = el(`<div class="stream"></div>`);
   body.appendChild(stream);
-  laneWatchNode = { node, body, stream, seg: "", buf: "", reasoning: null, t0: Date.now() };
+  laneWatchNode = { node, body, stream, seg: "", buf: "", reasoning: null, t0: Date.now(), working: null };
   return laneWatchNode;
+}
+
+/** The attached spoke has a turn running that this composer is not rendering itself: make sure its bubble
+ *  and status line are on screen, however quiet the turn is. No clock: the engine does not say when the
+ *  lane's turn began, and a clock started at attach would misstate the turn's age. */
+function showLaneWorking(status: string): LaneWatchBubble {
+  const live = laneWatchNode ?? openLaneWatchNode();
+  if (!live.working) {
+    const hud = el(`<div class="hud streaming lane-watch-status"><span class="hud-ic">${icon("bolt", 12)}</span><span class="hud-phase"></span></div>`);
+    live.body.appendChild(hud);
+    live.working = { el: hud, phase: $(".hud-phase", hud) as HTMLElement };
+    if (!live.seg) live.stream.innerHTML = `<span class="cursor"></span>`;
+  }
+  live.working.phase.textContent = status === "needs-approval" ? "Waiting for your approval" : "Working";
+  scrollChat();
+  return live;
 }
 
 /** P-FLEET.L8: the attachment badge above the composer row. Invariant #11: the label is ONE text child in
@@ -3405,85 +3563,20 @@ function openCheckinCard(): void {
   ($("[data-ck-x]", card) as HTMLElement).addEventListener("click", closeCheckin);
   ($("[data-ck-ask]", card) as HTMLElement).addEventListener("click", () => {
     closeCheckin();
-    void bridge.interject("master", STATUS_ASK).then((r) => {
-      if (r) addNoteChip("Check-in sent - the agent will answer at its next tool boundary.");
-      else showToast({ tone: "warn", title: "Check-in not delivered", desc: "The note was refused - the turn may have ended or the note cap is full.", timeout: 6000 });
+    // ADR-0414: the HUD this card opens from also runs a turn the composer sends to an attached spoke, so
+    // the ask goes to the composer's target. It was hard-wired to "master", which parked it on an idle
+    // master while the spoke that was actually working never saw it.
+    void bridge.interject(isLaneTarget(state.composerTarget) ? state.composerTarget.laneId : "master", STATUS_ASK, { live: true }).then((r) => {
+      // P-LIVENESS.1: with a call open the note cannot land until that call returns; say so, so silence
+      // after a Check-in is not read as a dead agent.
+      if (r.ok) addNoteChip(!isLaneTarget(state.composerTarget) && liveTurn.open > 0
+        ? "Check-in queued - the agent is inside a running tool call and reads it when that call returns."
+        : "Check-in sent - the agent will answer at its next tool boundary.");
+      else showToast({ tone: "warn", title: "Check-in not delivered", desc: `${r.reason[0]!.toUpperCase()}${r.reason.slice(1)}.`, timeout: 6000 });
     });
   });
   // Click-away dismiss - armed a tick later so the opening click cannot instantly close it.
   window.setTimeout(() => { if (checkinEl) document.addEventListener("pointerdown", checkinAway, true); }, 0);
-}
-
-// ───── the Processes popover - P-INTERJECT.4 ─────
-let procBtnEl: HTMLElement | null = null;
-let procPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
-let procTimer: number | null = null;
-const PROC_ICON: Record<string, string> = { "master-turn": "bolt", lane: "send", import: "download", browser: "eye" };
-
-/** Compact "how long has this run" readout: 42s, 7m 05s, 1h 12m. */
-function fmtProcElapsed(startedAt: number | null): string {
-  if (!startedAt) return "";
-  const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
-/** The status-bar Processes button. Created ONCE and re-adopted after every renderStatus innerHTML
- *  swap (the fleet-pill convention) so the 2.5s repaint never drops it. */
-function mountProcButton(): void {
-  if (!procBtnEl) {
-    procBtnEl = el(`<div class="seg seg-btn proc-seg" data-tip="Processes|Everything running right now: the master turn, fleet lanes, imports, and agent browser windows."><b>Processes</b></div>`);
-    procBtnEl.addEventListener("click", () => { if (procPop) procPop.close(); else void openProcPopover(); });
-  }
-  const sb = document.getElementById("statusbar");
-  if (sb && !sb.contains(procBtnEl)) sb.append(procBtnEl);
-}
-
-async function openProcPopover(): Promise<void> {
-  if (!procBtnEl) return;
-  procPop = popover(procBtnEl, `<div class="proc-pop"><div class="proc-pop-head">Running processes</div><div class="proc-pop-list"><div class="proc-empty">Loading…</div></div></div>`, () => {
-    procPop = null;
-    if (procTimer != null) { window.clearInterval(procTimer); procTimer = null; }
-  });
-  // Row actions, delegated once per open: lane Stop, master-turn Stop, browser Close (the browser
-  // seam lands with the BrowserFeature wave - optional chaining keeps this popover working without it).
-  procPop.node.addEventListener("click", (e) => {
-    const t = e.target as HTMLElement;
-    const stop = t.closest("[data-proc-stop]") as HTMLElement | null;
-    if (stop) { const id = stop.dataset.procStop ?? ""; void bridge.fleetStop(id.startsWith("lane:") ? id.slice(5) : id); window.setTimeout(() => void refreshProcPopover(), 400); return; }
-    if (t.closest("[data-proc-stopturn]")) { void stopTurn(); window.setTimeout(() => void refreshProcPopover(), 400); return; }
-    if (t.closest("[data-proc-close]")) { void (bridge as { browserClose?: () => Promise<unknown> }).browserClose?.(); window.setTimeout(() => void refreshProcPopover(), 400); return; }
-  });
-  await refreshProcPopover();
-  procTimer = window.setInterval(() => void refreshProcPopover(), 2500);
-}
-
-async function refreshProcPopover(): Promise<void> {
-  if (!procPop) return;
-  const rows = await bridge.processes();
-  if (!procPop) return; // closed while the fetch was in flight
-  const list = $(".proc-pop-list", procPop.node) as HTMLElement | null; if (!list) return;
-  if (!rows?.length) {
-    list.innerHTML = `<div class="proc-empty">${rows ? "Nothing is running right now." : "Process list unavailable - the backend did not answer."}</div>`;
-    procPop.reposition();
-    return;
-  }
-  list.innerHTML = rows.map((r, i) => {
-    const act = r.kind === "lane" ? `<button class="btn-mini danger" data-proc-stop="${esc(r.id)}">Stop</button>`
-      : r.kind === "master-turn" ? `<button class="btn-mini danger" data-proc-stopturn>Stop</button>`
-      : r.kind === "browser" ? `<button class="btn-mini danger" data-proc-close>Close</button>` : "";
-    return `<div class="proc-row"><span class="proc-ic">${icon(PROC_ICON[r.kind] ?? "bolt", 13)}</span><span class="proc-label" data-proc-label="${i}"></span><span class="proc-status" data-proc-status="${i}"></span><span class="proc-elapsed">${esc(fmtProcElapsed(r.startedAt))}</span>${act}</div>`;
-  }).join("");
-  // Labels/status are server-fed strings (lane names come from user folders): DOM properties, not HTML.
-  rows.forEach((r, i) => {
-    const lab = $(`[data-proc-label="${i}"]`, list) as HTMLElement | null;
-    if (lab) { lab.textContent = r.label; lab.title = r.detail ? `${r.label} · ${r.detail}` : r.label; }
-    const st = $(`[data-proc-status="${i}"]`, list) as HTMLElement | null;
-    if (st) st.textContent = r.status;
-  });
-  procPop.reposition();
 }
 
 // ───────────────────────── inspector ─────────────────────────
@@ -4748,30 +4841,42 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
     <div class="set-note" id="voiceNote"></div>`;
   return setCard("voice", "Voice", "TTS · STT · ElevenLabs", body, true);
 }
-// P-JEV.1 (ADR-0374): the Judgment card. Jev (TypeSafe System One) answers omp's typed judgments (choice /
-// yes-no / score) instead of a chat model. The key rides the same provCard plumbing as ElevenLabs; the mode
-// select drives omp's `providers.judgmentProvider`. The SERVER owns the lockdown clamp: under AskSage lockdown
-// `effective` is always "llm" and the select is disabled, with the stored choice shown so lifting the lock
-// visibly restores it. Nothing here ever enters the model picker (TypeSafe has no chat models).
+// P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416): the Judgment card. omp answers typed judgments (choice / yes-no /
+// score) through its `judge` model role; LUCID owns that role's chain (desktop/judgment_policy.ts). The
+// default is None: judging is opt-in. The key rides the same provCard plumbing as ElevenLabs. The SERVER
+// owns the lockdown clamp: under AskSage lockdown `effective` is `llm` (or `none`) and the select is disabled,
+// with the stored choice shown so lifting the lock visibly restores it. Nothing here ever enters the model
+// picker (TypeSafe has no chat models). The card also shows the chain omp is told and the models no longer
+// asked (a local one that failed more than once, or one the account cannot call), with the one Reset that
+// forgets those failures.
 function secJudgment(auth: AuthStatus | null, j: JudgmentView | null): string {
   const tsKey = (auth?.others ?? []).find((p) => p.id === "typesafe");
   const keyCard = tsKey ? provCard(tsKey) : "";
-  const stored = j?.stored ?? "auto";
+  const stored = j?.stored ?? "none";
   const sel = (v: boolean) => (v ? " selected" : "");
-  const lockNote = j?.locked
-    ? `<div class="set-note danger" id="judgmentLockNote">${icon("shield", 12)} <b>AskSage lockdown is on:</b> judgments are pinned to the <b>LLM chain</b> (your gov-routed models). A judgment carries conversation text and tool output to the judge, so TypeSafe's public endpoint is CUI backflow under lockdown. Your saved choice (<b>${esc(stored)}</b>) is kept and takes effect again when lockdown is turned off.</div>`
+  const lockNote = j?.locked && j.clamped
+    ? `<div class="set-note danger" id="judgmentLockNote">${icon("shield", 12)} <b>AskSage lockdown is on:</b> judgments are pinned to the <b>chat model</b> (your gov-routed models). A judgment carries conversation text and tool output to the judge, so TypeSafe's public endpoint is CUI backflow under lockdown. Your saved choice (<b>${esc(stored)}</b>) is kept and takes effect again when lockdown is turned off.</div>`
+    : "";
+  const chain = j?.chain ?? [];
+  const chainText = chain.length ? chain.map((m) => `<code>${esc(m)}</code>`).join(" \u2192 ") : "<b>no judge model</b>";
+  const bans = j?.bans ?? [];
+  const banRows = bans.map((b) => `<div class="judge-ban"><code>${esc(b.label)}</code><span class="abadge warn">${b.failures} failed</span><span class="judge-ban-why">${esc(b.lastError)}</span></div>`).join("");
+  const banBlock = bans.length
+    ? `<div class="set-note warn" id="judgmentBans">${icon("info", 12)} <span><b>Not asked any more</b> (a local model that failed more than once, or a model your account cannot call):</span>${banRows}<div class="prov-row"><button class="btn-mini" id="judgmentBansReset" type="button" data-tip="Forget these failures|The models are asked again from the next agent start.">${icon("refresh", 12)} Ask them again</button></div></div>`
     : "";
   const body = `${keyCard}
-    <div class="set-note">${icon("info", 12)} <b>Judgments</b> are the small typed questions LUCID's agent loop asks about its own work (yes/no checks, choices, scores). <b>Jev</b> is TypeSafe AI's hosted System One model built for exactly that; without it, omp asks a chat model. In <b>Auto</b>, a saved TypeSafe key routes judgments to Jev; a failed TypeSafe call falls back to the online chat-model chain (omp's rule, not a LUCID choice).</div>
+    <div class="set-note">${icon("info", 12)} <b>Judgments</b> are the small typed questions LUCID's agent loop asks about its own work (the per-turn thinking-effort pick under Thinking: Auto, the unexpected-stop check, the agent's own <code>judge()</code> calls). They are <b>off by default</b>: with <b>None</b> no separate judge model is consulted, and the one pick omp cannot skip (the effort pick) is answered by the chat model already in use. Opt in to route them to <b>Jev</b> (TypeSafe's hosted System One model, built for exactly this) or to your own models: your local providers first, then the chat model. A local model that fails more than once is not asked again until you reset it here.</div>
     <div class="voice-row"><label class="voice-lbl" for="judgmentMode">Judgment backend</label>
       <select id="judgmentMode" class="prov-key" data-judgment-set="mode"${j?.locked ? " disabled" : ""}>
-        <option value="auto"${sel(stored === "auto")}>Auto - Jev when a TypeSafe key is saved, else chat model</option>
+        <option value="none"${sel(stored === "none")}>None - no judge model (default)</option>
+        <option value="auto"${sel(stored === "auto")}>Auto - Jev if a TypeSafe key is saved, else your models</option>
         <option value="typesafe"${sel(stored === "typesafe")}>Jev (TypeSafe) - always try Jev first</option>
-        <option value="llm"${sel(stored === "llm")}>Chat model only - never TypeSafe</option>
+        <option value="llm"${sel(stored === "llm")}>Your models - local providers, then the chat model</option>
       </select></div>
     ${lockNote}
-    <div class="set-note" id="judgmentEffective">${icon("check", 12)} omp is told <b>${esc(j?.effective ?? "auto")}</b>${j?.clamped ? " (clamped by lockdown)" : ""}. Changing the backend restarts the omp child; the next turn uses it.</div>`;
-  return setCard("judgment", "Judgment", "Jev · TypeSafe System One", body, true);
+    <div class="set-note" id="judgmentEffective">${icon("check", 12)} <span>omp is told <b>${esc(j?.effective ?? "none")}</b>${j?.clamped ? " (clamped by lockdown)" : ""}: judge chain ${chainText}. Changing the backend restarts the agent; the next turn uses it.</span></div>
+    ${banBlock}`;
+  return setCard("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", body, true);
 }
 // P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
 // picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
@@ -5177,6 +5282,21 @@ function secChatScroll(): string {
     <div class="set-note">${icon("info", 12)} The chat always follows new output while you are at the bottom. Scrolling up to re-read pauses it until you scroll back down or press the jump-to-newest arrow. This choice decides where you land when you switch between Main and a spoke, or from one spoke to another.</div>`;
   return setCard("chatScroll", "Chat scrolling", "follow · spoke switching", inner, true);
 }
+/** P-PROGRESS.3 (ADR-0412): the quiet footer is the default; this card opts into the P-PROGRESS.1 detail and
+ *  the experimental time estimate. Rendered from localStorage, so it paints with no fetch. */
+function secWorkingStatus(): string {
+  const v = statusDetail();
+  const opt = (val: string, label: string) => `<option value="${val}"${v === val ? " selected" : ""}>${label}</option>`;
+  const inner = `
+    <div class="goal-row"><label class="goal-lbl" for="statusDetail">While the agent works</label>
+      <select id="statusDetail" class="prov-key">${opt("line", "One status line (Details opens more)")}${opt("full", "Full detail: progress, liveness, folder queue")}</select></div>
+    <label class="set-toggle"><input type="checkbox" id="statusEta" ${statusEta() ? "checked" : ""}/>
+      <span><b>Show a time estimate (experimental)</b> - how long the work probably has left, from how long your recent turns and helper runs took on this machine. It cannot see how big the task is, so treat it as a rough guess. Nothing is shown until there is enough history for a number.</span></label>
+    <label class="set-toggle"><input type="checkbox" id="statusRing" ${statusRing() ? "checked" : ""}/>
+      <span><b>Show a progress ring</b> - a small ring at the right end of the working line (and in each running fleet lane's header) that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
+    <div class="set-note">${icon("info", 12)} If the agent process stops, the Restart line always appears, whichever you choose.</div>`;
+  return setCard("workingStatus", "Working status", "one line · details · estimate", inner, true);
+}
 
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
 // A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
@@ -5384,10 +5504,11 @@ function settingsShell(): string {
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
-    setSkel("judgment", "Judgment", "Jev · TypeSafe System One", true), // P-JEV.1 (ADR-0374)
+    setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
     secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
+    secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
@@ -9942,13 +10063,14 @@ function renderWorkspaceBar(): void {
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
-  // inside the workspace folder) and where its commits go, so "which repo is this?" never needs a guess.
-  const r = mainRepo?.repo;
+  // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
+  // folder or a local-only repo shows just the workspace name: nothing to warn about.
+  const r = hostedRepo(mainRepo);
   const same = (a: string, b: string): boolean => a.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase() === b.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
   const repoLine = r
-    ? `<span class="ws-bar-repo${r.push ? "" : " local"}">${esc(same(r.root, w.current) ? (r.branch || r.head) : repoChip(r))} ${icon("arrowRight", 10)} ${esc(pushLabel(r))}</span>`
+    ? `<span class="ws-bar-repo">${esc(same(r.root, w.current) ? (r.branch || r.head) : repoChip(r))} ${icon("arrowRight", 10)} ${esc(pushLabel(r))}</span>`
     : "";
-  bar.innerHTML = `<span class="ws-bar-top">${icon(w.isGit || r ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}</span>${repoLine}`;
+  bar.innerHTML = `<span class="ws-bar-top">${icon(r ? "git" : "folder", 14)}<span class="ws-bar-name">${esc(w.name)}</span>${icon("sliders", 12, "dim")}</span>${repoLine}`;
 }
 async function loadWorkspace(): Promise<void> {
   // #11 perceived-latency: the bar used to stay hidden until workspace() resolved, then
@@ -10013,8 +10135,47 @@ async function adoptMasterTurn(status: TurnStatus, owner: number): Promise<void>
   if (status.sessionId) $$(".sess").forEach((s) => s.classList.toggle("active", (s as HTMLElement).dataset.sid === status.sessionId));
   await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: page?.messages });
 }
+/** ADR-0411: the master turn that was running when the composer left for a lane has ended while the
+ *  composer was away, so the parked thread ends on a bubble nothing will ever settle. Two sources, in
+ *  order of trust. (1) The engine still holds the finished turn (`turnStatus` reports it until the next
+ *  turn or a session switch): replay its canonical snapshot through the same attach the reconnect path
+ *  uses, with the parked thread as the prior context (`priorTurnContext` drops its trailing prompt and
+ *  the unsettled bubble). Nothing on disk is involved, so a transcript that has not flushed yet cannot
+ *  blank the thread. (2) Otherwise the session transcript, re-rendered only when it says at least as much
+ *  as the screen: a shorter page (no session file, a late flush) keeps the park rather than replacing a
+ *  conversation with nothing. Found live on an agent that writes no transcript: the disk-only version
+ *  wiped the thread. The notice chips the return just added survive either way (moved, handlers kept). */
+async function settleMasterAfterReturn(status: TurnStatus | null, owner: number): Promise<void> {
+  masterThreadStale = false;
+  const chips = $$("#thread .note-chip") as HTMLElement[];
+  const restoreChips = () => {
+    const thread = $("#thread");
+    if (!thread || isLaneTarget(state.composerTarget)) return;
+    for (const chip of chips) thread.appendChild(chip);
+    if (chips.length) jumpToEnd();
+  };
+  if (status) {
+    const expect = turnViewEpoch + 1; // renderChatTurn takes the next epoch; a later navigation takes another
+    await renderChatTurn("", (onEvent) => bridge.attachChat(status.turnId, onEvent), { turnId: status.turnId, context: snapshotThread() });
+    if (turnViewEpoch === expect) restoreChips();
+    return;
+  }
+  const sid = ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null;
+  if (!sid) return;
+  const page = await bridge.sessionMessages(sid, RESUME_TAIL).catch(() => null);
+  if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return; // the user moved on
+  if (!page) return; // the park stays: an unreachable transcript is the reconnect path's problem, not a blank thread
+  setCachedTranscript(sid, page.messages, Date.now());
+  const shown = snapshotThread();
+  if (page.messages.length < shown.length) return; // the transcript is behind the screen: never shrink
+  const freshSig = transcriptSig(page.messages) + (page.steps?.length ? `+s${page.steps.length}` : "");
+  if (freshSig === transcriptSig(shown)) return;
+  renderThread(page.messages, page.steps);
+  restoreChips();
+}
 async function recoverMasterTurn(): Promise<void> {
   if (isLaneTarget(state.composerTarget) || activeTurnView || goalLoopRunning) return;
+  window.clearTimeout(startupRetryTimer); startupRetryTimer = 0; // a newer probe supersedes a scheduled retry
   const owner = ++turnViewEpoch;
   $("#turnReconnect")?.remove();
   // Status discovery is not a running turn. Keep Send blocked without offering Stop.
@@ -10028,7 +10189,14 @@ async function recoverMasterTurn(): Promise<void> {
       return;
     }
     // A reachable engine with no adoptable turn is the NORMAL fresh-open outcome: clear both surfaces.
-    if (!canAdoptTurn(status)) { setRecoveryChecking(false); state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled(); return; }
+    if (!canAdoptTurn(status)) {
+      setRecoveryChecking(false); state.streaming = false; $("#turnReconnect")?.remove(); hideQuietReconnect(); setSendEnabled();
+      // Unless the composer just came back from a lane it left mid-turn: that turn ended unobserved, so
+      // the parked thread ends on a bubble nothing will ever settle. Show the session as it really is.
+      if (masterThreadStale) await settleMasterAfterReturn(status, owner);
+      return;
+    }
+    masterThreadStale = false; // the adopted stream re-renders the thread from the session itself
     await adoptMasterTurn(status!, owner);
   } catch (error) {
     if (owner !== turnViewEpoch) return;
@@ -10037,6 +10205,12 @@ async function recoverMasterTurn(): Promise<void> {
     // because there the user needs to know their history may be out of date before they send again.
     if (!$("#thread")?.querySelector(".turn, .msg, .asst, .user")) {
       setRecoveryChecking(false); setSendEnabled();
+      // Inside the startup grace the engine is probably still booting: retry quietly, no amber button.
+      if (Date.now() - windowOpenedAt < STARTUP_GRACE_MS) {
+        hideQuietReconnect();
+        startupRetryTimer = window.setTimeout(() => { if (owner === turnViewEpoch) void recoverMasterTurn(); }, STARTUP_RETRY_MS);
+        return;
+      }
       showQuietReconnect(() => void recoverMasterTurn());
       return;
     }
@@ -10101,6 +10275,7 @@ async function settleStartupIncident(inc: IncidentView, previousId: string | nul
 async function resumeSession(id: string, opts: { loaded?: boolean; force?: boolean } = {}): Promise<boolean> {
   if (isLaneTarget(state.composerTarget)) demoteLane();
   const owner = leaveTurnView();
+  masterThreadStale = false; // this render comes from the session itself
   // Status discovery is not a running turn. Keep Send blocked without offering Stop.
   setRecoveryChecking(true); state.streaming = false; setSendEnabled();
   let status: TurnStatus | null;
@@ -10862,12 +11037,11 @@ function renderStatus(): void {
       ${asksageChip()}
     </div>
     <div class="triv-slot" id="trivSlot"></div>`;
-  mountNetSeg(); // P-NETSTAT.1 (ADR-0410): re-adopt the network indicator, right of the context ring
+  mountNetSeg(); // P-NETSTAT.1 (ADR-0422): re-adopt the network indicator, right of the context ring
   mountTrivia(); // P-TRIV.1: re-adopt the persistent ticker after the innerHTML swap
   mountSharePill(); // P-REMOTE.11: re-adopt the minimized Share pill (it lives in the bar, right of the ticker)
   mountJoinPill(); // P-COLLAB.20: re-adopt the minimized Join pill (watching continues while minimized)
   mountFleetPill(); // P-FLEET.L2: re-adopt the minimized Fleet pill - without this the innerHTML swap above dropped it every status repaint and the next 2.5s poll put it back, which is the lower-right flicker
-  mountProcButton(); // P-INTERJECT.4: re-adopt the Processes button (same fleet-pill convention - the innerHTML swap above would drop it every 2.5s repaint)
 }
 
 // ───────────────────────── the Trivia Wire — P-TRIV.1 (ADR-0174) ─────────────────────────
@@ -15693,12 +15867,16 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
+    stopCall: bridge.stopCall, // P-LIVENESS.1: Stop command on a lane call marked likely stuck
     repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New lane form picks a repo instead of typing
     repoGithub: bridge.repoGithub,
     openUrl: (url) => void openAuthUrl(url),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
-    getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
+    // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
+    // gates, deprecated and auxiliary rows pruned, lockdown, unavailable providers): omp's raw catalog lists
+    // the whole Bedrock range on the strength of a stray ~/.aws profile, and a lane on one of those fails.
+    getModelOptions: () => modelOptions().map((o) => ({ value: o.value, label: o.name ?? o.value })),
     getMasterCwd: () => state.workspace?.current ?? "",
     // P-FLEET.L2: the same real OS dialog every other folder pick in the app uses (Electron dialog ->
     // local-backend Explorer/Finder/zenity -> in-app browser), so a lane folder can be browsed to or
@@ -15740,8 +15918,9 @@ function wire(): void {
     promoteLane: (laneId) => void promoteLane(laneId),
     demoteLane: () => demoteLane(),
     openGrid: () => openFleetGrid(),
+    closeGrid: () => closeFleetGrid(),
     pickFolder: (opts) => pickFolderDialog(opts ?? {}), // the same real OS dialog the grid form uses
-    getModelOptions: () => (state.config.find((c) => c.id === "model")?.options ?? []).map((o) => ({ value: o.value, label: o.name })),
+    getModelOptions: () => modelOptions().map((o) => ({ value: o.value, label: o.name ?? o.value })), // the composer's curated list, as above
     // P-FLEET.L18: the on-orbit form clones too - identical vault path as the grid form's deps above.
     saveGitToken: async ({ host, token, label }) => {
       if (!bridge.isElectron || !bridge.credStore) return { ok: false, error: "the encrypted vault needs the LUCID desktop app" };
@@ -15765,6 +15944,10 @@ function wire(): void {
       if (!isLaneTarget(t) || !lu) return null;
       return { used: lu.used, size: modelCtx(t.model) ?? lu.size, cost: lu.cost };
     },
+    // P-SWITCH.3 (ADR-0410): the hub core and the Hubs panel name sessions by their sidebar title, and
+    // opening another hub rides the same guarded switch as a sidebar click (a busy Main gets the sheet).
+    sessionTitle: (id) => cachedSessionInfo(id)?.title ?? null,
+    openSession: (id) => void openSession(id),
   });
   // P-REPO.1 (ADR-0406): the titlebar names the repo the composer's session works on and where it pushes.
   initTitlebarRepo({
@@ -15773,8 +15956,10 @@ function wire(): void {
     openUrl: (url) => void openAuthUrl(url),
     onMainContext: (ctx) => { mainRepo = ctx; renderWorkspaceBar(); },
   });
-  // P-FLEET.L18: the Fleet button opens whichever view the user PINNED (orbit by default); each view's
-  // header links to the other, so neither choice ever strands you.
+  // P-FLEET.L18: the Fleet button opens whichever view the user PINNED (the grid by default); each view's
+  // header links to the other, so neither choice ever strands you. One fleet view at a time: the orbit
+  // closes the grid whenever it opens (fleet_orbit closeGrid dep), so with the orbit pinned the grid
+  // appears only when the user switches to it.
   $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
   // P-FLEET.L5: the reviewable timeline dock.
   initTimelineDock({ timelineList: bridge.timelineList, timelineSession: bridge.timelineSession });
@@ -15819,6 +16004,10 @@ function wire(): void {
     // P-APPEAR.1: chat-background mode + image upload
     if (t0.id === "bgMode") { void updateChatBg({ mode: (t0 as HTMLSelectElement).value as "off" | "ambient" | "flashlight" }); return; }
     if (t0.id === "spokeSwitchScroll") { setSpokeSwitchScroll((t0 as HTMLSelectElement).value === "resume" ? "resume" : "latest"); return; } // P-SCROLL.1
+    // P-PROGRESS.3: running HUDs, rows and lane cards repaint on their own one-second tick, so nothing else to do.
+    if (t0.id === "statusDetail") { setStatusDetail((t0 as HTMLSelectElement).value === "full" ? "full" : "line"); return; }
+    if (t0.id === "statusEta") { setStatusEta((t0 as HTMLInputElement).checked); return; }
+    if (t0.id === "statusRing") { setStatusRing((t0 as HTMLInputElement).checked); return; }
     if (t0.id === "bgFile") {
       const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
       if (f.size > 9 * 1024 * 1024) { showToast({ tone: "warn", title: "Image too large", desc: "Pick an image under ~9 MB (or compress it first).", timeout: 3400 }); return; }
@@ -15870,7 +16059,7 @@ function wire(): void {
       const next = await bridge.setJudgment((t0 as HTMLSelectElement).value as JudgmentView["stored"]).catch(() => null);
       if (!next) { showToast({ tone: "warn", title: "Couldn't save judgment backend", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
       fillSec("judgment", secJudgment(state.auth, next));
-      showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the LLM chain until it is turned off." : "omp restarts with it; the next turn uses it.", timeout: 4000 });
+      showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the chat model until it is turned off." : next.chain.length ? "omp restarts with it; the next turn uses it." : "No judge model: the chat model answers the one pick omp cannot skip.", timeout: 4000 });
       return;
     }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
@@ -15956,6 +16145,14 @@ function wire(): void {
       return;
     }
     if (t.closest("[data-whisper-stop]")) { await bridge.whisperStop().catch(() => null); await hydrateWhisper(); return; }
+    // P-JEV.5 (ADR-0416): forget the local-judge failures; the engine restarts the agent when a ban was live.
+    if (t.closest("#judgmentBansReset")) {
+      const next = await bridge.judgmentResetBans().catch(() => null);
+      if (!next) { showToast({ tone: "warn", title: "Couldn't reset", desc: "The engine didn't answer; the bans stand.", timeout: 4000 }); return; }
+      fillSec("judgment", secJudgment(state.auth, next));
+      showToast({ title: "Local judges reset", desc: "They are asked again from the next agent start.", timeout: 4000 });
+      return;
+    }
     // P-STT.6 (ADR-0267): delete a downloaded model's weights (the running tier is refused server-side).
     const wrm = t.closest("[data-whisper-remove]") as HTMLElement | null;
     if (wrm) {
@@ -17440,9 +17637,14 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // acknowledged China-cloud models could Discover their own self-hosted GLM and the picker would
   // hide it with no hint, which is the edge-first posture inverted.
   const localOk = localPrefixSet(state.localProviders ?? []);
+  // Ambient-credential providers (Bedrock, Vertex): omp lists them on the strength of a stray ~/.aws profile
+  // or ADC on the box; LUCID shows them only behind a key saved in the hub. `state.auth` unloaded = no key
+  // yet, which hides them until the first auth fetch lands (pickerRedraw repaints).
+  const keyedIds = credentialedProviderIds(state.auth);
   const visible = opt.options.filter((o) =>
     !isAuxiliaryModel(o.value) &&
     !isDeprecatedModel(o.value) &&
+    !isUnconfiguredAmbientModel(o.value, keyedIds) &&
     (govOk || !isGovModel(o.value)) &&
     (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
   // Lockdown: only the gov-gateway models are selectable.
@@ -17456,7 +17658,9 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
     seen.add(key);
     return true;
   });
-  return ensureCurrent(deduped);
+  // Within each family (groupByFamily keeps this order): what this workspace has run, most recently used
+  // first, then the curated rest, then the special-case routes (regional / non-reasoning variants) last.
+  return ensureCurrent(orderByUsage(deduped, usageFromSessions(lastSessionList?.sessions ?? [])));
 }
 const THINK_DESC: Record<string, string> = {
   off: "Fastest replies - simple edits, lookups, and quick chat.",
@@ -17985,7 +18189,7 @@ setInspectorRail(true); // start with the right inspector slid into the metrics 
 renderStatus();
 loadCachedConfig(); renderStatus(); // P-IDE.1d: paint the cached model immediately, then refresh live
 void loadConfig().then(renderStatus);
-// P-NETSTAT.1 (ADR-0410): the network indicator probes the host the CURRENT model's turns travel to. While
+// P-NETSTAT.1 (ADR-0422): the network indicator probes the host the CURRENT model's turns travel to. While
 // the boot is still waiting on the live model list and the link has just become stable, re-arm a warm
 // cycle (at most every 15s): a cold start on a bad connection spends loadConfig's retry budget while the
 // network is down, and without this the picker stayed on the cached list until a manual refresh.

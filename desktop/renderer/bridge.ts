@@ -109,6 +109,9 @@ import type { SessionLive } from "../session_owner.ts"; // P-SWITCH.2 (ADR-0404)
 export type { RestoredTurn };
 import type { ProcessView } from "../process_view.ts"; // P-INTERJECT.1: the unified Processes list rows (canonical shape - imported, never mirrored, so it cannot drift)
 export type { ProcessView };
+import type { InterjectRefusal } from "../interject_store.ts"; // ADR-0414: the engine's refusal codes (imported, never mirrored)
+/** ADR-0414: what POST /api/interject answered. "unreachable" is the renderer's own code: no answer at all. */
+export type InterjectResult = { ok: true; pending: number } | { ok: false; code: InterjectRefusal | "unreachable"; reason: string };
 import type { SkillRoot } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097): skill source roots
 import type { TrustLabel } from "../../harness/contracts.ts"; // invariant #7: closed-set trust labels
 
@@ -244,10 +247,10 @@ export interface ConfigOption {
 // P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
-import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0410): the network indicator's view (owned there)
+import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0422): the network indicator's view (owned there)
 export type { NetView };
-import type { FolderQueue, WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (types only)
-export type { ProgressView, WaitView, FolderQueue };
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
+export type { ProgressView, WaitView };
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
 /** Approval scope: "once" answers only the pending ask; "session" also allows every same-kind ask for
  *  the rest of the lane's session (mirrors desktop/fleet_lanes.ts). */
@@ -259,6 +262,9 @@ export interface LaneView {
   canRetry: boolean; respawns: number;
   /** P-FLEET.L5: the omp session id behind this lane - the key into its on-disk history. */
   sessionId: string | null;
+  /** P-SWITCH.3 (ADR-0410): the master session this spoke was born under, kept for life. The orbit shows
+   *  a spoke under its own hub only; null (no master session at spawn) rides whichever hub is current. */
+  hubSessionId: string | null;
   pendingApproval?: { summary: string; kind: string };
   /** Full auto-mode: every ask is approved automatically (the security gate still scans every call). */
   autoApprove: boolean;
@@ -277,7 +283,7 @@ export interface LaneView {
   /** P-PROGRESS.1: live progress (elapsed, last signal, open steps, liveness, estimate) while a turn runs
    *  or the child is dead; absent when idle. */
   progress?: ProgressView;
-  /** P-PROGRESS.1: this lane's turn is queued behind another worker's turn in the same folder. */
+  /** P-WAIT.1: one of this lane's writes waits for a file another worker's running turn is editing. */
   waiting?: WaitView;
   /** P-REPO.1 (ADR-0406): the repo this lane works on and where its commits go; absent until probed. */
   repo?: RepoContext;
@@ -310,7 +316,7 @@ export type LaneEvent =
   | { type: "tool"; id?: string; name: string; detail: string; code?: LaneToolCode; input?: string; intent?: string; status?: "open" | "done" | "failed"; elapsedMs?: number }
   /** P-PROGRESS.1: the lane's progress view, every few seconds while its turn runs. */
   | { type: "progress"; progress: ProgressView }
-  /** P-PROGRESS.1: the lane's turn waits for another worker's turn in the same folder. */
+  /** P-WAIT.1: a write in the lane's turn waits for a file another worker is editing. */
   | { type: "waiting"; wait: WaitView }
   | { type: "permission"; summary: string; kind: string }
   | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
@@ -338,9 +344,8 @@ export interface FleetStatusView {
     memHotMs: number;
   };
   masterModel: string;
-  /** P-PROGRESS.1: every folder with two or more workers on it (the master counts), in run order with
-   *  expected start times; empty when nobody shares a folder. */
-  queues: FolderQueue[];
+  /** P-SWITCH.3 (ADR-0410): the master session that is the hub right now; null before the first session. */
+  hub: string | null;
 }
 // P-ACCT.1 (ADR-0375): the account list per provider. AccountView is single-sourced from the pure
 // policy module (never a secret in it - keys are last4-masked server-side).
@@ -350,13 +355,19 @@ export type AccountsSnapshot = Record<string, AccountView[]>;
 /** P-JEV.1 (ADR-0374): mirrors judgment_policy.ResolvedJudgmentProvider. `stored` is the user's choice;
  *  `effective` is what omp is told (lockdown pins "llm"); `clamped` says they differ because of the lock. */
 export interface JudgmentView {
-  stored: "auto" | "typesafe" | "llm";
-  effective: "auto" | "typesafe" | "llm";
+  stored: "none" | "auto" | "typesafe" | "llm";
+  effective: "none" | "auto" | "typesafe" | "llm";
   clamped: boolean;
   locked: boolean;
   /** P-JEV.2 (ADR-0377): can Jev answer a judgment in the running child (effective mode + a saved key).
    *  Gates the per-turn "Jev not consulted" note. */
   configured: boolean;
+  /** P-JEV.5 (ADR-0416): the judge candidates omp is told at the next spawn, in order (`provider/model`).
+   *  Empty = no judge model (omp still asks the session's own chat model for the effort pick under
+   *  Thinking: Auto). */
+  chain: string[];
+  /** P-JEV.5: local models no longer asked after failing more than once, until reset. */
+  bans: { label: string; failures: number; lastError: string; lastAt: number }[];
 }
 // P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
 export interface VoiceSettingsView {
@@ -851,6 +862,8 @@ export interface LucidBridge {
   /** P-JEV.1 (ADR-0374): the judgment backend (omp `providers.judgmentProvider`), stored vs effective. */
   judgment(): Promise<JudgmentView | null>;
   setJudgment(mode: JudgmentView["stored"]): Promise<JudgmentView | null>;
+  /** P-JEV.5 (ADR-0416): forget every local-judge failure; the engine restarts the child when a ban was live. */
+  judgmentResetBans(): Promise<JudgmentView | null>;
   // P-ACCT.1 (ADR-0375): named multi-account per provider. Every mutation returns the refreshed
   // snapshot (providerId -> accounts) so the UI repaints from the server's truth, never a client guess.
   accounts(): Promise<AccountsSnapshot | null>;
@@ -1044,7 +1057,7 @@ export interface LucidBridge {
   } | null>;
   /** Force one ladder step now instead of waiting for the next tick. */
   healthTick(): Promise<{ master: { action: string; reason: string } | null; lanes: { laneId: string; action: string; reason: string }[] } | null>;
-  /** P-NETSTAT.1 (ADR-0410): the engine's latency probe of the provider host `model` routes to. null when
+  /** P-NETSTAT.1 (ADR-0422): the engine's latency probe of the provider host `model` routes to. null when
    *  the engine itself did not answer (which the indicator reports as "Connecting to the LUCID engine"). */
   netStatus(model: string): Promise<NetView | null>;
   commands(): Promise<OmpCommand[]>;
@@ -1279,7 +1292,7 @@ export interface LucidBridge {
   previewElectronDetect(path: string): Promise<{ electron: boolean; reasons: string[]; appDir: string; launchable: boolean; via: string | null } | null>;
   previewElectronLaunch(path: string): Promise<{ launched: boolean; via?: string; appDir?: string; reason?: string } | null>;
   // ── P-BROWSER.1 (wave 2): the agent-controlled visible browser window (BrowserFeature section) ──
-  // Status feeds the floating browser pill; close is shared with the Processes popover's Close action.
+  // Status feeds the floating browser pill; the pill's own Close button closes it.
   browserStatus(): Promise<BrowserStatusView | null>;
   // Latest capture as a data:image/png;base64 URL (null before the first shot) - the pill's auto
   // send-to-phone fetches it here rather than re-driving a capture.
@@ -1346,10 +1359,13 @@ export interface LucidBridge {
   openExternal(url: string): Promise<boolean>; // open an http(s) URL in the OS browser (OAuth); false in browser → caller falls back to window.open
   // P-INTERJECT.1/.2 (wave 2): mid-turn operator interjection - queue a note the running turn's agent
   // reads at its next tool boundary (target "master" or a laneId; the server enforces trim, the 4000-char
-  // limit, and the 8-note-per-target cap). Resolves the pending count, or null on refusal/transport failure.
-  interject(target: string, text: string): Promise<{ pending: number } | null>;
-  // P-INTERJECT.1: everything running right now - master turn, live lanes, import job, agent browsers.
-  processes(): Promise<ProcessView[] | null>;
+  // limit, and the 8-note-per-target cap). ADR-0414: `live` marks the user's own push, which the engine
+  // refuses as `idle` when the turn is not running. Never rejects: a refusal resolves with the engine's
+  // typed code + reason, and a transport failure with code "unreachable", so the caller can say which.
+  interject(target: string, text: string, opts?: { live?: boolean }): Promise<InterjectResult>;
+  /** P-LIVENESS.1 (ADR-0418): end only the processes the open call of `target` ("master" or a laneId)
+   *  started; the agent gets a note and the turn continues. Null on transport failure. */
+  stopCall(target: string): Promise<{ ok: boolean; stopped: string[]; reason: string } | null>;
   // -- P-RECOVER.1 (ADR-0385): self-recovery + incident reports ---------------------------------------
   /** The previous engine's master session, the current one, and the UNSEEN incidents. Null = unreachable. */
   recoveryState(): Promise<RecoveryStateView | null>;
@@ -1630,6 +1646,7 @@ export const bridge: LucidBridge = {
   setVoiceSettings: (patch) => post("/api/voice-settings", patch),
   judgment: () => getData("/api/judgment"), // P-JEV.1 (ADR-0374)
   setJudgment: (mode) => post("/api/judgment", { mode }), // P-JEV.1: server clamps + restarts omp when the pin changes
+  judgmentResetBans: () => post("/api/judgment/bans/reset", {}), // P-JEV.5
   // P-ACCT.1 (ADR-0375): named provider accounts. Mutations answer with the refreshed snapshot.
   accounts: () => getData("/api/accounts"),
   accountAdd: (providerId, name, key) => post("/api/accounts/add", { providerId, name, key }),
@@ -2165,9 +2182,20 @@ export const bridge: LucidBridge = {
       return { ok: !!body.ok, error: body.error, run: body.data.run };
     } catch { return { ok: false, error: "The render service did not answer." }; }
   },
-  // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects + the unified Processes list.
-  interject: (target, text) => post("/api/interject", { target, text }),
-  processes: async () => { const d = await getData("/api/processes"); return Array.isArray((d as { processes?: unknown } | null)?.processes) ? (d as { processes: ProcessView[] }).processes : null; },
+  // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects.
+  // ADR-0414: NOT `post()`, which keeps only `data` and so turned every refusal into the same null.
+  interject: async (target, text, opts) => {
+    try {
+      const r = await fetch("/api/interject", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ target, text, ...(opts?.live ? { live: true } : {}) }) });
+      const j = await r.json() as { ok?: unknown; code?: unknown; error?: unknown; data?: { pending?: unknown } };
+      if (j?.ok === true) return { ok: true, pending: Number(j.data?.pending) || 0 };
+      const reason = typeof j?.error === "string" && j.error ? j.error : "the engine refused the note";
+      return { ok: false, code: typeof j?.code === "string" ? (j.code as InterjectRefusal) : "unreachable", reason };
+    } catch {
+      return { ok: false, code: "unreachable", reason: "LUCID could not reach its engine" };
+    }
+  },
+  stopCall: (target) => post("/api/liveness/stop-call", { target }), // P-LIVENESS.1 (ADR-0418)
   listDir: (path) => getData(`/api/fs/list${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,

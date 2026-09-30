@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/net_probe.ts - P-NETSTAT.1 (ADR-0410). The engine-side half of the network indicator: time a
+// desktop/net_probe.ts - P-NETSTAT.1 (ADR-0422). The engine-side half of the network indicator: time a
 // HEAD request to the host the active model's turns travel to, keep the last NET_WINDOW samples, and
 // report the pure summary (renderer/net_status.ts). Probing from the ENGINE, not the renderer, measures
 // the path omp actually uses and needs no CORS or CSP exception in the UI.

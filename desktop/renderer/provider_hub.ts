@@ -83,6 +83,14 @@ export function buildHubSections(auth: AuthStatus | null, opts: HubOpts): HubSec
   return sections;
 }
 
+/** The ids of every provider holding a CREDENTIAL in LUCID: an API key, an active OAuth login, or a secret
+ *  field (an access-key pair). A bare config field (project id, region, profile name) does not count; the
+ *  picker's ambient-provider gate reads this so Bedrock / Vertex rows appear only behind a real key. */
+export function credentialedProviderIds(auth: AuthStatus | null): Set<string> {
+  const all = [...(auth?.gateway ?? []), ...(auth?.majors ?? []), ...(auth?.others ?? [])];
+  return new Set(all.filter((p) => p.oauthActive || p.keySet || (p.fields ?? []).some((f) => f.secret && f.set)).map((p) => p.id));
+}
+
 /** How many chat-model providers are configured (gov gateway + frontier + open). Drives the onboarding nudge
  *  and the hub header count. Excludes the non-model (voice, judgment) providers. */
 export function configuredProviderCount(auth: AuthStatus | null): number {

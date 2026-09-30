@@ -38,7 +38,7 @@ const SNAPSHOT_SQL = `SELECT
   (SELECT count(*) FROM semantic_entities)::INT AS entities,
   (SELECT count(*) FROM semantic_facts)::INT AS facts,
   (SELECT count(*) FROM telemetry_events WHERE event = 'memory_promotion_blocked')::INT AS blocked,
-  (SELECT to_json(list(struct_pack(entity := e.name, statement := f.statement, trust_label := f.trust_label) ORDER BY f.promoted_at DESC)[1:8])::VARCHAR
+  (SELECT to_json(list(struct_pack(entity := e.name, statement := f.statement, trust_label := f.trust_label) ORDER BY f.promoted_at DESC, f.fact_id DESC)[1:8])::VARCHAR
      FROM semantic_facts f JOIN semantic_entities e ON e.entity_id = f.entity_id) AS recent`;
 
 function summary(n: { working: number; archive: number; entities: number; facts: number; blocked: number }, facts: HarnessMemory["facts"]): HarnessMemory {
@@ -92,7 +92,7 @@ export async function snapshotHarnessMemory(db: Db): Promise<HarnessMemory> {
   const factRows = (await rows(
     `SELECT e.name AS entity, f.statement, f.trust_label
      FROM semantic_facts f JOIN semantic_entities e ON e.entity_id = f.entity_id
-     ORDER BY f.promoted_at DESC LIMIT 8`,
+     ORDER BY f.promoted_at DESC, f.fact_id DESC LIMIT 8`,
   )).map((r) => ({ entity: String(r.entity), statement: String(r.statement), trust_label: String(r.trust_label) }));
   return summary({ working, archive, entities, facts, blocked }, factRows);
 }

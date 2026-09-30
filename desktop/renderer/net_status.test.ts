@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-NETSTAT.1 (ADR-0410): the verdicts that decide whether a failed turn blames the model or waits on the
+// P-NETSTAT.1 (ADR-0422): the verdicts that decide whether a failed turn blames the model or waits on the
 // network, and when a held prompt goes out again.
 import { expect, test } from "bun:test";
 import {

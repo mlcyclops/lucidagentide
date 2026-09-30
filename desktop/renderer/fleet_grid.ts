@@ -42,8 +42,9 @@ import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order 
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
 import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
-import { humanMs, progressLine, STREAMING_MS, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
-import type { FolderQueue, WaitView } from "../workspace_gate.ts"; // P-PROGRESS.1 (types only)
+import { agedProgress, humanMs, progressLine, STREAMING_MS, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
+import { ringView, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
 import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
@@ -52,7 +53,7 @@ import type { ChipKind } from "./answer_chips.ts";
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "repoChoices" | "repoGithub">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -120,7 +121,7 @@ interface LaneRun {
    *  card's ticker so the numbers move between samples. */
   progress: ProgressView | null;
   progressAt: number;
-  /** P-PROGRESS.1: the lane's turn is in line behind another worker's turn in the same folder. */
+  /** P-WAIT.1: one of the lane's writes waits for a file another worker's running turn is editing. */
   waiting: WaitView | null;
 }
 
@@ -673,34 +674,10 @@ async function refresh(): Promise<void> {
   layout = reconcile(layout, st.lanes.map((l) => l.id));
   if (grid) { applyOrder(grid); applySizes(); }
   if (hr) paintHeadroom(hr, st.resources, st.lanes.length);
-  if (grid) paintQueues(grid, st.queues ?? []); // P-PROGRESS.1: who runs and who waits, per shared folder
   paintEmpty();
   paintPill();
 }
 
-/** P-PROGRESS.1: the folder queue strip at the top of the grid: one block per folder two or more workers
- *  share, every worker on its own row in run order with when it is expected to start. Nothing when nobody
- *  shares a folder. Every row is ONE text child (invariant 11: no flex prose, no word-wrapped labels). */
-function paintQueues(grid: HTMLElement, queues: FolderQueue[]): void {
-  let strip = $(".fleet-queues", grid) as HTMLElement | null;
-  if (!queues.length) { strip?.remove(); return; }
-  if (!strip) { strip = el(`<div class="fleet-queues"></div>`); grid.prepend(strip); }
-  const now = Date.now();
-  strip.innerHTML = queues.map((q, qi) => `<div class="fleet-queue-folder" data-qf="${qi}"><div class="fleet-queue-title"></div>${q.entries.map((_, ei) => `<div class="fleet-queue-row" data-qe="${ei}"></div>`).join("")}</div>`).join("");
-  queues.forEach((q, qi) => {
-    const block = $(`[data-qf="${qi}"]`, strip!) as HTMLElement | null; if (!block) return;
-    ($(".fleet-queue-title", block) as HTMLElement).textContent = `Turns in ${q.folder}, in order:`;
-    q.entries.forEach((e, ei) => {
-      const row = $(`[data-qe="${ei}"]`, block) as HTMLElement | null; if (!row) return;
-      const when = e.state === "running"
-        ? `running since ${humanMs(Math.max(0, now - e.sinceAt))} ago${e.etaMs !== null ? `, about ${humanMs(e.etaMs)} left (est.)` : ""}`
-        : e.expectedStartAt !== null ? `waits, starts in about ${humanMs(Math.max(0, e.expectedStartAt - now))} (est.)` : "waits, start time unknown";
-      const line = `${e.position + 1}. ${e.name}: ${when}`;
-      row.textContent = line; row.title = line;
-      row.dataset.state = e.state;
-    });
-  });
-}
 
 /** The header HUD. There is no cap to show any more, so the numbers that matter are the two live percents
  *  and - when one of them is over the line - HOW LONG it has been over: `93% 12s/30s` is a burst you can
@@ -750,6 +727,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <span class="fleet-usage" data-fleet-usage data-tone="ok" hidden></span>
       <span class="fleet-health" data-fleet-health data-health-action="quiet" hidden></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
+      <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
       <select class="fleet-model" data-fleet-model aria-label="Lane model"></select>
       <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this lane from the main composer" title="Promote: point the main composer at this lane" hidden>${icon("arrowRight", 12)}</button>
       <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this lane's transcript" title="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
@@ -791,7 +769,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <div class="lane-progress" data-lane-progress hidden>
         <div class="lane-bar"><div class="lane-fill"></div></div>
         <div class="lane-progress-line" data-lane-est></div>
-        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
+        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-stopcall" data-lane-stopcall hidden title="Ends only the processes this tool call started. The agent is told why and continues.">Stop command</button><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
         <div class="lane-wait" data-lane-wait hidden></div>
       </div>
       <div class="fleet-queue" data-fleet-queue hidden></div>
@@ -808,42 +786,71 @@ function buildCard(run: LaneRun): HTMLElement {
   </div>`);
 }
 
+/** P-PROGRESS.3 (ADR-0412 amendment): the master HUD's progress ring, in the lane card header beside the
+ *  lane's status chips. Shown while the lane's turn runs (and red once its process is gone) with the setting
+ *  "Show a progress ring" on; hidden while the lane is idle or done. A write waiting for another worker's
+ *  file (P-WAIT.1) is still a running turn, so the ring stays. The tooltip is only rewritten when its words
+ *  change, so an open tooltip is not rebuilt on every progress tick. */
+function paintRing(card: HTMLElement, p: ProgressView | null, at: number): void {
+  const ring = $("[data-lane-ring]", card) as HTMLElement | null; if (!ring) return;
+  ring.hidden = !p || p.liveness.state === "idle" || !statusRing();
+  if (ring.hidden || !p) return;
+  const v = ringView(agedProgress(p, Math.max(0, Date.now() - at)), statusEta(), "Restart this lane");
+  ($(".hud-ring-arc", ring) as SVGCircleElement).style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
+  ring.dataset.tone = v.tone;
+  ring.dataset.empty = v.pct === null ? "1" : "0";
+  if (ring.getAttribute("data-tip") !== v.tip) ring.setAttribute("data-tip", v.tip);
+}
+
 /** P-PROGRESS.1: the progress strip: the history-estimate bar (95% at most while the turn runs), the
  *  progress line, the liveness pill (with the restart action when the child is gone), and the wait line
- *  while the turn is in line for its folder. Ages the last sample locally so the words keep moving. */
+ *  while one of the turn's writes waits for a file another worker is editing (P-WAIT.1). Ages the last
+ *  sample locally so the words keep moving. */
 function paintProgress(run: LaneRun): void {
   const card = run.card; if (!card) return;
-  const strip = $("[data-lane-progress]", card) as HTMLElement | null; if (!strip) return;
   const p = run.progress;
   const w = run.waiting;
-  strip.hidden = !p && !w;
-  if (!p && !w) return;
+  paintRing(card, p, run.progressAt);
+  const strip = $("[data-lane-progress]", card) as HTMLElement | null; if (!strip) return;
+  // P-PROGRESS.3 (ADR-0412): the quiet default (the beta.10 lane card) shows only what the user must know: the
+  // process is gone (the red pill + Restart this lane), or a write waits for another worker's file (the wait line).
+  // "Full detail" is the whole P-PROGRESS.1 strip.
+  const full = statusDetail() === "full";
+  // P-LIVENESS.1 (ADR-0418): a call marked likely stuck is something the user must know too.
+  const urgent = p?.liveness.state === "dead" || p?.liveness.state === "stuck";
+  strip.hidden = (!p && !w) || (!full && !urgent && !w);
+  strip.classList.toggle("quiet", !full);
+  if (strip.hidden) return;
   const bar = $(".lane-bar", strip) as HTMLElement, fill = $(".lane-fill", strip) as HTMLElement;
   const est = $("[data-lane-est]", strip) as HTMLElement, alive = $("[data-lane-alive]", strip) as HTMLElement;
   const signal = $("[data-lane-signal]", strip) as HTMLElement, restart = $("[data-lane-restart]", strip) as HTMLElement;
   const wait = $("[data-lane-wait]", strip) as HTMLElement;
+  const stopCall = $("[data-lane-stopcall]", strip) as HTMLButtonElement;
   if (p) {
-    const age = Math.max(0, Date.now() - run.progressAt);
     const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
-    const aged: ProgressView = running ? { ...p, elapsedMs: p.elapsedMs + age, lastSignalMs: p.lastSignalMs + age, estimate: p.estimate.etaMs === null ? p.estimate : { ...p.estimate, etaMs: Math.max(0, p.estimate.etaMs - age), overrun: p.estimate.overrun || p.estimate.etaMs - age <= 0 } } : p;
-    est.textContent = w ? "" : progressLine(aged);
+    const eta = statusEta();
+    const sampled = agedProgress(p, Math.max(0, Date.now() - run.progressAt));
+    const aged = eta ? sampled : withoutEstimate(sampled); // P-PROGRESS.3: the estimate is opt-in
+    est.textContent = w ? "" : progressLine(aged, eta);
     bar.classList.toggle("indeterminate", aged.estimate.percent === null && running && !w);
     fill.style.width = aged.estimate.percent === null ? "0%" : `${Math.min(95, aged.estimate.percent)}%`;
+    alive.hidden = !full && !urgent; // quiet: the pill appears only for a dead process or a likely-stuck call
     alive.dataset.state = w ? "waiting" : p.liveness.state;
-    alive.textContent = w ? "waiting for the folder" : p.liveness.label;
-    alive.title = w ? "Another worker's turn is running in this folder; this turn starts when it ends." : p.liveness.detail;
+    alive.textContent = w ? "waiting for a file" : p.liveness.label;
+    alive.title = w ? "Another worker's running turn is editing this file; the write goes through when it ends." : p.liveness.detail;
     signal.textContent = running && !w ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago`) : "";
-    restart.hidden = p.liveness.state !== "dead";
+    // P-LIVENESS.1 (ADR-0418): a call marked likely stuck offers its two ways out; LUCID takes neither.
+    restart.hidden = !urgent;
+    stopCall.hidden = !(p.liveness.state === "stuck" && p.liveness.canStopCall);
+    if (stopCall.hidden && !stopCall.disabled) stopCall.textContent = "Stop command";
   } else {
     est.textContent = ""; bar.classList.remove("indeterminate"); fill.style.width = "0%";
-    alive.dataset.state = "waiting"; alive.textContent = "waiting for the folder"; alive.title = "";
-    signal.textContent = ""; restart.hidden = true;
+    alive.hidden = !full; alive.dataset.state = "waiting"; alive.textContent = "waiting for a file"; alive.title = "";
+    signal.textContent = ""; restart.hidden = true; stopCall.hidden = true;
   }
   wait.hidden = !w;
   if (w) {
-    const nth = w.position === 1 ? "next" : `${w.position}th in line`;
-    const start = w.etaMs !== null ? `starts in about ${humanMs(w.etaMs)} (est.)` : "start time unknown";
-    const line = `Waiting for ${w.on.name} to finish in ${w.folder} · ${nth} · ${start}`;
+    const line = `Waiting for ${w.on.name} to finish with ${w.file}`;
     wait.textContent = line; wait.title = line;
   }
 }
@@ -1279,7 +1286,7 @@ function onLaneEvent(id: string, e: LaneEvent): void {
         ...(e.status ? { status: e.status } : {}), ...(e.elapsedMs !== undefined ? { elapsedMs: e.elapsedMs } : {}),
         open: false,
       });
-      run.waiting = null; // the lease was granted: the turn is running
+      run.waiting = null; // a tool event means the write wait is over
       paintOutput(run);
       // P-PREVIEW.10: a lane write worth LOOKING at (html/svg/pdf) earns the lane its own Preview panel
       // tab. P-PREVIEW.18: narrowed from "anything renderable" - a lane writing notes.md or a config.json
@@ -1311,7 +1318,8 @@ function onLaneEvent(id: string, e: LaneEvent): void {
     // P-PROGRESS.1: the lane's progress view, streamed every few seconds; a sample means the turn runs, so
     // any wait is over. The wait says what the turn is in line behind, and the next real event clears it.
     case "progress":
-      run.progress = e.progress; run.progressAt = Date.now(); run.waiting = null;
+      // P-WAIT.1: the turn keeps ticking while a write waits, so a tick does not end the wait; the poll does.
+      run.progress = e.progress; run.progressAt = Date.now();
       paintFrame(run);
       break;
     case "waiting":
@@ -1450,12 +1458,18 @@ function runRetry(run: LaneRun): void {
     .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); });
 }
 
-/** Respawn in place (memory carried); the returned view or the next poll repaints the frame. */
+/** Respawn in place (memory carried); the returned view or the next poll repaints the frame. A refusal
+ *  (the lane's session is held elsewhere, the gate is missing) is said on the card and the poll restores
+ *  the real status: Restart this lane doing nothing visible is indistinguishable from a broken button. */
 function runRespawn(run: LaneRun): void {
   if (!deps) return;
   run.view.status = "starting"; paintFrame(run); paintPill();
   void deps.fleetRespawn(run.view.id)
-    .then((r) => { if (r?.ok && r.lane) { run.view = r.lane; } paintFrame(run); paintOutput(run); paintPill(); })
+    .then((r) => {
+      if (r?.ok && r.lane) { run.view = r.lane; paintFrame(run); paintOutput(run); paintPill(); return; }
+      setLaneNote(run, r?.reason ?? "the lane could not be restarted");
+      void refresh();
+    })
     .catch(() => { /* the next poll corrects it */ });
 }
 
@@ -1574,16 +1588,15 @@ function toggleSpawnForm(): void {
       <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-lane form" title="Close">${icon("close", 12)}</button>
     </div>
     <div class="fleet-spawn">
-      <label class="fleet-spawn-lbl">Repository</label>
+      <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
+      <div class="fleet-spawn-row">
+        <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
+        <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
+      </div>
       ${repoPickerHtml()}
       <div class="fleet-spawn-note" data-spawn-repo-note hidden></div>
       <details class="fleet-spawn-more" data-spawn-more>
-        <summary>Other folder or clone URL</summary>
-        <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
-        <div class="fleet-spawn-row">
-          <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
-          <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
-        </div>
+        <summary>Clone from a URL</summary>
         <label class="fleet-spawn-lbl">Repo URL <span class="fleet-spawn-opt">optional</span></label>
         <input class="fleet-spawn-in" data-spawn-repo type="text" spellcheck="false" autocomplete="off" aria-label="A GitHub, GitLab or Azure DevOps repository URL to clone" placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git" />
       </details>
@@ -1602,8 +1615,9 @@ function toggleSpawnForm(): void {
   grid.prepend(form);
   paintEmpty();
   paintRepoHint(form);
-  // P-REPO.1 (ADR-0406): pick a repo instead of typing. The pick fills the same folder / URL fields the
-  // form always submitted, so the spawn path and its clone rules are unchanged.
+  // P-REPO.1 (ADR-0406): the Folder field (prefilled, with Browse) is enough to spawn; "Find repos" is
+  // opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the form
+  // always submitted, so the spawn path and its clone rules are unchanged, and Spawn never waits on a search.
   const cwdIn = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
   const repoIn = $("[data-spawn-repo]", form) as HTMLInputElement | null;
   const nameIn = $("[data-spawn-name]", form) as HTMLInputElement | null;
@@ -1619,7 +1633,7 @@ function toggleSpawnForm(): void {
     const auth = $("[data-spawn-auth]", form) as HTMLElement | null;
     if (signIn && note) { note.textContent = signIn; note.className = "fleet-spawn-note"; if (auth) auth.hidden = true; }
   });
-  ($("[data-repo-q]", form) as HTMLInputElement | null)?.focus();
+  cwdIn?.focus();
 }
 
 /** The REAL OS dialog (Explorer / Finder / zenity), where the user can also CREATE the folder. A cancel
@@ -1853,14 +1867,31 @@ function onClick(ev: Event): void {
   if (t.closest("[data-fleet-deny]")) { answer(run, false); return; }
   if (t.closest("[data-fleet-retry]")) { runRetry(run); return; }
   if (t.closest("[data-fleet-respawn]")) { runRespawn(run); return; }
+  // P-LIVENESS.1 (ADR-0418): the user's Stop command on a call marked likely stuck.
+  const stopCallBtn = t.closest("[data-lane-stopcall]") as HTMLButtonElement | null;
+  if (stopCallBtn) {
+    stopCallBtn.disabled = true; stopCallBtn.textContent = "Stopping...";
+    void deps.stopCall(run.view.id).then((r) => {
+      stopCallBtn.disabled = false; stopCallBtn.textContent = "Stop command";
+      if (r?.ok) stopCallBtn.hidden = true;
+      setLaneNote(run, r?.reason ?? "Stop command: the engine did not answer.");
+    });
+    return;
+  }
   // P-INTERJECT.2/.3: the per-lane Check in card + its actions (before the generic chip handlers so
   // clicks inside the card never fall through to them).
   if (t.closest("[data-fleet-checkin]")) { toggleLaneCheckin(run); return; }
   if (t.closest("[data-fleet-ck-x]")) { $("[data-fleet-checkin-card]", card)?.remove(); return; }
   const ask = t.closest("[data-fleet-ask]") as HTMLButtonElement | null;
   if (ask) {
-    ask.disabled = true; ask.textContent = "Sent - answers at the next tool boundary";
-    void deps.interject(run.view.id, LANE_STATUS_ASK).catch(() => { /* the reply simply never lands */ });
+    ask.disabled = true; ask.textContent = "Sending...";
+    // ADR-0414: a refused ask says why on the card and re-arms the button, instead of claiming "Sent".
+    void deps.interject(run.view.id, LANE_STATUS_ASK, { live: true }).then((r) => {
+      // P-LIVENESS.1: inside an open call the note waits for that call to return; say so.
+      if (r.ok) { ask.textContent = run.progress?.stepsOpen.length ? "Queued - lands when the running call returns" : "Sent - answers at the next tool boundary"; return; }
+      ask.disabled = false; ask.textContent = "Ask for status";
+      setLaneNote(run, `Status ask not sent: ${r.reason}.`);
+    });
     return;
   }
   const qgo = t.closest("[data-q-go]") as HTMLElement | null;
@@ -1869,8 +1900,14 @@ function onClick(ev: Event): void {
     const item = run.view.queued[i]; if (!item) return;
     run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
     paintFrame(run);
-    void deps.interject(run.view.id, item.text).catch(() => { /* the next poll corrects it */ });
-    void deps.fleetQueueRemove(run.view.id, i).catch(() => { /* the next poll corrects it */ });
+    // ADR-0414: the staged prompt leaves the lane's queue only once the push is accepted. A refused push
+    // (the turn ended, the note cap is full) keeps it staged, so the queue still runs it next, and the
+    // card says why. It used to be removed either way, which silently dropped it.
+    void deps.interject(run.view.id, item.text, { live: true }).then((r) => {
+      if (r.ok) { void deps?.fleetQueueRemove(run.view.id, i).catch(() => { /* the next poll corrects it */ }); return; }
+      void refresh(); // repaint the chip the optimistic removal hid
+      setLaneNote(run, `Not pushed: ${r.reason}. It stays staged and runs as this lane's next prompt.`);
+    });
     return;
   }
   // P-FLEET.L3: the pasted-image strip and the staged-prompt chips.

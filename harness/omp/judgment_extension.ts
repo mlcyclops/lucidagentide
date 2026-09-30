@@ -28,6 +28,7 @@
 
 import { TextJudge, TypeSafeJudge } from "@oh-my-pi/pi-ai/judgment";
 import { captureJudgment } from "../judgment/trace_schema.ts";
+import { isLocalJudge, isMissingModelError, JUDGE_BAN_FAILURES, parseCommaList } from "../judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416) + P-JEV.6 (ADR-0421)
 import type { JudgmentBackend, JudgmentReport } from "../judgment/trace.ts";
 
 /** Upper bound on one awaited loopback POST. Local, so 1.5 s is already an outage, not latency. */
@@ -42,18 +43,58 @@ export interface JudgeLike {
 
 const PATCHED = Symbol.for("lucid.judgment_trace");
 
+/** P-JEV.5 (ADR-0416): the in-process circuit breaker for judges. omp tries the judge role's candidates in
+ *  order and moves to the next on an ordinary error, but a timeout ends the whole judgment, so a local box
+ *  that stopped answering fails every judgment until something changes. This counts failed judgments per
+ *  local label (`provider/model`) and, from JUDGE_BAN_FAILURES on, refuses the call BEFORE it is made with
+ *  a plain Error: omp then moves on to the next candidate inside the same judgment. P-JEV.6 (ADR-0421): a
+ *  judge of ANY provider whose failure says the model does not exist for this account is refused from the
+ *  next call on; omp itself cools down only 401/402/403, so a 404 was re-paid on every judgment. Seeded from
+ *  the desktop's ledger (LUCID_JUDGE_BANS) so a ban survives a respawn; the desktop reaches the same count
+ *  from the trace reports (the same rule, judge_bans.noteJudgeOutcome) and drops the model from the chain at
+ *  the next spawn. */
+export class JudgeBreaker {
+  readonly #failures = new Map<string, number>();
+  readonly #missing = new Set<string>();
+  constructor(private readonly localProviders: readonly string[], banned: readonly string[]) {
+    for (const label of banned) this.#failures.set(label, JUDGE_BAN_FAILURES);
+  }
+  /** The reason this label must not be asked now, or null when it may be. */
+  skipReason(label: string): string | null {
+    if (this.#missing.has(label)) return `lucid: ${label} is not asked again, this account has no such model (Settings > Judgment resets this)`;
+    const n = this.#failures.get(label) ?? 0;
+    return n >= JUDGE_BAN_FAILURES ? `lucid: ${label} is not asked after ${n} failed judgments (Settings > Judgment resets this)` : null;
+  }
+  /** Count one failed judgment of `label`; returns the new count (0 when the failure does not count: a
+   *  transient error of a cloud judge). A missing-model failure counts as the ban threshold at once. */
+  noteFailure(label: string, error: unknown): number {
+    const missing = isMissingModelError(error instanceof Error ? error.message : String(error ?? ""));
+    if (!missing && !isLocalJudge(label, this.localProviders)) return 0;
+    if (missing) this.#missing.add(label);
+    const n = Math.max((this.#failures.get(label) ?? 0) + 1, missing ? JUDGE_BAN_FAILURES : 0);
+    this.#failures.set(label, n);
+    return n;
+  }
+}
+
 /** Wrap `proto.judge` so each call posts a JudgmentReport through `post` after it settles. Idempotent per
- *  prototype (loading the extension twice traces once). Returns false when there is nothing to wrap. */
-export function traceJudgePrototype(proto: JudgeLike, backend: JudgmentBackend, target: string, post: (report: JudgmentReport) => Promise<void>): boolean {
+ *  prototype (loading the extension twice traces once). Returns false when there is nothing to wrap.
+ *  With a `breaker`, a banned local judge is refused before the call and not traced (the trace shows the
+ *  candidate that actually answered), and every failure it sees is counted. */
+export function traceJudgePrototype(proto: JudgeLike, backend: JudgmentBackend, target: string, post: (report: JudgmentReport) => Promise<void>, breaker?: JudgeBreaker): boolean {
   const holder = proto as JudgeLike & { [PATCHED]?: true };
   if (holder[PATCHED]) return true;
   const original = proto.judge;
   if (typeof original !== "function") return false;
   proto.judge = async function tracedJudge(this: JudgeLike, request, options) {
+    const label = typeof this.label === "string" ? this.label : "";
+    const skip = breaker && label ? breaker.skipReason(label) : null;
+    if (skip) throw new Error(skip);
     const t0 = performance.now();
     let result: unknown, error: unknown, threw = false;
     try { result = await original.call(this, request, options); }
     catch (e) { threw = true; error = e; }
+    if (threw && breaker && label) { try { breaker.noteFailure(label, error); } catch { /* never changes what omp sees */ } }
     try {
       const report = captureJudgment({
         target, backend,
@@ -92,8 +133,10 @@ export default function judgmentExtension(_pi: unknown): void {
     // routes the report to that child's chat stream.
     const target = (process.env.LUCID_INTERJECT_TARGET ?? "").trim() || "master";
     const post = (report: JudgmentReport) => postReport(url, report);
+    // P-JEV.5 (ADR-0416): only the text judge (chat or local models) can be a local model or a missing one; Jev is never either.
+    const breaker = new JudgeBreaker(parseCommaList(process.env.LUCID_JUDGE_LOCAL_PROVIDERS), parseCommaList(process.env.LUCID_JUDGE_BANS));
     traceJudgePrototype(TypeSafeJudge.prototype as unknown as JudgeLike, "typesafe", target, post);
-    traceJudgePrototype(TextJudge.prototype as unknown as JudgeLike, "text", target, post);
+    traceJudgePrototype(TextJudge.prototype as unknown as JudgeLike, "text", target, post, breaker);
   } catch {
     /* A tracing extension must never break omp launch. Worst case: the chat shows no judgment row. */
   }

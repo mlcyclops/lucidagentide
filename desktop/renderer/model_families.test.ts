@@ -7,7 +7,7 @@
 // GPT) and the gateway-prefix robustness are the easy things to break, so they're pinned here.
 
 import { describe, expect, it } from "bun:test";
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, localPrefixSet, MODEL_FAMILIES, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, type LocalProviderRef, type ModelOption } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isSpecialVariantModel, isUnconfiguredAmbientModel, localPrefixSet, MODEL_FAMILIES, orderByUsage, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions, type LocalProviderRef, type ModelOption } from "./model_families.ts";
 
 describe("familyOf", () => {
   it("classifies direct Anthropic models (incl. fable) as Claude", () => {
@@ -453,5 +453,71 @@ describe("Grok family", () => {
     const opts = [{ value: "xai/grok-4.7", name: "Grok 4.7" }, { value: "xai/grok-4.20-0309-non-reasoning", name: "Grok 4.20" }, { value: "anthropic/claude-opus-5-5", name: "Opus 5.5" }];
     expect(recommendFallbacks("xai/grok-4.7", opts).sameFamily?.value).toBe("xai/grok-4.20-0309-non-reasoning");
     expect(recommendFallbacks("anthropic/claude-opus-5-5", opts).sameFamily).toBeNull();
+  });
+});
+
+// A stray ~/.aws profile makes omp list the whole Bedrock catalog; LUCID shows it only once Bedrock is
+// configured in the hub (field report: six regional "Claude Opus 5.5" rows that all failed on send).
+describe("isUnconfiguredAmbientModel (Bedrock behind the hub's configured state)", () => {
+  it("hides amazon-bedrock and bedrock-mantle models until the amazon-bedrock provider is configured", () => {
+    const none = new Set<string>(["anthropic"]);
+    expect(isUnconfiguredAmbientModel("amazon-bedrock/global.anthropic.claude-opus-5-5", none)).toBe(true);
+    expect(isUnconfiguredAmbientModel("bedrock-mantle/anthropic.claude-opus-5-5", none)).toBe(true);
+    expect(isUnconfiguredAmbientModel("amazon-bedrock/global.anthropic.claude-opus-5-5", new Set(["amazon-bedrock"]))).toBe(false);
+  });
+  it("never touches other providers, bare ids, or gov routes", () => {
+    const none = new Set<string>();
+    for (const v of ["anthropic/claude-opus-5-5", "claude-opus-5-5", "aws-bedrock-claude-45-sonnet-gov", "dgx-spark/glm-5.3-flash"]) {
+      expect(isUnconfiguredAmbientModel(v, none)).toBe(false);
+    }
+  });
+});
+
+describe("isUnconfiguredAmbientModel - google-vertex rides the same gate", () => {
+  it("hides google-vertex models until the google-vertex descriptor holds a key", () => {
+    expect(isUnconfiguredAmbientModel("google-vertex/gemini-3.1-pro", new Set(["google"]))).toBe(true);
+    expect(isUnconfiguredAmbientModel("google-vertex/gemini-3.1-pro", new Set(["google-vertex"]))).toBe(false);
+    expect(isUnconfiguredAmbientModel("google-gemini-cli/gemini-3.1-pro", new Set())).toBe(false);
+  });
+});
+
+describe("orderByUsage - used first (most recent to least), rest, special-case routes last", () => {
+  const mk = (value: string, name = value): ModelOption => ({ value, name });
+  const curated = [
+    mk("anthropic/claude-opus-5-5", "Claude Opus 5.5"),
+    mk("amazon-bedrock/eu.anthropic.claude-opus-5-5", "Claude Opus 5.5 (EU)"),
+    mk("anthropic/claude-sonnet-5", "Claude Sonnet 5"),
+    mk("anthropic/claude-haiku-4-5", "Claude Haiku 4.5"),
+    mk("xai/grok-4.20-0309-non-reasoning", "Grok 4.20 non-reasoning"),
+    mk("anthropic/claude-fable-5-1", "Claude Fable 5.1"),
+  ];
+  it("ranks by last use, then by session count, keeps the curated order for unused, and sinks variants", () => {
+    const usage = usageFromSessions([
+      { model: "anthropic/claude-haiku-4-5", updatedAt: 100 },
+      { model: "anthropic/claude-sonnet-5", updatedAt: 300 },
+      { model: "anthropic/claude-sonnet-5", updatedAt: 200 },
+      { model: "claude-fable-5-1", updatedAt: 300 }, // an older row records the bare id
+      { model: "amazon-bedrock/eu.anthropic.claude-opus-5-5", updatedAt: 900 }, // used, still a variant
+      { model: "-", updatedAt: 999 },
+    ]);
+    expect(orderByUsage(curated, usage).map((m) => m.value)).toEqual([
+      "anthropic/claude-sonnet-5",     // last used 300, 2 sessions
+      "anthropic/claude-fable-5-1",    // last used 300, 1 session (bare-id row matched)
+      "anthropic/claude-haiku-4-5",    // last used 100
+      "anthropic/claude-opus-5-5",     // never used: curated order
+      "amazon-bedrock/eu.anthropic.claude-opus-5-5", // special: bottom even though used
+      "xai/grok-4.20-0309-non-reasoning",
+    ]);
+  });
+  it("with no history the curated order stands, variants still last", () => {
+    expect(orderByUsage(curated, new Map()).map((m) => m.value)).toEqual([
+      "anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5", "anthropic/claude-haiku-4-5", "anthropic/claude-fable-5-1",
+      "amazon-bedrock/eu.anthropic.claude-opus-5-5", "xai/grok-4.20-0309-non-reasoning",
+    ]);
+  });
+  it("isSpecialVariantModel: geo prefixes and region tags, not ordinary ids", () => {
+    for (const v of ["amazon-bedrock/us-gov.anthropic.claude-opus-5-5", "amazon-bedrock/global.anthropic.claude-opus-5-5"]) expect(isSpecialVariantModel(mk(v))).toBe(true);
+    expect(isSpecialVariantModel(mk("x/y", "Claude Opus 5.5 (GovCloud)"))).toBe(true);
+    for (const v of ["anthropic/claude-opus-5-5", "openai-codex/gpt-5.2", "dgx-spark/glm-5.3-flash", "google-gemini-cli/gemini-3.1-pro"]) expect(isSpecialVariantModel(mk(v))).toBe(false);
   });
 });

@@ -810,8 +810,8 @@ kg-pack-all: ## Build every KG pack in the catalog, sequentially (long — one m
 # ---------------------------------------------------------------------------
 
 .PHONY: typecheck
-typecheck: ## TS typecheck (no emit)
-	$(BUN) x tsc --noEmit
+typecheck: ## TS typecheck (no emit); tools/typecheck.ts also works from a checkout on a network share
+	$(BUN) tools/typecheck.ts
 
 .PHONY: license-headers
 license-headers: ## Apply the BUSL-1.1 SPDX header to first-party source (idempotent)
@@ -864,7 +864,7 @@ demo-P-FLEET.L20: ## P-FLEET.L20 (ADR-0402): close a spoke from where it is show
 	$(BUN) run desktop/scripts/demo_p_fleet_l20.ts
 
 .PHONY: demo-P-PROGRESS.1
-demo-P-PROGRESS.1: ## P-PROGRESS.1 (ADR-0409): workers say what they are doing (every tool step opens on its doing line, arguments and outcome), how far along they probably are (a history estimate that never finishes a running turn), and whether they are alive (evidence-ranked liveness with an in-place restart); turns on one folder take turns in order, visibly, with expected start times
+demo-P-PROGRESS.1: ## P-PROGRESS.1 (ADR-0409, amended): workers say what they are doing (every tool step opens on its doing line, arguments and outcome) and a dead agent process shows one line with an in-place restart; turns on one folder take turns in order, and a waiter is told whom it waits for and its place in line (no estimates, no ETAs by default; P-PROGRESS.3 makes them opt-in)
 	$(BUN) run harness/scripts/demo_p_progress_1.ts
 .PHONY: demo-P-SCROLL.1
 demo-P-SCROLL.1: ## P-SCROLL.1 (ADR-0405): the chat follows new output until the reader scrolls up (a fast burst no longer releases it); a spoke switch lands on the newest message or, by preference, where the reader left off; the attached spoke's live turn renders in arrival order; a new spoke opens on the last spoke's model
@@ -874,13 +874,26 @@ demo-P-REPO.1: ## P-REPO.1 (ADR-0406): every session names the repo it works on 
 	$(BUN) run desktop/scripts/demo_p_repo_1.ts
 
 .PHONY: demo-P-PROGRESS.2
-demo-P-PROGRESS.2: ## P-PROGRESS.2 (ADR-0408): the activity window folds calls under 5 s into one summary line and failed, repeated or empty calls into "processing", so only long calls keep a row (with elapsed time and ETA); every running worker, subagent run and the whole prompt states an ETA, "ETA estimating" until history supports a number
+demo-P-PROGRESS.2: ## P-PROGRESS.2 (ADR-0408, amended): the activity window folds calls under 5 s into one summary line and failed, repeated or empty calls into "processing", so only long calls keep a row (with elapsed time); no ETA or estimate on any worker, subagent run or the prompt by default (P-PROGRESS.3 makes them opt-in)
 	$(BUN) run harness/scripts/demo_p_progress_2.ts
+
+.PHONY: demo-P-PROGRESS.3
+demo-P-PROGRESS.3: ## P-PROGRESS.3 (ADR-0412): the beta.10 quiet footer stays the default; the progress detail (per turn with Details, or always with Settings > Working status > Full detail) and the experimental time estimate are opt-ins; estimate off means no number on any surface, and on never shows the "ETA estimating" placeholder; a green progress ring (on by default) sits beside the one line, empty without history, red only when the process is gone
+	$(BUN) run harness/scripts/demo_p_progress_3.ts
+
+.PHONY: demo-P-PROGRESS.4
+demo-P-PROGRESS.4: ## P-PROGRESS.4 (ADR-0413): the turn ETA replayed against finished turns (a synthetic corpus and, read-only, this machine's latency ledger); prints the P-PROGRESS.1 baseline and the current estimator (time left given the time already run) side by side, median error and share within +/-30%, and fails unless the current one wins on the synthetic corpus
+	$(BUN) run harness/scripts/eta_backtest.ts --check
+
+.PHONY: demo-P-LIVENESS.1
+demo-P-LIVENESS.1: ## P-LIVENESS.1 (ADR-0418): an open tool call is judged on evidence (its processes' CPU and disk counters, process churn, subagent transcript writes), marked "likely stuck" after 5 min of none (12 min with a live subagent), and stopped only by the user's Stop command, which ends just the processes that call started
+	$(BUN) run harness/scripts/demo_p_liveness_1.ts
+
 .PHONY: demo-P-NETSTAT.1
-demo-P-NETSTAT.1: ## P-NETSTAT.1 (ADR-0410): a status-bar network indicator with provider latency; a turn that died on the network or on omp's startup handshake gets a stand-by card that resends once the link is stable, instead of blaming the model; outage toasts are held in the indicator's popover, security notices never are
+demo-P-NETSTAT.1: ## P-NETSTAT.1 (ADR-0422): a status-bar network indicator with provider latency; a turn that died on the network or on omp's startup handshake gets a stand-by card that resends once the link is stable, instead of blaming the model; outage toasts are held in the indicator's popover, security notices never are
 	$(BUN) run harness/scripts/demo_p_netstat_1.ts
 .PHONY: demo-P-SANDBOX.18
-demo-P-SANDBOX.18: ## P-SANDBOX.18 (ADR-0411): the AppContainer helper skips a grant already on disk instead of re-walking every file under it (23 s per spawn on this repo), so the contained agent answers initialize in time and respawns work; a contained handshake failure names the sandbox and never offers a model switch
+demo-P-SANDBOX.18: ## P-SANDBOX.18 (ADR-0423): the AppContainer helper skips a grant already on disk instead of re-walking every file under it (23 s per spawn on this repo), so the contained agent answers initialize in time and respawns work; a contained handshake failure names the sandbox and never offers a model switch
 	$(BUN) run harness/scripts/demo_p_sandbox_18.ts
 .PHONY: demo-P-GAME.1
 demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts
@@ -1194,3 +1207,34 @@ demo-P-SWITCH.1: ## P-SWITCH.1 (ADR-0403, issue #390): opening a session never s
 .PHONY: demo-P-SWITCH.2
 demo-P-SWITCH.2: demo-P-SWITCH.1 ## P-SWITCH.2 (ADR-0404, issue #390): one omp session, one owner. /api/session/load, /api/recovery/resume and /api/session/delete refuse a session a live spoke holds (409 heldBy, no override); a lane spawn or respawn refuses a session Main or another live lane holds, and creates nothing. /api/sessions stamps where each session is live and the sidebar shows it in the orbit colors. Proves the rule, the refusals against the real lane manager over the fake ACP agent, and the badge wording.
 	$(BUN) test $(TEST_IGNORES) desktop/session_owner.test.ts desktop/fleet_lanes.test.ts desktop/renderer/session_switch.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-INTERJECT.5
+demo-P-INTERJECT.5: ## P-INTERJECT.5 (ADR-0414): "Push not delivered" on an attached spoke. Notes no tool step picked up (attach / release notes on an idle spoke) now ride the target's next prompt instead of filling the 8-note cap across turns; a live push to an idle or unknown target is refused with a typed code; the toast quotes the engine's reason and the text is sent, staged or put back, never dropped. Proves it against the real lane manager over the fake ACP agent.
+	$(BUN) test $(TEST_IGNORES) desktop/interject_delivery.test.ts desktop/interject_store.test.ts desktop/renderer/queue_model.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-JEV.5
+demo-P-JEV.5: ## P-JEV.5 (ADR-0416): the Judge fixed, None by default, and no local model that failed more than once. omp 18.2.10 answers judgments through its `judge` model role; LUCID's legacy providers.judgmentProvider overlay was migrated into that role, whose default chain resolved `@tiny` through omp's smol priority patterns to the DGX local provider (dgx-spark/glm-5.3-flash), and a timeout there ended every judgment. LUCID now writes the role explicitly (none = no judge model, the default; llm = local providers then the chat model; typesafe/auto = Jev first), counts failed judgments per LOCAL model and bans it from the second on (left out at the next spawn, refused in-process at once). Proves it against omp's real Settings loader and role resolver, then the ledger and the in-process breaker.
+	$(BUN) run desktop/scripts/demo_p_jev_5.ts
+	$(BUN) run desktop/scripts/demo_p_jev_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/judgment_policy.test.ts harness/judgment/judge_bans.test.ts harness/omp/judgment_extension.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-BROWSER.4
+demo-P-BROWSER.4: ## P-BROWSER.4 (ADR-0415): the agent's visible browser came up as a white, unclosable rectangle. The engine had spawned omp with windowsHide, so omp had no console window and its daemon broker spawned the shared headed Chromium with SW_HIDE (omp hides its children's windows when it has no console). The engine now owns a HIDDEN console at boot and spawns a passthrough omp against it; the AppContainer spawn stays console-less. Proves the pure policy, then the real chain with real processes: a child started like the engine allocates a hidden console and its stdout still arrives; a grandchild in omp's seat inherits it hidden.
+	$(BUN) run desktop/scripts/demo_p_browser_4.ts
+	$(BUN) test $(TEST_IGNORES) desktop/console_host.test.ts desktop/acp.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-SWITCH.3
+demo-P-SWITCH.3: demo-P-SWITCH.2 ## P-SWITCH.3 (ADR-0410/0411): a new session is a new hub. Every spoke records the master session it was born under and keeps it for life; the orbit draws only the current session's spokes (plus hubless ones, so none is unreachable) and lists the other hubs. Proves the stamp against the real lane manager over the fake ACP agent (whose lane children mint their own session ids), the hub filter and the hub list.
+	$(BUN) test $(TEST_IGNORES) desktop/fleet_lanes.test.ts desktop/renderer/orbit_layout.test.ts harness/mcp/agent_firewall.integration.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.0
+demo-P-TUI.0: ## P-TUI.0 (ADR-0419): the engine discovery seam. The engine publishes engine-discovery-<port>.json (0600, port + per-launch nonce + UI token) into LUCID_DATA_ROOT (or ~/.omp standalone) on boot and removes it on exit; a terminal client (lucid hub, docs/TUI.md) finds it and must win the ADR-0305 health handshake against the file's own nonce before trusting anything - a stale file, a recycled port or a squatter verifies dead, fail-closed. Proves it against the REAL dev.ts engine: publish, verify, two concurrent token'd clients, squatter refusal, removal on SIGTERM.
+	$(BUN) run desktop/scripts/demo_p_tui_0.ts
+	$(BUN) test $(TEST_IGNORES) desktop/engine_discovery.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.1
+demo-P-TUI.1: demo-P-TUI.0 ## P-TUI.1 part (ADR-0420): `lucid hub` - the terminal hub as a PANE MULTIPLEXER (herdr/tmux idiom, operator direction 2026-09-28). Attaches to the running engine through the discovery seam only (never a guessed port); a binary split tree of panes each hosting a capability deck (Overview, Security with audited approve/dismiss, Fleet, Sessions, Audit, Usage) over the SAME /api routes the GUI calls; | and - split, tab walks focus, z zooms, x closes, 1-6 rebinds, hostile engine strings flatten to single rows. Proves it headless against the REAL engine: attach, real facts, side-by-side split, zoom/close, honest engine-unreachable status.
+	$(BUN) run desktop/scripts/demo_p_tui_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-JEV.6
+demo-P-JEV.6: ## P-JEV.6 (ADR-0421): a judge whose account says the model does not exist is not asked again, cloud or local. omp's smol priority patterns name gpt-5.3-codex-spark for the openai-codex OAuth provider and match openai/gpt-5.3-codex-spark under an API-key account with no such model; omp cools down only 401/402/403, so that judge answered every judgment with a 404 (model_not_found) before the chain moved on. P-JEV.5 counted only LOCAL failures. Now ONE missing-model answer bans (ledger + in-process breaker), a transient cloud failure still never does, and a banned chat model is not named in the chain. Proves it against the ledger, the breaker and omp's real role resolver.
+	$(BUN) run desktop/scripts/demo_p_jev_6.ts
+	$(BUN) test $(TEST_IGNORES) desktop/judgment_policy.test.ts harness/judgment/judge_bans.test.ts harness/omp/judgment_extension.test.ts harness/adr_numbering.test.ts

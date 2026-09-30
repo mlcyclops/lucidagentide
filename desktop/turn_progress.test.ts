@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/turn_progress.test.ts - P-PROGRESS.1: the estimate is history or nothing, the percent never
-// finishes a running turn, and liveness follows the evidence in strength order.
+// finishes a running turn, and liveness follows the evidence in strength order. P-PROGRESS.4: the time left
+// is conditioned on the time already run, narrowest history first, and past the typical length it names a
+// figure only with evidence.
 
 import { describe, expect, test } from "bun:test";
-import { DurationHistory, ETA_ESTIMATING, estimateFromSamples, estimateTurn, etaPhrase, livenessVerdict, progressLine, progressView, QUIET_MS, STREAMING_MS, wholeEtaPhrase } from "./turn_progress.ts";
+import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, estimateTurn, etaPhrase, livenessVerdict, progressLine, progressView, PROGRESS_TICK_MS, QUIET_MS, STREAMING_MS, wholeEtaPhrase } from "./turn_progress.ts";
 
 function seeded(model: string, ms: number[]): DurationHistory {
   const h = new DurationHistory();
@@ -53,18 +55,93 @@ describe("estimateTurn", () => {
   });
 });
 
+describe("P-PROGRESS.4 time left given the time already run", () => {
+  test("steady progress through a typical history counts down tick by tick, never below zero, never 100%", () => {
+    const h = seeded("a", Array.from({ length: 20 }, (_, k) => 50_000 + k * 1_000)); // 50 s .. 69 s, p75 = 64 s
+    // Between ticks the figure may step up by one sample gap as a shorter past turn drops out; at the engine's
+    // cadence, whatever the phase, it only goes down.
+    for (const phase of [0, 2_500]) {
+      let prev = Number.POSITIVE_INFINITY;
+      for (let e = phase; e <= 80_000; e += PROGRESS_TICK_MS) {
+        const est = estimateTurn({ elapsedMs: e, model: "a", history: h });
+        expect(est.etaMs!).toBeGreaterThanOrEqual(0);
+        expect(est.etaMs!).toBeLessThanOrEqual(prev);
+        expect(est.percent!).toBeLessThanOrEqual(95);
+        prev = est.etaMs!;
+      }
+    }
+    // Past the typical length with fewer than five longer turns on record: no invented finish time.
+    const late = estimateTurn({ elapsedMs: 66_000, model: "a", history: h });
+    expect(late.overrun).toBe(true);
+    expect(late.etaMs).toBe(0);
+    expect(etaPhrase(late)).toBe("longer than usual (typically 1 m 4 s)");
+  });
+
+  test("past the typical length a figure is named only once five longer turns back it", () => {
+    const h = seeded("a", Array(20).fill(60_000));
+    for (let k = 0; k < 4; k++) h.addTurn("a", 150_000);
+    const before = estimateTurn({ elapsedMs: 90_000, model: "a", history: h });
+    expect(before.etaMs).toBe(0);
+    expect(etaPhrase(before)).toBe("longer than usual (typically 1 m)");
+    h.addTurn("a", 150_000);
+    const after = estimateTurn({ elapsedMs: 90_000, model: "a", history: h });
+    expect(after.overrun).toBe(true);
+    expect(after.percent).toBe(95);
+    expect(after.etaMs).toBe(60_000);
+    expect(etaPhrase(after)).toBe("longer than usual, about 1 m left (est.)");
+    expect(wholeEtaPhrase(after, [20_000])).toBe("about 1 m left (est.)"); // backed, so it counts as known
+  });
+
+  test("the session's own history first, then the model's, then every model's", () => {
+    const h = new DurationHistory();
+    for (let k = 0; k < 10; k++) h.addTurn("a", 300_000, "s1");
+    for (let k = 0; k < 5; k++) h.addTurn("a", 20_000, "s2");
+    for (let k = 0; k < 5; k++) h.addTurn("a", 100_000, "s3");
+    const left = (model: string, scope?: string) => estimateTurn({ elapsedMs: 10_000, model, scope, history: h }).etaMs;
+    expect(left("a", "s1")).toBe(290_000);
+    expect(left("a", "s2")).toBe(10_000);
+    expect(left("a", "new-session")).toBe(90_000); // the model's 20 turns
+    expect(left("a")).toBe(90_000);
+    for (let k = 0; k < 3; k++) h.addTurn("c", 2_000_000, "s9");
+    expect(left("c", "s9")).toBe(90_000); // three of its own are not evidence: every model's turns decide
+    for (let k = 0; k < 2; k++) h.addTurn("c", 2_000_000, "s9");
+    expect(left("c", "s9")).toBe(1_990_000);
+  });
+
+  test("an aged sample says longer than usual only once the elapsed time passes the typical length", () => {
+    const h = seeded("a", Array.from({ length: 20 }, (_, k) => 50_000 + k * 1_000));
+    const now = 1_000_000;
+    const p = progressView({ busy: true, dead: false, startedAt: now - 58_000, lastActivityAt: now, stepsDone: 0, stepsOpen: [], model: "a", history: h, now });
+    expect(p.estimate.overrun).toBe(false);
+    const soon = agedProgress(p, p.estimate.etaMs! + 1_000); // the figure ran out, the typical 64 s not yet
+    expect(soon.estimate.etaMs).toBe(0);
+    expect(soon.estimate.overrun).toBe(false);
+    expect(agedProgress(p, 7_000).estimate.overrun).toBe(true);
+  });
+});
+
 describe("DurationHistory", () => {
   test("seeds from latency ledger lines, skipping failed turns and bad lines", () => {
     const h = new DurationHistory();
     const n = h.seedFromLatencyLines([
-      JSON.stringify({ model: "a", totalMs: 5_000, ok: true }),
+      JSON.stringify({ model: "a", totalMs: 5_000, ok: true, sessionId: "s1" }),
       JSON.stringify({ model: "a", totalMs: 300, ok: false }),
       "not json",
+      "null",
       JSON.stringify({ model: "a", totalMs: "7" }),
+      JSON.stringify({ model: "a", totalMs: 0 }),
       "",
     ]);
     expect(n).toBe(1);
     expect(h.turnSamples("a")).toEqual([5_000]);
+    expect(h.turnSamples("a", "s1")).toEqual([5_000]); // P-PROGRESS.4: the ledger's session keys the sample
+    expect(h.turnSamples("a", "s2")).toEqual([]);
+  });
+
+  test("seeding a long ledger keeps only the newest turns within the cap", () => {
+    const h = new DurationHistory(3);
+    h.seedFromLatencyLines([1_000, 2_000, 3_000, 4_000, 5_000].map((totalMs) => JSON.stringify({ model: "a", totalMs, ok: true })));
+    expect(h.turnSamples()).toEqual([3_000, 4_000, 5_000]);
   });
 
   test("is bounded: the oldest sample falls off first", () => {
@@ -132,22 +209,24 @@ describe("progressView", () => {
     expect(p.stepsOpen[0]!.typicalMs).toBe(4_000);
     expect(p.estimate.percent).toBe(50);
     expect(p.liveness.state).toBe("streaming");
-    expect(progressLine(p)).toBe("5 s \u00b7 step 4 \u00b7 about 5 s left (est.)");
+    expect(progressLine(p, true)).toBe("5 s \u00b7 step 4 \u00b7 about 5 s left (est.)");
+    expect(progressLine(p, false)).toBe("5 s \u00b7 step 4"); // P-PROGRESS.3: the estimate is opt-in
   });
 
   test("an idle worker has no estimate and no steps", () => {
     const p = progressView({ busy: false, dead: false, startedAt: null, lastActivityAt: 0, stepsDone: 0, stepsOpen: [], model: "a", history: new DurationHistory(), now: 10 });
     expect(p.estimate.basis).toBe("none");
     expect(p.liveness.state).toBe("idle");
-    expect(progressLine(p)).toBe("0 s");
+    expect(progressLine(p, true)).toBe("0 s");
   });
 
-  test("P-PROGRESS.2: a running worker with no history says ETA estimating instead of leaving the ETA out", () => {
+  test("P-PROGRESS.3: without history the line carries no ETA part, never the ETA estimating placeholder", () => {
     const now = 500_000;
     const p = progressView({ busy: true, dead: false, startedAt: now - 12_000, lastActivityAt: now - 1_000, stepsDone: 1, stepsOpen: [], model: "a", history: new DurationHistory(), now });
-    expect(progressLine(p)).toBe(`12 s \u00b7 step 1 \u00b7 ${ETA_ESTIMATING}`);
-    const dead = progressView({ busy: true, dead: true, startedAt: now - 12_000, lastActivityAt: now - 1_000, stepsDone: 1, stepsOpen: [], model: "a", history: new DurationHistory(), now });
-    expect(progressLine(dead)).toBe("12 s \u00b7 step 1"); // a dead worker has no ETA to estimate
+    expect(progressLine(p, true)).toBe("12 s \u00b7 step 1");
+    expect(progressLine(p, true)).not.toContain(ETA_ESTIMATING);
+    const dead = progressView({ busy: true, dead: true, startedAt: now - 12_000, lastActivityAt: now - 1_000, stepsDone: 1, stepsOpen: [], model: "a", history: seeded("a", [10_000, 10_000, 10_000, 10_000, 10_000]), now });
+    expect(progressLine(dead, true)).toBe("12 s \u00b7 step 1"); // a dead worker has no ETA to estimate
   });
 });
 
