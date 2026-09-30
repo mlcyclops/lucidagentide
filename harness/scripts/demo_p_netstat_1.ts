@@ -3,7 +3,7 @@
 
 // harness/scripts/demo_p_netstat_1.ts
 //
-// P-NETSTAT.1 (ADR-0422): a network problem reads as a network problem, not a model failure.
+// P-NETSTAT.1 (ADR-0423): a network problem reads as a network problem, not a model failure.
 //   [1] the engine probe times a REAL round trip to a live host, and a dead host reads offline;
 //   [2] the reported failure ("acp: initialize timed out after 20000ms") is startup, not the model;
 //       transport errors and a down link are the network; a real provider refusal still blames the model;
@@ -21,7 +21,7 @@ import {
 const fail = (m: string): never => { console.error(`FAIL: ${m}`); process.exit(1); };
 const ok = (cond: boolean, m: string) => { if (!cond) fail(m); console.log(`  ok  ${m}`); };
 
-console.log("== #ADR-0422 P-NETSTAT.1: stand by for the network instead of blaming the model ==\n");
+console.log("== #ADR-0423 P-NETSTAT.1: stand by for the network instead of blaming the model ==\n");
 
 console.log("[1] the engine probe against real sockets");
 const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(null, { status: 404 }) });

@@ -119,6 +119,8 @@ import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: l
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
+import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
+import { createLaneWorktree, removeLaneWorktree } from "./lane_worktree.ts"; // P-FLEET.WT1: a lane in its own git worktree
 import { cloneRepo, CLONE_ROOT, hostTokenForUrl, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { ghToken, githubRepoChoices, localRepoChoices, observeToolCall, peekRepoContext, repoContext, type RepoChoiceSource } from "./repo_probe.ts"; // P-REPO.1 (ADR-0406)
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
@@ -140,7 +142,8 @@ import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type Bo
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
-import { ensureHiddenConsole } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
+import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
+import { setDefaultWindowsHide } from "./acp.ts";
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
@@ -270,13 +273,13 @@ function whisperDeps(): WhisperRuntimeDeps {
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
 import { planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
-import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
 import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
-import { NetProbe } from "./net_probe.ts"; // P-NETSTAT.1 (ADR-0422): the status-bar network indicator's probe
+import { NetProbe } from "./net_probe.ts"; // P-NETSTAT.1 (ADR-0423): the status-bar network indicator's probe
 import { probeTargetFor } from "./renderer/net_status.ts"; // P-NETSTAT.1: fixed model -> provider-host table (pure)
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
@@ -755,7 +758,7 @@ setInterval(() => {
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
 let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
-// P-NETSTAT.1 (ADR-0422): one probe window per engine, shared by every renderer that polls it.
+// P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
 // and they run on the server's single event loop — so overlapping polls pile up and stall model streaming
@@ -1174,6 +1177,7 @@ delete process.env.LUCID_MAIN_TOKEN;
 // with SW_HIDE; without this the agent's visible browser came up as a white, unclosable rectangle.
 {
   const con = ensureHiddenConsole();
+  setDefaultWindowsHide(ompWindowsHide); // omp children attach to the (hidden) console from here on
   if (con.allocated) console.error(`[console] hidden console window allocated for the agent's children${con.hidden ? "" : " (WARNING: it could not be hidden)"}`);
   else if (process.platform === "win32" && !con.window) console.error(`[console] no console window for the agent's children (${con.reason ?? "unknown"}): windows the agent opens may stay hidden`);
 }
@@ -1195,6 +1199,7 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/checkout/peers", "/api/checkout/gate", "/api/checkin", "/api/checkin/reply", // P-OWN.1: checkin_* tools + the commit gate
   "/api/checkout/write",     // P-WAIT.1: the checkout gate hook claims a write's file (waits only on the same file)
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
+  "/api/agent/beat",         // P-HEALTH.3: the stream_beat extension says a tool call is still being written
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
@@ -1217,7 +1222,7 @@ const checkouts: CheckoutRegistry = new CheckoutRegistry({
     { id: "master", name: "main composer", cwd: currentWorkspace(), task: backend.currentTask(), running: backend.midTurn().busy },
     ...fleet.sessionsView(),
   ],
-  gitStatus: (root) => { const dir = gitCmdDir(); return gitDirtyPaths(dir ? join(dir, "git.exe") : "git", root); },
+  gitStatus: (root) => gitDirtyPaths(gitExe(), root),
 });
 backend.onAuthoredPath = (path) => checkouts.recordWrite({ id: "master", name: "main composer" }, path, currentWorkspace());
 // P-WAIT.1: a write claim counts only while its holder's turn runs (the backstop behind endTurn).
@@ -1606,7 +1611,7 @@ function listAgentTemplates(): AgentTemplateSummary[] {
 // working tree. Fail-soft: any git error → empty strings (the annex then reports "no changes detected").
 function gitOut(repo: string, args: string[]): string {
   try {
-    const r = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "ignore", timeout: 8000 });
+    const r = Bun.spawnSync([gitExe(), ...args], { cwd: repo, stdout: "pipe", stderr: "ignore", timeout: 8000 });
     return r.exitCode === 0 ? r.stdout.toString() : "";
   } catch { return ""; }
 }
@@ -3082,6 +3087,16 @@ return Bun.serve({
         });
         return json({ ok: true, data: { noted } });
       }
+      // P-HEALTH.3: omp's ACP mapper never forwards tool-call argument streaming, so a long write looked
+      // like a wedged session to the stall watchdog. stream_beat_extension posts { session } while it streams;
+      // the owner (master chat or the lane with that omp session id) counts it as activity. A beat for no
+      // running turn is dropped. Liveness only: it never authorizes anything.
+      if (p === "/api/agent/beat" && req.method === "POST") {
+        const b = await readBody<{ session?: unknown }>(req);
+        const session = typeof b.session === "string" ? b.session.trim() : "";
+        const noted = backend.noteStreaming(session) || fleet.noteStreaming(session);
+        return json({ ok: true, data: { noted } });
+      }
       // ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ──────────────────────────
       // The Electron MAIN owns the real BrowserWindow (compositor-level capturePage defeats DOM-locking
       // pages; the user watches every step and closing the window is a hard kill switch). Main cannot be
@@ -3389,6 +3404,7 @@ return Bun.serve({
           dataRoot: process.env.LUCID_DATA_ROOT || "",
           settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
           personalDir: personalBaseDir(),
+          platform: process.platform,
         }) });
       }
       // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail. Creator builds
@@ -4723,8 +4739,11 @@ return Bun.serve({
       // the lane's turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on
       // silence).
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
+      // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
+      // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.
+      if (p === "/api/hub/open" && req.method === "POST") return json({ ok: true, data: await openHubWindow(resolvedRepo().root, process.env.LUCID_RESOURCES ?? "") });
       if (p === "/api/fleet/spawn" && req.method === "POST") {
-        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown; sessionId?: unknown }>(req);
+        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown; sessionId?: unknown; worktree?: unknown }>(req);
         // P-FLEET.L2: a lane can be spawned straight from a GitHub / GitLab / Azure DevOps remote. The clone
         // lands INSIDE the folder the user picked in the OS dialog (or under ~/.omp/lucid-workspaces when
         // they picked none) and an existing clone is reused, so re-spawning the same repo is idempotent.
@@ -4742,6 +4761,12 @@ return Bun.serve({
           if (!c.ok || !c.path) return json({ ok: true, data: { ok: false, reason: c.error || "git clone failed" } });
           cwd = c.path;
         }
+        // P-FLEET.WT1: the user accepted the merge-conflict risk and asked for the lane's OWN worktree, so it
+        // works on its own branch beside other agents in this repo instead of sharing the checkout. A refused
+        // spawn removes the worktree it just made; a started lane keeps it (its branch is the lane's work).
+        const lane = b.worktree === true ? await createLaneWorktree(cwd, typeof b.name === "string" && b.name.trim() ? b.name : basename(cwd)) : null;
+        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason } });
+        if (lane?.ok) cwd = lane.laneCwd;
         // P-FLEET.L17: recovering a historical spoke brings its RECORDED session back (omp loads it
         // natively; the on-disk transcript seeds the composer and is the fallback memory).
         const sessionId = typeof b.sessionId === "string" ? b.sessionId.trim() : "";
@@ -4753,7 +4778,8 @@ return Bun.serve({
           resume = { sessionId, transcript, turns: page.userTotal };
         }
         const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined, ...(resume ? { resume } : {}) });
-        return json({ ok: true, data: r });
+        if (lane?.ok && !r.ok) await removeLaneWorktree(lane);
+        return json({ ok: true, data: lane?.ok && r.ok ? { ...r, worktree: { path: lane.path, branch: lane.branch } } : r });
       }
       // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
       // capped at 6). The same filter guards the queue and its drain below.
@@ -4896,7 +4922,7 @@ return Bun.serve({
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });
       }
-      // P-NETSTAT.1 (ADR-0422): the network indicator's feed. `model` only SELECTS a row of the fixed
+      // P-NETSTAT.1 (ADR-0423): the network indicator's feed. `model` only SELECTS a row of the fixed
       // provider-host table (probeTargetFor), so a caller can never make the engine fetch a URL of its
       // choosing; LUCID_NET_PROBE_URL is the operator's override for air-gapped or proxied networks.
       if (p === "/api/net-status") {
@@ -5456,6 +5482,8 @@ process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta
 // P-JEV.2 (ADR-0377): the judgment extension POSTs every typed judgment (question, answers, backend,
 // latency, error) here, because omp records none of them and has no hook for them. Unset means the
 // extension self-skips and the chat draws no judgment row.
+// P-HEALTH.3: stream_beat_extension (master and lanes) POSTs { session } here while a tool call streams.
+process.env.LUCID_STREAM_BEAT_URL = `http://127.0.0.1:${server.port}/api/agent/beat?t=${AGENT_TOKEN}`;
 process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${AGENT_TOKEN}`;
 // P-KG.3: the agent's memory_recall / memory_retain tools reach the UNLOCKED personal knowledge graph
 // through these. Both fail closed when the vault is locked: recall returns no hits and retain refuses,

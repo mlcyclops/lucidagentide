@@ -562,4 +562,15 @@
 //            button during the first minute after launch (P-RECOVER.2); lane pickers offer the composer's
 //            curated model list; the test harness works from a UNC checkout, injection-safe.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.13";
+// v2.3.0-beta.14 = beta.13 plus Sonnet 5.5 and the recovery evidence fixes. MODELS: omp pinned
+//            18.2.10 -> 18.4.4, whose catalog carries Claude Sonnet 5.5 (claude-sonnet-5-5, $2/$10 per Mtok,
+//            1M context); LUCID adds its price row, 1M window, card and a default rank above Sonnet 5 and
+//            below every flagship. StepFun (new `stepfun` provider) sits behind the China-origin ACKNOWLEDGE
+//            gate and never resolves in lockdown; omp's on-device `apple` provider lists on macOS only
+//            (P-MODEL.6, ADR-0422). Incident reports quote the real omp stderr (test runs no longer write
+//            the operator's lucid-acp.log) and the engine finds MinGit without git on PATH, so the
+//            code-activity poll stops filling engine.log (P-RECOVER.3). Fleet lanes can run in their own
+//            git worktree (P-FLEET.WT1); `lucid hub` opens from Fleet, the launcher and any terminal
+//            (P-TUI.2); a long tool-call write is not a stall (P-HEALTH.3).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.14";

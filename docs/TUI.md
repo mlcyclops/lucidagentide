@@ -36,7 +36,7 @@ TUI calls the route.
   This stays the zero-setup, single-session path.
 - **`lucid kb`, `lucid stats`, `lucid check`**: KB browsing, session metrics, and the
   gate preflight as plain CLI subcommands.
-- **`@oh-my-pi/pi-tui` 18.2.10**: already a pinned dependency. The TUI renders with
+- **`@oh-my-pi/pi-tui` 18.4.4**: already a pinned dependency. The TUI renders with
   it. No new dependency, no second widget toolkit, and the look matches omp's own
   terminal UI that `lucid tui` users already know.
 

@@ -3662,7 +3662,7 @@ body.preview-open .thread{font-size:.9em}
 .noresp-sr{opacity:.6;font-family:var(--mono);font-size:11px}
 .noresp-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .noresp-note{opacity:.6;font-size:10px;margin-left:6px;font-weight:400}
-/* P-NETSTAT.1 (ADR-0422): the status-bar network indicator, its popover, and the "stand by" card that
+/* P-NETSTAT.1 (ADR-0423): the status-bar network indicator, its popover, and the "stand by" card that
    replaces the switch-model card when a turn died on the network. Each text run is its own element. */
 .net-seg{gap:6px;min-width:0;max-width:360px}
 .net-seg .net-txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
@@ -4820,6 +4820,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-spawn-save input{flex:none;accent-color:var(--accent);margin:0}
 .fleet-spawn-save span{min-width:0;line-height:1.4}
 .fleet-spawn-save input:disabled+span{color:var(--txt-4)}
+/* P-FLEET.WT1: the worktree risk sentence wraps, so the box sits on its first line. */
+.fleet-spawn-wt{align-items:flex-start}
+.fleet-spawn-wt input{margin-top:2px}
 .fleet-spawn-err{font-size:11px;line-height:1.45;color:var(--red);background:var(--red-dim);border:1px solid rgb(var(--red-rgb) / .4);border-radius:7px;padding:5px 8px;word-break:break-word}
 .fleet-spawn-acts{display:flex;justify-content:flex-end;gap:6px}
 .fleet-empty{grid-column:1/-1;display:flex;align-items:center;gap:7px;min-width:0;color:var(--txt-3);font-size:12px;padding:10px 4px}
@@ -5948,6 +5951,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   border-radius:8px;color:var(--txt);font:inherit;font-size:12px;padding:7px 9px}
 .orbit-spawn-auth input[type="password"]:focus{outline:none;border-color:var(--accent)}
 .orbit-spawn-save{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--txt-3);cursor:pointer}
+.orbit-spawn-wt{align-items:flex-start;padding:5px 4px;min-width:0}
+.orbit-spawn-wt input{flex:none;margin:2px 0 0;accent-color:var(--accent)}
+.orbit-spawn-wt span{min-width:0;line-height:1.45}
 
 /* P-PROGRESS.1: tool steps say what they are doing and how they ended; the HUD and the lane cards carry a
    progress strip (history estimate bar, liveness pill, folder wait); the grid shows the folder queues.

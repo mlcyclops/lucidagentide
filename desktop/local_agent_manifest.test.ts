@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import creatorBuilder from "./build/electron-builder.creator.cjs";
 import { AGENT_FLAVOR } from "./build_flavor.ts";
+import { FORWARDER_MARKER } from "./cli_forwarder.ts";
 import { buildLocalAgentManifest, LOCAL_AGENT_MANIFEST_FILE, writeLocalAgentManifest, type ManifestInput } from "./local_agent_manifest.ts";
 
 const input = (over: Partial<ManifestInput> = {}): ManifestInput => ({
@@ -67,14 +68,28 @@ test("the writer round-trips the manifest and reports, rather than throws, when 
 });
 
 // The manifest must not outlive the install, and cleaning it up must never cost the user their data:
-// userData also holds settings, logs and the Windows safeStorage key.
-test("the NSIS uninstaller removes exactly the manifest file, wired for both flavors", () => {
+// userData also holds settings, logs and the Windows safeStorage key. The only other file the uninstaller
+// may delete is the P-TUI.2 `lucid.cmd` forwarder, and only one carrying our marker: a lucid.cmd the user
+// wrote themselves must survive.
+test("the NSIS uninstaller deletes only the manifest and a marked CLI forwarder, wired for both flavors", () => {
   const nsh = readFileSync(join(import.meta.dir, "build", "installer.nsh"), "utf8");
   const code = nsh.split(/\r?\n/).filter((l) => !l.trimStart().startsWith("#")).join("\n");
   expect(code).toContain(`!define LUCID_AGENT_MANIFEST "${LOCAL_AGENT_MANIFEST_FILE}"`);
   const deletes = code.match(/^\s*(Delete|RMDir)\b.*$/gm) ?? [];
-  expect(deletes.length).toBeGreaterThan(0);
-  for (const line of deletes) expect(line).toMatch(/^\s*Delete "[^"]*\\\$\{LUCID_AGENT_MANIFEST\}(\.\*\.tmp)?"$/);
+  const manifest = /^\s*Delete "[^"]*\\\$\{LUCID_AGENT_MANIFEST\}(\.\*\.tmp)?"$/;
+  const forwarder = /^\s*Delete "\$\{LUCID_CLI_FORWARDER\}"$/;
+  expect(deletes.filter((l) => manifest.test(l)).length).toBeGreaterThan(0);
+  for (const line of deletes) expect(manifest.test(line) || forwarder.test(line)).toBe(true);
+
+  // The forwarder delete is reachable only past the marker comparison, and the comparison reads exactly
+  // as many characters as the marker the app writes (a length drift would never match, or match a prefix).
+  expect(code).toContain(`!define LUCID_CLI_FORWARDER "$LOCALAPPDATA\\Microsoft\\WindowsApps\\lucid.cmd"`);
+  expect(code).toContain(`!define LUCID_CLI_MARKER "${FORWARDER_MARKER}"`);
+  const macro = code.match(/!macro lucidRemoveCliForwarder[\s\S]*?!macroend/)?.[0] ?? "";
+  const guard = macro.match(/StrCpy \$R1 \$R1 (\d+)\s+StrCmp \$R1 "\$\{LUCID_CLI_MARKER\}" 0 (\w+)\s+Delete "\$\{LUCID_CLI_FORWARDER\}"/);
+  expect(guard).not.toBeNull();
+  expect(Number(guard![1])).toBe(FORWARDER_MARKER.length);
+  expect(macro).toContain(`${guard![2]}:`);
   expect(code).toMatch(/\$\{ifNot\} \$\{isUpdated\}/);
 
   const pkg = JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf8"));

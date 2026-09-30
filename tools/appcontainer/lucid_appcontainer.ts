@@ -184,7 +184,7 @@ function fileRights(mask: number): number {
 }
 
 /**
- * PURE (P-SANDBOX.18, ADR-0423): does the DACL `acl` (raw ACL bytes) already give `sid` (raw SID bytes)
+ * PURE (P-SANDBOX.18, ADR-0424): does the DACL `acl` (raw ACL bytes) already give `sid` (raw SID bytes)
  * the `mode` grant, both on the object itself AND inheritably to every file and folder under it? Windows
  * stores one GENERIC_ALL inheritable grant as TWO ACEs (the mapped rights with no inherit flags, plus an
  * INHERIT_ONLY copy that keeps the generic bits), so this checks the effect, never a byte match. An
@@ -340,7 +340,7 @@ function modifyDacl(path: string, access: number, accessMode: number, sid: bigin
   let rc = advapi.symbols.GetNamedSecurityInfoW(ptr(wpath), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, null, null, ptr(daclOut), null, ptr(sdOut));
   if (rc !== 0) throw new Error(`GetNamedSecurityInfoW(${path}) failed (err=${rc})`);
 
-  // P-SANDBOX.18 (ADR-0423): SetNamedSecurityInfoW re-propagates the inheritable ACE through EVERY file
+  // P-SANDBOX.18 (ADR-0424): SetNamedSecurityInfoW re-propagates the inheritable ACE through EVERY file
   // under `path`, even when the DACL does not change. On a workspace with node_modules/vendor/.git that
   // walk measured 16.7 s per spawn (23 s for all grants), so the contained agent could not answer
   // `initialize` inside its 20 s bound and every respawn failed. The ACEs persist on disk after the

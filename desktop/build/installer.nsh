@@ -35,6 +35,26 @@
   Pop $R0
 !macroend
 
+# P-TUI.2: the app writes a `lucid` forwarder into the per-user WindowsApps folder (desktop/cli_forwarder.ts).
+# Delete it only when its second line carries our marker, so a lucid.cmd the user wrote themselves survives.
+!define LUCID_CLI_FORWARDER "$LOCALAPPDATA\Microsoft\WindowsApps\lucid.cmd"
+!define LUCID_CLI_MARKER "rem LUCID-CLI-FORWARDER"
+!macro lucidRemoveCliForwarder
+  Push $R0
+  Push $R1
+  IfFileExists "${LUCID_CLI_FORWARDER}" 0 lucid_cli_done
+    FileOpen $R0 "${LUCID_CLI_FORWARDER}" r
+    FileRead $R0 $R1
+    FileRead $R0 $R1
+    FileClose $R0
+    StrCpy $R1 $R1 23
+    StrCmp $R1 "${LUCID_CLI_MARKER}" 0 lucid_cli_done
+    Delete "${LUCID_CLI_FORWARDER}"
+  lucid_cli_done:
+  Pop $R1
+  Pop $R0
+!macroend
+
 !macro customUnInstall
   # An auto-update runs the old uninstaller with --updated; the app is still installed, so keep it.
   ${ifNot} ${isUpdated}
@@ -45,6 +65,7 @@
     ${endif}
     !insertmacro lucidRemoveAgentManifest "${APP_PACKAGE_NAME}"
     !insertmacro lucidRemoveAgentManifest "${PRODUCT_FILENAME}"
+    !insertmacro lucidRemoveCliForwarder
     ${if} $installMode == "all"
       SetShellVarContext all
     ${endif}

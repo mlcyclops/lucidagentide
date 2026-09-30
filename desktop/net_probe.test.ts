@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-NETSTAT.1 (ADR-0422): the engine probe is rate-limited however many renderers poll, and a provider
+// P-NETSTAT.1 (ADR-0423): the engine probe is rate-limited however many renderers poll, and a provider
 // switch starts a fresh window.
 import { expect, test } from "bun:test";
 import { MIN_GAP_MS, NetProbe } from "./net_probe.ts";

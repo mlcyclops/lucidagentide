@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/net_monitor.ts - P-NETSTAT.1 (ADR-0422). The renderer half of the network indicator:
+// desktop/renderer/net_monitor.ts - P-NETSTAT.1 (ADR-0423). The renderer half of the network indicator:
 // polls the engine's provider-latency probe, listens to the OS online/offline events, tracks what is
 // still loading at boot (engine, network, models, settings), paints the status-bar segment + its
 // popover, holds the outage's warn/danger toasts, and renders the "stand by" card that replaces the

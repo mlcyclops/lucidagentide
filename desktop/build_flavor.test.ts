@@ -91,7 +91,7 @@ describe("UI mode gating + posture", () => {
 });
 
 describe("build-info view", () => {
-  const runtime = { version: "1.14.0", port: 5320, dataRoot: "/data/LucidCreator", settingsFile: "/data/LucidCreator/lucid-gui.json", personalDir: "/data/LucidCreator/personal" };
+  const runtime = { version: "1.14.0", port: 5320, dataRoot: "/data/LucidCreator", settingsFile: "/data/LucidCreator/lucid-gui.json", personalDir: "/data/LucidCreator/personal", platform: "darwin" };
 
   test("reports the running port beside the flavor default and scopes the vault", () => {
     const v = buildInfoView(CREATOR_FLAVOR, runtime);

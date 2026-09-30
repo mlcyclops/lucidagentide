@@ -114,12 +114,12 @@ import { initTitlebarRepo, refreshTitlebarRepo } from "./repo_chip.ts"; // P-REP
 import { hostedRepo, pushLabel, repoChip } from "../repo_identity.ts";
 import type { RepoContext } from "./bridge.ts";
 import { formatImportLine } from "./import_progress.ts";
-import { mountNetSeg, netBooting, netSnapshot, onNetChange, renderNetStandby, setNetReady, startNetMonitor } from "./net_monitor.ts"; // P-NETSTAT.1 (ADR-0422)
+import { mountNetSeg, netBooting, netSnapshot, onNetChange, renderNetStandby, setNetReady, startNetMonitor } from "./net_monitor.ts"; // P-NETSTAT.1 (ADR-0423)
 import { classifyTurnFailure, effectiveState, type FailureCause } from "./net_status.ts"; // P-NETSTAT.1: pure verdicts
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
@@ -316,6 +316,8 @@ const MODEL_CTX: Record<string, number> = {
   "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
+  // Sonnet 5.5 (omp 18.4.4 catalog): 1M context, 128K max output.
+  "claude-sonnet-5-5": 1_000_000,
   "gpt-6-astra": 1_000_000, "gpt-6-sol": 1_000_000, "gpt-6-luna": 1_000_000,
   // Grok 4.6 / 4.7 (omp 18.2.10 catalog, xai + xai-oauth): 500K context.
   "grok-4.7": 500_000, "grok-4.6": 500_000,
@@ -1939,7 +1941,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
  *  assistant bubble that names the provider and offers concrete fallbacks — a lower model in the same
  *  family and/or an equivalent from another provider — each one-click to switch + re-send the same prompt. */
 function renderNoResponseNotice(container: HTMLElement, model: string, stopReason?: string, reason?: string, forceModel = false): void {
-  // P-NETSTAT.1 (ADR-0422): a turn that died on the WIRE (offline, unstable link, DNS/socket error, or
+  // P-NETSTAT.1 (ADR-0423): a turn that died on the WIRE (offline, unstable link, DNS/socket error, or
   // omp's startup handshake timing out on a fresh update) is not the model's fault, and switching models
   // cannot fix it. Those get the stand-by card; only a healthy-link failure blames the provider.
   if (!forceModel) {
@@ -1980,7 +1982,7 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   });
 }
 
-/** P-NETSTAT.1 (ADR-0422): automatic resends already spent on one prompt, so a flapping link (or a local
+/** P-NETSTAT.1 (ADR-0423): automatic resends already spent on one prompt, so a flapping link (or a local
  *  server that is simply down) ends at the switch-model card instead of resending forever. Cleared by the
  *  next turn that produces output. */
 let netResend: { prompt: string; attempts: number } | null = null;
@@ -2012,7 +2014,7 @@ function showNetStandby(container: HTMLElement, cause: Exclude<FailureCause, "mo
   });
 }
 
-/** P-SANDBOX.18 (ADR-0423): the agent process kept failing to start. Names where it failed (the engine
+/** P-SANDBOX.18 (ADR-0424): the agent process kept failing to start. Names where it failed (the engine
  *  tags a contained handshake failure "inside the Windows AppContainer sandbox") and offers the in-place
  *  restart; never a model switch, which cannot help. */
 function renderStartupFailed(container: HTMLElement, reason?: string): void {
@@ -2039,12 +2041,22 @@ function renderStartupFailed(container: HTMLElement, reason?: string): void {
   });
 }
 
-/** P-HEALTH.1: the harness acted on this session by itself. Shown in the transcript as the same quiet
- *  .evt note chip the other system notices use, so a probe or an in-place recovery reads as visible work
- *  rather than an unexplained gap. */
-function noteHealth(action: "probe" | "recover", reason: string): void {
-  const what = action === "recover" ? "Recovered this session in place" : "Checked on this session";
-  addNoteChip(reason ? `${what}: ${reason}` : what);
+/** P-TUI.2: the Fleet views' Terminal button. The engine opens `lucid hub` in a new terminal attached to this
+ *  app; only a refusal needs words here, with the engine's own reason. */
+async function openTerminalHub(): Promise<void> {
+  const r = await bridge.hubOpen().catch(() => null);
+  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same lanes. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
+  else showToast({ tone: "warn", title: "Terminal hub not opened", desc: r?.reason ?? "The engine did not answer.", timeout: 8000 });
+}
+
+/** P-HEALTH.1/.3: the harness acted on this session by itself. The phase line shows the self-heal while it
+ *  runs; the transcript keeps a note ONLY when the run did not continue on its own (`needsUser`), because
+ *  a permanent notice about a problem that was already handled is noise the user cannot act on. Every
+ *  action is still in engine.log and, for a recovery, in the incident report. */
+function noteHealth(e: { action: "probe" | "recover"; reason: string; needsUser?: boolean }): void {
+  if (!e.needsUser) return;
+  const what = e.action === "recover" ? "The session was restarted" : "Checked on this session";
+  addNoteChip(e.reason ? `${what}: ${e.reason}` : what);
 }
 
 // P-TURN-RECOVERY-OWNER: one renderer owns the composer; leaving only detaches its local reader.
@@ -2276,7 +2288,7 @@ async function send(): Promise<void> {
   // a second prompt with a lone error the composer never showed, which left the bubble on "Connection
   // lost" and muted the watch: the lane looked dead while it was working.
   if (turnInFlight()) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
-  // P-NETSTAT.1 (ADR-0422): with no network at all, sending would only manufacture an error that blames
+  // P-NETSTAT.1 (ADR-0423): with no network at all, sending would only manufacture an error that blames
   // the model. Hold the prompt in the transcript behind a stand-by card; it goes out once the link is
   // stable (or on "Send now"). Main only: a lane's turn runs in its own process with its own recovery.
   const ns = netSnapshot();
@@ -2807,8 +2819,8 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, e.pending); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
     // P-HEALTH.1: the harness noticed this session go quiet and acted on it. Same treatment as `slow` - the
-    // phase line names the wait, and the transcript gets a quiet note so the self-heal is visible work.
-    else if (e.type === "health") { setPhase(e.action === "recover" ? "Recovering the session" : "Checking on the session"); paintHud(); noteHealth(e.action, e.reason); }
+    // phase line names the wait; the transcript gets a note only when the user must act (P-HEALTH.3).
+    else if (e.type === "health") { setPhase(e.action === "recover" ? "Recovering the session" : "Checking on the session"); paintHud(); noteHealth(e); }
     // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
     // clear notice + a recommended fallback the user can switch to and retry.
     else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason, e.reason); scrollChat(); }
@@ -3376,7 +3388,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
     renderStatus(); renderMetricsRail();
     return;
   }
-  if (e.type === "health") { noteHealth(e.action, e.reason); return; }
+  if (e.type === "health") { noteHealth(e); return; }
   if (e.type === "error") {
     // The turn died, so the half-written bubble has to stop looking live.
     settleLaneWatchNode();
@@ -4734,7 +4746,7 @@ function secSovereignty(): string {
       `<div class="set-note ok">${icon("check", 12)} ${china.length} China-origin model(s) are unlocked and listed in the picker. <button class="btn-link" id="chinaRelock">Re-lock</button></div>`, true);
   }
   return setCard("sovereignty", "Restricted-origin models", `${china.length} hidden`,
-    `<div class="set-note danger">${icon("shield", 12)} <b>${china.length} model(s) from China-based providers</b> (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu) are hidden. They route to servers outside U.S. jurisdiction with <b>no U.S. data sovereignty</b>; review each provider's privacy policy before use.</div>
+    `<div class="set-note danger">${icon("shield", 12)} <b>${china.length} model(s) from China-based providers</b> (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu, StepFun) are hidden. They route to servers outside U.S. jurisdiction with <b>no U.S. data sovereignty</b>; review each provider's privacy policy before use.</div>
      <div class="china-unlock"><input id="chinaAckInput" placeholder="Type ACKNOWLEDGE to unlock" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="chinaAckBtn" disabled>Unlock</button></div>`, true);
 }
 function secAsksage(a: typeof state.asksage, datasets: string[] | null): string {
@@ -11042,7 +11054,7 @@ function renderStatus(): void {
       ${asksageChip()}
     </div>
     <div class="triv-slot" id="trivSlot"></div>`;
-  mountNetSeg(); // P-NETSTAT.1 (ADR-0422): re-adopt the network indicator, right of the context ring
+  mountNetSeg(); // P-NETSTAT.1 (ADR-0423): re-adopt the network indicator, right of the context ring
   mountTrivia(); // P-TRIV.1: re-adopt the persistent ticker after the innerHTML swap
   mountSharePill(); // P-REMOTE.11: re-adopt the minimized Share pill (it lives in the bar, right of the ticker)
   mountJoinPill(); // P-COLLAB.20: re-adopt the minimized Join pill (watching continues while minimized)
@@ -15855,6 +15867,7 @@ function wire(): void {
   void bridge.voiceSettings().then((v) => { if (v) { state.voice = v; updateVoiceChip(); } });
   // P-FLEET.L1: the fleet grid dashboard - headless local lanes as streaming mini agent windows.
   initFleetGrid({
+    hubOpen: openTerminalHub, // P-TUI.2
     fleetStatus: bridge.fleetStatus,
     fleetSpawn: bridge.fleetSpawn,
     fleetPrompt: bridge.fleetPrompt,
@@ -15909,6 +15922,7 @@ function wire(): void {
   // pair (attach is app.ts-owned either way) and opens the grid dock for spawning and per-lane work,
   // so the two views can never disagree about what a lane is doing.
   initFleetOrbit({
+    hubOpen: openTerminalHub, // P-TUI.2
     fleetStatus: bridge.fleetStatus,
     fleetAnswer: bridge.fleetAnswer,
     fleetRespawn: bridge.fleetRespawn,
@@ -17483,6 +17497,9 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "claude-opus-4-8": { exp: 4, iq: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
   "claude-opus-4-7": { exp: 4, iq: 5, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
   "claude-opus-4-6": { exp: 4, iq: 4, eff: "Prior Opus - very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
+  // Sonnet 5.5 (omp 18.4.4 catalog): $2/$10 per Mtok (cache read $0.20 / write $2.50), 1M context, 128K
+  // output, reasoning, text + image input. Half Opus 5.5's price for the balanced tier of the same family.
+  "claude-sonnet-5-5": { exp: 2, iq: 4, eff: "The Claude 5.5 family's balanced tier at $2/$10 per Mtok, half Opus 5.5's rate, with a 1M context window.", best: "Everyday coding, refactors, and code review at a workhorse price.", ctx: "1M" },
   "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
   "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
   "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude - excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
@@ -17498,6 +17515,9 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   // reasoning with an effort toggle, text + image input.
   "grok-4.7": { exp: 2, iq: 4, eff: "xAI's newest Grok: strong reasoning at $2/$6 per Mtok, doubling past 200K input; 500K context.", best: "Everyday coding and analysis with long context at a low price.", ctx: "500K" },
   "grok-4.6": { exp: 2, iq: 4, eff: "Prior Grok at the same $2/$6 price and 500K context.", best: "A version pin for Grok work.", ctx: "500K" },
+  // P-MODEL.6: omp's `apple` provider (macOS 27+ on Apple silicon, listed on macOS only) reports its one
+  // model as `apple/on-device`. Keyless and local: no per-token bill and no network egress.
+  "on-device": { exp: 1, iq: 2, eff: "Apple's on-device Foundation Model: runs on this Mac with no key and no network, so nothing you send leaves the machine.", best: "Quick private drafts, summaries, and lookups, even offline." },
   // AskSage · OpenAI. GPT-5.6 ships three tier codenames (luna=mid / sol / terra); luna is the default RAG model.
   "gpt-5.6-luna": { exp: 3, iq: 5, eff: "Newest mid-tier GPT-5.6; the default RAG model.", best: "General gov coding, analysis, and RAG grounding.", ctx: "256K" },
   "gpt-5.6-sol": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },
@@ -17553,7 +17573,7 @@ const MODEL_INFO: Record<string, ModelInfo> = {
 // id, then by fully-stripped base id so a provider-routed copy of a known model inherits it); otherwise
 // INFER ratings from the family + tier so no row is ever left without a card.
 const stripProvider = (v: string) => v.replace(/^[^/]*\//, "");
-const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemini: "Google Gemini", gpt: "OpenAI GPT", "gpt-o": "OpenAI o-series", rag: "AskSage RAG", other: "this provider" };
+const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemini: "Google Gemini", gpt: "OpenAI GPT", "gpt-o": "OpenAI o-series", apple: "Apple on-device", rag: "AskSage RAG", other: "this provider" };
 function inferModelInfo(value: string): ModelInfo {
   const fam = familyOf(value).id;
   // Capability tier from the SHARED heuristic (model_families.capabilityTier) so the hover-card iq stars
@@ -17647,10 +17667,14 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // or ADC on the box; LUCID shows them only behind a key saved in the hub. `state.auth` unloaded = no key
   // yet, which hides them until the first auth fetch lands (pickerRedraw repaints).
   const keyedIds = credentialedProviderIds(state.auth);
+  // P-MODEL.6: platform-bound providers (omp's on-device `apple`) list only where the ENGINE runs on their
+  // OS; until /api/build-info answers the platform is unknown and they stay hidden.
+  const enginePlatform = state.buildInfo?.platform ?? null;
   const visible = opt.options.filter((o) =>
     !isAuxiliaryModel(o.value) &&
     !isDeprecatedModel(o.value) &&
     !isUnconfiguredAmbientModel(o.value, keyedIds) &&
+    providerAllowedOnPlatform(providerPrefixOf(o.value), enginePlatform) &&
     (govOk || !isGovModel(o.value)) &&
     (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
   // Lockdown: only the gov-gateway models are selectable.
@@ -18195,7 +18219,7 @@ setInspectorRail(true); // start with the right inspector slid into the metrics 
 renderStatus();
 loadCachedConfig(); renderStatus(); // P-IDE.1d: paint the cached model immediately, then refresh live
 void loadConfig().then(renderStatus);
-// P-NETSTAT.1 (ADR-0422): the network indicator probes the host the CURRENT model's turns travel to. While
+// P-NETSTAT.1 (ADR-0423): the network indicator probes the host the CURRENT model's turns travel to. While
 // the boot is still waiting on the live model list and the link has just become stable, re-arm a warm
 // cycle (at most every 15s): a cold start on a bad connection spends loadConfig's retry budget while the
 // network is down, and without this the picker stayed on the cached list until a manual refresh.

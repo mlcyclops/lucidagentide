@@ -44,6 +44,7 @@ import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: C
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
 import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
 import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
+import { installCliForwarder } from "./cli_forwarder.ts"; // P-TUI.2: `lucid hub` from any terminal on an installed machine
 
 // CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
 // Order: an explicit env var (launcher / dev run), then the packaged package.json's `lucidBuildFlavor`
@@ -1286,6 +1287,11 @@ app.whenReady().then(async () => {
   // Dev: repo is the parent of desktop/. Packaged: the repo is bundled into
   // Resources/repo (electron-builder extraResources) so bun/omp can run it.
   REPO = app.isPackaged ? join(process.resourcesPath, "repo") : join(app.getAppPath(), "..");
+  // P-TUI.2: `lucid hub` from any terminal. A packaged Windows app points the per-user WindowsApps
+  // forwarder (on PATH by default) at the bin\lucid.exe it ships; a foreign lucid.cmd is left alone.
+  if (app.isPackaged && process.platform === "win32" && process.env.LOCALAPPDATA) {
+    console.log(`[main] lucid command: ${installCliForwarder({ localAppData: process.env.LOCALAPPDATA, resourcesPath: process.resourcesPath })}`);
+  }
 
   // First-run setup: install omp + provision the scanner interpreter using the
   // bundled bun/uv. Only shows a splash when there's actually work to do, so a

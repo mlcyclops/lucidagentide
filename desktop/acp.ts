@@ -10,26 +10,57 @@
 // could not be exercised headlessly).
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { closeSync, constants, fstatSync, ftruncateSync, mkdtempSync, openSync, readSync, writeSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): share the engine's hidden console
+
+// P-BROWSER.4 (ADR-0415): the `windowsHide` a spawn uses when its caller does not pass one. This module is
+// also bundled into the Node-hosted VS Code extension, so it must not import console_host.ts (bun:ffi):
+// the engine installs console_host's `ompWindowsHide` here at boot (dev.ts, after ensureHiddenConsole), and
+// every other host keeps CREATE_NO_WINDOW, the contract from before the hidden console existed.
+let defaultWindowsHide: () => boolean = () => true;
+export function setDefaultWindowsHide(fn: () => boolean): void { defaultWindowsHide = fn; }
 
 // Support diagnosability (the "agent process exited (code 1)" support ticket): every omp child's stderr
 // is appended to ONE rolling log so a fresh-install failure leaves evidence a human can send in. The
 // write is best-effort - diagnostics must never break the client - and the file is bounded: past 512KB
 // it is rewritten keeping the newest 256KB.
-const ACP_LOG = join(homedir(), ".omp", "lucid-acp.log");
+//
+// The recovery incident report quotes this log's tail as its only evidence, so it must hold the operator's
+// real omp children and nothing else. Every suite that drives the fake ACP agent spawns through this
+// client; resolved to the real home, a full `bun test` run filled the tail with `[fake-acp] ready` lines
+// and pushed the real omp stderr out of the report. So under `bun test` (NODE_ENV=test) it NEVER resolves
+// to the real log (the security_log.ts rule). `LUCID_ACP_LOG` gives a test a deterministic file. Resolved
+// per call, never at import: import order must not decide where a line lands. The test file lives in a
+// private mkdtemp directory (0700), never at a predictable name in the shared temp dir.
+let testLogDir: string | null = null;
+export function acpLogPath(): string {
+  const override = process.env.LUCID_ACP_LOG?.trim();
+  if (override) return override;
+  if (process.env.NODE_ENV === "test") return join(testLogDir ??= mkdtempSync(join(tmpdir(), "lucid-acp-test-")), "lucid-acp.log");
+  return join(homedir(), ".omp", "lucid-acp.log");
+}
 const ACP_LOG_MAX = 512 * 1024;
 const ACP_LOG_KEEP = 256 * 1024;
+/** Append, and past ACP_LOG_MAX keep the newest ACP_LOG_KEEP bytes. Every step goes through ONE descriptor,
+ *  so the size checked is the size of the file rewritten (no path re-resolved between check and use). Writes
+ *  are positional rather than O_APPEND because Windows refuses to truncate a handle opened for append. */
 function acpLog(text: string): void {
+  let fd: number | null = null;
   try {
-    appendFileSync(ACP_LOG, text);
-    if (statSync(ACP_LOG).size > ACP_LOG_MAX) {
-      const tail = readFileSync(ACP_LOG, "utf8").slice(-ACP_LOG_KEEP);
-      writeFileSync(ACP_LOG, tail);
+    fd = openSync(acpLogPath(), constants.O_RDWR | constants.O_CREAT, 0o600);
+    const line = Buffer.from(text, "utf8");
+    const at = fstatSync(fd).size;
+    writeSync(fd, line, 0, line.length, at);
+    const size = at + line.length;
+    if (size > ACP_LOG_MAX) {
+      const tail = Buffer.alloc(ACP_LOG_KEEP);
+      const n = readSync(fd, tail, 0, ACP_LOG_KEEP, size - ACP_LOG_KEEP);
+      ftruncateSync(fd, 0);
+      writeSync(fd, tail, 0, n, 0);
     }
   } catch { /* best-effort; never break the client over a log line */ }
+  finally { if (fd !== null) { try { closeSync(fd); } catch { /* already closed */ } } }
 }
 
 /** A JSON-RPC error object from the agent, as a real Error whose message says what went wrong.
@@ -90,7 +121,7 @@ export class ACPClient {
   private errTail = "";
 
   start(): void {
-    const windowsHide = this.spawnOpts.windowsHide ?? ompWindowsHide();
+    const windowsHide = this.spawnOpts.windowsHide ?? defaultWindowsHide();
     this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide, env: { ...process.env, ...this.env } });
     acpLog(`\n[acp spawn ${new Date().toISOString()} cmd=${this.cmd} cwd=${this.cwd}]\n`);
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));

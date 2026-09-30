@@ -147,7 +147,8 @@ async function resolveDefaultJudge(ctx: unknown): Promise<JudgeLike> {
   const { resolveJudge } = await import("@oh-my-pi/pi-coding-agent/judgment");
   const { ModelRegistry } = await import("@oh-my-pi/pi-coding-agent/config/model-registry");
   if (!(registry instanceof ModelRegistry)) throw new Error("the extension context's model registry is not omp's");
-  return resolveJudge({ settings, registry });
+  // omp 18.4 made `JudgeDeps.purpose` required; it labels the judgment ledger and telemetry spans.
+  return resolveJudge({ settings, registry, purpose: "browser_run" });
 }
 
 /** A run-ending condition the loop reports (never thrown past runBrowserGoal). */
