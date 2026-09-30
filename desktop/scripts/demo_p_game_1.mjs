@@ -117,4 +117,27 @@ voyage.key('KeyP');
 voyage.key('KeyR');
 assert.equal(voyage.node('goalN').textContent, 'GOAL 1/15', 'restart resets the voyage');
 console.log(`Nebula Fusion: Voyage: missions advanced to ${reached}, restart resets`);
+const brigade = await launch('brick-brigade.html', 400, 720);
+brigade.advance(2); // the attract demo plays behind the title panel and never ends the run
+assert.equal(brigade.node('ovTitle').textContent, 'BRICK BRIGADE');
+brigade.node('btnPrimary').click();
+assert.equal(brigade.node('overlay').hidden, true);
+assert.equal(brigade.node('goalN').textContent, 'GOAL 1/13');
+globalThis.__brickBrigade.autopilot(true); // the game's own playtest handle: the carrier tracks the ball
+for (let i = 0; i < 90 && brigade.node('overlay').hidden; i++) brigade.advance(1);
+const run = globalThis.__brickBrigade.state();
+assert.ok(run.done >= 3 && run.rescued >= 1, `missions and rescues must advance, got ${JSON.stringify(run)}`);
+brigade.key('KeyP');
+assert.equal(brigade.node('ovTitle').textContent, 'PAUSED');
+brigade.key('KeyR');
+assert.equal(brigade.node('goalN').textContent, 'GOAL 1/13', 'restart resets the ladder');
+assert.equal(globalThis.__brickBrigade.state().score, 0);
+globalThis.__brickBrigade.autopilot(false);
+brigade.key('ArrowLeft'); // park the carrier in the corner: every ball is lost
+for (let i = 0; i < 120 && brigade.node('ovTitle').textContent !== 'OUT OF LIVES'; i++) { brigade.key('Space'); brigade.advance(0.5); }
+assert.equal(brigade.node('ovTitle').textContent, 'OUT OF LIVES');
+assert.equal(brigade.node('btnPrimary').textContent, 'Redeploy');
+brigade.node('btnPrimary').click();
+assert.equal(globalThis.__brickBrigade.state().lives, 3, 'redeploy starts a fresh run');
+console.log(`Brick Brigade: ${run.done} missions and ${run.rescued} rescues on autopilot, pause/restart, loss, redeploy`);
 console.log('P-GAME.1 demo passed.');
