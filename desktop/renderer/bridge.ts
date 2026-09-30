@@ -46,6 +46,8 @@ export interface BuildInfoView {
   personalDir: string;
   vaultScope: string;
   features: { creatorMode: boolean; integrationRegistry: boolean; localMonitoring: boolean; cpuGpuOdometer: boolean; creatorLibrary: boolean };
+  /** P-MODEL.6: the engine's `process.platform`. Absent from an older engine, which reads as unknown. */
+  platform?: string;
 }
 
 /** CREATOR-IMG (ADR-0291): one model a live probe found on the configured image server. */

@@ -117,7 +117,7 @@ import { formatImportLine } from "./import_progress.ts";
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
@@ -314,6 +314,8 @@ const MODEL_CTX: Record<string, number> = {
   "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
+  // Sonnet 5.5 (omp 18.4.4 catalog): 1M context, 128K max output.
+  "claude-sonnet-5-5": 1_000_000,
   "gpt-6-astra": 1_000_000, "gpt-6-sol": 1_000_000, "gpt-6-luna": 1_000_000,
   // Grok 4.6 / 4.7 (omp 18.2.10 catalog, xai + xai-oauth): 500K context.
   "grok-4.7": 500_000, "grok-4.6": 500_000,
@@ -4661,7 +4663,7 @@ function secSovereignty(): string {
       `<div class="set-note ok">${icon("check", 12)} ${china.length} China-origin model(s) are unlocked and listed in the picker. <button class="btn-link" id="chinaRelock">Re-lock</button></div>`, true);
   }
   return setCard("sovereignty", "Restricted-origin models", `${china.length} hidden`,
-    `<div class="set-note danger">${icon("shield", 12)} <b>${china.length} model(s) from China-based providers</b> (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu) are hidden. They route to servers outside U.S. jurisdiction with <b>no U.S. data sovereignty</b>; review each provider's privacy policy before use.</div>
+    `<div class="set-note danger">${icon("shield", 12)} <b>${china.length} model(s) from China-based providers</b> (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu, StepFun) are hidden. They route to servers outside U.S. jurisdiction with <b>no U.S. data sovereignty</b>; review each provider's privacy policy before use.</div>
      <div class="china-unlock"><input id="chinaAckInput" placeholder="Type ACKNOWLEDGE to unlock" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="chinaAckBtn" disabled>Unlock</button></div>`, true);
 }
 function secAsksage(a: typeof state.asksage, datasets: string[] | null): string {
@@ -17409,6 +17411,9 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "claude-opus-4-8": { exp: 4, iq: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
   "claude-opus-4-7": { exp: 4, iq: 5, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
   "claude-opus-4-6": { exp: 4, iq: 4, eff: "Prior Opus - very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
+  // Sonnet 5.5 (omp 18.4.4 catalog): $2/$10 per Mtok (cache read $0.20 / write $2.50), 1M context, 128K
+  // output, reasoning, text + image input. Half Opus 5.5's price for the balanced tier of the same family.
+  "claude-sonnet-5-5": { exp: 2, iq: 4, eff: "The Claude 5.5 family's balanced tier at $2/$10 per Mtok, half Opus 5.5's rate, with a 1M context window.", best: "Everyday coding, refactors, and code review at a workhorse price.", ctx: "1M" },
   "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
   "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
   "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude - excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
@@ -17424,6 +17429,9 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   // reasoning with an effort toggle, text + image input.
   "grok-4.7": { exp: 2, iq: 4, eff: "xAI's newest Grok: strong reasoning at $2/$6 per Mtok, doubling past 200K input; 500K context.", best: "Everyday coding and analysis with long context at a low price.", ctx: "500K" },
   "grok-4.6": { exp: 2, iq: 4, eff: "Prior Grok at the same $2/$6 price and 500K context.", best: "A version pin for Grok work.", ctx: "500K" },
+  // P-MODEL.6: omp's `apple` provider (macOS 27+ on Apple silicon, listed on macOS only) reports its one
+  // model as `apple/on-device`. Keyless and local: no per-token bill and no network egress.
+  "on-device": { exp: 1, iq: 2, eff: "Apple's on-device Foundation Model: runs on this Mac with no key and no network, so nothing you send leaves the machine.", best: "Quick private drafts, summaries, and lookups, even offline." },
   // AskSage · OpenAI. GPT-5.6 ships three tier codenames (luna=mid / sol / terra); luna is the default RAG model.
   "gpt-5.6-luna": { exp: 3, iq: 5, eff: "Newest mid-tier GPT-5.6; the default RAG model.", best: "General gov coding, analysis, and RAG grounding.", ctx: "256K" },
   "gpt-5.6-sol": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },
@@ -17479,7 +17487,7 @@ const MODEL_INFO: Record<string, ModelInfo> = {
 // id, then by fully-stripped base id so a provider-routed copy of a known model inherits it); otherwise
 // INFER ratings from the family + tier so no row is ever left without a card.
 const stripProvider = (v: string) => v.replace(/^[^/]*\//, "");
-const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemini: "Google Gemini", gpt: "OpenAI GPT", "gpt-o": "OpenAI o-series", rag: "AskSage RAG", other: "this provider" };
+const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemini: "Google Gemini", gpt: "OpenAI GPT", "gpt-o": "OpenAI o-series", apple: "Apple on-device", rag: "AskSage RAG", other: "this provider" };
 function inferModelInfo(value: string): ModelInfo {
   const fam = familyOf(value).id;
   // Capability tier from the SHARED heuristic (model_families.capabilityTier) so the hover-card iq stars
@@ -17573,10 +17581,14 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // or ADC on the box; LUCID shows them only behind a key saved in the hub. `state.auth` unloaded = no key
   // yet, which hides them until the first auth fetch lands (pickerRedraw repaints).
   const keyedIds = credentialedProviderIds(state.auth);
+  // P-MODEL.6: platform-bound providers (omp's on-device `apple`) list only where the ENGINE runs on their
+  // OS; until /api/build-info answers the platform is unknown and they stay hidden.
+  const enginePlatform = state.buildInfo?.platform ?? null;
   const visible = opt.options.filter((o) =>
     !isAuxiliaryModel(o.value) &&
     !isDeprecatedModel(o.value) &&
     !isUnconfiguredAmbientModel(o.value, keyedIds) &&
+    providerAllowedOnPlatform(providerPrefixOf(o.value), enginePlatform) &&
     (govOk || !isGovModel(o.value)) &&
     (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
   // Lockdown: only the gov-gateway models are selectable.

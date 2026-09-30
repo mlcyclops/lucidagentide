@@ -156,6 +156,9 @@ export interface BuildInfoView {
   readonly personalDir: string;
   readonly vaultScope: BuildFlavor;
   readonly features: BuildFeatures;
+  /** P-MODEL.6: the ENGINE's `process.platform` (where omp runs), for platform-bound providers such as
+   *  omp's on-device `apple`, which the picker lists on darwin only. */
+  readonly platform: string;
 }
 
 export interface BuildRuntimeInfo {
@@ -164,6 +167,7 @@ export interface BuildRuntimeInfo {
   readonly dataRoot: string;
   readonly settingsFile: string;
   readonly personalDir: string;
+  readonly platform: string;
 }
 
 export function buildInfoView(info: BuildFlavorInfo, runtime: BuildRuntimeInfo): BuildInfoView {
@@ -182,5 +186,6 @@ export function buildInfoView(info: BuildFlavorInfo, runtime: BuildRuntimeInfo):
     personalDir: runtime.personalDir,
     vaultScope: info.flavor,
     features: info.features,
+    platform: runtime.platform,
   };
 }

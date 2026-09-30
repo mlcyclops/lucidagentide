@@ -3398,6 +3398,7 @@ return Bun.serve({
           dataRoot: process.env.LUCID_DATA_ROOT || "",
           settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
           personalDir: personalBaseDir(),
+          platform: process.platform,
         }) });
       }
       // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail. Creator builds

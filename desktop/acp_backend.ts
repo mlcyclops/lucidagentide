@@ -55,6 +55,7 @@ import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type Grant
 import { caps } from "../harness/runs/profiles.ts";
 import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
+import { providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
 import { providerAuth, typesafeKeySet, type ProviderAuth } from "./auth_status.ts";
 import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -2350,6 +2351,9 @@ class Backend {
     const opt = this.configOptions.find((c) => c?.id === "model");
     const list = Array.isArray(opt?.options) ? opt!.options : [];
     let models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    // P-MODEL.6: the same platform rule the picker applies (omp's on-device `apple` on darwin only), so the
+    // startup default and the checker recommendation can never pick a model the picker would not list.
+    models = models.filter((m: ModelOption) => providerAllowedOnPlatform(providerPrefixOf(m.value), process.platform));
     // P-GOAL.6.1: when the AskSage lock is on, the checker must use a model routed through the AskSage gateway.
     // Fail-safe: only narrow if such models exist (never empty the list, which would drop the picker / the
     // recommendation to the maker model). ADR-0217: match on the `asksage` provider prefix - real gov ids like

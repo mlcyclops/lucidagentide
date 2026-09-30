@@ -21,6 +21,10 @@ export const MODEL_FAMILIES: ModelFamily[] = [
   // P-MODEL.5 (ADR-0392): xAI Grok gets its own group. Unmatched, every Grok (4.7 included) sank into
   // "Other models" at the bottom of the picker, and "same family" fallbacks paired it with unrelated models.
   { id: "grok", label: "xAI Grok", icon: "eye", match: /grok/i },
+  // P-MODEL.6: omp's keyless `apple` provider (Apple Foundation Models, on-device, macOS 27+ on Apple
+  // silicon; ids such as `apple/on-device` are discovered at runtime). Matched on the provider prefix so
+  // no other vendor's id can land here. Listed on macOS only: see providerAllowedOnPlatform.
+  { id: "apple", label: "Apple on-device", icon: "shield", match: /^apple\//i },
   { id: "rag", label: "AskSage RAG", icon: "search", match: /(^|[/-])rag$/i },
 ];
 // Catch-all for anything unmatched (e.g. a newly-added open-source provider). `/.^/` never matches,
@@ -62,6 +66,19 @@ const AMBIENT_PROVIDERS: Record<string, string> = { "amazon-bedrock": "amazon-be
 export function isUnconfiguredAmbientModel(value: string, credentialedProviderIds: ReadonlySet<string>): boolean {
   const owner = AMBIENT_PROVIDERS[providerPrefixOf(value)];
   return owner !== undefined && !credentialedProviderIds.has(owner);
+}
+
+// P-MODEL.6: omp providers that exist on ONE host OS only, keyed by omp provider id, valued by the
+// `process.platform` they run on. `apple` is Apple Foundation Models, driven in-process on the Mac.
+const PLATFORM_BOUND_PROVIDERS: Record<string, string> = { apple: "darwin" };
+
+/** P-MODEL.6: whether models of omp provider `provider` may be listed where the engine runs on
+ *  `platform` (its `process.platform`; null when not known yet, e.g. an older engine). The single place
+ *  this decision lives: `apple` is listed on darwin only, never on win32 or linux, and stays hidden
+ *  while the platform is unknown; every other provider is unaffected. */
+export function providerAllowedOnPlatform(provider: string, platform: string | null): boolean {
+  if (!Object.hasOwn(PLATFORM_BOUND_PROVIDERS, provider)) return true; // own keys only: a prototype name is never a bound provider
+  return PLATFORM_BOUND_PROVIDERS[provider] === platform;
 }
 
 // ── Picker order inside a family: what you use, then the rest, then the special-case routes ──────
@@ -149,9 +166,13 @@ export function isAuxiliaryModel(value: string): boolean { return /tab_flash|tab
 
 /** China-origin model (no U.S. data sovereignty). Hidden until the user acknowledges in Settings.
  *  Forward-looking: matches the providers the user flagged (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu)
- *  plus common siblings, so a newly-configured one is gated by default rather than silently listed. */
+ *  plus common siblings, so a newly-configured one is gated by default rather than silently listed.
+ *  P-MODEL.6: StepFun (omp 18.4's `stepfun` provider, and its ids resold as `stepfun/…` / `stepfun-ai/…`
+ *  by aggregators) by name, and a bare StepFun id (`step-3.7-flash`, `step-5-preview`, `step-r1-v-mini`)
+ *  only where a path segment STARTS with `step-` and a version digit (or `r` + digit) follows, so
+ *  `step-by-step`, `multistep-2` or `footstep-3` never gate. */
 export function isChinaModel(value: string): boolean {
-  return /deepseek|kimi|moonshot|minimax|(^|[-/])glm(-|\b)|zhipu|qwen|ernie|hunyuan|doubao|(^|[-/])yi-|01-ai/i.test(value);
+  return /deepseek|kimi|moonshot|minimax|(^|[-/])glm(-|\b)|zhipu|qwen|ernie|hunyuan|doubao|(^|[-/])yi-|01-ai|stepfun|(^|\/)step-r?\d/i.test(value);
 }
 
 /** The GPT-5.x/4.x numeric version (e.g. 5.4), or null for non-versioned GPT (o-series, gpt-oss). */
@@ -265,6 +286,10 @@ export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
   /claude-fable-5[-.]1(?![\w.-])/,                                      // Fable 5.1 (API-credit billed, see isApiOnlyModel)
   /claude-mythos-5[-.]1(?![\w.-])/,                                     // Mythos 5.1, shipped alongside Fable 5.1
   /claude-fable-5(?![\w.-])/,
+  // Sonnet 5.5 (omp 18.4.4, 2026-09-30): the balanced tier of the 5.5 family, directly above the Sonnet it
+  // supersedes and below every flagship entry. `[-.]` takes both `claude-sonnet-5-5` and the aggregators'
+  // `anthropic/claude-sonnet-5.5`; the Sonnet 5 entry below is end-anchored, so it never matches 5.5.
+  /claude-sonnet-5[-.]5(?![\w.-])/,
   /claude-sonnet-5(?![\w.-])/,
   /gpt-5[-.]6(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/,       // 5.6 + the gov tier codenames (luna/sol/terra)
   /claude-opus-4[-.]8(?![\w.-])/,

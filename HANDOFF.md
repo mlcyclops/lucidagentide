@@ -95,8 +95,9 @@ audited evidence.
 **Bun version matters.** Under bun 1.3.x, 6 harness tests that start a real omp
 session (including the fail-closed dead-scanner test in
 `harness/hooks/quarantine_hook.test.ts`) die before their bodies run, because
-omp 18.2.10's browser prelude will not link ("Missing 'default' export in
-.../tools/browser/prelude.js"). They pass under bun 1.4.2 and in CI (which uses
+omp's browser prelude will not link ("Missing 'default' export in
+.../tools/browser/prelude.js"; seen on omp 18.2.10, not re-checked under bun 1.3.x
+at the current 18.4.4 pin). They pass under bun 1.4.2 and in CI (which uses
 `bun-version: latest`). Use bun >= 1.4.2 locally; if the machine's bun is older,
 `npm i bun@1.4.2` into a scratch dir and run its binary. A bare `bun test
 harness` also picks up the generated `desktop/release/win-unpacked/.../harness`

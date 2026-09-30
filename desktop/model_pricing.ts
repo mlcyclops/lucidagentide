@@ -16,6 +16,9 @@ export interface Price { inPerM: number; outPerM: number } // USD per 1,000,000 
 // Built-in list prices by tier, matched in order (cheapest/most-specific markers first so e.g.
 // "flash-lite" matches lite, "gpt-5-mini" matches mini, before the broader family fallbacks).
 const TABLE: [RegExp, Price][] = [
+  // P-MODEL.6: omp's `apple` provider runs Apple's Foundation Model on the Mac itself (keyless, no API
+  // bill), so its list price is zero rather than the sonnet-ish default. Anchored on the provider prefix.
+  [/^apple\//, { inPerM: 0, outPerM: 0 }],
   [/nano/, { inPerM: 0.05, outPerM: 0.40 }],
   [/lite/, { inPerM: 0.10, outPerM: 0.40 }],
   [/\bmini\b/, { inPerM: 0.25, outPerM: 2.00 }], // \b so it never matches the "mini" inside "geMINI"
@@ -38,6 +41,11 @@ const TABLE: [RegExp, Price][] = [
   // still correctly prices 4.6/4.7/4.8 at $15/$75.
   [/opus-?5(\b|[-.])/, { inPerM: 5.0, outPerM: 25.0 }],
   [/opus/, { inPerM: 15.0, outPerM: 75.0 }],
+  // Sonnet 5.5 (2026-09-30, from omp 18.4.4's catalog: anthropic, amazon-bedrock, google-vertex, and the
+  // aggregators' dotted `claude-sonnet-5.5`): $2/$10 per Mtok (cache read $0.20 / write $2.50). Must precede
+  // the generic /sonnet/ row, which stays the $3/$15 estimate for Sonnet 4.x and 5. `(\b|[-.])` ends the
+  // version so a future `sonnet-5-50` never lands here.
+  [/sonnet-?5[-.]5(\b|[-.])/, { inPerM: 2.0, outPerM: 10.0 }],
   [/sonnet/, { inPerM: 3.00, outPerM: 15.0 }],
   [/\bpro\b/, { inPerM: 1.25, outPerM: 10.0 }],
   [/\bo[34]\b|o3|o4/, { inPerM: 2.00, outPerM: 8.00 }],
