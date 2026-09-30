@@ -1985,6 +1985,11 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
  *  next turn that produces output. */
 let netResend: { prompt: string; attempts: number } | null = null;
 
+/** P-JEV.7: the effective Judgment backend, read at boot and whenever Settings loads or changes it. With
+ *  "none" the judgment window labels the chat model's own effort pick as that, not as a judge consulted.
+ *  null until the engine answers (the window then keeps the generic labels). */
+let judgeBackend: JudgmentView["effective"] | null = null;
+
 /** Render the stand-by card into `container` for a turn that failed (or, with `held`, was never sent) on
  *  the network. The resend reuses the composer path (same as the switch-and-retry buttons), and only
  *  fires when the composer is free: text the user is typing is never overwritten. */
@@ -2751,7 +2756,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
     // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
     else if (e.type === "judgment") {
-      if (!judgments) { judgments = createJudgments(); (thoughts?.el ?? streamEl).after(judgments.el); }
+      if (!judgments) { judgments = createJudgments({ judgeOff: judgeBackend === "none" }); (thoughts?.el ?? streamEl).after(judgments.el); }
       judgments.add(e.report);
       scrollChat();
     }
@@ -5539,7 +5544,7 @@ function hydrateSettings(): void {
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
     void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
-    void bridge.judgment().then((j) => fillSec("judgment", secJudgment(a, j))); // P-JEV.1: key state + the clamped mode
+    void bridge.judgment().then((j) => { if (j) judgeBackend = j.effective; fillSec("judgment", secJudgment(a, j)); }); // P-JEV.1: key state + the clamped mode
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -16058,6 +16063,7 @@ function wire(): void {
     if (t0.matches("[data-judgment-set]")) {
       const next = await bridge.setJudgment((t0 as HTMLSelectElement).value as JudgmentView["stored"]).catch(() => null);
       if (!next) { showToast({ tone: "warn", title: "Couldn't save judgment backend", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
+      judgeBackend = next.effective;
       fillSec("judgment", secJudgment(state.auth, next));
       showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the chat model until it is turned off." : next.chain.length ? "omp restarts with it; the next turn uses it." : "No judge model: the chat model answers the one pick omp cannot skip.", timeout: 4000 });
       return;
@@ -18194,6 +18200,7 @@ void loadConfig().then(renderStatus);
 // cycle (at most every 15s): a cold start on a bad connection spends loadConfig's retry budget while the
 // network is down, and without this the picker stayed on the cached list until a manual refresh.
 startNetMonitor(() => state.model);
+void bridge.judgment().then((j) => { if (j) judgeBackend = j.effective; }); // P-JEV.7: label the effort pick under None
 let netModelKickAt = Date.now(); // the boot loadConfig above gets the first 15s to itself
 onNetChange(() => {
   const ns = netSnapshot();

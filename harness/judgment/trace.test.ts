@@ -5,7 +5,7 @@
 // what the extension captures from a live pi-ai call, and what the desktop accepts off the loopback wire.
 
 import { describe, expect, test } from "bun:test";
-import { answerSummary, backendLabel, jevConsulted, judgmentPurpose, STATE_PREVIEW_CHARS } from "./trace.ts";
+import { answerSummary, backendLabel, effortPick, jevConsulted, judgmentPurpose, STATE_PREVIEW_CHARS } from "./trace.ts";
 import { captureJudgment, parseJudgmentReport } from "./trace_schema.ts";
 
 const questions = {
@@ -130,4 +130,14 @@ describe("view helpers", () => {
     expect(backendLabel({ backend: "text", provider: "anthropic", model: "claude-fable-5-1", label: "x" })).toBe("anthropic/claude-fable-5-1");
     expect(backendLabel({ backend: "text", label: "local/tiny" })).toBe("local/tiny");
   });
+});
+
+// P-JEV.7: under a None backend the trace view names the chat model's effort pick as that pick.
+test("effortPick: the chosen level of a successful effort pick, and nothing for anything else", () => {
+  const level = { type: "choice" as const, instructions: "effort", criteria: { low: null, high: null } };
+  const ans = { level: { type: "choice" as const, choice: "high", probabilities: { high: 1 }, confidence: 1 } };
+  expect(effortPick({ questions: { level }, answers: ans })).toBe("high");
+  expect(effortPick({ questions: { level }, answers: ans, error: "aborted" })).toBeNull();
+  expect(effortPick({ questions: { level } })).toBeNull();
+  expect(effortPick({ questions: { stopped: { type: "noul", instructions: "stopped?" } }, answers: { stopped: { type: "noul", noul: 0.9 } } })).toBeNull();
 });

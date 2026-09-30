@@ -14,7 +14,7 @@
 import { $, el, fmtNum } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { esc } from "./format.ts";
-import { answerSummary, backendLabel, JEV_IDLE_REASON, judgmentPurpose, type JudgmentReport, type TraceAnswer, type TraceQuestion } from "../../harness/judgment/trace.ts";
+import { answerSummary, backendLabel, effortPick, JEV_IDLE_REASON, judgmentPurpose, type JudgmentReport, type TraceAnswer, type TraceQuestion } from "../../harness/judgment/trace.ts";
 
 export interface JudgmentsWin { el: HTMLElement; add(report: JudgmentReport): void; finish(): void }
 
@@ -44,7 +44,12 @@ export function failureNote(error: string, timedOut: boolean): string {
     : `Failed: ${error}. omp tries the next judge in the chain; the next row is that attempt.`;
 }
 
-export function createJudgments(): JudgmentsWin {
+/** P-JEV.7: the hover text on a window that only holds the chat model's own effort pick. */
+const EFFORT_ONLY_TIP = "No judge model|Your Judgment backend is None, so no judge model is asked. With Thinking: Auto, omp still picks a thinking effort for each turn, and your chat model makes that pick itself (a few tokens). Set Thinking to a fixed level to skip it.";
+
+/** `judgeOff`: the Judgment backend is None. Then the window names an effort pick as what it is, the chat
+ *  model choosing its own thinking effort, rather than as a judgment (P-JEV.7). */
+export function createJudgments(opts: { judgeOff?: boolean } = {}): JudgmentsWin {
   const win = el(`<div class="thoughts judgments open" data-streaming="1">
     <button class="thoughts-head" type="button" aria-expanded="true">
       <span class="thoughts-spin">${scaleIcon(13)}</span>
@@ -59,6 +64,7 @@ export function createJudgments(): JudgmentsWin {
   const countEl = $(".thoughts-count", win) as HTMLElement;
   const body = $(".thoughts-body", win) as HTMLElement;
   const reports: JudgmentReport[] = [];
+  if (opts.judgeOff) headBtn.setAttribute("data-tip", EFFORT_ONLY_TIP);
   const toggle = (open: boolean) => { win.classList.toggle("open", open); headBtn.setAttribute("aria-expanded", String(open)); };
   headBtn.addEventListener("click", () => toggle(!win.classList.contains("open")));
   return {
@@ -68,7 +74,9 @@ export function createJudgments(): JudgmentsWin {
       countEl.hidden = false; countEl.textContent = String(reports.length);
       const who = backendLabel(report);
       const timedOut = !!report.error && /abort|timed? ?out/i.test(report.error);
-      curEl.textContent = report.error ? (timedOut ? `${who} timed out` : `${who} failed, trying the next judge\u2026`) : `${judgmentPurpose(report)} \u00b7 ${who}`;
+      const level = opts.judgeOff ? effortPick(report) : null;
+      curEl.textContent = report.error ? (timedOut ? `${who} timed out` : `${who} failed, trying the next judge\u2026`)
+        : level ? `Thinking effort: ${level} \u00b7 chosen by ${who}` : `${judgmentPurpose(report)} \u00b7 ${who}`;
       const rows = Object.entries(report.questions).map(([id, q]) => rowHtml(id, q, report.answers?.[id])).join("");
       const stateNote = `Judged state \u00b7 ${fmtNum(report.stateChars)} chars${report.stateTruncated ? " (preview truncated)" : ""}`;
       body.appendChild(el(`<div class="jd${report.error ? " failed" : ""}">
@@ -88,6 +96,14 @@ export function createJudgments(): JudgmentsWin {
       const failed = reports.filter((r) => r.backend === "typesafe" && r.error).length;
       const fallback = reports.filter((r) => r.backend === "text");
       const other = fallback.length ? backendLabel(fallback[fallback.length - 1]!) : "";
+      // P-JEV.7: under None a turn whose only reports are the chat model's effort picks says so, with the why.
+      const levels = opts.judgeOff ? reports.map(effortPick) : [];
+      if (n && levels.length === n && levels.every((l) => l !== null)) {
+        // "No judge model" leads: a narrow column ellipsizes the tail (invariant #11), never the point.
+        curEl.textContent = `No judge model \u00b7 thinking effort ${levels[n - 1]}, chosen by ${backendLabel(reports[n - 1]!)}`;
+        countEl.hidden = true;
+        return;
+      }
       curEl.textContent = jev
         ? `Jev consulted \u00b7 ${jev} judgment${jev === 1 ? "" : "s"}${failed ? ` \u00b7 ${failed} failed` : ""}${fallback.length ? ` \u00b7 ${fallback.length} by ${other}` : ""}`
         : `${n} judgment${n === 1 ? "" : "s"} by ${other || "the chat model"}${failed ? ` \u00b7 Jev failed ${failed}\u00d7` : ""}`;
