@@ -194,6 +194,29 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     g.fillStyle = '#10130c'; g.beginPath(); g.arc(0, 4, 4, 0, 7); g.fill(); g.fillStyle = '#7fe37a'; g.beginPath(); g.arc(0, 4, 1.7, 0, 7); g.fill();
     g.fillStyle = 'rgba(160,255,150,.85)'; g.beginPath(); g.arc(-10, 0, 1.3, 0, 7); g.fill(); g.beginPath(); g.arc(10, 0, 1.3, 0, 7); g.fill();
   });
+  // Baba Yaga Prime: the flying fortress. Arms reach out to six rotor pods (drawn live so they can be shot
+  // off), and two mechanical bird legs dangle under the belly, a nod to the witch's hut on chicken legs.
+  const PRIME_PODS = [[-92, -8], [-64, -28], [-26, -36], [26, -36], [64, -28], [92, -8]];
+  const PRIME = sprite(220, 100, (g) => {
+    g.translate(110, 50);
+    g.strokeStyle = '#161a10'; g.lineWidth = 5; g.lineCap = 'round';
+    for (const [x, y] of PRIME_PODS) { g.beginPath(); g.moveTo(x * 0.25, y * 0.2); g.lineTo(x, y); g.stroke(); }
+    g.strokeStyle = '#4b5534'; g.lineWidth = 1.6; for (const [x, y] of PRIME_PODS) { g.beginPath(); g.moveTo(x * 0.25, y * 0.2 - 1.5); g.lineTo(x, y - 1.5); g.stroke(); }
+    // armored hull: stacked plates like a log cabin wall, riveted
+    const b = g.createLinearGradient(0, -26, 0, 24); b.addColorStop(0, '#9aa274'); b.addColorStop(0.45, '#4a5433'); b.addColorStop(1, '#161a0e');
+    g.fillStyle = b; g.beginPath(); g.moveTo(-40, 14); g.lineTo(-46, -4); g.lineTo(-30, -24); g.lineTo(30, -24); g.lineTo(46, -4); g.lineTo(40, 14); g.lineTo(18, 22); g.lineTo(-18, 22); g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 1; g.stroke();
+    g.strokeStyle = 'rgba(20,24,14,.7)'; g.lineWidth = 0.8; for (let y = -18; y < 20; y += 6) { g.beginPath(); g.moveTo(-42, y); g.lineTo(42, y); g.stroke(); }
+    g.fillStyle = 'rgba(210,220,180,.5)'; for (let y = -15; y < 20; y += 6) for (let x = -36; x <= 36; x += 12) { g.beginPath(); g.arc(x, y, 0.8, 0, 7); g.fill(); }
+    g.fillStyle = 'rgba(255,255,255,.14)'; g.beginPath(); g.moveTo(-28, -22); g.lineTo(28, -22); g.lineTo(38, -8); g.lineTo(-38, -8); g.closePath(); g.fill();
+    // command dome and sensor eye
+    g.fillStyle = '#20251a'; g.beginPath(); g.arc(0, -24, 11, Math.PI, 0); g.fill();
+    g.fillStyle = '#ff3b2e'; g.beginPath(); g.arc(0, -27, 3.4, 0, 7); g.fill(); g.fillStyle = 'rgba(255,255,255,.8)'; g.beginPath(); g.arc(-1, -28, 1, 0, 7); g.fill();
+    // missile bay and bomb racks
+    g.fillStyle = '#0d0f0a'; rr(g, -12, 12, 24, 8, 2); g.fill(); g.fillStyle = '#c8102e'; g.fillRect(-12, 11, 24, 1.2);
+    for (let i = 0; i < 6; i++) { const x = -34 + i * 6 + (i >= 3 ? 38 : 0); g.fillStyle = '#5c6245'; rr(g, x - 2, 14, 4, 9, 2); g.fill(); }
+    g.fillStyle = 'rgba(210,220,190,.9)'; g.font = '900 7px ui-sans-serif,Arial'; g.textAlign = 'center'; g.fillText('BY-P', 0, 6);
+  });
   const BOMB = sprite(8, 16, (g) => {
     const b = g.createLinearGradient(1, 0, 7, 0); b.addColorStop(0, '#2f3324'); b.addColorStop(0.5, '#8a9168'); b.addColorStop(1, '#2f3324');
     g.fillStyle = b; rr(g, 1.5, 3, 5, 12, 2.5); g.fill(); g.fillStyle = '#c8102e'; g.fillRect(1.5, 11, 5, 1.2);
@@ -364,6 +387,22 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     const buf = c.createBuffer(1, c.sampleRate, c.sampleRate), ch = buf.getChannelData(0);
     for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
     A.noise = buf; A.next = c.currentTime + 0.1;
+    // Hornet buzz: a low sawtooth with a fast tremolo through a bandpass, panned toward the Hornets.
+    { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 96;
+      const o2 = c.createOscillator(); o2.type = 'sawtooth'; o2.frequency.value = 101;
+      const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 420; bp.Q.value = 1.4;
+      const trem = c.createGain(); trem.gain.value = 0.5; const lfo = c.createOscillator(); lfo.frequency.value = 26; const lg = c.createGain(); lg.gain.value = 0.5; lfo.connect(lg); lg.connect(trem.gain);
+      const g = c.createGain(); g.gain.value = 0; const pan = c.createStereoPanner ? c.createStereoPanner() : null;
+      o.connect(bp); o2.connect(bp); bp.connect(trem); trem.connect(g); if (pan) { g.connect(pan); pan.connect(A.sfx); } else g.connect(A.sfx);
+      o.start(); o2.start(); lfo.start(); A.buzz = { g, pan, o, o2 }; }
+    // Rotor drone: looped noise, low-passed, with a blade-pass amplitude throb, plus a sub sine; panned.
+    { const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 240; lp.Q.value = 3;
+      const am = c.createGain(); am.gain.value = 0.55; const lfo = c.createOscillator(); lfo.frequency.value = 16; const lg = c.createGain(); lg.gain.value = 0.45; lfo.connect(lg); lg.connect(am.gain);
+      const sub = c.createOscillator(); sub.type = 'sine'; sub.frequency.value = 48; const sg = c.createGain(); sg.gain.value = 0.35;
+      const g = c.createGain(); g.gain.value = 0; const pan = c.createStereoPanner ? c.createStereoPanner() : null;
+      src.connect(lp); lp.connect(am); sub.connect(sg); sg.connect(am); am.connect(g); if (pan) { g.connect(pan); pan.connect(A.sfx); } else g.connect(A.sfx);
+      src.start(); lfo.start(); sub.start(); A.rotor = { g, pan, lfo, lp }; }
   }
   function tone(freq, t, dur, type, vol, dest, o) {
     const c = A.ctx; if (!c) return null; o = o || {};
@@ -397,7 +436,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   const STEP = 60 / 76 / 4;
   function playStep(s, t) {
     if (G.mode === 'over') return;
-    const lvl = G.mode === 'play' ? clamp(Math.floor((G.wave - 1) / 2), 0, 3) : 0, bar = s >> 4, st = s & 15, M = A.music;
+    const lvl = G.mode === 'play' ? (boss ? 3 : clamp(Math.floor((G.wave - 1) / 2), 0, 3)) : 0, bar = s >> 4, st = s & 15, M = A.music;
     if (st === 0 || st === 8 || (bar === 3 && st === 10)) tone(90, t, 0.26, 'sine', 0.95, M, { to: 34, glide: 0.3, a: 0.003, s: 0.25, r: 0.18 });
     if (st === 4 || st === 12) { noise(t, 0.24, 0.3, 'bandpass', 850, M, 0.7); tone(160, t, 0.09, 'triangle', 0.28, M, { to: 105, a: 0.002, r: 0.12 }); }
     if (lvl >= 1 && (st === 11 || st === 15)) noise(t, 0.08, 0.1, 'bandpass', 780, M, 0.7);
@@ -414,6 +453,25 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     while (A.next < c.currentTime + 0.2) { playStep(A.step, A.next); A.next += STEP; A.step = (A.step + 1) % 64; if (A.step === 0) A.loops++; }
   }
   const now = () => (A.ctx && A.sfxOn ? A.ctx.currentTime : 0);
+  // Every frame: the buzz follows the Hornets on screen, the drone follows the motherships and the boss.
+  function audioLoops() {
+    const c = A.ctx; if (!c || !A.buzz) return;
+    const t = c.currentTime, playing = G.mode === 'play' || G.mode === 'dying';
+    let hn = 0, hx = 0;
+    for (const q of segs) if (q.kind === 'hornet' && !q.entering) { hn++; hx += q.x; }
+    for (const d of divers) if (d.kind === 'hornet') { hn++; hx += d.x; }
+    A.buzz.g.gain.setTargetAtTime(playing ? Math.min(0.11, hn * 0.012) : 0, t, 0.15);
+    if (A.buzz.pan && hn) A.buzz.pan.pan.setTargetAtTime(clamp((hx / hn) / W * 2 - 1, -0.8, 0.8), t, 0.2);
+    A.buzz.o.frequency.setTargetAtTime(96 + Math.sin(T * 3) * 4, t, 0.1);
+    const heavy = [];
+    for (const b of motherships) heavy.push({ x: b.x, w: 1 });
+    if (boss) heavy.push({ x: boss.x, w: 2.2 });
+    const wsum = heavy.reduce((a, h) => a + h.w, 0);
+    A.rotor.g.gain.setTargetAtTime(playing ? Math.min(0.5, wsum * 0.16) : 0, t, 0.3);
+    if (A.rotor.pan && wsum) A.rotor.pan.pan.setTargetAtTime(clamp(heavy.reduce((a, h) => a + h.x * h.w, 0) / wsum / W * 2 - 1, -0.7, 0.7), t, 0.3);
+    A.rotor.lfo.frequency.setTargetAtTime(boss ? 11 : 16, t, 0.5);
+    A.rotor.lp.frequency.setTargetAtTime(boss ? 180 : 240, t, 0.5);
+  }
   function throttle(key, gap) { const t = now(); if (!t || t - (A.last[key] || 0) < gap) return 0; A.last[key] = t; return t; }
   const SFX = {
     shot() { const t = throttle('shot', 0.07); if (t) tone(220, t, 0.04, 'square', 0.05, A.sfx, { to: 140, lp: 1200, a: 0.001, r: 0.03 }); },
@@ -426,6 +484,10 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     hurt() { const t = now(); if (!t) return; noise(t, 0.5, 0.5, 'lowpass', 400); tone(55, t, 0.5, 'sawtooth', 0.2, A.sfx, { to: 35, lp: 300 }); },
     mission() { const t = now(); if (!t) return; [62, 67, 71].forEach((n, i) => tone(mtof(n), t + i * 0.1, 0.14, 'triangle', 0.16, A.sfx, { a: 0.004, r: 0.3 })); },
     over() { const t = now(); if (!t) return; [50, 49, 48, 45].forEach((n, i) => tone(mtof(n), t + i * 0.42, i === 3 ? 1.1 : 0.34, 'sawtooth', 0.16, A.sfx, { lp: 700, q: 3, a: 0.03, s: 0.8, r: 0.2 })); },
+    bossHorn() { const t = now(); if (!t) return; for (const [n, d] of [[38, 0], [41, 0.5], [36, 1]]) { tone(mtof(n), t + d, 0.45, 'sawtooth', 0.22, A.sfx, { lp: 420, q: 2, a: 0.05, s: 0.8, r: 0.3 }); tone(mtof(n - 12), t + d, 0.45, 'sine', 0.3, A.sfx, { a: 0.05, r: 0.3 }); } },
+    podDown() { const t = now(); if (!t) return; noise(t, 0.5, 0.5, 'lowpass', 600); tone(95, t, 0.3, 'sawtooth', 0.2, A.sfx, { to: 40, lp: 500 }); noise(t + 0.08, 0.3, 0.25, 'bandpass', 1400, A.sfx, 1.2); },
+    shieldDown() { const t = now(); if (!t) return; const f = noise(t, 0.9, 0.35, 'bandpass', 1800, A.sfx, 2); if (f) f.frequency.exponentialRampToValueAtTime(200, t + 0.8); tone(220, t, 0.6, 'triangle', 0.12, A.sfx, { to: 70, a: 0.01 }); },
+    bossDeath() { const t = now(); if (!t) return; for (let i = 0; i < 5; i++) { noise(t + i * 0.22, 0.8, 0.5, 'lowpass', 420 - i * 50); tone(64 - i * 5, t + i * 0.22, 0.6, 'sine', 0.5, A.sfx, { to: 28, r: 0.4 }); } },
     win() { const t = now(); if (!t) return; [[55, 0], [60, 0.14], [64, 0.28], [67, 0.42], [64, 0.64], [67, 0.78], [72, 0.92]].forEach(([n, d], i) => tone(mtof(n), t + d, i === 6 ? 1.1 : 0.12, 'sawtooth', 0.13, A.sfx, { lp: 1600, a: 0.01, s: 0.7, r: 0.2 })); },
   };
   function setMusic(on) {
@@ -469,18 +531,18 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     { t: 'Clear a wave with no hull damage', n: 1, m: () => S.cleanWaves, d: 1, r: 'aegis' },
     { t: 'Down 200 drones in all', n: 200, m: () => S.downed, r: 'life' },
     { t: 'Intercept 5 missiles in all', n: 5, m: () => S.missiles, r: 'sweep' },
-    { t: 'Clear Wave 8: The Grand Swarm', n: 1, m: () => (S.waves >= LAST_WAVE ? 1 : 0), r: 'victory' },
+    { t: 'Destroy Baba Yaga Prime', n: 1, m: () => S.bossDown, r: 'victory' },
   ];
 
   // ─────────────────────────────── state ───────────────────────────────
   const G = { cheerT: 0, mothershipT: 0, mothershipsLeft: 0, mode: 'title', wave: 1, endless: false, auto: false, shake: 0, flash: 0, flashC: '255,255,255', waveT: 0, pendingWave: false, banners: [], shownScore: 0, waveName: '', missileT: 0, scoutT: 0, chainSeq: 0 };
   const keys = { left: false, right: false, up: false, down: false };
-  let crew = [], tug = { x: 120, dir: 1 };
+  let crew = [], tug = { x: 120, dir: 1 }, boss = null;
   let S = null, J = null, segs = [], divers = [], missiles = [], scouts = [], interceptors = [], vehicles = [], motherships = [], bombs = [];
   const chains = new Map(); // chain id -> { kind, total, announced, enraged }
   const wrecks = new Map();
   const wkey = (c, r) => c + ',' + r;
-  function freshStats() { return { score: 0, hull: 10, lives: 3, downed: 0, splits: 0, heads: 0, waves: 0, missiles: 0, glideKills: 0, mgKills: 0, aegisUsed: 0, wrecksCleared: 0, yagas: 0, cleanWaves: 0, waveHullHit: 0, combo: 0, comboT: 0, bestCombo: 0, aegis: 0, twinT: 0, mi: 0, goalBase: 0, done: 0 }; }
+  function freshStats() { return { score: 0, hull: 10, lives: 3, downed: 0, splits: 0, heads: 0, waves: 0, missiles: 0, glideKills: 0, mgKills: 0, aegisUsed: 0, wrecksCleared: 0, yagas: 0, bossDown: 0, cleanWaves: 0, waveHullHit: 0, combo: 0, comboT: 0, bestCombo: 0, aegis: 0, twinT: 0, mi: 0, goalBase: 0, done: 0 }; }
   function placeVehicles() {
     const spots = [[31, 'truck'], [87, 'track'], [271, 'truck'], [327, 'track']];
     if (!vehicles.length) vehicles = spots.map(([x, kind]) => ({ x, kind, hp: 2, alive: true, ang: -Math.PI / 2, heat: 0, hot: false, cd: 0 }));
@@ -490,7 +552,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   function newRun() {
     S = freshStats(); G.wave = 1; G.endless = false; G.banners = []; G.shownScore = 0; G.shake = 0; G.flash = 0; G.waveT = 0; G.pendingWave = false;
     J = { x: W / 2, y: DECK_Y - 30, tx: W / 2, ty: DECK_Y - 30, cd: 0, alive: true, respawnT: 0, inv: 2, bank: 0 };
-    segs = []; divers = []; missiles = []; scouts = []; interceptors = []; vehicles = []; motherships = []; bombs = []; crew = []; wrecks.clear(); chains.clear();
+    segs = []; divers = []; missiles = []; scouts = []; interceptors = []; vehicles = []; motherships = []; bombs = []; crew = []; boss = null; wrecks.clear(); chains.clear();
     for (const pool of [PARTS, RINGS, TEXTS, SHOTS, TRACERS]) for (const p of pool) p.on = false;
     placeVehicles(); loadWave(1); activateMission(0); updateHud(true);
   }
@@ -512,7 +574,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
       spawnChain(kind, len, 2 + ((Math.random() * (COLS - 4)) | 0), lag, d.sp);
       lag += len + 4;
     });
-    G.mothershipT = d.motherships ? 6 : 0; G.mothershipsLeft = d.motherships;
+    G.mothershipT = d.motherships ? 6 : 0; G.mothershipsLeft = d.motherships; G.bossSpawned = false;
     G.banners.push({ text: `WAVE ${w}`, sub: G.waveName, t: 0, life: 2.2, color: '127,227,255' });
   }
   // A chain of one class. It drops in single file at column c0 and is untouchable until it reaches the top lane.
@@ -733,6 +795,72 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     addScore(5000, b.x, b.y - 24, '160,255,150'); text(b.x, b.y - 44, 'BABA YAGA DOWN!', '160,255,150', 18, 1.6);
     charge(0.5); SFX.boom();
   }
+  // ─────────────────────────────── Baba Yaga Prime (the wave 8 boss) ───────────────────────────
+  // Phase 1: the core is shielded; shoot off rotor pods. Phase 2 (four pods gone): the shield drops, it fires
+  // hypersonic missiles from its belly and launches swarms faster. Phase 3 (core under 40%): enraged, it
+  // carpet-bombs and descends toward the deck. It returns every fourth endless wave.
+  const bossWave = (w) => w === LAST_WAVE || (w > LAST_WAVE && w % 4 === 0);
+  function spawnBoss() {
+    const scale = G.wave > LAST_WAVE ? 1.25 : 1;
+    boss = { x: W / 2, y: -70, ty: 96, t: 0, phase: 1, hitT: 0, dying: 0, bombT: 3, spawnT: 4, missileT: 9, leg: 0,
+      pods: PRIME_PODS.map(([dx, dy]) => ({ dx, dy, hp: Math.round(12 * scale), max: Math.round(12 * scale), alive: true })), core: Math.round(150 * scale), coreMax: Math.round(150 * scale) };
+    G.banners.push({ text: 'BABA YAGA PRIME', sub: 'SHOOT OFF ITS ROTOR PODS', t: 0, life: 2.6, color: '255,90,70' });
+    flash(0.3, '255,80,70'); shake(6); SFX.bossHorn();
+  }
+  const podsAlive = () => (boss ? boss.pods.filter((p) => p.alive).length : 0);
+  function stepBoss(dt) {
+    const b = boss; b.t += dt; if (b.hitT > 0) b.hitT -= dt;
+    if (b.dying > 0) {
+      b.dying -= dt; b.y += 30 * dt; b.leg += dt * 3;
+      if (Math.random() < 0.6) explode(b.x + rand(-90, 90), b.y + rand(-30, 20), Math.random() < 0.3);
+      if (b.dying <= 0) {
+        for (let i = 0; i < 6; i++) explode(b.x + rand(-80, 80), b.y + rand(-20, 20), true);
+        ring(b.x, b.y, 220, '255,200,140', 1, 6); flash(0.7, '255,230,190'); shake(14); SFX.bossDeath();
+        boss = null; S.bossDown++; G.cheerT = 3;
+      }
+      return;
+    }
+    const enraged = b.phase === 3;
+    b.y = lerp(b.y, b.ty + (enraged ? Math.min(90, b.t * 2) : 0), Math.min(1, dt * 0.8));
+    b.x = W / 2 + Math.sin(b.t * (enraged ? 0.7 : 0.45)) * 70; b.leg += dt;
+    const alive = podsAlive();
+    if (b.phase === 1 && alive <= 2) { b.phase = 2; G.banners.push({ text: 'SHIELD DOWN', sub: 'HIT THE CORE', t: 0, life: 1.8, color: '127,227,255' }); SFX.shieldDown(); flash(0.2, '127,227,255'); }
+    if (b.phase === 2 && b.core <= b.coreMax * 0.4) { b.phase = 3; G.banners.push({ text: 'PRIME IS ENRAGED', sub: 'IT IS DESCENDING', t: 0, life: 1.8, color: '255,80,70' }); SFX.bossHorn(); shake(6); }
+    b.bombT -= dt; b.spawnT -= dt; b.missileT -= dt;
+    if (b.bombT <= 0) {
+      b.bombT = enraged ? 1.6 : b.phase === 2 ? 2.4 : 3.2;
+      const n = enraged ? 5 : 3;
+      for (let i = 0; i < n; i++) { const x = clamp(b.x + (i - (n - 1) / 2) * (enraged ? 60 : 40), 20, W - 20); bombs.push({ x, y: b.y + 26, vy: 20 + i * 4, target: pickTarget(x), hp: 1, dead: false }); }
+    }
+    if (b.spawnT <= 0 && segs.length < 70) {
+      b.spawnT = b.phase === 1 ? 9 : 6;
+      const c0 = clamp(Math.round((b.x - CELL / 2) / CELL), 2, COLS - 3), row = clamp(Math.round((b.y + 30 - TOP - CELL / 2) / CELL), 2, 9);
+      const before = segs.length; spawnChain(pick(['hornet', 'wraith', 'raider']), 5, c0, 0, waveDef(G.wave).sp, row);
+      for (let i = before; i < segs.length; i++) segs[i].y = b.y + 20 - (i - before) * 6;
+    }
+    if (b.phase >= 2 && b.missileT <= 0 && missiles.length < 2) {
+      b.missileT = enraged ? 7 : 10;
+      missiles.push({ phase: 'glide', t: 0, side: 1, x: b.x, y: b.y + 20, vx: 0, vy: 0, hp: 4, base: b.x, target: null, ang: 0 });
+      text(b.x, b.y + 40, 'MISSILE AWAY', '255,90,106', 12, 1); SFX.boost();
+    }
+  }
+  // A projectile at (x, y) against the boss: pods first, then the core (only once the shield is down).
+  function hitBoss(x, y, dmg) {
+    const b = boss; if (!b || b.dying > 0) return false;
+    for (const p of b.pods) {
+      if (!p.alive || (x - b.x - p.dx) ** 2 + (y - b.y - p.dy) ** 2 > 13 * 13) continue;
+      p.hp -= dmg; b.hitT = 0.06; burst(x, y, 3, ['#ffe7a0', '#ffffff'], 80, 1, 1.3);
+      if (p.hp <= 0) { p.alive = false; explode(b.x + p.dx, b.y + p.dy, true); addScore(1000, b.x + p.dx, b.y + p.dy - 14, '255,160,90'); text(b.x + p.dx, b.y + p.dy + 18, 'POD DOWN', '255,160,90', 12, 1); shake(4); SFX.podDown(); }
+      return true;
+    }
+    if (Math.abs(x - b.x) < 46 && Math.abs(y - b.y) < 26) {
+      if (b.phase === 1) { burst(x, y, 3, ['#7fe3ff', '#ffffff'], 70, 1, 1.2); if (Math.random() < 0.06) text(b.x, b.y + 34, 'SHIELDED', '127,227,255', 10, 0.6); return true; }
+      b.core -= dmg; b.hitT = 0.06; burst(x, y, 3, ['#ffe7a0', '#ff6a3a'], 90, 1, 1.4);
+      if (b.core <= 0) { b.dying = 2.6; addScore(20000, b.x, b.y - 40, '255,207,90'); text(b.x, b.y - 60, 'PRIME DESTROYED!', '255,207,90', 20, 2); G.banners.push({ text: 'PRIME DESTROYED', sub: '+20,000', t: 0, life: 2.4, color: '255,207,90' }); SFX.boom(); }
+      return true;
+    }
+    return false;
+  }
   function stepBombs(dt) {
     for (const k of bombs) {
       k.vy = Math.min(210, k.vy + 160 * dt); k.y += k.vy * dt; k.x += clamp(k.target.x - k.x, -1, 1) * 22 * dt;
@@ -794,6 +922,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     for (const m of missiles) if (m.phase !== 'warn' && Math.abs(m.x - x) < 9 && Math.abs(m.y - y) < 16) { hurtMissile(m, dmg, byMg); return true; }
     for (const k of bombs) if (Math.abs(k.x - x) < 6 && Math.abs(k.y - y) < 9) { k.dead = true; addScore(150, k.x, k.y - 8); explode(k.x, k.y, false); SFX.pop(2); return true; }
     for (const b of motherships) if (b.dying <= 0 && Math.abs(b.x - x) < 30 && Math.abs(b.y - y) < 18) { hurtMothership(b, dmg); return true; }
+    if (boss && hitBoss(x, y, dmg)) return true;
     for (const d of divers) if (Math.abs(d.x - x) < 9 && Math.abs(d.y - y) < 9) { d.hp = (d.hp || 1) - dmg; if (d.hp <= 0) { d.dead = true; S.downed++; if (byMg) S.mgKills++; addScore(60, d.x, d.y - 8); explode(d.x, d.y, false); SFX.pop(1); charge(0.03); } return true; }
     for (const s of scouts) if (Math.abs(s.x - x) < 10 && Math.abs(s.y - y) < 9) { s.hp = (s.hp || 1) - dmg; if (s.hp <= 0) { s.dead = true; S.downed++; if (byMg) S.mgKills++; addScore(300, s.x, s.y - 8, '127,227,255'); explode(s.x, s.y, false); SFX.pop(3); } return true; }
     for (const s of segs) if (!s.entering && Math.abs(s.x - x) < 9 && Math.abs(s.y - y) < 9) {
@@ -850,13 +979,20 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     const ox = ISL_X - 14, oy = DECK_Y + 32;
     ring(ISL_X, DECK_Y + 10, 420, '127,227,255', 1.1, 4);
     const targets = missiles.filter((m) => m.phase !== 'warn').map((m) => ({ m }))
-      .concat(motherships.map((b) => ({ b })), segs.filter((s) => s.head && !s.entering).map((s) => ({ s })), divers.map((d) => ({ d })), segs.filter((s) => !s.head && !s.entering).slice(0, 8).map((s) => ({ s })));
+      .concat(boss ? [0, 1, 2].map(() => ({ boss: true })) : [], motherships.map((b) => ({ b })), segs.filter((s) => s.head && !s.entering).map((s) => ({ s })), divers.map((d) => ({ d })), segs.filter((s) => !s.head && !s.entering).slice(0, 8).map((s) => ({ s })));
     for (let i = 0; i < 8; i++) interceptors.push({ x: ox + (i % 3) * 7, y: oy, vx: rand(-40, 40), vy: -260, t: 0, tg: targets[i] || null });
     G.banners.push({ text: 'AEGIS NET', sub: 'INTERCEPTORS AWAY', t: 0, life: 1.4, color: '127,227,255' });
   }
   function stepInterceptors(dt) {
     for (const k of interceptors) {
       k.t += dt;
+      if (k.tg && k.tg.boss) {
+        if (!boss || boss.dying > 0) k.tg = null;
+        else { const p = boss.pods.find((q) => q.alive) || null; const tx = p ? boss.x + p.dx : boss.x, ty = p ? boss.y + p.dy : boss.y;
+          if (k.t > 0.25) { const dx = tx - k.x, dy = ty - k.y, dist = Math.hypot(dx, dy) || 1, sp = 420 + k.t * 120; k.vx = lerp(k.vx, dx / dist * sp, Math.min(1, dt * 6)); k.vy = lerp(k.vy, dy / dist * sp, Math.min(1, dt * 6));
+            if (dist < 14) { k.dead = true; explode(k.x, k.y, false); ring(k.x, k.y, 30, '127,227,255', 0.4, 3); if (p) { p.hp -= 7; if (p.hp <= 0) hitBoss(tx, ty, 0.01); } else if (boss.phase > 1) hitBoss(tx, ty, 7); } }
+          k.x += k.vx * dt; k.y += k.vy * dt; part(k.x, k.y, rand(-10, 10), rand(10, 40), 0.35, 2, 'rgba(210,230,255,.7)', 2); if (k.t > 4) k.dead = true; continue; }
+      }
       let tg = k.tg && (k.tg.b && !k.tg.b.dead && k.tg.b.dying <= 0 ? k.tg.b : k.tg.m && !k.tg.m.dead ? k.tg.m : k.tg.s && segs.includes(k.tg.s) ? k.tg.s : k.tg.d && !k.tg.d.dead ? k.tg.d : null);
       if (!tg) { const any = missiles.find((m) => m.phase !== 'warn') || segs.find((q) => !q.entering) || divers[0]; if (any) { tg = any; k.tg = any.phase ? { m: any } : divers.includes(any) ? { d: any } : { s: any }; } }
       if (tg && k.t > 0.25) {
@@ -881,7 +1017,9 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     const lowest = segs.reduce((a, s) => (s.entering ? a : !a || s.y > a.y ? s : a), null);
     const mis = missiles.find((m) => m.phase === 'glide' || m.phase === 'terminal');
     const yaga = motherships.find((b) => b.dying <= 0);
-    const aim = mis || (lowest && lowest.y > DECK_Y - 200 ? lowest : yaga || lowest);
+    const pod = boss && boss.dying <= 0 ? boss.pods.find((p) => p.alive) : null;
+    const bossAim = boss && boss.dying <= 0 ? { x: pod ? boss.x + pod.dx : boss.x, dir: 0 } : null;
+    const aim = mis || (lowest && lowest.y > DECK_Y - 200 ? lowest : bossAim || yaga || lowest);
     if (aim) J.tx = aim.x + (mis ? 0 : aim.dir * 10);
     const danger = segs.concat(divers, scouts).find((s) => Math.abs(s.x - J.x) < 26 && s.y > J.y - 60);
     J.ty = danger ? DECK_Y - 18 : ZONE_TOP + 30;
@@ -916,11 +1054,13 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     const d = waveDef(G.wave);
     if (d.missileEvery) { G.missileT -= dt; if (G.missileT <= 0) { G.missileT = d.missileEvery * rand(0.8, 1.2); if (missiles.length < 2) launchMissile(); } }
     if (d.scoutEvery) { G.scoutT -= dt; if (G.scoutT <= 0) { G.scoutT = d.scoutEvery * rand(0.8, 1.2); const l = Math.random() < 0.5; scouts.push({ x: l ? -20 : W + 20, y: rand(ZONE_TOP, DECK_Y - 30), vx: (l ? 1 : -1) * rand(70, 110), vy: rand(-80, 80), t: 0, hp: 1 }); } }
-    stepMotherships(dt); stepBombs(dt); stepCrew(dt);
+    stepMotherships(dt); stepBombs(dt); stepCrew(dt); if (boss) stepBoss(dt);
     stepSwarm(dt); stepDivers(dt); stepMissiles(dt); stepScouts(dt); stepVehicles(dt); stepTracers(dt); stepInterceptors(dt);
     stepFx(dt);
     if (G.mode === 'title') { S.hull = 10; S.lives = 3; }
-    if ((G.mode === 'play' || G.mode === 'title') && !G.pendingWave && !segs.length && !divers.length && !motherships.length && !G.mothershipsLeft) waveCleared();
+    if ((G.mode === 'play' || G.mode === 'title') && !G.pendingWave && !segs.length && !divers.length && !motherships.length && !G.mothershipsLeft && !boss) {
+      if (bossWave(G.wave) && !G.bossSpawned) { G.bossSpawned = true; spawnBoss(); } else waveCleared();
+    }
     checkMissions();
   }
   function stepFx(dt) {
@@ -1044,6 +1184,56 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
       ctx.save(); ctx.translate(k.x, k.y); ctx.rotate(Math.sin(T * 12 + k.x) * 0.15); ctx.drawImage(BOMB, -4, -8, 8, 16); ctx.restore();
       ctx.strokeStyle = 'rgba(255,90,90,.3)'; ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(k.x, k.y + 8); ctx.lineTo(k.target.x, k.target.y); ctx.stroke(); ctx.setLineDash([]);
     }
+  }
+  function drawBoss() {
+    const b = boss; if (!b) return;
+    const bob = Math.sin(b.t * 1.6) * 3, y = b.y + bob, enraged = b.phase === 3;
+    // two mechanical bird legs dangle and paddle under the belly
+    for (const side of [-1, 1]) {
+      const hx = b.x + side * 16, hy = y + 20, sw = Math.sin(b.leg * 2.4 + (side > 0 ? Math.PI : 0)) * 0.45;
+      const kx = hx + Math.sin(sw) * 16, ky = hy + Math.cos(sw) * 16, fx = kx - Math.sin(sw * 1.6) * 14, fy = ky + 14;
+      ctx.strokeStyle = '#2a2f1e'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.strokeStyle = '#7d8559'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.strokeStyle = '#2a2f1e'; ctx.lineWidth = 2; for (const t of [-0.6, 0, 0.6]) { ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx + Math.sin(t) * 8, fy + Math.cos(t) * 5); ctx.stroke(); }
+      ctx.fillStyle = '#9aa17c'; ctx.beginPath(); ctx.arc(kx, ky, 2.4, 0, 7); ctx.fill();
+    }
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(b.x, y, 10, b.x, y, 130); g.addColorStop(0, enraged ? 'rgba(255,70,50,.28)' : 'rgba(255,120,80,.12)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, y, 130, 0, 7); ctx.fill();
+    // enraged: twin searchlights sweep the deck
+    if (enraged) for (const sgn of [-1, 1]) {
+      const a = Math.PI / 2 + Math.sin(b.t * 1.3 * sgn) * 0.6, len = 360;
+      const lg = ctx.createLinearGradient(b.x, y, b.x + Math.cos(a) * len, y + Math.sin(a) * len); lg.addColorStop(0, 'rgba(255,80,60,.25)'); lg.addColorStop(1, 'rgba(255,80,60,0)');
+      ctx.fillStyle = lg; ctx.beginPath(); ctx.moveTo(b.x + sgn * 20, y + 10); ctx.lineTo(b.x + Math.cos(a - 0.08) * len, y + Math.sin(a - 0.08) * len); ctx.lineTo(b.x + Math.cos(a + 0.08) * len, y + Math.sin(a + 0.08) * len); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+    ctx.save(); ctx.translate(b.x, y); ctx.rotate(Math.sin(b.t * 0.9) * 0.05 + (6 - podsAlive()) * 0.012);
+    if (b.hitT > 0) ctx.filter = 'brightness(1.7)';
+    ctx.drawImage(PRIME, -110, -50, 220, 100); ctx.filter = 'none';
+    for (const p of b.pods) {
+      if (!p.alive) { ctx.fillStyle = '#16180f'; ctx.beginPath(); ctx.arc(p.dx, p.dy, 5, 0, 7); ctx.fill(); if (Math.random() < 0.5) part(b.x + p.dx, y + p.dy, rand(-8, 8), -25, 0.8, 4, 'rgba(60,62,66,.55)', 2); if (Math.random() < 0.4) part(b.x + p.dx, y + p.dy, rand(-5, 5), -20, 0.3, 2, pick(['#ffb04a', '#ff6a3a']), 1); continue; }
+      const m = ctx.createRadialGradient(p.dx - 2, p.dy - 2, 1, p.dx, p.dy, 9); m.addColorStop(0, '#b9c190'); m.addColorStop(1, '#1f2316');
+      ctx.fillStyle = m; ctx.beginPath(); ctx.arc(p.dx, p.dy, 8.5, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(200,210,190,.18)'; ctx.beginPath(); ctx.ellipse(p.dx, p.dy - 6, 19, 5, 0, 0, 7); ctx.fill();
+      const a = T * 38 + p.dx; ctx.strokeStyle = 'rgba(230,235,220,.6)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(p.dx - Math.cos(a) * 18, p.dy - 6 - Math.sin(a) * 4.6); ctx.lineTo(p.dx + Math.cos(a) * 18, p.dy - 6 + Math.sin(a) * 4.6); ctx.stroke();
+      const f = p.hp / p.max; ctx.fillStyle = f > 0.5 ? '#8fe07a' : f > 0.25 ? '#ffcf5a' : '#ff5a6a'; ctx.fillRect(p.dx - 7, p.dy + 10, 14 * f, 1.8);
+    }
+    if (b.phase === 1) {
+      ctx.strokeStyle = `rgba(127,227,255,${(0.35 + 0.25 * Math.sin(T * 6)).toFixed(3)})`; ctx.lineWidth = 1.6; ctx.beginPath();
+      for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + T * 0.5; ctx.lineTo(Math.cos(a) * 52, Math.sin(a) * 30); } ctx.closePath(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawBossBar() {
+    const b = boss; if (!b) return;
+    const w = W - 60, x = 30, y = 6, podF = b.pods.reduce((a, p) => a + Math.max(0, p.hp), 0) / b.pods.reduce((a, p) => a + p.max, 0);
+    const f = b.phase === 1 ? 0.5 + podF * 0.5 : Math.max(0, b.core / b.coreMax) * 0.5;
+    ctx.fillStyle = 'rgba(2,6,14,.75)'; rr(ctx, x - 2, y - 2, w + 4, 10, 5); ctx.fill();
+    const g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, '#ff5a3a'); g.addColorStop(1, b.phase === 3 ? '#ff2a2a' : '#ffcf5a');
+    ctx.fillStyle = g; rr(ctx, x, y, w * f, 6, 3); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.beginPath(); ctx.moveTo(x + w / 2, y - 1); ctx.lineTo(x + w / 2, y + 7); ctx.stroke();
+    ctx.fillStyle = '#ffd6c8'; ctx.font = '900 8px ui-sans-serif,Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(`BABA YAGA PRIME · ${b.phase === 1 ? 'SHOOT THE PODS' : b.phase === 2 ? 'HIT THE CORE' : 'ENRAGED'}`, W / 2, y + 17);
   }
   function drawDivers() {
     for (const d of divers) {
@@ -1261,7 +1451,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
       ctx.fillStyle = 'rgba(4,10,22,.35)'; ctx.fillRect(0, 0, W, H);
       drawSea();
       ctx.strokeStyle = 'rgba(127,227,255,.07)'; ctx.setLineDash([2, 6]); ctx.beginPath(); ctx.moveTo(0, ZONE_TOP - 16); ctx.lineTo(W, ZONE_TOP - 16); ctx.stroke(); ctx.setLineDash([]);
-      drawWrecks(); drawSwarm(); drawMotherships(); drawScouts(); drawDeck(); drawDivers(); drawMissiles(); drawShots(); drawJet(); drawFx(); drawBanners();
+      drawWrecks(); drawSwarm(); drawMotherships(); drawBoss(); drawScouts(); drawDeck(); drawDivers(); drawMissiles(); drawShots(); drawJet(); drawFx(); drawBossBar(); drawBanners();
       ctx.restore();
       ctx.strokeStyle = 'rgba(127,227,255,.3)'; ctx.lineWidth = 2; ctx.strokeRect(1, 1, W - 2, H - 2);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1332,7 +1522,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   function victory() {
     G.mode = 'won'; SFX.win(); flash(0.5, '200,240,255'); shake(6);
     for (let i = 0; i < 80; i++) part(rand(0, W), rand(-20, 60), rand(-60, 60), rand(40, 180), rand(1.6, 3), rand(2.5, 4.5), pick(['#7fe3ff', '#ffcf5a', '#8fe07a', '#ffffff']), 0);
-    showOverlay({ title: 'LINE HELD', sub: 'The Grand Swarm is broken', stats: true,
+    showOverlay({ title: 'LINE HELD', sub: 'Baba Yaga Prime is down', stats: true,
       body: `All <b>${MISSIONS.length}</b> missions done. The carrier survived with <b>${S.hull}</b> hull and <b>${S.missiles}</b> hypersonic kills. Keep flying in endless waves, or start fresh.`,
       primary: 'Keep flying', onPrimary: () => { audioStart(); G.endless = true; G.mode = 'play'; hideOverlay(); }, secondary: 'New run', onSecondary: startRun });
   }
@@ -1370,7 +1560,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   function frame(ts) {
     const dt = last ? Math.min(0.05, Math.max(0, (ts - last) / 1000)) : 1 / 60;
     last = ts;
-    update(dt); updateHud(false); render(); audioTick();
+    update(dt); updateHud(false); render(); audioTick(); audioLoops();
     requestAnimationFrame(frame);
   }
   // A small handle for automated playtests. Nothing in the game reads it.
@@ -1378,8 +1568,10 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     state: () => ({ mode: G.mode, wave: G.wave, score: S && S.score, hull: S && S.hull, lives: S && S.lives, mission: S && S.mi + 1, done: S && S.done, downed: S && S.downed, missiles: S && S.missiles, segs: segs.length, divers: divers.length, inbound: missiles.length, yagas: motherships.length, bombs: bombs.length, wrecks: wrecks.size, aegis: S && S.aegis }),
     autopilot: (on) => { G.auto = !!on; },
     invulnerable: (on) => { G.godTest = !!on; },
-    clearWave: () => { for (const s of segs.slice()) killSeg(s, false); divers = []; for (const b of motherships) hurtMothership(b, 999); G.mothershipsLeft = 0; },
+    clearWave: () => { if (boss && boss.dying <= 0) { for (const p of boss.pods) p.alive = false; boss.phase = 2; boss.core = 1; hitBoss(boss.x, boss.y, 5); } for (const s of segs.slice()) killSeg(s, false); divers = []; for (const b of motherships) hurtMothership(b, 999); G.mothershipsLeft = 0; },
     spawnMothership: () => spawnMothership(motherships.length),
+    spawnBoss: () => { if (!boss) { G.bossSpawned = true; spawnBoss(); } },
+    boss: () => (boss ? { phase: boss.phase, pods: podsAlive(), core: boss.core, dying: boss.dying > 0 } : null),
     launchMissile: () => launchMissile(),
   };
   resize();
