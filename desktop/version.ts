@@ -571,6 +571,12 @@
 //            the operator's lucid-acp.log) and the engine finds MinGit without git on PATH, so the
 //            code-activity poll stops filling engine.log (P-RECOVER.3). Fleet lanes can run in their own
 //            git worktree (P-FLEET.WT1); `lucid hub` opens from Fleet, the launcher and any terminal
-//            (P-TUI.2); a long tool-call write is not a stall (P-HEALTH.3).
+//            (P-TUI.2); a long tool-call write is not a stall (P-HEALTH.3). A status-bar network indicator
+//            with provider latency, and a stand-by card instead of blaming the model for a network or
+//            startup failure (P-NETSTAT.1, ADR-0423); the AppContainer helper skips a grant already on disk,
+//            so the contained agent answers initialize in time (P-SANDBOX.18, ADR-0424); under Judgment:
+//            None the effort pick reads as the chat model's own (P-JEV.7); ACPClient no longer imports the
+//            bun:ffi console host, so the VS Code extension builds again; arcade: Brick Brigade, Deck Guard,
+//            Signal Garden: Heartbloom, Orbit Loom retired (P-GAME.4-6b).
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
 export const APP_VERSION = "2.3.0-beta.14";

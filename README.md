@@ -279,7 +279,7 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.14 (prerelease)
 
-> **🪐 Claude Sonnet 5.5, and incident reports you can act on.** Beta.14 moves omp to 18.4.4 for Claude Sonnet 5.5, gates the new StepFun provider behind the China-origin acknowledgement, and makes the recovery notice's incident report carry the agent's real output.
+> **🪐 Claude Sonnet 5.5, a network indicator, and a sandbox that starts in time.** Beta.14 moves omp to 18.4.4 for Claude Sonnet 5.5, gates the new StepFun provider behind the China-origin acknowledgement, stops blaming the model for a bad network, makes the Windows sandbox answer on time, and brings three new arcade games.
 >
 > **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.14](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.14). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
 
@@ -287,6 +287,10 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 - **🛡️ StepFun stays behind the sovereignty gate** - omp's new `stepfun` provider is China-origin: hidden until you type ACKNOWLEDGE in Settings, and never selectable in AskSage lockdown. Apple's on-device model (omp's new `apple` provider) lists on macOS only. *(P-MODEL.6)*
 - **🧾 Incident reports quote the agent's real output** - the "agent process failed and was restarted" report now carries omp's own stderr; test runs no longer write into your `lucid-acp.log`. The engine finds MinGit without git on PATH, so workspace activity works and `engine.log` is no longer flooded with `git` ENOENT. *(P-RECOVER.3)*
 - **✍️ A long write is not a stall** - while the model streams a large file write, the agent sends a heartbeat, so the watchdog no longer cancels and respawns a healthy session. *(P-HEALTH.3)*
+- **📶 A network problem reads as a network problem** - a status-bar indicator shows the round trip to your model's provider; a turn that died on the network, or on the agent's startup handshake, gets a stand-by card that resends once the link is stable instead of telling you to switch models. *(P-NETSTAT.1, [ADR-0423](DECISIONS.md))*
+- **🧱 The Windows sandbox starts in time** - the AppContainer helper no longer re-applies every folder grant to every file on each spawn (23 s on a large repo, past the 20 s handshake), so chat works with the sandbox on and a restarted agent comes back; a startup failure names the sandbox and offers Restart agent, never a model switch. *(P-SANDBOX.18, [ADR-0424](DECISIONS.md))*
+- **🧠 With no judge, the effort pick says so** - under Judgment: None the thinking-effort pick reads as your chat model's own choice, not as a judge you thought was off. *(P-JEV.7)*
+- **🕹 Three new arcade games** - Brick Brigade: Rescue Run, Deck Guard: Swarm Break (with the Baba Yaga Prime boss) and Signal Garden: Heartbloom join Preview > Games; Orbit Loom is retired. *(P-GAME.4-6b)*
 - **🌳 Fleet lanes in their own worktree** - a new lane or spoke can run in its own `git worktree` beside the repo, so it shares no checkout with other agents. *(P-FLEET.WT1)*
 - **🖥 `lucid hub` from anywhere** - a Terminal button in the Fleet grid and orbit, option H in the launcher, and a `lucid` command on PATH on Windows. *(P-TUI.2)*
 
