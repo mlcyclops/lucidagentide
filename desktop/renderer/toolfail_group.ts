@@ -44,7 +44,7 @@ export function toolfailGroupHtml(entries: ToolFailEntry[], open: boolean): stri
   const n = entries.length;
   const head =
     `<button class="tf-head" type="button" aria-expanded="${open}" ` +
-    `data-tip="Tool Call Actions|${n} tool call${n === 1 ? "" : "s"} failed or did not run — click to ${open ? "collapse" : "expand"} · not a security block">` +
+    `data-tip="Tool Call Actions|${n} tool call${n === 1 ? "" : "s"} failed or did not run. Click to ${open ? "collapse" : "expand"} · not a security block">` +
     `${icon("toolbox", 15)}<span class="tf-count">${n}</span></button>`;
   if (!open) return head;
   return `${head}<div class="tf-body"><div class="tf-title">Tool Call Actions</div>${entries.map(toolfailRowHtml).join("")}</div>`;

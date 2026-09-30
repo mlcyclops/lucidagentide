@@ -109,7 +109,7 @@ async function runAction(act: CtxAction, field: Field, deps: CtxMenuDeps): Promi
         field.setSelectionRange(pasted.caret, pasted.caret);
         field.dispatchEvent(new Event("input", { bubbles: true }));
       } catch {
-        deps.toast?.({ title: "Clipboard blocked", desc: "The browser refused clipboard access — use Ctrl+V here.", tone: "warn" });
+        deps.toast?.({ title: "Clipboard blocked", desc: "The browser refused clipboard access. Use Ctrl+V here.", tone: "warn" });
       }
       break;
     }
@@ -123,7 +123,7 @@ async function runAction(act: CtxAction, field: Field, deps: CtxMenuDeps): Promi
 async function copyText(text: string, deps: CtxMenuDeps): Promise<void> {
   if (!text) return;
   try { await navigator.clipboard.writeText(text); }
-  catch { deps.toast?.({ title: "Clipboard blocked", desc: "The browser refused clipboard access — use Ctrl+C here.", tone: "warn" }); }
+  catch { deps.toast?.({ title: "Clipboard blocked", desc: "The browser refused clipboard access. Use Ctrl+C here.", tone: "warn" }); }
 }
 
 interface MenuEntry { label: string; kbd: string; enabled: boolean; run: () => void }

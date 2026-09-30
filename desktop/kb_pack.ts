@@ -224,7 +224,7 @@ export async function importKgPack(packDir: string, opts: {
   // (2) integrity + signature (ORIGIN). A tampered db or a present-but-invalid signature is refused.
   const v = verifyPackManifest(manifest, sha256Bytes(db), opts.trusted ?? loadPackKeys());
   if (!v.ok) {
-    record({ tool: "kb_pack_import", severity: "high", findings: v.stage, reason: `KG pack rejected — ${v.reason}` });
+    record({ tool: "kb_pack_import", severity: "high", findings: v.stage, reason: `KG pack rejected: ${v.reason}` });
     return { ok: false, stage: v.stage, error: v.reason };
   }
 
@@ -242,7 +242,7 @@ export async function importKgPack(packDir: string, opts: {
       let d: GateDecision;
       try { d = await decide(pg.body_md); }
       catch (e) {
-        record({ tool: "kb_pack_import", severity: "high", findings: "scanner-unavailable", reason: `KG pack "${manifest.kg.name}" blocked — scanner unavailable` });
+        record({ tool: "kb_pack_import", severity: "high", findings: "scanner-unavailable", reason: `KG pack "${manifest.kg.name}" blocked: scanner unavailable` });
         return { ok: false, stage: "scanner", error: `scanner unavailable: ${(e as Error).message}` };
       }
       findings += d.findings.length;
@@ -251,10 +251,10 @@ export async function importKgPack(packDir: string, opts: {
         // environment fault arrives here looking exactly like a content finding. Read the reason to tell
         // them apart, or a broken install is permanently indistinguishable from a poisoned pack.
         if (isScannerUnavailable(d.reason)) {
-          record({ tool: "kb_pack_import", severity: "high", findings: "scanner-unavailable", reason: `KG pack "${manifest.kg.name}" blocked — scanner unavailable` });
+          record({ tool: "kb_pack_import", severity: "high", findings: "scanner-unavailable", reason: `KG pack "${manifest.kg.name}" blocked: scanner unavailable` });
           return { ok: false, stage: "scanner", error: `scanner unavailable: ${d.reason}` };
         }
-        record({ tool: "kb_pack_import", severity: "high", findings: String(d.findings.length), reason: `KG pack "${manifest.kg.name}" blocked at the gate — page "${pg.slug}": ${d.reason}` });
+        record({ tool: "kb_pack_import", severity: "high", findings: String(d.findings.length), reason: `KG pack "${manifest.kg.name}" blocked at the gate, page "${pg.slug}": ${d.reason}` });
         return { ok: false, stage: "scan", findings, error: `page "${pg.slug}" flagged: ${d.reason}` };
       }
     }

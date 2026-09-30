@@ -146,12 +146,12 @@ export function cloneErrorHint(stderr: string, hadToken: boolean, ssh = false): 
   const auth = /authentication failed|could not read (?:username|password)|terminal prompts disabled|invalid username or password|403|permission denied|repository not found|fatal: could not read/i.test(s);
   const keyTrouble = ssh && /host key verification failed|permission denied \(publickey|no such identity|could not resolve hostname|passphrase|batch mode/i.test(s);
   if (keyTrouble || (ssh && auth)) {
-    return `SSH authentication failed — this remote needs an ssh key this machine can use without a prompt. Add the key to your agent (ssh-add), or paste the https:// URL instead and use a personal access token. ${s}`.slice(0, 400);
+    return `SSH authentication failed. This remote needs an ssh key this machine can use without a prompt. Add the key to your agent (ssh-add), or paste the https:// URL instead and use a personal access token. ${s}`.slice(0, 400);
   }
   if (auth) {
     return hadToken
-      ? `Authentication failed — the configured git token was rejected (check it has access to this private repo). ${s}`.slice(0, 400)
-      : `Authentication failed — this looks like a private repo. Paste a personal access token in the form (GitHub: repo · GitLab: read_repository · Azure DevOps: Code read), or clone via the agent (which uses your saved git credentials). ${s}`.slice(0, 400);
+      ? `Authentication failed. The configured git token was rejected (check it has access to this private repo). ${s}`.slice(0, 400)
+      : `Authentication failed. This looks like a private repo. Paste a personal access token in the form (GitHub: repo · GitLab: read_repository · Azure DevOps: Code read), or clone via the agent (which uses your saved git credentials). ${s}`.slice(0, 400);
   }
   return s.slice(0, 400) || "git clone failed";
 }

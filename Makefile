@@ -876,6 +876,12 @@ demo-P-REPO.1: ## P-REPO.1 (ADR-0406): every session names the repo it works on 
 .PHONY: demo-P-PROGRESS.2
 demo-P-PROGRESS.2: ## P-PROGRESS.2 (ADR-0408): the activity window folds calls under 5 s into one summary line and failed, repeated or empty calls into "processing", so only long calls keep a row (with elapsed time and ETA); every running worker, subagent run and the whole prompt states an ETA, "ETA estimating" until history supports a number
 	$(BUN) run harness/scripts/demo_p_progress_2.ts
+.PHONY: demo-P-NETSTAT.1
+demo-P-NETSTAT.1: ## P-NETSTAT.1 (ADR-0410): a status-bar network indicator with provider latency; a turn that died on the network or on omp's startup handshake gets a stand-by card that resends once the link is stable, instead of blaming the model; outage toasts are held in the indicator's popover, security notices never are
+	$(BUN) run harness/scripts/demo_p_netstat_1.ts
+.PHONY: demo-P-SANDBOX.18
+demo-P-SANDBOX.18: ## P-SANDBOX.18 (ADR-0411): the AppContainer helper skips a grant already on disk instead of re-walking every file under it (23 s per spawn on this repo), so the contained agent answers initialize in time and respawns work; a contained handshake failure names the sandbox and never offers a model switch
+	$(BUN) run harness/scripts/demo_p_sandbox_18.ts
 .PHONY: demo-P-GAME.1
 demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts
 	$(BUN) test desktop/arcade_games.test.ts

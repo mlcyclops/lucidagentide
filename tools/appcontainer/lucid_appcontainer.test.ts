@@ -9,7 +9,7 @@
 // deny-network container cannot reach the net); the parser is where the boundary correctness lives.
 
 import { expect, test } from "bun:test";
-import { aclTargets, buildBrowseInfoW, buildCommandLine, buildExplicitAccessW, buildStartupInfoExW, creationFlags, inheritableHandleList, checkNetIsolationArgs, icaclsListsSid, isPackageReadablePath, main, parentDir, PICK_CANCEL_MARK, PICK_PICKED_MARK, parseAclMode, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
+import { aclAlreadyGrants, aclTargets, buildBrowseInfoW, buildCommandLine, buildExplicitAccessW, buildStartupInfoExW, creationFlags, inheritableHandleList, checkNetIsolationArgs, icaclsListsSid, isPackageReadablePath, main, parentDir, PICK_CANCEL_MARK, PICK_PICKED_MARK, parseAclMode, parseHelperArgs, quoteArg } from "./lucid_appcontainer.ts";
 import type { HelperPlan } from "./lucid_appcontainer.ts";
 import { CANCEL_MARK, PICKED_MARK, parseWinPick } from "../../desktop/native_dialog.ts";
 
@@ -234,4 +234,48 @@ test("--pick-folder speaks the engine's picker markers, so parseWinPick reads it
   // Off Windows it refuses, never pretends a pick. On Windows it would open a real modal dialog and wait for a
   // person, so the test never calls it there (it hung the Windows CI gate until cancelled).
   if (process.platform !== "win32") expect(main(["--pick-folder", "t"])).toBe(3);
+});
+
+// ── P-SANDBOX.18 (ADR-0411): an existing grant is not re-propagated on every spawn ──────────────────
+// Fixtures follow the real DACL read off a granted workspace on Windows 11: one GENERIC_ALL inheritable
+// grant is stored as a mapped effective ACE (flags 0, 0x1F01FF) plus an INHERIT_ONLY generic copy (0x0B).
+const CONTAINER_SID = Uint8Array.from([1, 2, 0, 0, 0, 0, 0, 15, 2, 0, 0, 0, 3, 0, 0, 0]); // S-1-15-2-3 shape
+const OTHER_SID = Uint8Array.from([1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0]); // S-1-5-18
+function ace(type: number, flags: number, mask: number, sid: Uint8Array): Uint8Array {
+  const b = new Uint8Array(8 + sid.length);
+  const dv = new DataView(b.buffer);
+  b[0] = type; b[1] = flags; dv.setUint16(2, b.length, true); dv.setUint32(4, mask >>> 0, true);
+  b.set(sid, 8);
+  return b;
+}
+function acl(...aces: Uint8Array[]): Uint8Array {
+  const size = 8 + aces.reduce((n, a) => n + a.length, 0);
+  const b = new Uint8Array(size);
+  const dv = new DataView(b.buffer);
+  b[0] = 2; dv.setUint16(2, size, true); dv.setUint16(4, aces.length, true);
+  let off = 8;
+  for (const a of aces) { b.set(a, off); off += a.length; }
+  return b;
+}
+const rwStored = [ace(0, 0x00, 0x1f01ff, CONTAINER_SID), ace(0, 0x0b, 0x10000000, CONTAINER_SID)];
+const rxStored = [ace(0, 0x00, 0x1200a9, CONTAINER_SID), ace(0, 0x0b, 0xa0000000, CONTAINER_SID)];
+
+test("aclAlreadyGrants: the stored two-ACE form of a grant counts, for its mode and weaker ones", () => {
+  expect(aclAlreadyGrants(acl(...rwStored, ace(0, 0x13, 0x1f01ff, OTHER_SID)), CONTAINER_SID, "rw")).toBe(true);
+  expect(aclAlreadyGrants(acl(...rwStored), CONTAINER_SID, "rx")).toBe(true);
+  expect(aclAlreadyGrants(acl(...rxStored), CONTAINER_SID, "rx")).toBe(true);
+  expect(aclAlreadyGrants(acl(...rxStored), CONTAINER_SID, "rw")).toBe(false);
+  // inherited from a granted parent (e.g. ~/.omp/lucid-sandbox-tmp under ~/.omp)
+  expect(aclAlreadyGrants(acl(ace(0, 0x13, 0x1f01ff, CONTAINER_SID)), CONTAINER_SID, "rw")).toBe(true);
+});
+
+test("aclAlreadyGrants: half a grant, another SID, a deny, or a malformed ACL is written again", () => {
+  expect(aclAlreadyGrants(acl(rwStored[0]!), CONTAINER_SID, "rw")).toBe(false); // this folder only, children miss it
+  expect(aclAlreadyGrants(acl(rwStored[1]!), CONTAINER_SID, "rw")).toBe(false); // inherit-only, not this folder
+  expect(aclAlreadyGrants(acl(ace(0, 0x07, 0x1f01ff, CONTAINER_SID), rwStored[0]!), CONTAINER_SID, "rw")).toBe(false); // NO_PROPAGATE stops one level down
+  expect(aclAlreadyGrants(acl(ace(0, 0x03, 0x1f01ff, OTHER_SID)), CONTAINER_SID, "rw")).toBe(false);
+  expect(aclAlreadyGrants(acl(ace(1, 0x03, 0x10000, CONTAINER_SID), ...rwStored), CONTAINER_SID, "rw")).toBe(false);
+  expect(aclAlreadyGrants(new Uint8Array(0), CONTAINER_SID, "rw")).toBe(false);
+  const truncated = acl(...rwStored).slice(0, 20);
+  expect(aclAlreadyGrants(truncated, CONTAINER_SID, "rw")).toBe(false);
 });

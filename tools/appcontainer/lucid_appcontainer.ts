@@ -22,7 +22,7 @@
 // mediated case, which needs a WFP/loopback-exemption follow-up) — the helper EXITS NON-ZERO and never
 // runs the child. A helper that can't contain must block, never passthrough (that would be false security).
 
-import { dlopen, FFIType, ptr, read as ffiRead, CString, type Pointer } from "bun:ffi";
+import { dlopen, FFIType, ptr, read as ffiRead, toArrayBuffer, CString, type Pointer } from "bun:ffi";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 
@@ -171,6 +171,52 @@ export function buildExplicitAccessW(access: number, accessMode: number, sid: bi
   return ea;
 }
 
+/** Specific file rights each grant mode must deliver (WinNT.h FILE_ALL_ACCESS, FILE_GENERIC_READ|EXECUTE). */
+const FILE_RIGHTS: Record<"rw" | "rx", number> = { rw: 0x1f01ff, rx: 0x1200a9 };
+/** Map GENERIC_* bits to the specific file rights they stand for (the file object's generic mapping). */
+function fileRights(mask: number): number {
+  let m = mask & 0x0fffffff;
+  if (mask & 0x10000000) m |= 0x1f01ff; // GENERIC_ALL
+  if (mask & 0x80000000) m |= 0x120089; // GENERIC_READ
+  if (mask & 0x40000000) m |= 0x120116; // GENERIC_WRITE
+  if (mask & 0x20000000) m |= 0x1200a0; // GENERIC_EXECUTE
+  return m >>> 0;
+}
+
+/**
+ * PURE (P-SANDBOX.18, ADR-0411): does the DACL `acl` (raw ACL bytes) already give `sid` (raw SID bytes)
+ * the `mode` grant, both on the object itself AND inheritably to every file and folder under it? Windows
+ * stores one GENERIC_ALL inheritable grant as TWO ACEs (the mapped rights with no inherit flags, plus an
+ * INHERIT_ONLY copy that keeps the generic bits), so this checks the effect, never a byte match. An
+ * inherited ACE counts (a grant on a parent already covers the child). Any ACCESS_DENIED ACE for the SID
+ * answers false, so the real grant path runs and fails loudly instead of being skipped.
+ *   ACL:  +0 rev u8, +1 pad, +2 AclSize u16, +4 AceCount u16, +6 pad; ACEs from +8.
+ *   ACE:  +0 AceType u8 (0 allow, 1 deny), +1 AceFlags u8, +2 AceSize u16, +4 Mask u32, +8 SID.
+ */
+export function aclAlreadyGrants(acl: Uint8Array, sid: Uint8Array, mode: "rw" | "rx"): boolean {
+  if (acl.length < 8 || sid.length < 8) return false;
+  const dv = new DataView(acl.buffer, acl.byteOffset, acl.byteLength);
+  const count = dv.getUint16(4, true);
+  const need = FILE_RIGHTS[mode];
+  let here = 0, inherits = 0;
+  for (let i = 0, off = 8; i < count; i++) {
+    if (off + 8 > acl.length) return false;
+    const type = acl[off]!, flags = acl[off + 1]!, size = dv.getUint16(off + 2, true);
+    if (size < 8 || off + size > acl.length) return false;
+    const aceSid = acl.subarray(off + 8, off + 8 + sid.length);
+    if (aceSid.length === sid.length && aceSid.every((b, j) => b === sid[j])) {
+      if (type === 1) return false; // ACCESS_DENIED for the container: let the grant path handle it
+      if (type === 0) {
+        const rights = fileRights(dv.getUint32(off + 4, true));
+        if (!(flags & 0x08)) here |= rights; // not INHERIT_ONLY: applies to this object
+        if ((flags & 0x03) === 0x03 && !(flags & 0x04)) inherits |= rights; // OI|CI, propagates all the way down
+      }
+    }
+    off += size;
+  }
+  return (here & need) === need && (inherits & need) === need;
+}
+
 const APPCONTAINER_NAME = "LucidAgentIDE.Sandbox.v1";
 
 // ── Win32 constants ───────────────────────────────────────────────────────────────────────────────────
@@ -277,8 +323,9 @@ function containerSid(): bigint {
  * coalesced, never stacked), write it back (SetNamedSecurityInfoW). `accessMode` GRANT_ACCESS adds the
  * inheritable ACE; REVOKE_ACCESS strips every ACE for the SID (the `--revoke-acl` path). Windows-only;
  * throws on any Win32 failure so callers fail-closed BEFORE any spawn. NOT pure — the FFI edge.
+ * Returns false when a grant was already in place and nothing was written (see P-SANDBOX.18 below).
  */
-function modifyDacl(path: string, access: number, accessMode: number, sid: bigint): void {
+function modifyDacl(path: string, access: number, accessMode: number, sid: bigint): boolean {
   const advapi = dlopen("advapi32.dll", {
     GetNamedSecurityInfoW: { args: [FFIType.ptr, FFIType.u32, FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.u32 },
     // OldAcl / NewAcl / pDacl are pointer-sized values passed BY VALUE ⇒ u64 (same convention as HANDLEs above).
@@ -293,6 +340,18 @@ function modifyDacl(path: string, access: number, accessMode: number, sid: bigin
   let rc = advapi.symbols.GetNamedSecurityInfoW(ptr(wpath), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, null, null, ptr(daclOut), null, ptr(sdOut));
   if (rc !== 0) throw new Error(`GetNamedSecurityInfoW(${path}) failed (err=${rc})`);
 
+  // P-SANDBOX.18 (ADR-0411): SetNamedSecurityInfoW re-propagates the inheritable ACE through EVERY file
+  // under `path`, even when the DACL does not change. On a workspace with node_modules/vendor/.git that
+  // walk measured 16.7 s per spawn (23 s for all grants), so the contained agent could not answer
+  // `initialize` inside its 20 s bound and every respawn failed. The ACEs persist on disk after the
+  // first grant, so when the DACL already gives the container this grant, here and inheritably, nothing
+  // is written. The check is on the effect (aclAlreadyGrants), not bytes: Windows stores one generic
+  // inheritable grant as two ACEs, so a merged ACL never byte-matches the stored one.
+  if (accessMode === GRANT_ACCESS && aclAlreadyGrants(aclBytes(daclOut[0]!), sidBytes(sid), access === GENERIC_ALL ? "rw" : "rx")) {
+    kfree.symbols.LocalFree(sdOut[0]!);
+    return false;
+  }
+
   const ea = buildExplicitAccessW(access, accessMode, sid);
   const newAclOut = new BigUint64Array(1);
   rc = advapi.symbols.SetEntriesInAclW(1, ptr(ea), daclOut[0]!, ptr(newAclOut));
@@ -304,6 +363,21 @@ function modifyDacl(path: string, access: number, accessMode: number, sid: bigin
   kfree.symbols.LocalFree(newAclOut[0]!);
   kfree.symbols.LocalFree(sdOut[0]!);
   if (rc !== 0) throw new Error(`SetNamedSecurityInfoW(${path}) failed (err=${rc})`);
+  return true;
+}
+
+/** The bytes of an ACL at `acl` (a PACL), bounded by its header's AclSize (u16 at +2). A null PACL (no
+ *  DACL at all) reads as empty, which aclAlreadyGrants answers false, so the grant is written. */
+function aclBytes(acl: bigint): Uint8Array {
+  if (!acl) return new Uint8Array(0);
+  const p = Number(acl) as Pointer;
+  return new Uint8Array(toArrayBuffer(p, 0, ffiRead.u16(p, 2)).slice(0));
+}
+
+/** The bytes of a SID at `sid` (a PSID): 8 header bytes plus 4 per sub-authority (count u8 at +1). */
+function sidBytes(sid: bigint): Uint8Array {
+  const p = Number(sid) as Pointer;
+  return new Uint8Array(toArrayBuffer(p, 0, 8 + 4 * ffiRead.u8(p, 1)).slice(0));
 }
 
 /**
@@ -351,8 +425,8 @@ export function runInAppContainer(plan: HelperPlan): number {
     process.stderr.write(`[lucid-appcontainer] note: ${parentDir(resolvedCmd)} is already package-readable - skipping rx grant\n`);
   }
   for (const t of aclTargets(plan, resolvedCmd)) {
-    modifyDacl(t.path, t.mode === "rw" ? GENERIC_ALL : GENERIC_READ_EXECUTE, GRANT_ACCESS, sid);
-    process.stderr.write(`[lucid-appcontainer] acl grant ${t.path} ${t.mode}\n`);
+    const wrote = modifyDacl(t.path, t.mode === "rw" ? GENERIC_ALL : GENERIC_READ_EXECUTE, GRANT_ACCESS, sid);
+    process.stderr.write(`[lucid-appcontainer] acl ${wrote ? "grant" : "already granted"} ${t.path} ${t.mode}\n`);
   }
 
   // 2) SECURITY_CAPABILITIES { PSID AppContainerSid; PSID_AND_ATTRIBUTES Capabilities=NULL; DWORD Count=0; DWORD Reserved; }
@@ -463,8 +537,8 @@ function applyAcl(mode: "rx" | "rw", path: string): number {
     return 3;
   }
   try {
-    modifyDacl(path, mode === "rw" ? GENERIC_ALL : GENERIC_READ_EXECUTE, GRANT_ACCESS, containerSid());
-    process.stderr.write(`[lucid-appcontainer] acl grant ${path} ${mode}\n`);
+    const wrote = modifyDacl(path, mode === "rw" ? GENERIC_ALL : GENERIC_READ_EXECUTE, GRANT_ACCESS, containerSid());
+    process.stderr.write(`[lucid-appcontainer] acl ${wrote ? "grant" : "already granted"} ${path} ${mode}\n`);
     return 0;
   } catch (e) {
     process.stderr.write(`[lucid-appcontainer] acl grant failed: ${String((e as Error).message ?? e)}\n`);
