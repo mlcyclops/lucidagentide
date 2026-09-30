@@ -24,6 +24,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 .chip.goal .gp{flex:none;color:var(--sky);font-variant-numeric:tabular-nums;font-size:11px}
 .chip.goal i{position:absolute;left:0;bottom:0;height:3px;width:0;background:linear-gradient(90deg,var(--olive),var(--gold));box-shadow:0 0 8px rgba(255,207,90,.8);transition:width .3s ease}
 .chip.goal.flash{animation:gflash .7s ease}
+.chip.bump{animation:bump .38s ease}
+@keyframes bump{0%{transform:scale(1)}35%{transform:scale(1.16);box-shadow:0 0 22px rgba(255,207,90,.8)}100%{transform:scale(1)}}
 @keyframes gflash{0%{box-shadow:0 0 30px rgba(255,207,90,.95);border-color:var(--gold)}100%{box-shadow:0 0 16px rgba(255,207,90,.12)}}
 .hbtn{flex:none;pointer-events:auto;cursor:pointer;width:31px;height:31px;border-radius:10px;color:var(--ink);background:rgba(10,16,32,.7);border:1px solid rgba(143,211,255,.35);font:800 12px/1 ui-sans-serif,system-ui,"Segoe UI",Arial,sans-serif}
 .hbtn:hover,.hbtn:focus-visible{border-color:var(--sky);box-shadow:0 0 12px rgba(143,211,255,.45);outline:none}
@@ -716,7 +718,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     { t: 'Rescue an Army soldier', n: 1, m: () => S.by.army, d: 1, branch: 'army', r: 'life' },
     { t: 'Clear Wave 1: Boot Camp', n: 1, m: () => (S.waves >= 1 ? 1 : 0), r: 'barrier' },
     { t: 'Rescue a Navy sailor', n: 1, m: () => S.by.navy, d: 1, branch: 'navy', r: 'drone' },
-    { t: 'Catch 8 supply drops', n: 8, m: () => S.supplies, d: 1, r: 'life' },
+    { t: 'Salvage 3 medals', n: 3, m: () => S.medals, d: 1, r: 'life' },
     { t: 'Rescue an Airman', n: 1, m: () => S.by.air, d: 1, branch: 'air', r: 'barrier' },
     { t: 'Chain 8 bricks in one volley', n: 8, peak: 1, r: 'drone' },
     { t: 'Rescue a Marine', n: 1, m: () => S.by.marine, d: 1, branch: 'marine', r: 'life' },
@@ -729,16 +731,16 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   const G = { mode: 'title', wave: 1, endless: false, auto: false, shake: 0, flash: 0, flashC: '255,255,255', waveT: 0, overT: 0, banners: [], shownScore: 0, stuckT: 0, pendingWave: false, barrierPop: 0, waveName: '' };
   let S = null, P = null, balls = [], bricks = [], troops = [], jets = [], bombs = [], drones = [], pickups = [];
   const keys = { left: false, right: false };
-  function freshStats() { return { score: 0, lives: 3, broken: 0, rescued: 0, missed: 0, by: { army: 0, navy: 0, air: 0, marine: 0 }, supplies: 0, chain: 0, bestChain: 0, waves: 0, mi: 0, goalBase: 0, goalPeak: 0, done: 0, barrier: 0, breachT: 0 }; }
+  function freshStats() { return { score: 0, lives: 3, broken: 0, rescued: 0, missed: 0, by: { army: 0, navy: 0, air: 0, marine: 0 }, supplies: 0, medals: 0, chain: 0, bestChain: 0, waves: 0, mi: 0, goalBase: 0, goalPeak: 0, done: 0, barrier: 0, breachT: 0 }; }
   function newRun() {
     S = freshStats(); G.wave = 1; G.endless = false; G.banners = []; G.shownScore = 0; G.shake = 0; G.flash = 0; G.waveT = 0; G.pendingWave = false;
-    P = { x: W / 2, tx: W / 2, w: 64, baseW: 64, h: 12, wideT: 0, squash: 0, vx: 0, lastX: W / 2, tread: 0 };
+    P = { x: W / 2, tx: W / 2, w: 72, baseW: 72, h: 12, wideT: 0, squash: 0, vx: 0, lastX: W / 2, tread: 0 };
     troops = []; jets = []; bombs = []; drones = []; balls = []; pickups = [];
     for (const pool of [PARTS, RINGS, TEXTS]) for (const p of pool) p.on = false;
     loadWave(1); resetBall(); activateMission(0);
     updateHud(true);
   }
-  function waveSpeed() { return Math.min(540, 370 + (G.wave - 1) * 28); }
+  function waveSpeed() { return Math.min(520, 270 + (G.wave - 1) * 38); } // wave 1 is gentle; each wave adds pace
   function loadWave(n) {
     const def = n <= WAVES.length ? WAVES[n - 1] : { name: pick(ENDLESS_NAMES), rows: genRows() };
     G.waveName = def.name; bricks = [];
@@ -791,7 +793,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
       troops.push({ b: k.branch, x: cx, y: cy, vx: rand(-40, 40), vy: -170, t: 0, state: 'fall', rot: 0, chute: 0, dir: Math.random() < 0.5 ? -1 : 1, ft: 0 });
       text(cx, cy - 16, 'FREE!', BR[k.branch].glow, 13, 0.8);
     } else if (k.item && pickups.length < 14) {
-      pickups.push({ k: k.item, x: cx, y: cy, vx: rand(-30, 30), vy: -120, t: 0, rot: 0, vr: rand(-3, 3), dead: false });
+      pickups.push({ k: k.item, x: cx, y: cy, vx: rand(-25, 25), t: 0, dead: false, from: null });
     }
     shake(k.kind === 't' ? 2.2 : 1.2);
   }
@@ -903,7 +905,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     for (const l of STARS) for (const s of l) { s.y += dt * 0.004 * s.s; if (s.y > 1) s.y -= 1; }
     for (const c of CLOUDS) { c.x += c.sp * dt; if (c.x > 1.3) c.x = -0.5; }
     if (!S || G.mode === 'over' || G.mode === 'won' || G.mode === 'paused') { if (S && G.mode !== 'paused') stepFx(dt); return; }
-    if (G.mode === 'dying') { G.overT -= dt; stepFx(dt); stepTroops(dt); if (G.overT <= 0) gameOver(); return; }
+    if (G.mode === 'dying') { G.overT -= dt; stepFx(dt); stepTroops(dt); stepPickups(dt); if (G.overT <= 0) gameOver(); return; }
     P.w = lerp(P.w, P.wideT > 0 ? P.baseW * 1.5 : P.baseW, Math.min(1, dt * 8));
     if (P.wideT > 0) P.wideT -= dt;
     if (G.auto) autopilot();
@@ -927,7 +929,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     balls = balls.filter((b) => !b.dead);
     if (balls.some((b) => b.stuck)) { G.stuckT += dt; if (G.auto && G.stuckT > 0.5) launch(); }
     if (!balls.length) loseLife();
-    stepTroops(dt); stepAir(dt); stepDrones(dt);
+    stepTroops(dt); stepPickups(dt); stepAir(dt); stepDrones(dt);
     for (const k of bricks) {
       if (!k.alive) continue;
       if (k.pop < 1) k.pop = Math.min(1, k.pop + dt * 2.6);
@@ -959,28 +961,45 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     const s = BR[m.branch];
     text(k.x + k.w / 2, k.y - 6, 'TROOP SPOTTED', s.glow, 13, 1.3); ring(k.x + k.w / 2, k.y + k.h / 2, 40, s.glow, 0.6, 3); SFX.voice(m.branch);
   }
+  // A freed supply item pops out of its brick, then flies to the HUD chip it pays into (score, or lives for a
+  // medkit) and adds its value on arrival. It never stays in the play area and never needs catching.
+  const POP_T = 0.28, FLY_T = 0.7;
+  function hudTarget(id) {
+    const el = $(id), r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    if (!r || !r.width) return { x: W / 2, y: -30 };
+    return { x: (r.left + r.width / 2 - offX) / scale, y: (r.top + r.height / 2 - offY) / scale };
+  }
+  function bumpChip(id) { const c = $(id).parentNode; if (!c || !c.classList) return; c.classList.remove('bump'); void c.offsetWidth; c.classList.add('bump'); }
   function stepPickups(dt) {
     for (const p of pickups) {
-      p.t += dt; p.vy = Math.min(170, p.vy + 380 * dt); p.x = clamp(p.x + p.vx * dt, 12, W - 12); p.vx *= 1 - dt; p.y += p.vy * dt; p.rot += p.vr * dt;
-      if ((G.mode === 'play' || G.mode === 'title') && p.vy > 0 && p.y + 10 >= PADDLE_Y - P.h / 2 && p.y - 10 <= PADDLE_Y + P.h / 2 && Math.abs(p.x - P.x) <= P.w / 2 + 8) {
+      p.t += dt;
+      if (p.t < POP_T) { p.y -= 70 * dt; p.x += p.vx * dt; continue; }
+      if (!p.from) { p.from = { x: p.x, y: p.y }; p.to = hudTarget(p.k === 'medkit' ? 'livesV' : 'scoreV'); p.ctl = { x: p.x + (p.to.x - p.x) * 0.2 + (p.x < W / 2 ? -60 : 60), y: Math.min(p.y, p.to.y) - 20 }; }
+      const u = Math.min(1, (p.t - POP_T) / FLY_T), e = u * u * (3 - 2 * u), a = 1 - e;
+      p.x = a * a * p.from.x + 2 * a * e * p.ctl.x + e * e * p.to.x;
+      p.y = a * a * p.from.y + 2 * a * e * p.ctl.y + e * e * p.to.y;
+      if (Math.random() < 0.6) part(p.x, p.y, rand(-15, 15), rand(-15, 15), 0.35, rand(1.2, 2.2), '#ffe9a8', 1);
+      if (u >= 1) {
         p.dead = true;
         const it = ITEMS[p.k];
-        S.supplies++; addScore(it.pts, p.x, PADDLE_Y - 24, it.glow);
-        text(p.x, PADDLE_Y - 44, it.name, it.glow, 12, 0.9); ring(p.x, PADDLE_Y - 6, 22, it.glow, 0.4, 2.5);
-        burst(p.x, PADDLE_Y - 8, 10, ['#ffffff', '#ffe9a8'], 120, 1, 1.6); SFX.supply(); P.squash = Math.max(P.squash, 0.6);
-        if (it.effect === 'life' && S.lives < 6) { S.lives++; text(p.x, PADDLE_Y - 62, '+1 LIFE', '255,120,130', 15, 1.1); }
+        S.supplies++; if (p.k === 'medal') S.medals++;
+        addScore(it.pts); SFX.supply();
+        if (it.effect === 'life' && S.lives < 6) { S.lives++; bumpChip('livesV'); } else bumpChip('scoreV');
         if (it.effect === 'drone') applyReward('drone');
-      } else if (p.y > H + 20) p.dead = true;
+      }
     }
     pickups = pickups.filter((p) => !p.dead);
   }
   function drawPickups() {
     for (const p of pickups) {
-      const it = ITEMS[p.k];
+      const it = ITEMS[p.k], u = p.t < POP_T ? 0 : Math.min(1, (p.t - POP_T) / FLY_T);
+      const sz = p.t < POP_T ? 20 + 8 * Math.sin(p.t / POP_T * Math.PI / 2) : 28 - 16 * u;
       ctx.save(); ctx.globalCompositeOperation = 'lighter';
-      const hg = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, 18); hg.addColorStop(0, `rgba(${it.glow},.5)`); hg.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(p.x, p.y, 18, 0, 7); ctx.fill(); ctx.restore();
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Math.sin(p.rot) * 0.5); ctx.drawImage(itemSprite(p.k), -11, -11, 22, 22); ctx.restore();
+      const hg = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, sz);
+      hg.addColorStop(0, `rgba(${it.glow},.55)`); hg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(p.x, p.y, sz, 0, 7); ctx.fill(); ctx.restore();
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(u * Math.PI * 2 * (p.vx < 0 ? -1 : 1)); ctx.drawImage(itemSprite(p.k), -sz / 2, -sz / 2, sz, sz); ctx.restore();
+      if (p.t < POP_T + 0.15) { ctx.globalAlpha = Math.max(0, 1 - p.t / (POP_T + 0.15)); ctx.fillStyle = `rgb(${it.glow})`; ctx.textAlign = 'center'; ctx.font = '900 10px ui-sans-serif,system-ui,Arial'; ctx.fillText(`${it.name} +${it.pts}`, p.x, p.y - 16); ctx.globalAlpha = 1; }
     }
   }
   function stepTroops(dt) {
@@ -1444,7 +1463,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   }
   // A small handle for automated playtests. Nothing in the game reads it.
   window.__brickBrigade = {
-    state: () => ({ mode: G.mode, wave: G.wave, score: S && S.score, lives: S && S.lives, mission: S && S.mi + 1, done: S && S.done, rescued: S && S.rescued, bricks: bricks.filter((k) => k.alive).length, balls: balls.length, troops: troops.length }),
+    state: () => ({ mode: G.mode, wave: G.wave, score: S && S.score, lives: S && S.lives, mission: S && S.mi + 1, done: S && S.done, rescued: S && S.rescued, bricks: bricks.filter((k) => k.alive).length, balls: balls.length, troops: troops.length, supplies: S && S.supplies, inFlight: pickups.length }),
     autopilot: (on) => { G.auto = !!on; },
     clearWave: () => { for (const k of bricks) if (k.alive) hitBrick(k, k.hp); },
   };
