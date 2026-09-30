@@ -20,7 +20,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { gitCmdDir } from "../harness/runs/sandbox_exec.ts";
+import { gitExe } from "../harness/runs/sandbox_exec.ts";
 import { emitSecurityEvent, type SecurityEventInput } from "./audit_export.ts";
 import type { GitProvider } from "./git_url.ts";
 import { parseGitConfigZ, pushFrom, pushSlug, pushTarget, PUSH_CONFIG_REGEXP, toolCallTouches, type RepoContext, type RepoView } from "./repo_identity.ts";
@@ -34,14 +34,6 @@ const ROOT_TTL_MS = 120_000;
 const MAX_TRACKED_SESSIONS = 200;
 const MAX_OTHERS = 4;
 const FORCED = ["-c", "safe.directory=*", "-c", "core.fsmonitor=false"];
-
-let gitExeCache: string | undefined;
-function gitExe(): string {
-  if (gitExeCache !== undefined) return gitExeCache;
-  const dir = process.platform === "win32" ? gitCmdDir() : null;
-  gitExeCache = dir ? join(dir, "git.exe") : "git";
-  return gitExeCache;
-}
 
 /** Run one read-only git command in `dir`. Never throws; a timeout kills the child. The process cwd is
  *  the temp dir and the repo is named with -C, so a folder on a UNC share is never a process cwd. */

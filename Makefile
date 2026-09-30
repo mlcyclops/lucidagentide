@@ -1231,6 +1231,14 @@ demo-P-TUI.1: demo-P-TUI.0 ## P-TUI.1 part (ADR-0420): `lucid hub` - the termina
 	$(BUN) run desktop/scripts/demo_p_tui_1.ts
 	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-TUI.2
+demo-P-TUI.2: demo-P-TUI.1 ## P-TUI.2: lucid hub without a checkout or a manual command. The packaged app writes a marked one-line lucid.cmd forwarder into the per-user WindowsApps folder (on PATH by default) pointing at the bin\lucid.exe every dist already compiles; a lucid.cmd without the marker is never overwritten, and the uninstaller deletes only a marked one. The Fleet grid and orbit gain a Terminal button (engine route /api/hub/open, UI token only, fixed command) and LucidAgentIDE.bat gains H, both opening lucid hub in a new console attached to the running engine.
+	$(BUN) test $(TEST_IGNORES) desktop/cli_forwarder.test.ts
+
+.PHONY: demo-P-FLEET.WT1
+demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
+	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts
+
 .PHONY: demo-P-JEV.6
 demo-P-JEV.6: ## P-JEV.6 (ADR-0421): a judge whose account says the model does not exist is not asked again, cloud or local. omp's smol priority patterns name gpt-5.3-codex-spark for the openai-codex OAuth provider and match openai/gpt-5.3-codex-spark under an API-key account with no such model; omp cools down only 401/402/403, so that judge answered every judgment with a 404 (model_not_found) before the chain moved on. P-JEV.5 counted only LOCAL failures. Now ONE missing-model answer bans (ledger + in-process breaker), a transient cloud failure still never does, and a banned chat model is not named in the chain. Proves it against the ledger, the breaker and omp's real role resolver.
 	$(BUN) run desktop/scripts/demo_p_jev_6.ts

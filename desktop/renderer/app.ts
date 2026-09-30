@@ -1970,6 +1970,14 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   });
 }
 
+/** P-TUI.2: the Fleet views' Terminal button. The engine opens `lucid hub` in a new terminal attached to this
+ *  app; only a refusal needs words here, with the engine's own reason. */
+async function openTerminalHub(): Promise<void> {
+  const r = await bridge.hubOpen().catch(() => null);
+  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same lanes. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
+  else showToast({ tone: "warn", title: "Terminal hub not opened", desc: r?.reason ?? "The engine did not answer.", timeout: 8000 });
+}
+
 /** P-HEALTH.1/.3: the harness acted on this session by itself. The phase line shows the self-heal while it
  *  runs; the transcript keeps a note ONLY when the run did not continue on its own (`needsUser`), because
  *  a permanent notice about a problem that was already handled is noise the user cannot act on. Every
@@ -15773,6 +15781,7 @@ function wire(): void {
   void bridge.voiceSettings().then((v) => { if (v) { state.voice = v; updateVoiceChip(); } });
   // P-FLEET.L1: the fleet grid dashboard - headless local lanes as streaming mini agent windows.
   initFleetGrid({
+    hubOpen: openTerminalHub, // P-TUI.2
     fleetStatus: bridge.fleetStatus,
     fleetSpawn: bridge.fleetSpawn,
     fleetPrompt: bridge.fleetPrompt,
@@ -15827,6 +15836,7 @@ function wire(): void {
   // pair (attach is app.ts-owned either way) and opens the grid dock for spawning and per-lane work,
   // so the two views can never disagree about what a lane is doing.
   initFleetOrbit({
+    hubOpen: openTerminalHub, // P-TUI.2
     fleetStatus: bridge.fleetStatus,
     fleetAnswer: bridge.fleetAnswer,
     fleetRespawn: bridge.fleetRespawn,

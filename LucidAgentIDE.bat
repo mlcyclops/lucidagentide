@@ -117,6 +117,7 @@ echo     1^)  Launch / relaunch omp   ^(terminal, with the security gate^)
 echo     G^)  Desktop GUI             ^(the installed app: your history + settings^)
 echo     D^)  Desktop GUI from source ^(dev: runs THIS checkout, whatever version it is^)
 echo     F^)  Fleet GUI               ^(project-bound window: own workspace + Knowledge^)
+echo     H^)  Terminal hub            ^(lucid hub: the fleet as tmux-style panes, in a new window^)
 echo     2^)  Switch model
 echo     3^)  Switch provider
 echo     4^)  Dashboards  ^(security  /  memory ^& context^)
@@ -132,6 +133,7 @@ if "%CH%"=="1" goto :launch
 if /i "%CH%"=="G" ( call :appgui & goto :menu )
 if /i "%CH%"=="D" ( call :gui & goto :menu )
 if /i "%CH%"=="F" ( call :fleetgui & goto :menu )
+if /i "%CH%"=="H" ( call :hub & goto :menu )
 if "%CH%"=="2" goto :pickmodel
 if "%CH%"=="3" goto :pickprovider
 if "%CH%"=="4" ( call :dashboardmenu & goto :menu )
@@ -143,6 +145,22 @@ if "%CH%"=="9" ( call :install & goto :menu )
 if "%CH%"=="0" goto :bye
 echo    ^(unrecognized^)
 goto :menu
+
+rem ===========================================================================
+rem  H: P-TUI.2 - lucid hub in its own window. It attaches to the running app's engine (the discovery
+rem  file) or starts one headless. Uses bin\lucid.exe when this checkout compiled it, else bun on the source.
+:hub
+echo.
+if exist "%REPO%\bin\lucid.exe" (
+  start "LUCID hub" cmd /s /k ""%REPO%\bin\lucid.exe" hub"
+) else (
+  where bun >nul 2>&1 || ( echo    bun not found - install it with option 9, or use the Terminal button in the app's Fleet view. & goto :eof )
+  start "LUCID hub" cmd /s /k "bun "%REPO%\harness\launcher\lucid_acp.ts" hub"
+)
+echo    Opened lucid hub in a new window.
+echo    Keys: ^| and - split, tab moves focus, z zooms, x closes a pane, ? help, q quits.
+echo.
+goto :eof
 
 rem ===========================================================================
 :launch
