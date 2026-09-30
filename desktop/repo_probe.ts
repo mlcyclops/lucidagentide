@@ -36,7 +36,8 @@ const MAX_OTHERS = 4;
 const FORCED = ["-c", "safe.directory=*", "-c", "core.fsmonitor=false"];
 
 let gitExeCache: string | undefined;
-function gitExe(): string {
+/** The host git executable: MinGit / Git for Windows found by gitCmdDir on Windows, else PATH's git. */
+export function gitExe(): string {
   if (gitExeCache !== undefined) return gitExeCache;
   const dir = process.platform === "win32" ? gitCmdDir() : null;
   gitExeCache = dir ? join(dir, "git.exe") : "git";

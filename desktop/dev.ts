@@ -119,6 +119,8 @@ import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: l
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
+import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
+import { createLaneWorktree, removeLaneWorktree } from "./lane_worktree.ts"; // P-FLEET.WT1: a lane in its own git worktree
 import { cloneRepo, CLONE_ROOT, hostTokenForUrl, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { ghToken, githubRepoChoices, localRepoChoices, observeToolCall, peekRepoContext, repoContext, type RepoChoiceSource } from "./repo_probe.ts"; // P-REPO.1 (ADR-0406)
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
@@ -4730,8 +4732,11 @@ return Bun.serve({
       // the lane's turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on
       // silence).
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
+      // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
+      // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.
+      if (p === "/api/hub/open" && req.method === "POST") return json({ ok: true, data: await openHubWindow(resolvedRepo().root, process.env.LUCID_RESOURCES ?? "") });
       if (p === "/api/fleet/spawn" && req.method === "POST") {
-        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown; sessionId?: unknown }>(req);
+        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown; sessionId?: unknown; worktree?: unknown }>(req);
         // P-FLEET.L2: a lane can be spawned straight from a GitHub / GitLab / Azure DevOps remote. The clone
         // lands INSIDE the folder the user picked in the OS dialog (or under ~/.omp/lucid-workspaces when
         // they picked none) and an existing clone is reused, so re-spawning the same repo is idempotent.
@@ -4749,6 +4754,12 @@ return Bun.serve({
           if (!c.ok || !c.path) return json({ ok: true, data: { ok: false, reason: c.error || "git clone failed" } });
           cwd = c.path;
         }
+        // P-FLEET.WT1: the user accepted the merge-conflict risk and asked for the lane's OWN worktree, so it
+        // works on its own branch beside other agents in this repo instead of sharing the checkout. A refused
+        // spawn removes the worktree it just made; a started lane keeps it (its branch is the lane's work).
+        const lane = b.worktree === true ? await createLaneWorktree(cwd, typeof b.name === "string" && b.name.trim() ? b.name : basename(cwd)) : null;
+        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason } });
+        if (lane?.ok) cwd = lane.laneCwd;
         // P-FLEET.L17: recovering a historical spoke brings its RECORDED session back (omp loads it
         // natively; the on-disk transcript seeds the composer and is the fallback memory).
         const sessionId = typeof b.sessionId === "string" ? b.sessionId.trim() : "";
@@ -4760,7 +4771,8 @@ return Bun.serve({
           resume = { sessionId, transcript, turns: page.userTotal };
         }
         const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined, ...(resume ? { resume } : {}) });
-        return json({ ok: true, data: r });
+        if (lane?.ok && !r.ok) await removeLaneWorktree(lane);
+        return json({ ok: true, data: lane?.ok && r.ok ? { ...r, worktree: { path: lane.path, branch: lane.branch } } : r });
       }
       // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
       // capped at 6). The same filter guards the queue and its drain below.

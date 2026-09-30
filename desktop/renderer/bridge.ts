@@ -1008,7 +1008,10 @@ export interface LucidBridge {
    *  workspaces root when cwd is blank) and runs the lane there; an existing clone is reused. `pat` is a
    *  freshly-typed token used ONLY to spawn that git process - it is redacted from errors and never
    *  persisted by the server (the encrypted copy is written separately through the OS vault). */
-  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string }): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
+  /** P-FLEET.WT1: `worktree` runs the lane in its own git worktree on a new branch (the user accepted the merge risk). */
+  /** P-TUI.2: open `lucid hub` in a new terminal window attached to this engine. */
+  hubOpen(): Promise<{ ok: boolean; reason?: string } | null>;
+  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string; worktree?: boolean }): Promise<{ ok: boolean; lane?: LaneView; reason?: string; worktree?: { path: string; branch: string } } | null>;
   /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat. */
   fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[]): Promise<void>;
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
@@ -1730,6 +1733,7 @@ export const bridge: LucidBridge = {
   repoChoices: () => getData("/api/repo/choices"),
   repoGithub: (refresh) => getData(`/api/repo/github${refresh ? "?refresh=1" : ""}`),
   fleetSpawn: (opts) => post("/api/fleet/spawn", opts),
+  hubOpen: () => post("/api/hub/open", {}),
   timelineList: (limit = 100, offset = 0, includeSelfTest = false) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}`), // P-FLEET.L5
   timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5
   fleetPrompt: (laneId, text, onEvent, images) => {
