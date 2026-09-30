@@ -138,11 +138,11 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
 - **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
 
-The per-beta details are in [What's new in v2.3.0-beta.13](#-whats-new-in-v230-beta13-prerelease), [beta.12](#-whats-new-in-v230-beta12-prerelease), [beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+The per-beta details are in [What's new in v2.3.0-beta.14](#-whats-new-in-v230-beta14-prerelease), [beta.13](#-whats-new-in-v230-beta13-prerelease), [beta.12](#-whats-new-in-v230-beta12-prerelease), [beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
 
 ### Get the beta
 
-1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.13](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.13)).
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.14](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.14)).
 2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
 
@@ -276,6 +276,19 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > leave the host.
 
 ---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.14 (prerelease)
+
+> **🪐 Claude Sonnet 5.5, and incident reports you can act on.** Beta.14 moves omp to 18.4.4 for Claude Sonnet 5.5, gates the new StepFun provider behind the China-origin acknowledgement, and makes the recovery notice's incident report carry the agent's real output.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.14](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.14). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🪐 Claude Sonnet 5.5 in the picker** - omp 18.4.4 catalogs `claude-sonnet-5-5` ($2/$10 per Mtok, 1M context, 128K output) under Anthropic, Bedrock, Vertex and the aggregators; LUCID adds its cost card, the 1M window and a default rank directly above Sonnet 5 (Opus 5.5 stays the default). *(P-MODEL.6, [ADR-0422](DECISIONS.md))*
+- **🛡️ StepFun stays behind the sovereignty gate** - omp's new `stepfun` provider is China-origin: hidden until you type ACKNOWLEDGE in Settings, and never selectable in AskSage lockdown. Apple's on-device model (omp's new `apple` provider) lists on macOS only. *(P-MODEL.6)*
+- **🧾 Incident reports quote the agent's real output** - the "agent process failed and was restarted" report now carries omp's own stderr; test runs no longer write into your `lucid-acp.log`. The engine finds MinGit without git on PATH, so workspace activity works and `engine.log` is no longer flooded with `git` ENOENT. *(P-RECOVER.3)*
+- **✍️ A long write is not a stall** - while the model streams a large file write, the agent sends a heartbeat, so the watchdog no longer cancels and respawns a healthy session. *(P-HEALTH.3)*
+- **🌳 Fleet lanes in their own worktree** - a new lane or spoke can run in its own `git worktree` beside the repo, so it shares no checkout with other agents. *(P-FLEET.WT1)*
+- **🖥 `lucid hub` from anywhere** - a Terminal button in the Fleet grid and orbit, option H in the launcher, and a `lucid` command on PATH on Windows. *(P-TUI.2)*
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.13 (prerelease)
 
