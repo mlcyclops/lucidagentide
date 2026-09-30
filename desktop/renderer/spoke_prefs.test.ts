@@ -5,7 +5,7 @@
 // spoke ran, never on a model the picker no longer offers.
 
 import { describe, expect, test } from "bun:test";
-import { fleetModelOptions, spawnModelDefault } from "./spoke_prefs.ts";
+import { fleetModelOptions, loginLabel, spawnModelDefault } from "./spoke_prefs.ts";
 
 const OPTIONS = [{ value: "anthropic/claude-opus-5-5" }, { value: "anthropic/claude-sonnet-5" }, { value: "openai/gpt-6" }];
 
@@ -30,6 +30,14 @@ describe("spawnModelDefault", () => {
     ];
     expect(spawnModelDefault(grok, "xai/grok-4.7", "xai-oauth/grok-4.7")).toBe("xai-oauth/grok-4.7");
     expect(spawnModelDefault(grok, "xai-oauth/grok-4.7", "xai-oauth/grok-4.7")).toBe("xai-oauth/grok-4.7");
+  });
+});
+
+describe("loginLabel", () => {
+  test("xAI routes use the same words the fleet menu leads with", () => {
+    expect(loginLabel("xai-oauth")).toBe("X sign-in");
+    expect(loginLabel("xai")).toBe("API key");
+    expect(loginLabel("unknown-route")).toBe("");
   });
 });
 

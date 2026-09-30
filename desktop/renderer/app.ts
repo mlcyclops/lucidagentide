@@ -146,7 +146,7 @@ import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setId
 import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
 import { JUMP_SHOW_PX, anchorTop, chatTakesUpScroll, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor, type ScrollBox } from "./scroll_jump.ts";
-import { setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands
+import { loginLabel, providerRoute, setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands; colliding rows share the fleet login words
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -17366,16 +17366,14 @@ let collidingNames = new Set<string>();
 // cached list to the live one when the cold-boot config arrives). Null when no picker is open.
 let pickerRedraw: (() => void) | null = null;
 function providerLabel(v: string): string {
-  if (/^anthropic\//.test(v)) return "Anthropic";
-  if (/google-antigravity\//.test(v)) return "Antigravity";
-  if (/google-gemini-cli\//.test(v)) return "Gemini CLI";
-  if (/openai-codex\//.test(v)) return "Codex";
+  const named = loginLabel(providerRoute(v));
+  if (named) return named;
   const m = /^([^/]+)\//.exec(v);
   return m ? m[1]!.replace(/^asksage-/, "") : "";
 }
 const modelRow = (o: { value: string; name: string }, sel: string) => {
   // Provider tag only on NON-gov colliding rows - the Gov pill already distinguishes gov routes.
-  const prov = (!isAsksage(o.value) && collidingNames.has(cleanModelName(o.name))) ? `<span class="row-prov" data-tip="Provider route">${esc(providerLabel(o.value))}</span>` : "";
+  const prov = (!isAsksage(o.value) && collidingNames.has(cleanModelName(o.name))) ? `<span class="row-prov" data-tip="Login">${esc(providerLabel(o.value))}</span>` : "";
   // P-IDE.1b: an unavailable model (e.g. ITAR-blocked Fable) renders greyed + non-selectable - NO
   // data-val, so the picker's click handler skips it; data-model stays so the hover card explains why.
   const reason = unavailableReason(o.value);

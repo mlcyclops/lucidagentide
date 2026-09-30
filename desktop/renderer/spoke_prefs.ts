@@ -66,7 +66,14 @@ const LOGIN_LABEL: Record<string, string> = {
   openai: "OpenAI API key",
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini sign-in",
+  "google-antigravity": "Antigravity",
 };
+
+/** The login words for a provider prefix, or "" when this route has no named login.
+ *  Fleet menus and the main picker both read this, so the two cannot drift. */
+export function loginLabel(route: string): string {
+  return LOGIN_LABEL[route] ?? "";
+}
 
 /** Fleet `<select>` labels. A display name that appears once stays as the catalog wrote it. A name
  *  shared by two logins leads with the login (`X sign-in: Grok 4.7`, `API key: Grok 4.7`), because a
@@ -78,7 +85,7 @@ export function fleetModelOptions(options: readonly ModelOption[]): { value: str
   return options.map((o) => {
     const name = nameOf(o);
     const route = providerRoute(o.value);
-    const login = LOGIN_LABEL[route] ?? route.replace(/-/g, " ");
+    const login = loginLabel(route) || route.replace(/-/g, " ");
     const label = (counts.get(name) ?? 0) > 1 && route ? `${login}: ${name}` : name;
     return { value: o.value, label };
   });
