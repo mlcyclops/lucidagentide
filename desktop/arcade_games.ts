@@ -3,8 +3,7 @@
 
 /** Original, offline HTML games served through the existing sandboxed Preview. */
 export const ARCADE_GAMES = {
-  "orbit-loom": { name: "Orbit Loom", file: "orbit-loom.html" },
-  "signal-garden": { name: "Signal Garden", file: "signal-garden.html" },
+  "signal-garden": { name: "Signal Garden: Heartbloom", file: "signal-garden.html" },
   "nebula-fusion": { name: "Nebula Fusion: Voyage", file: "nebula-fusion.html" },
   "brick-brigade": { name: "Brick Brigade: Rescue Run", file: "brick-brigade.html" },
   "deck-guard": { name: "Deck Guard: Swarm Break", file: "deck-guard.html" },

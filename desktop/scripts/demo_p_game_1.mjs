@@ -56,56 +56,38 @@ async function launch(file, width, height) {
   return { node, advance, pointer: (kind, x, y) => node('field').pointer(kind, x, y), key: code => handlers.get('window:keydown')?.({ code, preventDefault() {} }) };
 }
 
-const merge = await launch('orbit-loom.html', 360, 520);
-merge.node('overlay-action').click();
-assert.equal(merge.node('overlay').hidden, true);
-for (let i = 0; i < 22; i++) { merge.node('drop').click(); merge.advance(2.2); }
-assert.ok(Number(merge.node('score').textContent.replaceAll(',', '')) > 0, 'matching orbs must score');
-merge.node('pause').click();
-assert.equal(merge.node('overlay-title').textContent, 'Orbit paused');
-merge.node('overlay-action').click();
-assert.equal(merge.node('overlay').hidden, true);
-merge.node('restart').click();
-assert.equal(merge.node('score').textContent, '0');
-for (let i = 0; i < 180 && merge.node('overlay-title').textContent !== 'Orbit lost'; i++) {
-  merge.node('drop').click(); merge.advance(1.5);
-}
-assert.equal(merge.node('overlay-title').textContent, 'Orbit lost');
-merge.node('overlay-action').click();
-assert.equal(merge.node('score').textContent, '0');
-console.log('Orbit Loom: fusion score, pause/resume, danger loss, replay');
-
-const defense = await launch('signal-garden.html', 450, 550);
-defense.node('veilButton').click();
-for (const [x, y] of [[3, 1], [6, 3], [3, 4]]) {
-  defense.node('pulse').click(); defense.pointer('pointerdown', x * 50 + 25, y * 50 + 25);
-}
-assert.equal(defense.node('credits').textContent, '5', 'three towers cost 135 credits');
-defense.node('speed').click();
-const plots = [[6, 6], [4, 7], [2, 3], [6, 1], [4, 4], [1, 7], [8, 6]];
-for (let wave = 1; wave <= 8; wave++) {
-  if (wave > 1) {
-    const [x, y] = plots[wave - 2];
-    defense.node(Number(defense.node('credits').textContent) >= 95 ? 'mortar' : 'pulse').click();
-    defense.pointer('pointerdown', x * 50 + 25, y * 50 + 25);
-    if (!defense.node('upgrade').disabled) defense.node('upgrade').click();
-  }
-  defense.node('send').click();
-  for (let i = 0; i < 700 && defense.node('send').disabled && defense.node('veil').hidden; i++) defense.advance(.05);
-  assert.equal(defense.node('wave').textContent, `${wave} / 8`);
-  if (wave < 8) assert.equal(defense.node('send').disabled, false, `wave ${wave} must finish`);
-}
-assert.equal(defense.node('status').textContent, 'Victory! The garden holds.');
-defense.node('veilButton').click();
-for (let wave = 0; wave < 2; wave++) {
-  defense.node('send').click();
-  for (let i = 0; i < 700 && defense.node('veil').hidden && defense.node('send').disabled; i++) defense.advance(.05);
-}
-assert.equal(defense.node('veilTitle').textContent, 'Heart extinguished');
-defense.node('veilButton').click();
-assert.equal(defense.node('heart').textContent, 12);
-assert.equal(defense.node('wave').textContent, '0 / 8');
-console.log('Signal Garden: tower economy, eight-wave victory, undefended defeat, replay');
+const garden = await launch('signal-garden.html', 400, 720);
+garden.advance(2); // the attract garden plays behind the title panel and never wilts
+assert.equal(garden.node('ovTitle').textContent, 'SIGNAL GARDEN');
+garden.node('btnPrimary').click();
+assert.equal(garden.node('overlay').hidden, true);
+assert.equal(garden.node('goalN').textContent, 'GOAL 1/13');
+// The tall garden at 400x720: 40px cells scaled by 392/360, offset (4, 70). Row 3 sits between two trail runs.
+const plot = (c, r) => [4 + (c * 40 + 20) * (392 / 360), 70 + (r * 40 + 20) * (392 / 360)];
+garden.node('seedThorn').click();
+for (const c of [3, 4, 5]) garden.pointer('pointerdown', ...plot(c, 3));
+garden.advance(0.5);
+assert.equal(globalThis.__signalGarden.state().towers, 3, 'three Thornlings planted on open plots');
+assert.equal(garden.node('goalN').textContent, 'GOAL 2/13', 'planting three seedlings completes mission 1');
+garden.pointer('pointerdown', ...plot(1, 2)); // the trail itself is never plantable
+assert.equal(globalThis.__signalGarden.state().towers, 3);
+globalThis.__signalGarden.autopilot(true);
+for (let i = 0; i < 120 && garden.node('overlay').hidden; i++) garden.advance(1);
+const grown = globalThis.__signalGarden.state();
+assert.ok(grown.done >= 4 && grown.kills >= 30 && grown.wave >= 3, `migrations must fall and missions advance, got ${JSON.stringify(grown)}`);
+garden.key('KeyP');
+assert.equal(garden.node('ovTitle').textContent, 'PAUSED');
+garden.key('KeyR');
+assert.equal(garden.node('goalN').textContent, 'GOAL 1/13', 'restart resets the ladder');
+assert.equal(globalThis.__signalGarden.state().score, 0);
+globalThis.__signalGarden.autopilot(false);
+garden.key('Space'); // an unplanted garden: every pest reaches the Heartbloom
+for (let i = 0; i < 400 && garden.node('ovTitle').textContent !== 'GARDEN WILTED'; i++) garden.advance(0.5);
+assert.equal(garden.node('ovTitle').textContent, 'GARDEN WILTED');
+assert.equal(garden.node('btnPrimary').textContent, 'Replant');
+garden.node('btnPrimary').click();
+assert.equal(globalThis.__signalGarden.state().heart, 20, 'replant starts a fresh garden');
+console.log(`Signal Garden: hand planting, ${grown.done} missions over ${grown.wave} migrations on autopilot, pause/restart, loss (GARDEN WILTED), replant`);
 const voyage = await launch('nebula-fusion.html', 460, 760);
 voyage.node('btnStart').click();
 assert.equal(voyage.node('goalN').textContent, 'GOAL 1/15');
