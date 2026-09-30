@@ -94,7 +94,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   <div class="chip goal" id="goalChip" title="Current mission"><span class="gn" id="goalN">GOAL 1/13</span><span class="gt" id="goalT">Break 12 bricks</span><span class="gp" id="goalP">0/12</span><i id="goalFill"></i></div>
   <button id="pauseBtn" class="hbtn" type="button" aria-label="Pause (P)" title="Pause (P)">II</button>
   <button id="musicBtn" class="hbtn tog" type="button" aria-label="Turn music on (M)" aria-pressed="false" title="Music (M)">&#9835;</button>
-  <button id="muteBtn" class="hbtn tog" type="button" aria-label="Turn sound effects off (N)" aria-pressed="true" title="Sound effects (N)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor"/><path d="M11 5.5q1.6 2.5 0 5M12.8 4q2.8 4 0 8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+  <button id="muteBtn" class="hbtn tog" type="button" aria-label="Turn sound effects on (N)" aria-pressed="false" title="Sound effects (N)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor"/><path d="M11 5.5q1.6 2.5 0 5M12.8 4q2.8 4 0 8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
 </div>
 <div id="overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="ovTitle">
   <div class="panel">
@@ -566,7 +566,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   }
 
   // ─────────────────────────────── audio ───────────────────────────────
-  const A = { ctx: null, master: null, music: null, sfx: null, noise: null, echo: null, musicOn: false, sfxOn: true, next: 0, step: 0, loops: 0, lastThud: 0, lastGlass: 0 };
+  const A = { ctx: null, master: null, music: null, sfx: null, noise: null, echo: null, musicOn: false, sfxOn: false, next: 0, step: 0, loops: 0, lastThud: 0, lastGlass: 0 };
   const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
   function audioStart() {
     if (A.ctx) { if (A.ctx.state === 'suspended') A.ctx.resume(); return; }
