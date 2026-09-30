@@ -7,6 +7,7 @@ export const ARCADE_GAMES = {
   "signal-garden": { name: "Signal Garden", file: "signal-garden.html" },
   "nebula-fusion": { name: "Nebula Fusion: Voyage", file: "nebula-fusion.html" },
   "brick-brigade": { name: "Brick Brigade: Rescue Run", file: "brick-brigade.html" },
+  "deck-guard": { name: "Deck Guard: Swarm Break", file: "deck-guard.html" },
 } as const;
 
 export type ArcadeGameId = keyof typeof ARCADE_GAMES;

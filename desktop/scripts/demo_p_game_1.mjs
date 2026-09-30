@@ -140,4 +140,25 @@ assert.equal(brigade.node('btnPrimary').textContent, 'Redeploy');
 brigade.node('btnPrimary').click();
 assert.equal(globalThis.__brickBrigade.state().lives, 3, 'redeploy starts a fresh run');
 console.log(`Brick Brigade: ${run.done} missions and ${run.rescued} rescues on autopilot, pause/restart, loss, redeploy`);
+const deck = await launch('deck-guard.html', 400, 720);
+deck.advance(2); // the attract demo flies behind the title panel and never loses
+assert.equal(deck.node('ovTitle').textContent, 'DECK GUARD');
+deck.node('btnPrimary').click();
+assert.equal(deck.node('overlay').hidden, true);
+assert.equal(deck.node('goalN').textContent, 'GOAL 1/13');
+globalThis.__deckGuard.autopilot(true);
+for (let i = 0; i < 60 && deck.node('overlay').hidden; i++) { deck.advance(1); if (i === 20 || i === 40) globalThis.__deckGuard.launchMissile(); }
+const flight = globalThis.__deckGuard.state();
+assert.ok(flight.done >= 1 && flight.downed >= 15, `the swarm must fall and missions advance, got ${JSON.stringify(flight)}`);
+if (!deck.node('overlay').hidden) deck.node('btnPrimary').click(); // the autopilot can lose its jets first: that ends in the loss screen, and a new run starts
+deck.key('KeyP');
+assert.equal(deck.node('ovTitle').textContent, 'PAUSED');
+deck.key('KeyR');
+assert.equal(deck.node('goalN').textContent, 'GOAL 1/13', 'restart resets the ladder');
+globalThis.__deckGuard.autopilot(false);
+for (let i = 0; i < 400 && !/CRIPPLED|NO INTERCEPTORS/.test(deck.node('ovTitle').textContent); i++) { if (i % 20 === 0) globalThis.__deckGuard.launchMissile(); deck.advance(0.5); }
+assert.match(deck.node('ovTitle').textContent, /CRIPPLED|NO INTERCEPTORS/, 'an undefended carrier falls');
+deck.node('btnPrimary').click();
+assert.equal(globalThis.__deckGuard.state().hull, 10, 'scramble again starts a fresh run');
+console.log(`Deck Guard: ${flight.done} missions, ${flight.downed} drones and ${flight.missiles} missiles on autopilot, pause/restart, loss (${deck.node('ovTitle').textContent}), replay`);
 console.log('P-GAME.1 demo passed.');
