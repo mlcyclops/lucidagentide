@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<!-- Copyright (c) 2026 TechLead 187 LLC -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- Deck Guard: Swarm Break. An original arcade shooter: drone swarms snake down toward a carrier deck, hypersonic missiles fly their full boost, glide and dive profile, and you hold the line with your interceptor, the carrier's radar-guided interceptor net and the auto-miniguns on the parked vehicles. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>DECK GUARD</title>
+<style>
+:root{--bg:#04070e;--ink:#eaf2ff;--dim:#8a97b3;--sea:#1d5d8f;--gold:#ffcf5a;--cyan:#7fe3ff;--red:#ff5a6a;--green:#8fe07a;--panel:rgba(7,12,24,.92)}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Arial,sans-serif;-webkit-user-select:none;user-select:none;overscroll-behavior:none}
+#field{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+.hidden,[hidden]{display:none!important}
+#hud{position:fixed;top:0;left:0;right:0;height:46px;z-index:5;display:flex;align-items:center;gap:6px;padding:7px 8px;pointer-events:none}
+.chip{flex:none;display:flex;align-items:center;gap:6px;height:31px;padding:0 10px;border-radius:10px;background:rgba(8,14,28,.64);border:1px solid rgba(127,227,255,.26);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);white-space:nowrap;font-weight:800;font-size:12px;letter-spacing:.06em}
+.chip b{font-variant-numeric:tabular-nums;font-size:14px;color:var(--gold)}
+.chip .lbl{color:var(--dim);font-size:9.5px;letter-spacing:.2em}
+#hullV{color:var(--green)}
+#hullChip.low #hullV{color:var(--red)}
+#livesV{color:var(--cyan)}
+.chip.goal{flex:1 1 auto;min-width:0;position:relative;overflow:hidden;border-color:rgba(255,207,90,.42)}
+.chip.goal .gn{flex:none;color:var(--gold);font-size:10px;letter-spacing:.14em}
+.chip.goal .gt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;letter-spacing:.04em;font-weight:700}
+.chip.goal .gp{flex:none;color:var(--cyan);font-variant-numeric:tabular-nums;font-size:11px}
+.chip.goal i{position:absolute;left:0;bottom:0;height:3px;width:0;background:linear-gradient(90deg,var(--cyan),var(--gold));box-shadow:0 0 8px rgba(255,207,90,.8);transition:width .3s ease}
+.chip.goal.flash{animation:gflash .7s ease}
+@keyframes gflash{0%{box-shadow:0 0 30px rgba(255,207,90,.95);border-color:var(--gold)}100%{box-shadow:none}}
+.chip.bump{animation:bump .38s ease}
+@keyframes bump{0%{transform:scale(1)}35%{transform:scale(1.16)}100%{transform:scale(1)}}
+.hbtn{flex:none;pointer-events:auto;cursor:pointer;width:31px;height:31px;border-radius:10px;color:var(--ink);background:rgba(8,14,28,.7);border:1px solid rgba(127,227,255,.35);font:800 12px/1 ui-sans-serif,system-ui,"Segoe UI",Arial,sans-serif}
+.hbtn:hover,.hbtn:focus-visible{border-color:var(--cyan);box-shadow:0 0 12px rgba(127,227,255,.45);outline:none}
+.hbtn svg{display:block;margin:auto}
+.hbtn.tog[aria-pressed="false"]{color:var(--dim);background:linear-gradient(135deg,transparent 46%,rgba(255,90,106,.75) 47%,rgba(255,90,106,.75) 53%,transparent 54%),rgba(8,14,28,.7)}
+#aegisBtn{flex:none;position:relative;pointer-events:auto;cursor:pointer;display:flex;align-items:center;gap:4px;height:31px;padding:0 8px;border-radius:10px;color:var(--cyan);font:900 11px/1 ui-sans-serif,system-ui,"Segoe UI",Arial,sans-serif;letter-spacing:.04em;font-variant-numeric:tabular-nums;background:rgba(8,14,28,.72);border:1px solid rgba(127,227,255,.4);overflow:hidden}
+#aegisBtn i{position:absolute;left:0;bottom:0;height:3px;width:0;background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
+#aegisBtn.ready{border-color:var(--cyan);box-shadow:0 0 18px rgba(127,227,255,.55);animation:ready 1s ease-in-out infinite alternate}
+#aegisBtn:disabled{cursor:default;color:var(--dim)}
+#aegisBtn b{min-width:30px;text-align:right}
+@keyframes ready{from{box-shadow:0 0 8px rgba(127,227,255,.35)}to{box-shadow:0 0 22px rgba(127,227,255,.85)}}
+@media (max-width:460px){#hud{gap:4px;padding:7px 5px}.chip .lbl{display:none}.chip{padding:0 7px}.chip.goal .gn{display:none}.hbtn{width:27px}#aegisBtn{padding:0 6px}#aegisBtn b{display:none}}
+.overlay{position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(2,5,12,.62);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:10px;animation:fadein .28s ease}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+.panel{background:var(--panel);border:1px solid rgba(127,227,255,.32);border-radius:18px;padding:16px 18px 14px;width:min(540px,96vw);max-height:96vh;overflow-y:auto;text-align:center;box-shadow:0 0 44px rgba(127,227,255,.14),inset 0 0 60px rgba(14,30,60,.6)}
+h1{font-size:clamp(28px,8vw,46px);font-weight:900;letter-spacing:.14em;line-height:1.05;margin:4px 0 2px;background:linear-gradient(90deg,#7fe3ff 0%,#dfefff 40%,#ffcf5a 70%,#ff7a5a 100%);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 0 14px rgba(127,227,255,.4))}
+h1.bad{background:linear-gradient(90deg,#ff5a6a,#ffb35a);-webkit-background-clip:text;background-clip:text}
+.sub{color:var(--gold);letter-spacing:.42em;font-size:10.5px;font-weight:800;margin-bottom:8px;text-transform:uppercase}
+.pitch{font-size:13px;line-height:1.5;color:#c9d6ef;max-width:54ch;margin:0 auto 8px}
+.pitch b{color:var(--gold)}
+.threats{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:5px;margin:2px 0 8px;text-align:left}
+.th{position:relative;font-size:11.5px;line-height:1.35;color:#c9d6ef;padding:6px 9px 6px 12px;border-radius:9px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}
+.th::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:2px;background:var(--c)}
+.th b{display:block;font-size:10.5px;letter-spacing:.16em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--c)}
+.legend{font-size:11px;color:var(--dim);margin-top:8px;line-height:2}
+kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radius:6px;font-weight:800;font-family:inherit;font-size:10.5px;color:var(--cyan);background:rgba(127,227,255,.08);border:1px solid rgba(127,227,255,.45)}
+.row2{display:flex;gap:10px;justify-content:center;margin-top:8px;flex-wrap:wrap}
+.btn{cursor:pointer;color:var(--ink);text-transform:uppercase;letter-spacing:.16em;font-weight:900;font-size:12px;padding:11px 20px;border-radius:12px;font-family:inherit;background:linear-gradient(180deg,rgba(127,227,255,.16),rgba(127,227,255,.04));border:1px solid rgba(127,227,255,.5)}
+.btn:hover,.btn:focus-visible{box-shadow:0 0 22px rgba(127,227,255,.5);outline:none}
+.btn.primary{font-size:16px;padding:13px 34px;background:linear-gradient(180deg,rgba(255,207,90,.26),rgba(127,227,255,.06));border-color:rgba(255,207,90,.7);box-shadow:0 0 18px rgba(255,207,90,.28)}
+#ovStats{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin:4px 0}
+#ovStats:empty{display:none}
+#ovStats div{display:flex;flex-direction:column;gap:2px;min-width:62px}
+#ovStats .lbl{font-size:9.5px;letter-spacing:.22em;color:var(--dim);white-space:nowrap}
+#ovStats .val{font-size:22px;font-weight:900;color:var(--gold);font-variant-numeric:tabular-nums}
+.ladder{list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:2px 10px;margin:6px 0 2px;text-align:left}
+.ladder li{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ladder li.ok{color:#bff5a8}
+.ladder li span{display:inline-block;width:16px;font-weight:900}
+@media (max-height:820px){.panel{padding:10px 16px}h1{font-size:clamp(24px,5.6vh,40px);margin:2px 0}.pitch{font-size:12px;line-height:1.4;margin-bottom:6px}.th{font-size:10.5px;padding:4px 8px 4px 11px}.ladder li{font-size:10.5px}#ovStats .val{font-size:18px}.btn.primary{padding:10px 30px;font-size:15px}.legend{margin-top:4px;line-height:1.8;font-size:10.5px}}
+@media (max-height:600px){.threats,.ladder,.pitch{display:none}h1{font-size:30px}}
+</style>
+</head>
+<body>
+<canvas id="field" role="img" aria-label="Deck Guard playfield: move your interceptor with the pointer or arrow keys; its guns fire automatically"></canvas>
+<div id="hud">
+  <div class="chip" id="hullChip" title="Carrier hull"><span class="lbl">HULL</span><b id="hullV">10</b></div>
+  <div class="chip" title="Interceptors left"><span class="lbl">JETS</span><b id="livesV">3</b></div>
+  <div class="chip" title="Score"><span class="lbl sl">SCORE</span><b id="scoreV">0</b></div>
+  <div class="chip goal" id="goalChip" title="Current mission"><span class="gn" id="goalN">GOAL 1/13</span><span class="gt" id="goalT">Down 15 drones</span><span class="gp" id="goalP">0/15</span><i id="goalFill"></i></div>
+  <button id="aegisBtn" type="button" aria-label="Fire the Aegis interceptor net (E)" title="Aegis net (E)" disabled><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 1.5l5.6 3.2v6.6L8 14.5l-5.6-3.2V4.7z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="1.8" fill="currentColor"/></svg><b id="aegisV">0%</b><i id="aegisFill"></i></button>
+  <button id="pauseBtn" class="hbtn" type="button" aria-label="Pause (P)" title="Pause (P)">II</button>
+  <button id="musicBtn" class="hbtn tog" type="button" aria-label="Turn music on (M)" aria-pressed="false" title="Music (M)">&#9835;</button>
+  <button id="muteBtn" class="hbtn tog" type="button" aria-label="Turn sound effects on (N)" aria-pressed="false" title="Sound effects (N)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor"/><path d="M11 5.5q1.6 2.5 0 5M12.8 4q2.8 4 0 8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+</div>
+<div id="overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="ovTitle">
+  <div class="panel">
+    <h1 id="ovTitle">DECK GUARD</h1>
+    <div id="ovSub" class="sub">Swarm Break</div>
+    <p id="ovBody" class="pitch"></p>
+    <div id="ovStats"></div>
+    <div id="ovExtra"></div>
+    <div class="row2"><button id="btnPrimary" class="btn primary" type="button">Scramble</button><button id="btnSecondary" class="btn" type="button" hidden>New run</button></div>
+    <div class="legend">Drag or <kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> fly &middot; guns fire on their own &middot; <kbd>E</kbd> Aegis &middot; <kbd>P</kbd> pause &middot; <kbd>M</kbd> music &middot; <kbd>N</kbd> sound</div>
+  </div>
+</div>
+<script>
+'use strict';
+(function () {
+  // ─────────────────────────────── basics ───────────────────────────────
+  const $ = (id) => document.getElementById(id);
+  const W = 360, HUD_H = 46, RS = 3, CELL = 18, COLS = 20, TOP = 8;
+  const cv = $('field'), ctx = cv.getContext('2d');
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pick = (a) => a[(Math.random() * a.length) | 0];
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const fmt = (n) => Math.round(n).toLocaleString('en-US');
+  const mk = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, Math.ceil(w)); c.height = Math.max(1, Math.ceil(h)); return c; };
+  function rr(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+  let vw = 360, vh = 640, dpr = 1, scale = 1, offX = 0, offY = HUD_H, T = 0;
+  // Field geometry. The height follows the panel: a short, wide Preview gets the compact field.
+  const DECK_H = 86, ISL_X = 184;
+  let H = 580, DECK_Y = 494, ROWS = 27, DIVE_ROW = 26, ZONE_TOP = 404;
+  function layout(h) {
+    H = h; DECK_Y = H - DECK_H; ROWS = Math.floor((DECK_Y - TOP) / CELL);
+    DIVE_ROW = ROWS - 1; ZONE_TOP = DECK_Y - 5 * CELL;
+  }
+  const colX = (c) => c * CELL + CELL / 2;
+  const rowY = (r) => TOP + r * CELL + CELL / 2;
+
+  // ─────────────────────────────── palettes ─────────────────────────────
+  // Tiered colors per entity: highlight, mid, shadow, glow rgb.
+  const PAL = {
+    drone:  { hi: '#c8d2de', mid: '#6d7a8c', sh: '#2b3340', glow: '255,110,90' },
+    head:   { hi: '#ffd2a8', mid: '#c0623a', sh: '#4e2014', glow: '255,90,60' },
+    wreck:  { hi: '#8a8f97', mid: '#4a4f58', sh: '#1d2027', glow: '255,140,70' },
+    missile:{ hi: '#ffffff', mid: '#b8c4d4', sh: '#4c5666', glow: '255,160,90' },
+    jet:    { hi: '#e8f6ff', mid: '#7fb6d9', sh: '#2c4d66', glow: '127,227,255' },
+    vehicle:{ hi: '#b9c48a', mid: '#6b7445', sh: '#2c3119', glow: '160,210,120' },
+  };
+
+  // ─────────────────────────────── sprites ───────────────────────────────
+  // Everything is pre-rendered once at 3x and blitted. Drones have two rotor frames.
+  function sprite(w, h, draw) { const c = mk(w * RS, h * RS), g = c.getContext('2d'); g.scale(RS, RS); draw(g); return c; }
+  // Swarm classes: each has its own livery, pace and quirk (see SWARM below).
+  const LIVERY = {
+    raider:   { hi: '#c8d2de', mid: '#6d7a8c', sh: '#2b3340', eye: '#ffb34a', glow: '255,150,90', stripe: null },
+    hornet:   { hi: '#ffe27a', mid: '#d19a1c', sh: '#4a3408', eye: '#ff3b2e', glow: '255,210,80', stripe: '#1a1408' },
+    wraith:   { hi: '#c9b8ff', mid: '#5b4a9a', sh: '#1d1638', eye: '#9ff3ff', glow: '170,140,255', stripe: null },
+    ironclad: { hi: '#b8d4ff', mid: '#3f5f96', sh: '#15233d', eye: '#7fe3ff', glow: '120,180,255', stripe: '#d4dce8' },
+  };
+  function droneSprite(kind, head, frame) {
+    const p = LIVERY[kind];
+    return sprite(20, 20, (g) => {
+      // delta wing loitering munition, nose down
+      const gr = g.createLinearGradient(0, 2, 0, 18); gr.addColorStop(0, p.hi); gr.addColorStop(0.5, p.mid); gr.addColorStop(1, p.sh);
+      g.fillStyle = gr; g.beginPath(); g.moveTo(10, 18); g.lineTo(19, 5); g.lineTo(13, 6.5); g.lineTo(10, 2); g.lineTo(7, 6.5); g.lineTo(1, 5); g.closePath(); g.fill();
+      if (p.stripe) { g.save(); g.clip(); g.fillStyle = p.stripe; for (let y = 4; y < 18; y += 4) g.fillRect(0, y, 20, 1.4); g.restore(); }
+      g.strokeStyle = 'rgba(0,0,0,.45)'; g.lineWidth = 0.6; g.beginPath(); g.moveTo(10, 18); g.lineTo(19, 5); g.lineTo(13, 6.5); g.lineTo(10, 2); g.lineTo(7, 6.5); g.lineTo(1, 5); g.closePath(); g.stroke();
+      g.fillStyle = 'rgba(255,255,255,.35)'; g.beginPath(); g.moveTo(10, 3.5); g.lineTo(12, 7); g.lineTo(10, 12); g.closePath(); g.fill();
+      if (head) { g.fillStyle = p.hi; g.beginPath(); g.moveTo(8, 9); g.lineTo(10, 4); g.lineTo(12, 9); g.closePath(); g.fill(); g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(9.5, 5, 1, 5); }
+      // pusher prop at the tail: two frames of blur
+      g.fillStyle = 'rgba(220,230,240,.55)';
+      if (frame) g.fillRect(6.5, 1.2, 7, 1.2); else g.fillRect(9.4, -0.2, 1.2, 3.6);
+      // sensor eye: leaders carry a bigger one
+      g.fillStyle = head ? '#ff3b2e' : p.eye; g.beginPath(); g.arc(10, 14.5, head ? 2.1 : 1.2, 0, 7); g.fill();
+      g.fillStyle = 'rgba(255,255,255,.85)'; g.beginPath(); g.arc(9.5, 14, 0.55, 0, 7); g.fill();
+    });
+  }
+  const SWARM_SPR = {};
+  for (const k of Object.keys(LIVERY)) SWARM_SPR[k] = { body: [droneSprite(k, false, 0), droneSprite(k, false, 1)], head: [droneSprite(k, true, 0), droneSprite(k, true, 1)] };
+  function wreckSprite(stage) {
+    const p = PAL.wreck;
+    return sprite(18, 18, (g) => {
+      const gr = g.createRadialGradient(8, 7, 1, 9, 9, 9); gr.addColorStop(0, p.hi); gr.addColorStop(0.6, p.mid); gr.addColorStop(1, p.sh);
+      g.fillStyle = gr; g.beginPath();
+      const pts = [[2, 11], [4, 4], [9, 2], [15, 4], [16.5, 10], [13, 16], [6, 16]];
+      pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.fill();
+      g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 0.7; g.stroke();
+      g.strokeStyle = 'rgba(20,20,24,.8)'; g.lineWidth = 0.8;
+      for (let k = 0; k < stage; k++) { g.beginPath(); g.moveTo(4 + k * 4, 5); g.lineTo(7 + k * 3, 10); g.lineTo(5 + k * 4, 14); g.stroke(); }
+      g.fillStyle = 'rgba(255,150,70,.9)'; g.beginPath(); g.arc(9, 9, 1.4 + (3 - stage) * 0.4, 0, 7); g.fill();
+    });
+  }
+  const WRECK = [wreckSprite(0), wreckSprite(1), wreckSprite(2)];
+  // Baba Yaga: a heavy six-rotor bomber drone. Body, arms and motor pods are baked; the rotors spin live.
+  const YAGA_ARMS = [[-34, -6], [-24, -16], [24, -16], [34, -6], [-22, 10], [22, 10]];
+  const YAGA = sprite(90, 56, (g) => {
+    g.translate(45, 26);
+    g.strokeStyle = '#1c2016'; g.lineWidth = 3.4; g.lineCap = 'round';
+    for (const [x, y] of YAGA_ARMS) { g.beginPath(); g.moveTo(0, 0); g.lineTo(x, y); g.stroke(); }
+    g.strokeStyle = '#4b5534'; g.lineWidth = 1.2; for (const [x, y] of YAGA_ARMS) { g.beginPath(); g.moveTo(0, -1); g.lineTo(x, y - 1); g.stroke(); }
+    for (const [x, y] of YAGA_ARMS) { const m = g.createRadialGradient(x - 1, y - 1, 0.5, x, y, 4.4); m.addColorStop(0, '#9aa17c'); m.addColorStop(1, '#1a1d12'); g.fillStyle = m; g.beginPath(); g.arc(x, y, 4.2, 0, 7); g.fill(); }
+    const b = g.createLinearGradient(0, -14, 0, 14); b.addColorStop(0, '#8e976a'); b.addColorStop(0.5, '#4a5433'); b.addColorStop(1, '#1b2012');
+    g.fillStyle = b; rr(g, -15, -11, 30, 20, 7); g.fill(); g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 0.8; g.stroke();
+    g.fillStyle = 'rgba(255,255,255,.18)'; rr(g, -12, -9, 24, 5, 3); g.fill();
+    // battery pack and GPS mast
+    g.fillStyle = '#2a2f22'; rr(g, -7, -15, 14, 5, 2); g.fill(); g.fillStyle = '#c9d1a8'; g.fillRect(-0.6, -21, 1.2, 6); g.beginPath(); g.arc(0, -21, 1.8, 0, 7); g.fill();
+    // bomb rack underneath: four tail-finned bombs
+    g.fillStyle = '#1a1d14'; g.fillRect(-14, 9, 28, 3);
+    for (let i = 0; i < 4; i++) { const x = -10.5 + i * 7; g.fillStyle = '#5c6245'; rr(g, x - 2.2, 11, 4.4, 10, 2); g.fill(); g.fillStyle = '#c8102e'; g.fillRect(x - 2.2, 13, 4.4, 1); g.fillStyle = '#2a2d20'; g.beginPath(); g.moveTo(x - 3, 11); g.lineTo(x + 3, 11); g.lineTo(x, 13.5); g.fill(); }
+    // camera turret and night-vision lamps
+    g.fillStyle = '#10130c'; g.beginPath(); g.arc(0, 4, 4, 0, 7); g.fill(); g.fillStyle = '#7fe37a'; g.beginPath(); g.arc(0, 4, 1.7, 0, 7); g.fill();
+    g.fillStyle = 'rgba(160,255,150,.85)'; g.beginPath(); g.arc(-10, 0, 1.3, 0, 7); g.fill(); g.beginPath(); g.arc(10, 0, 1.3, 0, 7); g.fill();
+  });
+  // Baba Yaga Prime: the flying fortress. Arms reach out to six rotor pods (drawn live so they can be shot
+  // off), and two mechanical bird legs dangle under the belly, a nod to the witch's hut on chicken legs.
+  const PRIME_PODS = [[-92, -8], [-64, -28], [-26, -36], [26, -36], [64, -28], [92, -8]];
+  const PRIME = sprite(220, 100, (g) => {
+    g.translate(110, 50);
+    g.strokeStyle = '#161a10'; g.lineWidth = 5; g.lineCap = 'round';
+    for (const [x, y] of PRIME_PODS) { g.beginPath(); g.moveTo(x * 0.25, y * 0.2); g.lineTo(x, y); g.stroke(); }
+    g.strokeStyle = '#4b5534'; g.lineWidth = 1.6; for (const [x, y] of PRIME_PODS) { g.beginPath(); g.moveTo(x * 0.25, y * 0.2 - 1.5); g.lineTo(x, y - 1.5); g.stroke(); }
+    // armored hull: stacked plates like a log cabin wall, riveted
+    const b = g.createLinearGradient(0, -26, 0, 24); b.addColorStop(0, '#9aa274'); b.addColorStop(0.45, '#4a5433'); b.addColorStop(1, '#161a0e');
+    g.fillStyle = b; g.beginPath(); g.moveTo(-40, 14); g.lineTo(-46, -4); g.lineTo(-30, -24); g.lineTo(30, -24); g.lineTo(46, -4); g.lineTo(40, 14); g.lineTo(18, 22); g.lineTo(-18, 22); g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 1; g.stroke();
+    g.strokeStyle = 'rgba(20,24,14,.7)'; g.lineWidth = 0.8; for (let y = -18; y < 20; y += 6) { g.beginPath(); g.moveTo(-42, y); g.lineTo(42, y); g.stroke(); }
+    g.fillStyle = 'rgba(210,220,180,.5)'; for (let y = -15; y < 20; y += 6) for (let x = -36; x <= 36; x += 12) { g.beginPath(); g.arc(x, y, 0.8, 0, 7); g.fill(); }
+    g.fillStyle = 'rgba(255,255,255,.14)'; g.beginPath(); g.moveTo(-28, -22); g.lineTo(28, -22); g.lineTo(38, -8); g.lineTo(-38, -8); g.closePath(); g.fill();
+    // command dome and sensor eye
+    g.fillStyle = '#20251a'; g.beginPath(); g.arc(0, -24, 11, Math.PI, 0); g.fill();
+    g.fillStyle = '#ff3b2e'; g.beginPath(); g.arc(0, -27, 3.4, 0, 7); g.fill(); g.fillStyle = 'rgba(255,255,255,.8)'; g.beginPath(); g.arc(-1, -28, 1, 0, 7); g.fill();
+    // missile bay and bomb racks
+    g.fillStyle = '#0d0f0a'; rr(g, -12, 12, 24, 8, 2); g.fill(); g.fillStyle = '#c8102e'; g.fillRect(-12, 11, 24, 1.2);
+    for (let i = 0; i < 6; i++) { const x = -34 + i * 6 + (i >= 3 ? 38 : 0); g.fillStyle = '#5c6245'; rr(g, x - 2, 14, 4, 9, 2); g.fill(); }
+    g.fillStyle = 'rgba(210,220,190,.9)'; g.font = '900 7px ui-sans-serif,Arial'; g.textAlign = 'center'; g.fillText('BY-P', 0, 6);
+  });
+  const BOMB = sprite(8, 16, (g) => {
+    const b = g.createLinearGradient(1, 0, 7, 0); b.addColorStop(0, '#2f3324'); b.addColorStop(0.5, '#8a9168'); b.addColorStop(1, '#2f3324');
+    g.fillStyle = b; rr(g, 1.5, 3, 5, 12, 2.5); g.fill(); g.fillStyle = '#c8102e'; g.fillRect(1.5, 11, 5, 1.2);
+    g.fillStyle = '#1b1e14'; g.beginPath(); g.moveTo(0, 0); g.lineTo(8, 0); g.lineTo(4, 4); g.fill();
+  });
+  const MISSILE = sprite(12, 44, (g) => {
+    const p = PAL.missile, gr = g.createLinearGradient(1, 0, 11, 0); gr.addColorStop(0, p.sh); gr.addColorStop(0.45, p.hi); gr.addColorStop(1, p.sh);
+    g.fillStyle = gr; g.beginPath(); g.moveTo(6, 44); g.lineTo(9.2, 30); g.lineTo(9.2, 6); g.lineTo(11.5, 1.5); g.lineTo(0.5, 1.5); g.lineTo(2.8, 6); g.lineTo(2.8, 30); g.closePath(); g.fill();
+    g.fillStyle = '#39414f'; g.beginPath(); g.moveTo(2.8, 8); g.lineTo(0, 2); g.lineTo(2.8, 4); g.fill(); g.beginPath(); g.moveTo(9.2, 8); g.lineTo(12, 2); g.lineTo(9.2, 4); g.fill();
+    g.fillStyle = '#c8102e'; g.fillRect(2.8, 26, 6.4, 1.4);
+  });
+  const JET = sprite(30, 30, (g) => {
+    const p = PAL.jet, gr = g.createLinearGradient(0, 4, 0, 28); gr.addColorStop(0, p.hi); gr.addColorStop(0.5, p.mid); gr.addColorStop(1, p.sh);
+    g.fillStyle = gr; g.beginPath(); g.moveTo(15, 1); g.lineTo(17.2, 10); g.lineTo(29, 19); g.lineTo(29, 22); g.lineTo(17.4, 19); g.lineTo(17.6, 25); g.lineTo(21.5, 28.5); g.lineTo(8.5, 28.5); g.lineTo(12.4, 25); g.lineTo(12.6, 19); g.lineTo(1, 22); g.lineTo(1, 19); g.lineTo(12.8, 10); g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.4)'; g.lineWidth = 0.6; g.stroke();
+    g.fillStyle = '#12304a'; g.beginPath(); g.ellipse(15, 9, 1.9, 4, 0, 0, 7); g.fill();
+    g.fillStyle = 'rgba(127,227,255,.9)'; g.fillRect(14.3, 6, 1.1, 3);
+    g.fillStyle = '#ffcf5a'; g.fillRect(3, 19.2, 4, 1); g.fillRect(23, 19.2, 4, 1);
+  });
+  // parked vehicles, side view: a wheeled light tactical truck and a tracked infantry fighting vehicle.
+  // Both carry a remote weapon station; its minigun is drawn live so it can track and spin.
+  function vehicleSprite(kind, dead) {
+    return sprite(46, 28, (g) => {
+      const c = dead ? ['#6a6a66', '#3a3a38', '#161614'] : ['#c2c98e', '#6f7846', '#2b301a'];
+      const body = (y0, y1) => { const gr = g.createLinearGradient(0, y0, 0, y1); gr.addColorStop(0, c[0]); gr.addColorStop(0.5, c[1]); gr.addColorStop(1, c[2]); return gr; };
+      if (kind === 'truck') {
+        g.fillStyle = body(8, 22);
+        g.beginPath(); g.moveTo(2, 20); g.lineTo(2, 13); g.lineTo(9, 11); g.lineTo(13, 6); g.lineTo(30, 6); g.lineTo(32, 11); g.lineTo(44, 11); g.lineTo(44, 20); g.closePath(); g.fill();
+        g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 0.6; g.stroke();
+        g.fillStyle = dead ? '#222' : 'rgba(127,200,255,.55)'; g.beginPath(); g.moveTo(10, 11); g.lineTo(14, 7.2); g.lineTo(20, 7.2); g.lineTo(20, 11); g.fill(); g.fillRect(21.5, 7.2, 7, 3.8);
+        g.strokeStyle = 'rgba(0,0,0,.45)'; g.beginPath(); g.moveTo(21, 7); g.lineTo(21, 18); g.moveTo(29.5, 7); g.lineTo(29.5, 18); g.stroke();
+        g.fillStyle = 'rgba(0,0,0,.35)'; for (let x = 3; x < 9; x += 1.6) g.fillRect(x, 13.5, 0.8, 3); // hood louvers
+        g.fillStyle = c[2]; rr(g, 33, 8.5, 10, 2.8, 1); g.fill(); // gear in the bed
+        g.fillStyle = '#111'; g.beginPath(); g.arc(44.5, 15, 2.6, 0, 7); g.fill(); // spare tire
+        for (const x of [9, 36]) { g.fillStyle = '#0e1015'; g.beginPath(); g.arc(x, 21, 5.2, 0, 7); g.fill(); g.fillStyle = dead ? '#333' : '#5e6552'; g.beginPath(); g.arc(x, 21, 2.3, 0, 7); g.fill(); g.fillStyle = '#0e1015'; g.beginPath(); g.arc(x, 21, 0.8, 0, 7); g.fill(); }
+      } else {
+        g.fillStyle = '#0e1015'; rr(g, 2, 18, 42, 8.5, 4.2); g.fill(); // track
+        g.fillStyle = 'rgba(80,86,96,.8)'; for (let x = 4; x < 43; x += 2.4) g.fillRect(x, 25.2, 1.2, 1.2);
+        g.fillStyle = dead ? '#333' : '#474e3c'; for (let x = 8; x < 40; x += 6) { g.beginPath(); g.arc(x, 22.3, 2.7, 0, 7); g.fill(); }
+        g.fillStyle = body(6, 19); g.beginPath(); g.moveTo(1, 18); g.lineTo(6, 11); g.lineTo(38, 9); g.lineTo(45, 12); g.lineTo(45, 18); g.closePath(); g.fill();
+        g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 0.6; g.stroke();
+        g.fillStyle = body(3, 10); rr(g, 16, 4, 16, 6.5, 1.5); g.fill(); // turret
+        g.fillStyle = '#23271a'; g.fillRect(32, 6, 11, 1.8); // autocannon
+        g.fillStyle = c[2]; for (let i = 0; i < 3; i++) g.fillRect(17 + i * 2.2, 2.6, 1.4, 1.6); // smoke launchers
+        g.fillStyle = dead ? '#222' : 'rgba(127,200,255,.5)'; g.fillRect(9, 11.4, 3, 1.2); g.fillRect(13, 11, 3, 1.2);
+        g.strokeStyle = 'rgba(0,0,0,.3)'; g.beginPath(); g.moveTo(6, 15); g.lineTo(44, 14); g.stroke();
+      }
+      if (dead) { g.fillStyle = 'rgba(0,0,0,.4)'; for (let i = 0; i < 12; i++) { g.beginPath(); g.arc(4 + Math.random() * 38, 6 + Math.random() * 14, 1 + Math.random() * 2.5, 0, 7); g.fill(); } }
+    });
+  }
+  const VEH = { truck: vehicleSprite('truck', false), track: vehicleSprite('track', false), truckX: vehicleSprite('truck', true), trackX: vehicleSprite('track', true) };
+  // a parked strike fighter with its wing tips folded, side view
+  const PARKED = sprite(48, 18, (g) => {
+    const gr = g.createLinearGradient(0, 3, 0, 15); gr.addColorStop(0, '#b3bcc8'); gr.addColorStop(0.5, '#6d7684'); gr.addColorStop(1, '#2d333d');
+    g.fillStyle = gr; g.beginPath(); g.moveTo(47, 10); g.lineTo(36, 7.6); g.lineTo(30, 6); g.lineTo(10, 6.4); g.lineTo(5, 1.5); g.lineTo(2, 1.5); g.lineTo(3.5, 7); g.lineTo(1, 9); g.lineTo(4, 11.5); g.lineTo(36, 12.6); g.closePath(); g.fill();
+    g.fillStyle = '#2d333d'; g.beginPath(); g.moveTo(12, 6.4); g.lineTo(9, 0.5); g.lineTo(11.5, 0.5); g.lineTo(16, 6.2); g.fill(); // second tail
+    g.fillStyle = '#58606c'; g.beginPath(); g.moveTo(16, 9.5); g.lineTo(28, 9.5); g.lineTo(22, 3); g.lineTo(19, 3); g.closePath(); g.fill(); // folded wing
+    g.fillStyle = 'rgba(255,200,90,.8)'; g.beginPath(); g.ellipse(33, 6.6, 4.2, 1.6, -0.1, 0, 7); g.fill(); // canopy
+    g.fillStyle = '#0e1015'; for (const x of [8, 34]) { g.beginPath(); g.arc(x, 15, 2, 0, 7); g.fill(); } g.fillRect(33.4, 12, 1.2, 3);
+    g.fillStyle = '#c8102e'; g.fillRect(40, 9.4, 3, 0.8);
+  });
+  const HELO = sprite(46, 20, (g) => {
+    const gr = g.createLinearGradient(0, 5, 0, 17); gr.addColorStop(0, '#9aa38a'); gr.addColorStop(0.5, '#56604a'); gr.addColorStop(1, '#262b20');
+    g.fillStyle = gr; g.beginPath(); g.moveTo(8, 9); g.quadraticCurveTo(10, 5, 20, 5); g.lineTo(30, 6); g.quadraticCurveTo(36, 8, 35, 14); g.lineTo(12, 15); g.quadraticCurveTo(7, 14, 8, 9); g.fill();
+    g.fillRect(34, 8.6, 10, 2.4); g.fillRect(42, 4, 2.2, 7); // tail boom and fin
+    g.fillStyle = 'rgba(127,200,255,.6)'; g.beginPath(); g.moveTo(9.5, 9.5); g.quadraticCurveTo(11, 6.4, 16, 6.2); g.lineTo(16, 10); g.closePath(); g.fill();
+    g.fillStyle = '#1b1f18'; g.fillRect(20, 3, 3, 2.4); g.fillRect(12, 16, 22, 1); g.fillRect(14, 15, 1, 2); g.fillRect(30, 15, 1, 2); // hub, skids
+  });
+  // deck crew jerseys: aircraft handlers, catapult, ordnance, tractors, fuel, safety
+  const JERSEYS = ['#ffd21f', '#35b24a', '#d8262e', '#2f6fe0', '#8b45c9', '#f1f3f6', '#ffd21f', '#35b24a'];
+  // ─────────────────────────────── background ─────────────────────────────
+  const STARS = [[], [], []];
+  for (let l = 0; l < 3; l++) for (let i = 0; i < [70, 38, 18][l]; i++) STARS[l].push({ x: Math.random(), y: Math.random() * 0.6, s: [0.7, 1.1, 1.7][l], ph: Math.random() * 7, sp: rand(0.8, 2.6) });
+  function bakeCloud(w, h) {
+    const c = mk(w, h), g = c.getContext('2d');
+    for (let k = 0; k < 7; k++) {
+      const x = rand(w * 0.2, w * 0.8), y = rand(h * 0.35, h * 0.65), r = rand(h * 0.25, h * 0.5);
+      const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, 'rgba(110,140,190,.12)'); gr.addColorStop(1, 'rgba(110,140,190,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    }
+    return c;
+  }
+  const CLOUDS = Array.from({ length: 4 }, () => ({ img: bakeCloud(260, 110), x: Math.random(), y: rand(0.08, 0.5), sp: rand(0.004, 0.012), sc: rand(0.8, 1.5) }));
+  let VIG = null, DECK = null;
+  function bakeVignette() {
+    const w = Math.max(2, Math.ceil(vw / 2)), h = Math.max(2, Math.ceil(vh / 2));
+    VIG = mk(w, h); const g = VIG.getContext('2d');
+    const gr = g.createRadialGradient(w / 2, h * 0.5, Math.min(w, h) * 0.25, w / 2, h * 0.5, Math.max(w, h) * 0.75);
+    gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,.6)');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  }
+  // The flight deck is taller now: back row of parked aircraft, a crew lane, and the armed vehicles in front.
+  // DECK_H is its height; the island rises out of the middle. Static paint is baked; everything that moves is live.
+  function bakeDeck() {
+    const h = H - DECK_Y;
+    DECK = sprite(W, h, (g) => {
+      const gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, '#6c737d'); gr.addColorStop(0.1, '#4d545e'); gr.addColorStop(1, '#23282f');
+      g.fillStyle = gr; g.fillRect(0, 0, W, h);
+      // non-skid texture and tire scuffs
+      g.fillStyle = 'rgba(0,0,0,.16)'; for (let i = 0; i < 520; i++) g.fillRect(Math.random() * W, Math.random() * h, rand(0.5, 2.5), 0.5);
+      g.strokeStyle = 'rgba(0,0,0,.18)'; g.lineWidth = 2; for (let i = 0; i < 6; i++) { const x = rand(0, W); g.beginPath(); g.moveTo(x, rand(0, h)); g.quadraticCurveTo(x + rand(-30, 30), rand(0, h), x + rand(-60, 60), rand(0, h)); g.stroke(); }
+      // deck edge, safety net and catwalk
+      g.fillStyle = '#2a3038'; g.fillRect(0, 0, W, 4); g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1; g.beginPath(); g.moveTo(0, 4.5); g.lineTo(W, 4.5); g.stroke();
+      g.strokeStyle = 'rgba(200,210,220,.18)'; g.lineWidth = 0.5; for (let x = 0; x < W; x += 3) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 2, 4); g.stroke(); }
+      // elevators (outlined), catapult tracks, arresting wires
+      g.strokeStyle = 'rgba(255,255,255,.14)'; g.lineWidth = 1; g.strokeRect(6, 8, 52, 26); g.strokeRect(W - 64, 8, 58, 26);
+      g.strokeStyle = 'rgba(20,24,30,.9)'; g.lineWidth = 1.6; for (const y of [10, 32]) { g.beginPath(); g.moveTo(64, y); g.lineTo(150, y); g.stroke(); }
+      g.strokeStyle = 'rgba(160,170,180,.35)'; g.lineWidth = 0.8; for (const y of [10, 32]) { g.setLineDash([1, 3]); g.beginPath(); g.moveTo(64, y); g.lineTo(150, y); g.stroke(); } g.setLineDash([]);
+      g.strokeStyle = 'rgba(210,215,225,.35)'; g.lineWidth = 0.7; for (let i = 0; i < 4; i++) { g.beginPath(); g.moveTo(212 + i * 9, 6); g.lineTo(212 + i * 9, 36); g.stroke(); }
+      // crew lane, foul line and front row parking marks
+      g.strokeStyle = 'rgba(255,207,90,.85)'; g.lineWidth = 1.1; g.setLineDash([9, 6]); g.beginPath(); g.moveTo(0, 38); g.lineTo(W, 38); g.stroke();
+      g.strokeStyle = 'rgba(230,60,60,.7)'; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(0, 49); g.lineTo(W, 49); g.stroke(); g.setLineDash([]);
+      g.strokeStyle = 'rgba(255,255,255,.2)'; for (const x of [4, 60, 244, 300]) { g.strokeRect(x, 52, 54, 30); }
+      // jet blast deflector panels behind the catapult
+      g.fillStyle = '#3a414b'; g.fillRect(60, 12, 3, 18); g.fillStyle = 'rgba(255,255,255,.2)'; g.fillRect(60, 12, 1, 18);
+      g.fillStyle = 'rgba(255,255,255,.1)'; g.font = '900 26px ui-sans-serif,Arial'; g.textAlign = 'center'; g.fillText('79', W * 0.5, h - 6);
+      // parked aircraft on the back row (the helicopter is drawn live for its rotor)
+      g.drawImage(PARKED, 8, 14, 48, 18); g.drawImage(PARKED, 88, 14, 48, 18); g.drawImage(PARKED, 242, 14, 48, 18);
+      // island base (the tower above the deck is drawn live)
+      const ib = g.createLinearGradient(ISL_X - 22, 0, ISL_X + 22, 0); ib.addColorStop(0, '#9aa1ab'); ib.addColorStop(1, '#4c535d');
+      g.fillStyle = ib; rr(g, ISL_X - 22, 0, 44, 46, 3); g.fill();
+      g.fillStyle = '#1e2229'; for (let i = 0; i < 8; i++) g.fillRect(ISL_X - 19 + (i % 4) * 6, 30 + Math.floor(i / 4) * 6, 4.4, 4.4); // launch cells
+    });
+  }
+  function resize() {
+    vw = window.innerWidth || 360; vh = window.innerHeight || 640;
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(vw * dpr); cv.height = Math.round(vh * dpr);
+    const availH = vh - HUD_H - 4, compact = vw / Math.max(1, availH) > 0.95;
+    const nh = compact ? 500 : 580;
+    if (nh !== H || !DECK) { layout(nh); bakeDeck(); if (S) placeVehicles(); }
+    scale = Math.max(0.3, Math.min((vw - 8) / W, availH / H));
+    offX = (vw - W * scale) / 2; offY = HUD_H + Math.max(0, (availH - H * scale) / 2);
+    bakeVignette();
+  }
+
+  // ─────────────────────────────── pools ───────────────────────────────
+  const PARTS = Array.from({ length: 480 }, () => ({ on: false, life: 0 }));
+  const RINGS = Array.from({ length: 40 }, () => ({ on: false, life: 0 }));
+  const TEXTS = Array.from({ length: 36 }, () => ({ on: false, life: 0 }));
+  const SHOTS = Array.from({ length: 60 }, () => ({ on: false }));
+  const TRACERS = Array.from({ length: 80 }, () => ({ on: false }));
+  function slot(pool) { for (const p of pool) if (!p.on) return p; let o = pool[0]; for (const p of pool) if ((p.life || 0) < (o.life || 0)) o = p; return o; }
+  function part(x, y, vx, vy, life, size, color, kind) { const p = slot(PARTS); p.on = true; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.life = life; p.max = life; p.size = size; p.color = color; p.kind = kind || 0; }
+  function ring(x, y, r, color, life, width) { const p = slot(RINGS); p.on = true; p.x = x; p.y = y; p.r = r; p.color = color; p.life = life || 0.45; p.max = p.life; p.width = width || 3; }
+  function text(x, y, str, color, size, life) { const p = slot(TEXTS); p.on = true; p.x = x; p.y = y; p.str = str; p.color = color; p.size = size || 14; p.life = life || 1.1; p.max = p.life; }
+  function burst(x, y, n, colors, speed, kind, size) {
+    for (let i = 0; i < n; i++) { const a = rand(0, Math.PI * 2), v = rand(speed * 0.3, speed); part(x, y, Math.cos(a) * v, Math.sin(a) * v, rand(0.3, 0.8), size || rand(1.5, 3.2), pick(colors), kind); }
+  }
+  function explode(x, y, big) {
+    burst(x, y, big ? 34 : 14, ['#ffe7a0', '#ffb04a', '#ff6a3a', '#ffffff'], big ? 230 : 150, 1, big ? 3.4 : 2.4);
+    burst(x, y, big ? 12 : 5, ['rgba(80,84,92,.7)', 'rgba(120,124,130,.6)'], big ? 70 : 40, 2, big ? 7 : 4.5);
+    ring(x, y, big ? 60 : 22, '255,170,90', big ? 0.6 : 0.35, big ? 5 : 2.5);
+  }
+
+  // ─────────────────────────────── audio ───────────────────────────────
+  // Music and effects both start OFF; M and N (or the HUD buttons) turn them on.
+  const A = { ctx: null, master: null, music: null, sfx: null, noise: null, musicOn: false, sfxOn: false, next: 0, step: 0, loops: 0, last: {} };
+  const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  function audioStart() {
+    if (A.ctx) { if (A.ctx.state === 'suspended') A.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    const c = A.ctx = new AC();
+    const comp = c.createDynamicsCompressor(); comp.threshold.value = -16; comp.knee.value = 12; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.2;
+    A.master = c.createGain(); A.master.gain.value = 0.8; A.master.connect(comp); comp.connect(c.destination);
+    A.music = c.createGain(); A.music.gain.value = A.musicOn ? 0.55 : 0; A.music.connect(A.master);
+    A.sfx = c.createGain(); A.sfx.gain.value = A.sfxOn ? 0.8 : 0; A.sfx.connect(A.master);
+    const buf = c.createBuffer(1, c.sampleRate, c.sampleRate), ch = buf.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+    A.noise = buf; A.next = c.currentTime + 0.1;
+    // Hornet buzz: a low sawtooth with a fast tremolo through a bandpass, panned toward the Hornets.
+    { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 96;
+      const o2 = c.createOscillator(); o2.type = 'sawtooth'; o2.frequency.value = 101;
+      const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 420; bp.Q.value = 1.4;
+      const trem = c.createGain(); trem.gain.value = 0.5; const lfo = c.createOscillator(); lfo.frequency.value = 26; const lg = c.createGain(); lg.gain.value = 0.5; lfo.connect(lg); lg.connect(trem.gain);
+      const g = c.createGain(); g.gain.value = 0; const pan = c.createStereoPanner ? c.createStereoPanner() : null;
+      o.connect(bp); o2.connect(bp); bp.connect(trem); trem.connect(g); if (pan) { g.connect(pan); pan.connect(A.sfx); } else g.connect(A.sfx);
+      o.start(); o2.start(); lfo.start(); A.buzz = { g, pan, o, o2 }; }
+    // Rotor drone: looped noise, low-passed, with a blade-pass amplitude throb, plus a sub sine; panned.
+    { const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+      const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 240; lp.Q.value = 3;
+      const am = c.createGain(); am.gain.value = 0.55; const lfo = c.createOscillator(); lfo.frequency.value = 16; const lg = c.createGain(); lg.gain.value = 0.45; lfo.connect(lg); lg.connect(am.gain);
+      const sub = c.createOscillator(); sub.type = 'sine'; sub.frequency.value = 48; const sg = c.createGain(); sg.gain.value = 0.35;
+      const g = c.createGain(); g.gain.value = 0; const pan = c.createStereoPanner ? c.createStereoPanner() : null;
+      src.connect(lp); lp.connect(am); sub.connect(sg); sg.connect(am); am.connect(g); if (pan) { g.connect(pan); pan.connect(A.sfx); } else g.connect(A.sfx);
+      src.start(); lfo.start(); sub.start(); A.rotor = { g, pan, lfo, lp }; }
+  }
+  function tone(freq, t, dur, type, vol, dest, o) {
+    const c = A.ctx; if (!c) return null; o = o || {};
+    const osc = c.createOscillator(), g = c.createGain();
+    osc.type = type; osc.frequency.setValueAtTime(freq, t);
+    if (o.to) osc.frequency.exponentialRampToValueAtTime(o.to, t + (o.glide || dur));
+    if (o.detune) osc.detune.value = o.detune;
+    let node = osc;
+    if (o.lp) { const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.lp; f.Q.value = o.q || 0.7; node.connect(f); node = f; }
+    node.connect(g); g.connect(dest || A.sfx);
+    const a = o.a || 0.006, r = o.r || 0.12, hold = Math.max(dur, a);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + a);
+    g.gain.setValueAtTime(vol * (o.s === undefined ? 0.6 : o.s), t + hold); g.gain.exponentialRampToValueAtTime(0.0001, t + hold + r);
+    osc.start(t); osc.stop(t + hold + r + 0.05);
+    return osc;
+  }
+  function noise(t, dur, vol, type, freq, dest, q) {
+    const c = A.ctx; if (!c) return null;
+    const src = c.createBufferSource(); src.buffer = A.noise;
+    const f = c.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q || 0.8;
+    const g = c.createGain(); src.connect(f); f.connect(g); g.connect(dest || A.sfx);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
+    return f;
+  }
+  // Music: a slow, deep naval march in D minor at 76 BPM. Kick and a low field snare, toms into bar 4,
+  // a sub bass, a dark pad, and a low horn line on every second loop. Nothing above the middle register.
+  const CH = [[50, 53, 57], [46, 50, 53], [48, 52, 55], [45, 49, 52]], ROOT = [38, 34, 36, 33];
+  const BASS = [1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0];
+  const HORN = { 0: [57, 6], 6: [55, 2], 8: [53, 8], 16: [58, 6], 22: [57, 2], 24: [55, 8], 32: [53, 4], 36: [55, 4], 40: [57, 8], 48: [52, 4], 52: [55, 4], 56: [57, 8] };
+  const STEP = 60 / 76 / 4;
+  function playStep(s, t) {
+    if (G.mode === 'over') return;
+    const lvl = G.mode === 'play' ? (boss ? 3 : clamp(Math.floor((G.wave - 1) / 2), 0, 3)) : 0, bar = s >> 4, st = s & 15, M = A.music;
+    if (st === 0 || st === 8 || (bar === 3 && st === 10)) tone(90, t, 0.26, 'sine', 0.95, M, { to: 34, glide: 0.3, a: 0.003, s: 0.25, r: 0.18 });
+    if (st === 4 || st === 12) { noise(t, 0.24, 0.3, 'bandpass', 850, M, 0.7); tone(160, t, 0.09, 'triangle', 0.28, M, { to: 105, a: 0.002, r: 0.12 }); }
+    if (lvl >= 1 && (st === 11 || st === 15)) noise(t, 0.08, 0.1, 'bandpass', 780, M, 0.7);
+    if (bar === 3 && st >= 12 && st <= 14) tone([112, 94, 80][st - 12], t, 0.2, 'sine', 0.5, M, { to: [76, 64, 52][st - 12], a: 0.003, r: 0.14 });
+    if (BASS[st]) tone(mtof(ROOT[bar]), t, STEP * (st === 0 ? 3.5 : 1.6), 'sawtooth', 0.3, M, { lp: 240, q: 2.2, a: 0.006, s: 0.55, r: 0.08 });
+    if (st === 0) for (const n of CH[bar]) tone(mtof(n), t, STEP * 15, 'sawtooth', 0.045, M, { lp: 620, a: 0.55, s: 0.75, r: 0.5, detune: rand(-8, 8) });
+    if (lvl >= 2 && st % 2 === 0) { const c = CH[bar]; tone(mtof(c[(st / 2) % 3] + (st >= 8 ? 12 : 0)), t, STEP * 1.6, 'triangle', 0.04, M, { lp: 1200, a: 0.01, s: 0.4, r: 0.12 }); }
+    const hn = HORN[s];
+    if (hn && A.loops % 2 === 1) tone(mtof(hn[0]), t, STEP * hn[1] * 0.95, 'square', 0.065, M, { lp: 900, a: 0.06, s: 0.8, r: 0.2 });
+  }
+  function audioTick() {
+    const c = A.ctx; if (!c || c.state !== 'running' || !A.musicOn) return;
+    if (A.next < c.currentTime - 0.3) A.next = c.currentTime + 0.05;
+    while (A.next < c.currentTime + 0.2) { playStep(A.step, A.next); A.next += STEP; A.step = (A.step + 1) % 64; if (A.step === 0) A.loops++; }
+  }
+  const now = () => (A.ctx && A.sfxOn ? A.ctx.currentTime : 0);
+  // Every frame: the buzz follows the Hornets on screen, the drone follows the motherships and the boss.
+  function audioLoops() {
+    const c = A.ctx; if (!c || !A.buzz) return;
+    const t = c.currentTime, playing = G.mode === 'play' || G.mode === 'dying';
+    let hn = 0, hx = 0;
+    for (const q of segs) if (q.kind === 'hornet' && !q.entering) { hn++; hx += q.x; }
+    for (const d of divers) if (d.kind === 'hornet') { hn++; hx += d.x; }
+    A.buzz.g.gain.setTargetAtTime(playing ? Math.min(0.11, hn * 0.012) : 0, t, 0.15);
+    if (A.buzz.pan && hn) A.buzz.pan.pan.setTargetAtTime(clamp((hx / hn) / W * 2 - 1, -0.8, 0.8), t, 0.2);
+    A.buzz.o.frequency.setTargetAtTime(96 + Math.sin(T * 3) * 4, t, 0.1);
+    const heavy = [];
+    for (const b of motherships) heavy.push({ x: b.x, w: 1 });
+    if (boss) heavy.push({ x: boss.x, w: 2.2 });
+    const wsum = heavy.reduce((a, h) => a + h.w, 0);
+    A.rotor.g.gain.setTargetAtTime(playing ? Math.min(0.5, wsum * 0.16) : 0, t, 0.3);
+    if (A.rotor.pan && wsum) A.rotor.pan.pan.setTargetAtTime(clamp(heavy.reduce((a, h) => a + h.x * h.w, 0) / wsum / W * 2 - 1, -0.7, 0.7), t, 0.3);
+    A.rotor.lfo.frequency.setTargetAtTime(boss ? 11 : 16, t, 0.5);
+    A.rotor.lp.frequency.setTargetAtTime(boss ? 180 : 240, t, 0.5);
+  }
+  function throttle(key, gap) { const t = now(); if (!t || t - (A.last[key] || 0) < gap) return 0; A.last[key] = t; return t; }
+  const SFX = {
+    shot() { const t = throttle('shot', 0.07); if (t) tone(220, t, 0.04, 'square', 0.05, A.sfx, { to: 140, lp: 1200, a: 0.001, r: 0.03 }); },
+    minigun() { const t = throttle('mg', 0.05); if (t) noise(t, 0.04, 0.12, 'bandpass', 1100, A.sfx, 1.2); },
+    pop(chain) { const t = throttle('pop', 0.03); if (!t) return; const sc = [0, 3, 5, 7, 10]; tone(mtof(Math.min(79, 55 + sc[chain % 5] + 12 * Math.floor(chain / 5))), t, 0.08, 'triangle', 0.14, A.sfx, { a: 0.002, r: 0.18 }); noise(t, 0.12, 0.14, 'lowpass', 900); },
+    boom() { const t = throttle('boom', 0.08); if (!t) return; noise(t, 0.6, 0.55, 'lowpass', 520); tone(70, t, 0.4, 'sine', 0.6, A.sfx, { to: 30, a: 0.002, r: 0.25 }); },
+    alarm() { const t = now(); if (!t) return; for (let i = 0; i < 3; i++) tone(330, t + i * 0.26, 0.14, 'square', 0.07, A.sfx, { to: 250, lp: 900, a: 0.01, r: 0.06 }); },
+    boost() { const t = now(); if (!t) return; const f = noise(t, 1.1, 0.35, 'bandpass', 300, A.sfx, 1); if (f) f.frequency.exponentialRampToValueAtTime(1500, t + 1); },
+    aegis() { const t = now(); if (!t) return; for (let i = 0; i < 6; i++) { noise(t + i * 0.09, 0.4, 0.3, 'bandpass', 600, A.sfx, 0.8); tone(110, t + i * 0.09, 0.3, 'sawtooth', 0.08, A.sfx, { to: 60, lp: 700 }); } tone(mtof(45), t, 0.6, 'sine', 0.3, A.sfx, { a: 0.02, r: 0.4 }); },
+    hurt() { const t = now(); if (!t) return; noise(t, 0.5, 0.5, 'lowpass', 400); tone(55, t, 0.5, 'sawtooth', 0.2, A.sfx, { to: 35, lp: 300 }); },
+    mission() { const t = now(); if (!t) return; [62, 67, 71].forEach((n, i) => tone(mtof(n), t + i * 0.1, 0.14, 'triangle', 0.16, A.sfx, { a: 0.004, r: 0.3 })); },
+    over() { const t = now(); if (!t) return; [50, 49, 48, 45].forEach((n, i) => tone(mtof(n), t + i * 0.42, i === 3 ? 1.1 : 0.34, 'sawtooth', 0.16, A.sfx, { lp: 700, q: 3, a: 0.03, s: 0.8, r: 0.2 })); },
+    bossHorn() { const t = now(); if (!t) return; for (const [n, d] of [[38, 0], [41, 0.5], [36, 1]]) { tone(mtof(n), t + d, 0.45, 'sawtooth', 0.22, A.sfx, { lp: 420, q: 2, a: 0.05, s: 0.8, r: 0.3 }); tone(mtof(n - 12), t + d, 0.45, 'sine', 0.3, A.sfx, { a: 0.05, r: 0.3 }); } },
+    podDown() { const t = now(); if (!t) return; noise(t, 0.5, 0.5, 'lowpass', 600); tone(95, t, 0.3, 'sawtooth', 0.2, A.sfx, { to: 40, lp: 500 }); noise(t + 0.08, 0.3, 0.25, 'bandpass', 1400, A.sfx, 1.2); },
+    shieldDown() { const t = now(); if (!t) return; const f = noise(t, 0.9, 0.35, 'bandpass', 1800, A.sfx, 2); if (f) f.frequency.exponentialRampToValueAtTime(200, t + 0.8); tone(220, t, 0.6, 'triangle', 0.12, A.sfx, { to: 70, a: 0.01 }); },
+    bossDeath() { const t = now(); if (!t) return; for (let i = 0; i < 5; i++) { noise(t + i * 0.22, 0.8, 0.5, 'lowpass', 420 - i * 50); tone(64 - i * 5, t + i * 0.22, 0.6, 'sine', 0.5, A.sfx, { to: 28, r: 0.4 }); } },
+    win() { const t = now(); if (!t) return; [[55, 0], [60, 0.14], [64, 0.28], [67, 0.42], [64, 0.64], [67, 0.78], [72, 0.92]].forEach(([n, d], i) => tone(mtof(n), t + d, i === 6 ? 1.1 : 0.12, 'sawtooth', 0.13, A.sfx, { lp: 1600, a: 0.01, s: 0.7, r: 0.2 })); },
+  };
+  function setMusic(on) {
+    A.musicOn = on; const b = $('musicBtn'); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.setAttribute('aria-label', on ? 'Turn music off (M)' : 'Turn music on (M)');
+    if (A.music && A.ctx) { A.music.gain.setTargetAtTime(on ? 0.55 : 0, A.ctx.currentTime, 0.05); if (on) A.next = A.ctx.currentTime + 0.05; }
+  }
+  function setSound(on) {
+    A.sfxOn = on; const b = $('muteBtn'); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.setAttribute('aria-label', on ? 'Turn sound effects off (N)' : 'Turn sound effects on (N)');
+    if (A.sfx && A.ctx) A.sfx.gain.setTargetAtTime(on ? 0.8 : 0, A.ctx.currentTime, 0.03);
+  }
+  // ─────────────────────────────── waves + missions ───────────────────────────
+  const WAVE_NAMES = ['PICKET LINE', 'FIRST LIGHT', 'NARROW STRAIT', 'STORM FRONT', 'IRON RAIN', 'BLACK TIDE', 'LONG NIGHT', 'THE GRAND SWARM'];
+  const ENDLESS = ['DEEP WATCH', 'RED HORIZON', 'NO MOON', 'SALT WIND'];
+  const LAST_WAVE = 8;
+  const SWARM = {
+    raider:   { name: 'RAIDER SWARM', pace: 1, dive: 'DIVE!' },
+    hornet:   { name: 'HORNET SWARM', pace: 1.35, dive: 'BZZZT!' },
+    wraith:   { name: 'WRAITH SWARM', pace: 1, dive: '...' },
+    ironclad: { name: 'IRONCLAD LEAD', pace: 0.85, dive: 'RAMMING!' },
+  };
+  const LINEUP = [['raider'], ['raider', 'hornet'], ['wraith', 'hornet'], ['ironclad', 'raider', 'hornet'], ['wraith', 'ironclad', 'raider'],
+    ['hornet', 'hornet', 'ironclad', 'wraith'], ['ironclad', 'wraith', 'raider', 'hornet'], ['ironclad', 'ironclad', 'wraith', 'hornet']];
+  function waveDef(w) {
+    const kinds = w <= LAST_WAVE ? LINEUP[w - 1] : Array.from({ length: 4 }, () => pick(Object.keys(SWARM)));
+    return {
+      kinds, len: Math.min(13, 7 + w), sp: Math.min(110, 50 + (w - 1) * 6), motherships: w === LAST_WAVE ? 2 : (w >= 3 && w % 2 === 1) || w > LAST_WAVE ? 1 : 0,
+      missileEvery: w >= 2 ? Math.max(8, 24 - w * 2) : 0, scoutEvery: w >= 3 ? Math.max(7, 17 - w) : 0, wrecks: w === 1 ? 14 : 4,
+    };
+  }
+  const REWARD = { aegis: 'AEGIS FULLY CHARGED', sweep: 'DECK SWEEP', twin: 'TWIN GUNS', repair: 'DAMAGE REPAIRED', life: 'SPARE INTERCEPTOR', victory: 'VICTORY' };
+  const MISSIONS = [
+    { t: 'Down 15 drones', n: 15, m: () => S.downed, d: 1, r: 'aegis' },
+    { t: 'Split a swarm in two', n: 1, m: () => S.splits, d: 1, r: 'sweep' },
+    { t: 'Take out 3 swarm leaders', n: 3, m: () => S.heads, d: 1, r: 'twin' },
+    { t: 'Clear Wave 1: Picket Line', n: 1, m: () => (S.waves >= 1 ? 1 : 0), r: 'repair' },
+    { t: 'Intercept a hypersonic missile', n: 1, m: () => S.missiles, d: 1, r: 'aegis' },
+    { t: 'Fire the Aegis net', n: 1, m: () => S.aegisUsed, d: 1, r: 'sweep' },
+    { t: 'Let the miniguns down 6 drones', n: 6, m: () => S.mgKills, d: 1, r: 'life' },
+    { t: 'Down a Baba Yaga mothership', n: 1, m: () => S.yagas, d: 1, r: 'twin' },
+    { t: 'Kill a missile in its glide', n: 1, m: () => S.glideKills, d: 1, r: 'repair' },
+    { t: 'Clear a wave with no hull damage', n: 1, m: () => S.cleanWaves, d: 1, r: 'aegis' },
+    { t: 'Down 200 drones in all', n: 200, m: () => S.downed, r: 'life' },
+    { t: 'Intercept 5 missiles in all', n: 5, m: () => S.missiles, r: 'sweep' },
+    { t: 'Destroy Baba Yaga Prime', n: 1, m: () => S.bossDown, r: 'victory' },
+  ];
+
+  // ─────────────────────────────── state ───────────────────────────────
+  const G = { cheerT: 0, mothershipT: 0, mothershipsLeft: 0, mode: 'title', wave: 1, endless: false, auto: false, shake: 0, flash: 0, flashC: '255,255,255', waveT: 0, pendingWave: false, banners: [], shownScore: 0, waveName: '', missileT: 0, scoutT: 0, chainSeq: 0 };
+  const keys = { left: false, right: false, up: false, down: false };
+  let crew = [], tug = { x: 120, dir: 1 }, boss = null;
+  let S = null, J = null, segs = [], divers = [], missiles = [], scouts = [], interceptors = [], vehicles = [], motherships = [], bombs = [];
+  const chains = new Map(); // chain id -> { kind, total, announced, enraged }
+  const wrecks = new Map();
+  const wkey = (c, r) => c + ',' + r;
+  function freshStats() { return { score: 0, hull: 10, lives: 3, downed: 0, splits: 0, heads: 0, waves: 0, missiles: 0, glideKills: 0, mgKills: 0, aegisUsed: 0, wrecksCleared: 0, yagas: 0, bossDown: 0, cleanWaves: 0, waveHullHit: 0, combo: 0, comboT: 0, bestCombo: 0, aegis: 0, twinT: 0, mi: 0, goalBase: 0, done: 0 }; }
+  function placeVehicles() {
+    const spots = [[31, 'truck'], [87, 'track'], [271, 'truck'], [327, 'track']];
+    if (!vehicles.length) vehicles = spots.map(([x, kind]) => ({ x, kind, hp: 2, alive: true, ang: -Math.PI / 2, heat: 0, hot: false, cd: 0 }));
+    for (const v of vehicles) v.y = DECK_Y + 66;
+    if (!crew.length) crew = JERSEYS.map((color, i) => ({ color, x: 20 + i * 44, goal: 0, face: 1, t: Math.random() * 3, timer: rand(0, 2), state: 'idle' }));
+  }
+  function newRun() {
+    S = freshStats(); G.wave = 1; G.endless = false; G.banners = []; G.shownScore = 0; G.shake = 0; G.flash = 0; G.waveT = 0; G.pendingWave = false;
+    J = { x: W / 2, y: DECK_Y - 30, tx: W / 2, ty: DECK_Y - 30, cd: 0, alive: true, respawnT: 0, inv: 2, bank: 0 };
+    segs = []; divers = []; missiles = []; scouts = []; interceptors = []; vehicles = []; motherships = []; bombs = []; crew = []; boss = null; wrecks.clear(); chains.clear();
+    for (const pool of [PARTS, RINGS, TEXTS, SHOTS, TRACERS]) for (const p of pool) p.on = false;
+    placeVehicles(); loadWave(1); activateMission(0); updateHud(true);
+  }
+  function loadWave(w) {
+    const d = waveDef(w);
+    G.waveName = w <= LAST_WAVE ? WAVE_NAMES[w - 1] : pick(ENDLESS);
+    G.missileT = d.missileEvery ? d.missileEvery * 0.6 : 0; G.scoutT = d.scoutEvery ? d.scoutEvery : 0;
+    S.waveHullHit = 0;
+    if (wrecks.size > 42) { const ks = [...wrecks.keys()]; for (let i = 0; i < wrecks.size - 42; i++) wrecks.delete(ks[(Math.random() * ks.length) | 0]); }
+    for (let i = 0; i < d.wrecks; i++) {
+      const c = (Math.random() * COLS) | 0, r = 2 + ((Math.random() * (ROWS - 9)) | 0);
+      if (!wrecks.has(wkey(c, r))) wrecks.set(wkey(c, r), { c, r, hp: 3 });
+    }
+    // Chains drop in from above at a random column, single file, and only become targetable once they
+    // reach the top lane, so camping one entry column does not work.
+    let lag = 0;
+    d.kinds.forEach((kind) => {
+      const len = kind === 'hornet' ? 5 + Math.floor(w / 2) : d.len;
+      spawnChain(kind, len, 2 + ((Math.random() * (COLS - 4)) | 0), lag, d.sp);
+      lag += len + 4;
+    });
+    G.mothershipT = d.motherships ? 6 : 0; G.mothershipsLeft = d.motherships; G.bossSpawned = false;
+    G.banners.push({ text: `WAVE ${w}`, sub: G.waveName, t: 0, life: 2.2, color: '127,227,255' });
+  }
+  // A chain of one class. It drops in single file at column c0 and is untouchable until it reaches the top lane.
+  function spawnChain(kind, len, c0, lag, sp, atRow) {
+    const id = ++G.chainSeq, dir = Math.random() < 0.5 ? 1 : -1, row = atRow || 0;
+    chains.set(id, { kind, total: len, announced: false, enraged: false });
+    for (let i = 0; i < len; i++) {
+      segs.push({ chain: id, kind, head: i === 0, hp: kind === 'ironclad' && i === 0 ? 3 : 1, x: colX(c0), c: c0, row, y: rowY(row) - (i + 1 + lag) * CELL, ty: rowY(row), dir,
+        sp: sp * SWARM[kind].pace, anim: Math.random() * 6, pop: 0, alert: 0, entering: true });
+    }
+  }
+  function activateMission(i) { S.mi = i; const m = MISSIONS[i]; if (m) S.goalBase = m.d ? m.m() : 0; }
+  function missionValue(m) { return m.d ? m.m() - S.goalBase : m.m(); }
+  const live = () => G.mode === 'play';
+
+  // ─────────────────────────────── scoring + rewards ───────────────────────────
+  function addScore(n, x, y, color) { S.score += n; if (x !== undefined) text(x, y, '+' + fmt(n), color || '255,230,150', n >= 500 ? 15 : 11, 0.9); }
+  function shake(a) { G.shake = Math.min(12, G.shake + a); }
+  function flash(a, c) { G.flash = Math.min(0.8, G.flash + a); G.flashC = c || '255,255,255'; }
+  function charge(v) { const was = S.aegis >= 1; S.aegis = Math.min(1, S.aegis + v); if (!was && S.aegis >= 1 && live()) text(W / 2, DECK_Y - 70, 'AEGIS READY: PRESS E', '127,227,255', 14, 1.6); }
+  function applyReward(r) {
+    if (r === 'aegis') charge(1);
+    else if (r === 'sweep') {
+      let n = 0;
+      for (const [k, w] of wrecks) if (Math.random() < 0.75) { wrecks.delete(k); burst(colX(w.c), rowY(w.r), 6, ['#ffb04a', '#ffffff'], 90, 1, 1.6); n++; }
+      ring(W / 2, H / 2, 200, '127,227,255', 0.8, 5); addScore(50 * n);
+    } else if (r === 'twin') S.twinT = 25;
+    else if (r === 'repair') {
+      const v = vehicles.find((q) => !q.alive);
+      if (v) { v.alive = true; v.hp = 2; v.heat = 0; ring(v.x, v.y, 30, '160,210,120', 0.6, 3); } else S.hull = Math.min(10, S.hull + 3);
+    } else if (r === 'life') S.lives = Math.min(6, S.lives + 1);
+    return REWARD[r];
+  }
+  function checkMissions() {
+    if (!live()) return;
+    const m = MISSIONS[S.mi]; if (!m || missionValue(m) < m.n) return;
+    S.done++; SFX.mission(); flash(0.15, '255,230,150');
+    const chip = $('goalChip'); chip.classList.remove('flash'); void chip.offsetWidth; chip.classList.add('flash');
+    if (m.r === 'victory') { S.mi = MISSIONS.length; victory(); return; }
+    G.banners.push({ text: `MISSION ${S.mi + 1} COMPLETE`, sub: `REWARD: ${applyReward(m.r)}`, t: 0, life: 2, color: '255,207,90' });
+    activateMission(S.mi + 1);
+  }
+
+  // ─────────────────────────────── the swarm ───────────────────────────────
+  // Each drone flies its lane cell by cell. At an edge or a wreck it drops one lane and turns, so a chain
+  // snakes down the screen. Shooting a drone leaves a wreck and splits the chain: the drone behind it leads.
+  function killSeg(s, byMg) {
+    const i = segs.indexOf(s); if (i < 0) return;
+    const x = s.x, y = s.y, wasHead = s.head;
+    segs.splice(i, 1);
+    const behind = segs[i];
+    if (behind && behind.chain === s.chain) {
+      if (!wasHead) { S.splits++; text(x, y - 14, 'SPLIT!', '255,207,90', 12, 0.8); }
+      const id = ++G.chainSeq, info = chains.get(s.chain) || { kind: s.kind, total: 1 };
+      let n = 0; for (let k = i; k < segs.length && segs[k].chain === s.chain; k++) { segs[k].chain = id; n++; }
+      chains.set(id, { kind: info.kind, total: n, announced: true, enraged: false });
+      behind.head = true; behind.pop = 1; behind.alert = 0.9;
+    }
+    S.downed++; if (wasHead) S.heads++; if (byMg) S.mgKills++;
+    S.combo = S.comboT > 0 ? S.combo + 1 : 1; S.comboT = 1.2; S.bestCombo = Math.max(S.bestCombo, S.combo);
+    addScore((wasHead ? 100 : 10) + 5 * Math.min(20, S.combo - 1), x, y - 8, wasHead ? '255,150,90' : undefined);
+    SFX.pop(S.combo); charge(0.035);
+    explode(x, y, false); shake(0.8);
+    const c = Math.round((x - CELL / 2) / CELL), r = Math.round((y - TOP - CELL / 2) / CELL);
+    if (c >= 0 && c < COLS && r >= 1 && r < ROWS - 3 && !wrecks.has(wkey(c, r))) wrecks.set(wkey(c, r), { c, r, hp: 3 });
+  }
+  function stepSwarm(dt) {
+    for (const s of segs) {
+      s.anim += dt * 14; if (s.pop > 0) s.pop = Math.max(0, s.pop - dt * 3);
+      if (s.alert > 0) s.alert = Math.max(0, s.alert - dt);
+      const info = chains.get(s.chain), rage = info && info.enraged ? 1.4 : 1;
+      if (s.y < s.ty) {
+        s.y = Math.min(s.ty, s.y + s.sp * rage * dt);
+        if (s.y >= s.ty && s.entering) { s.entering = false; if (s.head && info && !info.announced) { info.announced = true; text(s.x, s.y + 16, SWARM[s.kind].name, LIVERY[s.kind].glow, 12, 1.6); } }
+        continue;
+      }
+      const sp = s.sp * rage * (s.head && !segs.some((q) => q !== s && q.chain === s.chain) ? 1.35 : 1);
+      const tx = colX(s.c), dx = tx - s.x, stepv = sp * dt;
+      if (Math.abs(dx) > stepv) { s.x += Math.sign(dx) * stepv; continue; }
+      s.x = tx;
+      const nc = s.c + s.dir;
+      if (nc < 0 || nc >= COLS || wrecks.has(wkey(nc, s.row))) { s.row++; s.ty = rowY(s.row); s.dir = -s.dir; }
+      else s.c = nc;
+    }
+    // a chain cut down to three or fewer (from six or more) is enraged: faster, and it glows red
+    for (const [id, info] of chains) {
+      if (info.enraged || info.total < 6) continue;
+      let n = 0, h = null; for (const q of segs) if (q.chain === id) { n++; if (q.head) h = q; }
+      if (n === 0) { chains.delete(id); continue; }
+      if (n <= 3 && h && !h.entering) { info.enraged = true; text(h.x, h.y - 16, 'ENRAGED!', '255,80,70', 13, 1.2); }
+    }
+    // a drone that reaches the deck lane turns into a diver and goes for a vehicle or the island
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const s = segs[i];
+      if (s.row < DIVE_ROW || s.y < s.ty) continue;
+      segs.splice(i, 1);
+      const behind = segs[i]; if (behind && behind.chain === s.chain) { behind.head = true; behind.pop = 1; }
+      divers.push({ x: s.x, y: s.y, vx: 0, vy: 0, t: 0, kind: s.kind, target: pickTarget(s.x) });
+      text(s.x, s.y - 12, SWARM[s.kind].dive, LIVERY[s.kind].glow, 12, 0.8);
+    }
+  }
+  function pickTarget(x) {
+    const alive = vehicles.filter((v) => v.alive);
+    const opts = alive.map((v) => ({ x: v.x, y: v.y, v })).concat([{ x: ISL_X, y: DECK_Y + 8, v: null }]);
+    opts.sort((a, b) => Math.abs(a.x - x) - Math.abs(b.x - x));
+    return opts[0];
+  }
+  function hitAsset(tg, dmg, x, y) {
+    explode(x, y, dmg >= 3); shake(dmg >= 3 ? 8 : 4); SFX.boom();
+    if (!live()) return;
+    if (tg.v && !tg.v.alive) return; // it was already destroyed: only the explosion
+    if (tg.v) {
+      tg.v.hp -= dmg >= 3 ? 2 : 1;
+      if (tg.v.hp <= 0) { tg.v.alive = false; text(tg.v.x, tg.v.y - 20, 'VEHICLE LOST', '255,110,120', 13, 1.2); burst(tg.v.x, tg.v.y, 20, ['#ff7a3a', '#ffcf5a'], 160, 1, 3); }
+    } else {
+      S.hull = Math.max(0, S.hull - dmg); S.waveHullHit++; flash(0.3, '255,70,80'); SFX.hurt();
+      text(x, DECK_Y - 20, `HULL -${dmg}`, '255,110,120', 16, 1.2);
+      bumpChip('hullV');
+      if (S.hull <= 0) { G.mode = 'dying'; G.overT = 1.4; }
+    }
+  }
+  function stepDivers(dt) {
+    for (const d of divers) {
+      d.t += dt;
+      const dx = d.target.x - d.x, dy = d.target.y - d.y, dist = Math.hypot(dx, dy) || 1, sp = 120 + d.t * 160;
+      d.vx = lerp(d.vx, dx / dist * sp, Math.min(1, dt * 4)); d.vy = lerp(d.vy, dy / dist * sp, Math.min(1, dt * 4));
+      d.x += d.vx * dt; d.y += d.vy * dt;
+      if (Math.random() < 0.5) part(d.x, d.y - 6, rand(-10, 10), -30, 0.3, 1.6, 'rgba(255,150,80,.7)', 1);
+      if (dist < 10) { d.dead = true; hitAsset(d.target, 1, d.x, d.y); }
+    }
+    divers = divers.filter((d) => !d.dead);
+  }
+
+  // ─────────────────────────────── hypersonic missiles ───────────────────────────
+  // Every missile flies the full profile: launch warning, boost across the top, a weaving glide, then a
+  // terminal dive at a vehicle or the island with a red reticle on the target. Hardest to hit while gliding.
+  function launchMissile() {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    missiles.push({ phase: 'warn', t: 0, side, x: side < 0 ? -30 : W + 30, y: 24, vx: 0, vy: 0, hp: 4, base: W / 2, target: null, ang: 0 });
+    G.banners.push({ text: 'HYPERSONIC LAUNCH', sub: side < 0 ? 'INBOUND FROM THE WEST' : 'INBOUND FROM THE EAST', t: 0, life: 1.4, color: '255,90,106' });
+    SFX.alarm();
+  }
+  function stepMissiles(dt) {
+    for (const m of missiles) {
+      m.t += dt;
+      if (m.phase === 'warn') { if (m.t > 1.4) { m.phase = 'boost'; m.t = 0; m.vx = -m.side * 430; m.vy = -8; SFX.boost(); } continue; }
+      if (m.phase === 'boost') {
+        m.x += m.vx * dt; m.y += m.vy * dt;
+        if ((m.side < 0 && m.x > W * 0.62) || (m.side > 0 && m.x < W * 0.38)) { m.phase = 'glide'; m.t = 0; m.base = m.x; }
+      } else if (m.phase === 'glide') {
+        m.y += (95 + G.wave * 4) * dt; m.x = clamp(m.base + Math.sin(m.t * 3.2) * 70, 16, W - 16);
+        if (m.y > H * 0.44) { m.phase = 'terminal'; m.t = 0; m.target = pickTarget(m.x); const alive = vehicles.filter((v) => v.alive); if (alive.length && Math.random() < 0.55) { const v = pick(alive); m.target = { x: v.x, y: v.y, v }; } }
+      } else {
+        const dx = m.target.x - m.x, dy = m.target.y - m.y, dist = Math.hypot(dx, dy) || 1, sp = 330 + m.t * 150;
+        m.x += dx / dist * sp * dt; m.y += dy / dist * sp * dt;
+        if (dist < 12) { m.dead = true; hitAsset(m.target, 3, m.x, m.y); }
+      }
+      const ang = Math.atan2(m.phase === 'glide' ? (95 + G.wave * 4) : m.phase === 'boost' ? m.vy : m.target.y - m.y, m.phase === 'glide' ? Math.cos(m.t * 3.2) * 224 : m.phase === 'boost' ? m.vx : m.target.x - m.x);
+      m.dirAng = ang; m.ang = ang - Math.PI / 2; // the sprite's nose points down (+y) at rotation 0
+      for (let k = 0; k < 3; k++) part(m.x - Math.cos(ang) * 16 + rand(-2, 2), m.y - Math.sin(ang) * 16 + rand(-2, 2), -Math.cos(ang) * rand(20, 80), -Math.sin(ang) * rand(20, 80), rand(0.2, 0.5), rand(2, 4), pick(['#ffd28a', '#ff8a4a', '#ffffff']), 1);
+    }
+    missiles = missiles.filter((m) => !m.dead);
+  }
+  function hurtMissile(m, dmg, by) {
+    if (m.phase === 'warn') return false;
+    m.hp -= dmg; burst(m.x, m.y, 4, ['#ffffff', '#ffd28a'], 90, 1, 1.4);
+    if (m.hp > 0) return false;
+    m.dead = true; const glide = m.phase === 'glide';
+    S.missiles++; if (glide) S.glideKills++;
+    addScore(glide ? 1500 : 1000, m.x, m.y - 12, '255,90,106'); text(m.x, m.y - 30, glide ? 'GLIDE KILL!' : 'INTERCEPTED', '255,207,90', 16, 1.3);
+    explode(m.x, m.y, true); flash(0.2, '255,200,140'); shake(5); SFX.boom(); charge(0.25);
+    void by; return true;
+  }
+
+  // ─────────────────────────────── Baba Yaga motherships ───────────────────────────
+  // A heavy hexacopter patrols the top lanes: it drops bombs on the deck and launches Hornet chains from its
+  // belly until it is shot down. It soaks a lot of fire; the Aegis net hurts it most.
+  function spawnMothership(k) {
+    const left = Math.random() < 0.5, hp = G.wave >= LAST_WAVE ? 45 : 30 + G.wave * 2;
+    motherships.push({ x: left ? -50 : W + 50, y: 58 + k * 44, dir: left ? 1 : -1, hp, max: hp, t: 0, bombT: 3, spawnT: 5, hitT: 0, dead: false, dying: 0 });
+    G.banners.push({ text: 'BABA YAGA INBOUND', sub: 'HEAVY BOMBER DRONE', t: 0, life: 1.8, color: '160,255,150' });
+    SFX.alarm();
+  }
+  function stepMotherships(dt) {
+    if (G.mothershipsLeft > 0) { G.mothershipT -= dt; if (G.mothershipT <= 0) { spawnMothership(motherships.length); G.mothershipsLeft--; G.mothershipT = 8; } }
+    for (const b of motherships) {
+      b.t += dt; if (b.hitT > 0) b.hitT -= dt;
+      if (b.dying > 0) {
+        b.dying -= dt; b.y += 40 * dt; b.x += b.dir * 20 * dt;
+        if (Math.random() < 0.5) explode(b.x + rand(-30, 30), b.y + rand(-12, 12), false);
+        if (b.dying <= 0) { b.dead = true; explode(b.x, b.y, true); explode(b.x - 20, b.y + 8, true); explode(b.x + 20, b.y - 6, true); shake(10); flash(0.35, '200,255,190'); SFX.boom(); }
+        continue;
+      }
+      const speed = 34 + G.wave * 2;
+      b.x += b.dir * speed * dt;
+      if ((b.dir > 0 && b.x > W - 48) || (b.dir < 0 && b.x < 48)) { if (b.t > 2) b.dir = -b.dir; }
+      b.bombT -= dt; b.spawnT -= dt;
+      if (b.bombT <= 0 && b.x > 10 && b.x < W - 10) {
+        b.bombT = rand(3.5, 5.5);
+        bombs.push({ x: b.x + rand(-10, 10), y: b.y + 20, vy: 30, target: pickTarget(b.x), hp: 1, dead: false });
+      }
+      if (b.spawnT <= 0 && b.x > 20 && b.x < W - 20 && segs.length < 70) {
+        b.spawnT = rand(8, 11);
+        const c0 = clamp(Math.round((b.x - CELL / 2) / CELL), 1, COLS - 2), row = clamp(Math.round((b.y + 24 - TOP - CELL / 2) / CELL), 1, 8);
+        const before = segs.length;
+        spawnChain('hornet', 4, c0, 0, waveDef(G.wave).sp, row);
+        for (let i = before; i < segs.length; i++) segs[i].y = b.y + 10 - (i - before) * 6;
+        text(b.x, b.y + 30, 'LAUNCHING SWARM', '255,210,80', 11, 1);
+      }
+    }
+    motherships = motherships.filter((b) => !b.dead);
+  }
+  function hurtMothership(b, dmg) {
+    if (b.dying > 0) return;
+    b.hp -= dmg; b.hitT = 0.08; burst(b.x + rand(-14, 14), b.y + rand(-8, 8), 3, ['#ffe7a0', '#ffffff'], 80, 1, 1.3);
+    if (b.hp > 0) return;
+    b.dying = 1.3; S.yagas++; S.downed++; G.cheerT = 2;
+    addScore(5000, b.x, b.y - 24, '160,255,150'); text(b.x, b.y - 44, 'BABA YAGA DOWN!', '160,255,150', 18, 1.6);
+    charge(0.5); SFX.boom();
+  }
+  // ─────────────────────────────── Baba Yaga Prime (the wave 8 boss) ───────────────────────────
+  // Phase 1: the core is shielded; shoot off rotor pods. Phase 2 (four pods gone): the shield drops, it fires
+  // hypersonic missiles from its belly and launches swarms faster. Phase 3 (core under 40%): enraged, it
+  // carpet-bombs and descends toward the deck. It returns every fourth endless wave.
+  const bossWave = (w) => w === LAST_WAVE || (w > LAST_WAVE && w % 4 === 0);
+  function spawnBoss() {
+    const scale = G.wave > LAST_WAVE ? 1.25 : 1;
+    boss = { x: W / 2, y: -70, ty: 96, t: 0, phase: 1, hitT: 0, dying: 0, bombT: 3, spawnT: 4, missileT: 9, leg: 0,
+      pods: PRIME_PODS.map(([dx, dy]) => ({ dx, dy, hp: Math.round(12 * scale), max: Math.round(12 * scale), alive: true })), core: Math.round(150 * scale), coreMax: Math.round(150 * scale) };
+    G.banners.push({ text: 'BABA YAGA PRIME', sub: 'SHOOT OFF ITS ROTOR PODS', t: 0, life: 2.6, color: '255,90,70' });
+    flash(0.3, '255,80,70'); shake(6); SFX.bossHorn();
+  }
+  const podsAlive = () => (boss ? boss.pods.filter((p) => p.alive).length : 0);
+  function stepBoss(dt) {
+    const b = boss; b.t += dt; if (b.hitT > 0) b.hitT -= dt;
+    if (b.dying > 0) {
+      b.dying -= dt; b.y += 30 * dt; b.leg += dt * 3;
+      if (Math.random() < 0.6) explode(b.x + rand(-90, 90), b.y + rand(-30, 20), Math.random() < 0.3);
+      if (b.dying <= 0) {
+        for (let i = 0; i < 6; i++) explode(b.x + rand(-80, 80), b.y + rand(-20, 20), true);
+        ring(b.x, b.y, 220, '255,200,140', 1, 6); flash(0.7, '255,230,190'); shake(14); SFX.bossDeath();
+        boss = null; S.bossDown++; G.cheerT = 3;
+      }
+      return;
+    }
+    const enraged = b.phase === 3;
+    b.y = lerp(b.y, b.ty + (enraged ? Math.min(90, b.t * 2) : 0), Math.min(1, dt * 0.8));
+    b.x = W / 2 + Math.sin(b.t * (enraged ? 0.7 : 0.45)) * 70; b.leg += dt;
+    const alive = podsAlive();
+    if (b.phase === 1 && alive <= 2) { b.phase = 2; G.banners.push({ text: 'SHIELD DOWN', sub: 'HIT THE CORE', t: 0, life: 1.8, color: '127,227,255' }); SFX.shieldDown(); flash(0.2, '127,227,255'); }
+    if (b.phase === 2 && b.core <= b.coreMax * 0.4) { b.phase = 3; G.banners.push({ text: 'PRIME IS ENRAGED', sub: 'IT IS DESCENDING', t: 0, life: 1.8, color: '255,80,70' }); SFX.bossHorn(); shake(6); }
+    b.bombT -= dt; b.spawnT -= dt; b.missileT -= dt;
+    if (b.bombT <= 0) {
+      b.bombT = enraged ? 1.6 : b.phase === 2 ? 2.4 : 3.2;
+      const n = enraged ? 5 : 3;
+      for (let i = 0; i < n; i++) { const x = clamp(b.x + (i - (n - 1) / 2) * (enraged ? 60 : 40), 20, W - 20); bombs.push({ x, y: b.y + 26, vy: 20 + i * 4, target: pickTarget(x), hp: 1, dead: false }); }
+    }
+    if (b.spawnT <= 0 && segs.length < 70) {
+      b.spawnT = b.phase === 1 ? 9 : 6;
+      const c0 = clamp(Math.round((b.x - CELL / 2) / CELL), 2, COLS - 3), row = clamp(Math.round((b.y + 30 - TOP - CELL / 2) / CELL), 2, 9);
+      const before = segs.length; spawnChain(pick(['hornet', 'wraith', 'raider']), 5, c0, 0, waveDef(G.wave).sp, row);
+      for (let i = before; i < segs.length; i++) segs[i].y = b.y + 20 - (i - before) * 6;
+    }
+    if (b.phase >= 2 && b.missileT <= 0 && missiles.length < 2) {
+      b.missileT = enraged ? 7 : 10;
+      missiles.push({ phase: 'glide', t: 0, side: 1, x: b.x, y: b.y + 20, vx: 0, vy: 0, hp: 4, base: b.x, target: null, ang: 0 });
+      text(b.x, b.y + 40, 'MISSILE AWAY', '255,90,106', 12, 1); SFX.boost();
+    }
+  }
+  // A projectile at (x, y) against the boss: pods first, then the core (only once the shield is down).
+  function hitBoss(x, y, dmg) {
+    const b = boss; if (!b || b.dying > 0) return false;
+    for (const p of b.pods) {
+      if (!p.alive || (x - b.x - p.dx) ** 2 + (y - b.y - p.dy) ** 2 > 13 * 13) continue;
+      p.hp -= dmg; b.hitT = 0.06; burst(x, y, 3, ['#ffe7a0', '#ffffff'], 80, 1, 1.3);
+      if (p.hp <= 0) { p.alive = false; explode(b.x + p.dx, b.y + p.dy, true); addScore(1000, b.x + p.dx, b.y + p.dy - 14, '255,160,90'); text(b.x + p.dx, b.y + p.dy + 18, 'POD DOWN', '255,160,90', 12, 1); shake(4); SFX.podDown(); }
+      return true;
+    }
+    if (Math.abs(x - b.x) < 46 && Math.abs(y - b.y) < 26) {
+      if (b.phase === 1) { burst(x, y, 3, ['#7fe3ff', '#ffffff'], 70, 1, 1.2); if (Math.random() < 0.06) text(b.x, b.y + 34, 'SHIELDED', '127,227,255', 10, 0.6); return true; }
+      b.core -= dmg; b.hitT = 0.06; burst(x, y, 3, ['#ffe7a0', '#ff6a3a'], 90, 1, 1.4);
+      if (b.core <= 0) { b.dying = 2.6; addScore(20000, b.x, b.y - 40, '255,207,90'); text(b.x, b.y - 60, 'PRIME DESTROYED!', '255,207,90', 20, 2); G.banners.push({ text: 'PRIME DESTROYED', sub: '+20,000', t: 0, life: 2.4, color: '255,207,90' }); SFX.boom(); }
+      return true;
+    }
+    return false;
+  }
+  function stepBombs(dt) {
+    for (const k of bombs) {
+      k.vy = Math.min(210, k.vy + 160 * dt); k.y += k.vy * dt; k.x += clamp(k.target.x - k.x, -1, 1) * 22 * dt;
+      if (k.y >= k.target.y - 6) { k.dead = true; hitAsset(k.target, 2, k.x, k.y); }
+    }
+    bombs = bombs.filter((k) => !k.dead);
+  }
+
+  // ─────────────────────────────── scouts ───────────────────────────────
+  function stepScouts(dt) {
+    for (const s of scouts) {
+      s.t += dt; s.x += s.vx * dt; s.y += s.vy * dt;
+      if (s.y < ZONE_TOP - 20 || s.y > DECK_Y - 12) s.vy = -s.vy;
+      if (Math.random() < dt * 1.5) s.vy = rand(-90, 90);
+      if (s.x < -30 || s.x > W + 30) s.dead = true;
+    }
+    scouts = scouts.filter((s) => !s.dead);
+  }
+
+  // ─────────────────────────────── the parked vehicles' miniguns ───────────────────────────
+  function mgTargets(v) {
+    const R = 230, out = [];
+    const near = (x, y) => (x - v.x) ** 2 + (y - v.y) ** 2 < R * R;
+    for (const d of divers) if (near(d.x, d.y)) out.push({ x: d.x, y: d.y, vx: d.vx, vy: d.vy, pri: 0 });
+    for (const m of missiles) if (m.phase === 'terminal' && near(m.x, m.y)) out.push({ x: m.x, y: m.y, vx: 0, vy: 0, pri: -1 });
+    for (const k of bombs) if (near(k.x, k.y)) out.push({ x: k.x, y: k.y, vx: 0, vy: k.vy, pri: -1 });
+    for (const s of scouts) if (near(s.x, s.y)) out.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy, pri: 1 });
+    for (const s of segs) if (!s.entering && s.y > DECK_Y - 230 && near(s.x, s.y)) out.push({ x: s.x, y: s.y, vx: s.dir * s.sp, vy: 0, pri: 2 });
+    out.sort((a, b) => a.pri - b.pri || ((a.x - v.x) ** 2 + (a.y - v.y) ** 2) - ((b.x - v.x) ** 2 + (b.y - v.y) ** 2));
+    return out[0];
+  }
+  function stepVehicles(dt) {
+    for (const v of vehicles) {
+      if (!v.alive) continue;
+      v.heat = Math.max(0, v.heat - dt * 0.35); if (v.hot && v.heat < 0.35) v.hot = false;
+      v.cd -= dt;
+      const tg = mgTargets(v);
+      const want = tg ? Math.atan2(tg.y + tg.vy * 0.12 - (v.y - 12), tg.x + tg.vx * 0.12 - v.x) : -Math.PI / 2;
+      let da = want - v.ang; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
+      v.ang += clamp(da, -dt * 7, dt * 7);
+      if (tg && !v.hot && v.cd <= 0 && Math.abs(da) < 0.2) {
+        v.cd = 0.075; v.heat += 0.045; if (v.heat >= 1) { v.hot = true; text(v.x, v.y - 26, 'COOLING', '255,160,90', 10, 0.8); }
+        const a = v.ang + rand(-0.05, 0.05), t = slot(TRACERS);
+        t.on = true; t.x = v.x + Math.cos(a) * 14; t.y = v.y - 12 + Math.sin(a) * 14; t.vx = Math.cos(a) * 720; t.vy = Math.sin(a) * 720; t.life = 0.32;
+        SFX.minigun();
+      }
+    }
+  }
+  function stepTracers(dt) {
+    for (const t of TRACERS) {
+      if (!t.on) continue;
+      t.life -= dt; t.x += t.vx * dt; t.y += t.vy * dt;
+      if (t.life <= 0 || t.y < -10 || t.x < -10 || t.x > W + 10) { t.on = false; continue; }
+      if (hitAt(t.x, t.y, 0.5, true)) t.on = false;
+    }
+  }
+  // One projectile at (x, y): the first thing it touches takes `dmg`. Returns true when it hit something.
+  function hitAt(x, y, dmg, byMg) {
+    for (const m of missiles) if (m.phase !== 'warn' && Math.abs(m.x - x) < 9 && Math.abs(m.y - y) < 16) { hurtMissile(m, dmg, byMg); return true; }
+    for (const k of bombs) if (Math.abs(k.x - x) < 6 && Math.abs(k.y - y) < 9) { k.dead = true; addScore(150, k.x, k.y - 8); explode(k.x, k.y, false); SFX.pop(2); return true; }
+    for (const b of motherships) if (b.dying <= 0 && Math.abs(b.x - x) < 30 && Math.abs(b.y - y) < 18) { hurtMothership(b, dmg); return true; }
+    if (boss && hitBoss(x, y, dmg)) return true;
+    for (const d of divers) if (Math.abs(d.x - x) < 9 && Math.abs(d.y - y) < 9) { d.hp = (d.hp || 1) - dmg; if (d.hp <= 0) { d.dead = true; S.downed++; if (byMg) S.mgKills++; addScore(60, d.x, d.y - 8); explode(d.x, d.y, false); SFX.pop(1); charge(0.03); } return true; }
+    for (const s of scouts) if (Math.abs(s.x - x) < 10 && Math.abs(s.y - y) < 9) { s.hp = (s.hp || 1) - dmg; if (s.hp <= 0) { s.dead = true; S.downed++; if (byMg) S.mgKills++; addScore(300, s.x, s.y - 8, '127,227,255'); explode(s.x, s.y, false); SFX.pop(3); } return true; }
+    for (const s of segs) if (!s.entering && Math.abs(s.x - x) < 9 && Math.abs(s.y - y) < 9) {
+      s.hp -= dmg;
+      if (s.hp <= 0) killSeg(s, byMg); else { burst(s.x, s.y - 4, 5, ['#bfe8ff', '#ffffff'], 90, 1, 1.4); s.pop = 0.5; if (s.hp <= 1) text(s.x, s.y - 14, 'SHIELD DOWN', '127,227,255', 10, 0.8); }
+      return true;
+    }
+    const c = Math.round((x - CELL / 2) / CELL), r = Math.round((y - TOP - CELL / 2) / CELL), w = wrecks.get(wkey(c, r));
+    if (w && Math.abs(colX(c) - x) < 8 && Math.abs(rowY(r) - y) < 8) {
+      w.hp -= byMg ? 0.5 : 1; burst(x, y, 3, ['#9aa0a8', '#ffb04a'], 60, 1, 1.2);
+      if (w.hp <= 0) { wrecks.delete(wkey(c, r)); S.wrecksCleared++; addScore(5); }
+      return true;
+    }
+    return false;
+  }
+
+  // ─────────────────────────────── the player's interceptor + Aegis ───────────────────────────
+  function stepJet(dt) {
+    if (!J.alive) { J.respawnT -= dt; if (J.respawnT <= 0 && (S.lives > 0 || !live())) { J.alive = true; J.inv = 2; J.x = W / 2; J.y = DECK_Y - 30; J.tx = J.x; J.ty = J.y; } return; }
+    if (J.inv > 0) J.inv -= dt;
+    if (G.auto) autopilot();
+    if (keys.left) J.tx -= 260 * dt; if (keys.right) J.tx += 260 * dt; if (keys.up) J.ty -= 220 * dt; if (keys.down) J.ty += 220 * dt;
+    J.tx = clamp(J.tx, 12, W - 12); J.ty = clamp(J.ty, ZONE_TOP, DECK_Y - 22);
+    const ox = J.x; J.x = lerp(J.x, J.tx, Math.min(1, dt * 16)); J.y = lerp(J.y, J.ty, Math.min(1, dt * 16));
+    J.bank = lerp(J.bank, clamp((J.x - ox) / Math.max(dt, 1e-4) / 400, -0.5, 0.5), Math.min(1, dt * 8));
+    J.cd -= dt;
+    if (J.cd <= 0) {
+      J.cd = 0.13;
+      const twin = S.twinT > 0, xs = twin ? [J.x - 7, J.x + 7] : [J.x];
+      for (const x of xs) { const s = slot(SHOTS); s.on = true; s.x = x; s.y = J.y - 14; }
+      SFX.shot();
+    }
+    for (const s of SHOTS) {
+      if (!s.on) continue;
+      s.y -= 640 * dt;
+      if (s.y < -10) { s.on = false; continue; }
+      if (hitAt(s.x, s.y, 1, false)) s.on = false;
+    }
+    // collisions: anything that touches the interceptor destroys it (unless it just respawned)
+    if (J.inv <= 0 && live() && !G.godTest) {
+      const hit = (x, y, r) => (x - J.x) ** 2 + (y - J.y) ** 2 < r * r;
+      if (segs.some((s) => hit(s.x, s.y, 13)) || divers.some((d) => hit(d.x, d.y, 12)) || scouts.some((s) => hit(s.x, s.y, 13)) || missiles.some((m) => m.phase !== 'warn' && hit(m.x, m.y, 14))) loseJet();
+    }
+  }
+  function loseJet() {
+    J.alive = false; J.respawnT = 1.4; S.lives--; S.combo = 0;
+    explode(J.x, J.y, true); shake(8); flash(0.35, '255,80,90'); SFX.hurt(); bumpChip('livesV');
+    text(W / 2, H * 0.5, S.lives > 0 ? 'INTERCEPTOR DOWN' : 'NO INTERCEPTORS LEFT', '255,110,120', 18, 1.3);
+    if (S.lives <= 0) { G.mode = 'dying'; G.overT = 1.4; }
+  }
+  function fireAegis() {
+    if (S.aegis < 1 || !(live() || G.mode === 'title')) return;
+    S.aegis = 0; S.aegisUsed++; SFX.aegis(); flash(0.2, '127,227,255');
+    const ox = ISL_X - 14, oy = DECK_Y + 32;
+    ring(ISL_X, DECK_Y + 10, 420, '127,227,255', 1.1, 4);
+    const targets = missiles.filter((m) => m.phase !== 'warn').map((m) => ({ m }))
+      .concat(boss ? [0, 1, 2].map(() => ({ boss: true })) : [], motherships.map((b) => ({ b })), segs.filter((s) => s.head && !s.entering).map((s) => ({ s })), divers.map((d) => ({ d })), segs.filter((s) => !s.head && !s.entering).slice(0, 8).map((s) => ({ s })));
+    for (let i = 0; i < 8; i++) interceptors.push({ x: ox + (i % 3) * 7, y: oy, vx: rand(-40, 40), vy: -260, t: 0, tg: targets[i] || null });
+    G.banners.push({ text: 'AEGIS NET', sub: 'INTERCEPTORS AWAY', t: 0, life: 1.4, color: '127,227,255' });
+  }
+  function stepInterceptors(dt) {
+    for (const k of interceptors) {
+      k.t += dt;
+      if (k.tg && k.tg.boss) {
+        if (!boss || boss.dying > 0) k.tg = null;
+        else { const p = boss.pods.find((q) => q.alive) || null; const tx = p ? boss.x + p.dx : boss.x, ty = p ? boss.y + p.dy : boss.y;
+          if (k.t > 0.25) { const dx = tx - k.x, dy = ty - k.y, dist = Math.hypot(dx, dy) || 1, sp = 420 + k.t * 120; k.vx = lerp(k.vx, dx / dist * sp, Math.min(1, dt * 6)); k.vy = lerp(k.vy, dy / dist * sp, Math.min(1, dt * 6));
+            if (dist < 14) { k.dead = true; explode(k.x, k.y, false); ring(k.x, k.y, 30, '127,227,255', 0.4, 3); if (p) { p.hp -= 7; if (p.hp <= 0) hitBoss(tx, ty, 0.01); } else if (boss.phase > 1) hitBoss(tx, ty, 7); } }
+          k.x += k.vx * dt; k.y += k.vy * dt; part(k.x, k.y, rand(-10, 10), rand(10, 40), 0.35, 2, 'rgba(210,230,255,.7)', 2); if (k.t > 4) k.dead = true; continue; }
+      }
+      let tg = k.tg && (k.tg.b && !k.tg.b.dead && k.tg.b.dying <= 0 ? k.tg.b : k.tg.m && !k.tg.m.dead ? k.tg.m : k.tg.s && segs.includes(k.tg.s) ? k.tg.s : k.tg.d && !k.tg.d.dead ? k.tg.d : null);
+      if (!tg) { const any = missiles.find((m) => m.phase !== 'warn') || segs.find((q) => !q.entering) || divers[0]; if (any) { tg = any; k.tg = any.phase ? { m: any } : divers.includes(any) ? { d: any } : { s: any }; } }
+      if (tg && k.t > 0.25) {
+        const dx = tg.x - k.x, dy = tg.y - k.y, dist = Math.hypot(dx, dy) || 1, sp = 420 + k.t * 120;
+        k.vx = lerp(k.vx, dx / dist * sp, Math.min(1, dt * 6)); k.vy = lerp(k.vy, dy / dist * sp, Math.min(1, dt * 6));
+        if (dist < 12) {
+          k.dead = true; explode(k.x, k.y, false); ring(k.x, k.y, 30, '127,227,255', 0.4, 3);
+          if (k.tg.m) hurtMissile(k.tg.m, 99, 'aegis');
+          if (k.tg.b) hurtMothership(k.tg.b, 7);
+          for (const s of segs.slice()) if ((s.x - k.x) ** 2 + (s.y - k.y) ** 2 < 28 * 28) killSeg(s, false);
+          for (const d of divers) if ((d.x - k.x) ** 2 + (d.y - k.y) ** 2 < 28 * 28) { d.dead = true; S.downed++; addScore(60, d.x, d.y); }
+        }
+      }
+      k.x += k.vx * dt; k.y += k.vy * dt;
+      part(k.x, k.y, rand(-10, 10), rand(10, 40), 0.35, 2, 'rgba(210,230,255,.7)', 2);
+      if (k.t > 4 || k.y < -40) k.dead = true;
+    }
+    interceptors = interceptors.filter((k) => !k.dead);
+  }
+  function autopilot() {
+    // the attract demo and the playtest handle: shadow the lowest threat, stay clear of anything close
+    const lowest = segs.reduce((a, s) => (s.entering ? a : !a || s.y > a.y ? s : a), null);
+    const mis = missiles.find((m) => m.phase === 'glide' || m.phase === 'terminal');
+    const yaga = motherships.find((b) => b.dying <= 0);
+    const pod = boss && boss.dying <= 0 ? boss.pods.find((p) => p.alive) : null;
+    const bossAim = boss && boss.dying <= 0 ? { x: pod ? boss.x + pod.dx : boss.x, dir: 0 } : null;
+    const aim = mis || (lowest && lowest.y > DECK_Y - 200 ? lowest : bossAim || yaga || lowest);
+    if (aim) J.tx = aim.x + (mis ? 0 : aim.dir * 10);
+    const danger = segs.concat(divers, scouts).find((s) => Math.abs(s.x - J.x) < 26 && s.y > J.y - 60);
+    J.ty = danger ? DECK_Y - 18 : ZONE_TOP + 30;
+    if (danger && Math.abs(danger.x - J.x) < 18) J.tx = J.x + (danger.x < J.x ? 40 : -40);
+    if (S.aegis >= 1 && (missiles.some((m) => m.phase === 'terminal') || segs.some((s) => s.row >= DIVE_ROW - 3))) fireAegis();
+  }
+
+  // ─────────────────────────────── the frame ───────────────────────────────
+  function waveCleared() {
+    S.waves++; if (S.waveHullHit === 0) S.cleanWaves++; G.cheerT = 2.2;
+    addScore(1000 * G.wave, W / 2, H * 0.4, '127,227,255');
+    G.banners.push({ text: 'WAVE CLEARED', sub: S.waveHullHit === 0 ? 'NO HULL DAMAGE' : `+${fmt(1000 * G.wave)}`, t: 0, life: 1.8, color: '143,224,122' });
+    for (const m of missiles) { m.dead = true; explode(m.x, m.y, false); }
+    missiles = []; scouts = []; bombs = []; flash(0.2, '200,255,220'); SFX.mission();
+    G.pendingWave = true; G.waveT = 2.2;
+    checkMissions();
+  }
+  function update(dt) {
+    T += dt;
+    for (const l of STARS) for (const s of l) { s.x += dt * 0.002 * s.s; if (s.x > 1) s.x -= 1; }
+    for (const c of CLOUDS) { c.x += c.sp * dt; if (c.x > 1.3) c.x = -0.5; }
+    if (!S || G.mode === 'over' || G.mode === 'won' || G.mode === 'paused') { if (S && G.mode !== 'paused') stepFx(dt); return; }
+    if (G.mode === 'dying') { G.overT -= dt; stepFx(dt); if (G.overT <= 0) gameOver(); return; }
+    if (S.twinT > 0) S.twinT -= dt;
+    if (S.comboT > 0) S.comboT -= dt;
+    stepJet(dt);
+    if (G.waveT > 0) {
+      G.waveT -= dt; stepInterceptors(dt); stepTracers(dt); stepFx(dt);
+      if (G.waveT <= 0 && G.pendingWave) { G.pendingWave = false; G.wave++; loadWave(G.wave); }
+      return;
+    }
+    const d = waveDef(G.wave);
+    if (d.missileEvery) { G.missileT -= dt; if (G.missileT <= 0) { G.missileT = d.missileEvery * rand(0.8, 1.2); if (missiles.length < 2) launchMissile(); } }
+    if (d.scoutEvery) { G.scoutT -= dt; if (G.scoutT <= 0) { G.scoutT = d.scoutEvery * rand(0.8, 1.2); const l = Math.random() < 0.5; scouts.push({ x: l ? -20 : W + 20, y: rand(ZONE_TOP, DECK_Y - 30), vx: (l ? 1 : -1) * rand(70, 110), vy: rand(-80, 80), t: 0, hp: 1 }); } }
+    stepMotherships(dt); stepBombs(dt); stepCrew(dt); if (boss) stepBoss(dt);
+    stepSwarm(dt); stepDivers(dt); stepMissiles(dt); stepScouts(dt); stepVehicles(dt); stepTracers(dt); stepInterceptors(dt);
+    stepFx(dt);
+    if (G.mode === 'title') { S.hull = 10; S.lives = 3; }
+    if ((G.mode === 'play' || G.mode === 'title') && !G.pendingWave && !segs.length && !divers.length && !motherships.length && !G.mothershipsLeft && !boss) {
+      if (bossWave(G.wave) && !G.bossSpawned) { G.bossSpawned = true; spawnBoss(); } else waveCleared();
+    }
+    checkMissions();
+  }
+  function stepFx(dt) {
+    for (const p of PARTS) if (p.on) {
+      p.life -= dt; if (p.life <= 0) { p.on = false; continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.kind === 0) p.vy += 300 * dt; else if (p.kind === 2) { p.vx *= 1 - dt * 2; p.vy *= 1 - dt * 2; }
+    }
+    for (const r of RINGS) if (r.on) { r.life -= dt; if (r.life <= 0) r.on = false; }
+    for (const t of TEXTS) if (t.on) { t.life -= dt; t.y -= 30 * dt; if (t.life <= 0) t.on = false; }
+    for (const b of G.banners) b.t += dt;
+    G.banners = G.banners.filter((b) => b.t < b.life);
+    G.shake *= Math.exp(-dt * 9); G.flash *= Math.exp(-dt * 6);
+    if (S) { G.shownScore += (S.score - G.shownScore) * Math.min(1, dt * 9); if (Math.abs(S.score - G.shownScore) < 1) G.shownScore = S.score; }
+  }
+  // ─────────────────────────────── render ───────────────────────────────
+  function drawBackground() {
+    const g = ctx.createLinearGradient(0, 0, 0, vh);
+    g.addColorStop(0, '#02050c'); g.addColorStop(0.5, '#08152b'); g.addColorStop(0.78, '#0c2440'); g.addColorStop(1, '#061424');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, vw, vh);
+    for (let l = 0; l < 3; l++) for (const s of STARS[l]) {
+      const a = 0.3 + 0.45 * Math.sin(T * s.sp + s.ph);
+      ctx.fillStyle = `rgba(210,225,255,${Math.max(0, a).toFixed(3)})`; ctx.fillRect(s.x * vw, s.y * vh, s.s, s.s);
+    }
+    for (const c of CLOUDS) ctx.drawImage(c.img, c.x * vw - 130 * c.sc, c.y * vh - 55 * c.sc, 260 * c.sc, 110 * c.sc);
+  }
+  function drawSea() {
+    // a moving sea surface behind the play field, lit by the moon
+    const top = H * 0.62;
+    const g = ctx.createLinearGradient(0, top, 0, DECK_Y); g.addColorStop(0, 'rgba(20,60,100,0)'); g.addColorStop(1, 'rgba(20,70,120,.45)');
+    ctx.fillStyle = g; ctx.fillRect(0, top, W, DECK_Y - top);
+    ctx.strokeStyle = 'rgba(127,190,255,.12)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 7; i++) {
+      const y = top + 12 + i * ((DECK_Y - top) / 7);
+      ctx.beginPath();
+      for (let x = 0; x <= W; x += 12) ctx.lineTo(x, y + Math.sin(x * 0.05 + T * 1.4 + i) * 1.8);
+      ctx.stroke();
+    }
+  }
+  function drawWrecks() {
+    for (const w of wrecks.values()) ctx.drawImage(WRECK[clamp(3 - Math.ceil(w.hp), 0, 2)], colX(w.c) - 9, rowY(w.r) - 9, 18, 18);
+  }
+  function drawSwarm() {
+    // idx: position in its chain (0 = leader), used for the slither wave and the chase lights
+    const idx = new Map(); let prev = null, n = 0;
+    for (const s of segs) { n = prev && prev.chain === s.chain ? n + 1 : 0; idx.set(s, n); prev = s; }
+    const off = (s) => Math.sin(T * 5 - idx.get(s) * 0.8) * 1.8;
+    ctx.lineWidth = 1.2;
+    for (let i = 1; i < segs.length; i++) {
+      const a = segs[i - 1], b = segs[i];
+      if (a.chain !== b.chain || a.entering || b.entering || Math.abs(a.x - b.x) + Math.abs(a.y - b.y) > CELL * 2.2) continue;
+      ctx.strokeStyle = `rgba(${LIVERY[b.kind].glow},.25)`; ctx.beginPath(); ctx.moveTo(a.x, a.y + off(a)); ctx.lineTo(b.x, b.y + off(b)); ctx.stroke();
+    }
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const s of segs) {
+      if (s.entering && s.y < 0) continue;
+      const info = chains.get(s.chain), rage = info && info.enraged, L = LIVERY[s.kind], y = s.y + off(s);
+      // leaders sweep a searchlight down the field
+      if (s.head && !s.entering) {
+        const a = Math.PI / 2 + Math.sin(T * 1.6 + s.chain) * 0.55, len = 120;
+        const g = ctx.createLinearGradient(s.x, y, s.x + Math.cos(a) * len, y + Math.sin(a) * len);
+        g.addColorStop(0, `rgba(${rage ? '255,80,70' : L.glow},.18)`); g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(s.x, y + 4);
+        ctx.lineTo(s.x + Math.cos(a - 0.2) * len, y + Math.sin(a - 0.2) * len); ctx.lineTo(s.x + Math.cos(a + 0.2) * len, y + Math.sin(a + 0.2) * len); ctx.closePath(); ctx.fill();
+      }
+      const r = s.head ? 16 : 11, pulse = rage ? 0.35 + 0.25 * Math.sin(T * 12) : 0;
+      const g = ctx.createRadialGradient(s.x, y, 1, s.x, y, r);
+      g.addColorStop(0, `rgba(${rage ? '255,70,60' : L.glow},${(s.head ? 0.42 : 0.2) + pulse})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(s.x, y, r, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+    for (const s of segs) {
+      if (s.y < -12) continue;
+      const i = idx.get(s), y = s.y + off(s), pop = 1 + s.pop * 0.5;
+      const bank = s.y < s.ty && !s.entering ? s.dir * 0.9 : -s.dir * 0.28; // leans into each turn
+      ctx.save(); ctx.translate(s.x, y); ctx.rotate(bank); ctx.scale(pop, pop);
+      if (s.kind === 'wraith') ctx.globalAlpha = 0.45 + 0.55 * Math.abs(Math.sin(T * 3 + i)); // flickers in and out
+      if (s.entering) ctx.globalAlpha *= 0.55;
+      ctx.drawImage(SWARM_SPR[s.kind][s.head ? 'head' : 'body'][Math.floor(s.anim) % 2], -10, -10, 20, 20);
+      ctx.restore();
+      // chase lights run from the leader down the chain
+      if (((T * 10 - i) % 8 + 8) % 8 < 1) { ctx.fillStyle = LIVERY[s.kind].eye; ctx.fillRect(s.x - 8, y - 4, 1.6, 1.6); ctx.fillRect(s.x + 6.4, y - 4, 1.6, 1.6); }
+      // ironclad shield bubble while it holds
+      if (s.hp > 1) {
+        ctx.save(); ctx.strokeStyle = `rgba(127,227,255,${(0.45 + 0.25 * Math.sin(T * 8)).toFixed(3)})`; ctx.lineWidth = 1.2; ctx.beginPath();
+        for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + T; ctx.lineTo(s.x + Math.cos(a) * 12, y + Math.sin(a) * 12); }
+        ctx.closePath(); ctx.stroke(); ctx.restore();
+      }
+      // a fresh leader is startled
+      if (s.alert > 0) {
+        const hop = Math.sin(s.alert / 0.9 * Math.PI) * 6;
+        ctx.fillStyle = '#ffcf5a'; ctx.beginPath(); ctx.arc(s.x + 8, y - 14 - hop, 5, 0, 7); ctx.fill();
+        ctx.fillStyle = '#1a1408'; ctx.font = '900 8px ui-sans-serif,Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('!', s.x + 8, y - 14 - hop);
+      }
+    }
+  }
+  function drawMotherships() {
+    for (const b of motherships) {
+      const bob = Math.sin(b.t * 2) * 2.5, tilt = b.dying > 0 ? 0.4 * b.dir : b.dir * 0.08, y = b.y + bob;
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createRadialGradient(b.x, y + 20, 2, b.x, y + 20, 70); g.addColorStop(0, 'rgba(160,255,150,.1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(b.x - 4, y + 6); ctx.lineTo(b.x - 40, y + 140); ctx.lineTo(b.x + 40, y + 140); ctx.lineTo(b.x + 4, y + 6); ctx.fill();
+      ctx.restore();
+      ctx.save(); ctx.translate(b.x, y); ctx.rotate(tilt);
+      if (b.hitT > 0) ctx.filter = 'brightness(1.8)';
+      ctx.drawImage(YAGA, -45, -26, 90, 56); ctx.filter = 'none';
+      // six rotors, each a spinning disc with a blade glint
+      for (const [x, yy] of YAGA_ARMS) {
+        ctx.fillStyle = 'rgba(200,210,190,.16)'; ctx.beginPath(); ctx.ellipse(x, yy - 3, 11, 3.2, 0, 0, 7); ctx.fill();
+        const a = T * 40 + x; ctx.strokeStyle = 'rgba(230,235,220,.55)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x - Math.cos(a) * 10, yy - 3 - Math.sin(a) * 2.8); ctx.lineTo(x + Math.cos(a) * 10, yy - 3 + Math.sin(a) * 2.8); ctx.stroke();
+      }
+      if (Math.sin(T * 7) > 0.3) { ctx.fillStyle = '#ff3b2e'; ctx.beginPath(); ctx.arc(-34, -6, 1.6, 0, 7); ctx.fill(); ctx.fillStyle = '#7fff7a'; ctx.beginPath(); ctx.arc(34, -6, 1.6, 0, 7); ctx.fill(); }
+      ctx.restore();
+      if (b.dying > 0) continue;
+      const w = 56, f = b.hp / b.max;
+      ctx.fillStyle = 'rgba(0,0,0,.6)'; rr(ctx, b.x - w / 2, y - 36, w, 5, 2.5); ctx.fill();
+      ctx.fillStyle = f > 0.5 ? '#8fe07a' : f > 0.25 ? '#ffcf5a' : '#ff5a6a'; rr(ctx, b.x - w / 2, y - 36, w * f, 5, 2.5); ctx.fill();
+      ctx.fillStyle = 'rgba(160,255,150,.9)'; ctx.font = '900 8px ui-sans-serif,Arial'; ctx.textAlign = 'center'; ctx.fillText('BABA YAGA', b.x, y - 40);
+    }
+    for (const k of bombs) {
+      ctx.save(); ctx.translate(k.x, k.y); ctx.rotate(Math.sin(T * 12 + k.x) * 0.15); ctx.drawImage(BOMB, -4, -8, 8, 16); ctx.restore();
+      ctx.strokeStyle = 'rgba(255,90,90,.3)'; ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(k.x, k.y + 8); ctx.lineTo(k.target.x, k.target.y); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  function drawBoss() {
+    const b = boss; if (!b) return;
+    const bob = Math.sin(b.t * 1.6) * 3, y = b.y + bob, enraged = b.phase === 3;
+    // two mechanical bird legs dangle and paddle under the belly
+    for (const side of [-1, 1]) {
+      const hx = b.x + side * 16, hy = y + 20, sw = Math.sin(b.leg * 2.4 + (side > 0 ? Math.PI : 0)) * 0.45;
+      const kx = hx + Math.sin(sw) * 16, ky = hy + Math.cos(sw) * 16, fx = kx - Math.sin(sw * 1.6) * 14, fy = ky + 14;
+      ctx.strokeStyle = '#2a2f1e'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.strokeStyle = '#7d8559'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.strokeStyle = '#2a2f1e'; ctx.lineWidth = 2; for (const t of [-0.6, 0, 0.6]) { ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx + Math.sin(t) * 8, fy + Math.cos(t) * 5); ctx.stroke(); }
+      ctx.fillStyle = '#9aa17c'; ctx.beginPath(); ctx.arc(kx, ky, 2.4, 0, 7); ctx.fill();
+    }
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(b.x, y, 10, b.x, y, 130); g.addColorStop(0, enraged ? 'rgba(255,70,50,.28)' : 'rgba(255,120,80,.12)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, y, 130, 0, 7); ctx.fill();
+    // enraged: twin searchlights sweep the deck
+    if (enraged) for (const sgn of [-1, 1]) {
+      const a = Math.PI / 2 + Math.sin(b.t * 1.3 * sgn) * 0.6, len = 360;
+      const lg = ctx.createLinearGradient(b.x, y, b.x + Math.cos(a) * len, y + Math.sin(a) * len); lg.addColorStop(0, 'rgba(255,80,60,.25)'); lg.addColorStop(1, 'rgba(255,80,60,0)');
+      ctx.fillStyle = lg; ctx.beginPath(); ctx.moveTo(b.x + sgn * 20, y + 10); ctx.lineTo(b.x + Math.cos(a - 0.08) * len, y + Math.sin(a - 0.08) * len); ctx.lineTo(b.x + Math.cos(a + 0.08) * len, y + Math.sin(a + 0.08) * len); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+    ctx.save(); ctx.translate(b.x, y); ctx.rotate(Math.sin(b.t * 0.9) * 0.05 + (6 - podsAlive()) * 0.012);
+    if (b.hitT > 0) ctx.filter = 'brightness(1.7)';
+    ctx.drawImage(PRIME, -110, -50, 220, 100); ctx.filter = 'none';
+    for (const p of b.pods) {
+      if (!p.alive) { ctx.fillStyle = '#16180f'; ctx.beginPath(); ctx.arc(p.dx, p.dy, 5, 0, 7); ctx.fill(); if (Math.random() < 0.5) part(b.x + p.dx, y + p.dy, rand(-8, 8), -25, 0.8, 4, 'rgba(60,62,66,.55)', 2); if (Math.random() < 0.4) part(b.x + p.dx, y + p.dy, rand(-5, 5), -20, 0.3, 2, pick(['#ffb04a', '#ff6a3a']), 1); continue; }
+      const m = ctx.createRadialGradient(p.dx - 2, p.dy - 2, 1, p.dx, p.dy, 9); m.addColorStop(0, '#b9c190'); m.addColorStop(1, '#1f2316');
+      ctx.fillStyle = m; ctx.beginPath(); ctx.arc(p.dx, p.dy, 8.5, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(200,210,190,.18)'; ctx.beginPath(); ctx.ellipse(p.dx, p.dy - 6, 19, 5, 0, 0, 7); ctx.fill();
+      const a = T * 38 + p.dx; ctx.strokeStyle = 'rgba(230,235,220,.6)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(p.dx - Math.cos(a) * 18, p.dy - 6 - Math.sin(a) * 4.6); ctx.lineTo(p.dx + Math.cos(a) * 18, p.dy - 6 + Math.sin(a) * 4.6); ctx.stroke();
+      const f = p.hp / p.max; ctx.fillStyle = f > 0.5 ? '#8fe07a' : f > 0.25 ? '#ffcf5a' : '#ff5a6a'; ctx.fillRect(p.dx - 7, p.dy + 10, 14 * f, 1.8);
+    }
+    if (b.phase === 1) {
+      ctx.strokeStyle = `rgba(127,227,255,${(0.35 + 0.25 * Math.sin(T * 6)).toFixed(3)})`; ctx.lineWidth = 1.6; ctx.beginPath();
+      for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + T * 0.5; ctx.lineTo(Math.cos(a) * 52, Math.sin(a) * 30); } ctx.closePath(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawBossBar() {
+    const b = boss; if (!b) return;
+    const w = W - 60, x = 30, y = 6, podF = b.pods.reduce((a, p) => a + Math.max(0, p.hp), 0) / b.pods.reduce((a, p) => a + p.max, 0);
+    const f = b.phase === 1 ? 0.5 + podF * 0.5 : Math.max(0, b.core / b.coreMax) * 0.5;
+    ctx.fillStyle = 'rgba(2,6,14,.75)'; rr(ctx, x - 2, y - 2, w + 4, 10, 5); ctx.fill();
+    const g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, '#ff5a3a'); g.addColorStop(1, b.phase === 3 ? '#ff2a2a' : '#ffcf5a');
+    ctx.fillStyle = g; rr(ctx, x, y, w * f, 6, 3); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.beginPath(); ctx.moveTo(x + w / 2, y - 1); ctx.lineTo(x + w / 2, y + 7); ctx.stroke();
+    ctx.fillStyle = '#ffd6c8'; ctx.font = '900 8px ui-sans-serif,Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(`BABA YAGA PRIME · ${b.phase === 1 ? 'SHOOT THE PODS' : b.phase === 2 ? 'HIT THE CORE' : 'ENRAGED'}`, W / 2, y + 17);
+  }
+  function drawDivers() {
+    for (const d of divers) {
+      ctx.save(); ctx.translate(d.x, d.y); ctx.rotate(Math.atan2(d.vy, d.vx) - Math.PI / 2);
+      ctx.drawImage(SWARM_SPR[d.kind || 'raider'].head[Math.floor(T * 20) % 2], -10, -10, 20, 20); ctx.restore();
+      ctx.strokeStyle = 'rgba(255,90,90,.35)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(d.x, d.y); ctx.lineTo(d.target.x, d.target.y); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  function drawMissiles() {
+    for (const m of missiles) {
+      if (m.phase === 'warn') {
+        const on = Math.sin(T * 18) > 0, x = m.side < 0 ? 12 : W - 12;
+        ctx.fillStyle = on ? '#ff5a6a' : 'rgba(255,90,106,.35)';
+        ctx.beginPath(); ctx.moveTo(x, 10); ctx.lineTo(x + (m.side < 0 ? -8 : 8), 24); ctx.lineTo(x + (m.side < 0 ? 8 : -8), 24); ctx.closePath(); ctx.fill();
+        ctx.font = '900 9px ui-sans-serif,Arial'; ctx.textAlign = m.side < 0 ? 'left' : 'right'; ctx.fillText('LAUNCH', x + (m.side < 0 ? 12 : -12), 21);
+        continue;
+      }
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createRadialGradient(m.x, m.y, 2, m.x, m.y, 30); g.addColorStop(0, 'rgba(255,190,120,.6)'); g.addColorStop(0.4, 'rgba(255,110,60,.25)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(m.x, m.y, 30, 0, 7); ctx.fill(); ctx.restore();
+      ctx.save(); ctx.translate(m.x, m.y); ctx.rotate(m.ang); ctx.drawImage(MISSILE, -5, -18, 10, 36);
+      // plasma sheath at the nose
+      ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'rgba(255,220,180,.85)'; ctx.beginPath(); ctx.ellipse(0, 18, 3.2, 5, 0, 0, 7); ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = 'rgba(255,90,106,.9)'; ctx.font = '900 8px ui-sans-serif,Arial'; ctx.textAlign = 'center';
+      ctx.fillText(m.phase === 'boost' ? 'BOOST' : m.phase === 'glide' ? 'GLIDE' : 'TERMINAL', m.x, m.y - 24);
+      if (m.phase === 'terminal') {
+        const t = m.target, r = 16 + Math.sin(T * 14) * 3;
+        ctx.strokeStyle = '#ff3b4a'; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.arc(t.x, t.y - 4, r, 0, 7); ctx.stroke();
+        for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; ctx.beginPath(); ctx.moveTo(t.x + Math.cos(a) * (r - 6), t.y - 4 + Math.sin(a) * (r - 6)); ctx.lineTo(t.x + Math.cos(a) * (r + 5), t.y - 4 + Math.sin(a) * (r + 5)); ctx.stroke(); }
+      }
+    }
+  }
+  function drawScouts() {
+    for (const s of scouts) {
+      ctx.save(); ctx.translate(s.x, s.y);
+      ctx.strokeStyle = '#8a95a6'; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(-8, -6); ctx.lineTo(8, 6); ctx.moveTo(8, -6); ctx.lineTo(-8, 6); ctx.stroke();
+      ctx.fillStyle = '#3a4250'; rr(ctx, -4, -3, 8, 6, 2); ctx.fill();
+      ctx.fillStyle = 'rgba(220,230,245,.45)';
+      for (const [x, y] of [[-8, -6], [8, -6], [-8, 6], [8, 6]]) { ctx.beginPath(); ctx.ellipse(x, y, 4.2, 1.2 + Math.abs(Math.sin(T * 50 + x)) * 1.6, 0, 0, 7); ctx.fill(); }
+      ctx.fillStyle = Math.sin(T * 10) > 0 ? '#7fe3ff' : '#ff5a6a'; ctx.beginPath(); ctx.arc(0, 0, 1.4, 0, 7); ctx.fill();
+      ctx.restore();
+    }
+  }
+  // The live half of the deck: the island tower, radar, flag, lights, helicopter, crew, tug and the armed vehicles.
+  function drawIsland() {
+    const x = ISL_X, top = DECK_Y - 16, ch = S ? S.aegis : 0;
+    const g = ctx.createLinearGradient(x - 16, 0, x + 16, 0); g.addColorStop(0, '#aab1bb'); g.addColorStop(1, '#565d67');
+    ctx.fillStyle = g; rr(ctx, x - 15, top, 30, 22, 2.5); ctx.fill();
+    ctx.fillStyle = '#10151c'; ctx.fillRect(x - 13, top + 3, 26, 3.2); // bridge windows
+    ctx.fillStyle = 'rgba(127,227,255,.5)'; for (let i = 0; i < 6; i++) ctx.fillRect(x - 12 + i * 4.3, top + 3.6, 2.8, 1.4);
+    // hexagonal phased-array faces: they glow brighter as the Aegis net charges
+    for (const sx of [-9, 9]) {
+      ctx.fillStyle = `rgba(${Math.round(60 + ch * 67)},${Math.round(110 + ch * 117)},${Math.round(170 + ch * 85)},1)`;
+      ctx.beginPath(); for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; ctx.lineTo(x + sx + Math.cos(a) * 4.2, top + 13 + Math.sin(a) * 4.2); } ctx.closePath(); ctx.fill();
+      if (ch >= 1) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = `rgba(127,227,255,${(0.3 + 0.3 * Math.sin(T * 6)).toFixed(3)})`; ctx.beginPath(); ctx.arc(x + sx, top + 13, 8, 0, 7); ctx.fill(); ctx.restore(); }
+    }
+    // mast, spinning radar, blinking light and the flag
+    ctx.fillStyle = '#7d858f'; ctx.fillRect(x - 1, top - 16, 2, 16);
+    const rw = Math.abs(Math.cos(T * 2.4)) * 9 + 1; ctx.fillStyle = '#d4dae2'; ctx.fillRect(x - rw, top - 12, rw * 2, 2);
+    if (Math.sin(T * 5) > 0.4) { ctx.fillStyle = '#ff3b3b'; ctx.beginPath(); ctx.arc(x, top - 17, 1.3, 0, 7); ctx.fill(); }
+    ctx.fillStyle = '#b8212e'; ctx.beginPath(); ctx.moveTo(x + 1, top - 15);
+    for (let i = 0; i <= 5; i++) ctx.lineTo(x + 1 + i * 2, top - 15 + Math.sin(T * 7 - i) * 0.9);
+    for (let i = 5; i >= 0; i--) ctx.lineTo(x + 1 + i * 2, top - 10 + Math.sin(T * 7 - i) * 0.9);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#1f3d8a'; ctx.fillRect(x + 1, top - 15 + Math.sin(T * 7) * 0.9, 4, 2.4);
+    // corner guns sweep
+    for (const sx of [-17, 17]) { ctx.save(); ctx.translate(x + sx, top + 20); ctx.rotate(-Math.PI / 2 + Math.sin(T * 0.8 + sx) * 0.7); ctx.fillStyle = '#e8ecf1'; ctx.beginPath(); ctx.arc(0, 0, 2.4, 0, 7); ctx.fill(); ctx.fillStyle = '#3a414b'; ctx.fillRect(0, -0.6, 5, 1.2); ctx.restore(); }
+  }
+  function drawDeckLife() {
+    // edge lights run in sequence along the deck
+    for (let i = 0; i < 24; i++) { const on = ((T * 8 - i) % 24 + 24) % 24 < 2; ctx.fillStyle = on ? '#9fd8ff' : 'rgba(80,120,160,.5)'; ctx.fillRect(4 + i * 15, DECK_Y + 1.5, 2, 1.4); }
+    // catapult steam
+    if (Math.random() < 0.08) part(rand(70, 150), DECK_Y + (Math.random() < 0.5 ? 10 : 32), rand(-8, 8), rand(-18, -6), 1.2, rand(3, 6), 'rgba(220,230,240,.22)', 2);
+    // the helicopter on its spot
+    const hx = 300, hy = DECK_Y + 22;
+    ctx.drawImage(HELO, hx - 23, hy - 10, 46, 20);
+    const bl = Math.abs(Math.sin(T * 18)) * 20 + 4; ctx.fillStyle = 'rgba(40,44,38,.8)'; ctx.fillRect(hx - bl, hy - 8.4, bl * 2, 1);
+    ctx.save(); ctx.translate(hx + 20, hy - 3); ctx.rotate(T * 25); ctx.fillStyle = 'rgba(40,44,38,.7)'; ctx.fillRect(-3.5, -0.4, 7, 0.8); ctx.restore();
+    // deck crew and the tug
+    for (const c of crew) drawCrew(c);
+    ctx.save(); ctx.translate(tug.x, DECK_Y + 43); ctx.scale(tug.dir, 1);
+    ctx.fillStyle = '#e8c21e'; rr(ctx, -8, -4, 16, 6, 1.5); ctx.fill(); ctx.fillStyle = '#2b2b2b'; ctx.fillRect(-3, -7, 5, 3.4); ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(-5, 2.5, 2, 0, 7); ctx.arc(5, 2.5, 2, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+  function drawCrew(c) {
+    const walk = c.state === 'walk' || c.state === 'run', step = walk ? Math.sin(c.t * (c.state === 'run' ? 22 : 11)) : 0, crouch = c.state === 'cover';
+    ctx.save(); ctx.translate(c.x, DECK_Y + 44 - (c.state === 'cheer' ? Math.abs(Math.sin(c.t * 9)) * 3 : 0)); ctx.scale(c.face, 1);
+    ctx.strokeStyle = '#1c2230'; ctx.lineWidth = 1.2;
+    if (!crouch) { ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(-1.6 * step, 2); ctx.moveTo(0, -2); ctx.lineTo(1.6 * step, 2); ctx.stroke(); }
+    ctx.fillStyle = c.color; rr(ctx, -1.8, crouch ? -4 : -6.5, 3.6, crouch ? 3.6 : 4.8, 1); ctx.fill();
+    // arms: swing when walking, both up to cheer, one up to wave
+    ctx.strokeStyle = c.color; ctx.beginPath();
+    if (c.state === 'cheer') { ctx.moveTo(-1.5, -5.5); ctx.lineTo(-3.4, -9.5); ctx.moveTo(1.5, -5.5); ctx.lineTo(3.4, -9.5); }
+    else if (c.state === 'wave') { ctx.moveTo(1.5, -5.5); ctx.lineTo(3 + Math.sin(c.t * 14) * 1.4, -9.5); ctx.moveTo(-1.5, -5.5); ctx.lineTo(-2, -2.5); }
+    else if (!crouch) { ctx.moveTo(-1.5, -5.5); ctx.lineTo(-2 - step, -2.5); ctx.moveTo(1.5, -5.5); ctx.lineTo(2 + step, -2.5); }
+    ctx.stroke();
+    ctx.fillStyle = '#f0c9a0'; ctx.beginPath(); ctx.arc(0, crouch ? -5.6 : -8, 1.6, 0, 7); ctx.fill();
+    ctx.fillStyle = c.color; ctx.beginPath(); ctx.arc(0, crouch ? -6 : -8.5, 1.7, Math.PI, 0); ctx.fill(); // cranial helmet
+    ctx.restore();
+  }
+  function drawVehicles() {
+    for (const v of vehicles) {
+      const img = v.alive ? VEH[v.kind] : VEH[v.kind + 'X'];
+      ctx.drawImage(img, v.x - 23, v.y - 14, 46, 28);
+      if (!v.alive) {
+        if (Math.random() < 0.35) part(v.x + rand(-10, 10), v.y - 10, rand(-6, 6), -32, 0.9, 4.5, 'rgba(70,72,78,.5)', 2);
+        if (Math.random() < 0.5) part(v.x + rand(-8, 8), v.y - 6, rand(-4, 4), -40, 0.35, 2.2, pick(['#ffb04a', '#ff6a3a']), 1);
+        continue;
+      }
+      // whip antenna sways; the remote weapon station tracks and its barrels spin while firing
+      const ax = v.x + (v.kind === 'truck' ? 17 : 14), ay = v.y - 8;
+      ctx.strokeStyle = 'rgba(30,34,24,.9)'; ctx.lineWidth = 0.7; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.quadraticCurveTo(ax + Math.sin(T * 3 + v.x) * 3, ay - 8, ax + Math.sin(T * 3 + v.x) * 5, ay - 16); ctx.stroke();
+      const mx = v.x + (v.kind === 'truck' ? -1 : 1), my = v.y - (v.kind === 'truck' ? 11 : 13);
+      ctx.fillStyle = '#2c3119'; rr(ctx, mx - 5, my - 2.5, 10, 5, 1.5); ctx.fill(); ctx.fillStyle = '#6b7445'; ctx.fillRect(mx - 4, my + 1.8, 3.2, 2.4); // ammo can
+      ctx.save(); ctx.translate(mx, my); ctx.rotate(v.ang);
+      ctx.fillStyle = '#1b2016'; ctx.fillRect(0, -2, 15, 4);
+      const spin = v.cd > 0 ? T * 60 : 0; ctx.strokeStyle = 'rgba(140,150,120,.8)'; ctx.lineWidth = 0.6; ctx.beginPath(); ctx.moveTo(4, Math.sin(spin) * 1.6); ctx.lineTo(15, Math.sin(spin) * 1.6); ctx.stroke();
+      ctx.fillStyle = '#9aa17c'; ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
+      if (v.cd > 0.03 && !v.hot) { ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'rgba(255,220,140,.95)'; ctx.beginPath(); ctx.moveTo(15, 0); ctx.lineTo(22, -2.5); ctx.lineTo(20, 0); ctx.lineTo(22, 2.5); ctx.closePath(); ctx.fill(); }
+      ctx.restore();
+      if (v.heat > 0.05) { ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(v.x - 13, v.y + 14, 26, 2.4); ctx.fillStyle = v.hot ? '#ff5a3a' : '#ffcf5a'; ctx.fillRect(v.x - 13, v.y + 14, 26 * Math.min(1, v.heat), 2.4); }
+    }
+  }
+  function drawDeck() {
+    ctx.drawImage(DECK, 0, DECK_Y, W, H - DECK_Y);
+    drawDeckLife(); drawIsland(); drawVehicles();
+  }
+  // Crew walk the lane between jobs, wave at the interceptor when it flies low overhead, run for cover from
+  // anything aimed near them, and cheer when a mothership or a wave goes down.
+  function stepCrew(dt) {
+    const threats = divers.map((d) => d.target).concat(bombs.map((b) => b.target), missiles.filter((m) => m.phase === 'terminal').map((m) => m.target));
+    for (const c of crew) {
+      c.t += dt; c.timer -= dt;
+      const danger = threats.find((tg) => tg && Math.abs(tg.x - c.x) < 55);
+      if (danger) { c.state = c.state === 'cover' ? 'cover' : 'run'; c.face = c.x < danger.x ? -1 : 1; if (c.state === 'run') { c.x += c.face * 70 * dt; if (Math.abs(danger.x - c.x) > 55 || c.x < 8 || c.x > W - 8) c.state = 'cover'; } c.x = clamp(c.x, 6, W - 6); continue; }
+      if (G.cheerT > 0) { c.state = 'cheer'; continue; }
+      if (c.state === 'cover' || c.state === 'run' || c.state === 'cheer') { c.state = 'idle'; c.timer = rand(0.3, 1); }
+      if (c.state === 'walk') {
+        const dx = c.goal - c.x; c.face = dx < 0 ? -1 : 1; c.x += Math.sign(dx) * Math.min(Math.abs(dx), 20 * dt);
+        if (Math.abs(dx) < 1) { c.state = 'idle'; c.timer = rand(1, 3); }
+      } else if (c.timer <= 0) {
+        if (J && J.alive && Math.abs(J.x - c.x) < 30 && J.y > DECK_Y - 60 && Math.random() < 0.5) { c.state = 'wave'; c.timer = 1.2; }
+        else { c.state = 'walk'; c.goal = clamp(c.x + rand(-80, 80), 8, W - 8); }
+      }
+    }
+    if (G.cheerT > 0) G.cheerT -= dt;
+    tug.x += tug.dir * 16 * dt; if (tug.x > W - 30 || tug.x < 30) tug.dir = -tug.dir;
+  }
+  function drawJet() {
+    if (!J.alive) return;
+    if (J.inv > 0 && Math.sin(T * 30) > 0) return;
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(J.x, J.y + 14, 1, J.x, J.y + 14, 12 + Math.random() * 3); g.addColorStop(0, 'rgba(127,227,255,.8)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(J.x, J.y + 14, 15, 0, 7); ctx.fill(); ctx.restore();
+    ctx.save(); ctx.translate(J.x, J.y); ctx.scale(1 - Math.abs(J.bank) * 0.35, 1); ctx.drawImage(JET, -15, -15, 30, 30); ctx.restore();
+  }
+  function drawShots() {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = '#bff0ff'; for (const s of SHOTS) if (s.on) ctx.fillRect(s.x - 1, s.y - 6, 2, 10);
+    ctx.strokeStyle = 'rgba(255,210,120,.9)'; ctx.lineWidth = 1.2;
+    for (const t of TRACERS) if (t.on) { ctx.beginPath(); ctx.moveTo(t.x, t.y); ctx.lineTo(t.x - t.vx * 0.014, t.y - t.vy * 0.014); ctx.stroke(); }
+    ctx.restore();
+    for (const k of interceptors) {
+      ctx.save(); ctx.translate(k.x, k.y); ctx.rotate(Math.atan2(k.vy, k.vx) + Math.PI / 2);
+      ctx.fillStyle = '#eef3fa'; ctx.fillRect(-1.3, -6, 2.6, 11); ctx.fillStyle = '#ff5a3a'; ctx.fillRect(-1.3, 5, 2.6, 2);
+      ctx.restore();
+    }
+  }
+  function drawFx() {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const p of PARTS) if (p.on) {
+      const a = p.life / p.max;
+      ctx.globalAlpha = Math.min(1, a * 1.4); ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (p.kind === 2 ? 1 + (1 - a) * 1.5 : a * 0.6 + 0.4), 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    for (const r of RINGS) if (r.on) {
+      const a = r.life / r.max;
+      ctx.strokeStyle = `rgba(${r.color},${(a * 0.9).toFixed(3)})`; ctx.lineWidth = r.width * a + 0.5;
+      ctx.beginPath(); ctx.arc(r.x, r.y, r.r * (1.15 - a * 0.9), 0, 7); ctx.stroke();
+    }
+    ctx.restore();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const t of TEXTS) if (t.on) {
+      const a = t.life / t.max, pop = 1 + Math.max(0, a - 0.8) * 2.5;
+      ctx.font = `900 ${Math.round(t.size * pop)}px ui-sans-serif,system-ui,"Segoe UI",Arial`;
+      ctx.lineWidth = 3; ctx.strokeStyle = `rgba(2,6,14,${(a * 0.8).toFixed(3)})`; ctx.strokeText(t.str, t.x, t.y);
+      ctx.fillStyle = `rgba(${t.color},${Math.min(1, a * 1.6).toFixed(3)})`; ctx.fillText(t.str, t.x, t.y);
+    }
+  }
+  function elastic(t) { if (t <= 0) return 0; if (t >= 1) return 1; return 1 - Math.pow(2, -9 * t) * Math.cos(t * 12); }
+  function drawBanners() {
+    let y = H * 0.36;
+    for (const b of G.banners) {
+      const t = b.t, a = Math.min(1, t * 5, (b.life - t) * 3), sc = 0.7 + 0.3 * elastic(Math.min(1, t * 2.2));
+      ctx.save(); ctx.translate(W / 2, y); ctx.scale(sc, sc); ctx.globalAlpha = Math.max(0, a);
+      ctx.fillStyle = 'rgba(2,6,14,.66)'; rr(ctx, -155, -24, 310, 50, 12); ctx.fill();
+      ctx.strokeStyle = `rgba(${b.color},.6)`; ctx.lineWidth = 1.2; ctx.stroke();
+      const g = ctx.createLinearGradient(-120, 0, 120, 0); g.addColorStop(0, '#7fe3ff'); g.addColorStop(0.5, '#eaf2ff'); g.addColorStop(1, '#ffcf5a');
+      ctx.fillStyle = g; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = '900 19px ui-sans-serif,system-ui,"Segoe UI",Arial'; ctx.fillText(b.text, 0, -6, 290);
+      ctx.fillStyle = `rgba(${b.color},1)`; ctx.font = '800 11px ui-sans-serif,system-ui,"Segoe UI",Arial'; ctx.fillText(b.sub, 0, 14, 290);
+      ctx.restore(); y += 58;
+    }
+  }
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawBackground();
+    if (S) {
+      const sh = G.shake, sx = sh > 0.2 ? rand(-sh, sh) : 0, sy = sh > 0.2 ? rand(-sh, sh) : 0;
+      ctx.setTransform(dpr * scale, 0, 0, dpr * scale, (offX + sx) * dpr, (offY + sy) * dpr);
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+      ctx.fillStyle = 'rgba(4,10,22,.35)'; ctx.fillRect(0, 0, W, H);
+      drawSea();
+      ctx.strokeStyle = 'rgba(127,227,255,.07)'; ctx.setLineDash([2, 6]); ctx.beginPath(); ctx.moveTo(0, ZONE_TOP - 16); ctx.lineTo(W, ZONE_TOP - 16); ctx.stroke(); ctx.setLineDash([]);
+      drawWrecks(); drawSwarm(); drawMotherships(); drawBoss(); drawScouts(); drawDeck(); drawDivers(); drawMissiles(); drawShots(); drawJet(); drawFx(); drawBossBar(); drawBanners();
+      ctx.restore();
+      ctx.strokeStyle = 'rgba(127,227,255,.3)'; ctx.lineWidth = 2; ctx.strokeRect(1, 1, W - 2, H - 2);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    if (VIG) ctx.drawImage(VIG, 0, 0, vw, vh);
+    if (G.flash > 0.01) { ctx.fillStyle = `rgba(${G.flashC},${(G.flash * 0.5).toFixed(3)})`; ctx.fillRect(0, 0, vw, vh); }
+  }
+
+  // ─────────────────────────────── HUD + overlays ───────────────────────────
+  const hudCache = {};
+  function setText(id, v) { if (hudCache[id] !== v) { hudCache[id] = v; $(id).textContent = v; } }
+  function bumpChip(id) { const c = $(id).parentNode; if (!c || !c.classList) return; c.classList.remove('bump'); void c.offsetWidth; c.classList.add('bump'); }
+  function updateHud(force) {
+    if (!S) return;
+    if (force) for (const k in hudCache) delete hudCache[k];
+    setText('hullV', String(S.hull)); setText('livesV', String(Math.max(0, S.lives))); setText('scoreV', fmt(G.shownScore));
+    const low = S.hull <= 3; if (hudCache.low !== low) { hudCache.low = low; $('hullChip').classList.toggle('low', low); }
+    const m = MISSIONS[S.mi];
+    if (m) {
+      const v = Math.min(m.n, Math.max(0, missionValue(m)));
+      setText('goalN', `GOAL ${S.mi + 1}/${MISSIONS.length}`); setText('goalT', m.t); setText('goalP', `${v}/${m.n}`);
+      const w = `${Math.round(v / m.n * 100)}%`; if (hudCache.fill !== w) { hudCache.fill = w; $('goalFill').style.width = w; }
+    } else { setText('goalN', 'ENDLESS'); setText('goalT', `Hold the line · wave ${G.wave}`); setText('goalP', `${S.downed} down`); }
+    const pct = Math.round(S.aegis * 100), ready = S.aegis >= 1 && G.mode === 'play';
+    setText('aegisV', ready ? 'GO' : pct + '%');
+    if (hudCache.ae !== pct) { hudCache.ae = pct; $('aegisFill').style.width = pct + '%'; }
+    if (hudCache.ready !== ready) { hudCache.ready = ready; $('aegisBtn').disabled = !ready; $('aegisBtn').classList.toggle('ready', ready); }
+  }
+  function threatsHtml() {
+    const t = [['#ff8a5a', 'DRONE SWARMS', 'Chains snake down lane by lane. Hit one and it splits; the one behind leads. Wrecks turn them.'],
+      ['#ff5a6a', 'HYPERSONIC MISSILES', 'Launch, boost, weaving glide, terminal dive with a red reticle on its target. Kill it in the glide for a bonus.'],
+      ['#8fe07a', 'DECK MINIGUNS', 'The parked trucks and tracked vehicles shoot on their own at anything near the deck. They overheat.'],
+      ['#a0ff96', 'BABA YAGA MOTHERSHIPS', 'Heavy six-rotor bombers patrol the top, drop bombs on the deck and launch Hornet swarms. Pour fire into them.'],
+      ['#7fe3ff', 'AEGIS NET', 'Kills charge it. Press E to launch radar-guided interceptors at missiles and swarm leaders.']];
+    return `<div class="threats">${t.map(([c, h, d]) => `<div class="th" style="--c:${c}"><b>${h}</b>${d}</div>`).join('')}</div>`;
+  }
+  function ladderHtml() { return `<ul class="ladder">${MISSIONS.map((m, i) => `<li class="${i < S.done ? 'ok' : ''}"><span>${i < S.done ? '&#10003;' : '&middot;'}</span>${i + 1}. ${m.t}</li>`).join('')}</ul>`; }
+  function statsHtml() {
+    return [['SCORE', fmt(S.score)], ['DOWNED', String(S.downed)], ['MISSILES', String(S.missiles)], ['MISSIONS', `${S.done}/${MISSIONS.length}`]]
+      .map(([l, v]) => `<div><span class="lbl">${l}</span><span class="val">${v}</span></div>`).join('');
+  }
+  let primaryAct = null, secondaryAct = null;
+  function showOverlay(o) {
+    $('ovTitle').textContent = o.title; $('ovTitle').className = o.bad ? 'bad' : '';
+    $('ovSub').textContent = o.sub || ''; $('ovBody').innerHTML = o.body || '';
+    $('ovStats').innerHTML = o.stats ? statsHtml() : ''; $('ovExtra').innerHTML = o.extra || '';
+    $('btnPrimary').textContent = o.primary; primaryAct = o.onPrimary;
+    const sec = $('btnSecondary'); sec.hidden = !o.secondary; sec.textContent = o.secondary || ''; secondaryAct = o.onSecondary || null;
+    $('overlay').hidden = false;
+    try { $('btnPrimary').focus(); } catch (e) { /* not focusable here */ }
+  }
+  function hideOverlay() { $('overlay').hidden = true; }
+  function titleScreen() {
+    G.mode = 'title'; G.auto = true; newRun();
+    showOverlay({ title: 'DECK GUARD', sub: 'Swarm Break',
+      body: 'Drone swarms are snaking down on your carrier and <b>hypersonic missiles</b> are inbound. Fly the interceptor, split the swarms, and let the <b>deck miniguns</b> and the <b>Aegis net</b> cover you.',
+      extra: threatsHtml(), primary: 'Scramble', onPrimary: startRun });
+  }
+  function startRun() { audioStart(); G.auto = false; G.mode = 'play'; newRun(); hideOverlay(); }
+  function pause() { if (G.mode !== 'play') return; G.mode = 'paused'; showOverlay({ title: 'PAUSED', sub: `Wave ${G.wave} · ${G.waveName}`, stats: true, extra: ladderHtml(), primary: 'Resume', onPrimary: resume, secondary: 'New run', onSecondary: startRun }); }
+  function resume() { audioStart(); G.mode = 'play'; hideOverlay(); }
+  function gameOver() {
+    G.mode = 'over'; SFX.over();
+    showOverlay({ title: S.hull <= 0 ? 'CARRIER CRIPPLED' : 'NO INTERCEPTORS', bad: true, sub: `Fell at wave ${G.wave} · ${G.waveName}`, stats: true,
+      body: S.done ? `You finished <b>${S.done} of ${MISSIONS.length}</b> missions and downed <b>${S.downed}</b> drones.` : 'Split the swarms high, before they reach the deck lanes, and save the Aegis for a terminal dive.',
+      extra: ladderHtml(), primary: 'Scramble again', onPrimary: startRun });
+  }
+  function victory() {
+    G.mode = 'won'; SFX.win(); flash(0.5, '200,240,255'); shake(6);
+    for (let i = 0; i < 80; i++) part(rand(0, W), rand(-20, 60), rand(-60, 60), rand(40, 180), rand(1.6, 3), rand(2.5, 4.5), pick(['#7fe3ff', '#ffcf5a', '#8fe07a', '#ffffff']), 0);
+    showOverlay({ title: 'LINE HELD', sub: 'Baba Yaga Prime is down', stats: true,
+      body: `All <b>${MISSIONS.length}</b> missions done. The carrier survived with <b>${S.hull}</b> hull and <b>${S.missiles}</b> hypersonic kills. Keep flying in endless waves, or start fresh.`,
+      primary: 'Keep flying', onPrimary: () => { audioStart(); G.endless = true; G.mode = 'play'; hideOverlay(); }, secondary: 'New run', onSecondary: startRun });
+  }
+
+  // ─────────────────────────────── input ───────────────────────────────
+  // The jet flies to a point just above your finger, so the finger never covers it.
+  function toField(e) { return { x: (e.clientX - offX) / scale, y: (e.clientY - offY) / scale }; }
+  let dragging = false;
+  cv.addEventListener('pointerdown', (e) => { audioStart(); if (G.mode !== 'play' || !J) return; dragging = true; const p = toField(e); J.tx = p.x; J.ty = p.y - 36; try { cv.setPointerCapture(e.pointerId); } catch (err) { /* optional */ } });
+  cv.addEventListener('pointermove', (e) => { if (G.mode !== 'play' || !J) return; if (!dragging && e.pointerType !== 'mouse') return; const p = toField(e); J.tx = p.x; J.ty = p.y - (e.pointerType === 'mouse' ? 0 : 36); });
+  cv.addEventListener('pointerup', () => { dragging = false; });
+  $('btnPrimary').addEventListener('click', () => { if (primaryAct) primaryAct(); });
+  $('btnSecondary').addEventListener('click', () => { if (secondaryAct) secondaryAct(); });
+  $('pauseBtn').addEventListener('click', () => { if (G.mode === 'play') pause(); else if (G.mode === 'paused') resume(); });
+  $('musicBtn').addEventListener('click', () => { audioStart(); setMusic(!A.musicOn); });
+  $('muteBtn').addEventListener('click', () => { audioStart(); setSound(!A.sfxOn); });
+  $('aegisBtn').addEventListener('click', () => fireAegis());
+  const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down' };
+  window.addEventListener('keydown', (e) => {
+    const c = e.code;
+    if (KEYMAP[c]) { keys[KEYMAP[c]] = true; e.preventDefault(); return; }
+    if (c === 'Space' || c === 'Enter') { if (G.mode !== 'play' && primaryAct) { e.preventDefault(); primaryAct(); } else e.preventDefault(); }
+    else if (c === 'KeyE') fireAegis();
+    else if (c === 'KeyP' || c === 'Escape') { if (G.mode === 'play') pause(); else if (G.mode === 'paused') resume(); }
+    else if (c === 'KeyM') { audioStart(); setMusic(!A.musicOn); }
+    else if (c === 'KeyN') { audioStart(); setSound(!A.sfxOn); }
+    else if (c === 'KeyR') { if (G.mode === 'paused' || G.mode === 'over' || G.mode === 'won') startRun(); }
+  });
+  window.addEventListener('keyup', (e) => { if (KEYMAP[e.code]) keys[KEYMAP[e.code]] = false; });
+  window.addEventListener('resize', resize);
+  window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; if (G.mode === 'play') pause(); });
+
+  // ─────────────────────────────── loop ───────────────────────────────
+  let last = 0;
+  function frame(ts) {
+    const dt = last ? Math.min(0.05, Math.max(0, (ts - last) / 1000)) : 1 / 60;
+    last = ts;
+    update(dt); updateHud(false); render(); audioTick(); audioLoops();
+    requestAnimationFrame(frame);
+  }
+  // A small handle for automated playtests. Nothing in the game reads it.
+  window.__deckGuard = {
+    state: () => ({ mode: G.mode, wave: G.wave, score: S && S.score, hull: S && S.hull, lives: S && S.lives, mission: S && S.mi + 1, done: S && S.done, downed: S && S.downed, missiles: S && S.missiles, segs: segs.length, divers: divers.length, inbound: missiles.length, yagas: motherships.length, bombs: bombs.length, wrecks: wrecks.size, aegis: S && S.aegis }),
+    autopilot: (on) => { G.auto = !!on; },
+    invulnerable: (on) => { G.godTest = !!on; },
+    clearWave: () => { if (boss && boss.dying <= 0) { for (const p of boss.pods) p.alive = false; boss.phase = 2; boss.core = 1; hitBoss(boss.x, boss.y, 5); } for (const s of segs.slice()) killSeg(s, false); divers = []; for (const b of motherships) hurtMothership(b, 999); G.mothershipsLeft = 0; },
+    spawnMothership: () => spawnMothership(motherships.length),
+    spawnBoss: () => { if (!boss) { G.bossSpawned = true; spawnBoss(); } },
+    boss: () => (boss ? { phase: boss.phase, pods: podsAlive(), core: boss.core, dying: boss.dying > 0 } : null),
+    launchMissile: () => launchMissile(),
+  };
+  resize();
+  titleScreen();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

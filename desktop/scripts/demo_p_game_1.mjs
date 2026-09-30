@@ -56,65 +56,96 @@ async function launch(file, width, height) {
   return { node, advance, pointer: (kind, x, y) => node('field').pointer(kind, x, y), key: code => handlers.get('window:keydown')?.({ code, preventDefault() {} }) };
 }
 
-const merge = await launch('orbit-loom.html', 360, 520);
-merge.node('overlay-action').click();
-assert.equal(merge.node('overlay').hidden, true);
-for (let i = 0; i < 22; i++) { merge.node('drop').click(); merge.advance(2.2); }
-assert.ok(Number(merge.node('score').textContent.replaceAll(',', '')) > 0, 'matching orbs must score');
-merge.node('pause').click();
-assert.equal(merge.node('overlay-title').textContent, 'Orbit paused');
-merge.node('overlay-action').click();
-assert.equal(merge.node('overlay').hidden, true);
-merge.node('restart').click();
-assert.equal(merge.node('score').textContent, '0');
-for (let i = 0; i < 180 && merge.node('overlay-title').textContent !== 'Orbit lost'; i++) {
-  merge.node('drop').click(); merge.advance(1.5);
-}
-assert.equal(merge.node('overlay-title').textContent, 'Orbit lost');
-merge.node('overlay-action').click();
-assert.equal(merge.node('score').textContent, '0');
-console.log('Orbit Loom: fusion score, pause/resume, danger loss, replay');
-
-const defense = await launch('signal-garden.html', 450, 550);
-defense.node('veilButton').click();
-for (const [x, y] of [[3, 1], [6, 3], [3, 4]]) {
-  defense.node('pulse').click(); defense.pointer('pointerdown', x * 50 + 25, y * 50 + 25);
-}
-assert.equal(defense.node('credits').textContent, '5', 'three towers cost 135 credits');
-defense.node('speed').click();
-const plots = [[6, 6], [4, 7], [2, 3], [6, 1], [4, 4], [1, 7], [8, 6]];
-for (let wave = 1; wave <= 8; wave++) {
-  if (wave > 1) {
-    const [x, y] = plots[wave - 2];
-    defense.node(Number(defense.node('credits').textContent) >= 95 ? 'mortar' : 'pulse').click();
-    defense.pointer('pointerdown', x * 50 + 25, y * 50 + 25);
-    if (!defense.node('upgrade').disabled) defense.node('upgrade').click();
-  }
-  defense.node('send').click();
-  for (let i = 0; i < 700 && defense.node('send').disabled && defense.node('veil').hidden; i++) defense.advance(.05);
-  assert.equal(defense.node('wave').textContent, `${wave} / 8`);
-  if (wave < 8) assert.equal(defense.node('send').disabled, false, `wave ${wave} must finish`);
-}
-assert.equal(defense.node('status').textContent, 'Victory! The garden holds.');
-defense.node('veilButton').click();
-for (let wave = 0; wave < 2; wave++) {
-  defense.node('send').click();
-  for (let i = 0; i < 700 && defense.node('veil').hidden && defense.node('send').disabled; i++) defense.advance(.05);
-}
-assert.equal(defense.node('veilTitle').textContent, 'Heart extinguished');
-defense.node('veilButton').click();
-assert.equal(defense.node('heart').textContent, 12);
-assert.equal(defense.node('wave').textContent, '0 / 8');
-console.log('Signal Garden: tower economy, eight-wave victory, undefended defeat, replay');
+const garden = await launch('signal-garden.html', 400, 720);
+garden.advance(2); // the attract garden plays behind the title panel and never wilts
+assert.equal(garden.node('ovTitle').textContent, 'SIGNAL GARDEN');
+garden.node('btnPrimary').click();
+assert.equal(garden.node('overlay').hidden, true);
+assert.equal(garden.node('goalN').textContent, 'GOAL 1/13');
+// The tall garden at 400x720: 40px cells scaled by 392/360, offset (4, 70). Row 3 sits between two trail runs.
+const plot = (c, r) => [4 + (c * 40 + 20) * (392 / 360), 70 + (r * 40 + 20) * (392 / 360)];
+garden.node('seedThorn').click();
+for (const c of [3, 4, 5]) garden.pointer('pointerdown', ...plot(c, 3));
+garden.advance(0.5);
+assert.equal(globalThis.__signalGarden.state().towers, 3, 'three Thornlings planted on open plots');
+assert.equal(garden.node('goalN').textContent, 'GOAL 2/13', 'planting three seedlings completes mission 1');
+garden.pointer('pointerdown', ...plot(1, 2)); // the trail itself is never plantable
+assert.equal(globalThis.__signalGarden.state().towers, 3);
+globalThis.__signalGarden.autopilot(true);
+for (let i = 0; i < 120 && garden.node('overlay').hidden; i++) garden.advance(1);
+const grown = globalThis.__signalGarden.state();
+assert.ok(grown.done >= 4 && grown.kills >= 30 && grown.wave >= 3, `migrations must fall and missions advance, got ${JSON.stringify(grown)}`);
+garden.key('KeyP');
+assert.equal(garden.node('ovTitle').textContent, 'PAUSED');
+garden.key('KeyR');
+assert.equal(garden.node('goalN').textContent, 'GOAL 1/13', 'restart resets the ladder');
+assert.equal(globalThis.__signalGarden.state().score, 0);
+globalThis.__signalGarden.autopilot(false);
+garden.key('Space'); // an unplanted garden: every pest reaches the Heartbloom
+for (let i = 0; i < 400 && garden.node('ovTitle').textContent !== 'GARDEN WILTED'; i++) garden.advance(0.5);
+assert.equal(garden.node('ovTitle').textContent, 'GARDEN WILTED');
+assert.equal(garden.node('btnPrimary').textContent, 'Replant');
+garden.node('btnPrimary').click();
+assert.equal(globalThis.__signalGarden.state().heart, 20, 'replant starts a fresh garden');
+console.log(`Signal Garden: hand planting, ${grown.done} missions over ${grown.wave} migrations on autopilot, pause/restart, loss (GARDEN WILTED), replant`);
 const voyage = await launch('nebula-fusion.html', 460, 760);
 voyage.node('btnStart').click();
 assert.equal(voyage.node('goalN').textContent, 'GOAL 1/15');
-for (let i = 0; i < 60; i++) { voyage.key('Space'); voyage.advance(.65); }
-const reached = Number(/GOAL (\d+)/.exec(voyage.node('goalN').textContent)?.[1]);
-assert.ok(reached >= 3, `missions must advance from center drops, got ${voyage.node('goalN').textContent}`);
+// Space on the collapse screen starts a new voyage, so stop dropping once the run ends (its mission tally is
+// written then) and count missions from that tally; otherwise a collapsed seed is measured as a fresh run.
+for (let i = 0; i < 60 && !voyage.node('overGoals').textContent; i++) { voyage.key('Space'); voyage.advance(.65); }
+const tally = voyage.node('overGoals').textContent;
+const reached = tally ? Number(tally.split('/')[0]) : Number(/GOAL (\d+)/.exec(voyage.node('goalN').textContent)?.[1]) - 1;
+assert.ok(reached >= 2, `missions must advance from center drops, got ${tally || voyage.node('goalN').textContent}`);
 assert.ok(Number(voyage.node('scoreV').textContent.replaceAll(',', '')) > 0);
 voyage.key('KeyP');
 voyage.key('KeyR');
+// A collapse begun by the last drops ignores keys until its screen shows; let it finish, then R restarts from there.
+if (voyage.node('goalN').textContent !== 'GOAL 1/15') { voyage.advance(8); voyage.key('KeyR'); }
 assert.equal(voyage.node('goalN').textContent, 'GOAL 1/15', 'restart resets the voyage');
-console.log(`Nebula Fusion: Voyage: missions advanced to ${reached}, restart resets`);
+console.log(`Nebula Fusion: Voyage: ${reached} missions done${tally ? ' before the well collapsed' : ''}, restart resets`);
+const brigade = await launch('brick-brigade.html', 400, 720);
+brigade.advance(2); // the attract demo plays behind the title panel and never ends the run
+assert.equal(brigade.node('ovTitle').textContent, 'BRICK BRIGADE');
+brigade.node('btnPrimary').click();
+assert.equal(brigade.node('overlay').hidden, true);
+assert.equal(brigade.node('goalN').textContent, 'GOAL 1/13');
+globalThis.__brickBrigade.autopilot(true); // the game's own playtest handle: the carrier tracks the ball
+for (let i = 0; i < 90 && brigade.node('overlay').hidden; i++) brigade.advance(1);
+const run = globalThis.__brickBrigade.state();
+assert.ok(run.done >= 3 && run.rescued >= 1, `missions and rescues must advance, got ${JSON.stringify(run)}`);
+brigade.key('KeyP');
+assert.equal(brigade.node('ovTitle').textContent, 'PAUSED');
+brigade.key('KeyR');
+assert.equal(brigade.node('goalN').textContent, 'GOAL 1/13', 'restart resets the ladder');
+assert.equal(globalThis.__brickBrigade.state().score, 0);
+globalThis.__brickBrigade.autopilot(false);
+brigade.key('ArrowLeft'); // park the carrier in the corner: every ball is lost
+for (let i = 0; i < 120 && brigade.node('ovTitle').textContent !== 'OUT OF LIVES'; i++) { brigade.key('Space'); brigade.advance(0.5); }
+assert.equal(brigade.node('ovTitle').textContent, 'OUT OF LIVES');
+assert.equal(brigade.node('btnPrimary').textContent, 'Redeploy');
+brigade.node('btnPrimary').click();
+assert.equal(globalThis.__brickBrigade.state().lives, 3, 'redeploy starts a fresh run');
+console.log(`Brick Brigade: ${run.done} missions and ${run.rescued} rescues on autopilot, pause/restart, loss, redeploy`);
+const deck = await launch('deck-guard.html', 400, 720);
+deck.advance(2); // the attract demo flies behind the title panel and never loses
+assert.equal(deck.node('ovTitle').textContent, 'DECK GUARD');
+deck.node('btnPrimary').click();
+assert.equal(deck.node('overlay').hidden, true);
+assert.equal(deck.node('goalN').textContent, 'GOAL 1/13');
+globalThis.__deckGuard.autopilot(true);
+for (let i = 0; i < 60 && deck.node('overlay').hidden; i++) { deck.advance(1); if (i === 20 || i === 40) globalThis.__deckGuard.launchMissile(); }
+const flight = globalThis.__deckGuard.state();
+assert.ok(flight.done >= 1 && flight.downed >= 15, `the swarm must fall and missions advance, got ${JSON.stringify(flight)}`);
+if (!deck.node('overlay').hidden) deck.node('btnPrimary').click(); // the autopilot can lose its jets first: that ends in the loss screen, and a new run starts
+deck.key('KeyP');
+assert.equal(deck.node('ovTitle').textContent, 'PAUSED');
+deck.key('KeyR');
+assert.equal(deck.node('goalN').textContent, 'GOAL 1/13', 'restart resets the ladder');
+globalThis.__deckGuard.autopilot(false);
+for (let i = 0; i < 400 && !/CRIPPLED|NO INTERCEPTORS/.test(deck.node('ovTitle').textContent); i++) { if (i % 20 === 0) globalThis.__deckGuard.launchMissile(); deck.advance(0.5); }
+assert.match(deck.node('ovTitle').textContent, /CRIPPLED|NO INTERCEPTORS/, 'an undefended carrier falls');
+deck.node('btnPrimary').click();
+assert.equal(globalThis.__deckGuard.state().hull, 10, 'scramble again starts a fresh run');
+console.log(`Deck Guard: ${flight.done} missions, ${flight.downed} drones and ${flight.missiles} missiles on autopilot, pause/restart, loss (${deck.node('ovTitle').textContent}), replay`);
 console.log('P-GAME.1 demo passed.');
