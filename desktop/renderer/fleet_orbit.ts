@@ -24,7 +24,7 @@ import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.t
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, otherHubs, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type HubEntry, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
-import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model
+import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 
@@ -480,7 +480,7 @@ function paintSpawnPanel(): void {
   // P-SCROLL.1 (ADR-0405): preselect the model the last spoke ran, else the master's. A default the
   // catalog does not list (not loaded yet) is still shown, so the form never silently lands on row one.
   const pick = spawnModelDefault(offered, rememberedSpokeModel(), deps.getMasterModel());
-  const models = !pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered];
+  const models = fleetModelOptions(!pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered]);
   box.innerHTML = `<div class="orbit-panel-h">${icon("plus", 14)}<b>New spoke</b><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>
     <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
       <button class="btn-mini orbit-btn" data-spawnp-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button></span></label>
@@ -503,6 +503,7 @@ function paintSpawnPanel(): void {
   // is opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the
   // panel always submitted, and Create spoke never waits on a search.
   const cwdIn = $("[data-spawnp-cwd]", box) as HTMLInputElement | null;
+  revealOrbitPathEnd(cwdIn);
   const repoIn = $("[data-spawnp-repo]", box) as HTMLInputElement | null;
   const nameIn = $("[data-spawnp-name]", box) as HTMLInputElement | null;
   const d = deps;
@@ -510,6 +511,7 @@ function paintSpawnPanel(): void {
     if (!cwdIn || !repoIn) return;
     if (pick.kind === "local") { cwdIn.value = pick.path; repoIn.value = ""; }
     else { repoIn.value = pick.cloneUrl; cwdIn.value = d.getMasterCwd(); }
+    revealOrbitPathEnd(cwdIn);
     if (nameIn) nameIn.placeholder = pick.name;
     paintOrbitRepoHint();
     const signIn = githubPickNote(pick, cwdIn.value.trim());
@@ -551,12 +553,26 @@ function paintOrbitRepoHint(): void {
   if (save) { save.disabled = !vault; if (!vault) save.checked = false; }
 }
 
+/** Same as the grid form: a long folder path must show its ending inside the panel. */
+function revealOrbitPathEnd(input: HTMLInputElement | null): void {
+  if (!input) return;
+  input.title = input.value;
+  const show = (): void => {
+    const end = input.value.length;
+    try { input.setSelectionRange(end, end); } catch { /* detached, or a type that has no selection */ }
+    input.scrollLeft = input.scrollWidth;
+  };
+  show();
+  requestAnimationFrame(show);
+}
+
 async function browseSpawnPanelFolder(): Promise<void> {
   if (!deps || !view) return;
   const picked = await deps.pickFolder({ title: "Choose or create the folder this spoke works in", confirm: "Use this folder" }).catch(() => null);
   if (!picked) return; // cancel leaves whatever is typed alone - never clear, never re-prompt
   const input = $("[data-spawnp-cwd]", view) as HTMLInputElement | null;
   if (input) input.value = picked;
+  revealOrbitPathEnd(input);
 }
 
 async function submitSpawnPanel(): Promise<void> {

@@ -23,6 +23,9 @@ import {
   shellInstallRoot,
   runtimeProbeVerdict,
   BwrapBackend,
+  bwrapExecRoot,
+  bwrapHostBinds,
+  pathCovered,
   listingExemptsMoniker,
   NoopBackend,
   resolveBackend,
@@ -368,6 +371,35 @@ test("the wrapped argv is preserved verbatim after the -- separator", () => {
   const sep = plan.args.indexOf("--");
   expect(sep).toBeGreaterThan(0);
   expect(plan.args.slice(sep + 1)).toEqual(ARGV);
+});
+
+// Mint deb, 2.3.0-beta.14: bwrap execvp of the packaged omp died with "No such file or directory".
+// The file exists on the host. The stock mount plan never binds /opt, so the sandbox cannot see it.
+const MINT_OMP = "/opt/LucidAgentIDE/resources/repo/node_modules/.bin/omp";
+const MINT_GATE = "/opt/LucidAgentIDE/resources/repo/harness/omp/security_extension.ts";
+
+test("bwrapExecRoot of a packaged path is the install prefix, not all of /opt", () => {
+  expect(bwrapExecRoot(MINT_OMP)).toBe("/opt/LucidAgentIDE");
+  expect(bwrapExecRoot("/opt/omp")).toBe("/opt");
+  expect(bwrapExecRoot("omp")).toBeNull();
+  expect(bwrapExecRoot("/")).toBeNull();
+});
+
+test("a path already under home or /usr needs no extra bind", () => {
+  expect(pathCovered("/home/u/.bun/bin/omp", ["/home/u", "/usr"])).toBe(true);
+  expect(bwrapHostBinds(["/home/u/.bun/bin/omp", "/usr/bin/bun"], ["/home/u", "/usr"])).toEqual([]);
+});
+
+test("bwrap binds the packaged install root so execvp can see omp and the bundled bun", () => {
+  const plan = new BwrapBackend(hasBwrap).wrap([MINT_OMP, "acp", "-e", MINT_GATE], caps("trusted-local"), CTX);
+  const a = plan.args.join(" ");
+  expect(a).toContain("--ro-bind-try /opt/LucidAgentIDE /opt/LucidAgentIDE");
+  expect(a).not.toContain("--ro-bind-try /opt /opt");
+  // one bind for the whole install, not one per argv path
+  expect(a.split("--ro-bind-try /opt/LucidAgentIDE /opt/LucidAgentIDE").length - 1).toBe(1);
+  // the rw workspace bind stays after the ro install bind, so a project inside the install stays writable
+  expect(a.indexOf("--ro-bind-try /opt/LucidAgentIDE")).toBeLessThan(a.indexOf("--bind /work/ws"));
+  expect(plan.args.slice(plan.args.indexOf("--") + 1)).toEqual([MINT_OMP, "acp", "-e", MINT_GATE]);
 });
 
 // ── wrapForProfile: the fail-closed decision point ────────────────────────────
