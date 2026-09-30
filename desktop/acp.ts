@@ -10,7 +10,7 @@
 // could not be exercised headlessly).
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, ftruncateSync, mkdtempSync, openSync, readSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): share the engine's hidden console
@@ -25,24 +25,36 @@ import { ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): s
 // client; resolved to the real home, a full `bun test` run filled the tail with `[fake-acp] ready` lines
 // and pushed the real omp stderr out of the report. So under `bun test` (NODE_ENV=test) it NEVER resolves
 // to the real log (the security_log.ts rule). `LUCID_ACP_LOG` gives a test a deterministic file. Resolved
-// per call, never at import: import order must not decide where a line lands.
+// per call, never at import: import order must not decide where a line lands. The test file lives in a
+// private mkdtemp directory (0700), never at a predictable name in the shared temp dir.
+let testLogDir: string | null = null;
 export function acpLogPath(): string {
   const override = process.env.LUCID_ACP_LOG?.trim();
   if (override) return override;
-  if (process.env.NODE_ENV === "test") return join(tmpdir(), `lucid-acp-test-${process.pid}.log`);
+  if (process.env.NODE_ENV === "test") return join(testLogDir ??= mkdtempSync(join(tmpdir(), "lucid-acp-test-")), "lucid-acp.log");
   return join(homedir(), ".omp", "lucid-acp.log");
 }
 const ACP_LOG_MAX = 512 * 1024;
 const ACP_LOG_KEEP = 256 * 1024;
+/** Append, and past ACP_LOG_MAX keep the newest ACP_LOG_KEEP bytes. Every step goes through ONE descriptor,
+ *  so the size checked is the size of the file rewritten (no path re-resolved between check and use). Writes
+ *  are positional rather than O_APPEND because Windows refuses to truncate a handle opened for append. */
 function acpLog(text: string): void {
+  let fd: number | null = null;
   try {
-    const file = acpLogPath();
-    appendFileSync(file, text);
-    if (statSync(file).size > ACP_LOG_MAX) {
-      const tail = readFileSync(file, "utf8").slice(-ACP_LOG_KEEP);
-      writeFileSync(file, tail);
+    fd = openSync(acpLogPath(), constants.O_RDWR | constants.O_CREAT, 0o600);
+    const line = Buffer.from(text, "utf8");
+    const at = fstatSync(fd).size;
+    writeSync(fd, line, 0, line.length, at);
+    const size = at + line.length;
+    if (size > ACP_LOG_MAX) {
+      const tail = Buffer.alloc(ACP_LOG_KEEP);
+      const n = readSync(fd, tail, 0, ACP_LOG_KEEP, size - ACP_LOG_KEEP);
+      ftruncateSync(fd, 0);
+      writeSync(fd, tail, 0, n, 0);
     }
   } catch { /* best-effort; never break the client over a log line */ }
+  finally { if (fd !== null) { try { closeSync(fd); } catch { /* already closed */ } } }
 }
 
 /** A JSON-RPC error object from the agent, as a real Error whose message says what went wrong.
