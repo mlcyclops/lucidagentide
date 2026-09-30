@@ -18,6 +18,7 @@ import { test, expect } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { cfgCompactionKeepRecentTokens, cfgCompactionMethodOrder } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { FROZEN_PREFIX } from "./assembler.ts";
 import { createEchoSession } from "../testing/echo.ts";
 
@@ -26,7 +27,7 @@ const joinBlocks = (blocks: readonly string[]): string => blocks.join("\u0000");
 
 // The omp version this regression is pinned to (R-02). A silent dependency bump trips the assertion
 // below; R-01's scheduled omp-compat CI reruns the suite against candidate versions before adopting.
-const SUPPORTED_OMP = "18.2.10";
+const SUPPORTED_OMP = "18.4.4";
 // pi-tui joined at 18.2.6: omp 18.2.5 moved the status-line context-usage helpers there, so it must
 // bump in lockstep with the other four (omp-compat.mjs enforces the same five-way agreement).
 // pi-catalog joined with R-07 (#347): harness/omp/provider_catalog.test.ts pins its provider universe.
@@ -55,8 +56,9 @@ test("R-02: auto-compaction never mutates the frozen prefix (layers 1-4)", async
 		// Shrink the keep-recent window so a small headless session is actually compactable (the
 		// default keeps the last 20k tokens, far more than echo turns produce). portable text summarization
 		// avoids snapcompact's vision-model requirement (the mock model has no image input).
-		session.settings.set("compaction.methodOrder", ["soft"]);
-		session.settings.set("compaction.keepRecentTokens", 10);
+		// omp 18.4 removed `Settings.set`; a registered setting writes through its own `override`.
+		cfgCompactionMethodOrder.override(session.settings, ["soft"]);
+		cfgCompactionKeepRecentTokens.override(session.settings, 10);
 
 		// Build conversation history so compaction has something older than the keep window to compact.
 		for (let i = 0; i < 6; i++) {

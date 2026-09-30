@@ -34,6 +34,20 @@ describe("listPrice tiers", () => {
     expect(listPrice("anthropic/claude-opus-5-5")).toEqual({ inPerM: 4, outPerM: 20 });
     expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 }); // Opus 5 unchanged
   });
+  test("Sonnet 5.5 (P-MODEL.6) carries its cataloged $2/$10 on every route spelling; other Sonnets keep $3/$15", () => {
+    for (const id of ["anthropic/claude-sonnet-5-5", "amazon-bedrock/global.anthropic.claude-sonnet-5-5",
+                      "google-vertex/claude-sonnet-5-5@default", "openrouter/anthropic/claude-sonnet-5.5",
+                      "kilo/anthropic/claude-sonnet-5.5", "vercel-ai-gateway/anthropic/claude-sonnet-5.5", "claude-sonnet-5-5"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 2, outPerM: 10 });
+    }
+    for (const id of ["anthropic/claude-sonnet-5", "anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-5-50"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 3, outPerM: 15 });
+    }
+  });
+  test("omp's on-device apple provider has no API bill, so it lists at zero, not the default", () => {
+    expect(listPrice("apple/on-device")).toEqual({ inPerM: 0, outPerM: 0 });
+    expect(listPrice("pineapple/on-device")).toEqual({ inPerM: 3, outPerM: 15 }); // anchored on the provider prefix
+  });
   test("Fable / Mythos are priced at the frontier rate, not the sonnet-ish default", () => {
     for (const m of ["anthropic/claude-fable-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1"]) {
       expect(listPrice(m)).toEqual({ inPerM: 10, outPerM: 50 });

@@ -110,7 +110,7 @@ export async function createEchoSession(opts: EchoSessionOptions = {}): Promise<
   const cwd = mkdtempSync(join(tmpdir(), "omp-echo-"));
 
   const authStorage = await AuthStorage.create(join(cwd, "auth.db"));
-  authStorage.setRuntimeApiKey(ECHO_PROVIDER, "test-key");
+  authStorage.keys.setRuntime(ECHO_PROVIDER, "test-key");
 
   const offlineFetch = (() =>
     Promise.reject(new Error("network disabled in echo session"))) as unknown as typeof fetch;

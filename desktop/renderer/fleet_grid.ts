@@ -50,6 +50,7 @@ import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile,
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
 import { fmtTokens, fmtUsd, meterBadge, newMeter, onUsage, type MeterState } from "./token_meter.ts";
 import type { ChipKind } from "./answer_chips.ts";
+import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
@@ -57,6 +58,8 @@ type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" |
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
+  /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
+  hubOpen: () => Promise<unknown>;
   /** The master agent's current model - a new lane's default until a lane model is remembered (P-SCROLL.1). */
   getMasterModel: () => string;
   /** The model catalog for the per-lane pickers. */
@@ -209,6 +212,7 @@ export function openFleetGrid(): void {
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Lanes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same lanes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
+      <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 12)} Terminal</button>
       <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local lane">${icon("plus", 12)} Lane</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (lanes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (lanes keep running)">${icon("close", 15)}</button>
@@ -1604,6 +1608,7 @@ function toggleSpawnForm(): void {
         <input class="fleet-spawn-in" data-spawn-pat type="password" autocomplete="off" spellcheck="false" aria-label="Personal access token for this repository host" placeholder="Personal access token (private repos)" />
         <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
       </div>
+      <label class="fleet-spawn-save fleet-spawn-wt" title="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the lane closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this lane gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
       <label class="fleet-spawn-lbl">Name <span class="fleet-spawn-opt">optional</span></label>
       <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="lane-${runs.size + 1}" spellcheck="false" aria-label="A name for this lane" />
       <label class="fleet-spawn-lbl">Model</label>
@@ -1689,6 +1694,7 @@ async function submitSpawn(): Promise<void> {
   const patInput = $("[data-spawn-pat]", form) as HTMLInputElement | null;
   const pat = patInput?.value ?? "";
   const remember = ($("[data-spawn-save]", form) as HTMLInputElement | null)?.checked === true;
+  const worktree = ($("[data-spawn-wt]", form) as HTMLInputElement | null)?.checked === true; // P-FLEET.WT1
   const err = $("[data-spawn-err]", form) as HTMLElement | null;
   const fail = (msg: string): void => { if (err) { err.textContent = msg; err.hidden = false; } };
   const remote = repoRaw ? parseGitRemote(repoRaw) : null;
@@ -1721,6 +1727,7 @@ async function submitSpawn(): Promise<void> {
     name: name || undefined,
     ...(remote ? { repoUrl: repoRaw } : {}),
     ...(remote && pat ? { pat } : {}),
+    ...(worktree ? { worktree: true } : {}),
   }).catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
   clearTimeout(slow);
   if (err && err.hidden === false && r?.ok) err.hidden = true; // the slow-note must not outlive a success
@@ -1776,6 +1783,9 @@ function onClick(ev: Event): void {
   if (t.closest("[data-dock-min]")) { minimize(); return; }
   // P-FLEET.L18: back to the map, and the default-view pin.
   if (t.closest("[data-fleet-orbit]")) { openFleetOrbit(); return; }
+  // P-TUI.2: the terminal hub. A refusal names why on the button's tooltip line (this module has no toasts).
+  const hubBtn = t.closest("[data-fleet-hub]") as HTMLButtonElement | null;
+  if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
   if (t.closest("[data-fleet-pin]")) { setFleetHome("grid"); paintGridPin(); return; }
   // P-FLEET.L18: group divider controls + the per-card group chip.
   const gt = t.closest("[data-grp-toggle]") as HTMLElement | null;

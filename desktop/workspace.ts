@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { load, save } from "./settings_store.ts";
 import { gitTokenEnvName, parseGitRemote } from "./git_url.ts";
+import { gitExe } from "../harness/runs/sandbox_exec.ts";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -184,7 +185,7 @@ export async function cloneRepo(url: string, tokenOverride?: string, parentDir?:
   // still resolves cached credentials, so this preserves the agent's working path while adding token auth.
   // GIT_SSH_COMMAND BatchMode=yes does the same job for an ssh remote: an encrypted key or an unknown host
   // key FAILS with a message instead of blocking forever on a passphrase prompt nobody can see.
-  const proc = Bun.spawn(["git", ...cloneArgv(url, dest, token)], {
+  const proc = Bun.spawn([gitExe(), ...cloneArgv(url, dest, token)], {
     stdout: "pipe", stderr: "pipe",
     env: {
       ...process.env,
