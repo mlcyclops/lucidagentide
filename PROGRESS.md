@@ -5329,3 +5329,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped:** root cause of supplies hovering then stranding: the pickup step ran only during the wave transition, never in normal play. Supplies no longer fall or need catching: a freed item pops out of its brick with its name and value, then flies on a curve (with a sparkle trail, spinning and shrinking) into the score chip, or the lives chip for a medkit, adds its value on arrival and the chip bumps. "Catch 8 supply drops" became "Salvage 3 medals". Wave 1 ball speed 370 -> 270 (+38 per wave, cap 520) and the carrier is 72 wide (was 64). Verified at 400px (items reach the chip, none linger, score rises on arrival); arcade test 4/4, demo steps 3/3.
 - **stubbed:** none.
 - **next:** operator playtest of the new pace.
+
+## P-GAME.4d: Brick Brigade starts slower and ramps gently
+- **shipped:** ball 230 on wave 1 (was 270), +22 per wave (was +38), cap 460; the in-wave creep is +0.7/s up to 35 over the wave speed (was +1.2/s up to 60). Carrier starts at 86 wide and narrows by 4 per wave to a floor of 70 (was a fixed 72). Arcade test 4/4, demo steps 3/3, checked at 400px.
+- **stubbed:** none.
+- **next:** operator playtest of the ramp through wave 5.

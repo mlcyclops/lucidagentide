@@ -734,13 +734,15 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
   function freshStats() { return { score: 0, lives: 3, broken: 0, rescued: 0, missed: 0, by: { army: 0, navy: 0, air: 0, marine: 0 }, supplies: 0, medals: 0, chain: 0, bestChain: 0, waves: 0, mi: 0, goalBase: 0, goalPeak: 0, done: 0, barrier: 0, breachT: 0 }; }
   function newRun() {
     S = freshStats(); G.wave = 1; G.endless = false; G.banners = []; G.shownScore = 0; G.shake = 0; G.flash = 0; G.waveT = 0; G.pendingWave = false;
-    P = { x: W / 2, tx: W / 2, w: 72, baseW: 72, h: 12, wideT: 0, squash: 0, vx: 0, lastX: W / 2, tread: 0 };
+    P = { x: W / 2, tx: W / 2, w: 86, baseW: 86, h: 12, wideT: 0, squash: 0, vx: 0, lastX: W / 2, tread: 0 };
     troops = []; jets = []; bombs = []; drones = []; balls = []; pickups = [];
     for (const pool of [PARTS, RINGS, TEXTS]) for (const p of pool) p.on = false;
     loadWave(1); resetBall(); activateMission(0);
     updateHud(true);
   }
-  function waveSpeed() { return Math.min(520, 270 + (G.wave - 1) * 38); } // wave 1 is gentle; each wave adds pace
+  // Pace ramps gently: the ball starts slow and each wave adds a little; the carrier starts wide and narrows.
+  function waveSpeed() { return Math.min(460, 230 + (G.wave - 1) * 22); }
+  function carrierWidth() { return Math.max(70, 86 - (G.wave - 1) * 4); }
   function loadWave(n) {
     const def = n <= WAVES.length ? WAVES[n - 1] : { name: pick(ENDLESS_NAMES), rows: genRows() };
     G.waveName = def.name; bricks = [];
@@ -898,7 +900,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     G.pendingWave = true; G.waveT = 1.8; balls = [];
     checkMissions();
   }
-  function nextWave() { G.pendingWave = false; G.wave++; loadWave(G.wave); resetBall(); }
+  function nextWave() { G.pendingWave = false; G.wave++; P.baseW = carrierWidth(); loadWave(G.wave); resetBall(); }
 
   function update(dt) {
     T += dt;
@@ -921,7 +923,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     const n = Math.max(1, Math.ceil(dt / (1 / 240))), h = dt / n;
     for (const b of balls) {
       if (b.stuck) { b.x = P.x; b.y = PADDLE_Y - P.h / 2 - BALL_R - 1; continue; }
-      b.sp = Math.min(waveSpeed() + 60, b.sp + dt * 1.2);
+      b.sp = Math.min(waveSpeed() + 35, b.sp + dt * 0.7); // a slow creep within the wave
       for (let i = 0; i < n && !b.dead; i++) ballStep(b, h);
       b.trail.push(b.x, b.y); if (b.trail.length > 20) b.trail.splice(0, 2);
       if (S.breachT > 0 && Math.random() < 0.7) part(b.x, b.y, rand(-20, 20), rand(-20, 20), 0.35, rand(2, 4), pick(['#ff7a3a', '#ffcf5a', '#ff4a3a']), 1);
