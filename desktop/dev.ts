@@ -1191,6 +1191,7 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/checkout/peers", "/api/checkout/gate", "/api/checkin", "/api/checkin/reply", // P-OWN.1: checkin_* tools + the commit gate
   "/api/checkout/write",     // P-WAIT.1: the checkout gate hook claims a write's file (waits only on the same file)
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
+  "/api/agent/beat",         // P-HEALTH.3: the stream_beat extension says a tool call is still being written
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
@@ -3076,6 +3077,16 @@ return Bun.serve({
           name: typeof b.name === "string" ? b.name : "",
           ...(typeof b.ok === "boolean" ? { ok: b.ok } : {}),
         });
+        return json({ ok: true, data: { noted } });
+      }
+      // P-HEALTH.3: omp's ACP mapper never forwards tool-call argument streaming, so a long write looked
+      // like a wedged session to the stall watchdog. stream_beat_extension posts { session } while it streams;
+      // the owner (master chat or the lane with that omp session id) counts it as activity. A beat for no
+      // running turn is dropped. Liveness only: it never authorizes anything.
+      if (p === "/api/agent/beat" && req.method === "POST") {
+        const b = await readBody<{ session?: unknown }>(req);
+        const session = typeof b.session === "string" ? b.session.trim() : "";
+        const noted = backend.noteStreaming(session) || fleet.noteStreaming(session);
         return json({ ok: true, data: { noted } });
       }
       // ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ──────────────────────────
@@ -5444,6 +5455,8 @@ process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta
 // P-JEV.2 (ADR-0377): the judgment extension POSTs every typed judgment (question, answers, backend,
 // latency, error) here, because omp records none of them and has no hook for them. Unset means the
 // extension self-skips and the chat draws no judgment row.
+// P-HEALTH.3: stream_beat_extension (master and lanes) POSTs { session } here while a tool call streams.
+process.env.LUCID_STREAM_BEAT_URL = `http://127.0.0.1:${server.port}/api/agent/beat?t=${AGENT_TOKEN}`;
 process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${AGENT_TOKEN}`;
 // P-KG.3: the agent's memory_recall / memory_retain tools reach the UNLOCKED personal knowledge graph
 // through these. Both fail closed when the vault is locked: recall returns no hits and retain refuses,

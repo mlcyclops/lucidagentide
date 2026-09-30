@@ -210,6 +210,12 @@ const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
 // for them: the extension wraps pi-ai's TypeSafeJudge / TextJudge in-process. Observability only, fail-soft,
 // self-skips when LUCID_JUDGMENT_URL is absent.
 const JUDGMENT_EXT = repoAsset("harness", "omp", "judgment_extension.ts");
+// P-HEALTH.3: a liveness beat while the model streams a tool call's arguments, which omp's ACP mapper never
+// forwards, so the stall watchdog stops reading a long write as a wedged session. Master AND lanes; each
+// beat names its omp session id, so the engine credits the right one. Fail-soft, self-skips when
+// LUCID_STREAM_BEAT_URL is absent.
+const STREAM_BEAT_EXT = repoAsset("harness", "omp", "stream_beat_extension.ts");
+const STREAM_BEAT_ARGS: readonly string[] = existsSync(STREAM_BEAT_EXT) ? ["-e", STREAM_BEAT_EXT] : [];
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = repoAsset("harness", "omp", "acp_config.yml");
@@ -330,7 +336,7 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
   const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -470,7 +476,7 @@ export type ChatEvent =
   // P-HEALTH.1: the harness acted on this session BY ITSELF - it probed a silent turn with the canned
   // status ask, or cancelled and resumed a wedged one in place. Kept in parity with the renderer's
   // chat_events.ts union (the two are mirrored at this one boundary, like every other variant here).
-  | { type: "health"; action: "probe" | "recover"; reason: string }
+  | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
 // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in). Preview +
@@ -730,6 +736,15 @@ class Backend {
     return true;
   }
 
+  /** P-HEALTH.3: stream_beat_extension says the model is still writing a tool call's arguments in
+   *  `sessionId`. Credited only to THIS session's running turn (a lane's beat must never hide a master
+   *  stall), through the same `arm` every ACP update uses, so the slow notice and the watchdog agree. */
+  noteStreaming(sessionId: string): boolean {
+    if (!sessionId || sessionId !== this.sessionId || !this.streamArm) return false;
+    this.streamArm();
+    return true;
+  }
+
   /** P-JEV.2 (ADR-0377): relay one traced judgment into the live chat stream. Only the MASTER child's
    *  reports belong to the chat turn this backend streams; a fleet lane's report (target = lane id) is
    *  dropped here rather than drawn under the wrong reply. Returns false when it was not delivered so the
@@ -950,7 +965,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -1787,6 +1802,7 @@ class Backend {
     };
     this.listener = sink;
     this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
+    this.streamArm = arm; // P-HEALTH.3: a tool-call streaming beat is activity, exactly like an ACP update
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
     this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.pulse.reset(); // P-LIVENESS.1: a new turn never inherits the last one's evidence
@@ -1868,7 +1884,7 @@ class Backend {
           const v = resumeVerdict({ recovered: true, sessionAlive: !!this.sessionId, resumesSoFar: resumes });
           this.turnDiag(`prompt.recovered session=${this.sessionId} resumes=${resumes} resume=${v.resume} silentMs=${rec.silentMs}`);
           // Either way the user is TOLD, through the same health channel the recovery itself reports on.
-          onEvent({ type: "health", action: "recover", reason: v.reason });
+          onEvent({ type: "health", action: "recover", reason: v.reason, needsUser: !v.resume });
           if (!v.resume) throw err;
           resumes++;
           // `restart()` nulls the listener and clears askActive. Without re-asserting both, the resumed run
@@ -1915,6 +1931,7 @@ class Backend {
       }
       if (this.listener === sink) { this.listener = null; this.turnStartedAtMs = null; }
       if (this.turnSink === sink) this.turnSink = null;
+      if (this.streamArm === arm) this.streamArm = null;
     }
     if (this.recoveryTurn !== turn) return;
     // P-NORESP.1: the turn produced NO content at all (no token/thinking/tool) — either a silent empty
@@ -2416,6 +2433,8 @@ class Backend {
   // Only a DEAD child overrides, and that is evidence rather than a guess about how long work may take.
   private healthEpisode: HealthEpisode = newEpisode(Date.now());
   private healthActivityAt = Date.now();
+  /** P-HEALTH.3: the running turn's activity clock (its `arm`), so a streaming beat can reset it. */
+  private streamArm: (() => void) | null = null;
   private healthTimer: Timer | null = null;
   private healthBusy = false;
   /** The last self-action, surfaced in status so the user can see the harness handled it. */

@@ -142,7 +142,7 @@ export type LaneEvent =
   | { type: "usage"; used: number; size: number; cost: number }
   /** P-HEALTH.1: the harness acted on this lane by itself (probe or in-place recover), so the card and
    *  the token meter can show the user that the stall was handled without an app restart. */
-  | { type: "health"; action: "probe" | "recover"; reason: string }
+  | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean }
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
   | { type: "error"; message: string };
@@ -979,6 +979,20 @@ export class FleetLaneManager {
 
   // -- P-HEALTH.1: the harness watches its own lanes ---------------------------------------------------
 
+  /** P-HEALTH.3: the lane whose omp session is `sessionId` is still streaming a tool call's arguments
+   *  (stream_beat_extension). Counts as traffic exactly like a session/update in #wire, and only for a
+   *  lane with a turn in flight, so a stray beat cannot keep an idle or stopped lane looking alive. */
+  noteStreaming(sessionId: string): boolean {
+    if (!sessionId) return false;
+    for (const lane of this.#lanes.values()) {
+      if (lane.sessionId !== sessionId || !lane.busy || lane.status === "stopped") continue;
+      lane.lastActivityAt = this.#deps.now();
+      lane.health = onActivity(lane.health, lane.lastActivityAt);
+      return true;
+    }
+    return false;
+  }
+
   /** Run the stall ladder over every lane and act. Called on the caller's cadence (dev.ts drives it from
    *  the status poll), so this method holds no timer of its own and stays testable with an injected clock.
    *
@@ -997,7 +1011,10 @@ export class FleetLaneManager {
       });
       if (v.action !== "probe" && v.action !== "recover") continue;
       lane.lastHealth = { action: v.action, reason: v.reason, at: now };
-      this.#emit(lane, { type: "health", action: v.action, reason: v.reason });
+      // P-HEALTH.3: a lane recovery cancels the run and the lane waits for Retry, so that one needs the user.
+      this.#emit(lane, v.action === "recover"
+        ? { type: "health", action: v.action, reason: `${v.reason} The run was stopped: send it again or press Retry to continue.`, needsUser: true }
+        : { type: "health", action: v.action, reason: v.reason });
       if (lane.sessionId) {
         try { this.#deps.recordLaneSession?.({ at: now, laneId: lane.id, name: lane.name, cwd: lane.cwd, sessionId: lane.sessionId, event: v.action, model: lane.model, note: v.reason }); }
         catch { /* a broken ledger never blocks recovery */ }

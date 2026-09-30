@@ -1970,12 +1970,14 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   });
 }
 
-/** P-HEALTH.1: the harness acted on this session by itself. Shown in the transcript as the same quiet
- *  .evt note chip the other system notices use, so a probe or an in-place recovery reads as visible work
- *  rather than an unexplained gap. */
-function noteHealth(action: "probe" | "recover", reason: string): void {
-  const what = action === "recover" ? "Recovered this session in place" : "Checked on this session";
-  addNoteChip(reason ? `${what}: ${reason}` : what);
+/** P-HEALTH.1/.3: the harness acted on this session by itself. The phase line shows the self-heal while it
+ *  runs; the transcript keeps a note ONLY when the run did not continue on its own (`needsUser`), because
+ *  a permanent notice about a problem that was already handled is noise the user cannot act on. Every
+ *  action is still in engine.log and, for a recovery, in the incident report. */
+function noteHealth(e: { action: "probe" | "recover"; reason: string; needsUser?: boolean }): void {
+  if (!e.needsUser) return;
+  const what = e.action === "recover" ? "The session was restarted" : "Checked on this session";
+  addNoteChip(e.reason ? `${what}: ${e.reason}` : what);
 }
 
 // P-TURN-RECOVERY-OWNER: one renderer owns the composer; leaving only detaches its local reader.
@@ -2725,8 +2727,8 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, e.pending); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
     // P-HEALTH.1: the harness noticed this session go quiet and acted on it. Same treatment as `slow` - the
-    // phase line names the wait, and the transcript gets a quiet note so the self-heal is visible work.
-    else if (e.type === "health") { setPhase(e.action === "recover" ? "Recovering the session" : "Checking on the session"); paintHud(); noteHealth(e.action, e.reason); }
+    // phase line names the wait; the transcript gets a note only when the user must act (P-HEALTH.3).
+    else if (e.type === "health") { setPhase(e.action === "recover" ? "Recovering the session" : "Checking on the session"); paintHud(); noteHealth(e); }
     // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
     // clear notice + a recommended fallback the user can switch to and retry.
     else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason, e.reason); scrollChat(); }
@@ -3293,7 +3295,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
     renderStatus(); renderMetricsRail();
     return;
   }
-  if (e.type === "health") { noteHealth(e.action, e.reason); return; }
+  if (e.type === "health") { noteHealth(e); return; }
   if (e.type === "error") {
     // The turn died, so the half-written bubble has to stop looking live.
     settleLaneWatchNode();

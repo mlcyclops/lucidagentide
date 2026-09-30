@@ -321,7 +321,7 @@ export type LaneEvent =
   /** P-FLEET.L7: this lane's OWN measured context fill, window, and cost. */
   | { type: "usage"; used: number; size: number; cost: number }
   /** P-HEALTH.1: the harness probed or recovered this lane by itself. */
-  | { type: "health"; action: "probe" | "recover"; reason: string }
+  | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean }
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
   | { type: "error"; message: string }
