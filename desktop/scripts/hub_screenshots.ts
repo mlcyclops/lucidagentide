@@ -23,7 +23,7 @@ const lanes = [
 const askLane = { id: "lane-3", name: "release-prep", model: "claude-opus-4-8", status: "needs-approval", turns: 1, pendingApproval: { summary: "$ make test && git push origin release", kind: "execute" } };
 
 const fixtures: Record<string, unknown> = {
-  "/api/build-info": { productName: "LucidAgentIDE", version: "2.3.0-beta.15", flavor: "agent", port: 5319 },
+  "/api/build-info": { productName: "LucidAgentIDE", version: "2.3.0", flavor: "agent", port: 5319 },
   "/api/security": { live: { quarantined: [
     { id: "b1", tool: "kb_pack_import", severity: "high", findings: "zero-width×2 · signature", at: "2026-09-29T14:02:11Z" },
     { id: "b2", tool: "write", severity: "high", findings: "bidi-override", at: "2026-09-29T14:05:40Z" },
@@ -142,7 +142,7 @@ function page(title: string, rows: readonly string[]): string {
 
 mkdirSync(OUT, { recursive: true });
 const ui = { requestRender() { /* frames are pulled explicitly */ }, terminal: { rows: ROWS } };
-const engine = { v: 1 as const, pid: 1, port: srv.port!, nonce: "shot-nonce", token: "shot-token", version: "2.3.0-beta.15", flavor: "agent", startedAt: new Date().toISOString() };
+const engine = { v: 1 as const, pid: 1, port: srv.port!, nonce: "shot-nonce", token: "shot-token", version: "2.3.0", flavor: "agent", startedAt: new Date().toISOString() };
 const hub = new HubComponent(ui, engine, { spawned: true });
 await hub.refresh();
 
