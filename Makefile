@@ -904,6 +904,26 @@ demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exe
 	$(BUN) test desktop/arcade_games.test.ts
 	$(BUN) run desktop/scripts/demo_p_game_1.mjs
 
+.PHONY: demo-P-GAME.7
+demo-P-GAME.7: ## P-GAME.7: Chroma Cadence joins the arcade. Proves the Preview gate, then plays whole seeded songs headless: a player 40 ms late reads as ~40 ms late, the results offer that sync, and the retry with it applied is all PERFECT; pause freezes the track, the count-in holds it, the drained meter fails the song
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.8
+demo-P-GAME.8: ## P-GAME.8: Gravity Gambit joins the arcade. Proves the Preview gate, then drives it headless: a landscape panel stays landscape, a 400x720 panel turns the course (scale 0.38 vs 0.25) and a pull-down sling on the turned screen aims at the wormhole; recall, crash, pause; then every sector is solved with the flight's own integrator and flown into the wormhole (sector 5 was unwinnable before this), debrief, replay
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.9
+demo-P-GAME.9: ## P-GAME.9: Silent Fathom joins the arcade. Proves the Preview gate, then drives it headless at 400x720: the view zooms out (0.65) so the sub sees as far as it is heard, the cave is black until a ping lights its walls, the ping cooldown holds, thrust is loud and silence settles, pause freezes the abyss; the autopilot (BFS path, hull-wide line of sight) surfaces through all 5 zones while leviathans hear it; with the hull unlocked it dies with the cause on the card; dive again restarts at zone 1
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.10
+demo-P-GAME.10: ## P-GAME.10: Skyhook joins the arcade. Proves the Preview gate, then drives it headless at 400x720: the view zooms out (0.5) so anchors in rope reach are on screen, holding Space latches and letting go flings forward into a FLOW chain, pause freezes the run, restart from pause; every anchor hangs within rope reach of its floor and a player idle on the floor can still latch (both were lost runs before the playability fix); the autopilot carries a seeded run past 2000 m; an idle player is then caught by the Cascade; the best distance carries to the menu
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
 	$(BUN) run desktop/scripts/demo_p_sysres_1.ts
