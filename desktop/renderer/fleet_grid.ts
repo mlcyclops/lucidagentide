@@ -33,7 +33,7 @@ import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, 
 import { isAutoPreviewPath } from "./preview_tabs.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with the main chat thread so the two cannot drift.
 import { LANE_JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
-import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new lanes open on the last lane's model
+import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new lanes open on the last lane's model; colliding names show the route
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
@@ -1031,13 +1031,14 @@ function paintFrame(run: LaneRun): void {
 
 function fillModelSelect(sel: HTMLSelectElement, current: string): void {
   const opts = deps?.getModelOptions() ?? [];
-  const all = opts.some((o) => o.value === current) || !current ? opts : [{ value: current, label: current }, ...opts];
-  const sig = all.map((o) => o.value).join("\n");
+  const all = fleetModelOptions(opts.some((o) => o.value === current) || !current ? opts : [{ value: current, label: current }, ...opts]);
+  const sig = all.map((o) => `${o.value}\t${o.label}`).join("\n");
   if (sel.dataset.sig !== sig) {
     sel.dataset.sig = sig;
-    sel.innerHTML = all.map((o) => `<option value="${esc(o.value)}">${esc(o.label ?? o.value)}</option>`).join("");
+    sel.innerHTML = all.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
   }
   sel.value = current || (all[0]?.value ?? "");
+  sel.title = all.find((o) => o.value === sel.value)?.label ?? current;
 }
 
 // ---------------------------------------------------------------- output stream
@@ -1583,8 +1584,8 @@ function toggleSpawnForm(): void {
   const options = deps.getModelOptions();
   // P-SCROLL.1 (ADR-0405): preselect the model the last lane ran, else the master's (the orbit form's rule).
   const pick = spawnModelDefault(options, rememberedSpokeModel(), deps.getMasterModel());
-  const all = options.some((o) => o.value === pick) || !pick ? options : [{ value: pick, label: pick }, ...options];
-  const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.label ?? o.value)}</option>`).join("");
+  const all = fleetModelOptions(options.some((o) => o.value === pick) || !pick ? options : [{ value: pick, label: pick }, ...options]);
+  const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.label)}</option>`).join("");
   const form = el(`<div class="fleet-card fleet-spawn-card">
     <div class="fleet-card-head">
       <span class="fleet-led" aria-hidden="true"></span>
@@ -1620,6 +1621,7 @@ function toggleSpawnForm(): void {
   grid.prepend(form);
   paintEmpty();
   paintRepoHint(form);
+  revealPathEnd($("[data-spawn-cwd]", form) as HTMLInputElement | null);
   // P-REPO.1 (ADR-0406): the Folder field (prefilled, with Browse) is enough to spawn; "Find repos" is
   // opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the form
   // always submitted, so the spawn path and its clone rules are unchanged, and Spawn never waits on a search.
@@ -1631,6 +1633,7 @@ function toggleSpawnForm(): void {
     if (!cwdIn || !repoIn) return;
     if (pick.kind === "local") { cwdIn.value = pick.path; repoIn.value = ""; }
     else { repoIn.value = pick.cloneUrl; cwdIn.value = d.getMasterCwd(); }
+    revealPathEnd(cwdIn);
     if (nameIn) nameIn.placeholder = pick.name;
     paintRepoHint(form);
     const signIn = githubPickNote(pick, cwdIn.value.trim());
@@ -1639,6 +1642,21 @@ function toggleSpawnForm(): void {
     if (signIn && note) { note.textContent = signIn; note.className = "fleet-spawn-note"; if (auth) auth.hidden = true; }
   });
   cwdIn?.focus();
+}
+
+/** A long folder path overflows a 360px card from the left. Scroll to the end so the folder name
+ *  stays visible, and keep the full path on the tooltip. Called after layout, because scrollWidth is
+ *  0 until the input has a width. */
+function revealPathEnd(input: HTMLInputElement | null): void {
+  if (!input) return;
+  input.title = input.value;
+  const show = (): void => {
+    const end = input.value.length;
+    try { input.setSelectionRange(end, end); } catch { /* detached, or a type that has no selection */ }
+    input.scrollLeft = input.scrollWidth;
+  };
+  show();
+  requestAnimationFrame(show);
 }
 
 /** The REAL OS dialog (Explorer / Finder / zenity), where the user can also CREATE the folder. A cancel
@@ -1650,6 +1668,7 @@ async function browseSpawnFolder(): Promise<void> {
   if (!picked) return;
   const input = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
   if (input) input.value = picked;
+  revealPathEnd(input);
   paintRepoHint(form);
 }
 
