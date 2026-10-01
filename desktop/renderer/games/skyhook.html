@@ -412,7 +412,7 @@ const AU = {
   noiseBuf:null, rumbleG:null, riserG:null, riserBP:null,
   nextStep:0, stepIdx:0, spb:60/116/4,
   padVoices:[], root:110, intensity:0.15, danger:0,
-  muted: lsGet('skyhook_mute')==='1',
+  muted: lsGet('skyhook_mute')!=='0', // sound starts OFF until the player turns it on
   duck:1
 };
 const PENT=[0,3,5,7,10];
@@ -632,7 +632,7 @@ function startGame(){
   ensureAudio(); sfxUI();
   resetRun();
   setState('play');
-  lastT = performance.now();
+  lastT = 0;
 }
 function toMenu(){
   ensureAudio();
@@ -651,7 +651,7 @@ function resumeGame(){
   if(state!=='pause') return;
   ensureAudio();
   setState('play');
-  lastT = performance.now();
+  lastT = 0;
 }
 function die(by){
   if(state!=='play') return;
@@ -1587,7 +1587,10 @@ function drawBanner(){
 /* ============================================================= main loop */
 function frame(now){
   requestAnimationFrame(frame);
-  let dtRaw=(now-lastT)/1000;
+  // lastT 0 = resync (boot, start, resume, restart): step one nominal frame. Those paths used to stamp
+  // performance.now(), a different clock from this rAF timestamp in some hosts, so the first step's
+  // length, and the whole run after it, depended on wall time.
+  let dtRaw=lastT ? (now-lastT)/1000 : 1/60;
   lastT=now;
   if(!(dtRaw>0)) dtRaw=0.001;
   if(dtRaw>0.05) dtRaw=0.05;
@@ -1642,7 +1645,7 @@ window.addEventListener('keydown', e=>{
       break;
     case 'Enter': case 'NumpadEnter':
       if(state==='menu') startGame();
-      else if(state==='dead'){ sfxUI(); resetRun(); setState('play'); lastT=performance.now(); }
+      else if(state==='dead'){ sfxUI(); resetRun(); setState('play'); lastT=0; }
       else if(state==='pause') resumeGame();
       break;
     case 'KeyW': keyIn=true; break;
@@ -1657,7 +1660,7 @@ window.addEventListener('keydown', e=>{
     case 'KeyM': setMute(!AU.muted); break;
     case 'KeyR':
       if(state==='menu'){ seed=(Math.random()*4294967296)>>>0; elSeed.textContent=seed.toString(16).toUpperCase(); resetWorld(); attractX=400; genTo(attractX+2600); clearParts(); sfxUI(); }
-      else if(state==='dead'){ resetRun(); setState('play'); lastT=performance.now(); }
+      else if(state==='dead'){ resetRun(); setState('play'); lastT=0; }
       break;
     case 'KeyP': case 'Escape':
       if(state==='play') pauseGame();
@@ -1704,9 +1707,9 @@ $('btnReroll').addEventListener('click', ()=>{
   resetWorld(); attractX=400; genTo(attractX+2600); clearParts();
 });
 $('btnResume').addEventListener('click', resumeGame);
-$('btnRestartP').addEventListener('click', ()=>{ ensureAudio(); sfxUI(); resetRun(); setState('play'); lastT=performance.now(); });
+$('btnRestartP').addEventListener('click', ()=>{ ensureAudio(); sfxUI(); resetRun(); setState('play'); lastT=0; });
 $('btnMenuP').addEventListener('click', ()=>{ sfxUI(); toMenu(); });
-$('btnRestart').addEventListener('click', ()=>{ ensureAudio(); sfxUI(); resetRun(); setState('play'); lastT=performance.now(); });
+$('btnRestart').addEventListener('click', ()=>{ ensureAudio(); sfxUI(); resetRun(); setState('play'); lastT=0; });
 $('btnMenuD').addEventListener('click', ()=>{ sfxUI(); toMenu(); });
 muteBtn.addEventListener('click', ()=>{ ensureAudio(); setMute(!AU.muted); });
 
@@ -1715,7 +1718,7 @@ muteBtn.textContent = AU.muted ? 'SND OFF' : 'SND ON';
 elSeed.textContent = seed.toString(16).toUpperCase();
 resize();
 toMenu();
-lastT = performance.now();
+lastT = 0;
 requestAnimationFrame(frame);
 
 /* QA autopilot: the swing the menu teaches. In free flight it reaches for an anchor once the climb
@@ -1738,7 +1741,7 @@ window.__skyhook = {
   get player(){ return P; },
   get dist(){ return runDistPx; },
   get cascade(){ return cascadeX; },
-  restart(){ resetRun(); setState('play'); lastT=performance.now(); },
+  restart(){ resetRun(); setState('play'); lastT=0; },
   kill(){ if(state==='play') die('abyss'); },
   autopilot(on){ apOn=!!on; },
   // Generates the cavern out to x and lists each anchor with the floor beneath it (chasms excluded).

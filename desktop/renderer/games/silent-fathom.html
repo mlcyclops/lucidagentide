@@ -170,7 +170,9 @@ window.addEventListener('resize',resize);resize();
 
 /* ---------- persistence ---------- */
 var best={score:0,zone:0};
-try{var b0=JSON.parse(localStorage.getItem('silentFathom.best'));if(b0&&typeof b0.score==='number')best=b0}catch(e){}
+// Stored data is untrusted: keep only whole numbers, so nothing from storage can reach the page as markup.
+function wholeNum(v){v=Math.floor(Number(v));return isFinite(v)&&v>0?v:0}
+try{var b0=JSON.parse(localStorage.getItem('silentFathom.best'));if(b0)best={score:wholeNum(b0.score),zone:wholeNum(b0.zone)}}catch(e){}
 function saveBest(){
   var ch=false;
   if(score>best.score){best.score=score;ch=true}
@@ -179,8 +181,8 @@ function saveBest(){
 }
 
 /* ---------- audio ---------- */
-var AU={ctx:null,muted:false,danger:0};
-try{AU.muted=localStorage.getItem('silentFathom.muted')==='1'}catch(e){}
+var AU={ctx:null,muted:true,danger:0}; // sound starts OFF until the player turns it on
+try{AU.muted=localStorage.getItem('silentFathom.muted')!=='0'}catch(e){}
 function audioInit(){
   if(AU.ctx)return;
   var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
@@ -806,19 +808,25 @@ function resumeGame(){
   state='playing';hide(elPause);SND.click();
   if(AU.ctx&&!AU.muted)AU.master.gain.setTargetAtTime(0.85,AU.ctx.currentTime,0.05);
 }
+// "BEST <b>score</b>…" built from nodes, never innerHTML (the score comes from storage).
+function setBestLine(id,tail){
+  var el=document.getElementById(id),b=document.createElement('b');
+  el.textContent='BEST ';b.textContent=String(best.score);el.appendChild(b);
+  if(tail)el.appendChild(document.createTextNode(tail));
+}
 function gameOver(){
   state='dead';saveBest();
   document.getElementById('overScore').textContent=score;
   document.getElementById('overZone').textContent='ZONE '+zone+': '+zoneParams(zone).name;
   document.getElementById('overCause').textContent=lastCause||'LOST TO THE DARK';
-  document.getElementById('overBest').innerHTML='BEST <b>'+best.score+'</b> \u00b7 ZONE '+Math.max(1,best.zone);
+  setBestLine('overBest',' \u00b7 ZONE '+Math.max(1,best.zone));
   hideAll();show(elOver);
   btnPauseB.classList.add('hid');
 }
 function winGame(){
   state='won';saveBest();SND.win();
   document.getElementById('winScore').textContent=score;
-  document.getElementById('winBest').innerHTML='BEST <b>'+best.score+'</b>';
+  setBestLine('winBest','');
   hideAll();show(elWin);
   btnPauseB.classList.add('hid');
 }

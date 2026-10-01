@@ -38,7 +38,7 @@ async function launch(file, width, height) {
     if (!nodes.has(id)) nodes.set(id, new Element(id));
     return nodes.get(id);
   };
-  globalThis.document = { getElementById: node, createElement: () => new Element('new'), activeElement: null, hidden: false, addEventListener() {} };
+  globalThis.document = { getElementById: node, createElement: () => new Element('new'), createTextNode: text => ({ textContent: String(text) }), activeElement: null, hidden: false, addEventListener() {} };
   globalThis.innerWidth = width; globalThis.innerHeight = height;
   globalThis.window = globalThis;
   globalThis.HTMLElement = globalThis.HTMLButtonElement = Element;
@@ -115,8 +115,10 @@ brigade.node('btnPrimary').click();
 assert.equal(brigade.node('overlay').hidden, true);
 assert.equal(brigade.node('goalN').textContent, 'GOAL 1/13');
 globalThis.__brickBrigade.autopilot(true); // the game's own playtest handle: the carrier tracks the ball
-// 180 s, not 90: about 1 random run in 30 had cleared only 2 missions by 90 s (measured; 0 of 30 short at 180 s).
-for (let i = 0; i < 180 && brigade.node('overlay').hidden; i++) brigade.advance(1);
+// The autopilot is random, so a fixed budget flakes (a 180 s run once stalled on mission 3). Play until the
+// bar is met (3 missions, 1 rescue), up to 400 s of game time (measured: 40 of 40 runs, median 17 s, max 110 s).
+const brigadeShort = () => { const s = globalThis.__brickBrigade.state(); return s.done < 3 || s.rescued < 1; };
+for (let i = 0; i < 400 && brigade.node('overlay').hidden && brigadeShort(); i++) brigade.advance(1);
 const run = globalThis.__brickBrigade.state();
 assert.ok(run.done >= 3 && run.rescued >= 1, `missions and rescues must advance, got ${JSON.stringify(run)}`);
 brigade.key('KeyP');

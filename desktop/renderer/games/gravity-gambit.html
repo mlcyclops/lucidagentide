@@ -337,7 +337,7 @@ let bests=new Array(LEVELS.length).fill(null);
 (()=>{try{const j=JSON.parse(lsGet('gravityGambit.best')||'[]');
   if(Array.isArray(j))j.forEach((v,i)=>{if(i<bests.length&&typeof v==='number')bests[i]=v;});}catch(e){}})();
 function saveBests(){lsSet('gravityGambit.best',JSON.stringify(bests));}
-let muted=lsGet('gravityGambit.muted')==='1';
+let muted=lsGet('gravityGambit.muted')!=='0'; // sound starts OFF until the player turns it on
 
 // ---------- canvas / view ----------
 const cv=document.getElementById('field');
