@@ -13,10 +13,15 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-10-01, v2.3.0-beta.15 prerelease)
+## Current state (2026-10-01, v2.3.0 stable)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.3.0-beta.15** (2026-10-01)
+now product increments, each with its own ADR. **v2.3.0** (2026-10-01) is the
+stable release: beta.15 promoted with no code change on top, tagged `v2.3.0`
+and marked Latest, so the download buttons, the electron-updater feed and the
+Homebrew cask (re-pinned by CI) all move to it. The beta channel stops here;
+the next prerelease, if any, is a 2.3.1 or 2.4.0 beta.
+**v2.3.0-beta.15** (2026-10-01)
 is beta.14 plus #441: Linux bubblewrap binds the packaged install root (a Mint
 .deb died at `bwrap: execvp /opt/LucidAgentIDE/.../omp`), fleet menus and the
 picker name a model offered twice by its login (`X sign-in` / `API key`), a new

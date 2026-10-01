@@ -587,4 +587,9 @@
 //            provider rather than an auth twin with a rejected key. FLEET: the New lane card stays 360 px and
 //            shows the end of a long folder path.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.15";
+// v2.3.0 = beta.15 promoted to STABLE, no code change on top of it. The whole beta train (beta.1-15:
+//            the Windows AppContainer sandbox, Jev and browser_run, omp 18.4.4 with Opus 5.5 / Sonnet 5.5 /
+//            GPT-6 / Grok 4.7, several accounts per provider, the network indicator, fleet worktrees,
+//            lucid hub, the Linux bubblewrap fix) ships to everyone: a plain v2.3.0 tag, marked Latest,
+//            so the download buttons and the electron-updater feed follow it and CI re-pins the cask.
+export const APP_VERSION = "2.3.0";
