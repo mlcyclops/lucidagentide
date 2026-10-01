@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-1803%20harness%20%2B%204276%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-1803%20harness%20%2B%204280%20desktop%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -73,20 +73,20 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <br/>
 
-<!-- v2.3.0 RELEASE BANNER -->
+<!-- v2.3 RELEASE BANNER -->
 <table align="center" width="100%">
 <tr>
 <td align="center">
 
-# 🚀 LUCID v2.3.0 is here
+# 🚀 LUCID v2.3.1 is here
 
-<p align="center"><b>🛡️ a Windows sandbox that chat actually works inside</b> · <b>🧭 Jev typed judgment</b> · <b>🖱 a browser agent that reads before it clicks</b> · <b>🪐 Claude Opus 5.5 and Sonnet 5.5, GPT-6 Astra / Sol / Luna, Grok 4.7</b> · <b>📶 network problems reported as network problems</b> · <b>🌳 fleet lanes in their own worktree</b> · <b>🖥 <code>lucid hub</code> in your terminal</b></p>
+<p align="center"><b>🛡️ a Windows sandbox that chat actually works inside</b> · <b>🧭 Jev typed judgment</b> · <b>🖱 a browser agent that reads before it clicks</b> · <b>🪐 Claude Opus 5.5 and Sonnet 5.5, GPT-6 Astra / Sol / Luna, Grok 4.7</b> · <b>📶 network problems reported as network problems</b> · <b>🌳 fleet lanes in their own worktree</b> · <b>🖥 <code>lucid hub</code> in your terminal</b> · <b>🕹 new in 2.3.1: four arcade games</b></p>
 
-<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0"><img src="https://img.shields.io/badge/Download-v2.3.0-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.3.0" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.1"><img src="https://img.shields.io/badge/Download-v2.3.1-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.3.1" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml"><img src="https://img.shields.io/badge/Found%20a%20bug%3F-Open%20an%20issue-d73a49?style=for-the-badge&logo=github&logoColor=white" alt="Found a bug? Open an issue" /></a>
 <a href="#how-to-pull-your-logs"><img src="https://img.shields.io/badge/How%20to-pull%20your%20logs-555555?style=for-the-badge" alt="How to pull your logs" /></a>
 
-<p align="center"><sub>Fifteen public betas, now one stable release: the download buttons above, Homebrew and the in-app updater all move to 2.3.0. <a href="#-lucid-v230-is-here"><b>What's in it, how to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
+<p align="center"><sub>v2.3.0 promoted fifteen public betas to stable; v2.3.1 adds four new games to Preview &gt; Games. The download buttons above, Homebrew and the in-app updater all move to 2.3.1. <a href="#-lucid-v230-is-here"><b>What's in it, how to update, and how to report a bug with screenshots and logs</b></a> · <a href="#-whats-new-in-v231"><b>What's new in 2.3.1</b></a>.</sub></p>
 
 </td>
 </tr>
@@ -127,7 +127,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ## 🚀 LUCID v2.3.0 is here
 
-> **v2.3.0 is the stable release that fifteen public betas built.** Everything below was tested in the open as a GitHub prerelease, fixed against the reports you filed, and now ships to everyone: the download buttons at the top of this page, the Homebrew cask and the in-app updater all move to 2.3.0.
+> **v2.3.0 is the stable release that fifteen public betas built.** Everything below was tested in the open as a GitHub prerelease, fixed against the reports you filed, and now ships to everyone. **v2.3.1** follows it with four new arcade games ([what's new in 2.3.1](#-whats-new-in-v231)); the download buttons at the top of this page, the Homebrew cask and the in-app updater all point at 2.3.1.
 
 ### The headlines
 
@@ -142,14 +142,14 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **🖥 `lucid hub`, the terminal hub.** A tmux-style pane multiplexer over the running engine (Security, Fleet, Sessions, Audit, Usage, Network and Knowledge decks plus a live agent pane), opened from the Fleet grid, the launcher or a `lucid` command on PATH. *(P-TUI.0-.2)*
 - **🛑 Calmer, honest status.** Stop stops (a queued prompt waits for you instead of sending), a long file write is never mistaken for a stall, a stuck tool call is marked on evidence with a Stop button, judgments are off unless you opt in, and the status bar keeps to one line by default. *(P-HEALTH.3, P-LIVENESS.1, P-JEV.5/.6, P-PROGRESS.1-.4)*
 - **🐧 Linux and the sandboxes.** The Windows sandbox starts in time on large repos, `.deb` and `.rpm` installs start the agent inside bubblewrap, and an arm64 AppImage ships beside x64. *(P-SANDBOX.18, #441, P-ARM64.B)*
-- **🕹 Games in Preview.** **Preview > Games** opens Brick Brigade, Deck Guard, Signal Garden: Heartbloom and Nebula Fusion: Voyage, single-file games you can play while the agent works. *(P-GAME.1-.6b)*
+- **🕹 Games in Preview.** **Preview > Games** opens Brick Brigade, Deck Guard, Signal Garden: Heartbloom and Nebula Fusion: Voyage, single-file games you can play while the agent works, and **2.3.1 adds four more**: Chroma Cadence, Gravity Gambit, Silent Fathom and Skyhook. *(P-GAME.1-.10)*
 
 The full detail, beta by beta, is in [What's new in v2.3.0](#-whats-new-in-v230) below.
 
 ### Install or update
 
-1. **Already on LUCID?** On Windows the in-app updater offers 2.3.0. On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos)). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. If you ran a beta, installing 2.3.0 over it keeps your settings, sessions and keys.
-2. **New install:** use the download buttons at the top of this page, or open the **[v2.3.0 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
+1. **Already on LUCID?** On Windows the in-app updater offers 2.3.1. On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos)). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. If you ran a beta, installing 2.3.1 over it keeps your settings, sessions and keys.
+2. **New install:** use the download buttons at the top of this page, or open the **[v2.3.1 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.1)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 
 ### Upgrade notes and known issues
 
@@ -282,6 +282,17 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > leave the host.
 
 ---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.1
+
+> **🕹 Four new games in Preview.** v2.3.1 is v2.3.0 plus four single-file arcade games, each reworked to fit the Preview panel (they zoom and re-flow on a narrow or short panel, keep every label on one line, and keep your best score for the session even where the frame cannot save it). Sound starts **off** in the three action games; turn it on with the SND button or **M**.
+>
+> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.1). It is the repository's Latest release: the download buttons, the in-app updater and Homebrew follow it.
+
+- **🎵 Chroma Cadence: Neon Rhythm** - a four-lane rhythm game on a seeded song. It measures how late your taps land and offers the audio sync that fixes it. *(P-GAME.7)*
+- **🪐 Gravity Gambit: Orbital Golf** - sling a probe around planets into a wormhole across ten sectors with par scoring. A portrait panel turns the course so the sling still aims where you pull. *(P-GAME.8)*
+- **🔊 Silent Fathom: Sonar Descent** - a sonar-stealth dive through five generated cave zones: the cave is black until you ping, and the leviathans hunt by sound. *(P-GAME.9)*
+- **🪝 Skyhook: Cascade Run** - a grappling momentum runner: latch crystal anchors, swing, and release to fling ahead of the collapsing Cascade. Tuned after playtests: every anchor is within rope reach of the floor, the rope keeps your swing off the floor, a slightly late release still flies, and the Cascade lets a lead stand. *(P-GAME.10)*
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0
 
@@ -1207,7 +1218,7 @@ CI builds desktop installers for **all three platforms** on every tag push:
 |:--|:--|:--|:--|
 | **Windows** | NSIS installer + portable `.exe` (x64) | [![Windows Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=windows&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**Installer**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-Setup.exe) · [Portable](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-portable.exe) |
 | **macOS** | `.pkg` installer **+** `.zip` app bundle (arm64 + x64) | [![macOS Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=apple&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | `.pkg`: [**Apple Silicon**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-arm64.pkg) · [Intel](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-x64.pkg) · `.zip`: [arm64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-arm64.zip) · [x64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-x64.zip) |
-| **Linux** | portable `AppImage` (x64 + arm64), `.deb` and `.rpm` (x64) | [![Linux Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=linux&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**AppImage**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-x86_64.AppImage) · [arm64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-arm64.AppImage) · [.deb](https://github.com/mlcyclops/lucidagentide/releases/latest/download/lucidagentide-desktop_2.3.0_amd64.deb) · [.rpm](https://github.com/mlcyclops/lucidagentide/releases/latest/download/lucidagentide-desktop-2.3.0.x86_64.rpm) |
+| **Linux** | portable `AppImage` (x64 + arm64), `.deb` and `.rpm` (x64) | [![Linux Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=linux&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**AppImage**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-x86_64.AppImage) · [arm64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-arm64.AppImage) · [.deb](https://github.com/mlcyclops/lucidagentide/releases/latest/download/lucidagentide-desktop_2.3.1_amd64.deb) · [.rpm](https://github.com/mlcyclops/lucidagentide/releases/latest/download/lucidagentide-desktop-2.3.1.x86_64.rpm) |
 
 All builds bundle [Bun](https://bun.sh) and [uv](https://docs.astral.sh/uv/) runtimes so the installed app
 needs **zero prerequisites**. Code-signing and notarization are supported when certs are configured.
@@ -1292,8 +1303,10 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.3.0):** fifteen
-public betas promoted to stable: a **Windows AppContainer sandbox that chat actually works inside**, with a
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.3.1):** four
+single-file arcade games in Preview (**Chroma Cadence**, **Gravity Gambit**, **Silent Fathom**, **Skyhook**),
+each fitted to the panel, with sound off by default in the action games and a stored best that can never
+reach the page as markup *(P-GAME.7-.10)*. **v2.3.0** promoted fifteen public betas to stable: a **Windows AppContainer sandbox that chat actually works inside**, with a
 switch, folder grants picked in a Windows dialog and Group Policy keys *(ADR-0386..0394, ADR-0424)*; **Jev
 typed judgment** and the `browser_run` **browser agent that reads before it clicks** *(ADR-0374..0379)*;
 **Claude Opus 5.5 and Sonnet 5.5, GPT-6 Astra / Sol / Luna and Grok 4.7** on omp 18.4.4 *(ADR-0383,
@@ -1386,7 +1399,7 @@ reads ~1-8 s → ~0-2 ms, idle server CPU ~29% → ~8%); and the **Preview panel
 every model** with bring-your-own-embeddings, server-side **gov lockdown**, the KG-pack marketplace, and the
 overloaded-provider fallback; v1.11.0 brought E2E-encrypted **live collaboration**.)*
 
-**6,200+ tests**: the repo's scoped gate measures **460 files / 6,184 tests** at v2.3.0 (scope defined by
+**6,200+ tests**: the repo's scoped gate measures **460 files / 6,190 tests** at v2.3.1 (scope defined by
 exclusion, ADR-0303) plus the Python sidecar's 57, with `tsc --noEmit` clean on the shipping projects. The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
@@ -1394,6 +1407,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v2.3.1 batch** | **🕹 Four arcade games** - `P-GAME.7..10`. Chroma Cadence (rhythm, with an audio-sync suggestion from measured tap error), Gravity Gambit (orbital golf, the course turns on a portrait panel), Silent Fathom (sonar stealth, the view zooms out so the sub sees as far as it is heard) and Skyhook (grappling runner, retuned after playtests: anchors always in rope reach of the floor, a self-clearing rope, late-release grace, a Cascade that lets a lead stand). Each is a single self-contained HTML file behind the arcade gate (BUSL header, inline script only, no external assets, no em dashes) with a playtest handle and a headless demo. Sound starts off in the three action games; Silent Fathom's stored best is kept to whole numbers and written as text (a CodeQL `js/xss-through-dom` fix). | P-GAME.7..10 |
 | **v2.3.0 batch** | **🚀 Fifteen betas promoted to stable** - `ADR-0373..0424`, beta.1 through beta.15 released as the repository's Latest: the tag build attaches the installers and the electron-updater feed, and the Homebrew cask is pinned to 2.3.0 (by PR #445: the update-cask job's direct push to master is refused by the master ruleset). **SANDBOX**: the Windows AppContainer runs the agent for real (the pill lights only after the contained runtime boots), with a switch, Windows folder-picker grants, Group Policy keys, and a helper that skips grants already on disk so it answers the handshake in time; Linux bubblewrap binds the packaged install root for `.deb`/`.rpm` installs. **JUDGMENT**: Jev typed judgment and the `browser_run` browser policy, off by default with a breaker for a judge that cannot answer. **MODELS**: omp 18.4.4 with Claude Opus 5.5 (default) and Sonnet 5.5, GPT-6 Astra / Sol / Luna, Grok 4.7, StepFun behind the China-origin gate, several accounts per provider, login-named rows. **FLEET**: lanes in their own git worktree, same-file-only waits, one owner per session, repo chips, pushes that arrive or say why. **STATUS**: a network indicator with a stand-by card, a long write is not a stall, evidence-based stuck marks, `lucid hub` in the terminal, Stop that stops. | [ADR-0373..0424](DECISIONS.md) |
 | **v2.3.0-beta.1 batch** | **🧭 Jev, the Jev browser policy, named accounts, and the Agent Mode pass** - `ADR-0373..0379`, shipped as a **prerelease** that never touches the rolling `latest` channel or the Homebrew cask. **JEV**: a typed-judgment engine (choice with per-option probabilities and confidence, yes/no probability, score over ordered levels) wired as omp's judgment backend, with a Settings card for the TypeSafe key and backend switch pinned to `llm` under AskSage lockdown, a per-turn trace under every reply naming the question, the typed answer, the backend and the latency, and a frozen prompt policy so "use Jev" is understood. **BROWSER**: `browser_run`, a TypeScript port of browser-use/jev-ultrafast: an isolated-world DOM snapshot becomes an indexed element table, one judgment picks the operation plus a target per operation, only the matching head executes through the existing input path after a freshness re-check, and every typed string is a caller-supplied named value (no text-generating model, page content can never become input). **ACCOUNTS**: several OAuth identities or named keys per provider, switchable from Settings and the Provider Hub. **AGENT MODE**: Regular/Max model tier in the title bar (and the drag-region bug that swallowed its clicks), the preview-link whiteout fixed by one navigation policy, the game cabinet, omp pinned to 18.2.6. Install: [releases/tag/v2.3.0-beta.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.1). | [ADR-0373](DECISIONS.md), [ADR-0374](DECISIONS.md), [ADR-0375](DECISIONS.md), [ADR-0376](DECISIONS.md), [ADR-0377](DECISIONS.md), [ADR-0378](DECISIONS.md), [ADR-0379](DECISIONS.md) |
 | **v2.2.0 batch** | **🐛 The reported-defect batch: a lane that could not run a command, a phone shown a broken preview, a panel that followed you home** - `ADR-0332..0339`. **FLEET**: there are TWO approval gates in front of a tool call and a lane answered only the first, because it had a handler for omp's per-tool `elicitation/create` gate that it had never ADVERTISED it could answer, so omp never sent it and denied every `bash` and `eval` in a lane regardless of configuration; fixing the advertisement exposed the other half, a handler reading the offered choices from the wrong path and replying in the wrong shape, so it still resolved to nothing. Both gates now read one shared module that both interactive clients import, verified on a live two-node DGX lane. **PREVIEW**: a FAILED preview was screenshotted and published to a phone guest, toast baked into the image and captioned with a file from an unrelated session (the serve route answers a failure with HTTP 200 and an HTML body saying so, so every guard read the failure page as a working page), now probed before capture with the toast suppressed and the rate-limit slot claimed only once a send is authorized; and the panel no longer follows the user into the next conversation, because an unresolvable target was remembered exactly like a success and outlived the session boundary, while a document the user opened by hand is still left alone. **MARKET + KG**: the Role KG Packs storefront gets a Packs button in the KG header (the only way in had been the command palette), a purchase resumes the exact pack after the sign-in detour under a 15-minute one-shot intent because that deep link is shared with Remote and Drive, and the Personalization card is rebuilt for a user with many named KGs (hero row into the existing picker, a measured two-row stat strip, missing numbers as a dash and never `NaN`). **RELEASE**: the rolling update channel could never publish, because the identity gate compared deb and rpm versions literally when neither format permits `-`, and a publishing dispatch stamped itself as a test build | [ADR-0332..0339](DECISIONS.md) |
