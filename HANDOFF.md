@@ -13,10 +13,23 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-09-30, v2.3.0-beta.14 prerelease)
+## Current state (2026-10-01, v2.3.0 stable)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.3.0-beta.14** (2026-09-30)
+now product increments, each with its own ADR. **v2.3.0** (2026-10-01) is the
+stable release: beta.15 promoted with no code change on top, tagged `v2.3.0`
+and marked Latest, so the download buttons, the electron-updater feed and the
+Homebrew cask all move to it. The cask was pinned by PR #445: the update-cask
+job built the pin, but master's ruleset refuses its direct push (GH013), so
+until that job opens a PR, every stable tag needs that manual PR. The beta
+channel stops here;
+the next prerelease, if any, is a 2.3.1 or 2.4.0 beta.
+**v2.3.0-beta.15** (2026-10-01)
+is beta.14 plus #441: Linux bubblewrap binds the packaged install root (a Mint
+.deb died at `bwrap: execvp /opt/LucidAgentIDE/.../omp`), fleet menus and the
+picker name a model offered twice by its login (`X sign-in` / `API key`), a new
+spoke follows Main's provider, and the New lane card stays 360 px.
+**v2.3.0-beta.14** (2026-09-30)
 adds #437 (P-HEALTH.3 a long write is not a stall, P-FLEET.WT1 lanes in their
 own worktree, P-TUI.2 `lucid hub` from Fleet/launcher/PATH, P-RECOVER.3 incident
 reports quote real omp stderr and engine git finds MinGit) and #438 (P-MODEL.6,
