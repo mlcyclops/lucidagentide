@@ -579,4 +579,12 @@
 //            bun:ffi console host, so the VS Code extension builds again; arcade: Brick Brigade, Deck Guard,
 //            Signal Garden: Heartbloom, Orbit Loom retired (P-GAME.4-6b).
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.14";
+// v2.3.0-beta.15 = beta.14 plus #441, cut so Linux installs get the bubblewrap fix. LINUX: the sandbox
+//            binds the packaged install root, so a .deb/.rpm under /opt/LucidAgentIDE no longer dies at
+//            `bwrap: execvp .../omp: No such file or directory` when a provider connects (Linux Mint report).
+//            MODELS: fleet menus and the main picker name a model offered twice by its login (`X sign-in:
+//            Grok 4.7`, `API key: Grok 4.7`) instead of a raw provider prefix, and a new spoke follows Main's
+//            provider rather than an auth twin with a rejected key. FLEET: the New lane card stays 360 px and
+//            shows the end of a long folder path.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+export const APP_VERSION = "2.3.0-beta.15";

@@ -138,11 +138,11 @@ personalization internals are proprietary and intentionally undocumented here - 
 - **👥 Several accounts per provider.** Keep multiple OAuth identities or named API keys on one provider and switch between them in Settings or the Provider Hub. *(P-ACCT.1)*
 - **🧹 Fewer dead ends.** Past sessions open again, a leftover engine from an earlier session no longer blocks launch (LUCID names it and offers to stop it), clicking an external link in a preview no longer blanks the window and loses the prompt you were typing, and an agent error reaches the chat as a readable message instead of `[object Object]`. *(P-SESS.3, P-PORTGUARD.2/.3, P-UX-JEV.1, P-NORESP.2)*
 
-The per-beta details are in [What's new in v2.3.0-beta.14](#-whats-new-in-v230-beta14-prerelease), [beta.13](#-whats-new-in-v230-beta13-prerelease), [beta.12](#-whats-new-in-v230-beta12-prerelease), [beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
+The per-beta details are in [What's new in v2.3.0-beta.15](#-whats-new-in-v230-beta15-prerelease), [beta.14](#-whats-new-in-v230-beta14-prerelease), [beta.13](#-whats-new-in-v230-beta13-prerelease), [beta.12](#-whats-new-in-v230-beta12-prerelease), [beta.11](#-whats-new-in-v230-beta11-prerelease), [beta.10](#-whats-new-in-v230-beta10-prerelease), [beta.9](#-whats-new-in-v230-beta9-prerelease), [beta.8](#-whats-new-in-v230-beta8-prerelease), [beta.7](#-whats-new-in-v230-beta7-prerelease) and [beta.1](#-whats-new-in-v230-beta1-prerelease) below.
 
 ### Get the beta
 
-1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.14](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.14)).
+1. Open the **[Releases page](https://github.com/mlcyclops/lucidagentide/releases)**. The newest build marked **Pre-release** is at the top (today: [v2.3.0-beta.15](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.15)).
 2. Under **Assets**, download the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 3. Install it the same way as a stable release. From then on, the beta updates itself to each new beta.
 
@@ -276,6 +276,16 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > leave the host.
 
 ---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.15 (prerelease)
+
+> **🐧 The Linux sandbox finds the agent again.** Beta.15 is a small fix release on top of beta.14: Linux installs from the `.deb` or `.rpm` can start the agent with the sandbox on, and a model offered through two logins says which one you are picking.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.15](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.15). Still a beta: not offered to stable installs, Homebrew stays on 2.2.2, the rolling `latest` links are untouched.
+
+- **🐧 Linux sandbox mounts the install folder** - on a `.deb` or `.rpm` install (under `/opt/LucidAgentIDE`), connecting a provider failed with `bwrap: execvp .../omp: No such file or directory`, because the bubblewrap sandbox never mounted `/opt`. It now binds the packaged install root, so the agent starts. *(#441)*
+- **🔑 Same model, two logins, two clear names** - when a model is offered both through a sign-in and an API key (Grok 4.7 through X sign-in and an xAI key), the fleet menus and the main picker read `X sign-in: Grok 4.7` and `API key: Grok 4.7` instead of a raw provider prefix. A new spoke follows Main's provider instead of landing on an API-key twin that the provider rejects. *(#441)*
+- **🗂 A tidier New lane card** - the card stays 360 px wide and its folder field shows the end of a long path. *(#441)*
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0-beta.14 (prerelease)
 
