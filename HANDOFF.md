@@ -19,7 +19,10 @@ The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
 now product increments, each with its own ADR. **v2.3.0** (2026-10-01) is the
 stable release: beta.15 promoted with no code change on top, tagged `v2.3.0`
 and marked Latest, so the download buttons, the electron-updater feed and the
-Homebrew cask (re-pinned by CI) all move to it. The beta channel stops here;
+Homebrew cask all move to it. The cask was pinned by PR #445: the update-cask
+job built the pin, but master's ruleset refuses its direct push (GH013), so
+until that job opens a PR, every stable tag needs that manual PR. The beta
+channel stops here;
 the next prerelease, if any, is a 2.3.1 or 2.4.0 beta.
 **v2.3.0-beta.15** (2026-10-01)
 is beta.14 plus #441: Linux bubblewrap binds the packaged install root (a Mint
