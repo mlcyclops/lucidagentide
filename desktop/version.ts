@@ -591,5 +591,8 @@
 //            the Windows AppContainer sandbox, Jev and browser_run, omp 18.4.4 with Opus 5.5 / Sonnet 5.5 /
 //            GPT-6 / Grok 4.7, several accounts per provider, the network indicator, fleet worktrees,
 //            lucid hub, the Linux bubblewrap fix) ships to everyone: a plain v2.3.0 tag, marked Latest,
-//            so the download buttons and the electron-updater feed follow it and CI re-pins the cask.
-export const APP_VERSION = "2.3.0";
+//            so the download buttons and the electron-updater feed follow it (cask pinned by PR #445).
+// v2.3.1 = v2.3.0 plus four arcade games (P-GAME.7-10, #442): Chroma Cadence, Gravity Gambit, Silent
+//            Fathom and Skyhook in Preview > Games, sound off by default in the action games, Silent Fathom's
+//            stored best never written through innerHTML (CodeQL js/xss-through-dom). A plain stable tag.
+export const APP_VERSION = "2.3.1";
