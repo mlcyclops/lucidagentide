@@ -24,7 +24,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { healthVerdict } from "../../desktop/port_guard.ts";
-import { HubOpError, type PaneDeck, type Spaces } from "./hub_spaces.ts";
+import { HubOpError, layoutOf, type PaneDeck, type Spaces } from "./hub_spaces.ts";
 import { parseHubCommand, type HubOp } from "./hub_tmux_verbs.ts";
 
 export interface HubDiscovery { v: 1; pid: number; port: number; nonce: string; token: string }
@@ -217,6 +217,7 @@ export function createHubExecutor(host: HubHost): (op: HubOp) => Promise<unknown
   }
 
   const space = (id: string) => spaces.list().find((s) => s.id === id);
+  const tab = (id: string) => spaces.tabList().find((t) => t.id === id);
 
   async function run(op: HubOp): Promise<unknown> {
     switch (op.op) {
@@ -225,6 +226,7 @@ export function createHubExecutor(host: HubHost): (op: HubOp) => Promise<unknown
           hub: { pid: process.pid },
           engine: { port: host.engine.port, version: host.engine.version, flavor: host.engine.flavor },
           active: spaces.active,
+          tab: spaces.tab.id,
           focused: spaces.pane().leaf.id,
           spaces: spaces.list(),
         };
@@ -233,18 +235,24 @@ export function createHubExecutor(host: HubHost): (op: HubOp) => Promise<unknown
       case "space.rename": return space(spaces.rename(op.target, op.name).id);
       case "space.close": { const s = spaces.close(op.target); return { closed: s.id, active: spaces.active }; }
       case "space.focus": return space(spaces.focus(op.target).id);
-      case "pane.list": return spaces.paneList(op.all ? undefined : op.space);
+      case "tab.list": return spaces.tabList(op.all ? undefined : op.space);
+      case "tab.create": return tab(spaces.createTab(op.space, op.name).id);
+      case "tab.rename": return tab(spaces.renameTab(op.target, op.name).id);
+      case "tab.close": { const t = spaces.closeTab(op.target); return { closed: t.id, tab: spaces.current.activeTab }; }
+      case "tab.focus": return tab(spaces.focusTab(op.target).id);
+      case "pane.list": return spaces.paneList(op.all ? {} : op.tab !== undefined ? { tab: op.tab } : { space: op.space });
       case "pane.split": {
         const leaf = spaces.split(op.target, op.dir);
-        return { pane: leaf.id, layout: space(leaf.id.split(":")[0]!)?.layout };
+        return { pane: leaf.id, layout: layoutOf(spaces.pane(leaf.id).tab.tree) };
       }
       case "pane.close": {
+        const { tab: home } = spaces.pane(op.target); // the tab object outlives the pane; its tree is replaced in place
         const leaf = spaces.closePane(op.target);
-        return { closed: leaf.id, layout: space(leaf.id.split(":")[0]!)?.layout };
+        return { closed: leaf.id, layout: layoutOf(home.tree) };
       }
-      case "pane.focus": return { focused: spaces.focusPane(op.target).id, active: spaces.active };
+      case "pane.focus": return { focused: spaces.focusPane(op.target).id, active: spaces.active, tab: spaces.tab.id };
       case "pane.zoom": { const zoomed = spaces.zoom(op.target); return { pane: spaces.pane().leaf.id, zoomed }; }
-      case "pane.swap": spaces.swap(op.source, op.target); return { layout: space(spaces.pane(op.source).space.id)?.layout };
+      case "pane.swap": spaces.swap(op.source, op.target); return { layout: layoutOf(spaces.pane(op.source).tab.tree) };
       case "pane.resize": return { pane: spaces.pane(op.target).leaf.id, ratio: spaces.resize(op.target, op.dir, op.n) };
       case "pane.rebind": {
         if (op.deck === "agent") {
