@@ -1291,6 +1291,11 @@ demo-P-TUI.5e2: demo-P-TUI.5 ## P-TUI.5 E2 (ADR-0434): the rail's AGENTS panel +
 	$(BUN) run desktop/scripts/demo_p_tui_5e2.ts
 	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_agents_panel.test.ts harness/launcher/hub_tui.test.ts harness/launcher/hub_tmux_verbs.test.ts harness/launcher/hub_control.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-TUI.6
+demo-P-TUI.6: demo-P-TUI.5e2 ## P-TUI.6 (ADR-0435): the deck STRIP + the fuzzy PALETTE (operator direction 2026-10-04). The strip is one line directly above the status bar - every deck as `digit glyph name count` with the SAME live counts the sidebar badges carry (Security quarantined, Fleet/Agents lanes, Sessions on disk, Spaces client-side), the focused pane's deck highlighted; narrowing drops names, then glyphs, then counts (digits stay); with the rail open it is the ONE deck surface; a click on a cell rebinds the focused pane (clickTarget's deck branch), digits 1-9,0 unchanged. The palette (ctrl+k or `:palette`, hub-owned focus only - the `:` prompt's guard) is ONE fused scored list: spaces (switch), tabs as space > tab (focus), agents (Enter attaches via the existing ADR-0420 bind), decks (rebind); the scorer is a pure subsequence matcher ranked consecutive-run length, then word-boundary hits, then shorter target (hub_palette.ts, unit-tested). Proves it on the real engine + real input paths: strip counts = badge counts on one frame, digit and click rebinds, asserted ranking on a seeded set, the Enter dispatch per kind, and the composer guard.
+	$(BUN) run desktop/scripts/demo_p_tui_6.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_palette.test.ts harness/launcher/hub_tui.test.ts harness/launcher/hub_agents_panel.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-FLEET.WT1
 demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
 	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts

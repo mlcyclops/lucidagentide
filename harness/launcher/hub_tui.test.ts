@@ -6,7 +6,7 @@
 // keystones (no lost or duplicated leaf, stable ids) live in hub_spaces.test.ts (P-TUI.3).
 
 import { describe, expect, test } from "bun:test";
-import { agentTableLines, clickTarget, deckLines, fmtElapsed, kgPages, modelCatalog, fitBlock, paneRects, railLine, railRows, spaceTableLines, type HubData, type HubGeometry, type HubSpace } from "./hub_tui.ts";
+import { agentTableLines, clickTarget, deckLines, deckStrip, deckStripEntries, fmtElapsed, kgPages, modelCatalog, fitBlock, paneRects, railLine, railRows, spaceTableLines, type HubData, type HubGeometry, type HubSpace } from "./hub_tui.ts";
 import { Spaces } from "./hub_spaces.ts";
 
 describe("fitBlock", () => {
@@ -286,5 +286,76 @@ describe("rail (P-TUI.5)", () => {
     const g: HubGeometry = { left: 28, rail: rows, top: 1, height: 38, panes: paneRects(model().tab.tree, 112, 38) };
     expect(clickTarget(g, 5, 1 + 9)).toEqual({ kind: "agent", id: "lane-a", row: 9 });
     expect(clickTarget(g, 5, 1 + 10)).toEqual({ kind: "agent", id: "lane-b", row: 10 });
+  });
+});
+
+// P-TUI.6: the deck strip. Entries carry the SAME live counts the sidebar badges show; layout is
+// pure column geometry (the click seam reads the cells), and narrowing drops names first, then
+// glyphs, then counts - the digits that rebind panes are the last thing standing (invariant 11:
+// cells drop whole, nothing shears or wraps).
+describe("deck strip (P-TUI.6)", () => {
+  const data: HubData = {
+    build: {}, audit: {}, usage: {}, whitelist: [], posture: {}, config: [], kg: {}, kgGraph: null,
+    security: { live: { quarantined: [{ id: "b1" }, { id: "b2" }] } },
+    fleet: { lanes: [{ name: "a" }, { name: "b" }, { name: "c" }] },
+    sessions: [{ id: "s1" }],
+  };
+
+  test("entries mirror the deck badges: quarantined (alert), lanes, sessions, spaces", () => {
+    const by = Object.fromEntries(deckStripEntries(data, 4).map((e) => [e.id, e]));
+    expect(by.security).toMatchObject({ key: "2", count: "2", alert: true });
+    expect(by.fleet!.count).toBe("3");
+    expect(by.agents!.count).toBe("3");
+    expect(by.sessions!.count).toBe("1");
+    expect(by.spaces).toMatchObject({ count: "4", alert: false });
+    expect(by.overview!.count).toBeNull();
+  });
+
+  test("before the first engine answer only the client-side Spaces count shows", () => {
+    const entries = deckStripEntries(null, 2);
+    expect(entries.find((e) => e.id === "spaces")!.count).toBe("2");
+    expect(entries.filter((e) => e.count !== null)).toHaveLength(1);
+  });
+
+  test("wide: digit glyph name count, cells at exact non-overlapping columns", () => {
+    const entries = deckStripEntries(data, 4);
+    const { level, cells } = deckStrip(entries, 200);
+    expect(level).toBe(0);
+    expect(cells).toHaveLength(10);
+    expect(cells[0]!.text).toBe("1 ◆ Overview");
+    expect(cells[1]!.text).toBe("2 ⛨ Security 2");
+    expect(cells[0]!.x).toBe(1); // one leading space
+    for (let i = 1; i < cells.length; i++) expect(cells[i]!.x).toBe(cells[i - 1]!.x + cells[i - 1]!.w + 2);
+    const last = cells.at(-1)!;
+    expect(last.x + last.w).toBeLessThanOrEqual(200);
+  });
+
+  test("narrowing drops names, then glyphs, then counts - digits never leave", () => {
+    const entries = deckStripEntries(data, 4);
+    const at = (w: number) => deckStrip(entries, w);
+    expect(at(90).level).toBe(1); // names gone, glyphs + counts stay
+    expect(at(90).cells[1]!.text).toBe("2 ⛨ 2");
+    expect(at(50).level).toBe(2); // glyphs gone, counts stay
+    expect(at(50).cells[1]!.text).toBe("2 2");
+    expect(at(30).level).toBe(3); // counts gone, digits stand
+    expect(at(30).cells.map((c) => c.text)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]);
+  });
+
+  test("cells that still overflow drop WHOLE from the tail, never sheared", () => {
+    const entries = deckStripEntries(data, 4);
+    const { cells } = deckStrip(entries, 12); // narrower than ten level-3 cells
+    expect(cells.length).toBeLessThan(10);
+    expect(cells.length).toBeGreaterThan(0);
+    for (const c of cells) expect(c.x + c.w).toBeLessThanOrEqual(12);
+  });
+
+  test("a click on a strip cell is that deck; the separator and the status row are nothing", () => {
+    const entries = deckStripEntries(data, 4);
+    const { cells } = deckStrip(entries, 200);
+    const g: HubGeometry = { left: 0, rail: null, top: 1, height: 37, panes: [], strip: { row: 38, cells } };
+    expect(clickTarget(g, cells[1]!.x, 38)).toEqual({ kind: "deck", id: "security" });
+    expect(clickTarget(g, cells[1]!.x + cells[1]!.w - 1, 38)).toEqual({ kind: "deck", id: "security" });
+    expect(clickTarget(g, cells[1]!.x + cells[1]!.w, 38)).toBeNull(); // the gap between cells
+    expect(clickTarget(g, cells[0]!.x, 39)).toBeNull(); // the status line is not the strip
   });
 });
