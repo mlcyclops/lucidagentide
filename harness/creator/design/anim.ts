@@ -55,14 +55,10 @@ export function cubicBezierEase(x1: number, y1: number, x2: number, y2: number):
   return (t) => (t <= 0 ? 0 : t >= 1 ? 1 : sampleY(solve(t)));
 }
 
-// A Map, not an object literal: a name read from a document can never resolve to an inherited member
-// (`constructor`, `toString`) and be called as a curve.
-const EASE_CURVES: ReadonlyMap<string, EaseFn> = new Map([
-  ["ease", cubicBezierEase(0.25, 0.1, 0.25, 1)],
-  ["ease-in", cubicBezierEase(0.42, 0, 1, 1)],
-  ["ease-out", cubicBezierEase(0, 0, 0.58, 1)],
-  ["ease-in-out", cubicBezierEase(0.42, 0, 0.58, 1)],
-]);
+const EASE = cubicBezierEase(0.25, 0.1, 0.25, 1);
+const EASE_IN = cubicBezierEase(0.42, 0, 1, 1);
+const EASE_OUT = cubicBezierEase(0, 0, 0.58, 1);
+const EASE_IN_OUT = cubicBezierEase(0.42, 0, 0.58, 1);
 
 /** True for a well-formed Ease value (named, or a cubic with four finite numbers and x1/x2 in 0..1). */
 export function isEase(e: unknown): e is Ease {
@@ -75,10 +71,17 @@ export function isEase(e: unknown): e is Ease {
 
 /** The progress function for an Ease; malformed values fall back to linear. */
 export function easeFn(e: Ease): EaseFn {
-  if (e === "linear") return linear;
-  if (e === "hold") return hold;
-  if (typeof e === "string") return EASE_CURVES.get(e) ?? linear;
-  if (!isEase(e)) return linear;
+  // Explicit cases, no lookup by name: the name comes from the document, so it can never resolve to an
+  // inherited member (`constructor`, `toString`) and be called as a curve.
+  switch (e) {
+    case "linear": return linear;
+    case "hold": return hold;
+    case "ease": return EASE;
+    case "ease-in": return EASE_IN;
+    case "ease-out": return EASE_OUT;
+    case "ease-in-out": return EASE_IN_OUT;
+  }
+  if (typeof e === "string" || !isEase(e)) return linear;
   const [x1, y1, x2, y2] = e.cubic;
   return cubicBezierEase(x1, y1, x2, y2);
 }
