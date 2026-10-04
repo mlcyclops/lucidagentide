@@ -1,17 +1,62 @@
 # LucidAgentIDE with Microsoft Defender for Endpoint and Agent 365
 
-For endpoint and security admins in Microsoft 365 E5/E7 or Agent 365 tenants. Decision record:
-ADR-0384 (P-LEGIBLE.1, issue #302).
+For endpoint and security admins in Microsoft 365 E5/E7 or Agent 365 tenants. Decision records:
+ADR-0384 (P-LEGIBLE.1) and ADR-0427 (P-LEGIBLE.2), issue #302. Microsoft sources were re-checked on
+2026-10-04; the Learn pages they rest on are dated 2026-09-16.
 
 ## What Defender sees today
 
 | Defender capability | Status for LucidAgentIDE | Why |
 | --- | --- | --- |
 | Local AI agent inventory (`AgentsInfo`, `Platform == "LocalAgents"`) | Not listed yet | Microsoft maintains the list of supported agents. There is no public registration API or manifest a vendor can use to enroll. |
-| Entra Agent ID | Does not apply | Local agents run as the signed-in OS user. Defender links them to that user with a `used by` edge. Agent ID covers cloud agents only. |
+| Entra Agent ID | Not used by the Defender inventory | Defender links a local agent to the signed-in OS user with a `used by` edge; `can authenticate as` is for cloud agents. Global Secure Access is different, see below. |
 | Runtime protection, agent-native hooks | Not available | Defender inspects agents through each vendor's hook interface (user prompt, pre-tool call, post-tool response). LucidAgentIDE does not expose one to third parties yet. |
-| Runtime protection, network inspection | Not effective | Model traffic is TLS from the agent runtime, or loopback-only for local models. Network inspection does not support certificate pinning, HTTP/3 or loopback flows. |
+| Runtime protection, network inspection | Not effective | Microsoft lists one supported agent for it (OpenClaw). It also does not support certificate pinning or HTTP/3, and loopback traffic to local models never crosses the network. |
 | Standard EDR telemetry (process, file, network) | Full | LucidAgentIDE runs as ordinary user-mode processes, like any other application. |
+
+## Agent 365 registry, Shadow AI and Global Secure Access
+
+**Shadow AI is a catalog, not a default.** The Shadow AI page in the Microsoft 365 admin center
+(Frontier preview) detects seven named agents through Defender: OpenClaw, ChatGPT Desktop, Ollama
+Desktop, Poe Desktop, Claw/ZeroClaw, OpenCode and Claude Desktop. It can block only OpenClaw, and only
+on Intune-managed Windows devices. LucidAgentIDE is not in that catalog, so it is not listed as shadow
+AI and not blocked by that feature. The block it can actually meet is ordinary application control
+(App Control for Business/WDAC, AppLocker, Smart App Control) refusing an unsigned binary; allow it by
+path or hash until the installers are signed.
+
+**Registering it yourself (optional, admin side).** The Agent Registration API (Microsoft Graph beta)
+creates an Agent 365 registry entry without an app package. It needs `AgentRegistration.ReadWrite.All`
+and runs in the Global service only (not US Government L4 or L5). Nothing in Microsoft's documentation
+links such an entry to the agents Defender detects on endpoints, so treat it as a record for your
+governance process, not as enrollment:
+
+```http
+POST https://graph.microsoft.com/beta/copilot/agentRegistrations
+Content-Type: application/json
+
+{
+  "displayName": "LucidAgentIDE",
+  "description": "Local agentic IDE. Runs as the signed-in user; loopback-only control plane.",
+  "createdBy": "<object ID of the admin or app creating the entry>",
+  "ownerIds": ["<owner object ID>"],
+  "originatingStore": "LucidAgentIDE",
+  "sourceAgentId": "com.lucidagentide.desktop",
+  "sourceCreatedDateTime": "2026-10-04T00:00:00Z",
+  "sourceLastModifiedDateTime": "2026-10-04T00:00:00Z"
+}
+```
+
+**Global Secure Access** (preview) labels each local agent it sees on the network as managed or
+shadow by whether the agent is registered with Microsoft Entra Agent ID. It needs the GSA client with
+TLS inspection on, and it sees internet-bound traffic only, so a fully local model is invisible to it.
+Whether it identifies LucidAgentIDE's model traffic as an agent at all is not documented. A managed
+label would need an agent identity your tenant provisions; the app cannot create one.
+
+Sources: [Shadow AI](https://learn.microsoft.com/en-us/microsoft-365/admin/manage/agent-shadow-ai),
+[Create agentRegistration](https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/admin-settings/agent-registration/agentregistration-create),
+[AI agent discovery in Global Secure Access](https://learn.microsoft.com/en-us/entra/global-secure-access/concept-ai-agent-discovery),
+[Discover local AI agents](https://learn.microsoft.com/en-us/defender-endpoint/discover-local-ai-agents),
+[AI agent runtime protection](https://learn.microsoft.com/en-us/defender-endpoint/ai-agent-runtime-protection-overview).
 
 ## The local-agent manifest
 
@@ -127,12 +172,17 @@ DeviceProcessEvents
 ## Government and CUI deployments
 
 - Defender local-agent discovery requires the commercial cloud. Sovereign and national clouds are
-  not supported.
+  not supported. The Agent Registration API is not available in US Government L4 or L5 either, so a
+  GCC High or DoD tenant has nothing to integrate with.
 - In audit or block mode, runtime-protection detections are sent to Defender XDR. A hook payload can
   include prompt and tool content, so an agent-native hook is a potential content egress path.
+  Defender XDR's **Prompt evidence collection** (Settings > Security for AI) is on by default and
+  attaches prompt snippets to alerts; Microsoft documents it for Security for AI alerts without saying
+  whether local-agent alerts are covered.
 - LucidAgentIDE exposes no agent-native hook, so Defender receives nothing beyond ordinary endpoint
-  telemetry. The honest posture for a CUI tenant is "network inspection only", which for this app
-  means discovery-grade visibility and no content inspection.
+  telemetry. The honest posture for a CUI tenant is "network inspection only", and since network
+  inspection does not cover this app either, that means EDR telemetry (process, file, network) and no
+  content inspection.
 - The manifest is local, metadata-only, and never transmitted by the app. Whether to collect it into
   a cloud console is the admin's decision.
 
@@ -144,8 +194,10 @@ Each item is a separate increment (ADR-0384):
    contract peer CLIs use. It will be off by default under the AskSage lockdown and in CUI sessions,
    controlled by a managed tighten-only policy, with a metadata-only payload mode. It can add a block,
    never remove one, and it runs after the built-in gate.
-2. Authenticode and Apple Developer ID signing. Defender's `trustedProcess` field depends on it.
+2. Authenticode and Apple Developer ID signing. Defender's `trustedProcess` field depends on it, and
+   it is what keeps application control from blocking the app.
 3. Asking Microsoft to add LucidAgentIDE to the supported agent list.
 
 These need a real tenant to confirm: whether discovery can use this manifest, how long XDR retains
-hook payloads, and whether the Agent 365 Registry accepts a local agent without an M365 app package.
+hook payloads, whether Global Secure Access identifies the app's model traffic as an agent, and
+whether an Agent Registration API entry is ever linked to Defender's endpoint detections.

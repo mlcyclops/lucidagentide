@@ -1233,6 +1233,10 @@ demo-P-MODEL.6: ## P-MODEL.6 (ADR-0422): Claude Sonnet 5.5 on omp 18.4.4. The si
 demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / Agent 365 without a content path. Each launch writes a metadata-only local-agent manifest (Defender's vendor / relatedProcess / autoApprove / mcpServers / localMcps vocabulary) to userData; MCP entries keep only name, type, URL origin or command basename, so no header, arg, env, path or query can leak. No hook seam, no listener, gate untouched.
 	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-LEGIBLE.2
+demo-P-LEGIBLE.2: ## P-LEGIBLE.2 (ADR-0427, issue #302): the Defender / Agent 365 runbook corrected against Microsoft's sources (Entra Agent ID matters to Global Secure Access, not the Defender inventory; Shadow AI is a fixed catalog; Agent Registration API is Global-cloud only). Docs only: re-proves the metadata-only manifest shape and ADR numbering, gate untouched.
+	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-SWITCH.1
 demo-P-SWITCH.1: ## P-SWITCH.1 (ADR-0403, issue #390): opening a session never stops the running one unless you choose to. /api/session/load and /api/newSession answer 409 while Main is busy (turn, goal loop, automation) unless force; the sidebar and New session ask first and offer Open as a spoke (session resumed in a lane, composer attached) or Stop it and switch. A session a live spoke holds attaches to that spoke instead of loading a second copy. Proves the busy predicate on the real backend over the fake agent, the switch plan, and the sheet wording.
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/session_switch.test.ts desktop/acp_backend_recovery.test.ts desktop/renderer/composer_target.test.ts harness/adr_numbering.test.ts
