@@ -46,7 +46,17 @@ import {
   pushCreatorSample, sampleCreatorCpu, sampleLocalGpu, sampleOf, telemetryFromAgentJson, validateRemoteTarget,
   type CreatorResourcesData, type CreatorSample, type TargetTelemetry,
 } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): normalized CPU/GPU telemetry + job admission
-import { CREATOR_PROVIDER_IDS, creatorRegistryStatus, type CreatorCapabilityId, type CreatorEndpointDef, type CreatorProviderId, type CreatorProviderStatus } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
+import { CREATOR_PROVIDER_IDS, creatorRegistryStatus, creatorSpec, type CreatorCapabilityId, type CreatorEndpointDef, type CreatorProviderId, type CreatorProviderStatus } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
+import { cuiProviderVerdict, cuiRefusal, gateCreatorProvider, isLoopbackHost, type CuiVerdict } from "./cui_policy.ts"; // CUI lockdown verdict for every provider-reaching Creator route
+import { scanCreatorMailbox, type CreatorMailboxReport } from "./creator_mailbox.ts"; // lucid-creator-endpoint v1 mailbox import
+import { DgxAvatarClient, buildAvatarSpec } from "./creator_dgx_avatar.ts"; // DGX avatar service client (contract 2a)
+import { DgxCadClient, buildCadModelRequest, checkInspectName, modelRunBody, CAD_ARTIFACT_ID, CAD_MAX_UPLOAD_BYTES } from "./creator_dgx_cad.ts"; // DGX CAD service client (contract 2c)
+import {
+  DgxVisionClient, buildVisionRequest, checkVisionImage, decodeB64, isVisionOp, parseVisionResult, visionRemoteRow,
+  VISION_MAX_IMAGE_BYTES, type VisionImage, type VisionRemoteRow,
+} from "./creator_dgx_vision.ts"; // Design suite: DGX vision service client (design contract section 4)
+import { DESIGN_STATE_MAX_BYTES, DesignStore, planDesignExport, planHyperframesExport } from "./creator_design.ts"; // Design suite: state, agent-op queue, export validation
+import { planHyperframesRender, preflightHyperframes, runHyperframesRender, type HyperframesFormat, type HyperframesQuality, type HyperframesSpawn } from "./creator_hyperframes.ts"; // local HyperFrames renders
 import { addTrack, foldLibrary, libraryLedger, libraryStats, removeTrack, trackAudio, updateTrack, type CreatorTrack, type LibraryIo, type LibraryStats, type TrackOrigin } from "./creator_library.ts"; // CREATOR-0 (ADR-0281)
 import {
   ComfyClient, applyWorkflowTemplate, artifactDir, artifactLedger, buildGif, buildSpriteSheet, decodePngDataUrl,
@@ -61,6 +71,8 @@ import { manifestCapabilities, parseModelManifest, reconcileManifest } from "../
 import type { MediaKind } from "../harness/creator/comfy_stream.ts"; // CREATOR-3: the closed media kinds
 import { scanAndDecide } from "../harness/security/gate.ts"; // CREATOR-3: the fail-closed gate every artifact's metadata passes
 import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
+import { DriftActivityLog, DriftClient, defaultDriftExePaths, driftSessionEndpointDef, driftSessionPath, driftSessionStatus, parseDriftSession, planDriftLibraryImport, type DriftActivityEntry, type DriftSessionState } from "./creator_drift.ts"; // CREATOR-DRIFT: CutWire Drift over its localhost agent protocol
+import { driftOpPolicy, isDriftMutation, summarizeDriftCall } from "../harness/creator/drift_policy.ts"; // CREATOR-DRIFT: the shared CUI / mutation policy
 import {
   createJob, finishJob, jobStats, listJobs, recordJobArtifact, requestJobCancel, startJob,
   type CreatorJobKind, type JobAdmissionSnapshot, type JobIo,
@@ -83,7 +95,8 @@ import { ElevenLabsTtsBackend, ElevenLabsSttBackend, elevenLabsSpeak, listEleven
 import { TTS_PROVIDERS, mapDotsVoices, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247) + P-VOICE.6 dots
 import { digestSpokenReply } from "../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
 import { parseVoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7: portable endpoint contract
-import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint } from "./settings_store.ts";
+import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint, type VoiceSettings } from "./settings_store.ts";
+import { enclaveHostSet, httpHost, lockdownEgressExempt, lockdownVoiceVerdict, type VoiceKind } from "./lockdown_route.ts"; // CUI lockdown: cloud voice refused, loopback/enclave engines allowed
 import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
 import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
@@ -172,6 +185,8 @@ function settingsData() {
 async function transcribeClip(audio: Uint8Array, mimeType?: string, language?: string): Promise<{ text: string; note: string }> {
   const v = voiceSettings();
   const topts = { mimeType, language };
+  const refused = voiceLockdownRefusal("stt", v.sttProvider, v);
+  if (refused) return { text: "", note: refused };
   if (v.sttProvider === "elevenlabs") {
     const key = process.env.ELEVENLABS_API_KEY;
     if (!key) return { text: "", note: "Add your ElevenLabs API key (Settings \u2192 Voice), or switch STT to offline Whisper." };
@@ -181,6 +196,24 @@ async function transcribeClip(audio: Uint8Array, mimeType?: string, language?: s
   let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
   if (sttTransportFailed(r)) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
   return { text: r.text, note: r.note ?? "" };
+}
+
+/** CUI lockdown voice gate, run before ANY speech dispatch. Lock off: "". Lock on: cloud engines (ElevenLabs
+ *  TTS/STT, OpenAI TTS) are refused, and a local engine must point at loopback or a DGX enclave host (an
+ *  enabled enclave Local Provider, or an imported Loader voice endpoint). A refusal is AUDITED as a blocked
+ *  egress decision and returns the user-facing reason. `audit: false` is for readiness listings, which
+ *  only explain; the dispatch that would have sent content is what gets recorded. */
+function voiceLockdownRefusal(kind: VoiceKind, engine: string, v: VoiceSettings, audit = true): string {
+  const managed = managedAsksageOnly();
+  if (!asksageOnly() && !managed) return "";
+  const url = engine === "whisper" ? v.sttUrl : engine === "dots-tts" ? v.dotsTtsUrl : engine === "local-tts" ? LOCAL_TTS_URL() : undefined;
+  // Under the org-managed lock no attestation or import widens it: loopback engines only.
+  const hosts = enclaveHostSet(listLocalProviders(), managed);
+  if (!managed) for (const e of v.voiceEndpoints) { const h = httpHost(e.url); if (h) hosts.add(h); }
+  const verdict = lockdownVoiceVerdict(true, kind, engine, url, hosts);
+  if (verdict.allowed) return "";
+  if (audit) emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: `voice-lockdown-${kind}`, reason: `${engine}: ${verdict.reason}`.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined });
+  return verdict.reason;
 }
 
 function whisperModelDir(): string { return join(homedir(), ".omp", "whisper"); }
@@ -343,7 +376,24 @@ function accountsSnapshot(): Record<string, AccountView[]> {
 
 // ADR-0221: the desktop's Embedder — an ApiEmbedder built from the stored config + the vault secret injected as
 // LUCID_EMBEDDINGS_KEY by main, or null when semantic search is off/incomplete (retrieval stays lexical).
-function desktopEmbedder() { return resolveApiEmbedder(embeddingsConfig() ?? undefined, process.env.LUCID_EMBEDDINGS_KEY); }
+// CUI lockdown: embedding sends KB page text to the endpoint, so under lockdown it must be loopback or a DGX
+// enclave host (user lock only); otherwise semantic search is OFF (retrieval stays lexical) and the refusal is
+// audited once per endpoint host rather than on every query.
+let embedLockAuditedHost = "";
+function desktopEmbedder() {
+  const cfg = embeddingsConfig() ?? undefined;
+  const managed = managedAsksageOnly();
+  if (cfg?.enabled && (asksageOnly() || managed) && !lockdownEgressExempt(cfg.baseUrl, enclaveHostSet(listLocalProviders(), managed))) {
+    const host = httpHost(cfg.baseUrl) ?? "(invalid URL)";
+    if (embedLockAuditedHost !== host) {
+      embedLockAuditedHost = host;
+      emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "embeddings-lockdown", reason: `CUI lockdown: embeddings endpoint ${host} is neither on this workstation nor a DGX enclave host; semantic search is off`.slice(0, 200) });
+    }
+    return null;
+  }
+  embedLockAuditedHost = "";
+  return resolveApiEmbedder(cfg, process.env.LUCID_EMBEDDINGS_KEY);
+}
 
 // ADR-0221: (re)build a KG's SEMANTIC vector index from its COMPILED PAGES — the canonical, always-available
 // corpus (so incremental ingest AND the explicit "re-index" action stay consistent). Idempotent: clears the
@@ -408,13 +458,13 @@ import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
 import type { CompleteFn } from "../harness/personal/distiller.ts";
 import { homedir } from "node:os";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync, openSync, fstatSync, closeSync } from "node:fs";
 import { listDir } from "./fs_browse.ts";
 import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
-import { apiAuthorized, isAllowedRequest, reqShape } from "./origin_guard.ts";
+import { apiAuthorized, isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 
 /** Sanitize an untrusted /api/goal `dial` payload into a LoopDial — only known command types + valid
  *  risk tiers survive; everything else is dropped (the backend clamps it by the managed ceiling anyway). */
@@ -829,12 +879,37 @@ const CREATOR_SECRET_ENV: Record<string, string> = {
   elevenlabs: "ELEVENLABS_API_KEY",
   suno: "LUCID_SUNO_TOKEN",
   comfyui: "LUCID_COMFY_TOKEN",
+  heygen: "HEYGEN_API_KEY",
+  "autodesk-aps": "LUCID_APS_TOKEN",
+  "bluebeam-studio": "LUCID_BLUEBEAM_TOKEN",
+  classcad: "LUCID_CLASSCAD_KEY",
+  drift: "DRIFT_MCP_TOKEN",
 };
+
+// CREATOR-DRIFT: Drift writes mcp-session.json while Agent access is on and removes it when it goes off, so
+// the file is read fresh on every use (read-then-parse: a vanished file is simply "no session"). The token
+// inside it is only ever handed to DriftClient for the Authorization header.
+function driftSessionState(): DriftSessionState {
+  const path = driftSessionPath(process.env, process.platform, homedir());
+  let text: string;
+  try { text = readFileSync(path, "utf8"); }
+  catch (e) {
+    const code = e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : "";
+    return { path, session: null, error: code === "ENOENT" ? "Agent access is off (no session file)." : `The session file could not be read${code ? ` (${code})` : ""}.` };
+  }
+  const session = parseDriftSession(text);
+  return { path, session, error: session ? "" : "The session file is incomplete: turn Agent access off and on in Drift." };
+}
+// The in-memory collaboration feed (agent and user calls alike) and the version the last initialize reported.
+const driftActivity = new DriftActivityLog();
+let driftVersion = "";
 
 interface CreatorRegistryData extends CreatorLibraryData {
   providers: CreatorProviderStatus[];
   /** CREATOR-1: the last probe per provider, so the UI can show what was proven and how fresh it is. */
   probes: ProbeResult[];
+  /** The CUI lockdown (asksageLocked semantics) the per-provider `cui` verdicts were folded under. */
+  cui: { lockdown: boolean };
 }
 // CREATOR-1 (ADR-0292): the last probe per provider. In memory by design - a capability answer goes stale
 // the moment a node is installed or a VPN drops, so it is never persisted as if it were fact.
@@ -844,9 +919,12 @@ function creatorSecretFor(id: CreatorProviderId): string {
   const env = CREATOR_SECRET_ENV[id];
   if (env && (process.env[env] ?? "").trim()) return process.env[env]!.trim();
   const ref = listCreatorEndpoints().find((e) => e.enabled && e.providerId === id && !!e.vaultRef)?.vaultRef;
-  if (!ref) return "";
-  const name = `LUCID_CREATOR_TARGET_${ref.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`;
-  return (process.env[name] ?? "").trim();
+  const name = ref ? `LUCID_CREATOR_TARGET_${ref.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}` : "";
+  const fromVault = name ? (process.env[name] ?? "").trim() : "";
+  if (fromVault) return fromVault;
+  // CREATOR-DRIFT: with no env var and no vault target, Drift's own session file carries the token.
+  if (id === "drift") return driftSessionState().session?.token ?? "";
+  return "";
 }
 
 const probeDeps: ProbeDeps = {
@@ -856,6 +934,9 @@ const probeDeps: ProbeDeps = {
   now: () => Date.now(),
   secret: creatorSecretFor,
   timeoutMs: 8000,
+  driftSession: driftSessionState,
+  platform: process.platform,
+  env: process.env,
 };
 
 function creatorRegistryData(): CreatorRegistryData {
@@ -867,12 +948,275 @@ function creatorRegistryData(): CreatorRegistryData {
     const env = CREATOR_SECRET_ENV[id];
     // Honest "a credential is registered": either the engine env carries it, or the user stored one in the
     // vault and the declaration references it by NAME. Nothing here reads a secret value.
-    const secretPresent = !!(env && (process.env[env] ?? "").trim()) || mine.some((e) => e.enabled && !!e.vaultRef);
+    let secretPresent = !!(env && (process.env[env] ?? "").trim()) || mine.some((e) => e.enabled && !!e.vaultRef);
+    let endpoints: CreatorEndpointDef[] = mine;
+    // CREATOR-DRIFT: Drift's own Agent access session stands in for a declaration (and its token for the
+    // credential) when the user declared nothing. The status row sees a loopback endpoint, never the token.
+    if (id === "drift" && !mine.some((e) => e.enabled)) {
+      const s = driftSessionState().session;
+      if (s) { endpoints = [...mine, driftSessionEndpointDef(s)]; secretPresent = true; }
+    }
     // CREATOR-1: `ready` now requires a LIVE probe that attested something. An expired answer is dropped.
-    byProvider[id] = { endpoints: mine, secretPresent, discovered: probeCache.discovered(id, now) };
+    byProvider[id] = { endpoints, secretPresent, discovered: probeCache.discovered(id, now) };
   }
-  return { providers: creatorRegistryStatus(byProvider), probes: probeCache.all(), ...creatorLibraryData() };
+  const lockdown = creatorLocked();
+  return { providers: creatorRegistryStatus(byProvider, lockdown), probes: probeCache.all(), cui: { lockdown }, ...creatorLibraryData() };
 }
+
+// ---- CUI lockdown for Creator providers (contract section 4) ----
+// The lockdown IS the AskSage lock (ADR-0217/0218/0219): the user's flag OR the org-managed one, exactly what
+// acp_backend's asksageLocked() reads. No second toggle. Every route that reaches a provider calls
+// creatorGate first; a refusal is audited through the same SecurityEvent sink as the lockdown egress block.
+
+const creatorLocked = (): boolean => asksageOnly() || managedAsksageOnly();
+
+function creatorGate(providerId: CreatorProviderId, ep: CreatorEndpointDef | undefined): CuiVerdict {
+  return gateCreatorProvider(creatorLocked(), creatorSpec(providerId), ep, (ev) => {
+    emitSecurityEvent({
+      category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown",
+      reason: `Creator provider ${ev.providerId}${ev.endpointId ? ` (${ev.endpointId})` : ""} refused under CUI lockdown: ${ev.reason}`.slice(0, 200),
+    });
+  });
+}
+
+/** The declaration a route uses: the named one when the caller picked an id, else the first enabled one the
+ *  lockdown allows, else the first enabled one (whose refusal the gate then reports). Mirrors the registry row. */
+function creatorEndpointFor(providerId: CreatorProviderId, endpointId?: string): CreatorEndpointDef | undefined {
+  const enabled = listCreatorEndpoints().filter((e) => e.enabled && e.providerId === providerId);
+  if (endpointId) return enabled.find((e) => e.id === endpointId);
+  const spec = creatorSpec(providerId);
+  const locked = creatorLocked();
+  const declared = enabled.find((e) => cuiProviderVerdict(locked, spec, e).allowed) ?? enabled[0];
+  if (declared || providerId !== "drift") return declared;
+  // CREATOR-DRIFT: no declaration, so Drift's own Agent access session is the endpoint when it parses.
+  const s = driftSessionState().session;
+  return s ? driftSessionEndpointDef(s) : undefined;
+}
+
+/** The dots.tts voice backend as a Creator declaration, so the avatar route gates its speech step with the
+ *  same verdict. A Creator dots-tts declaration for the same URL carries the user's own attestation; else an
+ *  imported voice endpoint written by the DGX Loader attests the enclave; else loopback counts as on-device. */
+function dotsTtsEndpointDef(url: string): CreatorEndpointDef {
+  const base = url.replace(/\/+$/, "");
+  const declared = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "dots-tts" && (e.baseUrl ?? "").replace(/\/+$/, "") === base);
+  if (declared) return declared;
+  const v = voiceSettings();
+  const active = v.voiceEndpoints.find((e) => e.id === v.activeVoiceEndpointId && e.url.replace(/\/+$/, "") === base);
+  let loopback = false;
+  try { loopback = isLoopbackHost(new URL(base).hostname); } catch { loopback = false; }
+  return {
+    id: "voice-dots-tts", providerId: "dots-tts", label: active?.label ?? "dots.tts voice endpoint", baseUrl: base,
+    zone: loopback ? "local" : "internal", ...(active && /^dgx-loader\b/i.test(active.source ?? "") ? { enclave: true } : {}), enabled: true,
+  };
+}
+
+// lucid-creator-endpoint v1: the DGX Loader writes <personal dir>/creator_endpoints/<id>.json. Scanned at
+// engine start (Creator builds) and on POST /api/creator/endpoint/import-mailbox.
+const creatorEndpointMailboxDir = (): string => join(personalBaseDir(), "creator_endpoints");
+function scanCreatorEndpointMailbox(): CreatorMailboxReport {
+  return scanCreatorMailbox({
+    listJson: (dir) => readdirSync(dir),
+    readText: (path) => readFileSync(path, "utf8"),
+    endpoints: () => listCreatorEndpoints(),
+    upsert: (def) => upsertCreatorEndpoint(def),
+  }, creatorEndpointMailboxDir());
+}
+
+// The avatar service's own job id, per Creator job, so GET /api/creator/avatar/job survives an engine restart.
+const avatarRemoteLedger = (): string => join(CREATOR_DIR, "jobs", "avatar_remote.jsonl");
+interface AvatarRemoteRow { jobId: string; endpointId: string; remoteJobId: string; artifactId?: string }
+function avatarRemoteRow(jobId: string): AvatarRemoteRow | null {
+  let found: AvatarRemoteRow | null = null;
+  for (const line of jobIo.readText(avatarRemoteLedger()).split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const r = JSON.parse(line) as Partial<AvatarRemoteRow>;
+      if (r.jobId === jobId && typeof r.endpointId === "string" && typeof r.remoteJobId === "string") found = { jobId, endpointId: r.endpointId, remoteJobId: r.remoteJobId, ...(typeof r.artifactId === "string" ? { artifactId: r.artifactId } : {}) };
+    } catch { /* torn line */ }
+  }
+  return found;
+}
+
+/** GET /api/creator/avatar/job's answer. `artifactId` appears once the video is in the Creator library. */
+interface AvatarJobView { jobId: string; state: string; stage: string; message: string; error?: string; artifactId?: string }
+type AvatarJobReply = { ok: true; data: AvatarJobView } | { ok: false; error: string; data?: { cui: CuiVerdict } | { jobId: string } };
+// One download per job: a second poll while the first is storing the video reports progress, not a duplicate.
+const avatarFinalizing = new Set<string>();
+
+/** Poll the box for one avatar job and, on `done`, pull the composed video (else the plain avatar render)
+ *  into the Creator library as a `video` artifact, settling the ledger job. Remote text is bounded data. */
+async function avatarJobView(jobId: string): Promise<AvatarJobReply> {
+  const row = avatarRemoteRow(jobId);
+  if (!row) return { ok: false, error: "That is not an avatar job this LUCID started." };
+  const job = listJobs(jobIo, CREATOR_DIR).find((j) => j.id === jobId);
+  if (row.artifactId || job?.state === "done") {
+    const artifactId = row.artifactId ?? job?.artifacts[0] ?? "";
+    return { ok: true, data: { jobId, state: "done", stage: "done", message: "The video is in the Creator library.", ...(artifactId ? { artifactId } : {}) } };
+  }
+  if (job && (job.state === "failed" || job.state === "cancelled" || job.state === "refused")) {
+    return { ok: true, data: { jobId, state: job.state, stage: "done", message: job.error || `The job ${job.state}.`, ...(job.error ? { error: job.error } : {}) } };
+  }
+  const ep = creatorEndpointFor("dgx-avatar", row.endpointId);
+  if (!ep?.baseUrl) return { ok: false, error: `The avatar endpoint ${row.endpointId} is no longer declared or enabled.`, data: { jobId } };
+  const verdict = creatorGate("dgx-avatar", ep);
+  if (!verdict.allowed) return cuiRefusal(verdict);
+  const client = new DgxAvatarClient({ baseUrl: ep.baseUrl });
+  if (job?.cancelRequested) await client.cancel(row.remoteJobId);
+  const st = await client.job(row.remoteJobId);
+  if (!st.ok) return { ok: false, error: st.error, data: { jobId } };
+  const s = st.data;
+  if (s.state === "failed" || s.state === "cancelled") {
+    const err = s.error || s.message || `the avatar render ${s.state}`;
+    finishJob(jobIo, CREATOR_DIR, jobId, s.state === "failed" ? "failed" : "cancelled", err);
+    return { ok: true, data: { jobId, state: s.state, stage: s.stage, message: s.message, error: err } };
+  }
+  if (s.state !== "done") return { ok: true, data: { jobId, state: s.state, stage: s.stage, message: s.message } };
+  if (avatarFinalizing.has(jobId)) return { ok: true, data: { jobId, state: "running", stage: "done", message: "Downloading the video into the Creator library." } };
+  avatarFinalizing.add(jobId);
+  try {
+    const variant = s.outputs.composed ? "composed" : "avatar";
+    const v = await client.video(row.remoteJobId, variant);
+    if (!v.ok) {
+      finishJob(jobIo, CREATOR_DIR, jobId, "failed", v.error);
+      return { ok: true, data: { jobId, state: "failed", stage: "done", message: v.error, error: v.error } };
+    }
+    const stored = storeArtifact(artifactIo, CREATOR_DIR, { kind: "video", bytes: v.data.bytes, mime: v.data.mime, width: 0, height: 0, source: "dgx-avatar", prompt: job?.label ?? "", model: variant });
+    if (!stored.ok || !stored.artifact) {
+      const err = stored.error ?? "The avatar video could not be stored.";
+      finishJob(jobIo, CREATOR_DIR, jobId, "failed", err);
+      return { ok: true, data: { jobId, state: "failed", stage: "done", message: err, error: err } };
+    }
+    recordJobArtifact(jobIo, CREATOR_DIR, jobId, stored.artifact.id);
+    finishJob(jobIo, CREATOR_DIR, jobId, "done", "");
+    jobIo.appendLine(avatarRemoteLedger(), JSON.stringify({ ...row, artifactId: stored.artifact.id }));
+    return { ok: true, data: { jobId, state: "done", stage: "done", message: `Stored the ${variant} video in the Creator library.`, artifactId: stored.artifact.id } };
+  } finally { avatarFinalizing.delete(jobId); }
+}
+
+/** A dgx-cad output's library kind and mime, by its declared kind (else its file extension). SVG previews
+ *  ride the response inline and are never stored: the library refuses SVG as a script risk. */
+function cadArtifactKind(a: { kind: string; name: string }): { kind: ArtifactKind; mime: string } | null {
+  const k = (a.kind || a.name.split(".").pop() || "").toLowerCase();
+  if (k === "step" || k === "stp") return { kind: "model-3d", mime: "model/step" };
+  if (k === "stl") return { kind: "model-3d", mime: "model/stl" };
+  if (k === "dxf") return { kind: "drawing", mime: "image/vnd.dxf" };
+  return null;
+}
+
+// ---- Design suite: the Design editor's state + agent-op queue, and the DGX vision service ----
+// The document lives in the renderer; the engine keeps only the last validated copy in memory (no CUI on disk
+// from here) plus the queue of agent op batches. Vision jobs (decompose, upscale) ride the Creator job ledger
+// with a remote-id row, like the avatar service, so a poll survives an engine restart.
+
+const designStore = new DesignStore();
+const visionRemoteLedger = (): string => join(CREATOR_DIR, "jobs", "vision_remote.jsonl");
+// One artifact download per job: a second poll while the first is storing reports progress, not a duplicate.
+const visionFinalizing = new Set<string>();
+/** The engine's request body limit (Bun's default maxRequestBodySize). */
+const ENGINE_MAX_BODY = 128 * 1024 * 1024;
+
+/** Read a JSON body of at most `max` bytes. */
+async function readJsonCapped(req: Request, max: number): Promise<{ ok: true; body: unknown; bytes: number } | { ok: false; error: string }> {
+  const limitMb = Math.round(max / (1024 * 1024));
+  if (Number(req.headers.get("content-length") ?? "0") > max) return { ok: false, error: `That request is over the ${limitMb} MB limit.` };
+  let text: string;
+  try { text = await req.text(); } catch { return { ok: false, error: "That request body could not be read." }; }
+  if (text.length > max) return { ok: false, error: `That request is over the ${limitMb} MB limit.` };
+  try { return { ok: true, body: JSON.parse(text), bytes: text.length }; } catch { return { ok: false, error: "That request was not JSON." }; }
+}
+
+const VISION_INPUT_MIMES: readonly string[] = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/apng"];
+
+/** A vision call's input: inline `{ dataB64 }` or a library `{ artifactId }`, sniffed and budget-checked. */
+function visionImageFrom(raw: unknown): { ok: true; image: VisionImage } | { ok: false; error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "Send image: { dataB64 } or { artifactId }." };
+  let bytes: Uint8Array;
+  if ("artifactId" in raw && typeof raw.artifactId === "string") {
+    const id = raw.artifactId;
+    const art = creatorArtifacts().find((a) => a.id === id);
+    if (!art) return { ok: false, error: "That artifact is not in the library." };
+    if (!VISION_INPUT_MIMES.includes(art.mime)) return { ok: false, error: `That artifact is ${art.mime}, not an image the vision service takes.` };
+    try { bytes = new Uint8Array(readFileSync(join(artifactDir(CREATOR_DIR), art.file))); }
+    catch { return { ok: false, error: "That artifact's file is missing." }; }
+  } else {
+    const d = decodeB64("dataB64" in raw ? raw.dataB64 : undefined, VISION_MAX_IMAGE_BYTES);
+    if (!d.ok) return { ok: false, error: `The image was refused: ${d.error}.` };
+    bytes = d.bytes;
+  }
+  return checkVisionImage(bytes);
+}
+
+type VisionJobReply = { ok: true; data: Record<string, unknown> } | { ok: false; error: string; data?: { cui: CuiVerdict } | { jobId: string } };
+
+/** Poll the box for one vision job. On `done` the result is validated against the input image; an upscale
+ *  too big to ride inline is downloaded into the Creator library (kind image) and returned as that artifact. */
+async function visionJobView(jobId: string): Promise<VisionJobReply> {
+  const row: VisionRemoteRow | null = visionRemoteRow(jobIo.readText(visionRemoteLedger()), jobId);
+  if (!row) return { ok: false, error: "That is not a vision job this LUCID started." };
+  const job = listJobs(jobIo, CREATOR_DIR).find((j) => j.id === jobId);
+  if (job && (job.state === "failed" || job.state === "cancelled" || job.state === "refused")) {
+    return { ok: true, data: { jobId, state: job.state === "failed" ? "error" : "cancelled", progress: 1, message: job.error, ...(job.error ? { error: job.error } : {}) } };
+  }
+  const ep = creatorEndpointFor("dgx-vision", row.endpointId);
+  if (!ep?.baseUrl) return { ok: false, error: `The vision endpoint ${row.endpointId} is no longer declared or enabled.`, data: { jobId } };
+  const verdict = creatorGate("dgx-vision", ep);
+  if (!verdict.allowed) return cuiRefusal(verdict);
+  const client = new DgxVisionClient({ baseUrl: ep.baseUrl });
+  const st = await client.job(row.remoteJobId);
+  if (!st.ok) return { ok: false, error: st.error, data: { jobId } };
+  const s = st.data;
+  if (s.state === "error" || s.state === "cancelled") {
+    const err = s.error || s.message || `the vision ${row.op} ${s.state === "error" ? "failed" : "was cancelled"}`;
+    finishJob(jobIo, CREATOR_DIR, jobId, s.state === "error" ? "failed" : "cancelled", err);
+    return { ok: true, data: { jobId, state: s.state, progress: s.progress, message: s.message, error: err } };
+  }
+  if (s.state !== "done") return { ok: true, data: { jobId, state: s.state, progress: s.progress, message: s.message } };
+  const parsed = parseVisionResult(row.op, s.result, { width: row.width, height: row.height }, row.scale);
+  if (!parsed.ok) {
+    finishJob(jobIo, CREATOR_DIR, jobId, "failed", parsed.error);
+    return { ok: true, data: { jobId, state: "error", progress: 1, message: parsed.error, error: parsed.error } };
+  }
+  let result: Record<string, unknown> = parsed.data;
+  const remoteArtifact = typeof result.artifactId === "string" ? result.artifactId : "";
+  if (row.op === "upscale" && remoteArtifact) {
+    const ow = row.width * row.scale;
+    const oh = row.height * row.scale;
+    const known = row.artifactId ? creatorArtifacts().find((a) => a.id === row.artifactId) : undefined;
+    if (known) result = { width: ow, height: oh, artifact: known };
+    else {
+      if (visionFinalizing.has(jobId)) return { ok: true, data: { jobId, state: "running", progress: 1, message: "Downloading the upscaled image into the Creator library." } };
+      visionFinalizing.add(jobId);
+      try {
+        const dl = await client.artifact(remoteArtifact, ow, oh);
+        if (!dl.ok) {
+          finishJob(jobIo, CREATOR_DIR, jobId, "failed", dl.error);
+          return { ok: true, data: { jobId, state: "error", progress: 1, message: dl.error, error: dl.error } };
+        }
+        const stored = storeArtifact(artifactIo, CREATOR_DIR, { kind: "image", bytes: dl.data.bytes, mime: "image/png", width: ow, height: oh, source: "dgx-vision", prompt: `Upscale ${row.scale}x`, model: "upscale" });
+        if (!stored.ok || !stored.artifact) {
+          const err = stored.error ?? "The upscaled image could not be stored.";
+          finishJob(jobIo, CREATOR_DIR, jobId, "failed", err);
+          return { ok: true, data: { jobId, state: "error", progress: 1, message: err, error: err } };
+        }
+        recordJobArtifact(jobIo, CREATOR_DIR, jobId, stored.artifact.id);
+        jobIo.appendLine(visionRemoteLedger(), JSON.stringify({ ...row, artifactId: stored.artifact.id }));
+        result = { width: ow, height: oh, artifact: stored.artifact };
+      } finally { visionFinalizing.delete(jobId); }
+    }
+  }
+  finishJob(jobIo, CREATOR_DIR, jobId, "done", "");
+  return { ok: true, data: { jobId, state: "done", progress: 1, message: s.message, result } };
+}
+
+/** HyperFrames runs as a fixed argument vector with an explicit env (never the engine's). No shell. */
+const hyperframesSpawn: HyperframesSpawn = async (argv, opts) => {
+  const proc = Bun.spawn([...argv], { cwd: opts.cwd, env: opts.env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const timer = setTimeout(() => { try { proc.kill(); } catch { /* already exited */ } }, opts.timeoutMs);
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { code, stdout: stdout.slice(-20_000), stderr: stderr.slice(-20_000) };
+  } finally { clearTimeout(timer); }
+};
 
 // ---- CREATOR-1: jobs ----
 
@@ -1193,6 +1537,11 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
+  // Design suite: design_read / design_apply / design_request. The agent reads a manifest REBUILT from the
+  // validated document and queues ops; it can never push state, ack batches, or export (UI token only).
+  "/api/creator/design/manifest", "/api/creator/design/ops", "/api/creator/design/ops/result",
+  // CREATOR-DRIFT: the drift_status / drift_read / drift_apply / drift_export tools (harness/omp/drift_extension.ts).
+  "/api/creator/drift/status", "/api/creator/drift/call", "/api/creator/drift/library",
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
   "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
@@ -1438,6 +1787,26 @@ async function bundleApp(): Promise<{ js: string; ok: boolean }> {
   }
 }
 
+/** Design suite: the Design editor's Web Worker (decode, composite, resample, trace, GIF quantize), served
+ *  SAME-ORIGIN so `worker-src 'self'` covers it with no blob: or eval. Same ADR-0260 rule as bundleApp: a
+ *  packaged build ships the prebuilt design_worker.bundle.js (build-renderer emits it) and never Bun.build()s
+ *  renderer TypeScript at runtime; dev builds it live. Null on failure (the error stays in the server log). */
+async function bundleDesignWorker(): Promise<string | null> {
+  const prebuilt = join(ROOT, "design_worker.bundle.js");
+  if (existsSync(prebuilt)) {
+    try { return await Bun.file(prebuilt).text(); }
+    catch (e) { console.error("[designWorker] prebuilt worker unreadable, rebuilding:", e); }
+  }
+  try {
+    const out = await Bun.build({ entrypoints: [join(ROOT, "design_worker.ts")], target: "browser", sourcemap: "inline" });
+    if (!out.success || !out.outputs[0]) { console.error("[designWorker] build failed:", out.logs.map((l) => String(l)).join("\n")); return null; }
+    return await out.outputs[0].text();
+  } catch (e) {
+    console.error("[designWorker] build failed:", e);
+    return null;
+  }
+}
+
 const json = (data: unknown) =>
   new Response(JSON.stringify(data, (_k, v) => (typeof v === "bigint" ? Number(v) : v)), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -1494,17 +1863,23 @@ async function ttsEngines(): Promise<(TtsProviderInfo & { ready: boolean; reason
   const auth = providerAuth(); // one SQLite read, not one per engine
   const rows = [...auth.majors, ...auth.others];
   const localUrl = LOCAL_TTS_URL();
-  return TTS_PROVIDERS.map((e) => ({
-    ...e,
-    ...ttsEngineStatus(e.id, {
-      keySet: !!(e.keyEnv && process.env[e.keyEnv]),
-      // The OpenAI engine's OAuth row is the CHAT sign-in ("openai"); ttsEngineStatus uses it to explain why
-      // being signed in still isn't enough for the platform speech API.
-      oauthActive: !!rows.find((r) => r.id === (e.id === "openai-tts" ? "openai" : e.id))?.oauthActive,
-      localUp: e.id === "dots-tts" ? dotsUp : localUp,
-      localUrl: e.id === "dots-tts" ? v.dotsTtsUrl : localUrl,
-    }),
-  }));
+  return TTS_PROVIDERS.map((e) => {
+    // CUI lockdown: a refused engine reads not-ready with the lockdown reason, so the picker explains it.
+    // Not audited here (a listing sends nothing); the dispatch routes audit the attempt.
+    const locked = voiceLockdownRefusal("tts", e.id, v, false);
+    if (locked) return { ...e, ready: false, reason: locked };
+    return {
+      ...e,
+      ...ttsEngineStatus(e.id, {
+        keySet: !!(e.keyEnv && process.env[e.keyEnv]),
+        // The OpenAI engine's OAuth row is the CHAT sign-in ("openai"); ttsEngineStatus uses it to explain why
+        // being signed in still isn't enough for the platform speech API.
+        oauthActive: !!rows.find((r) => r.id === (e.id === "openai-tts" ? "openai" : e.id))?.oauthActive,
+        localUp: e.id === "dots-tts" ? dotsUp : localUp,
+        localUrl: e.id === "dots-tts" ? v.dotsTtsUrl : localUrl,
+      }),
+    };
+  });
 }
 
 // A caught exception must never reach the client verbatim (CWE-209/497). Log it, return a curated message.
@@ -1735,6 +2110,14 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
 
+// lucid-creator-endpoint v1: import whatever the DGX Loader dropped in the mailbox while LUCID was closed.
+// Per-file fail-soft; a scan failure never blocks the engine from starting.
+if (BUILD.creatorBuild) {
+  try {
+    const r = scanCreatorEndpointMailbox();
+    if (r.imported.length || r.rejected.length) console.log(`[creator] mailbox: imported ${r.imported.join(", ") || "nothing"}; rejected ${r.rejected.map((x) => `${x.file} (${x.reason})`).join("; ") || "nothing"}`);
+  } catch (e) { console.warn("[creator] mailbox scan failed:", e); }
+}
 
 // P-PORTGUARD.2: the bind is the engine's first load-bearing act, and it CAN fail - something else may
 // already hold the port (in the field: this app's own orphaned engine). Unguarded, Bun's throw escaped
@@ -1784,6 +2167,12 @@ return Bun.serve({
     try {
       if (p === "/app.js") {
         const { js } = await bundleApp();
+        return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+      }
+      // Design suite: the editor's same-origin module worker (`new Worker("/design_worker.js", { type: "module" })`).
+      if (p === "/design_worker.js") {
+        const js = await bundleDesignWorker();
+        if (js === null) return new Response("// design worker build failed", { status: 500, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
       }
       // P-AVATAR.2a: split chunks (lazy three.js). A miss after a server restart rebuilds once - the
@@ -2077,7 +2466,10 @@ return Bun.serve({
       // (cached 5 min; [] when off); POST {enabled} flips the opt-in.
       if (p === "/api/ratelimits") {
         if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); return json({ ok: true, data: setRateLimitProbe(!!b.enabled) }); }
-        return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: await probeRateLimits(url.searchParams.get("force") === "1") } });
+        // CUI lockdown: no direct-provider turns run, so the probe (a keyed request to api.anthropic.com /
+        // api.openai.com) has nothing to measure and is not sent.
+        const probeLocked = asksageOnly() || managedAsksageOnly();
+        return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: probeLocked ? [] : await probeRateLimits(url.searchParams.get("force") === "1") } });
       }
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
       if (p === "/api/usage") return json({ ok: true, data: usageLedgerMemo() }); // P-PERF.3 memo
@@ -2676,15 +3068,23 @@ return Bun.serve({
       if (p === "/api/explain" && req.method === "POST") {
         const b = await readBody<{ command?: unknown }>(req);
         const cmd = String(b.command ?? "");
-        let r = await explainCommand(cmd); // direct keyed path first (cheapest, no session spawn)
+        // CUI lockdown: explainCommand refuses its direct keyed path (Anthropic / OpenAI / Gemini) and the SAME
+        // prompt goes through the omp util session instead, which Backend.complete pins to an allowed model
+        // (AskSage, or a user-lock DGX enclave provider) or refuses with an audit.
+        let r = await explainCommand(cmd, asksageOnly() || managedAsksageOnly()); // direct keyed path first (cheapest, no session spawn)
         // P-EXEC.3 fix: OAuth-only users have NO direct API key - don't dead-end them. Route the SAME
         // inert-DATA prompt through the omp session (which holds the OAuth/key auth) with a cheap accessible
         // model. Uses the dedicated util connection, so it never clobbers the live chat turn.
-        if (!r.ok && /Add an Anthropic/.test(r.error ?? "")) {
+        if (!r.ok && (r.lockdown || /Add an Anthropic/.test(r.error ?? ""))) {
           const trimmed = cmd.trim();
           if (trimmed && trimmed.length <= 8000) {
             try {
-              const model = backend.checkerModelInfo().recommended || undefined; // cheapest accessible (OAuth-safe)
+              const pin = backend.completionModel(backend.checkerModelInfo().recommended || undefined); // cheapest accessible (OAuth-safe), clamped under lockdown
+              if (!pin.ok) {
+                emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "explain-lockdown", reason: (pin.error ?? "no allowed model").slice(0, 200), sessionId: backend.currentSessionId() ?? undefined });
+                return json({ ok: false, data: { ok: false, error: pin.error }, error: pin.error });
+              }
+              const model = pin.model;
               const text = (await backend.complete(EXPLAIN_SYSTEM, explainUserPrompt(trimmed), { model, idleMs: 20_000 })).trim();
               r = text
                 ? { ok: true, text, model: model ? model.replace(/^[^/]*\//, "") : undefined }
@@ -2703,6 +3103,9 @@ return Bun.serve({
       if (p === "/api/brief/audio" && req.method === "POST") {
         const b = await readBody<{ provider?: unknown; voiceId?: unknown }>(req);
         const provider = b.provider === "local-tts" ? "local-tts" : b.provider === "elevenlabs" ? "elevenlabs" : b.provider === "dots-tts" ? "dots-tts" : "openai-tts";
+        // CUI lockdown: the podcast script is repo content, so a cloud engine is refused (and audited) first.
+        const lockdownRefusal = voiceLockdownRefusal("tts", provider, voiceSettings());
+        if (lockdownRefusal) return json({ ok: false, data: { note: lockdownRefusal, audioB64: null, mime: "audio/wav", turns: 0, blocked: true }, error: lockdownRefusal });
         const pickedVoice = typeof b.voiceId === "string" && b.voiceId ? b.voiceId : "";
         const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
@@ -2804,6 +3207,9 @@ return Bun.serve({
           }
         }
         if (provider !== "elevenlabs") return json({ ok: true, data: { ...base, voices: voicesForProvider(provider) } });
+        // CUI lockdown: the engine is refused, so its account is not contacted for a voice list either.
+        const elLocked = voiceLockdownRefusal("tts", "elevenlabs", v, false);
+        if (elLocked) return json({ ok: true, data: { ...base, voices: [], note: elLocked } });
         const key = process.env.ELEVENLABS_API_KEY;
         if (!key) return json({ ok: true, data: { ...base, voices: [], note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
         try { return json({ ok: true, data: { ...base, voices: await listElevenVoices({ apiKey: key }) } }); }
@@ -2894,6 +3300,9 @@ return Bun.serve({
         if (!text.trim()) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: "nothing to speak" } });
         const v = voiceSettings();
         const provider = typeof b.provider === "string" && b.provider ? normalizeTtsProvider(b.provider) : v.ttsProvider;
+        // CUI lockdown: refused fail-closed (and audited) BEFORE any text leaves for a cloud engine.
+        const lockdownRefusal = voiceLockdownRefusal("tts", provider, v);
+        if (lockdownRefusal) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: lockdownRefusal, blocked: true } });
         try {
           // P-VOICE.2: the SAME readiness reason the picker shows, so a failure never contradicts the menu
           // (notably: an OpenAI OAuth sign-in cannot reach the speech API - only a platform key can).
@@ -3418,10 +3827,19 @@ return Bun.serve({
           zone: raw.zone === "internal" || raw.zone === "external" ? raw.zone : "local",
           vaultRef: raw.vaultRef ? String(raw.vaultRef).trim() : undefined,
           workflow: raw.workflow ? String(raw.workflow) : undefined,
+          // CUI lockdown: the user's own attestation that this endpoint is a DGX enclave host. Only `true` counts.
+          ...(raw.enclave === true ? { enclave: true } : {}),
           enabled: raw.enabled !== false,
         };
         const r = upsertCreatorEndpoint(def);
         return json({ ok: r.ok, error: r.ok ? undefined : r.errors.join("; "), data: { registry: creatorRegistryData() } });
+      }
+      // lucid-creator-endpoint v1: rescan the DGX Loader mailbox (<personal dir>/creator_endpoints). Each file
+      // passes the fail-closed contract gate and the declaration validator, or is reported by name.
+      if (p === "/api/creator/endpoint/import-mailbox" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
+        const r = scanCreatorEndpointMailbox();
+        return json({ ok: true, data: { imported: r.imported, rejected: r.rejected, mailbox: creatorEndpointMailboxDir(), registry: creatorRegistryData() } });
       }
       // CREATOR-0 (ADR-0283): remote monitoring targets (a DGX Spark, a GPU VM behind the VPN).
       if (p === "/api/creator/target" && req.method === "POST") {
@@ -3487,14 +3905,20 @@ return Bun.serve({
       if (p === "/api/creator/probe" && req.method === "POST") {
         if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator probes are only in the Creator build." });
         const b = await readBody<{ providerId?: unknown }>(req);
-        const endpoints = listCreatorEndpoints();
         const wanted = (CREATOR_PROVIDER_IDS as readonly string[]).includes(String(b.providerId))
           ? [String(b.providerId) as CreatorProviderId]
           : [...CREATOR_PROVIDER_IDS];
         for (const id of wanted) {
+          // CUI lockdown first. A probe only reaches something when a declaration or a credential exists, so
+          // only then is a refusal an audited block; otherwise the verdict is just the honest skip reason.
+          const ep = creatorEndpointFor(id);
+          const reaches = !!ep || !!creatorSecretFor(id);
+          const verdict = reaches ? creatorGate(id, ep) : cuiProviderVerdict(creatorLocked(), creatorSpec(id), ep);
           const job = createJob(jobIo, CREATOR_DIR, { kind: "probe", label: `probe ${id}`, provider: id });
           startJob(jobIo, CREATOR_DIR, job.id);
-          const r = await probeProvider(probeDeps, id, endpoints);
+          const r: ProbeResult = verdict.allowed
+            ? await probeProvider(probeDeps, id, ep ? [ep] : [])
+            : { providerId: id, state: "skipped", at: Date.now(), latencyMs: 0, detail: `CUI lockdown: ${verdict.reason}`, attested: [], version: "" };
           probeCache.set(r);
           finishJob(jobIo, CREATOR_DIR, job.id, r.state === "ready" ? "done" : "failed", r.state === "ready" ? "" : `${r.state}: ${r.detail}`);
         }
@@ -3516,6 +3940,8 @@ return Bun.serve({
         if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
         const ep = comfyEndpoint();
         if (!ep) return json({ ok: true, data: { models: [], endpoint: "", note: "Connect a ComfyUI endpoint in Creator Studio to list its models." } });
+        const cuiModels = creatorGate("comfyui", ep);
+        if (!cuiModels.allowed) return json(cuiRefusal(cuiModels));
         const probe = await comfyClient(ep).probeModels();
         return json({ ok: true, data: { models: probe.models, endpoint: ep.baseUrl ?? "", note: probe.note } });
       }
@@ -3525,6 +3951,8 @@ return Bun.serve({
       if (p === "/api/creator/image" && req.method === "POST") {
         if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
         const b = await readBody<Record<string, unknown>>(req);
+        const imageEp = comfyEndpoint();
+        if (imageEp) { const cuiImage = creatorGate("comfyui", imageEp); if (!cuiImage.allowed) return json(cuiRefusal(cuiImage)); }
         // CREATOR-1: a generation is a JOB - admitted by the governor, recorded with what it produced.
         const label = typeof b.prompt === "string" && b.prompt.trim() ? b.prompt.trim().slice(0, 80) : "image generation";
         const admit = await admitCreatorJob("image", label, "comfyui", { gpu: true });
@@ -3545,6 +3973,8 @@ return Bun.serve({
         const kind: MediaKind = b.kind === "model-3d" ? "model-3d" : b.kind === "image" ? "image" : "video";
         const ep = comfyEndpoint();
         if (!ep) return json({ ok: false, error: "No ComfyUI endpoint is configured. Add one in Creator Studio first." });
+        const cuiRender = creatorGate("comfyui", ep);
+        if (!cuiRender.allowed) return json(cuiRefusal(cuiRender));
         const templateRaw = typeof b.workflow === "string" && b.workflow.trim() ? b.workflow : ep.workflow;
         if (!templateRaw || !templateRaw.trim()) {
           return json({ ok: false, error: `No workflow template is saved for this endpoint. Export the graph that produces your ${kind} from ComfyUI with Save (API Format) and paste it into the endpoint, using {{prompt}}, {{model}} and {{seed}} where LUCID should fill values in.` });
@@ -3594,6 +4024,8 @@ return Bun.serve({
         const ep = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "blender" && !!e.command);
         const exe = typeof b.exe === "string" && b.exe.trim() ? b.exe.trim() : (ep?.command ?? "");
         if (!exe) return json({ ok: false, error: "No Blender executable is configured. Add it in Creator Studio first." });
+        const cuiBlender = creatorGate("blender", ep);
+        if (!cuiBlender.allowed) return json(cuiRefusal(cuiBlender));
         const range = b.range && typeof b.range === "object"
           ? { start: Number((b.range as Record<string, unknown>).start), end: Number((b.range as Record<string, unknown>).end) }
           : undefined;
@@ -3618,6 +4050,415 @@ return Bun.serve({
         const run = await runBlenderRender({ spawn: blenderSpawn, jobIo, exists: (path) => existsSync(path), now: () => Date.now() }, CREATOR_DIR, input);
         return json({ ok: run.ok, error: run.error, data: { run, ...creatorJobsData() } });
       }
+      // DGX avatar (contract 2a): the template clips the box offers for one engine.
+      if (p === "/api/creator/avatar/templates") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const engine = url.searchParams.get("engine") ?? "musetalk";
+        if (engine !== "musetalk" && engine !== "echomimic") return json({ ok: false, error: "engine must be musetalk or echomimic." });
+        const ep = creatorEndpointFor("dgx-avatar", url.searchParams.get("endpointId") || undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        const cuiTpl = creatorGate("dgx-avatar", ep);
+        if (!cuiTpl.allowed) return json(cuiRefusal(cuiTpl));
+        const r = await new DgxAvatarClient({ baseUrl: ep.baseUrl }).templates(engine);
+        return json(r.ok ? { ok: true, data: { templates: r.data.templates, folders: r.data.folders, endpointId: ep.id } } : { ok: false, error: r.error });
+      }
+      // DGX avatar: speak the text through the dots.tts backend, then queue the lip-sync render on the box.
+      // Both hops are CUI-gated (the speech engine AND the avatar service); the job is recorded in the ledger
+      // and GET /api/creator/avatar/job pulls the finished video into the library.
+      if (p === "/api/creator/avatar/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That avatar request was not JSON." });
+        const ep = creatorEndpointFor("dgx-avatar", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        const cuiAvatar = creatorGate("dgx-avatar", ep);
+        if (!cuiAvatar.allowed) return json(cuiRefusal(cuiAvatar));
+        const spec = buildAvatarSpec(b);
+        if (!spec.ok) return json({ ok: false, error: spec.error });
+        const text = typeof b.text === "string" ? b.text.trim().slice(0, 8000) : "";
+        if (!text) return json({ ok: false, error: "Write the words the avatar should speak." });
+        const vs = voiceSettings();
+        const ttsStatus = (await ttsEngines()).find((e) => e.id === "dots-tts");
+        if (ttsStatus && !ttsStatus.ready) return json({ ok: false, error: `dots.tts is not ready: ${ttsStatus.reason}` });
+        const cuiTts = creatorGate("dots-tts", dotsTtsEndpointDef(vs.dotsTtsUrl));
+        if (!cuiTts.allowed) return json(cuiRefusal(cuiTts));
+        const voice = resolveVoice("dots-tts", (typeof b.voice === "string" && b.voice) || vs.ttsVoice);
+        if (!voice) return json({ ok: false, error: "Pick one of your DGX voices first (Settings > Voice)." });
+        let wav: Uint8Array = new Uint8Array(0);
+        try {
+          const speech = await new OpenAiCompatibleTtsBackend({ baseUrl: vs.dotsTtsUrl, model: vs.dotsTtsModel, voices: { default: voice } })
+            .synthesize({ title: "avatar", turns: [{ speaker: "default", text }] });
+          if (!speech.audio?.length) return json({ ok: false, error: `dots.tts produced no audio: ${speech.note || "no reason given"}` });
+          wav = speech.audio;
+        } catch (e) { return json({ ok: false, error: clientError(e, "dots.tts failed - check the voice endpoint.") }); }
+        const job = createJob(jobIo, CREATOR_DIR, { kind: "render", label: `avatar (${spec.spec.engine}): ${text.slice(0, 60)}`, provider: "dgx-avatar" });
+        startJob(jobIo, CREATOR_DIR, job.id);
+        const sub = await new DgxAvatarClient({ baseUrl: ep.baseUrl }).submit(wav, spec.spec);
+        if (!sub.ok) {
+          finishJob(jobIo, CREATOR_DIR, job.id, "failed", sub.error);
+          return json({ ok: false, error: sub.error, data: { jobId: job.id, busy: sub.status === 409 } });
+        }
+        jobIo.appendLine(avatarRemoteLedger(), JSON.stringify({ jobId: job.id, endpointId: ep.id, remoteJobId: sub.data.jobId }));
+        return json({ ok: true, data: { jobId: job.id, remoteJobId: sub.data.jobId } });
+      }
+      // DGX avatar: one job's state; on `done` the video lands in the Creator library as kind "video".
+      if (p === "/api/creator/avatar/job") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        return json(await avatarJobView(url.searchParams.get("jobId") ?? ""));
+      }
+      // HyperFrames: render a local composition folder on THIS machine. Fixed argv, telemetry off, one worker,
+      // lint first, path-confined; the job returns at once and the artifact lands in the library when it ends.
+      if (p === "/api/creator/hyperframes/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That HyperFrames request was not JSON." });
+        const ep = creatorEndpointFor("hyperframes", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.command) return json({ ok: false, error: "No HyperFrames executable is declared. Add it in Creator Studio first." });
+        const cuiHf = creatorGate("hyperframes", ep);
+        if (!cuiHf.allowed) return json(cuiRefusal(cuiHf));
+        const format: HyperframesFormat = b.format === "webm" || b.format === "mov" ? b.format : "mp4";
+        const quality: HyperframesQuality = b.quality === "draft" || b.quality === "high" ? b.quality : "standard";
+        const outDir = join(CREATOR_DIR, "hyperframes", `hf_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`);
+        const planned = planHyperframesRender({
+          exe: ep.command, prefixArgs: ep.args, projectDir: typeof b.projectDir === "string" ? b.projectDir : "",
+          outPath: join(outDir, `render.${format}`), format, quality, roots: managedWorkspaceRoots() ?? [],
+        });
+        if (!planned.ok) return json({ ok: false, error: planned.error });
+        const locked = creatorLocked();
+        const pre = preflightHyperframes({ exists: (path) => existsSync(path), readText: (path) => readFileSync(path, "utf8") }, planned.plan, ep.command, locked);
+        if (!pre.ok) {
+          if (pre.stage === "external-refs") emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown", reason: `HyperFrames render refused under CUI lockdown: external URLs in ${planned.plan.projectDir}`.slice(0, 200) });
+          return json({ ok: false, error: pre.error, data: { stage: pre.stage } });
+        }
+        const label = `HyperFrames ${format}: ${basename(planned.plan.projectDir)}`;
+        const admit = await admitCreatorJob("render", label, "hyperframes");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
+        try { mkdirSync(outDir, { recursive: true }); } catch { /* the runner reports a missing output */ }
+        void runHyperframesRender({
+          spawn: hyperframesSpawn, exists: (path) => existsSync(path), readText: (path) => readFileSync(path, "utf8"),
+          readBytes: (path) => new Uint8Array(readFileSync(path)), ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
+          jobIo, artifactIo, env: process.env, now: () => Date.now(),
+        }, CREATOR_DIR, admit.jobId, planned.plan, { label, note: pre.note })
+          .then((r) => { if (!r.ok) console.warn(`[creator] hyperframes ${admit.jobId} ${r.stage}: ${r.error}`); })
+          .catch((e) => { finishJob(jobIo, CREATOR_DIR, admit.jobId, "failed", String(e).slice(0, 300)); })
+          .finally(() => { try { rmSync(outDir, { recursive: true, force: true }); } catch { /* the library copy is the record */ } });
+        return json({ ok: true, data: { jobId: admit.jobId, note: pre.note } });
+      }
+      // DGX CAD (contract 2c): inspect a DXF / DWG / IFC / STEP file on the box. The origin guard requires a
+      // JSON content type on every POST, so the bytes ride either as the raw body (sent with content-type
+      // application/json) or as JSON `{ "dataB64": "..." }`; a CAD file never starts with "{".
+      if (p === "/api/creator/cad/inspect" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator CAD tools are only in the Creator build." });
+        const name = checkInspectName(url.searchParams.get("name"));
+        if (!name.ok) return json({ ok: false, error: name.error });
+        const ep = creatorEndpointFor("dgx-cad", url.searchParams.get("endpointId") || undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        const cuiInspect = creatorGate("dgx-cad", ep);
+        if (!cuiInspect.allowed) return json(cuiRefusal(cuiInspect));
+        if (Number(req.headers.get("content-length") ?? "0") > CAD_MAX_UPLOAD_BYTES * 1.4) return json({ ok: false, error: "That file is over the 200 MB inspect limit." });
+        let bytes = new Uint8Array(await req.arrayBuffer());
+        if (bytes[0] === 0x7b) {
+          try {
+            const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+            if (!parsed || typeof parsed !== "object" || !("dataB64" in parsed) || typeof parsed.dataB64 !== "string") return json({ ok: false, error: "Send the file bytes, or JSON with a dataB64 field." });
+            bytes = new Uint8Array(Buffer.from(parsed.dataB64, "base64"));
+          } catch { return json({ ok: false, error: "That inspect body looked like JSON but did not parse." }); }
+        }
+        const r = await new DgxCadClient({ baseUrl: ep.baseUrl }).inspect(name.name, bytes);
+        return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+      }
+      // DGX CAD: run the user's CadQuery / build123d script on the box. It EXECUTES user code, so it needs
+      // the exec-approval decision (`approved: true`, same contract as the Blender --python path) before the
+      // service is ever called with approved:true. Outputs land in the library (STEP/STL as model-3d, DXF as
+      // drawing); the SVG preview rides the response.
+      if (p === "/api/creator/cad/model" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator CAD tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That CAD request was not JSON." });
+        const ep = creatorEndpointFor("dgx-cad", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        const cuiModel = creatorGate("dgx-cad", ep);
+        if (!cuiModel.allowed) return json(cuiRefusal(cuiModel));
+        const built = buildCadModelRequest(b);
+        if (!built.ok) return json({ ok: false, error: built.error });
+        if (b.approved !== true) {
+          return json({ ok: false, error: "This script is your own code and the CAD service would execute it on the DGX box. That needs exec approval first: LUCID never runs it silently.", data: { stage: "approval", needsApproval: true } });
+        }
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: "allow", severity: "medium", tool: "creator-cad-model", reason: `CAD script approved for ${ep.id}: ${built.request.script.length} chars, outputs ${built.request.outputs.join("+")}`.slice(0, 200) });
+        const job = createJob(jobIo, CREATOR_DIR, { kind: "render", label: `CAD model: ${built.request.outputs.join(", ")}`, provider: "dgx-cad" });
+        startJob(jobIo, CREATOR_DIR, job.id);
+        const client = new DgxCadClient({ baseUrl: ep.baseUrl });
+        const r = await client.modelRun(modelRunBody(built.request, true));
+        if (!r.ok) { finishJob(jobIo, CREATOR_DIR, job.id, "failed", r.error); return json({ ok: false, error: r.error, data: { jobId: job.id } }); }
+        if (!r.data.ok) {
+          const err = r.data.error || "the script did not produce a result";
+          finishJob(jobIo, CREATOR_DIR, job.id, "failed", err);
+          return json({ ok: false, error: err, data: { jobId: job.id, result: r.data } });
+        }
+        const stored: CreatorArtifact[] = [];
+        const skipped: { id: string; reason: string }[] = [];
+        for (const a of r.data.artifacts) {
+          const kind = cadArtifactKind(a);
+          if (!kind) continue; // svg: inline in the result
+          const dl = await client.artifact(a.id);
+          if (!dl.ok) { skipped.push({ id: a.id, reason: dl.error }); continue; }
+          const s = storeArtifact(artifactIo, CREATOR_DIR, { kind: kind.kind, bytes: dl.data.bytes, mime: kind.mime, width: 0, height: 0, source: "dgx-cad", prompt: `CAD model (${ep.id})`, model: a.name });
+          if (!s.ok || !s.artifact) { skipped.push({ id: a.id, reason: s.error ?? "not stored" }); continue; }
+          recordJobArtifact(jobIo, CREATOR_DIR, job.id, s.artifact.id);
+          stored.push(s.artifact);
+        }
+        finishJob(jobIo, CREATOR_DIR, job.id, "done", "");
+        return json({ ok: true, data: { jobId: job.id, result: r.data, stored, skipped } });
+      }
+      // DGX CAD: one artifact's bytes, passed through with its type and a sanitized file name. Never rendered
+      // inline as a document of this origin (attachment + sandbox CSP + nosniff), because an SVG is a script.
+      if (p === "/api/creator/cad/artifact") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator CAD tools are only in the Creator build." });
+        const id = url.searchParams.get("id") ?? "";
+        if (!CAD_ARTIFACT_ID.test(id)) return json({ ok: false, error: "That is not a CAD artifact id." });
+        const ep = creatorEndpointFor("dgx-cad", url.searchParams.get("endpointId") || undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared." });
+        const cuiArt = creatorGate("dgx-cad", ep);
+        if (!cuiArt.allowed) return json(cuiRefusal(cuiArt));
+        const r = await new DgxCadClient({ baseUrl: ep.baseUrl }).artifact(id);
+        if (!r.ok) return json({ ok: false, error: r.error });
+        const filename = r.data.filename.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || `${id}.bin`;
+        return new Response(r.data.bytes, {
+          headers: {
+            "content-type": r.data.mime, "content-disposition": `attachment; filename="${filename}"`,
+            "cache-control": "no-store", "x-content-type-options": "nosniff", "content-security-policy": "sandbox",
+          },
+        });
+      }
+      // ── Design suite: DGX vision (design contract sections 3-4) ──────────────────────────────────────────
+      // Every call: Creator build, then the dgx-vision declaration, then the CUI gate (refusals audited by
+      // creatorGate), then the image sniff + decode budget, then a request REBUILT from validated fields.
+      // decompose and upscale are jobs on the box: the route answers { jobId } and the renderer polls.
+      if (p === "/api/creator/vision/job") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator vision tools are only in the Creator build." });
+        return json(await visionJobView(url.searchParams.get("jobId") ?? ""));
+      }
+      if (p.startsWith("/api/creator/vision/") && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator vision tools are only in the Creator build." });
+        const op = p.slice("/api/creator/vision/".length);
+        if (!isVisionOp(op)) return json({ ok: false, error: "Unknown vision operation." });
+        const read = await readJsonCapped(req, ENGINE_MAX_BODY);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        if (!read.body || typeof read.body !== "object" || Array.isArray(read.body)) return json({ ok: false, error: "Send a JSON object." });
+        const b = read.body as Record<string, unknown>;
+        const ep = creatorEndpointFor("dgx-vision", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX vision endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        const cuiVision = creatorGate("dgx-vision", ep);
+        if (!cuiVision.allowed) return json(cuiRefusal(cuiVision));
+        const img = visionImageFrom(b.image);
+        if (!img.ok) return json({ ok: false, error: img.error });
+        const built = buildVisionRequest(op, b, img.image);
+        if (!built.ok) return json({ ok: false, error: built.error });
+        const client = new DgxVisionClient({ baseUrl: ep.baseUrl });
+        if (op === "decompose" || op === "upscale") {
+          const sub = await client.submit(op, built.body);
+          if (!sub.ok) return json({ ok: false, error: sub.error });
+          const job = createJob(jobIo, CREATOR_DIR, { kind: "render", label: `Vision ${op} ${img.image.width}x${img.image.height}`, provider: "dgx-vision" });
+          startJob(jobIo, CREATOR_DIR, job.id);
+          const row: VisionRemoteRow = {
+            jobId: job.id, endpointId: ep.id, remoteJobId: sub.data.remoteJobId, op,
+            width: img.image.width, height: img.image.height, scale: op === "upscale" && typeof built.body.scale === "number" ? built.body.scale : 1,
+          };
+          jobIo.appendLine(visionRemoteLedger(), JSON.stringify(row));
+          return json({ ok: true, data: { jobId: job.id } });
+        }
+        const r = await client.run(op, built.body, img.image);
+        return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+      }
+      // ── Design suite: the editor's document, the agent-op queue, and exports ────────────────────────────
+      // UI token: state (push/read), ops GET + ack, export. Agent token (AGENT_ROUTES): manifest, ops POST,
+      // ops/result. The agent's manifest is rebuilt from the validated document, never taken from a request.
+      if (p === "/api/creator/design/state") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        if (req.method === "POST") {
+          const read = await readJsonCapped(req, DESIGN_STATE_MAX_BYTES);
+          if (!read.ok) return json({ ok: false, error: read.error });
+          const r = designStore.setState(read.body, read.bytes);
+          return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+        }
+        const s = designStore.state();
+        return json({ ok: true, data: s ? { doc: s.doc, manifest: s.manifest, savedAt: s.savedAt, ...(s.thumbB64 ? { thumbB64: s.thumbB64 } : {}) } : null });
+      }
+      if (p === "/api/creator/design/manifest") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        return json({ ok: true, data: designStore.agentView(url.searchParams.get("thumb") === "1") });
+      }
+      if (p === "/api/creator/design/ops") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        if (req.method === "POST") {
+          const read = await readJsonCapped(req, 2 * 1024 * 1024);
+          if (!read.ok) return json({ ok: false, error: read.error });
+          const r = designStore.enqueue(read.body);
+          return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+        }
+        return json({ ok: true, data: designStore.since(url.searchParams.get("since")) });
+      }
+      if (p === "/api/creator/design/ops/ack" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        const read = await readJsonCapped(req, 256 * 1024);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        const r = designStore.ack(read.body);
+        return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+      }
+      if (p === "/api/creator/design/ops/result") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        const r = designStore.result(url.searchParams.get("seq"));
+        return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+      }
+      // CREATOR-DRIFT: CutWire Drift over its own localhost agent protocol. The agent reaches these through the
+      // ?t= AGENT_TOKEN URLs it inherits; the Studio tab sends the UI token in the header. That is how a feed
+      // entry knows whether the agent or the user made the call: a header UI token is the user, else the agent.
+      if (p === "/api/creator/drift/status") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Drift is only in the Creator build." });
+        const state = driftSessionState();
+        const exePaths = defaultDriftExePaths(process.platform, process.env);
+        const exePath = exePaths.find((x) => existsSync(x)) ?? "";
+        const declared = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "drift");
+        const ep = creatorEndpointFor("drift");
+        const lockdown = creatorLocked();
+        const sinceRaw = url.searchParams.get("since");
+        const since = sinceRaw !== null && /^\d{1,15}$/.test(sinceRaw) ? Number(sinceRaw) : null;
+        return json({ ok: true, data: {
+          installed: !!exePath || !!state.session || !!declared,
+          exePath,
+          session: driftSessionStatus(state),
+          endpoint: ep ? { id: ep.id, label: ep.label, baseUrl: ep.baseUrl ?? "", source: declared && ep.id === declared.id ? "declared" : "session", cui: cuiProviderVerdict(lockdown, creatorSpec("drift"), ep) } : null,
+          lockdown,
+          probe: probeCache.get("drift"),
+          version: driftVersion,
+          activity: since === null ? driftActivity.latest(50) : driftActivity.since(since),
+        } });
+      }
+      if (p === "/api/creator/drift/call" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Drift is only in the Creator build." });
+        const read = await readJsonCapped(req, 4 * 1024 * 1024);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        const b = read.body && typeof read.body === "object" && !Array.isArray(read.body) ? read.body : {};
+        const tool = "tool" in b && typeof b.tool === "string" ? b.tool.trim().slice(0, 80) : "";
+        if (!tool || !/^[a-z][a-z0-9_]*$/.test(tool)) return json({ ok: false, error: "`tool` must be a Drift tool name (lowercase letters, digits, underscores)." });
+        const rawArgs = "args" in b ? b.args : undefined;
+        if (rawArgs !== undefined && (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs))) return json({ ok: false, error: "`args` must be an object." });
+        const args: Record<string, unknown> = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? { ...rawArgs } : {};
+        const source: DriftActivityEntry["source"] = tokenValid(req.headers.get("x-lucid-token"), TOKEN) ? "ui" : "agent";
+        const ep = creatorEndpointFor("drift");
+        if (!ep) return json({ ok: false, error: "Drift is not reachable: no Agent access session and no declared endpoint. In Drift: Settings -> Agent access -> On, then try again." });
+        const cui = creatorGate("drift", ep);
+        if (!cui.allowed) return json(cuiRefusal(cui));
+        const locked = creatorLocked();
+        const verdict = driftOpPolicy(tool, args, locked);
+        if (!verdict.allowed) {
+          emitSecurityEvent({
+            category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown",
+            reason: `Drift op ${verdict.tool} refused under CUI lockdown: ${verdict.reason}`.slice(0, 200),
+          });
+          // The feed shows the attempt too, so the user sees what the agent tried and why nothing happened.
+          const entry = driftActivity.push({ at: Date.now(), source, tool, ok: false, summary: `refused under CUI lockdown: ${verdict.tool}`.slice(0, 160), undoable: false, revision: null });
+          return json({ ok: false, error: `CUI lockdown: ${verdict.reason}`, data: { cui: { allowed: false, posture: cui.posture, reason: verdict.reason }, entry } });
+        }
+        const token = creatorSecretFor("drift");
+        if (!token) return json({ ok: false, error: `No Drift token: set DRIFT_MCP_TOKEN, store it in the vault under the declaration's credential name, or turn Agent access on in Drift (Settings -> Agent access) so it writes its session file.` });
+        const client = new DriftClient({ baseUrl: ep.baseUrl ?? "", token, timeoutMs: 120_000 });
+        if (!driftVersion) {
+          const init = await client.initialize();
+          if (!init.ok) {
+            return json({ ok: false, error: init.status === 401 || init.status === 403
+              ? "Drift refused the token. Turn Agent access off and on in Drift to rewrite its session file, or update the declared credential."
+              : init.error });
+          }
+          driftVersion = init.version;
+        }
+        const r = await client.call(tool, args);
+        const payload = r.payload && typeof r.payload === "object" && !Array.isArray(r.payload) ? r.payload : {};
+        const revision = "revision" in payload && typeof payload.revision === "number" ? payload.revision : null;
+        const entry = driftActivity.push({
+          at: Date.now(), source, tool, ok: r.ok,
+          // A transport or JSON-RPC failure has no payload: the summary quotes the client's error line instead.
+          summary: r.payload === null && r.error ? summarizeDriftCall(tool, args, { error: r.error }, true) : summarizeDriftCall(tool, args, r.payload, r.isError),
+          undoable: r.ok && isDriftMutation(tool), revision,
+        });
+        // No payload at all means Drift never ran the op (dead port, bad token, JSON-RPC rejection): a refusal.
+        // A `{ok:false}` payload is Drift's own answer and travels back as data with isError set.
+        if (r.status === 0 || r.status === 401 || r.status === 403) driftVersion = "";
+        if (r.payload === null && !r.ok) {
+          const error = r.status === 401 || r.status === 403
+            ? "Drift refused the token. Turn Agent access off and on in Drift to rewrite its session file, or update the declared credential."
+            : r.error ?? "Drift did not answer. In Drift: Settings -> Agent access -> On, then try again.";
+          return json({ ok: false, error, data: { tool, entry } });
+        }
+        return json({ ok: true, data: { tool, isError: r.isError, text: r.text, payload: r.payload, images: r.images, entry } });
+      }
+      if (p === "/api/creator/drift/library" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Drift is only in the Creator build." });
+        const read = await readJsonCapped(req, 256 * 1024);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        const b = read.body && typeof read.body === "object" && !Array.isArray(read.body) ? read.body : {};
+        const path = "path" in b && typeof b.path === "string" ? b.path.trim() : "";
+        if (!path) return json({ ok: false, error: "`path` is required: the absolute path Drift's export_video echoed back." });
+        if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(path)) return json({ ok: false, error: "The export path must be absolute." });
+        const prompt = "prompt" in b && typeof b.prompt === "string" ? b.prompt.trim().slice(0, 4000) : "";
+        const label = "label" in b && typeof b.label === "string" ? b.label.trim().slice(0, 200) : "";
+        const source: DriftActivityEntry["source"] = tokenValid(req.headers.get("x-lucid-token"), TOKEN) ? "ui" : "agent";
+        // One file handle for the size check and the read, so nothing can swap the file between the two.
+        let fd = -1;
+        try { fd = openSync(path, "r"); }
+        catch { return json({ ok: false, error: `${path} does not exist yet. Wait for export_status to report done, then try again.` }); }
+        let bytes: Uint8Array;
+        try {
+          const size = fstatSync(fd).size;
+          if (size > 4 * 1024 * 1024 * 1024) return json({ ok: false, error: `${path} is ${Math.round(size / (1024 * 1024 * 1024))} GiB; the library import stops at 4 GiB.` });
+          bytes = new Uint8Array(readFileSync(fd));
+        } catch (e) {
+          return json({ ok: false, error: `${path} could not be read: ${String(e).slice(0, 160)}` });
+        } finally {
+          try { closeSync(fd); } catch { /* already closed */ }
+        }
+        const plan = planDriftLibraryImport(path, bytes);
+        if (!plan.ok) return json({ ok: false, error: plan.error });
+        const stored = storeArtifact(artifactIo, CREATOR_DIR, {
+          kind: plan.kind, bytes, mime: plan.mime, width: 0, height: 0, source: "drift",
+          prompt: prompt || label || `Drift export: ${basename(path)}`, model: `drift ${driftVersion || "(version unknown)"}`,
+        });
+        if (!stored.ok || !stored.artifact) return json({ ok: false, error: stored.error ?? "The export could not be stored." });
+        const entry = driftActivity.push({ at: Date.now(), source, tool: "library", ok: true, summary: `library <- ${basename(path)}`.slice(0, 160), undoable: false, revision: null });
+        return json({ ok: true, data: { artifact: stored.artifact, path: stored.path, entry } });
+      }
+      // Exports land in the Creator library after magic-byte, svgSafetyCheck, and validateDoc gates. A
+      // HyperFrames project is written to a fresh folder this engine owns (inside the first managed workspace
+      // root when the organization sets roots, so planHyperframesRender accepts it) for /hyperframes/render.
+      if (p === "/api/creator/design/export" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        const read = await readJsonCapped(req, ENGINE_MAX_BODY);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        const body = read.body;
+        if (body && typeof body === "object" && !Array.isArray(body) && "kind" in body && body.kind === "hyperframes") {
+          const hf = planHyperframesExport(body);
+          if (!hf.ok) return json({ ok: false, error: hf.error });
+          const roots = managedWorkspaceRoots() ?? [];
+          const base = roots.length ? join(roots[0]!, ".lucid-design") : join(CREATOR_DIR, "design", "hyperframes");
+          const projectDir = join(base, `hf_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`);
+          try {
+            mkdirSync(join(projectDir, "assets"), { recursive: true });
+            for (const f of hf.data.files) writeFileSync(join(projectDir, ...f.path.split("/")), f.bytes, { mode: 0o600 });
+          } catch (e) {
+            try { rmSync(projectDir, { recursive: true, force: true }); } catch { /* nothing to clean */ }
+            return json({ ok: false, error: `The HyperFrames project could not be written: ${String(e).slice(0, 200)}` });
+          }
+          return json({ ok: true, data: { projectDir, name: hf.data.name } });
+        }
+        const plan = planDesignExport(body);
+        if (!plan.ok) return json({ ok: false, error: plan.error });
+        const e = plan.data;
+        const stored = storeArtifact(artifactIo, CREATOR_DIR, {
+          kind: e.artifactKind, bytes: e.bytes, mime: e.mime, width: e.width, height: e.height,
+          source: "design", prompt: `Design export: ${e.name}`, model: e.kind, ...(e.ext ? { ext: e.ext } : {}),
+        });
+        return json(stored.ok && stored.artifact ? { ok: true, data: { artifact: stored.artifact } } : { ok: false, error: stored.error ?? "The export could not be stored." });
+      }
       // CREATOR-3: the model MANIFEST. A declaration of what a given install can do, reconciled against what
       // the probe actually reported: the probe is the truth and the manifest is only the claim, so a declared
       // model the server does not list is reported ABSENT rather than offered.
@@ -3627,6 +4468,7 @@ return Bun.serve({
         const parsed = parseModelManifest(b.manifest);
         if (!parsed.ok) return json({ ok: false, error: parsed.error });
         const ep = comfyEndpoint();
+        if (ep) { const cuiManifest = creatorGate("comfyui", ep); if (!cuiManifest.allowed) return json(cuiRefusal(cuiManifest)); }
         const probe = probeCache.get("comfyui");
         const models = ep ? (await comfyClient(ep).probeModels()).models : [];
         const reconciliation = reconcileManifest(parsed.manifest, {
@@ -5451,6 +6293,17 @@ process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/t
 // nor silently swallow a write (which would teach it that it does).
 process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${AGENT_TOKEN}`;
 process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${AGENT_TOKEN}`;
+// Design suite: design_read / design_apply / design_request (harness/omp/design_extension.ts). Creator builds
+// only: without LUCID_DESIGN_OPS_URL the extension registers nothing, so other flavors never see the tools.
+if (BUILD.creatorBuild) {
+  process.env.LUCID_DESIGN_MANIFEST_URL = `http://127.0.0.1:${server.port}/api/creator/design/manifest?t=${AGENT_TOKEN}`;
+  process.env.LUCID_DESIGN_OPS_URL = `http://127.0.0.1:${server.port}/api/creator/design/ops?t=${AGENT_TOKEN}`;
+  process.env.LUCID_DESIGN_RESULT_URL = `http://127.0.0.1:${server.port}/api/creator/design/ops/result?t=${AGENT_TOKEN}`;
+  // CREATOR-DRIFT: drift_status / drift_read / drift_apply / drift_export (harness/omp/drift_extension.ts).
+  process.env.LUCID_DRIFT_STATUS_URL = `http://127.0.0.1:${server.port}/api/creator/drift/status?t=${AGENT_TOKEN}`;
+  process.env.LUCID_DRIFT_CALL_URL = `http://127.0.0.1:${server.port}/api/creator/drift/call?t=${AGENT_TOKEN}`;
+  process.env.LUCID_DRIFT_LIBRARY_URL = `http://127.0.0.1:${server.port}/api/creator/drift/library?t=${AGENT_TOKEN}`;
+}
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
 // token'd drain endpoint (same pattern as LUCID_FLEET_STATUS_URL - /api requires the per-launch token,

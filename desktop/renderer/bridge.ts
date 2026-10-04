@@ -28,6 +28,32 @@ import {
 } from "./recovery_supervisor.ts";
 export type { EngineProbe, EngineRestartView, IncidentOutcome, IncidentView, RecoveryRecoverView, RecoveryResumeView, RecoveryStateView };
 import type { MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix graph, edited in the renderer
+// Creator free stack: the Video and CAD panes own their view types and shape gates (layering rule).
+import type { AvatarEngine, AvatarJobStatusView, AvatarTemplatesView, HyperframesFormat, HyperframesQuality } from "./creator_video.ts";
+import { isCadInspect, isCadModelResult, type CadInspectView, type CadModelResultView, type CadOutput } from "./creator_cad.ts";
+import { isDriftCall, isDriftStatus, type DriftCallView, type DriftStatusView } from "./creator_drift_view.ts"; // CREATOR-DRIFT
+// Design suite: the pane owns its wire types and gates; the document model is the pure engine's.
+import {
+  isDesignExportResult, isDesignOpsPull, isDesignStateAck, isVisionJobStatus,
+  type DesignExportKind, type DesignExportResult, type DesignOpsPull, type DesignStateAck, type VisionJobStatus, type VisionOp,
+} from "./design_api.ts";
+import type { DesignDoc } from "../../harness/creator/design/types.ts";
+import type { AgentManifest } from "../../harness/creator/design/agent_view.ts";
+import type { CuiVerdictView } from "./creator_studio.ts";
+
+/** One Creator free-stack call: the payload on success, the server's own words on refusal, and the CUI
+ *  verdict when the lockdown is what refused it. */
+export interface CreatorCall<T> {
+  ok: boolean; error?: string; data?: T; cui?: CuiVerdictView;
+  /** The route wants the user's explicit approval first (CadQuery run); resend with `approved: true`. */
+  needsApproval?: boolean;
+}
+/** POST /api/creator/avatar/render */
+export interface CreatorAvatarRenderInput {
+  endpointId: string; engine: AvatarEngine; templatePath: string; text: string; voice: string;
+  tuning?: Record<string, number | string>;
+  compose?: { title?: string; subtitle?: string; captionText?: string };
+}
 
 /** CREATOR-0 (ADR-0279): what `GET /api/build-info` returns. `creatorBuild` is the ONLY thing that may
  *  reveal a Creator surface - never a persisted setting, never a role. */
@@ -1346,6 +1372,31 @@ export interface LucidBridge {
   // pane's whole job is to say what was PROVEN and a malformed run proves nothing.
   creatorRender(opts: { kind: string; prompt: string; model?: string; negative?: string; seed?: number; width?: number; height?: number; workflow?: string; maxArtifacts?: number }):
     Promise<{ ok: boolean; error?: string; run?: PipelineRunView } | null>;
+  // Creator free stack (dgx-avatar, HyperFrames, dgx-cad). Every call returns `{ ok, error }`; a CUI lockdown
+  // refusal arrives as ok:false with an error starting "CUI lockdown:" plus the verdict in `cui`.
+  creatorAvatarTemplates(endpointId: string, engine: AvatarEngine): Promise<CreatorCall<AvatarTemplatesView>>;
+  creatorAvatarRender(input: CreatorAvatarRenderInput): Promise<CreatorCall<{ jobId: string; remoteJobId: string }>>;
+  creatorAvatarJob(jobId: string): Promise<CreatorCall<AvatarJobStatusView>>;
+  creatorHyperframesRender(input: { projectDir: string; format?: HyperframesFormat; quality?: HyperframesQuality }): Promise<CreatorCall<{ jobId: string }>>;
+  // CREATOR-DRIFT: CutWire Drift over its own localhost agent protocol. `since` narrows the activity feed
+  // to entries newer than that seq; the token never crosses this bridge.
+  creatorDriftStatus(since?: number): Promise<CreatorCall<DriftStatusView>>;
+  creatorDriftCall(tool: string, args?: Record<string, unknown>): Promise<CreatorCall<DriftCallView>>;
+  creatorDriftLibrary(input: { path: string; prompt?: string; label?: string }): Promise<CreatorCall<{ artifact: CreatorArtifactView; path: string }>>;
+  creatorCadInspect(endpointId: string, name: string, bytes: ArrayBuffer): Promise<CreatorCall<CadInspectView>>;
+  /** Without `approved` the route answers needsApproval; the pane shows the script and resends on Approve. */
+  creatorCadModel(input: { endpointId: string; script: string; outputs: CadOutput[]; approved?: true }): Promise<CreatorCall<{ jobId?: string; result: CadModelResultView }>>;
+  /** Artifact bytes (auth header required, so never a plain href). */
+  creatorCadArtifact(endpointId: string, id: string): Promise<CreatorCall<{ blob: Blob; name: string }>>;
+  creatorImportMailbox(): Promise<CreatorCall<{ imported: string[]; rejected: { file: string; reason: string }[] }>>;
+  // Design suite: the pane pushes its document (no pixels) + agent manifest, pulls queued agent ops, and
+  // stores exports. Vision ops reach dgx-vision through the engine's CUI gate; decompose/upscale are jobs.
+  designPushState(input: { doc: DesignDoc; manifest: AgentManifest; thumbB64?: string }): Promise<CreatorCall<DesignStateAck>>;
+  designPullOps(since: number): Promise<CreatorCall<DesignOpsPull>>;
+  designAckOps(input: { seq: number; applied: number; errors: string[] }): Promise<CreatorCall<unknown>>;
+  designExport(input: { kind: DesignExportKind; name: string; dataB64: string } | { kind: "hyperframes"; name: string; files: { path: string; dataB64: string }[] }): Promise<CreatorCall<DesignExportResult>>;
+  visionCall(op: VisionOp, body: Record<string, unknown>): Promise<CreatorCall<unknown>>;
+  visionJob(jobId: string): Promise<CreatorCall<VisionJobStatus>>;
   listDir(path?: string): Promise<FsList | null>; // in-app folder browser (works everywhere)
   revealPath(path: string): Promise<boolean>; // open a folder in the OS file manager (Electron only; false in browser)
   canRevealPath(): boolean; // whether the native shell can reveal a folder (Electron only)
@@ -1476,6 +1527,26 @@ async function getTimed(path: string, ms: number): Promise<unknown> {
   try { return (await (await fetch(path, { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(ms) })).json())?.data ?? null; } catch { return null; }
 }
 const PROBE_TIMEOUT_MS = 5_000;
+
+/** Creator free stack: read the route's `{ ok, data, error }`, keep the server's refusal words (and the CUI
+ *  verdict when the lockdown refused), and refuse a payload the pane cannot read instead of painting half. */
+async function creatorCall<T>(path: string, init: { method?: string; body?: BodyInit; type?: string }, gate: (d: unknown) => d is T, unreachable: string): Promise<CreatorCall<T>> {
+  try {
+    const res = await fetch(path, { cache: "no-store", method: init.method ?? "GET", body: init.body, headers: authHeaders(init.type ? { "content-type": init.type } : {}) });
+    const body = await res.json() as { ok?: unknown; error?: unknown; data?: unknown };
+    const error = typeof body.error === "string" ? body.error : undefined;
+    const data = body.data;
+    const cuiRaw = data && typeof data === "object" && "cui" in data ? data.cui : undefined;
+    const cui = cuiRaw && typeof cuiRaw === "object" && "allowed" in cuiRaw && "reason" in cuiRaw && "posture" in cuiRaw
+      ? { posture: String(cuiRaw.posture), allowed: cuiRaw.allowed === true, reason: String(cuiRaw.reason) }
+      : undefined;
+    const needsApproval = !!data && typeof data === "object" && "needsApproval" in data && data.needsApproval === true;
+    if (body.ok !== true) return { ok: false, error: error ?? unreachable, cui, ...(needsApproval ? { needsApproval } : {}) };
+    return gate(data) ? { ok: true, data } : { ok: false, error: "The engine answered with a payload this build cannot read." };
+  } catch { return { ok: false, error: unreachable }; }
+}
+const jsonInit = (body: unknown) => ({ method: "POST", body: JSON.stringify(body), type: "application/json" });
+const hasString = (d: unknown, key: string): boolean => !!d && typeof d === "object" && typeof Reflect.get(d, key) === "string";
 /** One recovery probe read: `reached` = the engine answered at all (any HTTP status). */
 async function probeRead(path: string): Promise<{ reached: boolean; ok: boolean; data: unknown }> {
   try {
@@ -2175,6 +2246,70 @@ export const bridge: LucidBridge = {
       return { ok: !!body.ok, error: body.error, run: body.data.run };
     } catch { return { ok: false, error: "The render service did not answer." }; }
   },
+  // Creator free stack: dgx-avatar, HyperFrames, dgx-cad, and the Loader endpoint mailbox.
+  creatorAvatarTemplates: (endpointId, engine) =>
+    creatorCall(`/api/creator/avatar/templates?endpointId=${encodeURIComponent(endpointId)}&engine=${encodeURIComponent(engine)}`, {},
+      (d): d is AvatarTemplatesView => !!d && typeof d === "object" && "templates" in d && Array.isArray(d.templates) && "folders" in d && Array.isArray(d.folders),
+      "The avatar endpoint did not answer."),
+  creatorAvatarRender: (input) =>
+    creatorCall("/api/creator/avatar/render", jsonInit(input),
+      (d): d is { jobId: string; remoteJobId: string } => hasString(d, "jobId") && hasString(d, "remoteJobId"),
+      "The avatar service did not answer."),
+  creatorAvatarJob: (jobId) =>
+    creatorCall(`/api/creator/avatar/job?jobId=${encodeURIComponent(jobId)}`, {},
+      (d): d is AvatarJobStatusView => hasString(d, "state") && hasString(d, "stage") && hasString(d, "message"),
+      "The avatar service did not answer."),
+  creatorHyperframesRender: (input) =>
+    creatorCall("/api/creator/hyperframes/render", jsonInit(input), (d): d is { jobId: string } => hasString(d, "jobId"), "The HyperFrames renderer did not answer."),
+  // CREATOR-DRIFT: the Drift status, one tool call through the engine's CUI gate, and the library import.
+  creatorDriftStatus: (since) =>
+    creatorCall(`/api/creator/drift/status${since !== undefined ? `?since=${encodeURIComponent(String(since))}` : ""}`, {}, isDriftStatus, "The engine did not answer about Drift."),
+  creatorDriftCall: (tool, args) =>
+    creatorCall("/api/creator/drift/call", jsonInit({ tool, args: args ?? {} }), isDriftCall,
+      "Drift did not answer. In Drift: Settings -> Agent access -> On, then Refresh."),
+  creatorDriftLibrary: (input) =>
+    creatorCall("/api/creator/drift/library", jsonInit(input),
+      (d): d is { artifact: CreatorArtifactView; path: string } => !!d && typeof d === "object" && "artifact" in d && !!d.artifact && typeof d.artifact === "object" && hasString(d.artifact, "id") && hasString(d, "path"),
+      "The library import did not answer."),
+  creatorCadInspect: (endpointId, name, bytes) =>
+    creatorCall(`/api/creator/cad/inspect?endpointId=${encodeURIComponent(endpointId)}&name=${encodeURIComponent(name)}`,
+      // The raw file bytes ride a JSON content-type on purpose: the engine's origin guard admits only
+      // application/json POSTs, and the inspect route reads the body as bytes (no base64 doubling of 200 MB).
+      { method: "POST", body: bytes, type: "application/json" }, isCadInspect, "The CAD service did not answer."),
+  creatorCadModel: (input) =>
+    creatorCall("/api/creator/cad/model", jsonInit(input),
+      (d): d is { jobId?: string; result: CadModelResultView } => !!d && typeof d === "object" && "result" in d && isCadModelResult(d.result),
+      "The CAD service did not answer."),
+  creatorCadArtifact: async (endpointId, id) => {
+    try {
+      const res = await fetch(`/api/creator/cad/artifact?endpointId=${encodeURIComponent(endpointId)}&id=${encodeURIComponent(id)}`, { cache: "no-store", headers: authHeaders() });
+      // A refusal is the usual JSON envelope; bytes are anything else.
+      if ((res.headers.get("content-type") ?? "").includes("application/json")) {
+        const body = await res.json() as { error?: unknown };
+        return { ok: false, error: typeof body.error === "string" ? body.error : "The CAD artifact was refused." };
+      }
+      if (!res.ok) return { ok: false, error: `The CAD artifact could not be fetched (HTTP ${res.status}).` };
+      const disp = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(res.headers.get("content-disposition") ?? "");
+      return { ok: true, data: { blob: await res.blob(), name: disp ? decodeURIComponent(disp[1]!) : `${id}.bin` } };
+    } catch { return { ok: false, error: "The CAD service did not answer." }; }
+  },
+  creatorImportMailbox: () =>
+    creatorCall("/api/creator/endpoint/import-mailbox", jsonInit({}),
+      (d): d is { imported: string[]; rejected: { file: string; reason: string }[] } =>
+        !!d && typeof d === "object" && "imported" in d && Array.isArray(d.imported) && "rejected" in d && Array.isArray(d.rejected),
+      "The endpoint mailbox did not answer."),
+  designPushState: (input) =>
+    creatorCall("/api/creator/design/state", jsonInit(input), isDesignStateAck, "The Design state route did not answer."),
+  designPullOps: (since) =>
+    creatorCall(`/api/creator/design/ops?since=${encodeURIComponent(String(Math.max(0, Math.floor(since))))}`, {}, isDesignOpsPull, "The Design ops route did not answer."),
+  designAckOps: (input) =>
+    creatorCall("/api/creator/design/ops/ack", jsonInit(input), (d): d is unknown => true, "The Design ops route did not answer."),
+  designExport: (input) =>
+    creatorCall("/api/creator/design/export", jsonInit(input), isDesignExportResult, "The Design export route did not answer."),
+  visionCall: (op, body) =>
+    creatorCall(`/api/creator/vision/${op}`, jsonInit(body), (d): d is unknown => d !== undefined && d !== null, "The DGX vision route did not answer."),
+  visionJob: (jobId) =>
+    creatorCall(`/api/creator/vision/job?jobId=${encodeURIComponent(jobId)}`, {}, isVisionJobStatus, "The DGX vision route did not answer."),
   // P-INTERJECT.1/.2 (wave 2, TurnControls section): mid-turn interjects.
   // ADR-0414: NOT `post()`, which keeps only `data` and so turned every refusal into the same null.
   interject: async (target, text, opts) => {

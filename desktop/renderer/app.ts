@@ -119,6 +119,7 @@ import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
 import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
+import { enclaveProviderSet, isLockdownRoutable, LOCKDOWN_DETAIL, LOCKDOWN_LABEL, lockdownToggleDecision } from "../lockdown_route.ts"; // CUI lockdown: the ONE routing predicate the server clamp also uses
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
 import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
@@ -158,7 +159,15 @@ import { createJudgments, judgmentIdleNote, type JudgmentsWin } from "./judgment
 import { runCapture, type FrameDecoder } from "./capture_driver.ts"; // CREATOR-3b (ADR-0287 item 3): drive a previewed scene through the fixed timestep
 import { framePlan } from "../../harness/creator/frame_capture.ts"; // CREATOR-3: the deterministic plan the capture steps
 import { creatorFlyoutHtml, pressureRailHtml, type CreatorResourcesView } from "./creator_monitor.ts";
-import { creatorStudioHtml, type CreatorStudioView } from "./creator_studio.ts";
+import { creatorStudioHtml, cuiBannerHtml, type CreatorStudioView } from "./creator_studio.ts";
+// Creator free stack: Video (dgx-avatar + HyperFrames), CAD (dgx-cad), Markup (on-device PDF annotations).
+import { creatorVideoHtml, hyperframesRenderBlock, videoRenderBlock, type AvatarEngine, type CreatorVideoView, type VideoEndpointView } from "./creator_video.ts";
+import { CAD_OUTPUTS, SAMPLE_CADQUERY, cadRunBlock, creatorCadHtml, type CreatorCadView } from "./creator_cad.ts";
+// CREATOR-DRIFT: the CutWire Drift pane (collaborative edit over Drift's own localhost agent protocol).
+import { DRIFT_ASK_PROMPTS, creatorDriftHtml, driftConnectBlock, driftExportBlock, driftExportTarget, driftInspectFromPayload, newestUndoableIsAgent, type CreatorDriftView, type DriftActivityView, type DriftStatusView } from "./creator_drift_view.ts";
+import { creatorMarkupHtml, mountMarkupPane } from "./creator_markup_view.ts";
+import { creatorDesignHtml, mountDesignPane } from "./design_pane.ts"; // Design suite: Image / Vector / Motion on one doc
+import { sanitizedSvgDataUrl } from "./svg_sanitize.ts";
 import { creatorImagesHtml, type ArtifactView, type CreatorImagesView, type MixInputView } from "./creator_images.ts";
 import {
   creatorEditorHtml, dropTargetMs, formatClock, isWavTrack, msAtX, playheadX, selectionRange, waveformBars,
@@ -246,7 +255,10 @@ const state = {
   creatorEditor: null as CreatorEditorView | null, // CREATOR-2 (ADR-0286): the follow-along audio editor
   creatorMixer: null as CreatorMixerView | null, // CREATOR-5 (ADR-0289): the mixer (N takes into one file)
   creatorRender: null as CreatorRenderView | null, // CREATOR-3 (ADR-0287): the video/3D render pane
-  studioTab: "integrations" as "integrations" | "images" | "editor" | "mixer" | "render", // which Studio pane is showing
+  creatorVideo: null as CreatorVideoView | null, // Creator free stack: dgx-avatar + HyperFrames video pane
+  creatorCad: null as CreatorCadView | null, // Creator free stack: dgx-cad inspect + CadQuery model pane
+  creatorDrift: null as CreatorDriftView | null, // CREATOR-DRIFT: the CutWire Drift collaborative-edit pane
+  studioTab: "integrations" as StudioTab, // which Studio pane is showing
   commands: [] as OmpCommand[],
   skills: [] as SkillView[], // P-SKILL.4 (ADR-0097): discovered skills, widened with root/trust/removable/scan verdict
   userCommands: [] as UserCommand[], // P-CMD.1: user-authored "/" slash commands (workspace .omp/commands/)
@@ -4130,7 +4142,7 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
       <div class="modal-field"><input id="govKey" class="prov-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your AskSage API key" /></div>
       <label class="gov-lbl">Gov (CIV) routing endpoint <span class="gov-lbl-sub">prefilled for you</span></label>
       <div class="modal-field"><input id="govBase" class="prov-key" spellcheck="false" value="${esc(state.asksage?.base || CIV_ASKSAGE_BASE)}" /></div>
-      <div class="set-note">${icon("info", 12)} This lives in <b>Settings \u2192 AskSage gov gateway \u2192 "AskSage-only (lockdown)"</b>. We'll take you there so you know where it is.</div>
+      <div class="set-note">${icon("info", 12)} This lives in <b>Settings \u2192 AskSage gov gateway \u2192 "${esc(LOCKDOWN_LABEL)}"</b>. We'll take you there so you know where it is.</div>
       <div id="govSetupErr" class="modal-err" hidden></div>
       <div class="modal-actions">
         <button class="btn-mini" id="govSetupLater" type="button">I'll add it later</button>
@@ -4157,7 +4169,7 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
     // Keep the prefilled CIV endpoint; do NOT enable lockdown without a key (the backend would fail-closed).
     const base = ($("#govBase", ov) as HTMLInputElement)?.value ?? "";
     state.asksage = (await bridge.saveAsksage({ baseUrl: base.trim() || CIV_ASKSAGE_BASE }).catch(() => null)) ?? state.asksage;
-    finish({ title: "Finish CUI setup in Settings", desc: "Add your AskSage API key under AskSage gov gateway, then turn on \u201cAskSage-only (lockdown)\u201d." });
+    finish({ title: "Finish CUI setup in Settings", desc: `Add your AskSage API key under AskSage gov gateway, then turn on \u201c${LOCKDOWN_LABEL}\u201d.` });
   };
   $("#govSetupSave", ov)!.addEventListener("click", () => void save());
   $("#govSetupLater", ov)!.addEventListener("click", () => void later());
@@ -4390,9 +4402,13 @@ let voiceArmedByFlow = false;
 let lastSpokenGap = "";
 const modelOptions = (): { value: string; name?: string }[] => {
   const opt = state.config.find((c) => c.id === "model");
-  const lockdown = !!(state.asksage?.only || state.managed?.asksageOnly); // ADR-0068/0224: either lockdown source clamps tiers to gov routes
-  return (opt ? curatedModels(opt) : []).filter((o) => !unavailableReason(String(o.value)) && (!lockdown || isGovModel(String(o.value)))).map((o) => ({ value: String(o.value), name: o.name }));
+  const lockdown = !!(state.asksage?.only || state.managed?.asksageOnly); // ADR-0068/0224: either lockdown source clamps tiers to allowed routes
+  return (opt ? curatedModels(opt) : []).filter((o) => !unavailableReason(String(o.value)) && (!lockdown || lockdownRoutable(String(o.value)))).map((o) => ({ value: String(o.value), name: o.name }));
 };
+/** CUI lockdown: may this model carry a turn? THE shared predicate (lockdown_route.ts, also the server's
+ *  clamp): AskSage-routed, or served by an enabled Local Provider attested as a DGX enclave host (the
+ *  user's own lock only: the org-managed lock stays AskSage-only). */
+function lockdownRoutable(value: string): boolean { return isLockdownRoutable(value, enclaveProviderSet(state.localProviders, !!state.managed?.asksageOnly)); }
 async function enterAgentFlow(): Promise<void> {
   if (agentPrior) {
     if (!agentFlowTimer) agentFlowTimer = window.setInterval(() => { void agentFlowStep(); }, 4000);
@@ -4669,8 +4685,8 @@ function secAsksage(a: typeof state.asksage, datasets: string[] | null): string 
   const body = `${keyRow}
     <div class="prov-row"><input id="asksageBase" class="prov-key" placeholder="https://api.civ.asksage.ai/server" value="${esc(a?.base ?? "")}" />
       <button class="btn-mini ok" id="asksageSaveBase">${icon("check", 12)} Save URL</button></div>
-    <label class="set-toggle"><input type="checkbox" id="asksageOnly" ${checked} ${locked ? "disabled" : ""}/>
-      <span><b>AskSage-only (lockdown)</b> - route every turn through the gov gateway and hide direct providers in the model picker.</span></label>
+    <label class="set-toggle" data-tip="${esc(LOCKDOWN_LABEL)}|Turns, voice and agent web access may only reach AskSage (CUI-authorized) or a local DGX enclave service (a Local Provider marked as a DGX enclave host). Cloud voice is refused. Public downloads that carry no user content (model weights, packages) are not blocked: the supply-chain pipeline governs them."><input type="checkbox" id="asksageOnly" ${checked} ${locked ? "disabled" : ""}/>
+      <span><b>${esc(LOCKDOWN_LABEL)}</b> - ${esc(LOCKDOWN_DETAIL)}. Direct providers are hidden in the model picker.</span></label>
     ${managedNote}
     ${locked || a?.only ? datasetsSection(datasets) : ""}
     ${a?.configured ? `<div class="set-note ok">${icon("check", 12)} Gov gateway active - AskSage models appear in the picker, with monthly-usage and scanned personas.</div>` : `<div class="set-note">${icon("info", 12)} Add your <code>ASKSAGE_API_KEY</code> above to enable gov models, usage, and personas.</div>`}`;
@@ -5598,7 +5614,8 @@ function applyLocalPreset(id: string): void {
 async function addLocalProviderFromForm(): Promise<void> {
   const val = (id: string): string => (($(`#${id}`, $("#setBody")!) as HTMLInputElement | HTMLSelectElement | null)?.value ?? "");
   const external = ($("#lpExternal", $("#setBody")!) as HTMLInputElement | null)?.checked ?? false;
-  const draft = draftFromForm({ name: val("lpName"), baseUrl: val("lpBaseUrl"), auth: val("lpAuth"), models: val("lpModels"), external }, Date.now());
+  const enclave = ($("#lpEnclave", $("#setBody")!) as HTMLInputElement | null)?.checked ?? false; // CUI lockdown attestation
+  const draft = draftFromForm({ name: val("lpName"), baseUrl: val("lpBaseUrl"), auth: val("lpAuth"), models: val("lpModels"), external, enclave }, Date.now());
   if (draft.errors.length || !draft.def) { showToast({ tone: "warn", title: "Check the provider details", desc: draft.errors[0] ?? "invalid" }); return; }
   const def = draft.def;
   if (draft.needsKey) {
@@ -5817,21 +5834,52 @@ function closeCreatorStudio(): void {
   if (!studioOpen) return;
   studioOpen = false;
   stopEditorAudio(); // CREATOR-2: never leave the editor's clip playing behind a closed pane
+  stopDriftPoll(); // CREATOR-DRIFT: the activity poll runs only while the Drift tab is showing
   $("#creatorStudio")!.hidden = true;
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** The Studio is four panes behind one tab strip: integrations + library, the image tools, the
- *  follow-along audio editor, and the mixer that layers several takes into one file. */
+/** The Studio's panes behind one tab strip: integrations + library, the image tools, the render pane, the
+ *  follow-along audio editor, the mixer, and the free-stack Video, CAD and Markup panes. The CUI lockdown
+ *  banner sits under the strip on every pane, from the last registry payload. */
+const STUDIO_TABS = ["integrations", "images", "render", "video", "drift", "cad", "markup", "design", "editor", "mixer"] as const;
+type StudioTab = (typeof STUDIO_TABS)[number];
 function studioTabsHtml(): string {
-  const tab = (id: "integrations" | "images" | "editor" | "mixer" | "render", label: string, ic: string) =>
+  const tab = (id: StudioTab, label: string, ic: string) =>
     `<button type="button" class="cst-tab${state.studioTab === id ? " on" : ""}" data-studio-tab="${id}">${icon(ic, 13)}<span>${esc(label)}</span></button>`;
-  return `<div class="cst-tabs">${tab("integrations", "Integrations", "market")}${tab("images", "Images", "eye")}${tab("render", "Render", "play")}${tab("editor", "Editor", "volume")}${tab("mixer", "Mixer", "sliders")}</div>`;
+  return `<div class="cst-tabs">${tab("integrations", "Integrations", "market")}${tab("images", "Images", "eye")}${tab("render", "Render", "play")}${tab("video", "Video", "user")}${tab("drift", "Drift", "clock")}${tab("cad", "CAD", "scan")}${tab("markup", "Markup", "markup")}${tab("design", "Design", "pen")}${tab("editor", "Editor", "volume")}${tab("mixer", "Mixer", "sliders")}</div>${cuiBannerHtml(state.creatorStudio?.cui?.lockdown)}`;
 }
 async function renderCreatorStudio(): Promise<void> {
   const body = $("#studioBody");
   if (!body) return;
+  // The drawing panes need room for a page; every other pane keeps the standard fly-out width.
+  $("#creatorStudio")?.classList.toggle("cst-wide", state.studioTab === "markup" || state.studioTab === "cad" || state.studioTab === "design" || state.studioTab === "drift");
+  if (state.studioTab === "drift") {
+    body.innerHTML = studioTabsHtml() + creatorDriftHtml(state.creatorDrift);
+    paintCreatorDrift();
+    return;
+  }
+  if (state.studioTab === "design") {
+    body.innerHTML = studioTabsHtml() + creatorDesignHtml();
+    mountDesignPane(body);
+    return;
+  }
+  if (state.studioTab === "video") {
+    body.innerHTML = studioTabsHtml() + creatorVideoHtml(state.creatorVideo);
+    paintCreatorVideo();
+    return;
+  }
+  if (state.studioTab === "cad") {
+    body.innerHTML = studioTabsHtml() + creatorCadHtml(state.creatorCad);
+    paintCadSvgs();
+    return;
+  }
+  if (state.studioTab === "markup") {
+    body.innerHTML = studioTabsHtml() + creatorMarkupHtml();
+    mountMarkupPane(body);
+    return;
+  }
   if (state.studioTab === "editor") {
     body.innerHTML = studioTabsHtml() + creatorEditorHtml(state.creatorEditor);
     paintEditorWave();
@@ -5853,6 +5901,587 @@ async function renderCreatorStudio(): Promise<void> {
   const view = await bridge.creatorStudio().catch(() => null);
   state.creatorStudio = view;
   body.innerHTML = studioTabsHtml() + creatorStudioHtml(view);
+}
+
+// ---- Creator free stack: Video (dgx-avatar + HyperFrames) and CAD (dgx-cad) ----
+// Fields mirror into state on every input (syncStudioField), so a repaint from a job poll never drops what
+// the user typed, and the Render/Run gates are refreshed in place rather than by a repaint that would steal
+// focus mid-word.
+
+/** Enabled endpoints of one provider, with each endpoint's own CUI verdict, from the registry payload. */
+function creatorProviderEndpoints(view: CreatorStudioView | null, providerId: string): VideoEndpointView[] {
+  const p = view?.providers.find((x) => x.id === providerId);
+  return (p?.endpoints ?? []).filter((e) => e.enabled).map((e) => ({ id: e.id, label: e.label, cui: e.cui }));
+}
+
+async function refreshCreatorRegistry(): Promise<CreatorStudioView | null> {
+  const v = await bridge.creatorStudio().catch(() => null);
+  if (v) state.creatorStudio = v;
+  return state.creatorStudio;
+}
+
+async function loadCreatorVideo(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const studio = await refreshCreatorRegistry();
+  const voices = await bridge.voices("dots-tts").catch(() => null);
+  const prev = state.creatorVideo;
+  const endpoints = creatorProviderEndpoints(studio, "dgx-avatar");
+  const hf = studio?.providers.find((p) => p.id === "hyperframes");
+  const voiceList = (voices?.voices ?? []).map((x) => ({ id: x.voiceId, name: x.name }));
+  state.creatorVideo = {
+    lockdown: studio?.cui?.lockdown === true,
+    endpoints,
+    endpointId: prev && endpoints.some((e) => e.id === prev.endpointId) ? prev.endpointId : endpoints[0]?.id ?? "",
+    engine: prev?.engine ?? "musetalk",
+    templates: prev?.templates ?? [],
+    templatesNote: prev?.templatesNote ?? "",
+    templatePath: prev?.templatePath ?? "",
+    voices: voiceList,
+    voice: prev?.voice || voices?.selected || voiceList[0]?.id || "",
+    text: prev?.text ?? "",
+    title: prev?.title ?? "",
+    subtitle: prev?.subtitle ?? "",
+    captions: prev?.captions ?? true,
+    busy: prev?.busy ?? "",
+    status: prev?.status ?? "",
+    statusTone: prev?.statusTone ?? "",
+    jobId: prev?.jobId ?? "",
+    job: prev?.job ?? null,
+    artifactId: prev?.artifactId ?? "",
+    hyperframes: {
+      cui: hf?.cui,
+      projectDir: prev?.hyperframes.projectDir ?? "",
+      format: prev?.hyperframes.format ?? "mp4",
+      quality: prev?.hyperframes.quality ?? "standard",
+      jobId: prev?.hyperframes.jobId ?? "",
+      status: prev?.hyperframes.status ?? "",
+      statusTone: prev?.hyperframes.statusTone ?? "",
+    },
+    jobs: studio?.jobs ?? [],
+  };
+  if (studioOpen && state.studioTab === "video") void renderCreatorStudio();
+  const v = state.creatorVideo;
+  const ep = v.endpoints.find((e) => e.id === v.endpointId);
+  if (ep && ep.cui?.allowed !== false && !v.templates.length) void listAvatarTemplates();
+}
+
+function patchCreatorVideo(patch: Partial<CreatorVideoView>, repaint = true): void {
+  if (!state.creatorVideo) return;
+  state.creatorVideo = { ...state.creatorVideo, ...patch };
+  if (repaint && studioOpen && state.studioTab === "video") void renderCreatorStudio();
+}
+
+async function listAvatarTemplates(): Promise<void> {
+  const v = state.creatorVideo;
+  if (!v?.endpointId) return;
+  patchCreatorVideo({ templatesNote: "Asking the avatar service for its templates..." });
+  const r = await bridge.creatorAvatarTemplates(v.endpointId, v.engine);
+  const cur = state.creatorVideo;
+  if (!cur || cur.endpointId !== v.endpointId || cur.engine !== v.engine) return;
+  if (!r.ok || !r.data) { patchCreatorVideo({ templates: [], templatePath: "", templatesNote: r.error ?? "The avatar endpoint did not answer." }); return; }
+  const templates = r.data.templates;
+  patchCreatorVideo({
+    templates,
+    templatesNote: templates.length ? "" : "The avatar service lists no templates for this engine.",
+    templatePath: templates.some((t) => t.path === cur.templatePath) ? cur.templatePath : "",
+  });
+}
+
+const AVATAR_TERMINAL = new Set(["done", "failed", "cancelled", "refused"]);
+let avatarPollTimer = 0;
+
+async function runAvatarRender(): Promise<void> {
+  const v = state.creatorVideo;
+  if (!v || videoRenderBlock(v)) return;
+  const compose = v.title.trim() || v.subtitle.trim() || v.captions
+    ? { ...(v.title.trim() ? { title: v.title.trim() } : {}), ...(v.subtitle.trim() ? { subtitle: v.subtitle.trim() } : {}), ...(v.captions ? { captionText: v.text.trim() } : {}) }
+    : undefined;
+  patchCreatorVideo({ busy: "Synthesizing speech and queueing the render...", status: "", statusTone: "", job: null, jobId: "" });
+  const r = await bridge.creatorAvatarRender({ endpointId: v.endpointId, engine: v.engine, templatePath: v.templatePath, text: v.text.trim(), voice: v.voice, ...(compose ? { compose } : {}) });
+  if (!r.ok || !r.data) { patchCreatorVideo({ busy: "", status: r.error ?? "The avatar service did not answer.", statusTone: "error" }); return; }
+  patchCreatorVideo({ busy: "", jobId: r.data.jobId, job: { state: "queued", stage: "render", message: `Queued on the DGX box (${r.data.remoteJobId}).` } });
+  pollAvatarJob(r.data.jobId, 0);
+}
+
+/** Poll one avatar job until it settles. Five missed answers in a row end the poll with that said plainly. */
+function pollAvatarJob(jobId: string, misses: number): void {
+  clearTimeout(avatarPollTimer);
+  avatarPollTimer = window.setTimeout(async () => {
+    if (state.creatorVideo?.jobId !== jobId) return;
+    const r = await bridge.creatorAvatarJob(jobId);
+    if (state.creatorVideo?.jobId !== jobId) return;
+    if (!r.ok || !r.data) {
+      if (misses + 1 >= 5) { patchCreatorVideo({ status: `Stopped watching job ${jobId}: ${r.error ?? "no answer"}`, statusTone: "error" }); return; }
+      pollAvatarJob(jobId, misses + 1);
+      return;
+    }
+    const job = r.data;
+    patchCreatorVideo({ job });
+    if (!AVATAR_TERMINAL.has(job.state)) { pollAvatarJob(jobId, 0); return; }
+    if (job.state === "done" && job.artifactId) patchCreatorVideo({ artifactId: job.artifactId, status: "Render complete; the video is in the Creator library.", statusTone: "ok" });
+    const studio = await refreshCreatorRegistry();
+    patchCreatorVideo({ jobs: studio?.jobs ?? [] });
+  }, 2500);
+}
+
+let hfPollTimer = 0;
+async function runHyperframesRender(): Promise<void> {
+  const v = state.creatorVideo;
+  if (!v || hyperframesRenderBlock(v)) return;
+  const hf = v.hyperframes;
+  patchCreatorVideo({ hyperframes: { ...hf, status: "Starting the HyperFrames render on this machine...", statusTone: "" } });
+  const r = await bridge.creatorHyperframesRender({ projectDir: hf.projectDir.trim(), format: hf.format, quality: hf.quality });
+  const cur = state.creatorVideo;
+  if (!cur) return;
+  if (!r.ok || !r.data) { patchCreatorVideo({ hyperframes: { ...cur.hyperframes, status: r.error ?? "The HyperFrames renderer did not answer.", statusTone: "error" } }); return; }
+  patchCreatorVideo({ hyperframes: { ...cur.hyperframes, jobId: r.data.jobId, status: `Rendering (job ${r.data.jobId}). Progress is in Recent jobs.`, statusTone: "" } });
+  pollHyperframesJob(r.data.jobId);
+}
+
+/** HyperFrames jobs live in the shared job ledger, so the poll reads the registry rather than a new route. */
+function pollHyperframesJob(jobId: string): void {
+  clearTimeout(hfPollTimer);
+  hfPollTimer = window.setTimeout(async () => {
+    const studio = await refreshCreatorRegistry();
+    const cur = state.creatorVideo;
+    if (!cur || cur.hyperframes.jobId !== jobId) return;
+    const job = studio?.jobs?.find((j) => j.id === jobId);
+    patchCreatorVideo({ jobs: studio?.jobs ?? [] });
+    if (!job || job.state === "queued" || job.state === "running") { pollHyperframesJob(jobId); return; }
+    const ok = job.state === "done";
+    patchCreatorVideo({
+      ...(ok && job.artifacts[0] ? { artifactId: job.artifacts[0] } : {}),
+      hyperframes: { ...cur.hyperframes, status: ok ? "HyperFrames render complete; the video is in the Creator library." : `HyperFrames ${job.state}: ${job.error || "no reason given"}`, statusTone: ok ? "ok" : "error" },
+    });
+  }, 3000);
+}
+
+/** Set the result video's bytes as a DOM PROPERTY (the P-VISION.1 idiom), fetched once per artifact. */
+let creatorVideoSrc = { id: "", url: "" };
+function paintCreatorVideo(): void {
+  const video = $("[data-cvd-video]") as HTMLVideoElement | null;
+  const id = video?.dataset.cvdVideo ?? "";
+  if (!video || !id) return;
+  if (creatorVideoSrc.id === id) { video.src = creatorVideoSrc.url; return; }
+  void bridge.creatorArtifactData(id).then((d) => {
+    if (!d) { patchCreatorVideo({ status: `The video artifact ${id} could not be read from the library.`, statusTone: "error" }); return; }
+    creatorVideoSrc = { id, url: d.dataUrl };
+    const now = $("[data-cvd-video]") as HTMLVideoElement | null;
+    if (now?.dataset.cvdVideo === id) now.src = d.dataUrl;
+  });
+}
+
+// ---- CREATOR-DRIFT: the CutWire Drift pane ----
+// The engine owns the session file, the token and the CUI gate; this side only shows status, calls tools
+// through /api/creator/drift/call and keeps the activity feed fresh with a `?since=` poll while the tab
+// is showing. Fields mirror into state on input (syncStudioField), so a poll repaint never drops a typed
+// export path.
+
+const DRIFT_POLL_MS = 3000;
+const DRIFT_EXPORT_POLL_MS = 2000;
+let driftPollTimer = 0;
+let driftExportTimer = 0;
+
+function stopDriftPoll(): void {
+  if (driftPollTimer) { clearInterval(driftPollTimer); driftPollTimer = 0; }
+}
+function startDriftPoll(): void {
+  stopDriftPoll();
+  driftPollTimer = window.setInterval(() => { void pollDriftActivity(); }, DRIFT_POLL_MS);
+}
+
+/** Fold a status payload into the pane: the newest-first feed and the highest seq seen. */
+function driftStatusPatch(s: DriftStatusView, activity: DriftActivityView[]): Pick<CreatorDriftView, keyof DriftStatusView | "lastSeq"> {
+  return {
+    installed: s.installed, exePath: s.exePath, session: s.session, endpoint: s.endpoint, lockdown: s.lockdown,
+    probe: s.probe, version: s.version, activity,
+    lastSeq: activity.reduce((m, e) => Math.max(m, e.seq), 0),
+  };
+}
+
+async function loadCreatorDrift(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const r = await bridge.creatorDriftStatus();
+  const prev = state.creatorDrift;
+  const s: DriftStatusView = r.ok && r.data ? r.data : {
+    installed: prev?.installed ?? false, exePath: prev?.exePath ?? "", session: prev?.session ?? { path: "", present: false, port: 0, pid: 0, error: "" },
+    endpoint: null, lockdown: prev?.lockdown ?? false, probe: prev?.probe ?? null, version: prev?.version ?? "", activity: prev?.activity ?? [],
+  };
+  const activity = [...s.activity].sort((a, b) => b.seq - a.seq);
+  state.creatorDrift = {
+    ...driftStatusPatch(s, activity),
+    inspect: prev?.inspect ?? null,
+    inspectNote: prev?.inspectNote ?? "",
+    captureAt: prev?.captureAt ?? "",
+    captureSrc: prev?.captureSrc ?? "",
+    sheetSrc: prev?.sheetSrc ?? "",
+    exportPath: prev?.exportPath ?? "",
+    exportFormat: prev?.exportFormat ?? "mp4",
+    exportProgress: prev?.exportProgress ?? null,
+    exportState: prev?.exportState ?? "",
+    exportedPath: prev?.exportedPath ?? "",
+    artifactId: prev?.artifactId ?? "",
+    busy: prev?.busy ?? "",
+    status: r.ok ? prev?.status ?? "" : r.error ?? "The engine did not answer about Drift.",
+    statusTone: r.ok ? prev?.statusTone ?? "" : "error",
+  };
+  if (studioOpen && state.studioTab === "drift") { void renderCreatorStudio(); startDriftPoll(); }
+  if (s.endpoint && s.endpoint.cui.allowed !== false) await refreshDriftInspect();
+  else if (state.creatorDrift) patchCreatorDrift({ inspect: null, inspectNote: "" });
+}
+
+function patchCreatorDrift(patch: Partial<CreatorDriftView>, repaint = true): void {
+  if (!state.creatorDrift) return;
+  state.creatorDrift = { ...state.creatorDrift, ...patch };
+  if (repaint && studioOpen && state.studioTab === "drift") void renderCreatorStudio();
+}
+
+/** Ask Drift for the project summary. A refusal or a dead Drift becomes the note under the heading. */
+async function refreshDriftInspect(): Promise<void> {
+  const v = state.creatorDrift;
+  if (!v?.endpoint) return;
+  const r = await bridge.creatorDriftCall("inspect", {});
+  if (!state.creatorDrift) return;
+  if (!r.ok || !r.data) { patchCreatorDrift({ inspect: null, inspectNote: r.error ?? "Drift did not answer." }); return; }
+  if (r.data.isError) { patchCreatorDrift({ inspect: null, inspectNote: r.data.text || "Drift refused the inspect call." }); return; }
+  patchCreatorDrift({ inspect: driftInspectFromPayload(r.data.payload), inspectNote: "" });
+}
+
+/** The 3 s feed poll: `?since=` the highest seq seen; repaint only when something changed. */
+async function pollDriftActivity(): Promise<void> {
+  const v = state.creatorDrift;
+  if (!studioOpen || state.studioTab !== "drift" || !v) { stopDriftPoll(); return; }
+  const r = await bridge.creatorDriftStatus(v.lastSeq);
+  const cur = state.creatorDrift;
+  if (!r.ok || !r.data || !cur || !studioOpen || state.studioTab !== "drift") return;
+  const s = r.data;
+  const fresh = s.activity.filter((e) => e.seq > cur.lastSeq).sort((a, b) => b.seq - a.seq);
+  const connectionChanged = (s.endpoint?.id ?? "") !== (cur.endpoint?.id ?? "") || s.session.present !== cur.session.present
+    || s.lockdown !== cur.lockdown || s.installed !== cur.installed || (s.endpoint?.cui.allowed ?? true) !== (cur.endpoint?.cui.allowed ?? true)
+    || (s.probe?.at ?? 0) !== (cur.probe?.at ?? 0);
+  if (!fresh.length && !connectionChanged) return;
+  const activity = [...fresh, ...cur.activity].slice(0, 200);
+  patchCreatorDrift(driftStatusPatch(s, activity));
+  // An edit from either side moves the project; re-read the summary so revision and counts stay honest.
+  if (fresh.some((e) => e.undoable && e.ok) || (connectionChanged && s.endpoint)) void refreshDriftInspect();
+}
+
+/** One Drift tool call from the pane with the busy line shown while it runs. Null when it was refused. */
+async function driftPaneCall(tool: string, args: Record<string, unknown>, busy: string): Promise<{ text: string; payload: unknown; images: { mimeType: string; data: string }[] } | null> {
+  const v = state.creatorDrift;
+  if (!v || driftConnectBlock(v)) return null;
+  patchCreatorDrift({ busy, status: "", statusTone: "" });
+  const r = await bridge.creatorDriftCall(tool, args);
+  if (!state.creatorDrift) return null;
+  if (!r.ok || !r.data) { patchCreatorDrift({ busy: "", status: r.error ?? "Drift did not answer.", statusTone: "error" }); return null; }
+  const d = r.data;
+  const activity = [d.entry, ...state.creatorDrift.activity.filter((e) => e.seq !== d.entry.seq)].slice(0, 200);
+  const lastSeq = Math.max(state.creatorDrift.lastSeq, d.entry.seq);
+  if (d.isError) {
+    const err = d.payload && typeof d.payload === "object" && "error" in d.payload ? String(d.payload.error) : "";
+    const detail = d.payload && typeof d.payload === "object" && "detail" in d.payload ? String(d.payload.detail) : "";
+    patchCreatorDrift({ busy: "", activity, lastSeq, status: `Drift refused ${tool}${err ? ` (${err})` : ""}${detail ? `: ${detail}` : ""}.`, statusTone: "error" });
+    return null;
+  }
+  patchCreatorDrift({ busy: "", activity, lastSeq }, false);
+  return { text: d.text, payload: d.payload, images: d.images };
+}
+
+async function driftCapture(): Promise<void> {
+  const v = state.creatorDrift;
+  if (!v) return;
+  const typed = v.captureAt.trim();
+  const at = typed ? Number(typed) : v.inspect?.playhead ?? null;
+  if (typed && !Number.isFinite(at)) { patchCreatorDrift({ status: "Capture time must be a number of seconds.", statusTone: "error" }); return; }
+  const r = await driftPaneCall("capture", at === null ? {} : { at }, "Capturing a frame from Drift...");
+  if (!r) return;
+  const img = r.images[0];
+  if (!img) { patchCreatorDrift({ status: "Drift answered without an image.", statusTone: "error" }); return; }
+  patchCreatorDrift({ captureSrc: `data:${img.mimeType};base64,${img.data}`, status: `Captured${at !== null ? ` at ${at}s` : " at the playhead"}.`, statusTone: "ok" });
+}
+
+async function driftContactSheet(): Promise<void> {
+  const r = await driftPaneCall("frames", {}, "Asking Drift for a contact sheet...");
+  if (!r) return;
+  const img = r.images[0];
+  if (!img) { patchCreatorDrift({ status: "Drift answered without a contact sheet image.", statusTone: "error" }); return; }
+  patchCreatorDrift({ sheetSrc: `data:${img.mimeType};base64,${img.data}`, status: "Contact sheet updated.", statusTone: "ok" });
+}
+
+async function driftUndoRedo(tool: "undo" | "redo", label: string): Promise<void> {
+  const r = await driftPaneCall(tool, {}, `${label}...`);
+  if (!r) return;
+  patchCreatorDrift({ status: `${label} done.`, statusTone: "ok" });
+  await refreshDriftInspect();
+}
+
+/** Put a prompt in the composer for the user to review; never sent from here. */
+function driftAskAgent(index: number): void {
+  const ask = DRIFT_ASK_PROMPTS[index];
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  if (!ask || !ta) return;
+  ta.value = (ta.value.trim() ? ta.value.replace(/\s*$/, "") + "\n\n" : "") + ask.prompt;
+  ta.dispatchEvent(new Event("input", { bubbles: true })); // the composer's own listener autosizes and enables Send
+  ta.focus();
+}
+
+async function driftExport(): Promise<void> {
+  const v = state.creatorDrift;
+  if (!v || driftExportBlock(v)) return;
+  // Drift's export_video takes no format argument: the path's extension decides, plus gif:true for a GIF.
+  const target = driftExportTarget(v.exportPath, v.exportFormat);
+  if (target.format !== v.exportFormat || target.path !== v.exportPath) patchCreatorDrift({ exportFormat: target.format, exportPath: target.path }, false);
+  const r = await driftPaneCall("export_video", target.args, "Starting the export in Drift...");
+  if (!r) return;
+  const echoed = r.payload && typeof r.payload === "object" && "path" in r.payload && typeof r.payload.path === "string" ? r.payload.path : target.path;
+  patchCreatorDrift({ exportState: "running", exportProgress: 0, exportedPath: echoed, artifactId: "", status: `Exporting to ${echoed}...`, statusTone: "" });
+  pollDriftExport(echoed, 0);
+}
+
+/** Poll `export_status` every 2 s until Drift says the export is no longer active. */
+function pollDriftExport(path: string, misses: number): void {
+  clearTimeout(driftExportTimer);
+  driftExportTimer = window.setTimeout(async () => {
+    const v = state.creatorDrift;
+    if (!v || v.exportState !== "running" || v.exportedPath !== path) return;
+    const r = await bridge.creatorDriftCall("export_status", {});
+    const cur = state.creatorDrift;
+    if (!cur || cur.exportState !== "running" || cur.exportedPath !== path) return;
+    if (!r.ok || !r.data || r.data.isError) {
+      if (misses + 1 >= 5) { patchCreatorDrift({ exportState: "failed", status: `Stopped watching the export: ${r.error ?? r.data?.text ?? "no answer"}`, statusTone: "error" }); return; }
+      pollDriftExport(path, misses + 1);
+      return;
+    }
+    // export_status answers { ok, busy, progress, message }; progress <= 1 is a fraction.
+    const p = r.data.payload && typeof r.data.payload === "object" ? r.data.payload as Record<string, unknown> : {};
+    const rawProgress = typeof p.progress === "number" ? p.progress : null;
+    const progress = rawProgress === null ? null : rawProgress <= 1 ? rawProgress * 100 : rawProgress;
+    const message = typeof p.message === "string" ? p.message : "";
+    if (p.busy === true) { patchCreatorDrift({ exportProgress: progress, ...(message ? { status: message, statusTone: "" } : {}) }); pollDriftExport(path, 0); return; }
+    const error = typeof p.error === "string" && p.error ? p.error : typeof p.detail === "string" ? p.detail : "";
+    if (p.ok === false || error) { patchCreatorDrift({ exportState: "failed", exportProgress: null, status: `Export failed: ${error || message || "Drift gave no reason"}`, statusTone: "error" }); return; }
+    patchCreatorDrift({ exportState: "done", exportProgress: 100, status: `${message || `Export finished: ${path}.`} Save it to the library to keep it with its provenance.`, statusTone: "ok" });
+  }, DRIFT_EXPORT_POLL_MS);
+}
+
+async function driftSaveToLibrary(): Promise<void> {
+  const v = state.creatorDrift;
+  if (!v || v.exportState !== "done" || !v.exportedPath || v.busy) return;
+  patchCreatorDrift({ busy: "Importing the export into the Creator library..." });
+  const r = await bridge.creatorDriftLibrary({ path: v.exportedPath });
+  if (!state.creatorDrift) return;
+  if (!r.ok || !r.data) {
+    patchCreatorDrift({ busy: "", status: r.error ?? "The library import did not answer.", statusTone: "error" });
+    showToast({ tone: "danger", title: "Save to library", desc: r.error ?? "The library import did not answer.", actions: [{ label: "OK" }], timeout: 5200 });
+    return;
+  }
+  patchCreatorDrift({ busy: "", artifactId: r.data.artifact.id, status: `Saved to the Creator library as ${r.data.artifact.id}.`, statusTone: "ok" });
+  showToast({ title: "Saved to library", desc: `${r.data.path} is in the Creator library (${r.data.artifact.id}).`, timeout: 3600 });
+  void refreshCreatorRegistry();
+}
+
+/** The exported video's bytes as a DOM PROPERTY (the P-VISION.1 idiom), fetched once per artifact. */
+let driftVideoSrc = { id: "", url: "" };
+function paintCreatorDrift(): void {
+  const video = $("[data-cdr-video]") as HTMLVideoElement | null;
+  const id = video?.dataset.cdrVideo ?? "";
+  if (!video || !id) return;
+  if (driftVideoSrc.id === id) { video.src = driftVideoSrc.url; return; }
+  void bridge.creatorArtifactData(id).then((d) => {
+    if (!d) { patchCreatorDrift({ status: `The video artifact ${id} could not be read from the library.`, statusTone: "error" }); return; }
+    driftVideoSrc = { id, url: d.dataUrl };
+    const now = $("[data-cdr-video]") as HTMLVideoElement | null;
+    if (now?.dataset.cdrVideo === id) now.src = d.dataUrl;
+  });
+}
+
+async function importCreatorMailbox(): Promise<void> {
+  const r = await bridge.creatorImportMailbox();
+  if (!r.ok || !r.data) { showToast({ tone: "danger", title: "Import from the DGX Loader", desc: r.error ?? "The mailbox did not answer.", actions: [{ label: "OK" }], timeout: 5200 }); return; }
+  const { imported, rejected } = r.data;
+  const desc = [
+    imported.length ? `Imported ${imported.join(", ")}.` : "No new endpoint files.",
+    rejected.length ? `Rejected: ${rejected.map((x) => `${x.file} (${x.reason})`).join("; ")}` : "",
+  ].filter(Boolean).join(" ");
+  showToast({ tone: rejected.length ? "warn" : undefined, title: "Import from the DGX Loader", desc, actions: [{ label: "OK" }], timeout: 6400 });
+  if (state.studioTab === "cad") await loadCreatorCad();
+  else await loadCreatorVideo();
+}
+
+async function loadCreatorCad(): Promise<void> {
+  if (!state.buildInfo?.creatorBuild) return;
+  const studio = await refreshCreatorRegistry();
+  const prev = state.creatorCad;
+  const endpoints = creatorProviderEndpoints(studio, "dgx-cad");
+  state.creatorCad = {
+    endpoints,
+    endpointId: prev && endpoints.some((e) => e.id === prev.endpointId) ? prev.endpointId : endpoints[0]?.id ?? "",
+    fileName: prev?.fileName ?? "",
+    busy: "",
+    status: prev?.status ?? "",
+    statusTone: prev?.statusTone ?? "",
+    inspect: prev?.inspect ?? null,
+    script: prev?.script ?? SAMPLE_CADQUERY,
+    outputs: prev?.outputs ?? ["step", "svg"],
+    modelBusy: "",
+    modelStatus: prev?.modelStatus ?? "",
+    modelTone: prev?.modelTone ?? "",
+    model: prev?.model ?? null,
+  };
+  if (studioOpen && state.studioTab === "cad") void renderCreatorStudio();
+}
+
+function patchCreatorCad(patch: Partial<CreatorCadView>): void {
+  if (!state.creatorCad) return;
+  state.creatorCad = { ...state.creatorCad, ...patch };
+  if (studioOpen && state.studioTab === "cad") void renderCreatorStudio();
+}
+
+/** The SVG previews go through DOMPurify and are shown as <img> data URLs, never inlined (svg_sanitize.ts). */
+function paintCadSvgs(): void {
+  const v = state.creatorCad;
+  if (!v) return;
+  const inspectSvg = v.inspect && "svg" in v.inspect ? v.inspect.svg : "";
+  const slots: [string, string][] = [["inspect", inspectSvg], ["model", v.model?.svg ?? ""]];
+  for (const [slot, svg] of slots) {
+    const img = $(`[data-ccad-svg="${slot}"]`) as HTMLImageElement | null;
+    if (!img || !svg) continue;
+    const url = sanitizedSvgDataUrl(svg);
+    if (url) img.src = url;
+    else img.replaceWith(el(`<p class="cim-hint">The preview SVG had no safe content left after sanitizing, so it is not shown.</p>`));
+  }
+}
+
+const CAD_MAX_BYTES = 200 * 1024 * 1024;
+async function inspectCadFile(file: File): Promise<void> {
+  const v = state.creatorCad;
+  if (!v?.endpointId) return;
+  if (file.size > CAD_MAX_BYTES) { patchCreatorCad({ status: `${file.name} is larger than the 200 MB inspect limit.`, statusTone: "error" }); return; }
+  patchCreatorCad({ fileName: file.name, busy: `Inspecting ${file.name} on ${v.endpointId}...`, status: "", inspect: null });
+  const r = await bridge.creatorCadInspect(v.endpointId, file.name, await file.arrayBuffer());
+  if (!r.ok || !r.data) { patchCreatorCad({ busy: "", status: r.error ?? "The CAD service did not answer.", statusTone: "error" }); return; }
+  patchCreatorCad({ busy: "", inspect: r.data, status: `Inspected ${file.name}.`, statusTone: "ok" });
+}
+
+/** The exec approval for a CadQuery run: the exact script, where it runs, and what it may write. Resolves
+ *  true only on an explicit Approve; Escape, the scrim and Deny all refuse. */
+function confirmCadRun(endpointId: string, script: string, outputs: readonly string[]): Promise<boolean> {
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  const ov = el(`<div class="mkt-scrim cst-scrim"><div class="cst-modal" role="dialog" aria-label="Approve this CadQuery run">
+    <div class="cst-modal-h"><span class="cst-modal-t">Approve this CadQuery run</span>
+      <button class="mkt-close" data-cst-cancel aria-label="Close">${icon("close", 14)}</button></div>
+    <p class="cst-modal-note">${esc(`This Python runs on ${endpointId} in an isolated subprocess (fresh temp dir, stripped environment, CPU and memory limits, 120 s cap) and writes: ${outputs.join(", ")}.`)}</p>
+    <pre class="ccad-log">${esc(script)}</pre>
+    <div class="cst-modal-acts"><button class="btn-mini" data-cst-cancel>Deny</button><button class="btn-mini ok" data-cst-ok>Approve and run</button></div>
+  </div></div>`);
+  document.body.appendChild(ov);
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); done(false); } };
+  const done = (ok: boolean) => { document.removeEventListener("keydown", onKey, true); ov.remove(); resolve(ok); };
+  document.addEventListener("keydown", onKey, true);
+  ov.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t === ov || t.closest("[data-cst-cancel]")) done(false);
+    else if (t.closest("[data-cst-ok]")) done(true);
+  });
+  return promise;
+}
+
+async function runCadModel(): Promise<void> {
+  const v = state.creatorCad;
+  if (!v || cadRunBlock(v)) return;
+  const input = { endpointId: v.endpointId, script: v.script, outputs: v.outputs };
+  patchCreatorCad({ modelBusy: "Asking the engine to run the script...", modelStatus: "", model: null });
+  let r = await bridge.creatorCadModel(input);
+  if (!r.ok && r.needsApproval) {
+    patchCreatorCad({ modelBusy: "Waiting for your approval..." });
+    if (!(await confirmCadRun(v.endpointId, v.script, v.outputs))) {
+      patchCreatorCad({ modelBusy: "", modelStatus: "You denied the run. Nothing executed.", modelTone: "" });
+      return;
+    }
+    patchCreatorCad({ modelBusy: "Running on the DGX box..." });
+    r = await bridge.creatorCadModel({ ...input, approved: true });
+  }
+  if (!r.ok || !r.data) { patchCreatorCad({ modelBusy: "", modelStatus: r.error ?? "The CAD service did not answer.", modelTone: "error" }); return; }
+  const result = r.data.result;
+  patchCreatorCad({ modelBusy: "", model: result, modelStatus: result.ok ? "Model built; its artifacts are in the Creator library." : "", modelTone: result.ok ? "ok" : "error" });
+}
+
+async function downloadCadArtifact(id: string, name: string): Promise<void> {
+  const v = state.creatorCad;
+  if (!v?.endpointId) return;
+  const r = await bridge.creatorCadArtifact(v.endpointId, id);
+  if (!r.ok || !r.data) { showToast({ tone: "warn", title: "CAD artifact", desc: r.error ?? "That artifact could not be fetched.", actions: [{ label: "OK" }], timeout: 4200 }); return; }
+  const url = URL.createObjectURL(r.data.blob);
+  const a = document.createElement("a"); a.href = url; a.download = name || r.data.name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+/** Mirror one Video/CAD field into state; returns true when it was one of theirs. */
+function syncStudioField(t: HTMLElement): boolean {
+  const v = state.creatorVideo;
+  const c = state.creatorCad;
+  const field = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement ? t : null;
+  const val = field?.value ?? "";
+  const checked = t instanceof HTMLInputElement && t.checked;
+  if (v && t.id.startsWith("cvd")) {
+    const hf = v.hyperframes;
+    const patch: Partial<CreatorVideoView> | null =
+      t.id === "cvdEndpoint" ? { endpointId: val }
+      : t.id === "cvdTemplate" ? { templatePath: val }
+      : t.id === "cvdVoice" ? { voice: val }
+      : t.id === "cvdText" ? { text: val }
+      : t.id === "cvdTitle" ? { title: val }
+      : t.id === "cvdSubtitle" ? { subtitle: val }
+      : t.id === "cvdCaptions" ? { captions: checked }
+      : t.id === "cvdHfDir" ? { hyperframes: { ...hf, projectDir: val } }
+      : t.id === "cvdHfFormat" && (val === "mp4" || val === "webm" || val === "mov") ? { hyperframes: { ...hf, format: val } }
+      : t.id === "cvdHfQuality" && (val === "draft" || val === "standard" || val === "high") ? { hyperframes: { ...hf, quality: val } }
+      : null;
+    if (!patch) return false;
+    state.creatorVideo = { ...v, ...patch };
+    refreshStudioGates();
+    return true;
+  }
+  const d = state.creatorDrift;
+  if (d && t.id.startsWith("cdr")) {
+    const patch: Partial<CreatorDriftView> | null =
+      t.id === "cdrCaptureAt" ? { captureAt: val }
+      : t.id === "cdrExportPath" ? { exportPath: val }
+      : t.id === "cdrExportFormat" && (val === "mp4" || val === "webm" || val === "gif") ? { exportFormat: val }
+      : null;
+    if (!patch) return false;
+    state.creatorDrift = { ...d, ...patch };
+    refreshStudioGates();
+    return true;
+  }
+  if (c && (t.id === "ccadEndpoint" || t.id === "ccadScript")) {
+    state.creatorCad = t.id === "ccadEndpoint" ? { ...c, endpointId: val } : { ...c, script: val };
+    refreshStudioGates();
+    return true;
+  }
+  const o = c ? CAD_OUTPUTS.find((x) => x === t.dataset.ccadOutput) : undefined;
+  if (c && o) {
+    state.creatorCad = { ...c, outputs: checked ? [...new Set([...c.outputs, o])] : c.outputs.filter((x) => x !== o) };
+    refreshStudioGates();
+    return true;
+  }
+  return false;
+}
+
+/** Rewrite only the gate line and the button's disabled state, so typing never loses focus to a repaint. */
+function refreshStudioGates(): void {
+  const gate = (name: string, block: string, button: string, ready: string) => {
+    const line = $(`[data-gate="${name}"]`);
+    if (line) { line.textContent = block || ready; line.classList.toggle("ok", !block); }
+    const btn = $(button) as HTMLButtonElement | null;
+    if (btn) btn.disabled = !!block;
+  };
+  if (state.creatorVideo) {
+    gate("avatar", videoRenderBlock(state.creatorVideo), "#cvdRender", "Ready to render.");
+    gate("hf", hyperframesRenderBlock(state.creatorVideo), "#cvdHfRender", "Ready to render.");
+  }
+  if (state.creatorCad) gate("cad-run", cadRunBlock(state.creatorCad), "#ccadRun", "Ready to run (approval required).");
+  if (state.creatorDrift) gate("drift-export", driftExportBlock(state.creatorDrift), "[data-cdr-export]", "Ready to export.");
 }
 
 // ---- CREATOR-IMG (ADR-0291): the image tools ----
@@ -6215,13 +6844,17 @@ async function playCreatorTrack(id: string): Promise<void> {
 // fail-closed, so the UI never has to be the authority on what is acceptable.
 // CREATOR-2 adds `select`, for choosing among things the server already listed (a replacement source):
 // the user picks from real ids, so the modal cannot produce a source that does not exist.
+// The free stack adds `checkbox` (the enclave attestation): its value is "1" when ticked, "" otherwise, and
+// `placeholder` carries the sentence beside the box.
 interface CreatorPromptField {
-  name: string; label: string; kind: "text" | "textarea" | "select"; value?: string; placeholder?: string;
+  name: string; label: string; kind: "text" | "textarea" | "select" | "checkbox"; value?: string; placeholder?: string;
   options?: readonly { value: string; label: string }[];
 }
 function creatorPrompt(title: string, note: string, fields: CreatorPromptField[]): Promise<Record<string, string> | null> {
   const { promise, resolve } = Promise.withResolvers<Record<string, string> | null>();
-  const field = (f: CreatorPromptField) => f.kind === "select"
+  const field = (f: CreatorPromptField) => f.kind === "checkbox"
+    ? `<span class="cst-check"><input type="checkbox" data-cst-field="${esc(f.name)}"${f.value === "1" ? " checked" : ""} /><span>${esc(f.placeholder ?? "")}</span></span>`
+    : f.kind === "select"
     ? `<select class="prov-key" data-cst-field="${esc(f.name)}">${(f.options ?? []).map((o) => `<option value="${esc(o.value)}"${o.value === f.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
     : f.kind === "textarea"
     ? `<textarea class="prov-key" rows="3" data-cst-field="${esc(f.name)}" placeholder="${esc(f.placeholder ?? "")}">${esc(f.value ?? "")}</textarea>`
@@ -6242,7 +6875,10 @@ function creatorPrompt(title: string, note: string, fields: CreatorPromptField[]
     if (t === ov || t.closest("[data-cst-cancel]")) { done(null); return; }
     if (!t.closest("[data-cst-ok]")) return;
     const out: Record<string, string> = {};
-    for (const f of fields) out[f.name] = ($(`[data-cst-field="${f.name}"]`, ov) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null)?.value.trim() ?? "";
+    for (const f of fields) {
+      const input = $(`[data-cst-field="${f.name}"]`, ov) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+      out[f.name] = f.kind === "checkbox" ? (input instanceof HTMLInputElement && input.checked ? "1" : "") : input?.value.trim() ?? "";
+    }
     done(out);
   });
   ($("[data-cst-field]", ov) as HTMLInputElement | null)?.focus();
@@ -6295,13 +6931,20 @@ async function openCreatorEndpointPrompt(providerId: string): Promise<void> {
       { name: "id", label: "Id", kind: "text", value: `${providerId}-local`, placeholder: "lowercase-id" },
       { name: "label", label: "Label", kind: "text", placeholder: "what you call this box" },
       { name: "baseUrl", label: "Base URL", kind: "text", placeholder: "http://127.0.0.1:8188 (network providers)" },
-      { name: "command", label: "Executable", kind: "text", placeholder: "the app binary (Blender, Unreal)" },
+      { name: "command", label: "Executable", kind: "text", placeholder: "the app binary (Blender, Unreal, node for HyperFrames)" },
+      // An argument vector, one per line (never shell-split, so a Windows path with spaces stays one slot).
+      { name: "args", label: "Arguments (one per line)", kind: "textarea", placeholder: "e.g. the hyperframes CLI entry script for node" },
       { name: "vaultRef", label: "Vault credential name", kind: "text", placeholder: "comfyui_token" },
       { name: "zone", label: "Zone", kind: "text", value: "local", placeholder: "local, internal, external" },
+      // CUI lockdown: an attested DGX enclave host is an allowed route; anything else off this machine is not.
+      { name: "enclave", label: "Enclave (DGX, CUI-authorized host)", kind: "checkbox", placeholder: "This endpoint runs on a DGX host inside the CUI enclave (the lockdown allows it)." },
     ]);
   if (!vals) return;
   const endpoint: Record<string, unknown> = { providerId, enabled: true };
-  for (const [k, v] of Object.entries(vals)) if (v) endpoint[k] = v;
+  for (const [k, v] of Object.entries(vals)) if (v && k !== "enclave" && k !== "args") endpoint[k] = v;
+  const args = (vals.args ?? "").split(/\r?\n/).map((a) => a.trim()).filter(Boolean);
+  if (args.length) endpoint.args = args;
+  if (vals.enclave === "1") endpoint.enclave = true;
   const r = await bridge.creatorEndpoint({ endpoint });
   if (!r.ok) { showToast({ tone: "danger", title: "Refused", desc: r.error ?? "That declaration was not accepted.", actions: [{ label: "OK" }], timeout: 5600 }); return; }
   showToast({ title: "Declaration saved", desc: "Stored by reference. Add the secret itself in the vault.", timeout: 2800 });
@@ -12928,12 +13571,13 @@ function loadRunWith(ov: HTMLElement): void {
   const modelSel = $("#goalModel", ov) as HTMLSelectElement | null;
   if (modelSel && modelOpt) {
     let opts = (modelOpt.options ?? []).filter((o) => !isAuxiliaryModel(o.value) && !/(^|[/-])rag$/i.test(o.value));
-    // P-GOAL.8: under AskSage lockdown the base model must be AskSage-routed too - restrict to those, and
-    // group by family in the order Gemini, GPT, Anthropic (GOV-suffixed first within each).
+    // P-GOAL.8: under lockdown the base model must be an allowed route too (AskSage, or an enabled DGX
+    // enclave Local Provider: the shared predicate) - restrict to those, and group by family in the order
+    // Gemini, GPT, Anthropic (GOV-suffixed first within each; enclave models land in "other").
     const locked = !!state.asksage?.only;
     if (locked) {
-      const gov = opts.filter((o) => isGovModel(o.value));
-      if (gov.length) opts = gov;
+      const allowed = opts.filter((o) => lockdownRoutable(o.value));
+      if (allowed.length) opts = allowed;
     }
     if (locked) {
       modelSel.innerHTML = groupByFamily(sortGovFirstByLevel(opts), GUIDED_GOV_FAMILY_ORDER)
@@ -15481,16 +16125,53 @@ function wire(): void {
     // CREATOR-IMG (ADR-0291): the Studio tab strip + the image tools.
     const tab = t.closest("[data-studio-tab]") as HTMLElement | null;
     if (tab) {
-      const want = tab.dataset.studioTab;
-      state.studioTab = want === "images" ? "images" : want === "editor" ? "editor" : want === "mixer" ? "mixer" : want === "render" ? "render" : "integrations";
+      state.studioTab = STUDIO_TABS.find((x) => x === tab.dataset.studioTab) ?? "integrations";
       if (state.studioTab !== "editor") stopEditorAudio(); // CREATOR-2: leaving the pane stops its clip
+      if (state.studioTab !== "drift") stopDriftPoll(); // CREATOR-DRIFT: the feed poll runs only on its tab
+      if (state.studioTab === "drift") { void renderCreatorStudio(); void loadCreatorDrift(); return; }
       if (state.studioTab === "images" && !state.creatorImages) { void loadCreatorImages(); return; }
       if (state.studioTab === "editor" && !state.creatorEditor) { void loadCreatorEditor(); return; }
       if (state.studioTab === "mixer" && !state.creatorMixer) { void loadCreatorMixer(); return; } // CREATOR-5
       if (state.studioTab === "render" && !state.creatorRender) { void loadCreatorRender(); return; } // CREATOR-3
+      // Free stack: Video and CAD re-read the registry on every visit, because a CUI verdict changes the
+      // moment the lockdown or an endpoint declaration does; Markup only needs it for the banner.
+      if (state.studioTab === "video") { void renderCreatorStudio(); void loadCreatorVideo(); return; }
+      if (state.studioTab === "cad") { void renderCreatorStudio(); void loadCreatorCad(); return; }
+      if (state.studioTab === "markup") { void refreshCreatorRegistry().then(() => renderCreatorStudio()); return; }
+      // Design: the pane reads the dgx-vision CUI verdict itself; the registry refresh feeds the banner.
+      if (state.studioTab === "design") { void refreshCreatorRegistry().then(() => renderCreatorStudio()); return; }
       void renderCreatorStudio();
       return;
     }
+    // Creator free stack: Video, HyperFrames and CAD actions (Markup wires its own pane).
+    if (t.closest("[data-cvd-import]")) { void importCreatorMailbox(); return; }
+    const engine = t.closest("[data-cvd-engine]") as HTMLElement | null;
+    if (engine && state.creatorVideo) {
+      const next: AvatarEngine = engine.dataset.cvdEngine === "echomimic" ? "echomimic" : "musetalk";
+      if (next !== state.creatorVideo.engine) { patchCreatorVideo({ engine: next, templates: [], templatePath: "", templatesNote: "" }); void listAvatarTemplates(); }
+      return;
+    }
+    if (t.closest("[data-cvd-templates]")) { void listAvatarTemplates(); return; }
+    if (t.closest("#cvdRender")) { void runAvatarRender(); return; }
+    if (t.closest("#cvdHfRender")) { void runHyperframesRender(); return; }
+    // CREATOR-DRIFT: the Drift pane's buttons.
+    if (t.closest("[data-cdr-probe]")) { void runCreatorProbe("drift").then(() => loadCreatorDrift()); return; }
+    if (t.closest("[data-cdr-refresh]")) { void loadCreatorDrift(); return; }
+    if (t.closest("[data-cdr-connect]")) { void openCreatorEndpointPrompt("drift").then(() => loadCreatorDrift()); return; }
+    if (t.closest("[data-cdr-inspect]")) { void refreshDriftInspect(); return; }
+    if (t.closest("[data-cdr-capture]")) { void driftCapture(); return; }
+    if (t.closest("[data-cdr-sheet]")) { void driftContactSheet(); return; }
+    if (t.closest("[data-cdr-undo-agent]")) { if (state.creatorDrift && newestUndoableIsAgent(state.creatorDrift.activity)) void driftUndoRedo("undo", "Undo of the agent's last batch"); return; }
+    if (t.closest("[data-cdr-undo]")) { void driftUndoRedo("undo", "Undo"); return; }
+    if (t.closest("[data-cdr-redo]")) { void driftUndoRedo("redo", "Redo"); return; }
+    const ask = t.closest("[data-cdr-ask]") as HTMLElement | null;
+    if (ask) { driftAskAgent(Number(ask.dataset.cdrAsk)); return; }
+    if (t.closest("[data-cdr-export]")) { void driftExport(); return; }
+    if (t.closest("[data-cdr-save]")) { void driftSaveToLibrary(); return; }
+    if (t.closest("[data-ccad-open]")) { ($("[data-ccad-file]") as HTMLInputElement | null)?.click(); return; }
+    if (t.closest("#ccadRun")) { void runCadModel(); return; }
+    const cadArt = t.closest("[data-ccad-artifact]") as HTMLElement | null;
+    if (cadArt) { void downloadCadArtifact(cadArt.dataset.ccadArtifact!, cadArt.dataset.ccadName ?? ""); return; }
     // CREATOR-3 (ADR-0287): the render pane. Switching kind re-reads the fields first, so a typed prompt
     // survives the repaint, and re-evaluates the probe gate for the NEW kind.
     const renderKind = t.closest("[data-cpl-kind]") as HTMLElement | null;
@@ -15656,6 +16337,22 @@ function wire(): void {
       patchCreatorImages({ inputs: [...v.inputs, { role: roles[v.inputs.length] ?? "extra", name: file.name || "pasted.png", dataUrl: url }] });
     };
     reader.readAsDataURL(file);
+  });
+  // Creator free stack: Video/CAD fields mirror into state as they are typed; a picked endpoint relists the
+  // avatar templates; a picked drawing is inspected straight away.
+  $("#creatorStudio")?.addEventListener("input", (e) => { syncStudioField(e.target as HTMLElement); });
+  $("#creatorStudio")?.addEventListener("change", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.matches("[data-ccad-file]")) {
+      const input = t as HTMLInputElement;
+      const file = input.files?.[0];
+      input.value = "";
+      if (file) void inspectCadFile(file);
+      return;
+    }
+    if (!syncStudioField(t)) return;
+    if (t.id === "cvdEndpoint") { patchCreatorVideo({ templates: [], templatePath: "", templatesNote: "" }); void listAvatarTemplates(); }
+    if (t.id === "ccadEndpoint") void renderCreatorStudio();
   });
   // CREATOR-0 (ADR-0283): the odometer chips - click to expand the detailed flyout in place, click the
   // same chip again to collapse it. Refresh re-samples fresh rather than serving the 3s memo.
@@ -15943,6 +16640,22 @@ function wire(): void {
       if (row?.dataset.lpId) { await bridge.localProviderEnable(row.dataset.lpId, (t0 as HTMLInputElement).checked).catch(() => {}); }
       return;
     }
+    // CUI lockdown: attest / withdraw a provider as a DGX enclave host. Saved through the same validated
+    // upsert (the server re-validates and persists only a boolean), then the card repaints from storage.
+    if (t0.matches("[data-lp-enclave]")) {
+      const box = t0 as HTMLInputElement;
+      const def = state.localProviders.find((p) => p.id === (t0.closest("[data-lp-id]") as HTMLElement | null)?.dataset.lpId);
+      if (!def) return;
+      const saved = await bridge.localProviderUpsert({ ...def, enclave: box.checked, updatedAt: Date.now() }).catch(() => null);
+      if (saved && "saved" in saved && saved.saved) {
+        showToast({ tone: "ok", title: box.checked ? "Marked as a DGX enclave host" : "Enclave attestation removed", desc: box.checked ? `${def.name}: an allowed route under your CUI lockdown (an organization-managed lockdown stays AskSage-only).` : `${def.name} is no longer allowed under CUI lockdown.`, timeout: 3600 });
+      } else {
+        box.checked = !box.checked;
+        showToast({ tone: "danger", title: "Couldn't save the attestation", desc: (saved as { errors?: string[] } | null)?.errors?.[0] ?? "save error" });
+      }
+      void hydrateLocalProviders();
+      return;
+    }
     // P-VOICE.7: activate an imported endpoint - one click makes it THE speaking engine (url + model +
     // provider switch together server-side), and the URL field repaints to show the effective value.
     if (t0.id === "voiceEndpointSel") {
@@ -16200,27 +16913,30 @@ function wire(): void {
       if (state.managed?.locks?.models) return; // ADR-0068: org-locked routing - not user-toggleable
       const box = $("#asksageOnly", $("#setBody")!) as HTMLInputElement | null;
       const only = box?.checked ?? false;
-      // ADR-0217/GAP-5: lockdown routes every turn through the gov gateway, so it needs a configured AskSage
-      // key. Enabling it without one would leave no gov model to route to (a broken state the backend would
-      // then fail-closed on, blocking every turn). Refuse up front and revert the checkbox.
-      if (only && !state.asksage?.configured) {
+      // ADR-0217/GAP-5 + CUI lockdown: lockdown routes every turn through AskSage or an enabled DGX enclave
+      // Local Provider, so it needs one of them. Enabling it with neither would leave nothing to route to (a
+      // broken state the backend would then fail-closed on, blocking every turn). Refuse up front and revert
+      // the checkbox. The provider list is re-read so an enclave box marked a moment ago counts.
+      if (only) state.localProviders = (await bridge.localProvidersList().catch(() => null)) ?? state.localProviders;
+      const guard = lockdownToggleDecision({ enable: only, asksageConfigured: !!state.asksage?.configured, providers: state.localProviders, managedLocked: !!state.managed?.asksageOnly });
+      if (!guard.ok) {
         if (box) box.checked = false;
-        showToast({ tone: "warn", title: "Add your AskSage key first", desc: "Lockdown routes every turn through the AskSage gov gateway - configure the AskSage API key above before turning it on.", actions: [{ label: "OK" }], timeout: 5000 });
+        showToast({ tone: "warn", title: `${LOCKDOWN_LABEL} needs an allowed route`, desc: guard.reason ?? "", actions: [{ label: "OK" }], timeout: 6000 });
         return;
       }
       await bridge.saveAsksage({ only });
       state.asksage = { ...(state.asksage ?? { configured: false, base: "", only: false, limit: 200_000, datasets: [], queryModel: "gpt-5.6-luna", persona: "" }), only };
-      // Lockdown must guarantee gateway routing: if we're on a direct model, switch
-      // to a gov one so no turn can bypass AskSage.
+      // Lockdown must guarantee allowed routing: if we're on a direct model, switch to an allowed one
+      // (AskSage, or an enclave Local Provider) so no turn can bypass it. The server clamp is authoritative.
       if (only) {
         const model = state.config.find((c) => c.id === "model");
-        if (model && !isAsksage(model.currentValue)) {
-          const gov = topModel(model.options, isAsksage)?.value;
-          if (gov) await applyConfig("model", gov, { system: true });
+        if (model && !lockdownRoutable(model.currentValue)) {
+          const allowed = topModel(model.options, lockdownRoutable)?.value;
+          if (allowed) await applyConfig("model", allowed, { system: true });
         }
       }
       if (only) showDodBanner(); // ADR-0224: entering lockdown surfaces the DoD/STIG consent banner
-      showToast({ title: only ? "Lockdown ON" : "Lockdown off", desc: only ? "Every turn now routes through the AskSage gov gateway." : "Direct providers are selectable again.", actions: [{ label: "OK" }], timeout: 2800 });
+      showToast({ title: only ? `${LOCKDOWN_LABEL} ON` : `${LOCKDOWN_LABEL} off`, desc: only ? `${LOCKDOWN_DETAIL}. Cloud voice and direct providers are refused.` : "Direct providers are selectable again.", actions: [{ label: "OK" }], timeout: 2800 });
       updateComposerTools(); renderStatus();
       return;
     }
@@ -16990,10 +17706,11 @@ async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promi
   let desired = inList(chosen) ? chosen
     : inList(last) ? last
     : (preferredDefaultModel(candidates)?.value ?? "");
-  if (state.asksage?.only && desired && !isGovModel(desired)) {
+  if (state.asksage?.only && desired && !lockdownRoutable(desired)) {
     // Lockdown overrides even a remembered pick: a CUI session may not route direct. Prefer the curated
-    // gov default, then any gov model at all, and only then give up (the backend clamp is authoritative).
-    desired = preferredDefaultModel(candidates, isGovModel)?.value ?? topModel(candidates, isGovModel)?.value ?? desired;
+    // default among allowed routes (AskSage or a DGX enclave Local Provider), then any allowed model at all,
+    // and only then give up (the backend clamp is authoritative).
+    desired = preferredDefaultModel(candidates, lockdownRoutable)?.value ?? topModel(candidates, lockdownRoutable)?.value ?? desired;
   }
   if (desired && desired !== modelOpt.currentValue) await applyConfig("model", desired, { system: true });
 }
@@ -17567,8 +18284,8 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
     !isUnconfiguredAmbientModel(o.value, keyedIds) &&
     (govOk || !isGovModel(o.value)) &&
     (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
-  // Lockdown: only the gov-gateway models are selectable.
-  const list = state.asksage?.only ? visible.filter((o) => isGovModel(o.value)) : visible;
+  // Lockdown: only allowed routes are selectable (AskSage, or an enabled DGX enclave Local Provider).
+  const list = state.asksage?.only ? visible.filter((o) => lockdownRoutable(o.value)) : visible;
   // Final safety: an omp catalog can list the same model twice under one provider. Drop rows that would
   // render IDENTICALLY (same gov/provider + same display name) - the user can't tell them apart anyway.
   const seen = new Set<string>();
@@ -17913,7 +18630,7 @@ function openConfigPopover(anchor: HTMLElement): void {
       // P-LOCALPICK.1: local providers shape the pinned section, the china bypass, AND the pending
       // rows, so they are part of the memo key or a Discover/save while the picker sits open would
       // paint a stale list forever.
-      const lp = (state.localProviders ?? []).map((p) => `${p.ompProvider}:${p.enabled ? 1 : 0}:${(p.models ?? []).map((mm) => mm.id).join("+")}`).join(";");
+      const lp = (state.localProviders ?? []).map((p) => `${p.ompProvider}:${p.enabled ? 1 : 0}${p.enclave ? "e" : ""}:${(p.models ?? []).map((mm) => mm.id).join("+")}`).join(";"); // CUI lockdown: the enclave flag changes what lockdown lets through
       const key = `${list2.map((o) => o.value).join(",")}|${cur}|${q}|${[...collapsedFamilies()].sort().join(",")}|${state.asksage?.configured ? 1 : 0}|${favsOf().join(",")}|${lp}`; // P-FAV.1: stars invalidate the memo
       if (pickerMemo?.key !== key) pickerMemo = { key, html: familyListHTML(list2, cur, q) }; // P-PERF.5 memo
       list.innerHTML = pickerMemo.html;

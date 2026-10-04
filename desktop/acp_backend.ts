@@ -53,7 +53,8 @@ import { observeToolCall } from "./repo_probe.ts"; // P-REPO.1 (ADR-0406): which
 import { userTurnedSandboxOff } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
-import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
+import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
+import { enclaveHostSet, enclaveProviderSet, isAsksageRouted, isLockdownRoutable, lockdownEgressExempt, LOCKDOWN_SWITCH_FAILED_ERROR } from "./lockdown_route.ts"; // CUI lockdown: AskSage + DGX enclave routes
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
 import { providerAuth, typesafeKeySet, type ProviderAuth } from "./auth_status.ts";
 import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
@@ -210,6 +211,16 @@ const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
 // for them: the extension wraps pi-ai's TypeSafeJudge / TextJudge in-process. Observability only, fail-soft,
 // self-skips when LUCID_JUDGMENT_URL is absent.
 const JUDGMENT_EXT = repoAsset("harness", "omp", "judgment_extension.ts");
+// Design suite: design_read / design_apply / design_request let the agent read the Creator Design editor's
+// layer manifest and the user's traced hints, and QUEUE edits the renderer applies (requests need the user's
+// Allow). MASTER ONLY, like the browser tools: there is one editor. Self-skips when LUCID_DESIGN_OPS_URL is
+// absent, which is every non-Creator build (dev.ts sets the design URLs only in Creator builds).
+const DESIGN_EXT = repoAsset("harness", "omp", "design_extension.ts");
+// CREATOR-DRIFT: drift_status / drift_read / drift_apply / drift_export let the agent collaborate with the user in
+// CutWire Drift through the engine's /api/creator/drift/* routes (session, token, CUI gate, activity feed all live
+// in dev.ts). MASTER ONLY, like the Design suite: there is one editor. Self-skips when LUCID_DRIFT_CALL_URL is
+// absent, which is every non-Creator build.
+const DRIFT_EXT = repoAsset("harness", "omp", "drift_extension.ts");
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = repoAsset("harness", "omp", "acp_config.yml");
@@ -934,6 +945,8 @@ class Backend {
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
+        const designArgs = existsSync(DESIGN_EXT) ? ["-e", DESIGN_EXT] : []; // Design suite: master-only, see DESIGN_EXT
+        const driftArgs = existsSync(DRIFT_EXT) ? ["-e", DRIFT_EXT] : []; // CREATOR-DRIFT: master-only, see DRIFT_EXT
         const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
         // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
@@ -950,7 +963,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...designArgs, ...driftArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -1199,14 +1212,20 @@ class Backend {
               // SEARCH mode (user affirmed no CUI datasets) is exempt and falls through to the normal posture.
               // The mode is per-session (ADR-0219), read fail-closed (default CUI) by the ACTIVE session id; the
               // sanctioned "search" for a CUI thread is a SEPARATE Search-mode session, or the AskSage RAG model.
-              if (this.asksageLocked() && sessionMode(this.sessionId ?? "") === "cui" && !localFile) {
+              // CUI lockdown: an http(s) target on LOOPBACK or an enabled DGX enclave Local Provider host (user lock
+              // only; the org-managed lock gets loopback alone) is not public egress either, so it falls through
+              // to the normal whitelist/approval posture. Never for a
+              // web_search call: that goes to omp's public search providers whatever URL it carries.
+              const isWebSearch = toolName.includes("web_search") || toolName.includes("web-search");
+              if (this.asksageLocked() && sessionMode(this.sessionId ?? "") === "cui" && !localFile
+                && (isWebSearch || !lockdownEgressExempt(target, enclaveHostSet(listLocalProviders(), managedAsksageOnly())))) {
                 this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "block(asksage-lockdown-cui)" });
                 emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "egress-lockdown-cui", reason: `public web egress blocked: CUI session under AskSage lockdown · ${target ?? toolName}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
                 return { outcome: { outcome: "cancelled" } };
               }
               // P-NETWL.5 (ADR-0108): a web_search call (omp's default search providers, no arbitrary browse)
               // auto-approves when the user's posture allows web search - the pre-checked personal default.
-              if ((toolName.includes("web_search") || toolName.includes("web-search")) && egressPosture().allowWebSearch) {
+              if (isWebSearch && egressPosture().allowWebSearch) {
                 this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "allow(web-search)" });
                 const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
                 return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
@@ -2291,6 +2310,11 @@ class Backend {
    *  `models.asksageOnly` block plus the legacy top-level flag, via managedAsksageOnly). */
   private asksageLocked(): boolean { return asksageOnly() || managedAsksageOnly(); }
 
+  /** CUI lockdown: omp provider keys of the enabled Local Providers attested as DGX enclave hosts, the
+   *  allowed routes under lockdown next to AskSage. Empty under the org-managed lock (a user attestation
+   *  never widens an org control). Read fresh per call (a Settings edit applies at once). */
+  private enclaveProviders(): Set<string> { return enclaveProviderSet(listLocalProviders(), managedAsksageOnly()); }
+
   /** The model ids omp currently reports in the `model` config option. */
   private modelOptionValues(): string[] {
     const opt = this.configOptions.find((c) => c?.id === "model");
@@ -2306,12 +2330,13 @@ class Backend {
    *  launch with policy already persisted. */
   private async enforceModelPolicy(): Promise<{ ok: boolean; error?: string }> {
     const managed = managedConfig().config?.models;
-    const r = resolveGovernedModel(this.asksageLocked(), managed, this.activeModel(), this.modelOptionValues());
+    const enclave = this.enclaveProviders();
+    const r = resolveGovernedModel(this.asksageLocked(), managed, this.activeModel(), this.modelOptionValues(), enclave);
     if (!r.ok) return { ok: false, error: r.error };
     if (r.model && r.model !== this.activeModel()) {
       await this.setConfig("model", r.model).catch(() => {});
       const now = this.activeModel();
-      if (this.asksageLocked() && !isAsksageRouted(now)) return { ok: false, error: "Could not switch to an AskSage gov model for lockdown." };
+      if (this.asksageLocked() && !isLockdownRoutable(now, enclave)) return { ok: false, error: LOCKDOWN_SWITCH_FAILED_ERROR };
       if (!modelAllowed(now, managed)) return { ok: false, error: "Could not switch to a model permitted by your organization's policy." };
     }
     return { ok: true };
@@ -2323,7 +2348,16 @@ class Backend {
    *  `{ ok:false }` ⇒ the caller must REFUSE, never route denied. Unlocked + unmanaged ⇒ the desired model
    *  passes through unchanged. */
   resolveAgentRunModel(desired: string): { ok: boolean; model?: string; error?: string } {
-    return resolveGovernedModel(this.asksageLocked(), managedConfig().config?.models, desired || "haiku", this.modelOptionValues());
+    return resolveGovernedModel(this.asksageLocked(), managedConfig().config?.models, desired || "haiku", this.modelOptionValues(), this.enclaveProviders());
+  }
+
+  /** CUI lockdown: the model a utility completion (complete()) MUST run on. Lock off: the caller's model
+   *  (undefined = omp's default) exactly as before. Lock on: ALWAYS an explicit allowed model (the caller's,
+   *  else the active one, clamped like a turn: AskSage or a user-lock enclave provider), or `{ ok:false }`.
+   *  PUBLIC so a route can report the refusal before spending a request (dev.ts /api/explain). */
+  completionModel(requested: string | undefined): { ok: boolean; model?: string; error?: string } {
+    if (!this.asksageLocked()) return { ok: true, model: requested };
+    return resolveGovernedModel(true, managedConfig().config?.models, requested || this.activeModel(), this.modelOptionValues(), this.enclaveProviders());
   }
 
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
@@ -2336,10 +2370,12 @@ class Backend {
     // Fail-safe: only narrow if such models exist (never empty the list, which would drop the picker / the
     // recommendation to the maker model). ADR-0217: match on the `asksage` provider prefix - real gov ids like
     // `asksage-openai/gpt-5.6-luna` carry no "gov" SUBSTRING (the earlier `/gov/i` test matched none of them, so the
-    // checker silently fell through to ALL models, including direct providers).
+    // checker silently fell through to ALL models, including direct providers). CUI lockdown: the same shared
+    // predicate as the turn clamp, so an enabled DGX enclave Local Provider's models qualify too.
     if (this.asksageLocked()) {
-      const gov = models.filter((m: ModelOption) => isAsksageRouted(m.value));
-      if (gov.length) models = gov;
+      const enclave = this.enclaveProviders();
+      const allowed = models.filter((m: ModelOption) => isLockdownRoutable(m.value, enclave));
+      if (allowed.length) models = allowed;
     }
     // R-07 (#347): the managed allowed/denied lists narrow the pickers too. Same fail-safe shape as the
     // AskSage narrowing (only narrow when non-empty); enforceModelPolicy's pre-turn clamp stays authoritative.
@@ -2779,10 +2815,17 @@ class Backend {
       const deadline = deadlineSignal(COMPLETE_MS, opts.signal);
       try {
         await this.start();
+        // CUI lockdown: a throwaway util session starts on omp's DEFAULT model (a direct provider), so under
+        // lockdown the model is always pinned through the same governed clamp as a turn, or refused + audited.
+        const pin = this.completionModel(opts.model);
+        if (!pin.ok) {
+          emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "complete-lockdown", reason: (pin.error ?? "no allowed model").slice(0, 200), sessionId: this.sessionId ?? undefined });
+          return "";
+        }
         // P-KG-INGEST.4: prefer the DEDICATED util connection (true concurrency, never touches chat). If it
         // couldn't spawn, fall back to the shared connection with the ChatGate (chat preempts, max 1 extraction).
         const util = await this.startUtil();
-        const inner = { ...opts, signal: deadline.signal };
+        const inner = { ...opts, model: pin.model, signal: deadline.signal };
         return completionPath(!!util) === "dedicated" ? await this.completeOn(util!, system, user, inner) : await this.completeShared(system, user, inner);
       } catch { return ""; } // start()/startUtil() can now REJECT (timeout); an extraction failure is just "no facts"
       finally { deadline.dispose(); }
@@ -2804,7 +2847,10 @@ class Backend {
       const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
       sid = s?.sessionId ?? s?.id ?? null;
       if (!sid) return "";
-      if (opts.model) await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).catch(() => {});
+      if (opts.model) {
+        const pinned = await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
+        if (!pinned && this.asksageLocked()) return ""; // CUI lockdown: never fall back to omp's default (direct) model
+      }
       const IDLE = opts.idleMs ?? 60_000;
       const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
       this.utilSink = (t) => { arm(); text += t; };
@@ -2845,7 +2891,10 @@ class Backend {
       const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
       sid = s?.sessionId ?? s?.id ?? null;
       if (!sid) return "";
-      if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).catch(() => {});
+      if (opts.model) {
+        const pinned = await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
+        if (!pinned && this.asksageLocked()) return ""; // CUI lockdown: never fall back to omp's default (direct) model
+      }
       const IDLE = opts.idleMs ?? 60_000;
       const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
       myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
