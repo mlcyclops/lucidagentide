@@ -1276,6 +1276,11 @@ demo-P-TUI.3: demo-P-TUI.2 ## P-TUI.3 (ADR-0436): the lucid hub CONTROL PLANE, s
 	$(BUN) run desktop/scripts/demo_p_tui_3.ts
 	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_spaces.test.ts harness/launcher/hub_tmux_verbs.test.ts harness/launcher/hub_control.test.ts harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-TUI.4
+demo-P-TUI.4: demo-P-TUI.3 ## P-TUI.4: the herdr-parity decks join the hub's ring. Deck 9 (Agents) is a live agent table over the same fleet routes the Fleet deck uses: name, model, verbatim LaneStatus, elapsed since spawn, repo#branch (+ worktree) when the probe landed; Enter attaches the selected agent into THIS pane (ADR-0420), n spawns, c cancels the turn, x dismisses only a STOPPED lane (a live one is refused with the way out named). Deck 0 (Spaces) lists the control plane's spaces with pane counts and the focus marker; Enter focuses, n creates, r renames inline, x closes and the LAST space's refusal surfaces verbatim. Sidebar badges count agents and spaces; digits 1-9,0 rebind. Proves it headless against the REAL engine: both decks render real rows, the Enter/n/c/x paths run, the six prior decks still land on 1-6.
+	$(BUN) run desktop/scripts/demo_p_tui_4.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts
+
 .PHONY: demo-P-FLEET.WT1
 demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
 	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts
