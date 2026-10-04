@@ -27,7 +27,8 @@ const post = (headers: Record<string, string>, body: unknown = { argv: ["status"
 
 describe("discovery + handshake", () => {
   test("the file is 0600, wins the handshake, and is removed on stop", async () => {
-    expect(statSync(ctl.path).mode & 0o777).toBe(0o600);
+    // POSIX perms only: Windows ACLs do not map to a mode bitmask (stat reports 0o666).
+    if (process.platform !== "win32") expect(statSync(ctl.path).mode & 0o777).toBe(0o600);
     const d = await connectHub(dir);
     expect(d?.port).toBe(ctl.discovery.port);
     const r = await callHub(d!, ["status"]);
