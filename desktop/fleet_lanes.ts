@@ -45,6 +45,11 @@ import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: fil
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
 import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import type { RepoContext } from "./repo_identity.ts";
+// P-REMOTE.16 (ADR-0431): the rich turn shapes a remote guest replays, and the desktop's one diffstat
+// convention (pure, DOM-free) so a replay that sheds code to fit a frame still shows +/-.
+import type { CollabToolRecord, CollabTranscriptTurn } from "./collab/frames.ts";
+import { copyTool } from "./collab/turn_journal.ts";
+import { toolChip } from "./renderer/answer_chips.ts";
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -185,6 +190,8 @@ const STAT_DIR_MS = 10_000;
  *  chatty lane cannot grow without limit. Oldest turns fall off first; the byte cap trims per turn. */
 export const TRANSCRIPT_MAX_TURNS = 40;
 const TRANSCRIPT_MAX_TURN_CHARS = 8_000;
+/** P-REMOTE.16: tool records kept per recorded turn (the compact `[ran: ...]` titles keep their own 40 cap). */
+const TRANSCRIPT_MAX_TOOLS = 64;
 /** P-FLEET.L3: staged prompts per lane. Mirrors P-FLEET.1's job-queue cap - past it, refuse loudly. */
 const QUEUE_MAX = 8;
 /** P-FLEET.L3: cap on authored code carried per tool event. Lane cards are compact; the master's chat
@@ -288,7 +295,26 @@ export interface RepoTracker {
 /** One recovery-replay memory entry. Tool lines are folded into the assistant text at fold time.
  *  P-PWA-FOCUS.1: also the shape laneTranscript() hands out, so a remote guest joining mid-task can be
  *  seeded with the lane's conversation instead of an empty pane. */
-export interface LaneTurnRecord { role: "user" | "assistant"; text: string }
+export interface LaneTurnRecord {
+  role: "user" | "assistant";
+  /** The answer text (an assistant turn keeps its `[ran: ...]` tool-title prefix lines, which is what the
+   *  resume preamble and the desktop composer seeding read). */
+  text: string;
+  // P-REMOTE.16 (ADR-0431): the RICH detail a remote guest replays at fleet-lane parity. Assistant only.
+  thinking?: string;
+  tools?: CollabToolRecord[];
+  error?: string;
+}
+
+/** Field-by-field deep copy of a lane record, so a caller can never reach lane memory (the respawn replay
+ *  reads it) and an engine-only field added later cannot ride out by accident. */
+function copyRecord(t: LaneTurnRecord): LaneTurnRecord {
+  const out: LaneTurnRecord = { role: t.role, text: t.text };
+  if (t.thinking !== undefined) out.thinking = t.thinking;
+  if (t.tools) out.tools = t.tools.map(copyTool);
+  if (t.error !== undefined) out.error = t.error;
+  return out;
+}
 
 /** P-FLEET.L8: what a lane's IN-FLIGHT turn has produced so far - the answer text streamed to date and
  *  the compact titles of the tool calls it has made. Returned by promote() so a mid-turn attach shows
@@ -347,6 +373,11 @@ interface Lane {
   liveText: string;
   /** Compact tool titles for the current turn, folded with the assistant text. */
   liveTools: string[];
+  /** P-REMOTE.16: the current turn's thinking, fed from the same chunk the card renders; folded as `thinking`. */
+  liveThinking: string;
+  /** P-REMOTE.16: the current turn's tool calls as replayable records (code/input/intent + the diffstat),
+   *  settled by id (ok/elapsedMs) on the terminal update; folded as `tools`. */
+  liveToolRecords: CollabToolRecord[];
   /** The last user prompt (+ its images), for Retry. */
   lastPrompt: string | null;
   lastImages: LaneImage[];
@@ -467,6 +498,8 @@ export class FleetLaneManager {
       transcript: [],
       liveText: "",
       liveTools: [],
+      liveThinking: "",
+      liveToolRecords: [],
       lastPrompt: null,
       lastImages: [],
       turnStartedAt: null,
@@ -531,6 +564,8 @@ export class FleetLaneManager {
     lane.lastImages = images;
     lane.liveText = "";
     lane.liveTools = [];
+    lane.liveThinking = "";
+    lane.liveToolRecords = [];
     // P-HEALTH.1: a new turn starts a fresh stall episode with a full probe/recover budget, and no stale
     // open calls. A call left open by a killed turn would otherwise cap this turn's verdict at `quiet`
     // forever, silently disabling the self-watch for the rest of the lane's life.
@@ -900,7 +935,19 @@ export class FleetLaneManager {
    *  the records would let a caller rewrite a lane's memory, which is what the respawn replay reads. */
   laneTranscript(laneId: string): LaneTurnRecord[] {
     const lane = this.#lanes.get(laneId);
-    return lane ? lane.transcript.map((t) => ({ role: t.role, text: t.text })) : [];
+    return lane ? lane.transcript.map(copyRecord) : [];
+  }
+
+  /** P-REMOTE.16: the lane's IN-FLIGHT assistant turn as a replayable rich turn (`live: true`), or null when
+   *  the lane is idle. A guest that starts watching mid-turn sees the work so far at the same detail the
+   *  settled turns carry; the live stream then continues it. Copies only. */
+  laneLiveTurn(laneId: string): CollabTranscriptTurn | null {
+    const lane = this.#lanes.get(laneId);
+    if (!lane || !lane.busy) return null;
+    const turn: CollabTranscriptTurn = { role: "assistant", text: lane.liveText, live: true };
+    if (lane.liveThinking) turn.thinking = lane.liveThinking;
+    if (lane.liveToolRecords.length) turn.tools = lane.liveToolRecords.map(copyTool);
+    return turn;
   }
 
   // -- P-FLEET.L8: attach the MAIN composer to a lane, and release it ---------------------------------
@@ -1199,18 +1246,33 @@ export class FleetLaneManager {
   /** Append a turn to the bounded recovery transcript (per-turn char clamp, oldest turns fall off). */
   #record(lane: Lane, turn: LaneTurnRecord): void {
     const text = turn.text.length > TRANSCRIPT_MAX_TURN_CHARS ? `${turn.text.slice(0, TRANSCRIPT_MAX_TURN_CHARS)}\u2026[truncated]` : turn.text;
-    lane.transcript.push({ role: turn.role, text });
+    const rec: LaneTurnRecord = { role: turn.role, text };
+    // P-REMOTE.16: the rich detail, bounded like the text (the tool records were already capped at the wire).
+    if (turn.thinking) rec.thinking = turn.thinking.length > TRANSCRIPT_MAX_TURN_CHARS ? `${turn.thinking.slice(0, TRANSCRIPT_MAX_TURN_CHARS)}\u2026[truncated]` : turn.thinking;
+    if (turn.tools?.length) rec.tools = turn.tools.slice(0, TRANSCRIPT_MAX_TOOLS).map(copyTool);
+    if (turn.error) rec.error = turn.error;
+    lane.transcript.push(rec);
     if (lane.transcript.length > TRANSCRIPT_MAX_TURNS) lane.transcript.splice(0, lane.transcript.length - TRANSCRIPT_MAX_TURNS);
   }
 
-  /** Fold the streaming turn (assistant text + compact tool titles + any error) into the transcript. */
+  /** Fold the streaming turn (assistant text + compact tool titles + any error) into the transcript.
+   *  P-REMOTE.16: the thinking and the tool records ride along as their own fields, so a remote replay shows
+   *  the turn at live detail; the text keeps its `[ran: ...]` prefix lines for the resume preamble. */
   #foldLiveTurn(lane: Lane, error?: string): void {
     const tools = lane.liveTools.length ? `${lane.liveTools.map((t) => `[ran: ${t}]`).join("\n")}\n` : "";
     const err = error ? `\n[turn ended in error: ${error.slice(0, 300)}]` : "";
     const text = `${tools}${lane.liveText}${err}`.trim();
-    if (text) this.#record(lane, { role: "assistant", text });
+    if (text) {
+      const rec: LaneTurnRecord = { role: "assistant", text };
+      if (lane.liveThinking) rec.thinking = lane.liveThinking;
+      if (lane.liveToolRecords.length) rec.tools = lane.liveToolRecords;
+      if (error) rec.error = error.slice(0, 300);
+      this.#record(lane, rec);
+    }
     lane.liveText = "";
     lane.liveTools = [];
+    lane.liveThinking = "";
+    lane.liveToolRecords = [];
   }
 
   #wire(lane: Lane): void {
@@ -1231,7 +1293,11 @@ export class FleetLaneManager {
           }
           break;
         case "agent_thought_chunk":
-          if (u.content?.type === "text") this.#emit(lane, { type: "thinking", text: String(u.content.text) });
+          if (u.content?.type === "text") {
+            const text = String(u.content.text);
+            if (lane.liveThinking.length < TRANSCRIPT_MAX_TURN_CHARS) lane.liveThinking += text; // P-REMOTE.16: replay memory
+            this.#emit(lane, { type: "thinking", text });
+          }
           break;
         case "tool_call":
         case "tool_call_update": {
@@ -1251,6 +1317,9 @@ export class FleetLaneManager {
             const elapsedMs = Math.max(0, lane.lastActivityAt - open.startedAt);
             lane.stepsDone++;
             this.#durations.addTool(name, elapsedMs);
+            // P-REMOTE.16: settle the replay record the open call pushed, by id, with the same outcome.
+            const rec = lane.liveToolRecords.find((r) => r.id === id);
+            if (rec) { rec.ok = u.status === "completed"; rec.elapsedMs = elapsedMs; }
             this.#emit(lane, { type: "tool", id, name, detail: title, status: u.status === "completed" ? "done" : "failed", elapsedMs });
             break;
           }
@@ -1276,6 +1345,27 @@ export class FleetLaneManager {
           // at once: a row that spins forever is worse than no row.
           const status = !id ? undefined : lane.openCalls.has(id) ? "open" as const : u.status === "completed" ? "done" as const : "failed" as const;
           if (status && status !== "open") lane.stepsDone++;
+          // P-REMOTE.16: the same call as a replayable record (the fields the event carries + the diffstat
+          // sized by the desktop's own convention). A call that arrived terminal is recorded settled.
+          if (lane.liveToolRecords.length < TRANSCRIPT_MAX_TOOLS) {
+            const rec: CollabToolRecord = { name, detail: title };
+            if (id) rec.id = id;
+            if (code) {
+              // Key by key, never spread: an engine-only field added to LaneToolCode later must not ride out.
+              const c: NonNullable<CollabToolRecord["code"]> = { path: code.path };
+              if (code.content !== undefined) c.content = code.content;
+              if (code.oldText !== undefined) c.oldText = code.oldText;
+              if (code.newText !== undefined) c.newText = code.newText;
+              if (code.patch !== undefined) c.patch = code.patch;
+              rec.code = c;
+            }
+            if (input) rec.input = input;
+            if (intent) rec.intent = intent;
+            if (status && status !== "open") rec.ok = status === "done";
+            const stat = toolChip(name, title, code).diffstat;
+            if (stat) { rec.add = stat.add; rec.del = stat.del; }
+            lane.liveToolRecords.push(rec);
+          }
           this.#emit(lane, { type: "tool", ...(id ? { id, status } : {}), name, detail: title, ...(code ? { code } : {}), ...(input ? { input } : {}), ...(intent ? { intent } : {}) });
           break;
         }

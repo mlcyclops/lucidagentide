@@ -330,7 +330,7 @@ import { RelayTokenCache } from "./collab/relay_token_cache.ts"; // P-REMOTE.2c:
 import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watch a shared session read-only
 import { parseShareLink } from "./collab/link.ts";
 import { importRoomKey } from "./collab/crypto.ts";
-import type { CollabOptions, SttSource } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks; P-REMOTE.14: voice provenance
+import type { CollabOptions, CollabTranscriptTurn, SttSource } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks; P-REMOTE.14: voice provenance; P-REMOTE.16: rich lane replay
 import { laneEventToChatEvent } from "./collab/lane_event_adapter.ts"; // P-PWA-FOCUS.1: lane engine event -> guest-facing ChatEvent (pure)
 import { MAX_FAVS, offeredModels } from "./renderer/model_favorites.ts"; // P-REMOTE.11b (ADR-0238): favorites-filtered guest picker (pure, DOM-free)
 import { accessCounts, buildShareAwareness, type ShareCounts } from "./collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness preamble
@@ -754,9 +754,23 @@ const collabManager = new CollabManager({
   // next token. The lane manager already returns a COPY; the explicit per-turn map is the deliberate part.
   // LaneTurnRecord and CollabTranscriptTurn are structurally compatible TODAY, so passing the array
   // straight through would typecheck - and would silently ship any future ENGINE-only field (cwd, model,
-  // internal ids) to a remote guest the moment someone widens LaneTurnRecord. Naming role+text here is
+  // internal ids) to a remote guest the moment someone widens LaneTurnRecord. Naming the fields here is
   // what stops that: a new engine field cannot ride along, it has to be added on purpose.
-  laneTranscript: (laneId) => fleet.laneTranscript(laneId).map((t) => ({ role: t.role, text: t.text })),
+  // P-REMOTE.16 (ADR-0431): the replay is RICH (thinking / tool records with code + diffstat / error) at
+  // fleet-lane parity, and the lane's IN-FLIGHT turn rides last as `live: true` so a guest that taps a
+  // working lane sees the work so far. The host bounds the whole replay under the relay frame budget.
+  laneTranscript: (laneId) => {
+    const turns: CollabTranscriptTurn[] = fleet.laneTranscript(laneId).map((t) => {
+      const turn: CollabTranscriptTurn = { role: t.role, text: t.text };
+      if (t.thinking !== undefined) turn.thinking = t.thinking;
+      if (t.tools) turn.tools = t.tools;
+      if (t.error !== undefined) turn.error = t.error;
+      return turn;
+    });
+    const live = fleet.laneLiveTurn(laneId);
+    if (live) turns.push(live);
+    return turns;
+  },
   // P-COLLAB.18 (ADR-0204): host-authoritative audit — a guest joined/left the RELAY share. Metadata only.
   onParticipant: (kind, guest) => {
     const meta = { transport: "relay" as const, access: guest.access, roomId: collabManager.status().roomId, guest: guest.name };

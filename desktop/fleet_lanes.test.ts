@@ -651,6 +651,13 @@ test("laneTranscript hands out a COPY of the lane's memory, and [] for an unknow
   const again = live.laneTranscript(id);
   expect(again.length).toBeGreaterThanOrEqual(2);
   expect(again[0]).toEqual({ role: "user", text: "remember: OTTER" });
+  // P-REMOTE.16: a user record carries no rich fields, a settled assistant record never claims an error for
+  // a turn that completed, and an idle lane has no in-flight turn to replay.
+  expect(again[0]!.thinking).toBeUndefined();
+  expect(again[0]!.tools).toBeUndefined();
+  expect(again.find((t) => t.role === "assistant")!.error).toBeUndefined();
+  expect(live.laneLiveTurn(id)).toBeNull();
+  expect(live.laneLiveTurn("lane-does-not-exist")).toBeNull();
 }, TIMEOUT);
 
 // ── P-WAIT.1: workers in one folder run at once; only a write to the same file waits ─────────────

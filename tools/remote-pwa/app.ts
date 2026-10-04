@@ -17,7 +17,8 @@ import { importRoomKey } from "../../desktop/collab/crypto.ts";
 import { parseShareLink, formatShareLink } from "../../desktop/collab/link.ts";
 import { resolveReconnect, RELAY_FILE_NAME } from "../../desktop/collab/drive_relay_codes.ts"; // P-REMOTE.10c (ADR-0235): out-of-band reconnect reader
 import { findRelayFile, readRelayFile } from "../../desktop/collab/drive_file.ts";
-import { escapeHtml, foldEvent, renderControls, renderTranscript, renderHeader, renderLaneCard, renderProcessRow, presentedStatus, RECONNECT_GRACE_MS, buildTurnReport, renderReportHtml, reportMarkdown, type ViewItem, type TurnReport } from "../../desktop/collab/pwa_view.ts";
+import { escapeHtml, foldEvent, expandTurns, mergeWelcome, renderControls, renderTranscript, renderHeader, renderLaneCard, renderProcessRow, presentedStatus, RECONNECT_GRACE_MS, buildTurnReport, renderReportHtml, reportMarkdown, type ViewItem, type TurnReport } from "../../desktop/collab/pwa_view.ts";
+import { parseHistory, serializeHistory } from "../../desktop/collab/pwa_history.ts"; // P-REMOTE.16 (ADR-0431): the on-device settled-history store (CUI fail-closed)
 import { laneRollup } from "../../desktop/collab/fleet_status.ts"; // P-PWA-FLEET.2: the SAME order/wording/counting the desktop dock pill uses
 import { planSync, type SyncPlan, type TargetProgress } from "../../desktop/collab/sync_state.ts"; // P-PWA-FOCUS.2: the pure unseen-per-target decision
 import { createRemoteCheckout, entitlementActive, isEntitlementDenied } from "../../desktop/collab/remote_entitlement.ts";
@@ -26,7 +27,7 @@ import { downmixMono, encodeWavPcm16, mergeTranscript, resampleLinear, WHISPER_S
 import { penWidthFor, toNormPoint, type NormPoint } from "../../desktop/collab/preview_snapshot.ts"; // P-PREVIEW-PWA.2 (ADR-0239): normalized markup strokes
 import { decideSttMode, type SttCapability, type SttDecision } from "../../desktop/collab/device_stt_policy.ts"; // P-REMOTE.14: the pure, fail-closed "may this phone transcribe?" decision
 import { installSttLanguage, probeSttCapability, startDictation } from "./device_stt.ts"; // P-REMOTE.14: the typed Web Speech wrapper
-import type { CollabTranscriptTurn, SttSource } from "../../desktop/collab/frames.ts";
+import type { SttSource } from "../../desktop/collab/frames.ts";
 
 /** The auth bridge firebase_auth.js publishes on window - a Firebase ID token for the gated relay. */
 interface LucidAuth {
@@ -159,14 +160,27 @@ function main(): void {
 
   let guest: CollabGuest | null = null;
   let socket: CollabSocket | null = null;
-  let items: ViewItem[] = []; // the MASTER session's folded items - a lane's stream NEVER enters this list
+  // P-REMOTE.16 (ADR-0431): the phone's on-device history of the MASTER session's settled turns. ONE key,
+  // one room: the envelope names its room and parseHistory rejects any other, so opening a different invite
+  // starts empty and the next persist overwrites. Loaded BEFORE the first connect so the conversation is on
+  // screen under the reconnect banner, and so the first hello carries `since`. localStorage can be absent or
+  // throwing (private mode, quota): every access is guarded, and a failure means "no history", never a crash.
+  const HISTORY_KEY = "lucid-remote:history:v1";
+  const stored = ((): { items: ViewItem[]; since: number } | null => {
+    try { return parseHistory(localStorage.getItem(HISTORY_KEY), parsed.roomId); } catch { return null; }
+  })();
+  // The settled-seq cursor to seed a (re)built guest with: the stored one until a guest reports its own.
+  let sinceCursor = stored?.since ?? 0;
+  let persistedSince = -1; // what the last persist wrote (-1 = never), so a repaint without a settle is free
+  let historyDirty = stored === null; // a rejected/absent store is removed on the first live persist
+  let items: ViewItem[] = stored?.items ?? []; // the MASTER session's items - a lane's stream NEVER enters this list
   // P-PWA-FOCUS.1: which conversation the transcript + composer are pointed at: "master", or a lane id.
   let focus = "master";
-  // Per-target folded items + the host's `lane-sync` replay, keyed by lane id. Separate lists, never one
-  // shared one: a lane's words in the master transcript would be another agent's answer wearing this
-  // session's clothing. Dynamic keys (lanes come and go), so a Map.
+  // Per-target item lists keyed by lane id. Separate lists, never one shared one: a lane's words in the
+  // master transcript would be another agent's answer wearing this session's clothing. P-REMOTE.16: a
+  // `lane-sync` replay EXPANDS into items (expandTurns) and replaces the lane's list, then its live events
+  // fold on - one list per conversation, no separate "prior" stream. Dynamic keys (lanes come and go), so a Map.
   const targetItems = new Map<string, ViewItem[]>();
-  const targetPrior = new Map<string, CollabTranscriptTurn[]>();
   // The user's explicit open/closed choice per Thinking block, keyed `<target>:<data-think item index>`.
   // Repaints re-apply it; an untouched block keeps the default (the live trailing one renders open). The
   // target is part of the key because the index alone is not unique across two conversations.
@@ -1088,12 +1102,12 @@ function main(): void {
   // P-REMOTE.11: populate the auto-collapsed catch-up card from the turns that completed while the phone was
   // locked. Bandwidth-minimal: it summarizes the welcome-replay the guest already receives on reconnect - no
   // extra data crosses the wire. Text is set via textContent (host content is untrusted), never innerHTML.
-  /** Rendered stream length for a target: the replayed prior turns plus the folded live items. This is the
-   *  unit `seen`/`firstUnseen` are measured in, so it MUST match what render() hands renderTranscript. */
+  /** Rendered stream length for a target: its ONE item list (replayed turns are expanded into it), minus the
+   *  snapshot items the strips own. This is the unit `seen`/`firstUnseen` are measured in, so it MUST match
+   *  what render() hands renderTranscript. */
   const streamLen = (target: string): number => {
     const its = target === "master" ? items : targetItems.get(target) ?? [];
-    const pri = target === "master" ? (guest?.view().transcript ?? []) : targetPrior.get(target) ?? [];
-    return pri.length + its.filter((i) => i.kind !== "fleet-lanes" && i.kind !== "processes").length;
+    return its.filter((i) => i.kind !== "fleet-lanes" && i.kind !== "processes").length;
   };
 
   /** Every conversation the phone is tracking, for planSync. Master is always present; a lane appears once
@@ -1102,7 +1116,7 @@ function main(): void {
     const snap = items.find((i) => i.kind === "fleet-lanes");
     const lanes = snap?.kind === "fleet-lanes" ? snap.lanes : [];
     const out: TargetProgress[] = [{ target: "master", label: "main session", total: streamLen("master"), seen: seen.get("master") ?? 0 }];
-    for (const id of new Set([...targetPrior.keys(), ...targetItems.keys()])) {
+    for (const id of targetItems.keys()) {
       out.push({ target: id, label: lanes.find((l) => l.id === id)?.name || id, total: streamLen(id), seen: seen.get(id) ?? 0 });
     }
     return out;
@@ -1168,16 +1182,16 @@ function main(): void {
     $("bs-summary").textContent = st.text;
     $("bs-dot").dataset.tone = st.tone;
     const tr = $("transcript");
-    // P-PWA-FOCUS.1: the transcript shows the FOCUSED conversation - the master's prior turns + master items,
-    // or the focused lane's `lane-sync` replay + that lane's items. Everything below this line that reads
-    // `items`/`view.transcript` is master-scoped on purpose (status, catch-up, report, fleet, processes).
+    // P-PWA-FOCUS.1: the transcript shows the FOCUSED conversation - the master items, or the focused lane's
+    // items (P-REMOTE.16: one list each; the welcome / lane-sync replay is already expanded into it).
+    // Everything below this line that reads `items` is master-scoped on purpose (status, catch-up, report,
+    // fleet, processes).
     const shown = focus === "master" ? items : targetItems.get(focus) ?? [];
-    const prior = focus === "master" ? view.transcript : targetPrior.get(focus) ?? [];
     // P-PWA-FLEET.1: fleet/process snapshots render in their strips above the transcript, never inline.
     // P-PWA-FOCUS.2: `markFrom` draws the "new since you looked away" boundary for THIS target. It is passed
     // only while it is genuinely this target's boundary, so switching focus cannot carry another
     // conversation's marker across.
-    tr.innerHTML = renderTranscript(prior, shown.filter((i) => i.kind !== "fleet-lanes" && i.kind !== "processes"), markFrom >= 0 ? markFrom : undefined);
+    tr.innerHTML = renderTranscript(shown.filter((i) => i.kind !== "fleet-lanes" && i.kind !== "processes"), markFrom >= 0 ? markFrom : undefined);
     // Re-apply the user's Thinking open/closed choices - the innerHTML repaint above resets every <details>.
     for (const d of Array.from(tr.querySelectorAll<HTMLDetailsElement>("details[data-think]"))) {
       const want = thinkIntent.get(`${focus}:${d.dataset.think ?? "-1"}`);
@@ -1215,7 +1229,22 @@ function main(): void {
     if (guestReadOnly) endDictation(); // the composer just vanished (session ended / view-only): no hot mic
     if (guest) {
       const p = guest.posture();
-      if (`${p.cui}/${p.lockdown}` !== sttPosture) void refreshStt(false);
+      // P-REMOTE.16: a posture flip also re-gates the on-device history (CUI on = the key is removed).
+      if (`${p.cui}/${p.lockdown}` !== sttPosture) { historyDirty = true; void refreshStt(false); }
+    }
+    // P-REMOTE.16: persist the settled master history after a LIVE render - but only when something settled
+    // (the cursor moved or a welcome merged), so a token-by-token repaint never serializes a megabyte. The
+    // store is fail-closed: serializeHistory returns null under a CUI posture and the key is REMOVED.
+    if (guest && view.phase === "live") {
+      sinceCursor = guest.since();
+      if (historyDirty || sinceCursor !== persistedSince) {
+        historyDirty = false;
+        persistedSince = sinceCursor;
+        try {
+          const s = serializeHistory(parsed.roomId, items, sinceCursor, guest.posture());
+          if (s) localStorage.setItem(HISTORY_KEY, s); else localStorage.removeItem(HISTORY_KEY);
+        } catch { /* quota or private mode: history is a convenience, never a requirement */ }
+      }
     }
     // P-PWA-FLEET.1: the strips render the LATEST folded snapshots.
     renderFleetStrip();
@@ -1317,27 +1346,49 @@ function main(): void {
         const key = await importRoomKey(parsed.key);
         const wsUrl = `${cfg.relayWsBase.replace(/\/+$/, "")}/r/${parsed.roomId}`;
         socket = new CollabSocket({ wsUrl, role: "guest", key, authToken: () => auth.getIdToken() });
-        items = []; thinkIntent.clear(); lastReport = null; turnStart = 0; selfEchoes.length = 0;
+        // P-REMOTE.16: the master items, the report segment, and the pending self-echoes all SURVIVE a socket
+        // rebuild for the same room: the conversation is the thing the user came back to see, and the next
+        // welcome merges onto it by seq rather than replacing it. (A different room never gets here: the
+        // invite fragment is fixed for the page's life and the stored history was already room-checked.)
         // P-PWA-FOCUS.1: a fresh guest watches the master, so the phone must agree with it. Anything else
         // would point the composer at a lane this socket never subscribed to.
-        focus = "master"; targetItems.clear(); targetPrior.clear();
+        focus = "master"; targetItems.clear();
         // P-REMOTE.14: a fresh session re-decides dictation from scratch, and cloud consent NEVER carries over.
         endDictation();
         sttDecision = null; sttPosture = ""; sttCloudOk = false; pendingSttSource = null; dictatedText = "";
         applySttDecision();
         guest = new CollabGuest(socket, { name: currentEmail ?? "phone", writeToken: parsed.writeToken }, {
-          onEvent: (e) => {
-            items = foldEvent(items, e);
+          // P-REMOTE.16: the welcome is MERGED by seq - settled items up to `since` stay, the replay lands
+          // after them, and a `complete: false` replay adds the gap note. A fresh welcome replaces the list.
+          onWelcome: (w) => {
+            items = mergeWelcome(items, w);
+            if (turnStart > items.length) turnStart = items.length;
+            historyDirty = true;
+            render(guest!.view());
+          },
+          onEvent: (e, seq) => {
+            items = foldEvent(items, e, seq);
             // P-REMOTE.9: on turn end, build the report from this turn's items, then start the next segment.
             if (e.type === "done") { lastReport = buildTurnReport(items.slice(turnStart), guest!.view()); turnStart = items.length; }
             render(guest!.view());
           },
           // P-COLLAB.15: a live user turn from the host or ANOTHER guest. The sender already echoed its own
-          // optimistically, so dedup a matching pending self-echo; otherwise render it labelled with `from`.
-          onUserTurn: (text, from) => {
+          // optimistically, so a matching pending self-echo is TAGGED with the host's seq (P-REMOTE.16: the
+          // echo is now a settled, journaled turn) instead of shown twice; otherwise render it with `from`.
+          onUserTurn: (text, from, seq) => {
             const i = selfEchoes.indexOf(text);
-            if (i !== -1) { selfEchoes.splice(i, 1); return; } // my own turn, already shown
-            items = [...items, { kind: "user", text, from }];
+            if (i !== -1) {
+              selfEchoes.splice(i, 1);
+              if (seq !== undefined) {
+                for (let k = items.length - 1; k >= 0; k--) {
+                  const it = items[k]!;
+                  if (it.kind === "user" && it.seq === undefined && it.from === undefined && it.text === text) { items = items.slice(); items[k] = { ...it, seq }; break; }
+                }
+              }
+              render(guest!.view());
+              return;
+            }
+            items = [...items, { kind: "user", ...(seq !== undefined ? { seq } : {}), text, from }];
             render(guest!.view());
           },
           // P-PWA-FOCUS.1: a watched lane's events fold into THAT lane's own list. `foldEvent` is pure and
@@ -1349,12 +1400,12 @@ function main(): void {
             targetItems.set(laneId, foldEvent(targetItems.get(laneId) ?? [], e));
             if (focus === laneId) render(guest!.view());
           },
-          // The host's replay for a lane we just started watching. It is AUTHORITATIVE, so it replaces that
-          // lane's live items: re-watching a lane would otherwise show every turn twice (once from the
-          // previous watch window, once from this replay).
+          // The host's replay for a lane we just started watching. It is AUTHORITATIVE, so it REPLACES that
+          // lane's items: re-watching a lane would otherwise show every turn twice (once from the previous
+          // watch window, once from this replay). P-REMOTE.16: the rich replay (thinking, tool chips with
+          // their diffs, errors, the trailing live turn) expands into the same items a live fold produces.
           onLaneSync: (laneId, transcript) => {
-            targetPrior.set(laneId, transcript);
-            targetItems.set(laneId, []);
+            targetItems.set(laneId, expandTurns(transcript));
             if (focus === laneId) render(guest!.view());
           },
           onView: (view) => render(view),
@@ -1365,6 +1416,10 @@ function main(): void {
           },
           onError: (m) => render({ ...guest!.view(), note: m }),
         });
+        // P-REMOTE.16: the first hello carries the settled cursor the phone already holds (from on-device
+        // history, or from the guest this one replaces), so the host replays only what was missed. Then the
+        // retained items render at once, under the Connecting banner, instead of a blank screen.
+        guest.seedSince(sinceCursor);
         guest.start();
         show("session");
         render(guest.view());
@@ -1440,14 +1495,24 @@ function main(): void {
   });
 
   // P-REMOTE.3: keep the live session across an iOS screen-lock / tab-suspend. When the tab becomes visible
-  // again (or the network returns), nudge the socket to reconnect IMMEDIATELY instead of waiting out the
-  // exponential backoff; if it died fatally while away (e.g. the token lapsed), rebuild a fresh socket that
-  // re-presents a fresh token. Idempotent + guarded so it never double-connects.
+  // again (or the network returns), the socket is nudged IMMEDIATELY instead of waiting out the exponential
+  // backoff. Idempotent + guarded so it never double-connects.
+  // P-REMOTE.16 (ADR-0431): a socket that is still alive is told how long the phone was hidden
+  // (`socket.resume(hiddenMs)`) and decides for itself whether the Cloud Run cap or the relay's idle timeout
+  // has silently killed it while the OS froze the tab - the guest instance (and its `since` cursor) is kept,
+  // so the hello that follows asks only for what was missed. A FATALLY closed socket (the token lapsed) is
+  // rebuilt; the items + cursor survive that too, and the next welcome merges onto them.
   const resumeConnection = (): void => {
     if (document.visibilityState === "hidden" || !currentEmail) return;
-    if (socket && !socket.isClosed) { socket.reconnectNow(); return; }
+    // `hiddenAt` is read HERE, before the sync handler below zeroes it: this listener is registered first.
+    const hiddenMs = hiddenAt ? Date.now() - hiddenAt : 0;
+    if (socket && !socket.isClosed) { socket.resume(hiddenMs); return; }
+    if (guest) sinceCursor = guest.since();
     guest = null; socket = null; connect();
   };
+  document.addEventListener("visibilitychange", resumeConnection);
+  window.addEventListener("online", resumeConnection);
+  window.addEventListener("pageshow", resumeConnection);
   // P-PWA-FOCUS.2: the screen locked. Only the TIME is snapshotted; the per-target `seen` map is already the
   // record of what had been looked at, so there is nothing else to freeze.
   document.addEventListener("visibilitychange", () => {
@@ -1475,9 +1540,6 @@ function main(): void {
     const mark = $("transcript").querySelector("[data-sync-mark]");
     if (mark) mark.scrollIntoView({ block: "center" });
   });
-  document.addEventListener("visibilitychange", resumeConnection);
-  window.addEventListener("online", resumeConnection);
-  window.addEventListener("pageshow", resumeConnection);
 
   auth.onChange((email) => {
     currentEmail = email;

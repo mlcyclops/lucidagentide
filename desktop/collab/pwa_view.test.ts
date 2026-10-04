@@ -8,12 +8,13 @@
 // (the load-bearing safety property: the phone must never turn host/echoed content into markup).
 
 import { describe, expect, it } from "bun:test";
-import { foldEvent, renderItem, renderTranscript, renderHeader, renderLaneCard, renderProcessRow, statusLabel, escapeHtml, thinkingGist, type ViewItem } from "./pwa_view.ts";
+import { foldEvent, expandTurns, mergeWelcome, elapsedLabel, GAP_NOTE, renderItem, renderTranscript, renderHeader, renderLaneCard, renderProcessRow, statusLabel, escapeHtml, thinkingGist, type ViewItem } from "./pwa_view.ts";
 import type { ChatEvent } from "../renderer/chat_events.ts";
 import type { GuestView } from "./guest.ts";
-import type { CollabTranscriptTurn } from "./frames.ts";
+import type { CollabTranscriptTurn, WelcomeFrame } from "./frames.ts";
 
-const fold = (events: ChatEvent[]): ViewItem[] => events.reduce(foldEvent, [] as ViewItem[]);
+// (an explicit lambda: reduce's index argument must not land in foldEvent's `seq` parameter)
+const fold = (events: ChatEvent[]): ViewItem[] => events.reduce((acc, e) => foldEvent(acc, e), [] as ViewItem[]);
 
 describe("pwa_view: foldEvent reducer", () => {
   it("coalesces token deltas into one streaming answer, then finalizes on done", () => {
@@ -87,14 +88,14 @@ describe("pwa_view: readable Thinking (live-open + gist + stable identity)", () 
 
   it("a TRAILING thinking item renders OPEN (live reasoning); it renders closed once something follows", () => {
     const think: ViewItem = { kind: "thinking", text: "weighing options" };
-    expect(renderTranscript([], [think])).toContain("<details class=\"msg thinking\" open");
-    const after = renderTranscript([], [think, { kind: "answer", text: "ok", streaming: true }]);
+    expect(renderTranscript([think])).toContain("<details class=\"msg thinking\" open");
+    const after = renderTranscript([think, { kind: "answer", text: "ok", streaming: true }]);
     expect(after).not.toContain("<details class=\"msg thinking\" open");
     expect(after).toContain("data-think=\"0\"");
   });
 
   it("each thinking block carries its item index in data-think (open-state keying across repaints)", () => {
-    const html = renderTranscript([], [
+    const html = renderTranscript([
       { kind: "thinking", text: "a" },
       { kind: "tool", name: "read", detail: "f.ts" },
       { kind: "thinking", text: "b" },
@@ -129,8 +130,8 @@ describe("pwa_view: rendering escapes ALL host-authored text", () => {
     }
   });
 
-  it("escapes prior transcript turns and the header", () => {
-    const html = renderTranscript([{ role: "user", text: "<script>x</script>" }], []);
+  it("escapes replayed transcript turns and the header", () => {
+    const html = renderTranscript(expandTurns([{ role: "user", text: "<script>x</script>" }]));
     expect(html).not.toContain("<script>x");
     expect(html).toContain("&lt;script&gt;");
     const hdr = renderHeader({ sessionId: "s", title: "<b>t</b>", model: "<m>", hostName: "<h>", startedAt: 0 });
@@ -258,119 +259,288 @@ describe("pwa_view: fleet lane cards + process rows", () => {
   });
 });
 
-// ── P-PWA-FOCUS.2: the unseen boundary (`newFrom`) in the COMBINED prior+items stream ───────────────────
+// ── P-PWA-FOCUS.2: the unseen boundary (`newFrom`) in the item stream ────────────────────────────────────
 //
 // The phone SCROLLS to this marker after a cross-screen-lock sync, so its POSITION is load-bearing: a
 // marker one entry off silently parks the reader on something they already read, or skips what they missed.
-// These tests pin the exact rendered bytes rather than a substring, and they pin the two-argument output
-// against a reference reproduction of the pre-change renderer.
+// These tests pin the exact rendered bytes rather than a substring. P-REMOTE.16: the stream is ONE item
+// list (replayed turns are expanded into it), so the index is simply the item index.
 
 const MARK = `<div class="sync-mark" data-sync-mark><span class="sync-mark-l">new since you looked away</span></div>`;
 
-/** The pre-change renderer, rebuilt from the two primitives its body used. Each combined-stream entry, in
- *  order: `prior` turns first, then the folded items (trailing thinking rendered live-open). */
-const entries = (prior: CollabTranscriptTurn[], items: ViewItem[]): string[] => [
-  ...prior.map((t) => `<div class="msg ${t.role === "user" ? "user" : "answer"}">${escapeHtml(t.text)}</div>`),
-  ...items.map((it, i) => renderItem(it, i, it.kind === "thinking" && i === items.length - 1)),
-];
+/** The renderer rebuilt from its one primitive: each item in order (trailing thinking rendered live-open). */
+const entries = (items: ViewItem[]): string[] => items.map((it, i) => renderItem(it, i, it.kind === "thinking" && i === items.length - 1));
 
-/** What the render MUST be byte-for-byte with the marker at combined index `at`. */
-const withMark = (prior: CollabTranscriptTurn[], items: ViewItem[], at: number): string => {
-  const e = entries(prior, items);
+/** What the render MUST be byte-for-byte with the marker at index `at`. */
+const withMark = (items: ViewItem[], at: number): string => {
+  const e = entries(items);
   e.splice(at, 0, MARK);
   return e.join("");
 };
 
 const markCount = (html: string): number => html.split(MARK).length - 1;
 
-const PRIOR: CollabTranscriptTurn[] = [
-  { role: "user", text: "turn zero" },
-  { role: "assistant", text: "turn one" },
-  { role: "user", text: "turn two" },
-];
 const ITEMS: ViewItem[] = [
+  { kind: "user", text: "turn zero", seq: 1 },
+  { kind: "answer", text: "turn one", streaming: false, seq: 2 },
+  { kind: "user", text: "turn two", seq: 3 },
   { kind: "answer", text: "answer three", streaming: false },
   { kind: "tool", name: "read", detail: "four.ts" },
   { kind: "note", text: "note five" },
 ];
-const TOTAL = PRIOR.length + ITEMS.length; // 6
+const TOTAL = ITEMS.length; // 6
 
 describe("pwa_view: renderTranscript unseen boundary", () => {
-  it("draws the marker immediately before the boundary entry when it falls inside `prior`", () => {
-    expect(renderTranscript(PRIOR, ITEMS, 1)).toBe(withMark(PRIOR, ITEMS, 1));
-    expect(renderTranscript(PRIOR, ITEMS, 2)).toBe(withMark(PRIOR, ITEMS, 2));
-    // and it is the SECOND prior bubble that follows it, not the first or third
-    const html = renderTranscript(PRIOR, ITEMS, 1);
+  it("draws the marker immediately before the boundary entry", () => {
+    for (let n = 1; n < TOTAL; n++) expect(renderTranscript(ITEMS, n)).toBe(withMark(ITEMS, n));
+    // and it is the SECOND bubble that follows it, not the first or third
+    const html = renderTranscript(ITEMS, 1);
     expect(html).toContain(`${MARK}<div class="msg answer">turn one</div>`);
     expect(html.indexOf("turn zero")).toBeLessThan(html.indexOf(MARK));
-  });
-
-  it("draws the marker immediately before the boundary entry when it falls inside `items`", () => {
-    expect(renderTranscript(PRIOR, ITEMS, 4)).toBe(withMark(PRIOR, ITEMS, 4));
-    expect(renderTranscript(PRIOR, ITEMS, 5)).toBe(withMark(PRIOR, ITEMS, 5));
-    // combined index 4 is items[1] (the tool chip), which still renders with ITS OWN item index of 1
-    expect(renderTranscript(PRIOR, ITEMS, 4)).toContain(MARK + renderItem(ITEMS[1]!, 1, false));
-  });
-
-  it("lands exactly on the prior/items seam", () => {
-    const html = renderTranscript(PRIOR, ITEMS, PRIOR.length);
-    expect(html).toBe(withMark(PRIOR, ITEMS, PRIOR.length));
-    expect(html).toContain(`<div class="msg user">turn two</div>${MARK}${renderItem(ITEMS[0]!, 0, false)}`);
-  });
-
-  it("threads the index through BOTH loops when one side is empty", () => {
-    expect(renderTranscript([], ITEMS, 2)).toBe(withMark([], ITEMS, 2));
-    expect(renderTranscript(PRIOR, [], 1)).toBe(withMark(PRIOR, [], 1));
-    // an empty side has no in-range boundary of its own
-    expect(markCount(renderTranscript([], ITEMS, 3))).toBe(0); // == total
-    expect(markCount(renderTranscript(PRIOR, [], 3))).toBe(0);
+    // index 4 is the tool chip, which still renders with ITS OWN item index of 4
+    expect(renderTranscript(ITEMS, 4)).toContain(MARK + renderItem(ITEMS[4]!, 4, false));
   });
 
   it("emits NO marker for out-of-range, non-integer, or non-finite boundaries", () => {
-    const plain = renderTranscript(PRIOR, ITEMS);
+    const plain = renderTranscript(ITEMS);
     for (const bad of [0, -1, -7, TOTAL, TOTAL + 5, 1.5, 2.0001, NaN, Infinity, -Infinity]) {
-      const html = renderTranscript(PRIOR, ITEMS, bad);
+      const html = renderTranscript(ITEMS, bad);
       expect(markCount(html)).toBe(0);
       expect(html).toBe(plain); // and nothing else shifted either
     }
+    expect(markCount(renderTranscript([], 3))).toBe(0);
   });
 
   it("emits at most ONE marker, even when entries are byte-identical to each other", () => {
-    for (let n = 1; n < TOTAL; n++) expect(markCount(renderTranscript(PRIOR, ITEMS, n))).toBe(1);
+    for (let n = 1; n < TOTAL; n++) expect(markCount(renderTranscript(ITEMS, n))).toBe(1);
     // duplicate content would re-fire any content-matching implementation; the marker is a POSITION
-    const dupPrior: CollabTranscriptTurn[] = [
-      { role: "user", text: "same" },
-      { role: "user", text: "same" },
-      { role: "user", text: "same" },
-    ];
-    const dupItems: ViewItem[] = [
+    const dup: ViewItem[] = [
+      { kind: "user", text: "same" },
+      { kind: "user", text: "same" },
+      { kind: "user", text: "same" },
       { kind: "note", text: "same" },
       { kind: "note", text: "same" },
     ];
-    for (let n = 1; n < dupPrior.length + dupItems.length; n++) {
-      expect(markCount(renderTranscript(dupPrior, dupItems, n))).toBe(1);
-      expect(renderTranscript(dupPrior, dupItems, n)).toBe(withMark(dupPrior, dupItems, n));
+    for (let n = 1; n < dup.length; n++) {
+      expect(markCount(renderTranscript(dup, n))).toBe(1);
+      expect(renderTranscript(dup, n)).toBe(withMark(dup, n));
     }
   });
 
-  it("renders byte-identically to the pre-change renderer when the third argument is omitted", () => {
-    const before = entries(PRIOR, ITEMS).join("");
-    const twoArg = renderTranscript(PRIOR, ITEMS);
-    expect(twoArg).toBe(before);
-    expect(renderTranscript(PRIOR, ITEMS, undefined)).toBe(twoArg);
-    // including the live-open trailing thinking block, whose open state depends on the item index
+  it("renders every item in order when the boundary is omitted, with the trailing thinking live-open", () => {
+    expect(renderTranscript(ITEMS)).toBe(entries(ITEMS).join(""));
+    expect(renderTranscript(ITEMS, undefined)).toBe(renderTranscript(ITEMS));
     const think: ViewItem[] = [{ kind: "answer", text: "a", streaming: false }, { kind: "thinking", text: "live" }];
-    expect(renderTranscript(PRIOR, think)).toBe(entries(PRIOR, think).join(""));
-    expect(renderTranscript(PRIOR, think)).toContain("<details class=\"msg thinking\" open");
-    expect(renderTranscript([], [])).toBe("");
-    expect(renderTranscript([], [], 0)).toBe("");
+    expect(renderTranscript(think)).toBe(entries(think).join(""));
+    expect(renderTranscript(think)).toContain("<details class=\"msg thinking\" open");
+    expect(renderTranscript([])).toBe("");
+    expect(renderTranscript([], 0)).toBe("");
   });
 
   it("keeps the trailing thinking block live-open when a marker is present", () => {
     const think: ViewItem[] = [{ kind: "tool", name: "read", detail: "f.ts" }, { kind: "thinking", text: "live" }];
-    const html = renderTranscript(PRIOR, think, 3);
-    expect(html).toBe(withMark(PRIOR, think, 3));
+    const html = renderTranscript(think, 1);
+    expect(html).toBe(withMark(think, 1));
     expect(html).toContain("<details class=\"msg thinking\" open");
     expect(html).toContain("data-think=\"1\"");
+  });
+});
+
+// ── P-REMOTE.16 (ADR-0431): rich replay expansion, welcome merge by seq, tool settle + drilldown ─────────
+
+const HEADER = { sessionId: "s1", title: "t", model: "m", hostName: "h", startedAt: 1 };
+const welcomeOf = (transcript: CollabTranscriptTurn[], extra: Partial<WelcomeFrame> = {}): WelcomeFrame =>
+  ({ t: "welcome", protocol: 1, header: HEADER, transcript, participants: [], readOnly: true, ...extra });
+
+describe("pwa_view: expandTurns (P-REMOTE.16)", () => {
+  it("expands a user turn and a rich assistant turn into the same items a live fold would produce", () => {
+    const items = expandTurns([
+      { role: "user", text: "fix it", seq: 1, from: "bob" },
+      {
+        role: "assistant", seq: 2, text: "Done.", thinking: "look first",
+        tools: [
+          { id: "c1", name: "edit", detail: "src/a.ts", code: { path: "src/a.ts", oldText: "a\nb", newText: "a\nc" }, ok: true, elapsedMs: 1200 },
+          { name: "bash", detail: "bun test", input: "bun test x", intent: "running the suite", ok: false },
+        ],
+        blocks: [{ reason: "secret in output", severity: "high" }],
+      },
+    ]);
+    expect(items[0]).toEqual({ kind: "user", seq: 1, text: "fix it", from: "bob" });
+    expect(items[1]).toEqual({ kind: "thinking", seq: 2, text: "look first" });
+    const edit = items[2] as Extract<ViewItem, { kind: "tool" }>;
+    expect(edit.kind).toBe("tool");
+    expect(edit.seq).toBe(2);
+    expect(edit.id).toBe("c1");
+    expect(edit.path).toBe("src/a.ts");
+    expect(edit.add).toBe(1);
+    expect(edit.del).toBe(1);
+    expect(edit.code).toEqual({ path: "src/a.ts", oldText: "a\nb", newText: "a\nc" });
+    expect(edit.ok).toBe(true);
+    expect(edit.elapsedMs).toBe(1200);
+    const bash = items[3] as Extract<ViewItem, { kind: "tool" }>;
+    expect(bash.input).toBe("bun test x");
+    expect(bash.intent).toBe("running the suite");
+    expect(bash.ok).toBe(false);
+    expect(bash.code).toBeUndefined();
+    expect(items[4]).toEqual({ kind: "block", seq: 2, reason: "secret in output", severity: "high" });
+    expect(items[5]).toEqual({ kind: "answer", seq: 2, text: "Done.", streaming: false });
+    expect(items).toHaveLength(6);
+  });
+
+  it("uses the record's precomputed +/- when the code body was shed, and the trailing live turn streams", () => {
+    const items = expandTurns([
+      { role: "assistant", seq: 4, text: "", tools: [{ name: "write", detail: "n.ts", code: { path: "n.ts" }, add: 12, del: 0 }] },
+      { role: "assistant", seq: 5, text: "half an ans", live: true },
+    ]);
+    const w = items[0] as Extract<ViewItem, { kind: "tool" }>;
+    expect(w.add).toBe(12);
+    expect(w.del).toBe(0);
+    expect(w.path).toBe("n.ts");
+    // an empty, settled answer is omitted; the live one renders streaming
+    expect(items).toHaveLength(2);
+    expect(items[1]).toEqual({ kind: "answer", seq: 5, text: "half an ans", streaming: true });
+    // an empty LIVE answer still renders (the cursor)
+    expect(expandTurns([{ role: "assistant", text: "", live: true }])).toEqual([{ kind: "answer", text: "", streaming: true }]);
+  });
+
+  it("strips the leading [ran: ...] lines ONLY when structured tools ride along; a lane error becomes a lane-fail chip", () => {
+    const withTools = expandTurns([{ role: "assistant", text: "[ran: read]\n[ran: edit] a.ts\nPatched.", tools: [{ name: "read", detail: "a.ts" }], error: "child exited" }]);
+    expect(withTools.map((i) => i.kind)).toEqual(["tool", "answer", "lane-error"]);
+    expect(withTools[1]).toEqual({ kind: "answer", text: "Patched.", streaming: false });
+    expect(withTools[2]).toEqual({ kind: "lane-error", message: "child exited" });
+    const textOnly = expandTurns([{ role: "assistant", text: "[ran: read]\nPatched." }]);
+    expect(textOnly).toEqual([{ kind: "answer", text: "[ran: read]\nPatched.", streaming: false }]);
+    // a user turn is never rewritten
+    expect(expandTurns([{ role: "user", text: "[ran: read]" }])).toEqual([{ kind: "user", text: "[ran: read]" }]);
+  });
+
+  it("drops malformed turns and tool records rather than throwing", () => {
+    const bad = [null, 7, { role: "assistant", text: "ok", tools: [null, { detail: "no name" }] }] as unknown as CollabTranscriptTurn[];
+    expect(expandTurns(bad)).toEqual([{ kind: "answer", text: "ok", streaming: false }]);
+    expect(expandTurns(undefined as unknown as CollabTranscriptTurn[])).toEqual([]);
+  });
+});
+
+describe("pwa_view: mergeWelcome (P-REMOTE.16)", () => {
+  const held: ViewItem[] = [
+    { kind: "user", seq: 1, text: "one" },
+    { kind: "answer", seq: 2, text: "two", streaming: false },
+    { kind: "fleet-lanes", lanes: [] },
+    { kind: "user", seq: 3, text: "three" },
+    { kind: "thinking", seq: 4, text: "partial" }, // folded live from a turn the host now re-sends
+    { kind: "user", text: "local echo" }, // no seq: a local fold
+  ];
+
+  it("keeps items settled at or before `since`, drops newer and seq-less ones, appends the replay", () => {
+    const out = mergeWelcome(held, welcomeOf([{ role: "assistant", seq: 4, text: "four" }, { role: "user", seq: 5, text: "five" }], { since: 3 }));
+    expect(out.map((i) => i.seq)).toEqual([1, 2, undefined, 3, 4, 5]);
+    expect(out[2]!.kind).toBe("fleet-lanes"); // status snapshot survives in place
+    expect(out.some((i) => i.kind === "thinking")).toBe(false);
+    expect(out.some((i) => i.kind === "user" && i.text === "local echo")).toBe(false);
+    expect(out[4]).toEqual({ kind: "answer", seq: 4, text: "four", streaming: false });
+  });
+
+  it("inserts the gap note at the boundary when the replay is incomplete", () => {
+    const out = mergeWelcome(held, welcomeOf([{ role: "user", seq: 9, text: "nine" }], { since: 3, complete: false }));
+    expect(out.map((i) => i.kind)).toEqual(["user", "answer", "fleet-lanes", "user", "note", "user"]);
+    expect(out[4]).toEqual({ kind: "note", text: GAP_NOTE });
+    // complete (absent or true) adds nothing
+    expect(mergeWelcome(held, welcomeOf([], { since: 3 })).some((i) => i.kind === "note")).toBe(false);
+    expect(mergeWelcome(held, welcomeOf([], { since: 3, complete: true })).some((i) => i.kind === "note")).toBe(false);
+  });
+
+  it("a welcome without `since` is a fresh full replay and REPLACES everything", () => {
+    const out = mergeWelcome(held, welcomeOf([{ role: "user", seq: 1, text: "fresh" }]));
+    expect(out).toEqual([{ kind: "user", seq: 1, text: "fresh" }]);
+    expect(mergeWelcome(held, welcomeOf([]))).toEqual([]);
+  });
+});
+
+describe("pwa_view: tool-meta settles a chip in place (P-REMOTE.16)", () => {
+  it("sets ok/elapsedMs on the chip with that id, relabels with the real name, never appends", () => {
+    let items = fold([{ type: "tool", id: "c1", name: "other", detail: "x" }, { type: "token", text: "hi" }]);
+    items = foldEvent(items, { type: "tool-meta", id: "c1", name: "knowledge_search", ok: false, elapsedMs: 850 });
+    expect(items).toHaveLength(2);
+    const t = items[0] as Extract<ViewItem, { kind: "tool" }>;
+    expect(t.name).toBe("knowledge_search");
+    expect(t.ok).toBe(false);
+    expect(t.elapsedMs).toBe(850);
+    // a coarse kind never replaces a real name
+    items = foldEvent(items, { type: "tool-meta", id: "c1", name: "other", ok: true });
+    const settled = items[0]!;
+    if (settled.kind !== "tool") throw new Error("expected the tool chip to stay first");
+    expect(settled.name).toBe("knowledge_search");
+    expect(settled.ok).toBe(true);
+    // an unmatched settle is not a chip
+    expect(foldEvent(items, { type: "tool-meta", id: "zzz", name: "bash", ok: true })).toEqual(items);
+  });
+
+  it("tags pushed and coalesced items with the event's seq, and keeps it across done", () => {
+    let items = foldEvent([], { type: "thinking", text: "a" }, 7);
+    items = foldEvent(items, { type: "thinking", text: "b" }, 7);
+    items = foldEvent(items, { type: "token", text: "x" }, 7);
+    items = foldEvent(items, { type: "done", text: "xy" }, 7);
+    expect(items).toEqual([{ kind: "thinking", seq: 7, text: "ab" }, { kind: "answer", seq: 7, text: "xy", streaming: false }]);
+    // no seq (older host) leaves items untagged, exactly as before
+    expect(foldEvent([], { type: "token", text: "x" })).toEqual([{ kind: "answer", text: "x", streaming: true }]);
+  });
+
+  it("clips a live event's code bodies and input to the host's caps", () => {
+    const big = "x".repeat(20 * 1024);
+    const [t] = foldEvent([], { type: "tool", name: "write", detail: "b.ts", code: { path: "b.ts", content: big }, input: big }) as [Extract<ViewItem, { kind: "tool" }>];
+    expect(t.code?.content?.length).toBe(16 * 1024);
+    expect(t.input?.length).toBe(4 * 1024);
+    expect(t.add).toBe(1); // the diffstat was sized from the full text
+  });
+});
+
+describe("pwa_view: tool chip drilldown (P-REMOTE.16)", () => {
+  it("wraps a chip with code in a <details> whose body carries classified diff rows", () => {
+    const html = renderItem({ kind: "tool", name: "edit", detail: "a.ts", path: "a.ts", add: 1, del: 1, code: { path: "a.ts", oldText: "keep\nold", newText: "keep\nnew" }, ok: true, elapsedMs: 1200, intent: "swap the line" });
+    expect(html.startsWith('<details class="chip tool tool-drill"><summary>')).toBe(true);
+    expect(html).toContain('<span class="chip-name">edit</span>');
+    expect(html).toContain('<div class="dr dr-ctx">keep</div>');
+    expect(html).toContain('<div class="dr dr-del">old</div>');
+    expect(html).toContain('<div class="dr dr-add">new</div>');
+    expect(html).toContain('<div class="drill-intent">swap the line</div>');
+    expect(html).toContain("\u00b7 1.2s");
+    expect(html).not.toContain(" failed");
+  });
+
+  it("renders a raw patch line-by-line, an input as a <pre>, and a bare path as a flat chip", () => {
+    const patch = renderItem({ kind: "tool", name: "edit", detail: "a.ts", code: { path: "a.ts", patch: "[a.ts#1A2B]\n+added\n-gone" } });
+    expect(patch).toContain('<div class="dr dr-ctx">[a.ts#1A2B]</div>');
+    expect(patch).toContain('<div class="dr dr-add">+added</div>');
+    expect(patch).toContain('<div class="dr dr-del">-gone</div>');
+    const input = renderItem({ kind: "tool", name: "bash", detail: "bun test", input: "bun test x\n  --bail", ok: false });
+    expect(input).toContain('<pre class="drill-input">bun test x\n  --bail</pre>');
+    expect(input).toContain('class="chip tool failed tool-drill"');
+    const bare = renderItem({ kind: "tool", name: "write", detail: "n.ts", path: "n.ts", add: 3, del: 0, code: { path: "n.ts" } });
+    expect(bare.startsWith('<div class="chip tool">')).toBe(true);
+    expect(bare).not.toContain("<details");
+  });
+
+  it("caps the diff at 400 rows with a visible truncation line", () => {
+    const content = Array.from({ length: 1000 }, (_, i) => `line ${i}`).join("\n");
+    const html = renderItem({ kind: "tool", name: "write", detail: "big.ts", code: { path: "big.ts", content } });
+    expect(html.split('<div class="dr ').length - 1).toBe(400);
+    expect(html).toContain("[truncated: 601 more rows");
+    expect(html).not.toContain("line 999");
+  });
+
+  it("escapes hostile code, input, intent, and the truncation never leaks markup", () => {
+    const hostile = "<script>alert(1)</script>";
+    const html = renderItem({ kind: "tool", name: "edit", detail: hostile, code: { path: "a.ts", oldText: hostile, newText: `${hostile}!` }, intent: hostile });
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    const input = renderItem({ kind: "tool", name: "bash", detail: "x", input: hostile });
+    expect(input).not.toContain("<script>");
+  });
+
+  it("elapsedLabel: sub-10s with a decimal, whole seconds under a minute, minutes beyond", () => {
+    expect(elapsedLabel(1500)).toBe("1.5s");
+    expect(elapsedLabel(12_400)).toBe("12s");
+    expect(elapsedLabel(65_000)).toBe("1m 05s");
+    expect(elapsedLabel(-1)).toBe("");
   });
 });

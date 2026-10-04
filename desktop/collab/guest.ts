@@ -14,6 +14,10 @@
 // Phase 1 is VIEW-ONLY (invariant #3): the guest only ever SENDS a `hello`. It never sends a prompt/abort -
 // guest WRITE, which would run tools on the host behind the host's fail-closed scan gate, is a later slice.
 // A protocol-version mismatch is refused by surfacing the host's `error`, never by guessing a wire shape.
+//
+// P-REMOTE.16 (ADR-0431): the guest keeps a SETTLED-SEQ CURSOR (`since`) and sends it in every hello, so a
+// reconnect replays only the turns it missed; a welcome that echoes `since` is MERGED onto what it holds
+// rather than replacing it. `seedSince` preloads the cursor from the phone's on-device history.
 
 import type { ChatEvent } from "../renderer/chat_events.ts";
 import type {
@@ -62,8 +66,9 @@ export interface GuestView {
 export interface GuestCallbacks {
   /** The initial sync landed (safe to render the header + transcript). */
   onWelcome?: (w: WelcomeFrame) => void;
-  /** A live session event to render read-only, in order. */
-  onEvent?: (e: ChatEvent) => void;
+  /** A live session event to render read-only, in order. P-REMOTE.16 (ADR-0431): `seq` is the master-journal
+   *  turn the event folds into (absent from an older host), so the app can tag what it folds locally. */
+  onEvent?: (e: ChatEvent, seq?: number) => void;
   /** P-PWA-FOCUS.1: a live event belonging to a FLEET LANE's conversation, arriving only for the lane this
    *  guest asked to watch. Separate from `onEvent` so an app cannot accidentally fold a lane's tokens into
    *  the master transcript: the lane id is not optional here. */
@@ -80,7 +85,7 @@ export interface GuestCallbacks {
   /** P-COLLAB.14: the pickable model + already-used-folder allowlists arrived/changed (EDIT guest only). */
   onOptions?: (options: CollabOptions) => void;
   /** P-COLLAB.15: a user turn was submitted on the host (by the host or any guest), for live mirroring. */
-  onUserTurn?: (text: string, from: string) => void;
+  onUserTurn?: (text: string, from: string, seq?: number) => void;
   /** Any view change - a single sink the UI can re-render from. */
   onView?: (view: GuestView) => void;
 }
@@ -114,6 +119,11 @@ export class CollabGuest {
   // P-PWA-FOCUS.1: the conversation this guest is looking at. "master" is the default and the pre-focus
   // behaviour; a lane id means the host is also streaming that lane to us.
   #watching = "master";
+  // P-REMOTE.16 (ADR-0431): the highest SETTLED master-journal turn seq this guest holds (0 = none). Rides
+  // every `hello` as `since`, so a reconnect (hourly Cloud Run cap, screen lock) gets back exactly the turns
+  // it missed rather than the whole window. Advances on settled welcome turns, `user-turn.seq`, and the
+  // `done`/`no-response` event that settles an assistant turn; a live (in-flight) turn never advances it.
+  #lastSettledSeq = 0;
 
   constructor(transport: GuestTransport, opts: GuestStartOpts, cb: GuestCallbacks = {}) {
     this.#transport = transport;
@@ -231,6 +241,17 @@ export class CollabGuest {
 
   get readOnly(): boolean { return this.#readOnly; }
 
+  /** P-REMOTE.16: preload the settled-seq cursor from on-device history BEFORE `start()`, so the very first
+   *  `hello` already asks only for what the phone is missing. A non-finite or negative value is ignored
+   *  (fail-closed: a bad cursor means a full replay, never a skipped one); the cursor only ever moves up. */
+  seedSince(seq: number): void {
+    if (!Number.isFinite(seq) || seq <= 0) return;
+    this.#lastSettledSeq = Math.max(this.#lastSettledSeq, Math.floor(seq));
+  }
+
+  /** P-REMOTE.16: the highest settled master turn seq this guest holds (0 = none). What `hello.since` sends. */
+  since(): number { return this.#lastSettledSeq; }
+
   /** P-REMOTE.14: the host's CUI + lockdown stance, for `decideSttMode`. Strict until a host frame proves
    *  otherwise, so the phone's first decision is always the safe one. */
   posture(): { cui: boolean; lockdown: boolean } { return this.#posture; }
@@ -254,8 +275,14 @@ export class CollabGuest {
   #sayHello(): void {
     if (this.#ended) return;
     if (this.#phase === "reconnecting") this.#phase = "connecting";
+    // P-REMOTE.16: `since` = the highest settled turn we hold, so the host replays only what we missed. Omitted
+    // when we hold nothing settled: that is a FRESH join and the host answers with its whole window.
     this.#transport.send(
-      { t: "hello", protocol: COLLAB_PROTOCOL_VERSION, name: this.#name, ...(this.#writeTokenB64 ? { writeToken: this.#writeTokenB64 } : {}) },
+      {
+        t: "hello", protocol: COLLAB_PROTOCOL_VERSION, name: this.#name,
+        ...(this.#writeTokenB64 ? { writeToken: this.#writeTokenB64 } : {}),
+        ...(this.#lastSettledSeq > 0 ? { since: this.#lastSettledSeq } : {}),
+      },
       0, // to the host
     );
     // P-PWA-FOCUS.1: the host keys its watch subscriptions by PEER ID, and a reconnect earns a new one, so a
@@ -271,7 +298,18 @@ export class CollabGuest {
     switch (f.t) {
       case "welcome":
         this.#header = f.header;
-        this.#transcript = f.transcript;
+        {
+          // P-REMOTE.16: a welcome that ECHOES `since` carries only the turns after it, so keep what we hold
+          // up to `since` (anything newer we folded locally is partial and is superseded by the replay) and
+          // append. A welcome without `since` is a full replay (fresh join, or an older host) and replaces
+          // everything, cursor included: the host's window is the truth, not our stale cursor.
+          const replay = Array.isArray(f.transcript) ? f.transcript : [];
+          const since = typeof f.since === "number" && Number.isFinite(f.since) ? f.since : null;
+          this.#transcript = since === null ? replay : this.#transcript.filter((t) => (t.seq ?? 0) <= since).concat(replay);
+          let top = since === null ? 0 : this.#lastSettledSeq;
+          for (const t of replay) if (!t.live && typeof t.seq === "number" && t.seq > top) top = t.seq;
+          this.#lastSettledSeq = top;
+        }
         this.#participants = f.participants;
         this.#model = f.header.model;
         this.#readOnly = f.readOnly;
@@ -290,10 +328,15 @@ export class CollabGuest {
         // only sends these to a guest that asked to watch the lane, so an unrequested one is a host bug: it
         // is still routed by lane rather than silently absorbed into the master stream.
         if (f.lane) { this.#cb.onLaneEvent?.(f.lane, f.event); break; }
-        this.#cb.onEvent?.(f.event);
+        this.#cb.onEvent?.(f.event, typeof f.seq === "number" ? f.seq : undefined);
+        // P-REMOTE.16: done/no-response SETTLES the assistant turn `seq` names - advance the cursor so the
+        // next hello asks only for what comes after it. A seq-less event (older host) leaves it alone.
+        if ((f.event.type === "done" || f.event.type === "no-response") && typeof f.seq === "number" && f.seq > this.#lastSettledSeq) {
+          this.#lastSettledSeq = f.seq;
+        }
         // fold done/usage so a late view() reflects the current state, mirroring the host
         if (f.event.type === "done" && typeof f.event.text === "string" && f.event.text.trim()) {
-          this.#transcript = [...this.#transcript, { role: "assistant", text: f.event.text }];
+          this.#transcript = [...this.#transcript, { role: "assistant", text: f.event.text, ...(typeof f.seq === "number" ? { seq: f.seq } : {}) }];
           this.#emit();
         } else if (f.event.type === "usage" && f.event.size > 0) {
           this.#contextPct = Math.min(100, Math.round((f.event.used / f.event.size) * 100));
@@ -322,7 +365,9 @@ export class CollabGuest {
         break;
       case "user-turn":
         // P-COLLAB.15: a live user turn (host or another guest). The app folds it into the transcript.
-        this.#cb.onUserTurn?.(f.text, f.from);
+        // P-REMOTE.16: a user turn is settled the moment it is journaled, so its seq advances the cursor.
+        if (typeof f.seq === "number" && f.seq > this.#lastSettledSeq) this.#lastSettledSeq = f.seq;
+        this.#cb.onUserTurn?.(f.text, f.from, typeof f.seq === "number" ? f.seq : undefined);
         break;
       case "bye":
         this.#end(f.reason || "the host ended the session");

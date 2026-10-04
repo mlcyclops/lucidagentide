@@ -107,7 +107,26 @@
     .chip.lane-fail .chip-name { color: #ef5f5f; font-weight: 700; }
     .chip.lane-fail .chip-detail { color: var(--txt2); }
     .chip.block.sev-high { font-weight: 600; background: rgba(239, 68, 68, 0.1); }
-    
+    /* P-REMOTE.16 (ADR-0431): a tool chip opens into the SAME code/diff drilldown a fleet lane card shows.
+       The <summary> IS the chip (inline, one line); the body is monospaced with the desktop's diff tints.
+       A failed call reads red; the elapsed time rides the chip as a muted suffix. */
+    details.tool-drill { display: block; padding: 0; overflow: hidden; }
+    details.tool-drill > summary { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 14px; cursor: pointer; list-style: none; outline: none; }
+    details.tool-drill > summary::-webkit-details-marker { display: none; }
+    details.tool-drill > summary::after { content: "\25B8"; color: var(--txt3); font-size: 11px; margin-left: auto; padding-left: 6px; }
+    details.tool-drill[open] > summary::after { content: "\25BE"; }
+    details.tool-drill[open] > summary { border-bottom: 1px solid var(--line); }
+    .drill { max-height: 50vh; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; -webkit-overflow-scrolling: touch; }
+    .drill-intent { padding: 6px 14px 4px; font-family: inherit; font-size: 12px; font-style: italic; color: var(--txt3); }
+    .drill-diff { padding: 4px 0 6px; }
+    .dr { padding: 0 14px; white-space: pre-wrap; word-break: break-all; }
+    .dr-add { background: rgba(34, 197, 94, 0.12); color: var(--green); }
+    .dr-del { background: rgba(239, 68, 68, 0.12); color: var(--red); }
+    .dr-ctx { color: var(--txt3); }
+    .drill-input { margin: 0; padding: 8px 14px; white-space: pre-wrap; word-break: break-word; color: var(--txt2); }
+    .chip.tool.failed .chip-name { color: var(--red); }
+    .chip-took { color: var(--txt3); font-size: 12px; white-space: nowrap; }
+
     #controls { display: flex; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--bg1); flex-shrink: 0; flex-wrap: wrap; }
     #controls .ctl { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 130px; }
     #controls .ctl-l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--txt3); }
