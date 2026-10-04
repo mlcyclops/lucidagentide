@@ -35,7 +35,7 @@
 // `lucid-appcontainer` helper land here; the native helper itself + Linux slirp raw-socket forwarding are
 // follow-ups. Pure + hermetic: `which` is injectable and `ctx.proxy` is a plain path/URL record.
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { win32 as win32Path } from "node:path";
 import type { ProfileCaps } from "./profiles.ts";
@@ -322,6 +322,20 @@ export function gitCmdDir(env: Record<string, string | undefined> = process.env)
   return root ? win32Path.join(root, "cmd") : null;
 }
 
+let gitExeCache: string | undefined;
+/** The host git executable for the ENGINE's own git calls: on Windows the git gitCmdDir discovers (MinGit,
+ *  scoop, GitHub Desktop's copy - none of which put themselves on PATH), else PATH's `git`. Every engine
+ *  spawn of git goes through this rather than a bare "git": the installed app's PATH commonly has no git,
+ *  and a bare spawn then throws ENOENT. The engine's own PATH is deliberately left alone, because the
+ *  contained agent inherits it behind its git broker shim (P-SANDBOX.17) and a real git.exe there would let
+ *  a PATHEXT-less lookup (libuv searches .com/.exe only) step past the broker's git.cmd. */
+export function gitExe(): string {
+  if (gitExeCache !== undefined) return gitExeCache;
+  const dir = process.platform === "win32" ? gitCmdDir() : null;
+  gitExeCache = dir ? win32Path.join(dir, "git.exe") : "git";
+  return gitExeCache;
+}
+
 /** PURE: the PATH overlay that puts `dir` first (a discovered git's `cmd` dir, or the contained agent's git
  *  broker shim, P-SANDBOX.17), keyed by the env's OWN spelling of PATH (Windows env names are
  *  case-insensitive, so a second `PATH` beside `Path` is ambiguous at spawn). Empty when there is no dir or
@@ -403,19 +417,72 @@ export interface SandboxBackend {
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan;
 }
 
+/** The host tree an absolute exec path needs visible inside bwrap.
+ *  A packaged Linux install lives at `/opt/LucidAgentIDE/resources/...`. The stock mounts are only
+ *  `/usr` `/lib` `/bin` `/etc`, `$HOME`, and the workspace, so `execvp` of the bundled omp reports
+ *  "No such file or directory" for a file that exists on the host. Bind the install root (the parent
+ *  of `resources`) so the shim, its node_modules target, and `resources/runtimes/bun` are all visible.
+ *  Otherwise bind the path's directory. `/` is never a bind. */
+export function bwrapExecRoot(absPath: string): string | null {
+  const n = absPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!n.startsWith("/")) return null;
+  const marker = "/resources/";
+  const i = n.indexOf(marker);
+  if (i > 0) return n.slice(0, i);
+  const slash = n.lastIndexOf("/");
+  if (slash <= 0) return null;
+  return n.slice(0, slash);
+}
+
+/** True when `p` is `root` or a child of it. A mount of `/` covers everything. */
+export function pathCovered(p: string, mounted: readonly string[]): boolean {
+  const n = p.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+  return mounted.some((m) => {
+    const root = m.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+    if (root === "/") return true;
+    return n === root || n.startsWith(root + "/");
+  });
+}
+
+/** Extra `--ro-bind-try` pairs for absolute paths the stock mount plan cannot see. One bind per
+ *  install root. A path already under a mounted prefix is skipped. `--ro-bind-try` so a stale path
+ *  does not abort the sandbox; a path that exists on the host is mounted. */
+export function bwrapHostBinds(paths: readonly string[], mounted: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of paths) {
+    if (pathCovered(p, mounted)) continue;
+    const root = bwrapExecRoot(p);
+    if (!root || seen.has(root) || pathCovered(root, mounted)) continue;
+    seen.add(root);
+    out.push("--ro-bind-try", root, root);
+  }
+  return out;
+}
+
 /** Linux bubblewrap backend. Mount plan per ADR-0157: workspace rw, system paths ro(-try so a
- *  missing path never aborts), fresh proc/dev/tmp, die-with-parent, and — the enforcement bit —
- *  `--unshare-net` when the profile denies network (total deny; DNS included). */
+ *  missing path never aborts), fresh proc/dev/tmp, die-with-parent, and the enforcement bit
+ *  `--unshare-net` when the profile denies network (total deny; DNS included).
+ *  The packaged install root is bound too: `/opt` is not one of the stock mounts, and that is why a
+ *  Mint deb died at `bwrap: execvp /opt/LucidAgentIDE/.../omp: No such file or directory`. */
 export class BwrapBackend implements SandboxBackend {
   readonly name = "bwrap" as const;
   readonly isolates = true;
   constructor(private readonly which: WhichFn = defaultWhich, private readonly probe: ProbeFn = defaultProbe) {}
-  /** Presence AND capability — a bwrap that cannot unshare a user namespace is not a backend. */
+  /** Presence AND capability: a bwrap that cannot unshare a user namespace is not a backend. */
   available(): boolean {
     return this.which("bwrap") && this.probe("bwrap");
   }
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const home = ctx.home ?? homedir();
+    const mounted = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", home, ctx.workspace];
+    // The literal argv plus argv[0]'s real path, so a symlink whose target sits outside the install
+    // root is still mounted. A missing host path is not an error: the literal bind still applies.
+    const hostPaths = [...argv];
+    const bin = argv[0];
+    if (bin && bin.startsWith("/")) {
+      try { hostPaths.push(realpathSync(bin)); } catch { /* not on this host */ }
+    }
     const args = [
       "--die-with-parent",
       "--proc", "/proc",
@@ -427,6 +494,9 @@ export class BwrapBackend implements SandboxBackend {
       "--ro-bind-try", "/bin", "/bin",
       "--ro-bind-try", "/sbin", "/sbin",
       "--ro-bind-try", "/etc", "/etc",
+      // Install root BEFORE the rw binds, so a workspace inside the install stays writable
+      // (bwrap last-writer-wins). --ro-bind-try: a missing path must not abort the sandbox.
+      ...bwrapHostBinds(hostPaths, mounted),
       // omp session state / config / credentials; fs containment is omp --isolate's job (ADR-0028).
       "--bind-try", home, home,
       "--bind", ctx.workspace, ctx.workspace,

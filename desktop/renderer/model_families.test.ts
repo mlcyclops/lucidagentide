@@ -7,7 +7,7 @@
 // GPT) and the gateway-prefix robustness are the easy things to break, so they're pinned here.
 
 import { describe, expect, it } from "bun:test";
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isSpecialVariantModel, isUnconfiguredAmbientModel, localPrefixSet, MODEL_FAMILIES, orderByUsage, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions, type LocalProviderRef, type ModelOption } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isSpecialVariantModel, isUnconfiguredAmbientModel, localPrefixSet, MODEL_FAMILIES, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions, type LocalProviderRef, type ModelOption } from "./model_families.ts";
 
 describe("familyOf", () => {
   it("classifies direct Anthropic models (incl. fable) as Claude", () => {
@@ -150,6 +150,17 @@ describe("P-IDE.1c - gov / auxiliary / china detection", () => {
   it("isChinaModel matches flagged providers, not Western ones", () => {
     for (const c of ["deepseek/deepseek-v3", "moonshot/kimi-k2", "minimax/abab", "zhipu/glm-4.6", "openrouter/glm-4", "qwen/qwen-max"]) expect(isChinaModel(c)).toBe(true);
     for (const w of ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.4", "google-antigravity/gemini-3-pro", "asksage-google/google-gemini-2.5-pro"]) expect(isChinaModel(w)).toBe(false);
+  });
+  it("P-MODEL.6: StepFun gates by provider and by a segment-leading `step-<digit>` id, nothing else containing `step`", () => {
+    // omp 18.4.4's own provider, its bare ids, and the aggregator resales in the same catalog.
+    for (const c of ["stepfun/step-5-preview", "step-3.7-flash", "stepfun/step-3.5-flash-2603", "openrouter/stepfun/step-3.5-flash",
+                     "huggingface/stepfun-ai/Step-3.7-Flash", "nanogpt/step-r1-v-mini", "nanogpt/step-2-16k-exp", "zenmux/stepfun/step-3"]) {
+      expect(isChinaModel(c)).toBe(true);
+    }
+    for (const w of ["anthropic/claude-sonnet-5-5", "acme/step-by-step-v1", "local/multistep-2", "dgx/footstep-3",
+                     "vendor/model-step-2", "openai/gpt-6-stepwise", "stepper/llama-3.3-70b"]) {
+      expect(isChinaModel(w)).toBe(false);
+    }
   });
 });
 
@@ -348,6 +359,17 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
     expect(preferredDefaultModel(mk("anthropic/claude-opus-5", "anthropic/claude-opus-5-5"))?.value).toBe("anthropic/claude-opus-5-5");
     expect(preferredDefaultModel(mk("anthropic/claude-opus-5"))?.value).toBe("anthropic/claude-opus-5"); // no 5.5 offered -> Opus 5 still hits its own entry
   });
+  it("Sonnet 5.5 (P-MODEL.6) outranks Sonnet 5 on every route spelling, and never outranks Opus 5.5", () => {
+    for (const s55 of ["anthropic/claude-sonnet-5-5", "amazon-bedrock/global.anthropic.claude-sonnet-5-5",
+                       "google-vertex/claude-sonnet-5-5@default", "openrouter/anthropic/claude-sonnet-5.5"]) {
+      expect(preferredDefaultModel(mk("anthropic/claude-sonnet-5", s55))?.value).toBe(s55);
+    }
+    expect(preferredDefaultModel(mk("anthropic/claude-sonnet-5"))?.value).toBe("anthropic/claude-sonnet-5"); // the 5 entry still hits alone
+    expect(preferredDefaultModel(mk("anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5"))?.value).toBe("anthropic/claude-opus-5-5");
+    // Same tier, so the version tiebreak decides wherever level ranking applies: 5-5 parses as [5,5] > [5].
+    expect(capabilityTier("anthropic/claude-sonnet-5-5")).toBe(capabilityTier("anthropic/claude-sonnet-5"));
+    expect(cmpModelsByLevel("anthropic/claude-sonnet-5-5", "anthropic/claude-sonnet-5")).toBeLessThan(0);
+  });
   it("a bigger version digit does not win across families: Opus 5 beats gpt-6-astra by LIST ORDER", () => {
     expect(preferredDefaultModel(mk("openai-codex/gpt-6-astra", "anthropic/claude-opus-5"))?.value).toBe("anthropic/claude-opus-5");
     expect(preferredDefaultModel(mk("anthropic/claude-opus-5", "openai-codex/gpt-6-astra"))?.value).toBe("anthropic/claude-opus-5"); // input order is irrelevant
@@ -382,6 +404,7 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
   it("returns null on an empty list and when every option is filtered out", () => {
     expect(preferredDefaultModel([])).toBeNull();
     expect(preferredDefaultModel(mk("deepseek/deepseek-v3", "asksage-query/rag"))).toBeNull();
+    expect(preferredDefaultModel(mk("stepfun/step-5-preview", "openrouter/stepfun/step-3.7-flash"))).toBeNull(); // P-MODEL.6: StepFun is China-gated
   });
   it("no curated entry can ever select a small/fast model", () => {
     for (const pat of DEFAULT_MODEL_PREFERENCE) {
@@ -470,6 +493,26 @@ describe("isUnconfiguredAmbientModel (Bedrock behind the hub's configured state)
     for (const v of ["anthropic/claude-opus-5-5", "claude-opus-5-5", "aws-bedrock-claude-45-sonnet-gov", "dgx-spark/glm-5.3-flash"]) {
       expect(isUnconfiguredAmbientModel(v, none)).toBe(false);
     }
+  });
+});
+
+// P-MODEL.6: omp 18.4's keyless `apple` provider is Apple Foundation Models on the Mac. Operator decision:
+// listed on macOS builds only, never on Windows or Linux, in its own group rather than "Other models".
+describe("providerAllowedOnPlatform + the Apple on-device family", () => {
+  it("lists apple on darwin only: never on win32 or linux, and not while the engine platform is unknown", () => {
+    expect(providerAllowedOnPlatform("apple", "darwin")).toBe(true);
+    for (const p of ["win32", "linux", null]) expect(providerAllowedOnPlatform("apple", p)).toBe(false);
+  });
+  it("leaves every other provider alone on every platform (incl. a prototype-named id)", () => {
+    for (const prov of ["anthropic", "stepfun", "dgx-spark", "", "constructor"]) {
+      for (const p of ["darwin", "win32", "linux", null]) expect(providerAllowedOnPlatform(prov, p)).toBe(true);
+    }
+  });
+  it("groups apple/on-device under Apple on-device, anchored on the provider prefix", () => {
+    expect(familyOf("apple/on-device").id).toBe("apple");
+    expect(familyOf("apple/on-device").label).toBe("Apple on-device");
+    expect(familyOf("pineapple/on-device").id).toBe("other");
+    expect(isChinaModel("apple/on-device")).toBe(false);
   });
 });
 

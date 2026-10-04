@@ -562,4 +562,37 @@
 //            button during the first minute after launch (P-RECOVER.2); lane pickers offer the composer's
 //            curated model list; the test harness works from a UNC checkout, injection-safe.
 //            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
-export const APP_VERSION = "2.3.0-beta.13";
+// v2.3.0-beta.14 = beta.13 plus Sonnet 5.5 and the recovery evidence fixes. MODELS: omp pinned
+//            18.2.10 -> 18.4.4, whose catalog carries Claude Sonnet 5.5 (claude-sonnet-5-5, $2/$10 per Mtok,
+//            1M context); LUCID adds its price row, 1M window, card and a default rank above Sonnet 5 and
+//            below every flagship. StepFun (new `stepfun` provider) sits behind the China-origin ACKNOWLEDGE
+//            gate and never resolves in lockdown; omp's on-device `apple` provider lists on macOS only
+//            (P-MODEL.6, ADR-0422). Incident reports quote the real omp stderr (test runs no longer write
+//            the operator's lucid-acp.log) and the engine finds MinGit without git on PATH, so the
+//            code-activity poll stops filling engine.log (P-RECOVER.3). Fleet lanes can run in their own
+//            git worktree (P-FLEET.WT1); `lucid hub` opens from Fleet, the launcher and any terminal
+//            (P-TUI.2); a long tool-call write is not a stall (P-HEALTH.3). A status-bar network indicator
+//            with provider latency, and a stand-by card instead of blaming the model for a network or
+//            startup failure (P-NETSTAT.1, ADR-0423); the AppContainer helper skips a grant already on disk,
+//            so the contained agent answers initialize in time (P-SANDBOX.18, ADR-0424); under Judgment:
+//            None the effort pick reads as the chat model's own (P-JEV.7); ACPClient no longer imports the
+//            bun:ffi console host, so the VS Code extension builds again; arcade: Brick Brigade, Deck Guard,
+//            Signal Garden: Heartbloom, Orbit Loom retired (P-GAME.4-6b).
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0-beta.15 = beta.14 plus #441, cut so Linux installs get the bubblewrap fix. LINUX: the sandbox
+//            binds the packaged install root, so a .deb/.rpm under /opt/LucidAgentIDE no longer dies at
+//            `bwrap: execvp .../omp: No such file or directory` when a provider connects (Linux Mint report).
+//            MODELS: fleet menus and the main picker name a model offered twice by its login (`X sign-in:
+//            Grok 4.7`, `API key: Grok 4.7`) instead of a raw provider prefix, and a new spoke follows Main's
+//            provider rather than an auth twin with a rejected key. FLEET: the New lane card stays 360 px and
+//            shows the end of a long folder path.
+//            Still a PRERELEASE on the beta channel: dash-tagged, never marked latest, cask untouched.
+// v2.3.0 = beta.15 promoted to STABLE, no code change on top of it. The whole beta train (beta.1-15:
+//            the Windows AppContainer sandbox, Jev and browser_run, omp 18.4.4 with Opus 5.5 / Sonnet 5.5 /
+//            GPT-6 / Grok 4.7, several accounts per provider, the network indicator, fleet worktrees,
+//            lucid hub, the Linux bubblewrap fix) ships to everyone: a plain v2.3.0 tag, marked Latest,
+//            so the download buttons and the electron-updater feed follow it (cask pinned by PR #445).
+// v2.3.1 = v2.3.0 plus four arcade games (P-GAME.7-10, #442): Chroma Cadence, Gravity Gambit, Silent
+//            Fathom and Skyhook in Preview > Games, sound off by default in the action games, Silent Fathom's
+//            stored best never written through innerHTML (CodeQL js/xss-through-dom). A plain stable tag.
+export const APP_VERSION = "2.3.1";

@@ -96,6 +96,12 @@ describe("resolveLockdownModel", () => {
   test("lock ON + on a DIRECT model ⇒ switch to the first gov option (the startup/respawn bug)", () => {
     expect(resolveLockdownModel(true, "anthropic/claude-opus-4-8", values)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6-luna" });
   });
+  test("P-MODEL.6: lock ON never resolves a StepFun model, whether current, offered, or the only option", () => {
+    const withStep = ["stepfun/step-5-preview", "openrouter/stepfun/step-3.7-flash", ...values];
+    expect(resolveLockdownModel(true, "stepfun/step-5-preview", withStep)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6-luna" });
+    expect(resolveLockdownModel(true, "stepfun/step-5-preview", ["stepfun/step-5-preview", "stepfun/step-3.7-flash"]).ok).toBe(false);
+    expect(resolveGovernedModel(true, { allowed: ["step"] }, "stepfun/step-5-preview", withStep).ok).toBe(false);
+  });
   test("lock ON + NO gov model available ⇒ FAIL-CLOSED (block, never route direct)", () => {
     const r = resolveLockdownModel(true, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.5"]);
     expect(r.ok).toBe(false);

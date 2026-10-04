@@ -236,7 +236,7 @@ export async function rescanSkill(
   } catch (e) {
     // Fail-closed: no valid scan ⇒ quarantine + record for review, never a clean label.
     recordScanVerdict(key, "quarantined", 0);
-    record({ tool: "skill_rescan", severity: "high", findings: "scanner-unavailable", reason: `skill "${name}" re-scan blocked — scanner unavailable` });
+    record({ tool: "skill_rescan", severity: "high", findings: "scanner-unavailable", reason: `skill "${name}" re-scan blocked: scanner unavailable` });
     return { ok: true, name, found: true, trust: "quarantined", findings: 0, blocked: true, reason: `scanner unavailable: ${String((e as Error)?.message ?? e)}` };
   }
 
@@ -246,7 +246,7 @@ export async function rescanSkill(
       tool: "skill_rescan",
       severity: decision.trustLabel === "quarantined" ? "high" : "medium",
       findings: String(decision.findings.length),
-      reason: `skill "${name}" re-scan flagged — ${decision.reason}`,
+      reason: `skill "${name}" re-scan flagged: ${decision.reason}`,
     });
   }
   return { ok: true, name, found: true, trust: decision.trustLabel, findings: decision.findings.length, blocked: decision.block, reason: decision.reason };

@@ -77,7 +77,7 @@ export function resolveProviderSecrets(spec: AgentSpec, runDir: string): Provide
   const request = buildKmsFetchRequest(spec, outFile);
   if (!request) return { ok: true, skipped: true, detail: "no provider-sourced secrets declared" };
   if (!connectorStatus("kms").installed)
-    return { ok: true, skipped: true, detail: `${request.requests.length} provider ref(s) declared but the enterprise kms connector is not installed — using the local vault flow` };
+    return { ok: true, skipped: true, detail: `${request.requests.length} provider ref(s) declared but the enterprise kms connector is not installed; using the local vault flow` };
   const requestFile = join(runDir, "secrets.request.json");
   try {
     mkdirSync(runDir, { recursive: true });
@@ -249,7 +249,7 @@ function execChildAgent(entry: PausedEntry, boundary: SubagentBoundary): AgentRu
   });
   // Defensive: the guard refuses children with approval nodes, so a nested park is unreachable — but if it
   // ever happened it would strand a machine; fail loudly instead.
-  if (child.paused) return { ok: false, error: `sub-agent "${childSpec!.name}" halted at a nested approval — unsupported` };
+  if (child.paused) return { ok: false, error: `sub-agent "${childSpec!.name}" halted at a nested approval (unsupported)` };
   return child;
 }
 
@@ -304,7 +304,7 @@ function driveSegments(entry: PausedEntry): AgentRunResult {
         return { ok: false, error: `branch "${b.label}": the agent did not emit a parseable CHOICE line (expected one of: ${expected})`, runId: entry.runId };
       }
       m.takeBranch(choice.edgeId);
-      rec.step({ kind: "branch", node_ids: [b.nodeId], label: b.label, started_at: Date.now(), finished_at: Date.now(), ok: true, detail: `chose "${choice.label}" — the not-taken path is skipped` });
+      rec.step({ kind: "branch", node_ids: [b.nodeId], label: b.label, started_at: Date.now(), finished_at: Date.now(), ok: true, detail: `chose "${choice.label}"; the not-taken path is skipped` });
       continue;
     }
     if (m.state === "awaiting-subagent") {
@@ -402,7 +402,7 @@ export async function startAgentRun(opts: AgentRunOpts): Promise<AgentRunResult>
 export function approveAgentRun(runId: string, approve: boolean, reason?: string): AgentRunResult {
   prunePaused(Date.now());
   const entry = pausedRuns.get(runId);
-  if (!entry) return { ok: false, error: "unknown or expired approval — run the agent again" };
+  if (!entry) return { ok: false, error: "unknown or expired approval. Run the agent again" };
   pausedRuns.delete(runId); // consumed either way; a resumed run re-parks under the SAME stable id
   const halt = entry.machine.pendingApproval();
   const t0 = Date.now();

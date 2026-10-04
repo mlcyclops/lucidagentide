@@ -13,10 +13,35 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-09-29, v2.3.0-beta.13 prerelease)
+## Current state (2026-10-01, v2.3.1 stable)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.3.0-beta.13** (2026-09-29)
+now product increments, each with its own ADR. **v2.3.1** (2026-10-01) is
+v2.3.0 plus #442: four arcade games (P-GAME.7-10: Chroma Cadence, Gravity
+Gambit, Silent Fathom, Skyhook), sound off by default in the action games, and
+Silent Fathom's stored best written as text (CodeQL js/xss-through-dom). No
+betas any more: releases are plain stable tags. **v2.3.0** (2026-10-01) is the
+stable release: beta.15 promoted with no code change on top, tagged `v2.3.0`
+and marked Latest, so the download buttons, the electron-updater feed and the
+Homebrew cask all move to it. The cask was pinned by PR #445: the update-cask
+job built the pin, but master's ruleset refuses its direct push (GH013), so
+until that job opens a PR, every stable tag needs that manual PR. The beta
+channel stopped here.
+**v2.3.0-beta.15** (2026-10-01)
+is beta.14 plus #441: Linux bubblewrap binds the packaged install root (a Mint
+.deb died at `bwrap: execvp /opt/LucidAgentIDE/.../omp`), fleet menus and the
+picker name a model offered twice by its login (`X sign-in` / `API key`), a new
+spoke follows Main's provider, and the New lane card stays 360 px.
+**v2.3.0-beta.14** (2026-09-30)
+adds #437 (P-HEALTH.3 a long write is not a stall, P-FLEET.WT1 lanes in their
+own worktree, P-TUI.2 `lucid hub` from Fleet/launcher/PATH, P-RECOVER.3 incident
+reports quote real omp stderr and engine git finds MinGit) and #438 (P-MODEL.6,
+ADR-0422: omp 18.2.10 -> 18.4.4, Claude Sonnet 5.5, StepFun behind the
+China-origin gate and out of lockdown, Apple on-device on macOS only), #434
+(P-NETSTAT.1 network indicator and stand-by card, ADR-0423; P-SANDBOX.18 the
+AppContainer helper skips a grant already on disk, ADR-0424; P-JEV.7) and #435
+(arcade: Brick Brigade, Deck Guard, Signal Garden: Heartbloom).
+**v2.3.0-beta.13** (2026-09-29)
 merges the surgery train and the judge fixes on top of beta.12: #421
 (P-BROWSER.4 the visible agent browser, P-JEV.5 the Judge off by default with
 a local-model breaker, ADR-0415/0416), #424 P-WAIT.1 same-file waits
@@ -95,8 +120,9 @@ audited evidence.
 **Bun version matters.** Under bun 1.3.x, 6 harness tests that start a real omp
 session (including the fail-closed dead-scanner test in
 `harness/hooks/quarantine_hook.test.ts`) die before their bodies run, because
-omp 18.2.10's browser prelude will not link ("Missing 'default' export in
-.../tools/browser/prelude.js"). They pass under bun 1.4.2 and in CI (which uses
+omp's browser prelude will not link ("Missing 'default' export in
+.../tools/browser/prelude.js"; seen on omp 18.2.10, not re-checked under bun 1.3.x
+at the current 18.4.4 pin). They pass under bun 1.4.2 and in CI (which uses
 `bun-version: latest`). Use bun >= 1.4.2 locally; if the machine's bun is older,
 `npm i bun@1.4.2` into a scratch dir and run its binary. A bare `bun test
 harness` also picks up the generated `desktop/release/win-unpacked/.../harness`

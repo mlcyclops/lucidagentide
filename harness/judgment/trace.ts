@@ -71,6 +71,15 @@ export function judgmentPurpose(report: Pick<JudgmentReport, "questions">): stri
   return "Agent judge() call";
 }
 
+/** P-JEV.7: the level a successful auto-thinking effort pick chose, else null. With the Judgment backend
+ *  on None this is the ONLY judgment omp still makes (Thinking: Auto cannot skip it), and the chat model
+ *  makes it itself, so the trace view labels it as that pick instead of as a judge being consulted. */
+export function effortPick(report: Pick<JudgmentReport, "questions" | "answers" | "error">): string | null {
+  if (report.error || judgmentPurpose(report) !== "Auto-thinking effort") return null;
+  const a = report.answers?.[Object.keys(report.questions)[0]!];
+  return a?.type === "choice" ? a.choice : null;
+}
+
 /** True when at least one report in the turn was ANSWERED by Jev (a TypeSafe call that threw and fell back
  *  does not count as consulted: the answer the agent used came from the fallback). */
 export function jevConsulted(reports: readonly Pick<JudgmentReport, "backend" | "error">[]): boolean {

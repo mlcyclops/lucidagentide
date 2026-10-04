@@ -114,10 +114,12 @@ import { initTitlebarRepo, refreshTitlebarRepo } from "./repo_chip.ts"; // P-REP
 import { hostedRepo, pushLabel, repoChip } from "../repo_identity.ts";
 import type { RepoContext } from "./bridge.ts";
 import { formatImportLine } from "./import_progress.ts";
+import { mountNetSeg, netBooting, netSnapshot, onNetChange, renderNetStandby, setNetReady, startNetMonitor } from "./net_monitor.ts"; // P-NETSTAT.1 (ADR-0423)
+import { classifyTurnFailure, effectiveState, type FailureCause } from "./net_status.ts"; // P-NETSTAT.1: pure verdicts
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { enclaveProviderSet, isLockdownRoutable, LOCKDOWN_DETAIL, LOCKDOWN_LABEL, lockdownToggleDecision } from "../lockdown_route.ts"; // CUI lockdown: the ONE routing predicate the server clamp also uses
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
@@ -145,7 +147,7 @@ import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setId
 import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
 import { JUMP_SHOW_PX, anchorTop, chatTakesUpScroll, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor, type ScrollBox } from "./scroll_jump.ts";
-import { setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands
+import { loginLabel, providerRoute, setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands; colliding rows share the fleet login words
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
 // terminal adapter uses. Drives the HUD's live "tok out · tok/s" readout from the
@@ -326,6 +328,8 @@ const MODEL_CTX: Record<string, number> = {
   "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
+  // Sonnet 5.5 (omp 18.4.4 catalog): 1M context, 128K max output.
+  "claude-sonnet-5-5": 1_000_000,
   "gpt-6-astra": 1_000_000, "gpt-6-sol": 1_000_000, "gpt-6-luna": 1_000_000,
   // Grok 4.6 / 4.7 (omp 18.2.10 catalog, xai + xai-oauth): 500K context.
   "grok-4.7": 500_000, "grok-4.6": 500_000,
@@ -954,7 +958,7 @@ async function copyCodeBlock(btn: HTMLElement): Promise<void> {
     await navigator.clipboard.writeText(text);
     btn.classList.add("ok"); btn.innerHTML = icon("check", 12);
     setTimeout(() => { btn.classList.remove("ok"); btn.innerHTML = icon("copy", 12); }, 1200);
-  } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view — use right-click → Copy code block.", timeout: 3000 }); }
+  } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view. Use right-click → Copy code block.", timeout: 3000 }); }
 }
 function addEvent(html: string): HTMLElement {
   const node = el(html);
@@ -1757,7 +1761,7 @@ function appendRunReport(host: HTMLElement, turn: EvalReportTurn): void {
   </div>`);
   const files = new Set(turn.tools.filter((t) => t.path && (t.add != null || t.del != null)).map((t) => t.path)).size;
   ($(".runmeta", foot) as HTMLElement).textContent = `· ${turn.tools.length} step${turn.tools.length === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"}`;
-  ($(".rc-lbl", foot) as HTMLElement).textContent = "Run report ready — ";
+  ($(".rc-lbl", foot) as HTMLElement).textContent = "Run report ready: ";
   const btn = $(".report-cta", foot) as HTMLButtonElement;
   const link = $(".reportlink", foot) as HTMLElement;
   btn.addEventListener("click", async () => {
@@ -1948,7 +1952,15 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
 /** P-NORESP.1: a model returned nothing (overloaded/oversubscribed). Render a notice into the (empty)
  *  assistant bubble that names the provider and offers concrete fallbacks — a lower model in the same
  *  family and/or an equivalent from another provider — each one-click to switch + re-send the same prompt. */
-function renderNoResponseNotice(container: HTMLElement, model: string, stopReason?: string, reason?: string): void {
+function renderNoResponseNotice(container: HTMLElement, model: string, stopReason?: string, reason?: string, forceModel = false): void {
+  // P-NETSTAT.1 (ADR-0423): a turn that died on the WIRE (offline, unstable link, DNS/socket error, or
+  // omp's startup handshake timing out on a fresh update) is not the model's fault, and switching models
+  // cannot fix it. Those get the stand-by card; only a healthy-link failure blames the provider.
+  if (!forceModel) {
+    const ns = netSnapshot();
+    const cause = classifyTurnFailure({ reason, view: ns.view, browserOnline: ns.browserOnline });
+    if (cause !== "model") { showNetStandby(container, cause, { model, stopReason, reason }); return; }
+  }
   const opts = ((state.config.find((c) => c.id === "model")?.options ?? []) as { value: string; name?: string }[])
     .map((o) => ({ value: String(o.value), name: String(o.name ?? o.value) }));
   const provider = providerLabelOf(model);
@@ -1962,8 +1974,8 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   ].filter(Boolean).join("");
   // Two flavors: an errored failure shows the actual reason; a silent empty response reads as an overload.
   const body = reason
-    ? `<b>${esc(modelLabel(model))}</b> didn't respond <span class="noresp-sr">(${esc(reason)})</span> — the provider may be overloaded, or this model may be unavailable right now. Switch to another model and try again:`
-    : `<b>${esc(modelLabel(model))}</b> returned nothing — the provider may be overloaded or oversubscribed right now${stopReason ? ` <span class="noresp-sr">(${esc(stopReason)})</span>` : ""}. Switch to another model and try again:`;
+    ? `<b>${esc(modelLabel(model))}</b> didn't respond <span class="noresp-sr">(${esc(reason)})</span>. The provider may be overloaded, or this model may be unavailable right now. Switch to another model and try again:`
+    : `<b>${esc(modelLabel(model))}</b> returned nothing. The provider may be overloaded or oversubscribed right now${stopReason ? ` <span class="noresp-sr">(${esc(stopReason)})</span>` : ""}. Switch to another model and try again:`;
   container.innerHTML = `<div class="noresp-card">
     <div class="noresp-h">${icon("info", 14)}<span>No response from ${esc(provider)}</span></div>
     <div class="noresp-b">${body}</div>
@@ -1982,12 +1994,81 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   });
 }
 
-/** P-HEALTH.1: the harness acted on this session by itself. Shown in the transcript as the same quiet
- *  .evt note chip the other system notices use, so a probe or an in-place recovery reads as visible work
- *  rather than an unexplained gap. */
-function noteHealth(action: "probe" | "recover", reason: string): void {
-  const what = action === "recover" ? "Recovered this session in place" : "Checked on this session";
-  addNoteChip(reason ? `${what}: ${reason}` : what);
+/** P-NETSTAT.1 (ADR-0423): automatic resends already spent on one prompt, so a flapping link (or a local
+ *  server that is simply down) ends at the switch-model card instead of resending forever. Cleared by the
+ *  next turn that produces output. */
+let netResend: { prompt: string; attempts: number } | null = null;
+
+/** P-JEV.7: the effective Judgment backend, read at boot and whenever Settings loads or changes it. With
+ *  "none" the judgment window labels the chat model's own effort pick as that, not as a judge consulted.
+ *  null until the engine answers (the window then keeps the generic labels). */
+let judgeBackend: JudgmentView["effective"] | null = null;
+
+/** Render the stand-by card into `container` for a turn that failed (or, with `held`, was never sent) on
+ *  the network. The resend reuses the composer path (same as the switch-and-retry buttons), and only
+ *  fires when the composer is free: text the user is typing is never overwritten. */
+function showNetStandby(container: HTMLElement, cause: Exclude<FailureCause, "model">, failed: { model: string; stopReason?: string; reason?: string }, held?: { prompt: string; nodes: HTMLElement[]; atts: Attachment[] }): void {
+  const prompt = held?.prompt ?? state.lastPrompt ?? "";
+  // A held prompt never reached the engine, so it starts a fresh budget whatever the last outage spent.
+  const attempts = !held && netResend?.prompt === prompt ? netResend.attempts : 0;
+  renderNetStandby(container, {
+    cause, reason: failed.reason, attempts, held: !!held,
+    resend: () => {
+      const ta = $("#input") as HTMLTextAreaElement | null;
+      if (!prompt || !ta || ta.value.trim() || state.streaming || turnInFlight() || agentTierApplying) return false;
+      netResend = { prompt, attempts: attempts + 1 };
+      if (held) { for (const n of held.nodes) n.remove(); state.attachments = held.atts; renderComposerThumbs(); }
+      ta.value = prompt; autosize(ta); setSendEnabled(); void send();
+      return true;
+    },
+    // A startup failure that outlived the resends is still not the model's fault: it gets the engine card.
+    giveUp: () => cause === "starting" ? renderStartupFailed(container, failed.reason) : renderNoResponseNotice(container, failed.model, failed.stopReason, failed.reason, true),
+  });
+}
+
+/** P-SANDBOX.18 (ADR-0424): the agent process kept failing to start. Names where it failed (the engine
+ *  tags a contained handshake failure "inside the Windows AppContainer sandbox") and offers the in-place
+ *  restart; never a model switch, which cannot help. */
+function renderStartupFailed(container: HTMLElement, reason?: string): void {
+  const inSandbox = /AppContainer/i.test(reason ?? "");
+  container.innerHTML = `<div class="noresp-card">
+    <div class="noresp-h">${icon("info", 14)}<span>The agent engine did not start</span></div>
+    <div class="noresp-b"></div>
+    ${reason ? `<div class="noresp-b"><span class="noresp-sr"></span></div>` : ""}
+    <div class="noresp-actions"><button class="btn-mini ok" data-startup-restart>${icon("refresh", 12)} Restart agent</button></div>
+  </div>`;
+  ($(".noresp-b", container) as HTMLElement).textContent = inSandbox
+    ? "LUCID started its agent process inside the Windows sandbox, and it did not answer in time, even after retrying. This is not a problem with your model. Restart the agent below. If it keeps happening, the Security panel shows the sandbox state, and the engine log records each attempt."
+    : "LUCID's agent process did not answer in time, even after retrying. This is not a problem with your model. Restart the agent below; the engine log records each attempt.";
+  const sr = $(".noresp-sr", container) as HTMLElement | null;
+  if (sr) sr.textContent = reason!;
+  const btn = $("[data-startup-restart]", container) as HTMLButtonElement;
+  btn.addEventListener("click", () => {
+    btn.disabled = true; btn.textContent = "Restarting\u2026";
+    void bridge.recoveryRecover().then((r) => {
+      btn.disabled = false; btn.textContent = "Restart agent";
+      if (!r || !r.ok) { showToast({ tone: "warn", title: "The agent did not restart", desc: r?.reason ?? "The engine did not answer.", timeout: 9000 }); return; }
+      showToast({ tone: "ok", title: "Agent restarted", desc: "Send your message again when you are ready.", timeout: 6000 });
+    });
+  });
+}
+
+/** P-TUI.2: the Fleet views' Terminal button. The engine opens `lucid hub` in a new terminal attached to this
+ *  app; only a refusal needs words here, with the engine's own reason. */
+async function openTerminalHub(): Promise<void> {
+  const r = await bridge.hubOpen().catch(() => null);
+  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same lanes. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
+  else showToast({ tone: "warn", title: "Terminal hub not opened", desc: r?.reason ?? "The engine did not answer.", timeout: 8000 });
+}
+
+/** P-HEALTH.1/.3: the harness acted on this session by itself. The phase line shows the self-heal while it
+ *  runs; the transcript keeps a note ONLY when the run did not continue on its own (`needsUser`), because
+ *  a permanent notice about a problem that was already handled is noise the user cannot act on. Every
+ *  action is still in engine.log and, for a recovery, in the incident report. */
+function noteHealth(e: { action: "probe" | "recover"; reason: string; needsUser?: boolean }): void {
+  if (!e.needsUser) return;
+  const what = e.action === "recover" ? "The session was restarted" : "Checked on this session";
+  addNoteChip(e.reason ? `${what}: ${e.reason}` : what);
 }
 
 // P-TURN-RECOVERY-OWNER: one renderer owns the composer; leaving only detaches its local reader.
@@ -2219,6 +2300,19 @@ async function send(): Promise<void> {
   // a second prompt with a lone error the composer never showed, which left the bubble on "Connection
   // lost" and muted the watch: the lane looked dead while it was working.
   if (turnInFlight()) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
+  // P-NETSTAT.1 (ADR-0423): with no network at all, sending would only manufacture an error that blames
+  // the model. Hold the prompt in the transcript behind a stand-by card; it goes out once the link is
+  // stable (or on "Send now"). Main only: a lane's turn runs in its own process with its own recovery.
+  const ns = netSnapshot();
+  if (!isLaneTarget(state.composerTarget) && effectiveState(ns.view, ns.browserOnline) === "offline") {
+    ta.value = ""; autosize(ta);
+    state.attachments = []; renderComposerThumbs();
+    const userNode = addMessage("user", text, atts);
+    const waitNode = addMessage("assistant", "");
+    jumpToEnd();
+    showNetStandby($(".text", waitNode) as HTMLElement, "network", { model: state.model }, { prompt: text, nodes: [userNode, waitNode], atts });
+    return;
+  }
   // First message of the app session: auto-collapse the sessions panel (Claude-Code style) so the
   // chat takes the focus - the nav hamburger (#sideToggle) reopens history on demand. Done once so
   // we never fight a user who reopens it mid-chat.
@@ -2686,7 +2780,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // P-JEV.2 (ADR-0377): a typed judgment the omp child just answered. The window sits under the tool
     // activity (or under the answer when there was none) and fills in live; it settles with the HUD.
     else if (e.type === "judgment") {
-      if (!judgments) { judgments = createJudgments(); (thoughts?.el ?? streamEl).after(judgments.el); }
+      if (!judgments) { judgments = createJudgments({ judgeOff: judgeBackend === "none" }); (thoughts?.el ?? streamEl).after(judgments.el); }
       judgments.add(e.report);
       scrollChat();
     }
@@ -2721,7 +2815,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     else if (e.type === "tool-image") renderToolImages(e.images, e.title); // P-IMG.1 (ADR-0208): a tool produced image(s) → inline + download + push-to-preview
     else if (e.type === "preview-available") onPreviewAvailable(e.path);
     else if (e.type === "preview-activity") flashPreviewTesting(e.label); // P-PREVIEW.6a (ADR-0153)
-    else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants — review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
+    else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants. Review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
     // `used`/`size`/`cost` are the only figures the provider reports over ACP. While attached to a lane
@@ -2737,14 +2831,15 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       if (!slowNoticed) { slowNoticed = true; const c = slowToastCopy(e.waitedMs, e.pending); showToast({ tone: "warn", title: c.title, desc: c.desc, timeout: 9000 }); }
     }
     // P-HEALTH.1: the harness noticed this session go quiet and acted on it. Same treatment as `slow` - the
-    // phase line names the wait, and the transcript gets a quiet note so the self-heal is visible work.
-    else if (e.type === "health") { setPhase(e.action === "recover" ? "Recovering the session" : "Checking on the session"); paintHud(); noteHealth(e.action, e.reason); }
+    // phase line names the wait; the transcript gets a note only when the user must act (P-HEALTH.3).
+    else if (e.type === "health") { setPhase(e.action === "recover" ? "Recovering the session" : "Checking on the session"); paintHud(); noteHealth(e); }
     // P-NORESP.1: the model produced nothing (overloaded/oversubscribed). Replace the empty bubble with a
     // clear notice + a recommended fallback the user can switch to and retry.
     else if (e.type === "no-response") { noResponse = true; setPhase(""); renderNoResponseNotice(streamEl, e.model, e.stopReason, e.reason); scrollChat(); }
     else if (e.type === "done") {
       terminal = true;
       buf = canonicalTurnAnswer(buf, e.text);
+      if (!noResponse) netResend = null; // P-NETSTAT.1: a turn that answered ends any resend budget
       // Don't clobber the no-response notice with an empty answer body.
       if (!(noResponse && !buf.trim())) { const chipped = renderAnswerBody(streamEl, buf, marks); /* P-CHAT.A sections / P-CHAT.B chips */ if (chipped) dropThoughtsWindow(); }
       (node as MsgNode)._md = buf; stopThinkingCues(); speechFeed(buf, true); /* P-VOICE.2: speak the tail the sentence gate withheld */ finishHud(); maybeAppendReport(); /* P-CHAT.C: settled-turn report CTA */ state.streaming = false; setSendEnabled(); clearPreviewTesting();
@@ -3305,7 +3400,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
     renderStatus(); renderMetricsRail();
     return;
   }
-  if (e.type === "health") { noteHealth(e.action, e.reason); return; }
+  if (e.type === "health") { noteHealth(e); return; }
   if (e.type === "error") {
     // The turn died, so the half-written bubble has to stop looking live.
     settleLaneWatchNode();
@@ -4667,7 +4762,7 @@ function secSovereignty(): string {
       `<div class="set-note ok">${icon("check", 12)} ${china.length} China-origin model(s) are unlocked and listed in the picker. <button class="btn-link" id="chinaRelock">Re-lock</button></div>`, true);
   }
   return setCard("sovereignty", "Restricted-origin models", `${china.length} hidden`,
-    `<div class="set-note danger">${icon("shield", 12)} <b>${china.length} model(s) from China-based providers</b> (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu) are hidden. They route to servers outside U.S. jurisdiction with <b>no U.S. data sovereignty</b>; review each provider's privacy policy before use.</div>
+    `<div class="set-note danger">${icon("shield", 12)} <b>${china.length} model(s) from China-based providers</b> (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu, StepFun) are hidden. They route to servers outside U.S. jurisdiction with <b>no U.S. data sovereignty</b>; review each provider's privacy policy before use.</div>
      <div class="china-unlock"><input id="chinaAckInput" placeholder="Type ACKNOWLEDGE to unlock" autocomplete="off" spellcheck="false" /><button class="btn-mini" id="chinaAckBtn" disabled>Unlock</button></div>`, true);
 }
 function secAsksage(a: typeof state.asksage, datasets: string[] | null): string {
@@ -5477,7 +5572,7 @@ function hydrateSettings(): void {
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
     void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
-    void bridge.judgment().then((j) => fillSec("judgment", secJudgment(a, j))); // P-JEV.1: key state + the clamped mode
+    void bridge.judgment().then((j) => { if (j) judgeBackend = j.effective; fillSec("judgment", secJudgment(a, j)); }); // P-JEV.1: key state + the clamped mode
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -8488,10 +8583,10 @@ function clearPreviewTesting(): void {
 // ── P-FIGMA.1/.2 (ADR-0154): /figma — import a Figma design, then a guided step (review / build-or-open DESIGN.md).
 function figmaImportStepHtml(savedToken: boolean): string {
   return `<div class="figma-modal-h">${icon("eye", 15)} Import a Figma design</div>
-    <div class="figma-modal-sub">Paste a Figma file URL and a personal access token. The token is stored in the OS-encrypted vault and used only on this machine to fetch the frames — it never reaches the agent. The design opens in the Preview panel as a board you (and the agent) can review.</div>
+    <div class="figma-modal-sub">Paste a Figma file URL and a personal access token. The token is stored in the OS-encrypted vault and used only on this machine to fetch the frames; it never reaches the agent. The design opens in the Preview panel as a board you (and the agent) can review.</div>
     <label class="fg-lbl">Figma file URL</label>
     <input id="fgUrl" class="prov-key" placeholder="https://www.figma.com/design/…/…" autocomplete="off" spellcheck="false" />
-    <label class="fg-lbl">Personal access token ${savedToken ? `<span class="fg-opt">— a token is saved; leave blank to reuse it</span>` : `<span class="fg-opt">— Figma → Settings → Personal access tokens</span>`}</label>
+    <label class="fg-lbl">Personal access token ${savedToken ? `<span class="fg-opt">(a token is saved; leave blank to reuse it)</span>` : `<span class="fg-opt">(Figma → Settings → Personal access tokens)</span>`}</label>
     <input id="fgPat" class="prov-key" type="password" placeholder="${savedToken ? "•••••• (using the saved token)" : "figd_…"}" autocomplete="off" />
     <div class="fg-status" id="fgStatus" hidden></div>
     <div class="fg-actions"><button class="btn-mini" data-fg="cancel">Cancel</button><button class="btn-mini ok" data-fg="import">${icon("download", 12)} Import</button></div>`;
@@ -8544,7 +8639,7 @@ function openFigmaForm(): void {
         onPreviewAvailable(res.path); // open + load the design board in the Preview panel
         modal.innerHTML = figmaNextStepsHtml(res); // guided next step (review / DESIGN.md)
       } else {
-        status(res?.error ?? "Couldn't import — check the file URL and token.", true);
+        status(res?.error ?? "Couldn't import. Check the file URL and token.", true);
       }
     }
   });
@@ -8552,7 +8647,7 @@ function openFigmaForm(): void {
 /** Seed a design-review turn: the agent screenshots + inspects the imported board and checks it against DESIGN.md. */
 function seedFigmaReview(fileName: string): void {
   const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
-  ta.value = `I've imported the Figma design "${fileName}" into the Preview panel — it's a board of the design's frames. Please review it: use preview_screenshot to look at it and preview_inspect to read it, and if this project has a DESIGN.md check the design against those invariants. Then give me (1) a short summary of what the design is, (2) any issues you see (spacing, color, typography, hierarchy, states, accessibility), and (3) concrete, actionable follow-up recommendations.`;
+  ta.value = `I've imported the Figma design "${fileName}" into the Preview panel. It's a board of the design's frames. Please review it: use preview_screenshot to look at it and preview_inspect to read it, and if this project has a DESIGN.md check the design against those invariants. Then give me (1) a short summary of what the design is, (2) any issues you see (spacing, color, typography, hierarchy, states, accessibility), and (3) concrete, actionable follow-up recommendations.`;
   autosize(ta); setSendEnabled(); void send();
 }
 /** Seed a turn where the agent AUTHORS DESIGN.md from the imported design; the design-available event then pops it out. */
@@ -8745,7 +8840,7 @@ const PREV_DEVICES: Record<PrevDevice, { label: string; w: number; h: number }> 
   "phone-landscape": { label: "Phone (Landscape)", w: 844, h: 390 },
   "tablet-landscape": { label: "Tablet (Landscape)", w: 1024, h: 768 },
 };
-const DEVICE_NOTE = "This preview can be viewed at device viewports (phone portrait/landscape, tablet landscape) via the phone icon in the preview toolbar — use it when building or reviewing a PWA or a mobile/responsive layout.";
+const DEVICE_NOTE = "This preview can be viewed at device viewports (phone portrait/landscape, tablet landscape) via the phone icon in the preview toolbar. Use it when building or reviewing a PWA or a mobile/responsive layout.";
 let prevDevice: PrevDevice = "desktop";
 /** Custom device glyphs, inline so they don't depend on the shared icon set. */
 function devSvg(kind: PrevDevice, size = 14): string {
@@ -9277,7 +9372,7 @@ async function renderAgentBuilder(): Promise<void> {
     // P-AGENT.9: resume the stored trust state too — an imported agent stays gated across sessions.
     const t = list[0];
     abTrust = t && t.trust_label && t.trust_label !== "trusted" && t.spec_id === abSpec.spec_id
-      ? { label: t.trust_label, reason: t.trust_reason ?? "imported agent — review before running" }
+      ? { label: t.trust_label, reason: t.trust_reason ?? "imported agent, review before running" }
       : null;
   }
   abHandle?.destroy();
@@ -9446,8 +9541,8 @@ function openAbToolsPanel(): void {
       openAbToolsPanel(); // refresh the chips
       showToast(
         brokenSteps
-          ? { tone: "warn", title: `${t} blocked`, desc: `Removed from the allow-list. ${brokenSteps} step${brokenSteps > 1 ? "s" : ""} still reference it — fix or delete ${brokenSteps > 1 ? "them" : "it"} (or re-add the tool) before saving.` }
-          : { tone: "ok", title: `${t} blocked`, desc: "Removed from the allow-list — this agent can no longer call it." },
+          ? { tone: "warn", title: `${t} blocked`, desc: `Removed from the allow-list. ${brokenSteps} step${brokenSteps > 1 ? "s" : ""} still reference it. Fix or delete ${brokenSteps > 1 ? "them" : "it"} (or re-add the tool) before saving.` }
+          : { tone: "ok", title: `${t} blocked`, desc: "Removed from the allow-list. This agent can no longer call it." },
       );
     }),
   );
@@ -9476,7 +9571,7 @@ async function shareAgentBuilder(): Promise<void> {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   } catch { /* download is a convenience; the file is already on disk */ }
-  showToast({ tone: "ok", title: "Portable agent saved", desc: `${r.fileName} — no credential values inside; the recipient adds their own via Secrets & connections.`, meta: r.path });
+  showToast({ tone: "ok", title: "Portable agent saved", desc: `${r.fileName}: no credential values inside; the recipient adds their own via Secrets & connections.`, meta: r.path });
 }
 // P-AGENT.10: export the canvas as an importable n8n workflow JSON (approvals become REAL Wait nodes; the
 // provenance sticky embeds the portable agent so another LUCID can round-trip it losslessly).
@@ -9498,8 +9593,8 @@ async function n8nExportAgentBuilder(): Promise<void> {
     tone: "ok",
     title: "n8n workflow saved",
     desc: r.pushAvailable
-      ? `${r.fileName} — import it in n8n, or use “n8n ⇧” to push it straight to your instance.`
-      : `${r.fileName} — import it in your n8n instance (Workflows → Import from File). Direct push needs the enterprise add-on.`,
+      ? `${r.fileName}: import it in n8n, or use “n8n ⇧” to push it straight to your instance.`
+      : `${r.fileName}: import it in your n8n instance (Workflows → Import from File). Direct push needs the enterprise add-on.`,
     meta: r.path,
   });
 }
@@ -9529,7 +9624,7 @@ async function importAgentFile(file: File): Promise<void> {
     tone: label === "quarantined" ? "danger" : "warn",
     title: `Imported: ${r.spec.name}`,
     desc: label === "quarantined"
-      ? `Quarantined — ${r.findings ?? 0} finding(s). It cannot run; review the flagged content.`
+      ? `Quarantined: ${r.findings ?? 0} finding(s). It cannot run; review the flagged content.`
       : `Held for review (${label}). Check every step, tool, and connection, add credentials via Secrets & connections, then Approve.${r.notes?.length ? ` Mapping: ${r.notes[0]}.` : ""}`,
   });
 }
@@ -9562,9 +9657,9 @@ function openAbSchedulePanel(): void {
   const side = $("#abSide");
   if (!side) return;
   const blockedWhy = abTrust
-    ? `This agent is ${abTrust.label} — review and approve it before scheduling unattended runs.`
+    ? `This agent is ${abTrust.label}. Review and approve it before scheduling unattended runs.`
     : abSpec.nodes.some((n) => n.kind === "approval")
-      ? "This workflow has human-approval checkpoints, so it can't run unattended — approval cards would go unanswered. Run it manually, or remove the checkpoints."
+      ? "This workflow has human-approval checkpoints, so it can't run unattended: approval cards would go unanswered. Run it manually, or remove the checkpoints."
       : saveErrors(abSpec)[0] ?? null;
   side.innerHTML = schedulePanelHtml(abSpec, blockedWhy);
   side.hidden = false;
@@ -9585,7 +9680,7 @@ async function createAbSchedule(): Promise<void> {
     agentPrompt: prompt,
     agentModel: state.model,
   });
-  if (a) showToast({ tone: "ok", title: "Schedule created (disarmed)", desc: `“${abSpec.name}” ${a.cadence.kind === "interval" ? `every ${a.cadence.everyMin} min` : `daily at ${a.cadence.hhmm}`} — arm it in the Goal panel's Automations.` });
+  if (a) showToast({ tone: "ok", title: "Schedule created (disarmed)", desc: `“${abSpec.name}” ${a.cadence.kind === "interval" ? `every ${a.cadence.everyMin} min` : `daily at ${a.cadence.hhmm}`}. Arm it in the Goal panel's Automations.` });
   else showToast({ tone: "danger", title: "Couldn't create the schedule", desc: kind === "daily" ? "Use HH:MM (24h), e.g. 09:30." : "Interval must be a number of minutes ≥ 1." });
 }
 // P-AGENT.17: the History flyout — restore any of the last 20 saved revisions (a restore is itself saved,
@@ -9627,7 +9722,7 @@ async function openAbTemplatesPanel(): Promise<void> {
       if (!r || r.error || !r.spec) { showToast({ tone: "danger", title: "Couldn't use the template", desc: r?.error ?? "template unavailable" }); return; }
       abSpec = r.spec;
       const label = (r.trustLabel ?? "untrusted") as TrustLabel;
-      abTrust = label === "trusted" ? null : { label, reason: r.reason ?? "created from a template — review before running" };
+      abTrust = label === "trusted" ? null : { label, reason: r.reason ?? "created from a template, review before running" };
       openAgentBuilder();
       renderAbTrust();
       showToast({ tone: "ok", title: `Template loaded: ${r.spec.name}`, desc: "Review the steps, rename it, approve it, and it's yours." });
@@ -9674,7 +9769,7 @@ function renderAbRunReply(r: AgentRunReply | null): void {
 }
 async function resolveAbRunApproval(runId: string, approve: boolean): Promise<void> {
   const out = $("#abRunOut");
-  if (out) out.textContent = approve ? "Approved — continuing…" : "Stopping…";
+  if (out) out.textContent = approve ? "Approved, continuing…" : "Stopping…";
   renderAbRunReply(await bridge.agentRunApprove(runId, approve));
 }
 
@@ -9695,7 +9790,7 @@ function openAgentBuilderWithSpec(spec: AgentSpec): void {
     renderAbTrust();
     // surface Secrets & connections only when the draft GAINS credential/egress needs mid-conversation
     if ((spec.secrets?.length ?? 0) + (spec.egress?.length ?? 0) > hadNeeds) void openAbSecretsPanel();
-    showToast({ tone: "info", title: "Draft updated", desc: `“${spec.name}” — ${spec.nodes.length} steps. Review the changes; reply in chat to steer.` });
+    showToast({ tone: "info", title: "Draft updated", desc: `“${spec.name}”: ${spec.nodes.length} steps. Review the changes; reply in chat to steer.` });
     return;
   }
   openAgentBuilder(); // renderAgentBuilder keeps abSpec since it's already set
@@ -9735,7 +9830,7 @@ function askCredentialHelp(btn: HTMLElement): void {
   const name = row?.dataset.cred ?? "";
   const kind = row?.dataset.kind ?? "";
   const purpose = btn.dataset.purpose ?? "";
-  const q = `Walk me through generating the credential "${name}" (kind: ${kind}${purpose ? `; for: ${purpose}` : ""}). Read the vendor's official documentation and give me clear, numbered step-by-step instructions to obtain it. Do NOT ask me for the value — I'll paste it into the Secrets & connections panel, which stores it in the encrypted vault.`;
+  const q = `Walk me through generating the credential "${name}" (kind: ${kind}${purpose ? `; for: ${purpose}` : ""}). Read the vendor's official documentation and give me clear, numbered step-by-step instructions to obtain it. Do NOT ask me for the value. I'll paste it into the Secrets & connections panel, which stores it in the encrypted vault.`;
   const ta = $("#input") as HTMLTextAreaElement | null;
   if (ta) { ta.value = q; autosize(ta); setSendEnabled(); }
   void send();
@@ -9755,7 +9850,7 @@ async function addCredentialFromRow(btn: HTMLElement): Promise<void> {
   const r = await bridge.credStore({ ref: name, kind, secret, label: name });
   if (input) input.value = "";
   if (r && !("error" in r)) {
-    showToast({ tone: "ok", title: "Stored in the vault", desc: `${name} (••••${(r as { last4?: string }).last4 ?? ""}) — encrypted; the agent never sees the value.` });
+    showToast({ tone: "ok", title: "Stored in the vault", desc: `${name} (••••${(r as { last4?: string }).last4 ?? ""}): encrypted; the agent never sees the value.` });
     void openAbSecretsPanel(); // refresh statuses
   } else {
     showToast({ tone: "danger", title: "Couldn't store the credential", desc: (r as { error?: string })?.error ?? "vault error" });
@@ -11602,6 +11697,7 @@ function renderStatus(): void {
       ${asksageChip()}
     </div>
     <div class="triv-slot" id="trivSlot"></div>`;
+  mountNetSeg(); // P-NETSTAT.1 (ADR-0423): re-adopt the network indicator, right of the context ring
   mountTrivia(); // P-TRIV.1: re-adopt the persistent ticker after the innerHTML swap
   mountSharePill(); // P-REMOTE.11: re-adopt the minimized Share pill (it lives in the bar, right of the ticker)
   mountJoinPill(); // P-COLLAB.20: re-adopt the minimized Join pill (watching continues while minimized)
@@ -14598,9 +14694,9 @@ function slashSource(): SlashItem[] {
   const out: SlashItem[] = [];
   // P-AGENT.8: the flagship /agent command — start the Agent Builder interview. Promoted (high `uses`) so it
   // surfaces near the top; `complete` lets the user optionally add a one-line description before sending.
-  out.push({ label: "/agent", hint: "Build an AI agent — LUCID interviews you, then opens the Agent Builder", kind: "command", complete: "/agent ", uses: 9000 + (uses["agent"] ?? 0) });
+  out.push({ label: "/agent", hint: "Build an AI agent: LUCID interviews you, then opens the Agent Builder", kind: "command", complete: "/agent ", uses: 9000 + (uses["agent"] ?? 0) });
   // P-CMD.1: create your OWN reusable "/" command by describing it — LUCID interviews you, then saves it.
-  out.push({ label: "/command", hint: "Create your own /command — describe it, LUCID interviews you and saves it", kind: "command", complete: "/command ", uses: 8500 + (uses["command"] ?? 0) });
+  out.push({ label: "/command", hint: "Create your own /command: describe it, LUCID interviews you and saves it", kind: "command", complete: "/command ", uses: 8500 + (uses["command"] ?? 0) });
   out.push({ label: "/figma", hint: "Import a Figma design into the Preview and have the agent review it", kind: "command", activate: "figma", uses: 8900 + (uses["figma"] ?? 0) }); // P-FIGMA.1 (ADR-0154)
   for (const s of bundledSkillsByUsage()) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
   // P-SKILL.4: a disabled or flagged project skill is never offered in the picker (same decision the
@@ -16468,6 +16564,7 @@ function wire(): void {
   void bridge.voiceSettings().then((v) => { if (v) { state.voice = v; updateVoiceChip(); } });
   // P-FLEET.L1: the fleet grid dashboard - headless local lanes as streaming mini agent windows.
   initFleetGrid({
+    hubOpen: openTerminalHub, // P-TUI.2
     fleetStatus: bridge.fleetStatus,
     fleetSpawn: bridge.fleetSpawn,
     fleetPrompt: bridge.fleetPrompt,
@@ -16522,6 +16619,7 @@ function wire(): void {
   // pair (attach is app.ts-owned either way) and opens the grid dock for spawning and per-lane work,
   // so the two views can never disagree about what a lane is doing.
   initFleetOrbit({
+    hubOpen: openTerminalHub, // P-TUI.2
     fleetStatus: bridge.fleetStatus,
     fleetAnswer: bridge.fleetAnswer,
     fleetRespawn: bridge.fleetRespawn,
@@ -16692,6 +16790,7 @@ function wire(): void {
     if (t0.matches("[data-judgment-set]")) {
       const next = await bridge.setJudgment((t0 as HTMLSelectElement).value as JudgmentView["stored"]).catch(() => null);
       if (!next) { showToast({ tone: "warn", title: "Couldn't save judgment backend", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
+      judgeBackend = next.effective;
       fillSec("judgment", secJudgment(state.auth, next));
       showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the chat model until it is turned off." : next.chain.length ? "omp restarts with it; the next turn uses it." : "No judge model: the chat model answers the one pick omp cannot skip.", timeout: 4000 });
       return;
@@ -16998,7 +17097,7 @@ function wire(): void {
       if (!command) { showToast({ title: "Command required", desc: "Enter the command that starts the remote agent's ACP server (e.g. hermes acp).", actions: [{ label: "OK" }], timeout: 4000 }); return; }
       await bridge.remoteAgentUpsert({ name: name || "Remote agent", kind, command, args, permissionPolicy });
       hydrateAgents();
-      showToast({ title: "Remote agent added", desc: `${name || "Agent"} is proxied through the Lucid firewall — the agent picks it up on your next turn.`, meta: "scanned both ways · permissions default deny", actions: [{ label: "OK" }], timeout: 5000 });
+      showToast({ title: "Remote agent added", desc: `${name || "Agent"} is proxied through the Lucid firewall. The agent picks it up on your next turn.`, meta: "scanned both ways · permissions default deny", actions: [{ label: "OK" }], timeout: 5000 });
       return;
     }
     const agentToggle = t.closest("[data-agent-toggle]") as HTMLElement | null;
@@ -17199,7 +17298,7 @@ function wire(): void {
       showToast({
         tone: "warn",
         title: "Sign out of all providers?",
-        desc: "Deletes every saved OAuth login, including any stale or orphaned ones. Your API keys are kept — you'll just reconnect providers next time you need them.",
+        desc: "Deletes every saved OAuth login, including any stale or orphaned ones. Your API keys are kept; you'll just reconnect providers next time you need them.",
         actions: [
           { label: "Sign out of all", kind: "danger", run: () => void (async () => {
             await bridge.oauthLogoutAll();
@@ -17735,6 +17834,7 @@ async function loadConfig(newCycle = true): Promise<void> {
       state.configCached = false;
       state.configWarming = false;
       cacheConfig();
+      setNetReady("models", true); // P-NETSTAT.1: the live model list landed
     } else if (step.action === "repoll") {
       // Session still warming; keep the spinner up and re-poll so the picker self-heals when the live
       // list lands (non-blocking). newCycle=false: this continuation spends the cycle's budget.
@@ -17983,16 +18083,14 @@ let collidingNames = new Set<string>();
 // cached list to the live one when the cold-boot config arrives). Null when no picker is open.
 let pickerRedraw: (() => void) | null = null;
 function providerLabel(v: string): string {
-  if (/^anthropic\//.test(v)) return "Anthropic";
-  if (/google-antigravity\//.test(v)) return "Antigravity";
-  if (/google-gemini-cli\//.test(v)) return "Gemini CLI";
-  if (/openai-codex\//.test(v)) return "Codex";
+  const named = loginLabel(providerRoute(v));
+  if (named) return named;
   const m = /^([^/]+)\//.exec(v);
   return m ? m[1]!.replace(/^asksage-/, "") : "";
 }
 const modelRow = (o: { value: string; name: string }, sel: string) => {
   // Provider tag only on NON-gov colliding rows - the Gov pill already distinguishes gov routes.
-  const prov = (!isAsksage(o.value) && collidingNames.has(cleanModelName(o.name))) ? `<span class="row-prov" data-tip="Provider route">${esc(providerLabel(o.value))}</span>` : "";
+  const prov = (!isAsksage(o.value) && collidingNames.has(cleanModelName(o.name))) ? `<span class="row-prov" data-tip="Login">${esc(providerLabel(o.value))}</span>` : "";
   // P-IDE.1b: an unavailable model (e.g. ITAR-blocked Fable) renders greyed + non-selectable - NO
   // data-val, so the picker's click handler skips it; data-model stays so the hover card explains why.
   const reason = unavailableReason(o.value);
@@ -18114,6 +18212,9 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "claude-opus-4-8": { exp: 4, iq: 5, eff: "Top-tier reasoning with strong value at the Opus tier.", best: "Hard bugs, architecture, multi-file refactors.", ctx: "1M" },
   "claude-opus-4-7": { exp: 4, iq: 5, eff: "Near-4.8 capability for a little less.", best: "Complex coding when 4.8 is overkill.", ctx: "1M" },
   "claude-opus-4-6": { exp: 4, iq: 4, eff: "Prior Opus - very capable, good to pin to.", best: "Complex work needing a stable version.", ctx: "1M" },
+  // Sonnet 5.5 (omp 18.4.4 catalog): $2/$10 per Mtok (cache read $0.20 / write $2.50), 1M context, 128K
+  // output, reasoning, text + image input. Half Opus 5.5's price for the balanced tier of the same family.
+  "claude-sonnet-5-5": { exp: 2, iq: 4, eff: "The Claude 5.5 family's balanced tier at $2/$10 per Mtok, half Opus 5.5's rate, with a 1M context window.", best: "Everyday coding, refactors, and code review at a workhorse price.", ctx: "1M" },
   "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
   "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
   "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude - excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
@@ -18129,6 +18230,9 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   // reasoning with an effort toggle, text + image input.
   "grok-4.7": { exp: 2, iq: 4, eff: "xAI's newest Grok: strong reasoning at $2/$6 per Mtok, doubling past 200K input; 500K context.", best: "Everyday coding and analysis with long context at a low price.", ctx: "500K" },
   "grok-4.6": { exp: 2, iq: 4, eff: "Prior Grok at the same $2/$6 price and 500K context.", best: "A version pin for Grok work.", ctx: "500K" },
+  // P-MODEL.6: omp's `apple` provider (macOS 27+ on Apple silicon, listed on macOS only) reports its one
+  // model as `apple/on-device`. Keyless and local: no per-token bill and no network egress.
+  "on-device": { exp: 1, iq: 2, eff: "Apple's on-device Foundation Model: runs on this Mac with no key and no network, so nothing you send leaves the machine.", best: "Quick private drafts, summaries, and lookups, even offline." },
   // AskSage · OpenAI. GPT-5.6 ships three tier codenames (luna=mid / sol / terra); luna is the default RAG model.
   "gpt-5.6-luna": { exp: 3, iq: 5, eff: "Newest mid-tier GPT-5.6; the default RAG model.", best: "General gov coding, analysis, and RAG grounding.", ctx: "256K" },
   "gpt-5.6-sol": { exp: 4, iq: 5, eff: "GPT-5.6 tier variant.", best: "Demanding gov reasoning.", ctx: "256K" },
@@ -18184,7 +18288,7 @@ const MODEL_INFO: Record<string, ModelInfo> = {
 // id, then by fully-stripped base id so a provider-routed copy of a known model inherits it); otherwise
 // INFER ratings from the family + tier so no row is ever left without a card.
 const stripProvider = (v: string) => v.replace(/^[^/]*\//, "");
-const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemini: "Google Gemini", gpt: "OpenAI GPT", "gpt-o": "OpenAI o-series", rag: "AskSage RAG", other: "this provider" };
+const FAMILY_LABEL: Record<string, string> = { claude: "Anthropic Claude", gemini: "Google Gemini", gpt: "OpenAI GPT", "gpt-o": "OpenAI o-series", apple: "Apple on-device", rag: "AskSage RAG", other: "this provider" };
 function inferModelInfo(value: string): ModelInfo {
   const fam = familyOf(value).id;
   // Capability tier from the SHARED heuristic (model_families.capabilityTier) so the hover-card iq stars
@@ -18278,10 +18382,14 @@ function curatedModels(opt: ConfigOption): { value: string; name: string }[] {
   // or ADC on the box; LUCID shows them only behind a key saved in the hub. `state.auth` unloaded = no key
   // yet, which hides them until the first auth fetch lands (pickerRedraw repaints).
   const keyedIds = credentialedProviderIds(state.auth);
+  // P-MODEL.6: platform-bound providers (omp's on-device `apple`) list only where the ENGINE runs on their
+  // OS; until /api/build-info answers the platform is unknown and they stay hidden.
+  const enginePlatform = state.buildInfo?.platform ?? null;
   const visible = opt.options.filter((o) =>
     !isAuxiliaryModel(o.value) &&
     !isDeprecatedModel(o.value) &&
     !isUnconfiguredAmbientModel(o.value, keyedIds) &&
+    providerAllowedOnPlatform(providerPrefixOf(o.value), enginePlatform) &&
     (govOk || !isGovModel(o.value)) &&
     (chinaOk || localOk.has(providerPrefixOf(o.value)) || !isChinaModel(o.value)));
   // Lockdown: only allowed routes are selectable (AskSage, or an enabled DGX enclave Local Provider).
@@ -18826,6 +18934,20 @@ setInspectorRail(true); // start with the right inspector slid into the metrics 
 renderStatus();
 loadCachedConfig(); renderStatus(); // P-IDE.1d: paint the cached model immediately, then refresh live
 void loadConfig().then(renderStatus);
+// P-NETSTAT.1 (ADR-0423): the network indicator probes the host the CURRENT model's turns travel to. While
+// the boot is still waiting on the live model list and the link has just become stable, re-arm a warm
+// cycle (at most every 15s): a cold start on a bad connection spends loadConfig's retry budget while the
+// network is down, and without this the picker stayed on the cached list until a manual refresh.
+startNetMonitor(() => state.model);
+void bridge.judgment().then((j) => { if (j) judgeBackend = j.effective; }); // P-JEV.7: label the effort pick under None
+let netModelKickAt = Date.now(); // the boot loadConfig above gets the first 15s to itself
+onNetChange(() => {
+  const ns = netSnapshot();
+  if (!netBooting() || ns.modelsReady || !ns.browserOnline || !ns.view?.stable) return;
+  if (configWarmTimer !== null || Date.now() - netModelKickAt < 15_000) return;
+  netModelKickAt = Date.now();
+  void loadConfig(true).then(renderStatus);
+});
 // P-KGMARKET.4 (ADR-0206): register the entitlement provider for this build (firebase / dev stub / off) and
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
@@ -18865,7 +18987,11 @@ void loadWorkspace();
 void loadAsksage();
 void loadSkills();
 void loadDev(); // ADR-0009 Phase D: reveal the Logs rail panel if developer mode is on
+// P-NETSTAT.1: the settings read is the boot's "Settings" readiness check. A failed read (engine not up
+// yet) re-asks every 3s until one answers, so the indicator never waits on a request nobody retries.
+const settingsReady = (): void => { void bridge.getSettings().then((s) => { if (s) setNetReady("settings", true); else window.setTimeout(settingsReady, 3000); }); };
 void bridge.getSettings().then((s) => { // your saved name → the "You" label on your messages
+  if (s) setNetReady("settings", true); else window.setTimeout(settingsReady, 3000);
   if (s?.username) { state.username = s.username; $$(".msg.user .who").forEach((w) => { w.textContent = s.username!; }); }
   if (s?.email) state.email = s.email;
   state.attribution = s?.attribution ?? null;

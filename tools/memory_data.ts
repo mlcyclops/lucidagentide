@@ -20,6 +20,7 @@ import { Db } from "../harness/memory/db.ts";
 import { resolveMigrationsDir } from "../harness/migrations_dir.ts";
 import { readHarnessMirror, snapshotHarnessMemory, type HarnessMemory } from "../harness/memory/obs_mirror.ts";
 import { pathWithin } from "../desktop/path_guard.ts";
+import { gitExe } from "../harness/runs/sandbox_exec.ts";
 import { aggregateAiLoc, readAiLocSamples } from "../desktop/ailoc_read.ts"; // P-LOC.4 (ADR-0211): AI-LOC from the GUI-owned ledger
 
 // Session / context / KV-cache / spend metrics live in the DuckDB-FREE session_metrics.ts (so the
@@ -273,13 +274,19 @@ export function codeActivity(opts: { workspaces?: string[]; root?: string; now?:
     // Args ARRAY, never a shell string (no injection via paths/refs). Exclude vendored/
     // generated churn so the metric reflects real source. `--format=` suppresses commit
     // headers, leaving only numstat rows + blank separators.
-    const r = Bun.spawnSync(
-      ["git", "log", `--since=${monthStart.toISOString()}`, "--numstat", "--no-color", "--format=",
-        "--", ".", ":(exclude)node_modules", ":(exclude)vendor", ":(exclude)dist", ":(exclude)*.lock", ":(exclude)*.min.*"],
-      { cwd: safe, timeout, stdout: "pipe", stderr: "pipe" },
-    );
-    if (!r.success) continue;                           // git missing/failed/timeout → omit (never fake)
-    const { added, deleted, files } = parseNumstat(r.stdout.toString());
+    // gitExe(), never a bare "git": the installed app's PATH commonly has no git (MinGit is not on it), and
+    // Bun.spawnSync THROWS ENOENT for a missing executable rather than returning a failed result.
+    let out: string;
+    try {
+      const r = Bun.spawnSync(
+        [gitExe(), "log", `--since=${monthStart.toISOString()}`, "--numstat", "--no-color", "--format=",
+          "--", ".", ":(exclude)node_modules", ":(exclude)vendor", ":(exclude)dist", ":(exclude)*.lock", ":(exclude)*.min.*"],
+        { cwd: safe, timeout, stdout: "pipe", stderr: "pipe" },
+      );
+      if (!r.success) continue;                         // git failed/timeout → omit (never fake)
+      out = r.stdout.toString();
+    } catch { break; }                                  // no git at all → every workspace would fail: omit all
+    const { added, deleted, files } = parseNumstat(out);
     if (files.length === 0) continue;                   // no activity this month → not listed
     workspaces.push({ name: basename(safe), path: safe, added, deleted, files: files.length, spend: 0 });
   }

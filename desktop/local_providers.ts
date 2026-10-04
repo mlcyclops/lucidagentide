@@ -238,7 +238,7 @@ export function validateLocalProvider(def: LocalProviderDef): string[] {
       if (v !== undefined && (!Number.isInteger(v) || v <= 0)) errs.push(`model "${m.id}" ${k} must be a positive integer`);
   }
   const leak = scanForInlineSecret(def);
-  if (leak) errs.push(`a ${leak} looks pasted into a text field — put the secret in the vault, not the provider fields`);
+  if (leak) errs.push(`a ${leak} looks pasted into a text field. Put the secret in the vault, not the provider fields`);
   return errs;
 }
 

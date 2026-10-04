@@ -33,7 +33,7 @@ import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, 
 import { isAutoPreviewPath } from "./preview_tabs.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with the main chat thread so the two cannot drift.
 import { LANE_JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
-import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new lanes open on the last lane's model
+import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new lanes open on the last lane's model; colliding names show the route
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
@@ -50,6 +50,7 @@ import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile,
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
 import { fmtTokens, fmtUsd, meterBadge, newMeter, onUsage, type MeterState } from "./token_meter.ts";
 import type { ChipKind } from "./answer_chips.ts";
+import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
@@ -57,6 +58,8 @@ type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" |
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
+  /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
+  hubOpen: () => Promise<unknown>;
   /** The master agent's current model - a new lane's default until a lane model is remembered (P-SCROLL.1). */
   getMasterModel: () => string;
   /** The model catalog for the per-lane pickers. */
@@ -209,6 +212,7 @@ export function openFleetGrid(): void {
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Lanes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same lanes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
+      <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 12)} Terminal</button>
       <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local lane">${icon("plus", 12)} Lane</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (lanes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (lanes keep running)">${icon("close", 15)}</button>
@@ -1027,13 +1031,14 @@ function paintFrame(run: LaneRun): void {
 
 function fillModelSelect(sel: HTMLSelectElement, current: string): void {
   const opts = deps?.getModelOptions() ?? [];
-  const all = opts.some((o) => o.value === current) || !current ? opts : [{ value: current, label: current }, ...opts];
-  const sig = all.map((o) => o.value).join("\n");
+  const all = fleetModelOptions(opts.some((o) => o.value === current) || !current ? opts : [{ value: current, label: current }, ...opts]);
+  const sig = all.map((o) => `${o.value}\t${o.label}`).join("\n");
   if (sel.dataset.sig !== sig) {
     sel.dataset.sig = sig;
-    sel.innerHTML = all.map((o) => `<option value="${esc(o.value)}">${esc(o.label ?? o.value)}</option>`).join("");
+    sel.innerHTML = all.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
   }
   sel.value = current || (all[0]?.value ?? "");
+  sel.title = all.find((o) => o.value === sel.value)?.label ?? current;
 }
 
 // ---------------------------------------------------------------- output stream
@@ -1579,8 +1584,8 @@ function toggleSpawnForm(): void {
   const options = deps.getModelOptions();
   // P-SCROLL.1 (ADR-0405): preselect the model the last lane ran, else the master's (the orbit form's rule).
   const pick = spawnModelDefault(options, rememberedSpokeModel(), deps.getMasterModel());
-  const all = options.some((o) => o.value === pick) || !pick ? options : [{ value: pick, label: pick }, ...options];
-  const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.label ?? o.value)}</option>`).join("");
+  const all = fleetModelOptions(options.some((o) => o.value === pick) || !pick ? options : [{ value: pick, label: pick }, ...options]);
+  const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.label)}</option>`).join("");
   const form = el(`<div class="fleet-card fleet-spawn-card">
     <div class="fleet-card-head">
       <span class="fleet-led" aria-hidden="true"></span>
@@ -1604,6 +1609,7 @@ function toggleSpawnForm(): void {
         <input class="fleet-spawn-in" data-spawn-pat type="password" autocomplete="off" spellcheck="false" aria-label="Personal access token for this repository host" placeholder="Personal access token (private repos)" />
         <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
       </div>
+      <label class="fleet-spawn-save fleet-spawn-wt" title="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the lane closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this lane gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
       <label class="fleet-spawn-lbl">Name <span class="fleet-spawn-opt">optional</span></label>
       <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="lane-${runs.size + 1}" spellcheck="false" aria-label="A name for this lane" />
       <label class="fleet-spawn-lbl">Model</label>
@@ -1615,6 +1621,7 @@ function toggleSpawnForm(): void {
   grid.prepend(form);
   paintEmpty();
   paintRepoHint(form);
+  revealPathEnd($("[data-spawn-cwd]", form) as HTMLInputElement | null);
   // P-REPO.1 (ADR-0406): the Folder field (prefilled, with Browse) is enough to spawn; "Find repos" is
   // opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the form
   // always submitted, so the spawn path and its clone rules are unchanged, and Spawn never waits on a search.
@@ -1626,6 +1633,7 @@ function toggleSpawnForm(): void {
     if (!cwdIn || !repoIn) return;
     if (pick.kind === "local") { cwdIn.value = pick.path; repoIn.value = ""; }
     else { repoIn.value = pick.cloneUrl; cwdIn.value = d.getMasterCwd(); }
+    revealPathEnd(cwdIn);
     if (nameIn) nameIn.placeholder = pick.name;
     paintRepoHint(form);
     const signIn = githubPickNote(pick, cwdIn.value.trim());
@@ -1634,6 +1642,21 @@ function toggleSpawnForm(): void {
     if (signIn && note) { note.textContent = signIn; note.className = "fleet-spawn-note"; if (auth) auth.hidden = true; }
   });
   cwdIn?.focus();
+}
+
+/** A long folder path overflows a 360px card from the left. Scroll to the end so the folder name
+ *  stays visible, and keep the full path on the tooltip. Called after layout, because scrollWidth is
+ *  0 until the input has a width. */
+function revealPathEnd(input: HTMLInputElement | null): void {
+  if (!input) return;
+  input.title = input.value;
+  const show = (): void => {
+    const end = input.value.length;
+    try { input.setSelectionRange(end, end); } catch { /* detached, or a type that has no selection */ }
+    input.scrollLeft = input.scrollWidth;
+  };
+  show();
+  requestAnimationFrame(show);
 }
 
 /** The REAL OS dialog (Explorer / Finder / zenity), where the user can also CREATE the folder. A cancel
@@ -1645,6 +1668,7 @@ async function browseSpawnFolder(): Promise<void> {
   if (!picked) return;
   const input = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
   if (input) input.value = picked;
+  revealPathEnd(input);
   paintRepoHint(form);
 }
 
@@ -1689,6 +1713,7 @@ async function submitSpawn(): Promise<void> {
   const patInput = $("[data-spawn-pat]", form) as HTMLInputElement | null;
   const pat = patInput?.value ?? "";
   const remember = ($("[data-spawn-save]", form) as HTMLInputElement | null)?.checked === true;
+  const worktree = ($("[data-spawn-wt]", form) as HTMLInputElement | null)?.checked === true; // P-FLEET.WT1
   const err = $("[data-spawn-err]", form) as HTMLElement | null;
   const fail = (msg: string): void => { if (err) { err.textContent = msg; err.hidden = false; } };
   const remote = repoRaw ? parseGitRemote(repoRaw) : null;
@@ -1721,6 +1746,7 @@ async function submitSpawn(): Promise<void> {
     name: name || undefined,
     ...(remote ? { repoUrl: repoRaw } : {}),
     ...(remote && pat ? { pat } : {}),
+    ...(worktree ? { worktree: true } : {}),
   }).catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
   clearTimeout(slow);
   if (err && err.hidden === false && r?.ok) err.hidden = true; // the slow-note must not outlive a success
@@ -1776,6 +1802,9 @@ function onClick(ev: Event): void {
   if (t.closest("[data-dock-min]")) { minimize(); return; }
   // P-FLEET.L18: back to the map, and the default-view pin.
   if (t.closest("[data-fleet-orbit]")) { openFleetOrbit(); return; }
+  // P-TUI.2: the terminal hub. A refusal names why on the button's tooltip line (this module has no toasts).
+  const hubBtn = t.closest("[data-fleet-hub]") as HTMLButtonElement | null;
+  if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
   if (t.closest("[data-fleet-pin]")) { setFleetHome("grid"); paintGridPin(); return; }
   // P-FLEET.L18: group divider controls + the per-card group chip.
   const gt = t.closest("[data-grp-toggle]") as HTMLElement | null;

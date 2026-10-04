@@ -24,10 +24,13 @@ import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.t
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, otherHubs, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type HubEntry, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
-import { rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model
+import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
+import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 
 export interface FleetOrbitDeps {
+  /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
+  hubOpen: () => Promise<unknown>;
   fleetStatus: LucidBridge["fleetStatus"];
   fleetAnswer: LucidBridge["fleetAnswer"];
   fleetRespawn: LucidBridge["fleetRespawn"];
@@ -477,7 +480,7 @@ function paintSpawnPanel(): void {
   // P-SCROLL.1 (ADR-0405): preselect the model the last spoke ran, else the master's. A default the
   // catalog does not list (not loaded yet) is still shown, so the form never silently lands on row one.
   const pick = spawnModelDefault(offered, rememberedSpokeModel(), deps.getMasterModel());
-  const models = !pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered];
+  const models = fleetModelOptions(!pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered]);
   box.innerHTML = `<div class="orbit-panel-h">${icon("plus", 14)}<b>New spoke</b><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>
     <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
       <button class="btn-mini orbit-btn" data-spawnp-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button></span></label>
@@ -491,6 +494,7 @@ function paintSpawnPanel(): void {
       <input type="password" data-spawnp-pat autocomplete="off" spellcheck="false" placeholder="Personal access token (private repos)">
       <label class="orbit-spawn-save"><input type="checkbox" data-spawnp-save checked><span data-spawnp-save-txt>Remember this token for this host</span></label>
     </div>
+    <label class="orbit-spawn-save orbit-spawn-wt" title="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the spoke closes."><input type="checkbox" data-spawnp-wt><span>Own worktree: this spoke gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
     <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-spawnp-name placeholder="what this spoke is for (defaults to the folder name)" maxlength="64"></label>
     <label class="orbit-spawn-l">model<select data-spawnp-model>${models.map((m) => `<option value="${esc(m.value)}"${m.value === pick ? " selected" : ""}>${esc(m.label)}</option>`).join("") || `<option value="">master's model</option>`}</select></label>
     <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-spawnp-go>${icon("bolt", 13)} Create spoke</button></div>
@@ -499,6 +503,7 @@ function paintSpawnPanel(): void {
   // is opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the
   // panel always submitted, and Create spoke never waits on a search.
   const cwdIn = $("[data-spawnp-cwd]", box) as HTMLInputElement | null;
+  revealOrbitPathEnd(cwdIn);
   const repoIn = $("[data-spawnp-repo]", box) as HTMLInputElement | null;
   const nameIn = $("[data-spawnp-name]", box) as HTMLInputElement | null;
   const d = deps;
@@ -506,6 +511,7 @@ function paintSpawnPanel(): void {
     if (!cwdIn || !repoIn) return;
     if (pick.kind === "local") { cwdIn.value = pick.path; repoIn.value = ""; }
     else { repoIn.value = pick.cloneUrl; cwdIn.value = d.getMasterCwd(); }
+    revealOrbitPathEnd(cwdIn);
     if (nameIn) nameIn.placeholder = pick.name;
     paintOrbitRepoHint();
     const signIn = githubPickNote(pick, cwdIn.value.trim());
@@ -547,12 +553,26 @@ function paintOrbitRepoHint(): void {
   if (save) { save.disabled = !vault; if (!vault) save.checked = false; }
 }
 
+/** Same as the grid form: a long folder path must show its ending inside the panel. */
+function revealOrbitPathEnd(input: HTMLInputElement | null): void {
+  if (!input) return;
+  input.title = input.value;
+  const show = (): void => {
+    const end = input.value.length;
+    try { input.setSelectionRange(end, end); } catch { /* detached, or a type that has no selection */ }
+    input.scrollLeft = input.scrollWidth;
+  };
+  show();
+  requestAnimationFrame(show);
+}
+
 async function browseSpawnPanelFolder(): Promise<void> {
   if (!deps || !view) return;
   const picked = await deps.pickFolder({ title: "Choose or create the folder this spoke works in", confirm: "Use this folder" }).catch(() => null);
   if (!picked) return; // cancel leaves whatever is typed alone - never clear, never re-prompt
   const input = $("[data-spawnp-cwd]", view) as HTMLInputElement | null;
   if (input) input.value = picked;
+  revealOrbitPathEnd(input);
 }
 
 async function submitSpawnPanel(): Promise<void> {
@@ -564,6 +584,7 @@ async function submitSpawnPanel(): Promise<void> {
   const patInput = $("[data-spawnp-pat]", view) as HTMLInputElement | null;
   const pat = patInput?.value ?? "";
   const remember = ($("[data-spawnp-save]", view) as HTMLInputElement | null)?.checked === true;
+  const worktree = ($("[data-spawnp-wt]", view) as HTMLInputElement | null)?.checked === true; // P-FLEET.WT1
   const err = $("[data-spawnp-err]", view) as HTMLElement | null;
   // Same rules as the grid form: a repo makes the folder optional (it clones into the shared
   // workspaces folder), and a repo that does not parse is refused before anything runs.
@@ -581,7 +602,7 @@ async function submitSpawnPanel(): Promise<void> {
       .catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     if (!s.ok) warn = `Token not saved (${s.error ?? "vault unavailable"}) - used for this clone only. `;
   }
-  const r = await deps.fleetSpawn({ cwd, ...(name ? { name } : {}), ...(model ? { model } : {}), ...(remote ? { repoUrl: repoRaw } : {}), ...(remote && pat ? { pat } : {}) }).catch(() => null);
+  const r = await deps.fleetSpawn({ cwd, ...(name ? { name } : {}), ...(model ? { model } : {}), ...(remote ? { repoUrl: repoRaw } : {}), ...(remote && pat ? { pat } : {}), ...(worktree ? { worktree: true } : {}) }).catch(() => null);
   // The request is done with the token either way: never leave the plaintext sitting in the DOM (a
   // retry pastes it again; a remembered one is already in the vault).
   if (patInput) patInput.value = "";
@@ -698,6 +719,7 @@ function buildView(): HTMLElement {
       <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every lane that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model, with its conversation loaded; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
       <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} New spoke</button>
       <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and spoke as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
+      <button class="btn-mini orbit-btn" data-orbit-hubterm data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 13)} Terminal</button>
       <button class="btn-mini orbit-btn" data-orbit-grid data-tip="Grid view|The classic fleet dashboard: streaming mini agent windows with per-lane composers, queues and transcripts.">${icon("layout", 13)} Grid</button>
       <button class="btn-mini orbit-btn orbit-pin" data-orbit-pin data-tip="Default view|Make ORBIT what the Fleet button opens instead of the grid. The grid header has the same pin to switch back."></button>
       <button class="btn-mini orbit-btn orbit-x" data-orbit-close data-tip="Close (Esc)|The spokes keep running; this view is a map, not a lifecycle owner.">${icon("close", 13)}</button>
@@ -752,6 +774,8 @@ function onViewClick(ev: Event): void {
   // The on-orbit panel spawns (folder or repo clone + vault PAT, P-FLEET.L18), so creating a spoke never
   // leaves the screen; the grid stays one click away as the workbench.
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
+  const hubBtn = t.closest("[data-orbit-hubterm]") as HTMLButtonElement | null; // P-TUI.2
+  if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
   if (t.closest("[data-orbit-spawn]")) { togglePanel("spawn"); return; }
   if (t.closest("[data-orbit-panel]")) { onPanelClick(t); return; }
   if (t.closest("[data-orbit-hub]")) { goHome(); return; }

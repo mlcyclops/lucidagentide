@@ -3662,6 +3662,53 @@ body.preview-open .thread{font-size:.9em}
 .noresp-sr{opacity:.6;font-family:var(--mono);font-size:11px}
 .noresp-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .noresp-note{opacity:.6;font-size:10px;margin-left:6px;font-weight:400}
+/* P-NETSTAT.1 (ADR-0423): the status-bar network indicator, its popover, and the "stand by" card that
+   replaces the switch-model card when a turn died on the network. Each text run is its own element. */
+.net-seg{gap:6px;min-width:0;max-width:360px}
+.net-seg .net-txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.net-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--txt-4)}
+[data-tone="ok"]>.net-dot{background:var(--green)}
+[data-tone="warn"]>.net-dot{background:var(--amber)}
+[data-tone="bad"]>.net-dot{background:var(--red)}
+[data-tone="idle"]>.net-dot{background:var(--txt-4);animation:netPulse 1.4s ease-in-out infinite}
+.net-seg.standby .net-dot{animation:netPulse 1.4s ease-in-out infinite}
+.net-seg[data-tone="bad"] .net-txt{color:var(--red-txt)}
+.net-seg[data-tone="warn"] .net-txt{color:var(--amber-txt)}
+.net-held{flex:none;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:rgb(var(--amber-rgb) / .2);
+  color:var(--amber-txt);font-size:10px;font-weight:700;line-height:16px;text-align:center}
+@keyframes netPulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion: reduce){.net-dot{animation:none!important}}
+.net-pop{padding:10px 12px;min-width:300px;max-width:380px;display:flex;flex-direction:column;gap:4px}
+.net-pop-head{display:flex;align-items:center;gap:7px;font-weight:600;color:var(--txt-1)}
+.net-pop-head>span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.net-pop-detail{font-size:12px;line-height:1.45;color:var(--txt-3);margin-bottom:4px}
+.net-spark{display:flex;align-items:flex-end;gap:2px;height:26px;margin:2px 0 6px}
+.net-bar{flex:1;min-width:4px;border-radius:2px 2px 0 0;background:rgb(var(--green-rgb) / .7)}
+.net-bar.fail{background:rgb(var(--red-rgb) / .55)}
+.net-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:1px 0}
+.net-k{flex:none;color:var(--txt-4);white-space:nowrap}
+.net-v{min-width:0;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.net-pop-sub{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--txt-4);margin-top:8px;white-space:nowrap}
+.net-check{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt-3)}
+.net-check>svg{flex:none}
+.net-check>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.net-check.ok{color:var(--txt-2)}
+.net-check.ok>svg{color:var(--green)}
+.net-held-list{display:flex;flex-direction:column;gap:4px;max-height:160px;overflow:auto}
+.net-held-item{font-size:11.5px;line-height:1.4;padding:4px 6px;border-radius:6px;background:var(--bg-2)}
+.net-held-t{font-weight:600;color:var(--txt-2)}
+.net-held-d{color:var(--txt-3)}
+.net-pop-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.netwait-card{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:10px;padding:10px 12px;background:rgb(var(--blue-rgb) / .06)}
+.netwait-card.sent{border-left-color:var(--green);background:rgb(var(--green-rgb) / .05)}
+.netwait-h{display:flex;align-items:center;gap:6px;font-weight:600;color:var(--txt-1)}
+.netwait-h>svg{flex:none}
+.netwait-b{font-size:13px;line-height:1.5;color:var(--txt-2)}
+.netwait-live{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-2);font-variant-numeric:tabular-nums}
+.netwait-lat{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.netwait-line{font-size:12px;color:var(--txt-3)}
+.netwait-sr{font-family:var(--mono);font-size:11px;opacity:.6;overflow-wrap:anywhere}
+.netwait-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 /* P-PROV.1 (ADR-0210): extra config-field rows (Azure resource, Vertex/Gemini-Enterprise project/location,
    Gemini GCP project). The label sits on its OWN full-width line and the input goes full-width underneath it
    (wrap + a 100%-basis label), so a field like "GCP project ID" gets a real, typeable input instead of a
@@ -4491,6 +4538,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* P-FLEET.L12: the card is now a flex ITEM whose width fleet_grid.ts sets inline (`flex:0 1 <w>px`), so this
    rule sets NO width/flex of its own and nothing here fights that inline value. `max-width:100%` is
    load-bearing: a card sized wider than the panel shrinks to fit rather than overflowing the fleet column. */
+/* The + Lane opener used to size to its longest unwrapped sentence and ate the whole panel. Pin it
+   to about one lane (360px) so the path ending and the worktree line stay readable beside other cards. */
+.fleet-spawn-card{flex:0 1 360px;width:360px;max-width:100%}
 .fleet-card{--lane:var(--txt-4);--lane-dim:color-mix(in srgb,var(--txt-4) 25%,transparent);position:relative;display:flex;flex-direction:column;min-width:0;max-width:100%;
   background:var(--bg-2);border:1px solid var(--line);border-radius:10px;overflow:hidden;
   transition:border-color .25s,box-shadow .25s,opacity .25s}
@@ -4556,7 +4606,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-cwd-chip{flex:0 1 auto;min-width:0;max-width:92px;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);
   background:var(--bg-1);border:1px solid var(--line);border-radius:5px;padding:1px 5px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-model{flex:0 1 auto;min-width:0;max-width:110px;height:20px;font:inherit;font-size:10px;color:var(--txt-2);
+.fleet-model{flex:0 1 auto;min-width:0;max-width:168px;height:20px;font:inherit;font-size:10px;color:var(--txt-2);
   background:var(--bg-1);border:1px solid var(--line);border-radius:6px;padding:0 2px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 .fleet-model:focus{outline:none;border-color:var(--accent)}
@@ -4773,6 +4823,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-spawn-save input{flex:none;accent-color:var(--accent);margin:0}
 .fleet-spawn-save span{min-width:0;line-height:1.4}
 .fleet-spawn-save input:disabled+span{color:var(--txt-4)}
+/* P-FLEET.WT1: the worktree risk sentence wraps inside the 360px card, so the box sits on its first line.
+   The span is the single text child (invariant 11); overflow-wrap keeps a long token from widening the card. */
+.fleet-spawn-wt{align-items:flex-start}
+.fleet-spawn-wt input{margin-top:2px}
+.fleet-spawn-wt span{flex:1 1 auto;white-space:normal;overflow-wrap:break-word}
+.fleet-spawn-in[data-spawn-cwd]{font-family:var(--mono);text-overflow:ellipsis}
 .fleet-spawn-err{font-size:11px;line-height:1.45;color:var(--red);background:var(--red-dim);border:1px solid rgb(var(--red-rgb) / .4);border-radius:7px;padding:5px 8px;word-break:break-word}
 .fleet-spawn-acts{display:flex;justify-content:flex-end;gap:6px}
 .fleet-empty{grid-column:1/-1;display:flex;align-items:center;gap:7px;min-width:0;color:var(--txt-3);font-size:12px;padding:10px 4px}
@@ -6119,6 +6175,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   border-radius:8px;color:var(--txt);font:inherit;font-size:12px;padding:7px 9px}
 .orbit-spawn-auth input[type="password"]:focus{outline:none;border-color:var(--accent)}
 .orbit-spawn-save{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--txt-3);cursor:pointer}
+.orbit-spawn-wt{align-items:flex-start;padding:5px 4px;min-width:0}
+.orbit-spawn-wt input{flex:none;margin:2px 0 0;accent-color:var(--accent)}
+.orbit-spawn-wt span{flex:1 1 auto;min-width:0;line-height:1.45;white-space:normal;overflow-wrap:break-word}
 
 /* P-PROGRESS.1: tool steps say what they are doing and how they ended; the HUD and the lane cards carry a
    progress strip (history estimate bar, liveness pill, folder wait); the grid shows the folder queues.

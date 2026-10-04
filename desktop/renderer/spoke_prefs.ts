@@ -25,14 +25,70 @@ function write(key: string, value: string): void {
   try { localStorage.setItem(key, value); } catch { /* storage unavailable: the default stands */ }
 }
 
+/** Provider prefix of a model id (`xai-oauth/grok-4.7` -> `xai-oauth`). Bare ids have none. */
+export function providerRoute(value: string): string {
+  const v = value.trim();
+  const i = v.indexOf("/");
+  return i === -1 ? "" : v.slice(0, i);
+}
+
+/** Model id with the provider prefix removed, compared case-insensitively. */
+export function bareModelId(value: string): string {
+  const v = value.trim();
+  const i = v.lastIndexOf("/");
+  return (i === -1 ? v : v.slice(i + 1)).toLowerCase();
+}
+
 /** The model a new spoke form preselects. Pure: the remembered spoke model when it is still offered,
  *  else the master's model (the forms list it even when the catalog has not loaded yet), else the first
- *  offered model, else "" (the engine then uses its own default). */
+ *  offered model, else "" (the engine then uses its own default).
+ *
+ *  A remembered id that is the same bare model on a different provider is an auth twin
+ *  (`xai/grok-4.7` vs `xai-oauth/grok-4.7`), not a model choice. Main's route wins: that is the
+ *  credential that is signed in. Following the twin is how a lane landed on a dead API key. */
 export function spawnModelDefault(options: readonly ModelOption[], remembered: string, master: string): string {
   const r = remembered.trim();
+  const m = master.trim();
+  const bare = bareModelId(m);
+  if (m && r && r !== m && bare !== "" && bareModelId(r) === bare) return m;
   if (r && options.some((o) => o.value === r)) return r;
-  if (master) return master;
+  if (m) return m;
   return options[0]?.value ?? "";
+}
+
+/** What a colliding route IS, in the words a person picks a login with. Raw prefixes (`xai-oauth`)
+ *  read as a second model. Unknown routes fall back to the prefix with hyphens as spaces. */
+const LOGIN_LABEL: Record<string, string> = {
+  "xai-oauth": "X sign-in",
+  xai: "API key",
+  anthropic: "Anthropic",
+  "openai-codex": "Codex",
+  openai: "OpenAI API key",
+  "github-copilot": "Copilot",
+  "google-gemini-cli": "Gemini sign-in",
+  "google-antigravity": "Antigravity",
+};
+
+/** The login words for a provider prefix, or "" when this route has no named login.
+ *  Fleet menus and the main picker both read this, so the two cannot drift. */
+export function loginLabel(route: string): string {
+  return LOGIN_LABEL[route] ?? "";
+}
+
+/** Fleet `<select>` labels. A display name that appears once stays as the catalog wrote it. A name
+ *  shared by two logins leads with the login (`X sign-in: Grok 4.7`, `API key: Grok 4.7`), because a
+ *  native option has no separate tag and a parenthetical suffix looks like a second model. */
+export function fleetModelOptions(options: readonly ModelOption[]): { value: string; label: string }[] {
+  const nameOf = (o: ModelOption): string => (o.label ?? o.value).trim() || o.value;
+  const counts = new Map<string, number>();
+  for (const o of options) counts.set(nameOf(o), (counts.get(nameOf(o)) ?? 0) + 1);
+  return options.map((o) => {
+    const name = nameOf(o);
+    const route = providerRoute(o.value);
+    const login = loginLabel(route) || route.replace(/-/g, " ");
+    const label = (counts.get(name) ?? 0) > 1 && route ? `${login}: ${name}` : name;
+    return { value: o.value, label };
+  });
 }
 
 /** The last model a spoke was created with or switched to ("" when none yet). */

@@ -582,6 +582,10 @@ demo-P-HEALTH.1: ## P-HEALTH.1: the harness watches its OWN sessions so a stalle
 demo-P-HEALTH.2: demo-P-HEALTH.1 ## P-HEALTH.2 (runs with P-HEALTH.1): a recovered session now RESUMES THE RUN the recovery interrupted. P-HEALTH.1's `recover` reloads the same session id so the conversation survives, but dropping the omp child rejects the in-flight session/prompt, so the turn printed "[agent unavailable]" and settled: the session was healthy again and the WORK was gone, with nothing telling the user which, so they still had to notice the stall and re-ask. The run is now re-sent on the recovered session with a short operator note (do NOT start over, re-read and verify any file you were part-way through writing) and the user is told plainly that the stalled session is restarting and picking up where it left off. The refusals are the design: a user STOP is never resumed (Stop means stop), one mark authorizes exactly ONE resume so a repeat failure cannot reuse it, a session that failed to reload is never resumed rather than talking to a phantom, and the budget is per RUN and NOT refilled by activity - so wedge/resume/wedge/resume/wedge STOPS and says the work so far is saved, even though that same activity deliberately refills the health episode's own probe/recover budget.
 	$(BUN) run harness/scripts/demo_phealth2.ts
 
+.PHONY: demo-P-HEALTH.3
+demo-P-HEALTH.3: demo-P-HEALTH.2 ## P-HEALTH.3: a model writing a large tool call is not a stall. omp's ACP mapper drops toolcall_start/toolcall_delta, so a long write reached the desktop as minutes of silence with no tool call open and the watchdog probed ("Status?") and then cancelled and respawned a healthy session (incident 20260930T022224Z-mlnj). harness/omp/stream_beat_extension.ts posts a throttled beat carrying the omp session id while arguments stream; the engine credits it only to the master turn or busy lane with that id (no id, no beat). A successful self-heal no longer leaves chat chips; only a run that did not continue on its own (needsUser) does.
+	$(BUN) test $(TEST_IGNORES) harness/omp/stream_beat_extension.test.ts desktop/health_watch.test.ts
+
 .PHONY: demo-P-TOKENS.1
 demo-P-TOKENS.1: ## P-TOKENS.1 / P-FLEET.L9: the token-spend accounting behind the fleet card's context-fill chip (the composer popover it was first built for was removed at the user's request, ADR-0315; the module stays because each lane card folds its own usage and reads meterBadge for the value and the escalation thresholds) - the central assertion is NEGATIVE: omp reports only context fill, window, and cost, so a metric that never arrived reads "not reported", never a plausible $0.00 or 0 tokens a user would budget against. A REPORTED zero renders $0.00 and stays measured because a reported zero is a fact while an unreported one is an invention; every output row is unmeasured with a hint containing "estimate"; per-call context delta is ATTRIBUTION that says so when unbracketed rather than showing 0; 70 calls keep the newest 60 and no reducer mutates its input. Plus the geometry: dragging a card's BOTTOM edge DOWN grows it (the grip follows the cursor, cards top-anchored so the row holds still), the dock's north edge keeps its BOTTOM edge pinned even once height pins at the minimum, 7 corrupt saved layouts degrade to empty without throwing, and resizeShape composes with share_dock's viewport clamp
 	$(BUN) run harness/scripts/demo_ptokens1.ts
@@ -888,8 +892,35 @@ demo-P-PROGRESS.4: ## P-PROGRESS.4 (ADR-0413): the turn ETA replayed against fin
 .PHONY: demo-P-LIVENESS.1
 demo-P-LIVENESS.1: ## P-LIVENESS.1 (ADR-0418): an open tool call is judged on evidence (its processes' CPU and disk counters, process churn, subagent transcript writes), marked "likely stuck" after 5 min of none (12 min with a live subagent), and stopped only by the user's Stop command, which ends just the processes that call started
 	$(BUN) run harness/scripts/demo_p_liveness_1.ts
+
+.PHONY: demo-P-NETSTAT.1
+demo-P-NETSTAT.1: ## P-NETSTAT.1 (ADR-0423): a status-bar network indicator with provider latency; a turn that died on the network or on omp's startup handshake gets a stand-by card that resends once the link is stable, instead of blaming the model; outage toasts are held in the indicator's popover, security notices never are
+	$(BUN) run harness/scripts/demo_p_netstat_1.ts
+.PHONY: demo-P-SANDBOX.18
+demo-P-SANDBOX.18: ## P-SANDBOX.18 (ADR-0424): the AppContainer helper skips a grant already on disk instead of re-walking every file under it (23 s per spawn on this repo), so the contained agent answers initialize in time and respawns work; a contained handshake failure names the sandbox and never offers a model switch
+	$(BUN) run harness/scripts/demo_p_sandbox_18.ts
 .PHONY: demo-P-GAME.1
 demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.7
+demo-P-GAME.7: ## P-GAME.7: Chroma Cadence joins the arcade. Proves the Preview gate, then plays whole seeded songs headless: a player 40 ms late reads as ~40 ms late, the results offer that sync, and the retry with it applied is all PERFECT; pause freezes the track, the count-in holds it, the drained meter fails the song
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.8
+demo-P-GAME.8: ## P-GAME.8: Gravity Gambit joins the arcade. Proves the Preview gate, then drives it headless: a landscape panel stays landscape, a 400x720 panel turns the course (scale 0.38 vs 0.25) and a pull-down sling on the turned screen aims at the wormhole; recall, crash, pause; then every sector is solved with the flight's own integrator and flown into the wormhole (sector 5 was unwinnable before this), debrief, replay
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.9
+demo-P-GAME.9: ## P-GAME.9: Silent Fathom joins the arcade. Proves the Preview gate, then drives it headless at 400x720: the view zooms out (0.65) so the sub sees as far as it is heard, the cave is black until a ping lights its walls, the ping cooldown holds, thrust is loud and silence settles, pause freezes the abyss; the autopilot (BFS path, hull-wide line of sight) surfaces through all 5 zones while leviathans hear it; with the hull unlocked it dies with the cause on the card; dive again restarts at zone 1
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.10
+demo-P-GAME.10: ## P-GAME.10: Skyhook joins the arcade. Proves the Preview gate, then drives it headless at 400x720: the view zooms out (0.5) so anchors in rope reach are on screen, holding Space latches and letting go flings forward into a FLOW chain, pause freezes the run, restart from pause; every anchor hangs within rope reach of its floor and a player idle on the floor can still latch (both were lost runs before the playability fix); the autopilot carries a seeded run past 2000 m; an idle player is then caught by the Cascade; the best distance carries to the menu
 	$(BUN) test desktop/arcade_games.test.ts
 	$(BUN) run desktop/scripts/demo_p_game_1.mjs
 
@@ -1189,6 +1220,10 @@ demo-P-PORTGUARD.3: demo-portguard-2 ## P-PORTGUARD.3 (ADR-0382): reap our OWN o
 demo-P-MODEL.4: ## P-MODEL.4 (ADR-0383): GPT-6 Sol and Luna. omp 18.2.7 -> 18.2.10 carries both ids natively; LUCID adds the cataloged prices (Astra 10/50, Sol 2/10, Luna 0.10/0.50), the 1M windows and cards, an Astra > Sol > Luna fresh-install order, and pins the Regular/Max walk across the three tiers.
 	$(BUN) test $(TEST_IGNORES) desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts harness/prompt/prefix_compaction.test.ts
 
+.PHONY: demo-P-MODEL.6
+demo-P-MODEL.6: ## P-MODEL.6 (ADR-0422): Claude Sonnet 5.5 on omp 18.4.4. The six-package pin moves 18.2.10 -> 18.4.4 (three API moves: keys.setRuntime, cfg*.override, JudgeDeps.purpose); LUCID adds Sonnet 5.5's $2/$10 row on every route spelling, the 1M window, a card, and a default rank above Sonnet 5 below every flagship. R-07 re-pinned: StepFun gates behind the China-origin ACKNOWLEDGE and never resolves in lockdown; omp's on-device apple provider lists on darwin only (providerAllowedOnPlatform, engine platform via build-info).
+	$(BUN) test $(TEST_IGNORES) harness/omp/provider_catalog.test.ts harness/prompt/prefix_compaction.test.ts harness/testing/echo.test.ts harness/prompt/prompt_audit.test.ts harness/omp/browser_extension.test.ts harness/hooks/quarantine_hook.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts desktop/checker_model.test.ts desktop/build_flavor.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-LEGIBLE.1
 demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / Agent 365 without a content path. Each launch writes a metadata-only local-agent manifest (Defender's vendor / relatedProcess / autoApprove / mcpServers / localMcps vocabulary) to userData; MCP entries keep only name, type, URL origin or command basename, so no header, arg, env, path or query can leak. No hook seam, no listener, gate untouched.
 	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
@@ -1226,6 +1261,14 @@ demo-P-TUI.0: ## P-TUI.0 (ADR-0419): the engine discovery seam. The engine publi
 demo-P-TUI.1: demo-P-TUI.0 ## P-TUI.1 part (ADR-0420): `lucid hub` - the terminal hub as a PANE MULTIPLEXER (herdr/tmux idiom, operator direction 2026-09-28). Attaches to the running engine through the discovery seam only (never a guessed port); a binary split tree of panes each hosting a capability deck (Overview, Security with audited approve/dismiss, Fleet, Sessions, Audit, Usage) over the SAME /api routes the GUI calls; | and - split, tab walks focus, z zooms, x closes, 1-6 rebinds, hostile engine strings flatten to single rows. Proves it headless against the REAL engine: attach, real facts, side-by-side split, zoom/close, honest engine-unreachable status.
 	$(BUN) run desktop/scripts/demo_p_tui_1.ts
 	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.2
+demo-P-TUI.2: demo-P-TUI.1 ## P-TUI.2: lucid hub without a checkout or a manual command. The packaged app writes a marked one-line lucid.cmd forwarder into the per-user WindowsApps folder (on PATH by default) pointing at the bin\lucid.exe every dist already compiles; a lucid.cmd without the marker is never overwritten, and the uninstaller deletes only a marked one. The Fleet grid and orbit gain a Terminal button (engine route /api/hub/open, UI token only, fixed command) and LucidAgentIDE.bat gains H, both opening lucid hub in a new console attached to the running engine.
+	$(BUN) test $(TEST_IGNORES) desktop/cli_forwarder.test.ts
+
+.PHONY: demo-P-FLEET.WT1
+demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
+	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts
 
 .PHONY: demo-P-JEV.6
 demo-P-JEV.6: ## P-JEV.6 (ADR-0421): a judge whose account says the model does not exist is not asked again, cloud or local. omp's smol priority patterns name gpt-5.3-codex-spark for the openai-codex OAuth provider and match openai/gpt-5.3-codex-spark under an API-key account with no such model; omp cools down only 401/402/403, so that judge answered every judgment with a 404 (model_not_found) before the chain moved on. P-JEV.5 counted only LOCAL failures. Now ONE missing-model answer bans (ledger + in-process breaker), a transient cloud failure still never does, and a banned chat model is not named in the chain. Proves it against the ledger, the breaker and omp's real role resolver.
