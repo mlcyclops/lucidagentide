@@ -1274,3 +1274,8 @@ demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn 
 demo-P-JEV.6: ## P-JEV.6 (ADR-0421): a judge whose account says the model does not exist is not asked again, cloud or local. omp's smol priority patterns name gpt-5.3-codex-spark for the openai-codex OAuth provider and match openai/gpt-5.3-codex-spark under an API-key account with no such model; omp cools down only 401/402/403, so that judge answered every judgment with a 404 (model_not_found) before the chain moved on. P-JEV.5 counted only LOCAL failures. Now ONE missing-model answer bans (ledger + in-process breaker), a transient cloud failure still never does, and a banned chat model is not named in the chain. Proves it against the ledger, the breaker and omp's real role resolver.
 	$(BUN) run desktop/scripts/demo_p_jev_6.ts
 	$(BUN) test $(TEST_IGNORES) desktop/judgment_policy.test.ts harness/judgment/judge_bans.test.ts harness/omp/judgment_extension.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-CTRL.1
+demo-P-CTRL.1: ## P-CTRL.1 (ADR-0426; design ADR-0425, issue #449): the seven controller_* event names (controller_paired/_unpaired/_turn_started/_turn_blocked/_auto_consented/_auto_revoked/_ruling) are in the frozen EventName contract. Each one emits through the real Telemetry envelope with the stable run/session ids; a typo'd controller_* name still raises UnknownEventError and writes nothing (invariant #8); the ADR numbering stays unique.
+	$(BUN) run harness/scripts/demo_p_ctrl_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/telemetry/events.test.ts harness/adr_numbering.test.ts
