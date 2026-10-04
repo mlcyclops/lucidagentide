@@ -1281,6 +1281,11 @@ demo-P-TUI.4: demo-P-TUI.3 ## P-TUI.4: the herdr-parity decks join the hub's rin
 	$(BUN) run desktop/scripts/demo_p_tui_4.ts
 	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts
 
+.PHONY: demo-P-TUI.5
+demo-P-TUI.5: demo-P-TUI.4 ## P-TUI.5 (ADR-0433): spaces hold TABS and a persistent left RAIL shows them. hub-spaces.json v2 (space -> tabs -> panes; pane ids stay space-scoped so every v1 id still resolves; a v1 file migrates one way into tab t1, a v2 file never reads as v1); grouped `tab list|create|rename|close|focus`; the tmux mapping corrected (window = TAB, session = SPACE: new/kill/rename/select/list-window and new/kill/rename-session, switch-client, list-sessions). The rail (b toggles, persisted; B puts the keyboard on it) lists each space with its tabs, focus marker, pane counts and live lane badges, and an AGENTS seam header; SGR clicks focus a space, a tab or a pane. Proves it with the REAL headless hub, engine and CLI plus the real input path fed terminal mouse bytes.
+	$(BUN) run desktop/scripts/demo_p_tui_5.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_spaces.test.ts harness/launcher/hub_tmux_verbs.test.ts harness/launcher/hub_control.test.ts harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-FLEET.WT1
 demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
 	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts

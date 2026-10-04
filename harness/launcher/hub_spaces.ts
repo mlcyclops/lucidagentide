@@ -1,14 +1,17 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0436): the hub's SPACES model. A space is a named root layout (tmux: a window; herdr: a
-// workspace) holding its own binary split tree of panes. Pure state, no I/O except the two persistence
-// helpers at the bottom, so the TUI keys, the `:` prompt and the control server all drive ONE model.
+// P-TUI.3 (ADR-0431) + P-TUI.5 (ADR-0433): the hub's SPACES model. A space is a named group of TABS
+// (tmux: a session; herdr: a workspace), and a tab is one root layout holding its own binary split
+// tree of panes (tmux: a window). Pure state, no I/O except the two persistence helpers at the
+// bottom, so the TUI keys, the rail, the `:` prompt and the control server all drive ONE model.
 //
-// Ids are the control plane's addressing contract: spaces are s1, s2, ... and panes are s<n>:p<m>. Both
-// counters only ever climb and are persisted with the layout, so an id an agent was handed never comes
-// back pointing at a different pane (a reused id is how a scripted `kill-pane -t` hits the wrong thing).
-// A pane keeps its id when its deck is rebound or it is swapped; only split mints a new one.
+// Ids are the control plane's addressing contract: spaces are s1, s2, ...; tabs are s<n>:t<m>; panes
+// are s<n>:p<m>. Pane ids stay SPACE-scoped (not tab-scoped) so every id the v1 control plane handed
+// out still resolves after the v2 migration. Every counter only ever climbs and is persisted with the
+// layout, so an id an agent was handed never comes back pointing at a different thing (a reused id is
+// how a scripted `kill-pane -t` hits the wrong pane). A pane keeps its id when its deck is rebound or
+// it is swapped; only split and a new tab mint one.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -21,7 +24,8 @@ export interface PaneLeaf { kind: "leaf"; id: string; deck: PaneDeck; lane?: str
 export interface PaneSplit { kind: "split"; dir: "h" | "v"; ratio?: number; a: PaneNode; b: PaneNode }
 export type PaneNode = PaneLeaf | PaneSplit;
 
-export interface Space { id: string; name: string; tree: PaneNode; focus: number; zoom: boolean; nextPane: number }
+export interface Tab { id: string; name: string; tree: PaneNode; focus: number; zoom: boolean }
+export interface Space { id: string; name: string; tabs: Tab[]; activeTab: string; nextPane: number; nextTab: number }
 
 /** A refused or malformed hub operation. `code` is the stable machine-readable part of the error. */
 export class HubOpError extends Error {
@@ -31,6 +35,11 @@ export class HubOpError extends Error {
 /** In-order leaves - the focus ring. */
 export function leaves(node: PaneNode): PaneLeaf[] {
   return node.kind === "leaf" ? [node] : [...leaves(node.a), ...leaves(node.b)];
+}
+
+/** Every pane in a space, across its tabs. */
+export function spacePanes(s: Space): number {
+  return s.tabs.reduce((n, t) => n + leaves(t.tree).length, 0);
 }
 
 /** Replace the `index`-th leaf via `f` - returns a new tree. */
@@ -63,17 +72,22 @@ export function layoutOf(node: PaneNode): string {
   return node.kind === "leaf" ? node.id : `[${layoutOf(node.a)} ${node.dir === "v" ? "|" : "/"} ${layoutOf(node.b)}]`;
 }
 
-// Space names render in the hub's top bar: one physical row, no control bytes, bounded.
+// Space and tab names render in the top bar and the rail: one physical row, no control bytes, bounded.
 const NAME_RE = /^[^\u0000-\u001f\u007f]{1,40}$/;
 const SPACE_ID_RE = /^s(\d+)$/;
+const TAB_ID_RE = /^(s\d+):t(\d+)$/;
 const PANE_ID_RE = /^(s\d+):p(\d+)$/;
+
+const activeTabOf = (s: Space): Tab => s.tabs.find((t) => t.id === s.activeTab) ?? s.tabs[0]!;
 
 export class Spaces {
   spaces: Space[] = [];
   active = "";
+  /** The hub's left rail (P-TUI.5) is open. Persisted with the layout: it is how the hub looks. */
+  rail = true;
   #nextSpace = 1;
   /** Called after every structural mutation (persistence hook). Focus/zoom moves made directly on a
-   *  Space by the TUI keys are not structural; the hub saves those on exit. */
+   *  Tab by the TUI keys are not structural; the hub saves those on exit. */
   onChange: () => void = () => {};
 
   constructor(fresh = true) {
@@ -84,6 +98,11 @@ export class Spaces {
     return this.spaces.find((s) => s.id === this.active) ?? this.spaces[0]!;
   }
 
+  /** The active space's active tab: the layout on screen. */
+  get tab(): Tab {
+    return activeTabOf(this.current);
+  }
+
   /** Resolve a space by id or exact name; omitted = the active space. */
   space(ref?: string): Space {
     if (ref === undefined || ref === "") return this.current;
@@ -92,15 +111,34 @@ export class Spaces {
     return s;
   }
 
-  #name(name: string): string {
+  /** Resolve a tab by id (s1:t2, any space) or exact name in the active space; omitted = the active tab. */
+  findTab(ref?: string): { space: Space; tab: Tab } {
+    if (ref === undefined || ref === "") return { space: this.current, tab: this.tab };
+    const m = TAB_ID_RE.exec(ref);
+    const space = m ? this.spaces.find((s) => s.id === m[1]) : this.current;
+    const tab = space?.tabs.find((t) => (m ? t.id === ref : t.name === ref));
+    if (!space || !tab) throw new HubOpError("not_found", `no tab "${ref}"`);
+    return { space, tab };
+  }
+
+  #name(name: string, what: "space" | "tab"): string {
     const n = name.trim();
-    if (!NAME_RE.test(n)) throw new HubOpError("bad_name", "a space name is 1-40 printable characters");
+    if (!NAME_RE.test(n)) throw new HubOpError("bad_name", `a ${what} name is 1-40 printable characters`);
     return n;
+  }
+
+  /** Mint a tab (and its first pane) in `s`. Does not attach it. */
+  #newTab(s: Space, name?: string): Tab {
+    const id = `${s.id}:t${s.nextTab++}`;
+    return { id, name: name === undefined ? id.slice(s.id.length + 1) : this.#name(name, "tab"), tree: { kind: "leaf", id: `${s.id}:p${s.nextPane++}`, deck: "overview" }, focus: 0, zoom: false };
   }
 
   create(name?: string): Space {
     const id = `s${this.#nextSpace++}`;
-    const s: Space = { id, name: name === undefined ? id : this.#name(name), tree: { kind: "leaf", id: `${id}:p1`, deck: "overview" }, focus: 0, zoom: false, nextPane: 2 };
+    const s: Space = { id, name: name === undefined ? id : this.#name(name, "space"), tabs: [], activeTab: "", nextPane: 1, nextTab: 1 };
+    const t = this.#newTab(s);
+    s.tabs.push(t);
+    s.activeTab = t.id;
     this.spaces.push(s);
     this.active = id;
     this.onChange();
@@ -109,12 +147,12 @@ export class Spaces {
 
   rename(ref: string | undefined, name: string): Space {
     const s = this.space(ref);
-    s.name = this.#name(name);
+    s.name = this.#name(name, "space");
     this.onChange();
     return s;
   }
 
-  /** Close a space and every pane in it. The hub always keeps one: closing the last refuses. */
+  /** Close a space and every tab and pane in it. The hub always keeps one: closing the last refuses. */
   close(ref?: string): Space {
     const s = this.space(ref);
     if (this.spaces.length === 1) throw new HubOpError("last_space", "the hub keeps at least one space");
@@ -132,82 +170,127 @@ export class Spaces {
     return s;
   }
 
-  /** Find a pane by full id (s1:p2); omitted = the active space's focused pane. */
-  pane(ref?: string): { space: Space; index: number; leaf: PaneLeaf } {
+  /** New tab in a space (default: the active one); it becomes the active tab of the active space. */
+  createTab(spaceRef?: string, name?: string): Tab {
+    const s = this.space(spaceRef);
+    const t = this.#newTab(s, name);
+    s.tabs.push(t);
+    s.activeTab = t.id;
+    this.active = s.id;
+    this.onChange();
+    return t;
+  }
+
+  renameTab(ref: string | undefined, name: string): Tab {
+    const { tab } = this.findTab(ref);
+    tab.name = this.#name(name, "tab");
+    this.onChange();
+    return tab;
+  }
+
+  /** Close a tab and its panes. A space always keeps one tab: closing the last refuses. */
+  closeTab(ref?: string): Tab {
+    const { space, tab } = this.findTab(ref);
+    if (space.tabs.length === 1) throw new HubOpError("last_tab", "a space keeps at least one tab - close the space instead");
+    const i = space.tabs.indexOf(tab);
+    space.tabs.splice(i, 1);
+    if (space.activeTab === tab.id) space.activeTab = space.tabs[Math.min(i, space.tabs.length - 1)]!.id;
+    this.onChange();
+    return tab;
+  }
+
+  /** Focus a tab, switching to its space. */
+  focusTab(ref: string): Tab {
+    const { space, tab } = this.findTab(ref);
+    this.active = space.id;
+    space.activeTab = tab.id;
+    this.onChange();
+    return tab;
+  }
+
+  /** Find a pane by full id (s1:p2), in any tab of its space; omitted = the focused pane on screen. */
+  pane(ref?: string): { space: Space; tab: Tab; index: number; leaf: PaneLeaf } {
     if (ref === undefined || ref === "") {
       const space = this.current;
-      const ring = leaves(space.tree);
-      const index = Math.min(space.focus, ring.length - 1);
-      return { space, index, leaf: ring[index]! };
+      const tab = activeTabOf(space);
+      const ring = leaves(tab.tree);
+      const index = Math.min(tab.focus, ring.length - 1);
+      return { space, tab, index, leaf: ring[index]! };
     }
     const m = PANE_ID_RE.exec(ref);
     const space = m ? this.spaces.find((s) => s.id === m[1]) : undefined;
-    const index = space ? leaves(space.tree).findIndex((l) => l.id === ref) : -1;
-    if (!space || index < 0) throw new HubOpError("not_found", `no pane "${ref}"`);
-    return { space, index, leaf: leaves(space.tree)[index]! };
+    for (const tab of space?.tabs ?? []) {
+      const ring = leaves(tab.tree);
+      const index = ring.findIndex((l) => l.id === ref);
+      if (index >= 0) return { space: space!, tab, index, leaf: ring[index]! };
+    }
+    throw new HubOpError("not_found", `no pane "${ref}"`);
   }
 
   /** Split a pane right (side by side) or down (stacked). The new pane copies the source's deck and
    *  lane and gets a fresh id; focus stays on the source pane. */
   split(ref: string | undefined, dir: "right" | "down"): PaneLeaf {
-    const { space, index, leaf } = this.pane(ref);
+    const { space, tab, index, leaf } = this.pane(ref);
     const fresh: PaneLeaf = { ...leaf, id: `${space.id}:p${space.nextPane++}` };
-    space.tree = mapLeaf(space.tree, index, (l) => ({ kind: "split", dir: dir === "right" ? "v" : "h", a: l, b: fresh }));
-    space.zoom = false;
+    tab.tree = mapLeaf(tab.tree, index, (l) => ({ kind: "split", dir: dir === "right" ? "v" : "h", a: l, b: fresh }));
+    tab.zoom = false;
     this.onChange();
     return fresh;
   }
 
-  /** Close a pane; its sibling takes the region. The last pane of a space refuses (close the space). */
+  /** Close a pane; its sibling takes the region. The last pane of a tab refuses (close the tab). */
   closePane(ref?: string): PaneLeaf {
-    const { space, index, leaf } = this.pane(ref);
-    const next = closeLeaf(space.tree, index);
-    if (!next) throw new HubOpError("last_pane", "last pane in this space - close the space instead");
-    space.tree = next;
-    if (index < space.focus) space.focus--;
-    space.focus = Math.min(space.focus, leaves(next).length - 1);
-    space.zoom = false;
+    const { tab, index, leaf } = this.pane(ref);
+    const next = closeLeaf(tab.tree, index);
+    if (!next) throw new HubOpError("last_pane", "last pane in this tab - close the tab instead");
+    tab.tree = next;
+    if (index < tab.focus) tab.focus--;
+    tab.focus = Math.min(tab.focus, leaves(next).length - 1);
+    tab.zoom = false;
     this.onChange();
     return leaf;
   }
 
-  /** Focus a pane, switching to its space. */
+  /** Focus a pane, switching to its space and tab. */
   focusPane(ref: string): PaneLeaf {
-    const { space, index, leaf } = this.pane(ref);
+    const { space, tab, index, leaf } = this.pane(ref);
     this.active = space.id;
-    if (space.focus !== index) space.zoom = false;
-    space.focus = index;
+    space.activeTab = tab.id;
+    if (tab.focus !== index) tab.zoom = false;
+    tab.focus = index;
     this.onChange();
     return leaf;
   }
 
-  /** Toggle zoom on a pane (focusing it first). */
+  /** Toggle zoom on a pane (focusing it, its tab and its space first). */
   zoom(ref?: string): boolean {
-    const { space, index } = this.pane(ref);
+    const { space, tab, index } = this.pane(ref);
     this.active = space.id;
-    space.zoom = space.focus === index ? !space.zoom : true;
-    space.focus = index;
+    space.activeTab = tab.id;
+    tab.zoom = tab.focus === index ? !tab.zoom : true;
+    tab.focus = index;
     this.onChange();
-    return space.zoom;
+    return tab.zoom;
   }
 
   /** Put another deck (or an agent lane) in a pane. The pane keeps its id. */
   rebind(ref: string | undefined, deck: PaneDeck, lane?: { id: string; name: string }): PaneLeaf {
-    const { space, index, leaf } = this.pane(ref);
+    const { tab, index, leaf } = this.pane(ref);
     if (deck === "agent" && !lane) throw new HubOpError("usage", "an agent pane needs a lane");
     const next: PaneLeaf = deck === "agent" ? { kind: "leaf", id: leaf.id, deck, lane: lane!.id, laneName: lane!.name } : { kind: "leaf", id: leaf.id, deck };
-    space.tree = mapLeaf(space.tree, index, () => next);
+    tab.tree = mapLeaf(tab.tree, index, () => next);
     this.onChange();
     return next;
   }
 
-  /** Swap two panes' positions (ids travel with the panes). Same space only. */
+  /** Swap two panes' positions (ids travel with the panes). Same tab only. */
   swap(src: string, dst: string): void {
     const a = this.pane(src);
     const b = this.pane(dst);
-    if (a.space !== b.space) throw new HubOpError("cross_space", "swap-pane works within one space");
+    if (a.space !== b.space) throw new HubOpError("cross_space", "swap-pane works within one tab");
+    if (a.tab !== b.tab) throw new HubOpError("cross_tab", "swap-pane works within one tab");
     if (a.index === b.index) return;
-    a.space.tree = mapLeaf(mapLeaf(a.space.tree, a.index, () => b.leaf), b.index, () => a.leaf);
+    a.tab.tree = mapLeaf(mapLeaf(a.tab.tree, a.index, () => b.leaf), b.index, () => a.leaf);
     this.onChange();
   }
 
@@ -215,7 +298,7 @@ export class Spaces {
    *  it left/up, R/D right/down (tmux's sense). Clamped to 10-90% so no pane collapses to nothing.
    *  ponytail: percent, not cells - the model has no terminal width; cells need the render size. */
   resize(ref: string | undefined, dir: "L" | "R" | "U" | "D", n: number): number {
-    const { space, leaf } = this.pane(ref);
+    const { tab, leaf } = this.pane(ref);
     const want = dir === "L" || dir === "R" ? "v" : "h";
     const path: PaneSplit[] = [];
     const find = (node: PaneNode): boolean => {
@@ -225,7 +308,7 @@ export class Spaces {
       path.pop();
       return false;
     };
-    find(space.tree);
+    find(tab.tree);
     const split = path.reverse().find((s) => s.dir === want);
     if (!split) throw new HubOpError("no_split", `no ${want === "v" ? "side-by-side" : "stacked"} split around ${leaf.id}`);
     const delta = (dir === "L" || dir === "U" ? -n : n) / 100;
@@ -234,30 +317,58 @@ export class Spaces {
     return split.ratio;
   }
 
-  list(): { id: string; name: string; active: boolean; panes: number; zoom: boolean; layout: string }[] {
-    return this.spaces.map((s) => ({ id: s.id, name: s.name, active: s.id === this.active, panes: leaves(s.tree).length, zoom: s.zoom, layout: layoutOf(s.tree) }));
+  /** Open or close the rail. */
+  setRail(on: boolean): void {
+    this.rail = on;
+    this.onChange();
   }
 
-  paneList(spaceRef?: string): { id: string; space: string; deck: PaneDeck; lane?: string; laneName?: string; focused: boolean; zoomed: boolean }[] {
+  list(): { id: string; name: string; active: boolean; panes: number; tabs: number; activeTab: string }[] {
+    return this.spaces.map((s) => ({ id: s.id, name: s.name, active: s.id === this.active, panes: spacePanes(s), tabs: s.tabs.length, activeTab: s.activeTab }));
+  }
+
+  /** Tabs of one space (default: every space). `active` = the space's active tab; `focused` = on screen. */
+  tabList(spaceRef?: string): { id: string; space: string; name: string; active: boolean; focused: boolean; panes: number; zoom: boolean; layout: string }[] {
     const spaces = spaceRef === undefined ? this.spaces : [this.space(spaceRef)];
-    return spaces.flatMap((s) => leaves(s.tree).map((l, i) => ({
-      id: l.id, space: s.id, deck: l.deck, ...(l.lane ? { lane: l.lane, laneName: l.laneName } : {}),
-      focused: s.id === this.active && i === s.focus, zoomed: s.zoom && i === s.focus,
+    return spaces.flatMap((s) => s.tabs.map((t) => ({
+      id: t.id, space: s.id, name: t.name, active: s.activeTab === t.id, focused: s.id === this.active && s.activeTab === t.id,
+      panes: leaves(t.tree).length, zoom: t.zoom, layout: layoutOf(t.tree),
     })));
   }
 
-  toJSON(): { v: 1; active: string; nextSpace: number; spaces: Space[] } {
-    return { v: 1, active: this.active, nextSpace: this.#nextSpace, spaces: this.spaces };
+  /** Panes of every space, one space, or one tab. */
+  paneList(scope: { space?: string; tab?: string } = {}): { id: string; space: string; tab: string; deck: PaneDeck; lane?: string; laneName?: string; focused: boolean; zoomed: boolean }[] {
+    const tabs = scope.tab !== undefined
+      ? [this.findTab(scope.tab)]
+      : (scope.space === undefined ? this.spaces : [this.space(scope.space)]).flatMap((space) => space.tabs.map((tab) => ({ space, tab })));
+    return tabs.flatMap(({ space: s, tab: t }) => leaves(t.tree).map((l, i) => ({
+      id: l.id, space: s.id, tab: t.id, deck: l.deck, ...(l.lane ? { lane: l.lane, laneName: l.laneName } : {}),
+      focused: s.id === this.active && s.activeTab === t.id && i === t.focus, zoomed: t.zoom && i === t.focus,
+    })));
   }
 
-  /** Rebuild from saved JSON. Anything off-shape (unknown deck, malformed id, id collisions, a counter
-   *  that would re-mint an existing id) is null: the hub starts fresh rather than render a guess. */
+  toJSON(): { v: 2; active: string; nextSpace: number; rail: boolean; spaces: Space[] } {
+    return { v: 2, active: this.active, nextSpace: this.#nextSpace, rail: this.rail, spaces: this.spaces };
+  }
+
+  /** Rebuild from saved JSON. v2 loads as v2; a v1 file (P-TUI.3: one tree per space) migrates ONE
+   *  WAY by wrapping each space's tree in tab t1, keeping every pane id. The version field decides the
+   *  reading, never the shape, so a v2 file cannot load as v1 (or the reverse). Anything off-shape
+   *  (unknown deck, malformed id, id collisions, a counter that would re-mint an existing id) is null:
+   *  the hub starts fresh rather than render a guess. */
   static restore(raw: string, isDeck: (deck: string) => boolean): Spaces | null {
     let b: unknown;
     try { b = JSON.parse(raw); } catch { return null; }
     const o = b as Record<string, unknown>;
-    if (typeof o !== "object" || o === null || o.v !== 1 || !Array.isArray(o.spaces) || o.spaces.length === 0) return null;
+    if (typeof o !== "object" || o === null || (o.v !== 1 && o.v !== 2) || !Array.isArray(o.spaces) || o.spaces.length === 0) return null;
     if (typeof o.nextSpace !== "number" || !Number.isInteger(o.nextSpace)) return null;
+    // v1 -> v2: the space's one layout becomes its first tab. Off-shape input stays off-shape (a space
+    // without a tree wraps to a tab without one and fails validation below).
+    const rawSpaces: unknown[] = o.v === 2 ? o.spaces : o.spaces.map((x) => {
+      const s = x as Record<string, unknown>;
+      if (typeof s !== "object" || s === null) return s;
+      return { id: s.id, name: s.name, nextPane: s.nextPane, nextTab: 2, activeTab: `${String(s.id)}:t1`, tabs: [{ id: `${String(s.id)}:t1`, name: "t1", tree: s.tree, focus: s.focus, zoom: s.zoom }] };
+    });
     const out = new Spaces(false);
     const ids = new Set<string>();
     const node = (n: unknown, sid: string, max: number): PaneNode | null => {
@@ -280,20 +391,33 @@ export class Spaces {
       const ratio = typeof x.ratio === "number" && x.ratio >= 0.1 && x.ratio <= 0.9 ? x.ratio : undefined;
       return { kind: "split", dir: x.dir, ...(ratio === undefined ? {} : { ratio }), a, b: c };
     };
-    for (const raw of o.spaces) {
+    const count = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
+    for (const raw of rawSpaces) {
       const s = raw as Record<string, unknown>;
       if (typeof s !== "object" || s === null) return null;
       const m = typeof s.id === "string" ? SPACE_ID_RE.exec(s.id) : null;
       if (!m || Number(m[1]) >= o.nextSpace || out.spaces.some((x) => x.id === s.id)) return null;
       if (typeof s.name !== "string" || !NAME_RE.test(s.name)) return null;
-      if (typeof s.nextPane !== "number" || !Number.isInteger(s.nextPane)) return null;
-      const tree = node(s.tree, s.id as string, s.nextPane);
-      if (!tree) return null;
-      const focus = typeof s.focus === "number" && Number.isInteger(s.focus) ? Math.max(0, Math.min(s.focus, leaves(tree).length - 1)) : 0;
-      out.spaces.push({ id: s.id as string, name: s.name, tree, focus, zoom: s.zoom === true, nextPane: s.nextPane });
+      if (!count(s.nextPane) || !count(s.nextTab) || !Array.isArray(s.tabs) || s.tabs.length === 0) return null;
+      const sid = s.id as string;
+      const tabs: Tab[] = [];
+      for (const rt of s.tabs) {
+        const t = rt as Record<string, unknown>;
+        if (typeof t !== "object" || t === null) return null;
+        const tm = typeof t.id === "string" ? TAB_ID_RE.exec(t.id) : null;
+        if (!tm || tm[1] !== sid || Number(tm[2]) >= s.nextTab || tabs.some((x) => x.id === t.id)) return null;
+        if (typeof t.name !== "string" || !NAME_RE.test(t.name)) return null;
+        const tree = node(t.tree, sid, s.nextPane);
+        if (!tree) return null;
+        const focus = count(t.focus) ? Math.max(0, Math.min(t.focus, leaves(tree).length - 1)) : 0;
+        tabs.push({ id: t.id as string, name: t.name, tree, focus, zoom: t.zoom === true });
+      }
+      const activeTab = tabs.some((t) => t.id === s.activeTab) ? (s.activeTab as string) : tabs[0]!.id;
+      out.spaces.push({ id: sid, name: s.name, tabs, activeTab, nextPane: s.nextPane, nextTab: s.nextTab });
     }
     out.#nextSpace = o.nextSpace;
     out.active = out.spaces.some((s) => s.id === o.active) ? (o.active as string) : out.spaces[0]!.id;
+    out.rail = o.rail !== false;
     return out;
   }
 }

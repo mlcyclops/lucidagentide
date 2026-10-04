@@ -89,17 +89,28 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
 - **`$EDITOR` replaces Monaco.** Anywhere the GUI opens the embedded editor (design
   doc, agent specs, skill studio drafts), the TUI writes a temp file, opens
   `$EDITOR`, and posts the result back through the same save route.
-- **Spaces and the control plane (P-TUI.3, ADR-0436).** The hub holds named spaces (tmux
-  windows), each with its own split tree; panes have stable ids like `s1:p2` that are never
-  reused. `:` opens a command prompt. The same commands drive a running hub from outside:
-  `lucid hub split-window -h`, `lucid hub pane read -t s1:p2`, `lucid hub new-window -n work`,
-  `lucid hub agent prompt <lane> <text>`, and the rest of the grouped (`status`, `space`,
-  `pane`, `agent`) and tmux vocabularies. Output is JSON; errors are JSON on stderr with exit 1,
+- **Spaces, tabs and the control plane (P-TUI.3, ADR-0431; P-TUI.5, ADR-0433).** The hub
+  holds named spaces (tmux sessions); each space holds named tabs (tmux windows), and each tab
+  has its own split tree. Ids never come back meaning something else: spaces `s1`, tabs
+  `s1:t2`, panes `s1:p2` (pane ids are per space, not per tab). `:` opens a command prompt.
+  The same commands drive a running hub from outside: `lucid hub split-window -h`,
+  `lucid hub pane read -t s1:p2`, `lucid hub new-window -n logs` (a tab),
+  `lucid hub new-session -s work` (a space), `lucid hub agent prompt <lane> <text>`, and the
+  rest of the grouped (`status`, `space`, `tab`, `pane`, `agent`) and tmux vocabularies.
+  Output is JSON; errors are JSON on stderr with exit 1,
   and `{"error":"no_hub"}` when nothing is running. The hub publishes `hub-discovery-<pid>.json`
   (0600) and a client must win the same nonce handshake as P-TUI.0 before it sends the token.
   `lucid hub --headless` runs the hub with no terminal for agents and CI. Agent commands call
   a fixed set of engine fleet routes; nothing on the control plane approves, dismisses,
   answers asks, or changes the whitelist, and `send-keys` only types into agent panes.
+- **The rail (P-TUI.5).** A left column lists every space with its tabs indented beneath:
+  `◆` and an accent bar mark the focused space, the tab on screen is cyan, each row counts its
+  panes (`3▣`), and a tab hosting agent panes carries a `◎n` badge (green while one works,
+  amber while one waits on you). Below it sits the AGENTS section. `b` opens or closes the
+  rail (closed, the deck list is back; the choice is saved in `hub-spaces.json`). Clicks work:
+  a space or tab row focuses it, a pane focuses the pane. `B` puts the keyboard on the rail
+  (`j`/`k`, `⏎` focus, `r` rename inline, `n` new tab, or a new space on the SPACES header,
+  `esc` back to the panes).
 
 ## Capability map
 
