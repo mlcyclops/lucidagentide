@@ -16,6 +16,11 @@
 // 1-6 rebind the focused pane, j/k select rows, a approve / i dismiss (Security), r refresh, q quit.
 // Chat deck, palette and directional focus/resize are the rest of P-TUI.1.
 //
+// P-TUI.3 (ADR-0436): the layout lives in SPACES (hub_spaces.ts: named root layouts, stable pane ids
+// s1:p2), `:` opens a command prompt running the same tmux/hub verbs as `lucid hub <cmd>`, and a
+// loopback control server (hub_control.ts) lets an agent drive this hub. `lucid hub --headless` is
+// this same hub with no terminal attached.
+//
 // The colors are the desktop design system (styles.css → the P-THEME.1 palette), so the hub and the
 // gated `lucid tui` read as one product: LUCID magenta chrome, cyan focus, the styles.css status hues.
 
@@ -23,6 +28,9 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { matchesKey, ProcessTerminal, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
 import { join } from "node:path";
 import { discoveryDir, listDiscoveries, verifyDiscovery, type EngineDiscovery } from "../../desktop/engine_discovery.ts";
+import { createHubExecutor, startHubControl } from "./hub_control.ts";
+import { HubOpError, leaves, loadSpaces, saveSpaces, Spaces, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
+import { parseHubCommand, tokenize, type HubOp } from "./hub_tmux_verbs.ts";
 
 // styles.css palette (desktop/renderer/styles.css) - the single source of the brand.
 const ACCENT = chalk.hex("#c64bd6");   // --accent: LUCID magenta
@@ -275,43 +283,6 @@ export function wrapText(text: string, width: number): string[] {
   return out;
 }
 
-// ---- pane tree (pure) --------------------------------------------------------------------------
-
-/** A leaf is a capability deck, or a live AGENT pane bound to a fleet lane. */
-export type PaneDeck = DeckId | "agent";
-export interface PaneLeaf { kind: "leaf"; deck: PaneDeck; lane?: string; laneName?: string }
-export type PaneNode = PaneLeaf | { kind: "split"; dir: "h" | "v"; a: PaneNode; b: PaneNode };
-
-/** In-order leaves - the focus ring. */
-export function leaves(node: PaneNode): PaneLeaf[] {
-  return node.kind === "leaf" ? [node] : [...leaves(node.a), ...leaves(node.b)];
-}
-
-/** Replace the `index`-th leaf via `f` (split it, retitle it) - returns a new tree. */
-export function mapLeaf(node: PaneNode, index: number, f: (leaf: PaneLeaf) => PaneNode): PaneNode {
-  let seen = 0;
-  const walk = (n: PaneNode): PaneNode => {
-    if (n.kind === "leaf") return seen++ === index ? f(n) : n;
-    return { kind: "split", dir: n.dir, a: walk(n.a), b: walk(n.b) };
-  };
-  return walk(node);
-}
-
-/** Drop the `index`-th leaf; its sibling takes the whole region. Null = last pane, not removable. */
-export function closeLeaf(node: PaneNode, index: number): PaneNode | null {
-  if (node.kind === "leaf") return null;
-  let seen = 0;
-  const walk = (n: PaneNode): PaneNode | null => {
-    if (n.kind === "leaf") return seen++ === index ? null : n;
-    const a = walk(n.a);
-    const b = walk(n.b);
-    if (a === null) return b;
-    if (b === null) return a;
-    return { kind: "split", dir: n.dir, a, b };
-  };
-  return walk(node);
-}
-
 /** Pad/clip a block of rows to exactly w x h (plain text in, plain text out). */
 export function fitBlock(lines: readonly string[], w: number, h: number): string[] {
   const out: string[] = [];
@@ -337,9 +308,14 @@ export class HubComponent implements Component {
   readonly #engine: EngineDiscovery;
   readonly #spawned: boolean;
   readonly #done = Promise.withResolvers<void>();
-  #tree: PaneNode = { kind: "leaf", deck: "overview" };
-  #focus = 0;
-  #zoom = false;
+  readonly #spaces: Spaces;
+  readonly #exec: (op: HubOp) => Promise<unknown>;
+  // The focused space's tree/focus/zoom: every pane key below reads and writes the ACTIVE space.
+  get #tree(): PaneNode { return this.#spaces.current.tree; }
+  get #focus(): number { return this.#spaces.current.focus; }
+  set #focus(i: number) { this.#spaces.current.focus = i; }
+  get #zoom(): boolean { return this.#spaces.current.zoom; }
+  set #zoom(z: boolean) { this.#spaces.current.zoom = z; }
   #sidebar = true;
   #help = false;
   #selected = 0;
@@ -351,7 +327,7 @@ export class HubComponent implements Component {
   #watchers: Record<string, AbortController> = {};
   #prompt: { lane: string; text: string } | null = null;
   #picker: { lane: string; models: ModelOption[]; sel: number; filter: string; busy?: boolean } | null = null;
-  #promptKind: "agent" | "wl-add" | "kg-filter" = "agent";
+  #promptKind: "agent" | "wl-add" | "kg-filter" | "command" = "agent";
   #kgFilter = "";
   #reader: { title: string; rows: string[] } | null = null;
   #data: HubData | null = null;
@@ -359,12 +335,43 @@ export class HubComponent implements Component {
   #timer: NodeJS.Timeout | undefined;
   #disposed = false;
 
-  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean } = {}) {
+  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces } = {}) {
     this.#ui = ui;
     this.#engine = engine;
     this.#spawned = !!opts.spawned;
     this.#base = `http://127.0.0.1:${engine.port}`;
     this.#token = engine.token;
+    this.#spaces = opts.spaces ?? new Spaces();
+    this.#exec = createHubExecutor({
+      spaces: this.#spaces,
+      engine: { base: this.#base, token: engine.token, port: engine.port, version: engine.version, flavor: engine.flavor },
+      isDeck: (d) => DECKS.some((x) => x.id === d),
+      paneText: (id, w, n) => this.paneText(id, w, n),
+      refresh: () => this.refresh(),
+      changed: () => this.#ui.requestRender(),
+    });
+  }
+
+  get spaces(): Spaces {
+    return this.#spaces;
+  }
+
+  /** Run one control op (the control server and the `:` prompt both land here). */
+  exec(op: HubOp): Promise<unknown> {
+    return this.#exec(op);
+  }
+
+  quit(): void {
+    this.#done.resolve();
+  }
+
+  /** A pane as the hub draws it: ANSI stripped, frame removed, trailing blank rows dropped. */
+  paneText(ref: string | undefined, width: number, lines: number): { id: string; title: string; lines: string[] } {
+    const { leaf } = this.#spaces.pane(ref);
+    const rows = this.#pane(leaf, width, lines + 2, false).map((r) => Bun.stripANSI(r));
+    const body = rows.slice(1, -1).map((r) => r.slice(2, -2).trimEnd());
+    while (body.length && !body[body.length - 1]) body.pop();
+    return { id: leaf.id, title: rows[0]!.replace(/^╭─|─*╮$/g, "").trim(), lines: body };
   }
 
   run(): Promise<void> {
@@ -497,7 +504,7 @@ export class HubComponent implements Component {
   }
 
   #focusedLeaf(): PaneLeaf {
-    return leaves(this.#tree)[this.#focus] ?? { kind: "leaf", deck: "overview" };
+    return this.#spaces.pane().leaf;
   }
 
   #focusedDeck(): PaneDeck {
@@ -564,19 +571,17 @@ export class HubComponent implements Component {
     if (matchesKey(data, "ctrl+c") || data === "q") { this.#done.resolve(); return; }
     if (data === "?") { this.#help = true; this.#ui.requestRender(); return; }
     const count = leaves(this.#tree).length;
-    if (data === "|") this.#tree = mapLeaf(this.#tree, this.#focus, (l) => ({ kind: "split", dir: "v", a: l, b: { ...l } }));
-    else if (data === "-") this.#tree = mapLeaf(this.#tree, this.#focus, (l) => ({ kind: "split", dir: "h", a: l, b: { ...l } }));
+    const sp = this.#spaces;
+    if (data === "|" || data === "-") sp.split(undefined, data === "|" ? "right" : "down");
     else if (matchesKey(data, "tab")) { this.#focus = (this.#focus + 1) % count; this.#selected = 0; this.#scroll = 0; }
     else if (matchesKey(data, "shift+tab")) { this.#focus = (this.#focus + count - 1) % count; this.#selected = 0; this.#scroll = 0; }
     else if (data === "z") this.#zoom = !this.#zoom;
     else if (data === "b") this.#sidebar = !this.#sidebar;
+    else if (data === ":") { this.#promptKind = "command"; this.#prompt = { lane: "", text: "" }; }
     else if (data === "x") {
-      const next = closeLeaf(this.#tree, this.#focus);
-      if (next) { this.#tree = next; this.#focus = Math.min(this.#focus, leaves(next).length - 1); this.#zoom = false; }
-      else this.#status = "last pane - q quits";
+      try { sp.closePane(); } catch (e) { if (!(e instanceof HubOpError)) throw e; this.#status = "last pane - q quits"; }
     } else if (DECKS.some((d) => d.key === data)) {
-      const deck = DECKS.find((d) => d.key === data)!.id;
-      this.#tree = mapLeaf(this.#tree, this.#focus, () => ({ kind: "leaf", deck }));
+      sp.rebind(undefined, DECKS.find((d) => d.key === data)!.id);
       this.#selected = 0; this.#scroll = 0;
     } else if (data === "j" || matchesKey(data, "down")) {
       if (this.#focusedDeck() === "agent") this.#scroll = Math.max(0, this.#scroll - 1);
@@ -669,7 +674,7 @@ export class HubComponent implements Component {
       const lanes = arr(this.#data.fleet.lanes).map(rec);
       const lane = lanes[Math.min(this.#selected, lanes.length - 1)];
       if (!lane) { this.#status = "no agent selected - n spawns one"; this.#ui.requestRender(); return; }
-      this.#tree = mapLeaf(this.#tree, this.#focus, () => ({ kind: "leaf", deck: "agent", lane: str(lane.id), laneName: str(lane.name) }));
+      this.#spaces.rebind(undefined, "agent", { id: str(lane.id), name: str(lane.name) });
       await this.refresh();
       return;
     }
@@ -731,7 +736,7 @@ export class HubComponent implements Component {
       const lane = rec(reply.lane);
       const id = str(lane.id);
       if (id === "?") { this.#status = `spawn refused: ${str(reply.reason ?? reply.error ?? reply.detail ?? "no lane in reply")}`; this.#ui.requestRender(); return; }
-      this.#tree = mapLeaf(this.#tree, this.#focus, () => ({ kind: "leaf", deck: "agent", lane: id, laneName: str(lane.name) }));
+      this.#spaces.rebind(undefined, "agent", { id, name: str(lane.name) });
       this.#status = sessionId ? `resumed session as agent ${str(lane.name)}` : `spawned agent ${str(lane.name)}`;
       await this.refresh();
     } catch (err) {
@@ -749,7 +754,11 @@ export class HubComponent implements Component {
     this.#prompt = null;
     if (!text) { this.#ui.requestRender(); return; }
     try {
-      if (kind === "wl-add") {
+      if (kind === "command") {
+        // Same parser + executor as `lucid hub <cmd>`: what works typed works scripted.
+        const r = await this.exec(parseHubCommand(tokenize(text)));
+        this.#status = `:${text} → ${truncateToWidth(JSON.stringify(r) ?? "ok", 120)}`;
+      } else if (kind === "wl-add") {
         // Same audited whitelist route the GUI settings panel drives (P-NETWL.2). IP/CIDR-looking
         // input files as an ip entry; anything else is a domain pattern. Internal zone, standing.
         const isIp = /^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(text);
@@ -762,7 +771,7 @@ export class HubComponent implements Component {
         this.#status = "prompt sent";
       }
     } catch (err) {
-      this.#status = `${kind === "wl-add" ? "whitelist" : "prompt"} failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.#status = kind === "command" ? `:${text} → ${err instanceof HubOpError ? err.code : "error"}: ${err instanceof Error ? err.message : String(err)}` : `${kind === "wl-add" ? "whitelist" : "prompt"} failed: ${err instanceof Error ? err.message : String(err)}`;
     }
     await this.refresh();
   }
@@ -1003,12 +1012,12 @@ export class HubComponent implements Component {
   #renderNode(node: PaneNode, w: number, h: number, ring: { i: number }): string[] {
     if (node.kind === "leaf") return this.#pane(node, w, h, ring.i++ === this.#focus);
     if (node.dir === "v") {
-      const wa = Math.floor(w / 2);
+      const wa = Math.floor(w * (node.ratio ?? 0.5));
       const a = this.#renderNode(node.a, wa, h, ring);
       const b = this.#renderNode(node.b, w - wa, h, ring);
       return a.map((line, i) => line + (b[i] ?? ""));
     }
-    const ha = Math.floor(h / 2);
+    const ha = Math.floor(h * (node.ratio ?? 0.5));
     return [...this.#renderNode(node.a, w, ha, ring), ...this.#renderNode(node.b, w, h - ha, ring)];
   }
 
@@ -1021,7 +1030,9 @@ export class HubComponent implements Component {
       ACCENT.bold(" ◆ LUCID ") + TXT("HUB") +
       TXT_3(`  ·  engine 127.0.0.1:${this.#engine.port} · v${this.#engine.version}${this.#spawned ? " · spawned by hub" : ""}`);
     const right = q > 0 ? RED.bold(`⛨ ${q} blocked `) : "";
-    const brandCut = truncateToWidth(brand, Math.max(0, width - Bun.stringWidth(right) - 1));
+    // The spaces, tmux-window style: the active one bracketed in the focus color.
+    const tabs = this.#spaces.spaces.map((s) => (s.id === this.#spaces.active ? CYAN.bold(`[${s.name}]`) : TXT_3(s.name))).join(" ");
+    const brandCut = truncateToWidth(`${brand}  ${tabs}`, Math.max(0, width - Bun.stringWidth(right) - 1));
     const pad = Math.max(1, width - Bun.stringWidth(brandCut) - Bun.stringWidth(right));
     return brandCut + " ".repeat(pad) + right;
   }
@@ -1056,7 +1067,9 @@ export class HubComponent implements Component {
       ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
       : this.#prompt && this.#promptKind === "kg-filter"
         ? ` filter pages: ${this.#prompt.text}▌  (live · ⏎ keep · esc clear)`
-        : "";
+        : this.#prompt && this.#promptKind === "command"
+          ? ` :${this.#prompt.text}▌  (⏎ run · esc cancel)`
+          : "";
     const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#focusedDeck()]} · ? help`;
     const leftPlain = truncateToWidth(composing || (this.#status ? ` ${this.#status}` : hint), Math.max(0, width - Bun.stringWidth(rightPlain) - 1));
     const pad = Math.max(1, width - Bun.stringWidth(leftPlain) - Bun.stringWidth(rightPlain));
@@ -1102,24 +1115,36 @@ export async function attachOrSpawnEngine(env: Readonly<Record<string, string | 
   return null;
 }
 
-/** `lucid hub` - attach or spawn, then run the pane multiplexer until quit. */
-export async function runHubCli(env: Readonly<Record<string, string | undefined>> = process.env): Promise<number> {
+/** `lucid hub` - attach or spawn, then run the pane multiplexer until quit. Headless = the same hub,
+ *  control plane and all, with no terminal (an agent's or CI's hub); SIGTERM/SIGINT quit it cleanly. */
+export async function runHubCli(env: Readonly<Record<string, string | undefined>> = process.env, opts: { headless?: boolean } = {}): Promise<number> {
   const attached = await attachOrSpawnEngine(env);
   if (!attached) {
     process.stderr.write("[lucid hub] no engine: none running, and spawning one failed (port busy or missing deps). Try `bun desktop/dev.ts` to see why.\n");
     return 1;
   }
-  const ui = new TUI(new ProcessTerminal());
-  const component = new HubComponent(ui, attached.engine, { spawned: attached.spawned });
-  const overlay = ui.showOverlay(component, { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: false });
-  ui.setFocus(component);
-  ui.start();
+  const dir = discoveryDir(env);
+  const layoutFile = spacesPath(dir);
+  const spaces = loadSpaces(layoutFile, (d) => DECKS.some((x) => x.id === d)) ?? new Spaces();
+  spaces.onChange = () => { try { saveSpaces(layoutFile, spaces); } catch { /* layout is convenience, never fatal */ } };
+  const tui = opts.headless ? null : new TUI(new ProcessTerminal());
+  const ui: HubUi = tui ?? { requestRender() { /* no terminal */ }, terminal: { rows: 40 } };
+  const component = new HubComponent(ui, attached.engine, { spawned: attached.spawned, spaces });
+  const control = startHubControl({ dir, exec: (op) => component.exec(op) });
+  const quit = () => component.quit();
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, quit);
+  const overlay = tui?.showOverlay(component, { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: false });
+  if (tui) { tui.setFocus(component); tui.start(); }
+  else process.stdout.write(JSON.stringify({ hub: "ready", pid: process.pid, port: control.discovery.port, engine: attached.engine.port }) + "\n");
   try {
     await component.run();
   } finally {
+    for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.off(sig, quit);
+    control.stop();
     component.dispose();
-    overlay.hide();
-    ui.stop();
+    spaces.onChange();
+    overlay?.hide();
+    tui?.stop();
     if (attached.child) { try { attached.child.kill("SIGTERM"); } catch { /* gone */ } await attached.child.exited; }
   }
   return 0;
