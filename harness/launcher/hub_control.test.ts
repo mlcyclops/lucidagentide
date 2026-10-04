@@ -67,7 +67,10 @@ describe("discovery + handshake", () => {
 describe("/cmd auth", () => {
   test("wrong or missing token is 403 and nothing executes", async () => {
     expect((await post({ "x-lucid-hub-token": "wrong" })).status).toBe(403);
-    expect((await post({ "x-lucid-hub-token": ctl.discovery.token.slice(0, -1) + "0" })).status).toBe(403);
+    // A one-character near miss. Flip the last char rather than force it to "0": a token that already
+    // ends in "0" (1 in 16) would otherwise be sent back unchanged and authenticate.
+    const t = ctl.discovery.token;
+    expect((await post({ "x-lucid-hub-token": t.slice(0, -1) + (t.endsWith("0") ? "1" : "0") })).status).toBe(403);
     expect((await post({})).status).toBe(403);
     expect(ran).toEqual([]);
   });
