@@ -1253,6 +1253,10 @@ even though the build is unsigned/not-notarized (a `postflight` strips quarantin
 there is no manual `xattr` step). The cask serves both Apple Silicon and Intel automatically. To remove it
 later: `brew uninstall --cask lucidagentide` (add `--zap` to also delete app data).
 
+The install also puts two commands on your PATH: `lucid` (the fail-closed launcher)
+and `lucid-hub` (a shim that execs `lucid hub`), so the terminal hub works from any
+terminal, including inside herdr.
+
 ## <img src=".github/assets/icons/onboarding-animated.svg" width="28" align="top" alt=""> Onboarding
 
 First launch asks **who you are**, then gets out of your way. Pick one of four roles - **Developer**,

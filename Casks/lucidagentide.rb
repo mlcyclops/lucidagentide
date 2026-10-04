@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 cask "lucidagentide" do
   arch arm: "arm64", intel: "x64"
 
@@ -32,6 +34,15 @@ cask "lucidagentide" do
   # `allow_untrusted` lets installer accept the unsigned package; it's permitted
   # in third-party taps like this one (just not in homebrew/cask).
   pkg "LucidAgent-mac-#{arch}.pkg", allow_untrusted: true
+  # The compiled fail-closed launcher ships INSIDE the app bundle: desktop/package.json
+  # compile-lucid writes ../bin/lucid and the extraResources "repo" copy packs bin/**/* into
+  # Contents/Resources/repo. Put it on PATH for Homebrew installs, plus a lucid-hub command
+  # wrapper that execs `lucid hub "$@"`, so the terminal hub runs from any terminal
+  # (including inside herdr) without typing the bundle path.
+  binary "#{appdir}/LucidAgentIDE.app/Contents/Resources/repo/bin/lucid"
+  command_wrapper "lucid-hub",
+                  executable: "#{appdir}/LucidAgentIDE.app/Contents/Resources/repo/bin/lucid",
+                  args:       ["hub"]
 
   # Belt-and-suspenders: strip quarantine if anything set it, so the very first
   # launch never trips Gatekeeper.
