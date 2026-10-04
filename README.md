@@ -953,7 +953,7 @@ working memory - lives in the **tail after the cache breakpoint**. Untrusted byt
 | **Scan** | `scanner-sidecar/` (pure Unicode) behind NDJSON | finds zero-width, bidi, tag-block, homoglyph, PUA, `Cf` |
 | **Decide** | `gate.ts` → `scanAndDecide` | any scan failure ⇒ **block / quarantine** (never "safe") |
 | **Gate** | `harness/omp/security_extension.ts` (omp pre-hook) | runs **in-process** on every tool call |
-| **Contain** | `harness/runs/sandbox_exec.ts` (bwrap · Seatbelt; Windows AppContainer = enterprise) + `egress_proxy.ts` | an approved process runs **runtime-isolated**; subprocess DNS/CONNECT is **mediated + audited** (fail-closed) |
+| **Contain** | `harness/runs/sandbox_exec.ts` (bwrap · Seatbelt; Windows AppContainer = enterprise) + `egress_proxy.ts` | an approved process runs **runtime-isolated**; subprocess DNS, CONNECT and plain-HTTP requests are **mediated + audited** (fail-closed) |
 | **Label** | closed set `trusted · untrusted · suspicious · quarantined` | no other values exist |
 | **Promote** | `promotion_gate.ts` | suspicious/quarantined sources can't enter semantic memory |
 | **Export** | `safe_export.ts` | invisibles escaped to `\u{..}`; raw referenced by `sha256`, never inline |
@@ -974,8 +974,9 @@ once `bash` / `pip` / `python` is approved and executing, a malicious dependency
 exfiltrating over a DNS lookup that no argv classifier can catch. LUCID closes that hole *beneath* the gate:
 an approved process is **OS-isolated** (Linux **bubblewrap** · macOS **Seatbelt**, picked per platform; where
 none is available LUCID says so out loud and the org can require isolation to **fail-closed** instead), and
-its network is not raw but **mediated** - every subprocess DNS query and CONNECT is routed through a loopback
-proxy and decided by the **same** curated egress policy your browser tools already use. So a lookup to a
+its network is not raw but **mediated** - every subprocess DNS query, HTTPS CONNECT tunnel and plain-HTTP request (a
+LAN model server at `http://host:11434`, say) is routed through a loopback proxy and decided by the **same** curated
+egress policy your browser tools already use. So a lookup to a
 non-whitelisted or foreign-country host is **refused and audited** (a metadata-only `egress` event to your
 SIEM), while `pip install requests` still resolves and works. The whole posture - which backend is active,
 whether egress is mediated, and every reach-out the proxy refused - is visible in the Security panel.

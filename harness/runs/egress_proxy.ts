@@ -11,7 +11,8 @@
 // entirely there would break `pip install` and every legitimate reach-out.
 //
 // This module is the middle path: for `canNetwork:true` the sandbox's only route out is a LOOPBACK
-// DNS resolver + HTTP CONNECT proxy that the harness runs. Every DNS query and every CONNECT is decided
+// DNS resolver + HTTP proxy that the harness runs (CONNECT tunnels and absolute-form plain-HTTP forwards,
+// ADR-0432). Every DNS query, CONNECT and plain-HTTP forward is decided
 // by the EXACT SAME brain the agent's own browser/web tools already use — `egressDecisionDetailed`
 // (ADR-0062/0106/0108) — so subprocess egress obeys the SAME curated whitelist (P-NETWL), managed
 // ceiling (P-ENT.1), and posture (P-NETWL.5) the user already curates. `gethostbyname` on a TXT record
@@ -48,14 +49,15 @@ export interface EgressProxyDecision {
   action: EgressAction;
   /** The (normalized) host we decided on. */
   host: string;
-  /** Machine-stable reason: "allowed" | "prompt-not-auto-allowed" | "unparseable-host" | "decision-error". */
+  /** Machine-stable reason: "allowed" | "prompt-not-auto-allowed" | "unparseable-host" | "decision-error" | "unsupported-request". */
   reason: string;
   /** How the underlying brain decided: "whitelist" | "allow-all" | "host" | "fail-closed". */
   via: string;
 }
 
 /** One mediated reach-out, kept in an in-memory ring so tests/demos (and, in P-SANDBOX.3, the Security
- *  panel) can observe what the proxy saw. `channel` distinguishes a DNS query from a CONNECT tunnel. */
+ *  panel) can observe what the proxy saw. `channel` distinguishes a DNS query from the HTTP proxy
+ *  listener; `connect` covers both CONNECT tunnels and absolute-form plain-HTTP forwards (ADR-0432). */
 export interface ProxyEvent {
   channel: "dns" | "connect";
   decision: EgressProxyDecision;
@@ -167,6 +169,8 @@ export interface EgressProxyOpts {
 }
 
 const LOOPBACK = "127.0.0.1";
+/** Cap on a buffered plain-HTTP request head (bodies are never buffered). Over it ⇒ 431, refused. */
+const MAX_HEAD = 64 * 1024;
 
 export class EgressProxy {
   readonly events: ProxyEvent[] = [];
@@ -199,7 +203,10 @@ export class EgressProxy {
 
   /** PURE-ish helper (the decision is pure; the logging is the side effect): decide + record one host. */
   decideHost(host: string, channel: "dns" | "connect"): EgressProxyDecision {
-    const decision = decideEgress(host, this.decide, this.ctx);
+    return this.record(channel, decideEgress(host, this.decide, this.ctx));
+  }
+
+  private record(channel: "dns" | "connect", decision: EgressProxyDecision): EgressProxyDecision {
     const event: ProxyEvent = { channel, decision };
     this.events.push(event);
     if (this.events.length > this.maxEvents) this.events.shift();
@@ -370,9 +377,7 @@ export class EgressProxy {
       const line = head.split("\r\n", 1)[0] ?? "";
       const m = /^CONNECT\s+(\S+)\s+HTTP\/1\.[01]/i.exec(line);
       if (!m) {
-        // Plain-HTTP proxying (absolute-URI GET) is not tunnelled in v1 — deny explicitly (fail-closed).
-        this.decideHost(hostFromAbsoluteUri(line), "connect");
-        client.end("HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\nLUCID egress proxy: only CONNECT tunnels are mediated (ADR-0166).\r\n");
+        this.forward(client, chunk); // ADR-0432: absolute-form plain HTTP, same brain; anything else refused
         return;
       }
       const target = m[1]!;
@@ -402,6 +407,81 @@ export class EgressProxy {
       } catch {
         /* ignore */
       }
+      upstream.destroy();
+    });
+  }
+
+  /** ADR-0432: forward one absolute-form plain-HTTP request (`GET http://host:port/path HTTP/1.1`), the
+   *  shape local model servers (ollama, llama.cpp, vLLM) receive from a client under HTTP_PROXY. The
+   *  host goes through the SAME `decideHost` as CONNECT; deny ⇒ 403 and the target is never dialed. The
+   *  head is buffered (capped) only to rewrite it to origin-form with `Connection: close`; bodies in both
+   *  directions are piped unbuffered, so SSE/chunked streams flow for as long as the server sends. */
+  private forward(client: TcpSocket, first: Buffer | string): void {
+    let buf = typeof first === "string" ? Buffer.from(first, "latin1") : first; // no setEncoding ⇒ always a Buffer
+    const refuse = (status: string) => {
+      client.removeListener("data", onData);
+      const line = buf.toString("latin1").split("\r\n", 1)[0] ?? "";
+      this.record("connect", { action: "deny", host: hostFromAbsoluteUri(line), reason: "unsupported-request", via: "fail-closed" });
+      client.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\nLUCID egress proxy: only CONNECT tunnels and absolute-form http:// requests are mediated (ADR-0166, ADR-0432).\r\n`);
+    };
+    const onData = (more: Buffer) => {
+      buf = Buffer.concat([buf, more]);
+      tryHead();
+    };
+    const tryHead = () => {
+      const end = buf.indexOf("\r\n\r\n");
+      if (end < 0) {
+        if (buf.length > MAX_HEAD) refuse("431 Request Header Fields Too Large");
+        return;
+      }
+      client.removeListener("data", onData);
+      client.pause(); // body bytes wait in the socket until the upstream is up
+      const [line = "", ...headers] = buf.subarray(0, end).toString("latin1").split("\r\n");
+      const m = /^([A-Z]+) (http:\/\/\S+) (HTTP\/1\.[01])$/i.exec(line);
+      let url: URL | null = null;
+      try {
+        url = m ? new URL(m[2]!) : null;
+      } catch {
+        /* unparseable ⇒ refused below */
+      }
+      if (!m || !url) return refuse("400 Bad Request");
+      const decision = this.decideHost(url.host, "connect");
+      if (decision.action === "deny") {
+        client.end(`HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nLUCID egress proxy: ${decision.host} denied (${decision.reason}).\r\n`); // byte-identical to a denied CONNECT
+        return;
+      }
+      // Origin-form, Host from the URI (RFC 9112 3.2.2), hop-by-hop headers dropped, one request per connection.
+      const kept = headers.filter((h) => !/^(host|connection|proxy-connection|keep-alive|proxy-authorization)\s*:/i.test(h));
+      const head = [`${m[1]} ${url.pathname}${url.search} ${m[3]}`, `Host: ${url.host}`, ...kept, "Connection: close", "", ""].join("\r\n");
+      this.dial(client, decision.host, Number(url.port || 80), Buffer.concat([Buffer.from(head, "latin1"), buf.subarray(end + 4)]));
+    };
+    client.on("data", onData);
+    tryHead();
+  }
+
+  private dial(client: TcpSocket, host: string, port: number, head: Buffer): void {
+    let connected = false;
+    const badGateway = () => {
+      if (!connected) client.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+      else client.destroy();
+    };
+    let upstream: TcpSocket;
+    try {
+      upstream = tcpConnect({ host, port }, () => {
+        connected = true;
+        upstream.write(head);
+        client.pipe(upstream);
+        upstream.pipe(client);
+      });
+    } catch {
+      badGateway();
+      return;
+    }
+    this.sockets.add(upstream);
+    upstream.once("close", () => this.sockets.delete(upstream));
+    client.once("close", () => upstream.destroy());
+    upstream.on("error", () => {
+      badGateway();
       upstream.destroy();
     });
   }
