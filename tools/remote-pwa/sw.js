@@ -8,7 +8,7 @@
 // or a cached session would be wrong AND a data-at-rest surface). Same-origin shell requests are NETWORK-FIRST
 // so a deployed fix reaches an installed phone immediately; the cache is offline fallback only.
 
-const CACHE = "lucid-remote-v7";
+const CACHE = "lucid-remote-v8"; // P-REMOTE.16: history + tool drilldown shell
 const SHELL = ["./", "./index.html", "./app.js", "./firebase_auth.js", "./config.js", "./manifest.webmanifest", "./icon.svg?v=3"];
 
 // P-REMOTE.13 (the "sometimes I get the OLD app" bug): "network-first" was really HTTP-CACHE-first.

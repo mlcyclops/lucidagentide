@@ -381,6 +381,11 @@ demo-P-REMOTE.12: ## P-REMOTE.12 (ADR-0251): PWA push-to-talk - fail-closed Prom
 demo-P-REMOTE.13: ## P-REMOTE.13 (ADR-0251): the invisible hourly reconnect - grace-window presentation (young flap = Live, real outage surfaces, terminal never masked); the 60-min cap + hourly re-verify stay
 	$(BUN) run desktop/scripts/demo_p_remote_13.ts
 
+.PHONY: demo-P-REMOTE.16
+demo-P-REMOTE.16: ## P-REMOTE.16 (ADR-0431): the phone resumes with exactly what it missed - REAL gated relay + host + socket + guest + viewer + history. Fresh join gets rich seq turns (thinking, edit with code, ok/elapsed, +/-); the diff drilldown renders with hostile code escaped; on-device history round-trips, rejects another room, stores nothing under CUI; an unlock with since=2 receives only seq 3 + the in-flight seq 4 and merges without duplicates; a planned pre-cap rotation re-hellos, replays nothing, keeps the guest live; a short-absence probe is answered by the relay pong
+	$(BUN) run harness/scripts/demo_premote16.ts
+	$(BUN) test $(TEST_IGNORES) desktop/collab/turn_journal.test.ts desktop/collab/host.test.ts desktop/collab/guest.test.ts desktop/collab/pwa_view.test.ts desktop/collab/pwa_history.test.ts desktop/collab/relay_client.test.ts desktop/collab/relay_server.test.ts
+
 .PHONY: demo-P-GOVCUI.1
 demo-P-GOVCUI.1: ## P-GOVCUI.1: first-run Government/CUI step - asks once if the user is a Government/GovCon user handling CUI; a "yes" walks a novice into the CUI-safe posture (AskSage gov gateway in LOCKDOWN) with the CIV routing endpoint PREFILLED + step-by-step token instructions. Pure core: decideGovOnboarding (ask/skip/auto-enable, exactly once; org-forced routing auto-enables) + planGovSetup (with a key -> CIV persisted + lockdown ON; no key -> endpoint prefilled but lockdown NEVER flipped, since a keyless lockdown leaves no gov model and the backend fail-closes)
 	$(BUN) run harness/scripts/demo_pgovcui1.ts
