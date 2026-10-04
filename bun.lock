@@ -7,6 +7,7 @@
       "dependencies": {
         "@duckdb/node-api": "1.5.4-r.1",
         "@huggingface/transformers": "^4.2.0",
+        "@noble/ciphers": "2.4.0",
         "@oh-my-pi/pi-agent-core": "18.4.4",
         "@oh-my-pi/pi-ai": "18.4.4",
         "@oh-my-pi/pi-catalog": "18.4.4",
@@ -141,6 +142,8 @@
     "@napi-rs/canvas-win32-arm64-msvc": ["@napi-rs/canvas-win32-arm64-msvc@1.0.10", "", { "os": "win32", "cpu": "arm64" }, "sha512-bWK+YajM/8sL0mMgLtug2s063FVBPzFV4QAn987CQomMKlmzrBY6Trz43KY+24hq7IOa3qNhUAgP/XMEF50ZEQ=="],
 
     "@napi-rs/canvas-win32-x64-msvc": ["@napi-rs/canvas-win32-x64-msvc@1.0.10", "", { "os": "win32", "cpu": "x64" }, "sha512-9WtzW85PaIhtB27iXaR/9RrLCqHLbqD3Z8Q+kh17NjFxwQXFXU5vWbYH4vEH+drM307TTyK3hidZgpt09G5T3g=="],
+
+    "@noble/ciphers": ["@noble/ciphers@2.4.0", "", {}, "sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw=="],
 
     "@oh-my-pi/omp-stats": ["@oh-my-pi/omp-stats@18.4.4", "", { "dependencies": { "@oh-my-pi/pi-ai": "18.4.4", "@oh-my-pi/pi-catalog": "18.4.4", "@oh-my-pi/pi-utils": "18.4.4", "lucide-react": "^1.24.0", "react": "19.2.7", "react-dom": "19.2.7" }, "bin": { "omp-stats": "src/index.ts" } }, "sha512-lBu6TXDMo+cVi49YvV7VecgdheKb6Cde4mODK2Vx5KLtxNe7Uic4B901bXjt7bRhp05MssxzvLHrVhf6ZlZ8gw=="],
 

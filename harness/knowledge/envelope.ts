@@ -18,7 +18,7 @@
 // is inert on the wire; the default (unset) emits nothing, which is what 4.2 asks of a producer.
 
 import { createHash, createPrivateKey, hkdfSync, randomBytes, sign } from "node:crypto";
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import type { Db } from "../memory/db.ts";
@@ -213,16 +213,23 @@ export function appendEnvelope(syncRoot: string, ident: Identity, envelope: Reco
   const dir = join(syncRoot, ident.user, "journal", ident.device);
   mkdirSync(dir, { recursive: true });
   const last = readdirSync(dir).filter((n) => /^\d{6}\.jl$/.test(n)).sort().at(-1) ?? "000001.jl";
-  let path = join(dir, last);
-  let size = 0;
+  let name = last;
+  // Open first (O_APPEND|O_CREAT, never truncates), then size the file we HOLD: no path is checked and then
+  // reopened, so nothing can swap the segment between the size check and the write (CodeQL js/file-system-race).
+  let fd = openSync(join(dir, name), "a");
   try {
-    size = statSync(path).size;
-  } catch {
-    /* first write: the segment does not exist yet */
+    if (fstatSync(fd).size >= SEGMENT_CAP) {
+      const full = fd;
+      fd = -1; // never close a stale descriptor number in finally if the next open throws
+      closeSync(full);
+      name = `${String(Number(last.slice(0, 6)) + 1).padStart(6, "0")}.jl`;
+      fd = openSync(join(dir, name), "a");
+    }
+    appendFileSync(fd, journalLine(envelope)); // one write per whole line; readers skip a torn tail (spec 6)
+  } finally {
+    if (fd >= 0) closeSync(fd);
   }
-  if (size >= SEGMENT_CAP) path = join(dir, `${String(Number(last.slice(0, 6)) + 1).padStart(6, "0")}.jl`);
-  appendFileSync(path, journalLine(envelope)); // one write per whole line; readers skip a torn tail (spec 6)
-  return path;
+  return join(dir, name);
 }
 
 export interface FactBody {

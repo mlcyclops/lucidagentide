@@ -121,6 +121,23 @@ describe("conformance vectors", () => {
     }
   });
 
+  test("a segment below the 8 MiB cap takes the line; at the cap the next line opens 000002.jl and the full one is untouched", () => {
+    const root = mkdtempSync(join(tmpdir(), "ksync-rotate-"));
+    try {
+      const dir = join(root, ident.user, "journal", ident.device);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "000001.jl"), Buffer.alloc(8 * 1024 * 1024 - 1, 0x20));
+      const env = buildEnvelope(itemOf(V.envelopes[0]), ident);
+      expect(appendEnvelope(root, ident, env)).toBe(join(dir, "000001.jl")); // one byte under: still this segment
+      const full = readFileSync(join(dir, "000001.jl"));
+      expect(appendEnvelope(root, ident, env)).toBe(join(dir, "000002.jl"));
+      expect(readFileSync(join(dir, "000001.jl")).equals(full)).toBe(true);
+      expect(readFileSync(join(dir, "000002.jl")).equals(Buffer.from(journalLine(env)))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   for (const t of V.forbidden_types as string[]) {
     test(`forbidden type "${t}" is refused by name`, () => {
       expect(() => buildEnvelope({ ...itemOf(V.envelopes[0]), type: t }, ident)).toThrow(`"${t}" has no representation`);
