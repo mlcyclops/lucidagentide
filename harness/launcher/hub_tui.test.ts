@@ -267,4 +267,24 @@ describe("rail (P-TUI.5)", () => {
     expect(clickTarget(closed, 5, 3)).toBeNull();
     expect(clickTarget(closed, 20, 3)).toEqual({ kind: "pane", index: 0 });
   });
+
+  // P-TUI.5 E2: the AGENTS panel's rows ride under the header; clicks map to their lane id.
+  test("agent rows: the panel's rows sit under the AGENTS header (which counts them) and take clicks", () => {
+    const agents = [
+      { id: "lane-a", name: "a", location: "main:t1", status: "working", priority: 5, model: "sonnet", elapsed: "4m" },
+      { id: "lane-b", name: "b", location: "", status: "needs-approval", priority: 0, model: "opus", elapsed: "1h2m" },
+    ];
+    const rows = railRows(model(), agents);
+    expect(rows.at(-3)).toEqual({ kind: "agents-head", count: 2 });
+    expect(rows.slice(-2).map((r) => (r.kind === "agent" ? r.row.id : r.kind))).toEqual(["lane-a", "lane-b"]);
+    const lines = rows.map((r) => railLine(r, 27));
+    for (const l of lines) expect(Bun.stringWidth(l)).toBe(27);
+    expect(lines.at(-2)).toContain("● a");
+    expect(lines.at(-2)).toContain("4m p5 ");
+    expect(lines.at(-1)).toContain("◉ b"); // blocked-on-a-human glyph, no badge when unset
+    expect(lines.at(-1)).not.toContain("p0");
+    const g: HubGeometry = { left: 28, rail: rows, top: 1, height: 38, panes: paneRects(model().tab.tree, 112, 38) };
+    expect(clickTarget(g, 5, 1 + 9)).toEqual({ kind: "agent", id: "lane-a", row: 9 });
+    expect(clickTarget(g, 5, 1 + 10)).toEqual({ kind: "agent", id: "lane-b", row: 10 });
+  });
 });
