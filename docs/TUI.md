@@ -90,6 +90,17 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
   doc, agent specs, skill studio drafts), the TUI writes a temp file, opens
   `$EDITOR`, and posts the result back through the same save route.
 
+## Driving the hub from a coding agent
+
+`lucid hub` also has a JSON control CLI (P-TUI.3): `lucid hub status | space | pane |
+agent ...`, plus the tmux verbs (`split-window`, `list-panes`, `send-keys`, ...) as
+top-level aliases. The agent skill at
+[`.agents/skills/lucid-hub/SKILL.md`](../.agents/skills/lucid-hub/SKILL.md) teaches any
+coding agent to use it the way the herdr skill teaches herdr: verify with `lucid hub
+status` first, learn flags from `--help`, pass explicit ids, and leave approvals, the
+engine, and the UI token alone. `lucid hub --skill` prints the same file, so an agent
+on any machine with LUCID installed can load it without the repo.
+
 ## Capability map
 
 Every GUI surface, its TUI counterpart, and the transport it already has. "Same
