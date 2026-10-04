@@ -1,7 +1,7 @@
 # LucidAgentIDE with Microsoft Defender for Endpoint and Agent 365
 
 For endpoint and security admins in Microsoft 365 E5/E7 or Agent 365 tenants. Decision records:
-ADR-0384 (P-LEGIBLE.1) and ADR-0427 (P-LEGIBLE.2), issue #302. Microsoft sources were re-checked on
+ADR-0384 (P-LEGIBLE.1) and ADR-0437 (P-LEGIBLE.2), issue #302. Microsoft sources were re-checked on
 2026-10-04; the Learn pages they rest on are dated 2026-09-16.
 
 ## What Defender sees today

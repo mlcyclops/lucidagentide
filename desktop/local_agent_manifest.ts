@@ -5,7 +5,7 @@
 //
 // Microsoft Defender for Endpoint inventories local AI agents (Assets > AI agents > Local agents, the
 // `AgentsInfo` advanced-hunting table with `Platform == "LocalAgents"`). An agent it does not recognize
-// is absent there, not flagged: the Shadow AI page is a fixed catalog of named agents (ADR-0427).
+// is absent there, not flagged: the Shadow AI page is a fixed catalog of named agents (ADR-0437).
 // Defender's discovery list is maintained by Microsoft, and Microsoft publishes no vendor-writable
 // manifest format or enrollment API, so no file we write enrolls us and nothing documents Defender
 // reading this one. It is an ADVISORY,

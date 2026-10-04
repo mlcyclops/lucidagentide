@@ -1234,7 +1234,7 @@ demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / A
 	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-LEGIBLE.2
-demo-P-LEGIBLE.2: ## P-LEGIBLE.2 (ADR-0427, issue #302): the Defender / Agent 365 runbook corrected against Microsoft's sources (Entra Agent ID matters to Global Secure Access, not the Defender inventory; Shadow AI is a fixed catalog; Agent Registration API is Global-cloud only). Docs only: re-proves the metadata-only manifest shape and ADR numbering, gate untouched.
+demo-P-LEGIBLE.2: ## P-LEGIBLE.2 (ADR-0437, issue #302): the Defender / Agent 365 runbook corrected against Microsoft's sources (Entra Agent ID matters to Global Secure Access, not the Defender inventory; Shadow AI is a fixed catalog; Agent Registration API is Global-cloud only). Docs only: re-proves the metadata-only manifest shape and ADR numbering, gate untouched.
 	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-SWITCH.1
