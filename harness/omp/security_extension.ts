@@ -224,8 +224,12 @@ export default function securityExtension(pi: any): void {
       const db = await getDb();
       if (!db) return;
       const { gateSubagentResult } = await import("../runs/task_gate.ts");
-      await gateSubagentResult(db, scanner, { runId: LIVE_RUN, agent, resultText: text });
+      const outcome = await gateSubagentResult(db, scanner, { runId: LIVE_RUN, agent, resultText: text });
       touchMirror(); // a promoted/blocked subagent result changes the panel's gate counts
+      // P-KSYNC.L1 (#360): opt-in Knowledge Sync journal of the fact just promoted (off unless LUCID_KSYNC_JOURNAL
+      // is set). Imported lazily so that module and its cipher dependency can never stop this gate from loading;
+      // never awaited, resolves null on any failure, and only reads the DB.
+      if (outcome.promoted && process.env.LUCID_KSYNC_JOURNAL?.trim()) void import("../knowledge/envelope.ts").then((m) => m.journalPromotedFact(db, outcome.artifactId)).catch(() => {});
     } catch {
       /* best-effort memory gating; never affects the tool result */
     }
