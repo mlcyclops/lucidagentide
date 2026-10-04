@@ -92,9 +92,10 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
 
 ## Driving the hub from a coding agent
 
-`lucid hub` also has a JSON control CLI (P-TUI.3): `lucid hub status | space | pane |
-agent ...`, plus the tmux verbs (`split-window`, `list-panes`, `send-keys`, ...) as
-top-level aliases. The agent skill at
+`lucid hub` also has a JSON control CLI (P-TUI.3): `lucid hub status | space | tab |
+pane | agent ...`, plus the tmux verbs (`split-window`, `list-panes`, `send-keys`,
+`new-session`, ...) as top-level aliases, where a tmux session is a hub space and a
+tmux window is a hub tab. The agent skill at
 [`.agents/skills/lucid-hub/SKILL.md`](../.agents/skills/lucid-hub/SKILL.md) teaches any
 coding agent to use it the way the herdr skill teaches herdr: verify with `lucid hub
 status` first, learn flags from `--help`, pass explicit ids, and leave approvals, the
