@@ -63,6 +63,13 @@ describe("validation (fail-closed)", () => {
       expect(validateLocalProvider(def({ ompProvider: reserved })).join()).toContain("reserved");
     }
   });
+  test("refuses any asksage* provider id: CUI lockdown treats that prefix as the gov gateway", () => {
+    expect(validateLocalProvider(def({ ompProvider: "asksage-openai" })).join()).toContain("reserved");
+  });
+  test("an enclave host cannot be on the public internet", () => {
+    expect(validateLocalProvider(def({ enclave: true }))).toEqual([]);
+    expect(validateLocalProvider(def({ enclave: true, zone: "external" })).join()).toContain("enclave");
+  });
   test("duplicate model ids and non-positive context windows are caught", () => {
     expect(validateLocalProvider(def({ models: [{ id: "m" }, { id: "m" }] })).join()).toContain("duplicate model id");
     expect(validateLocalProvider(def({ models: [{ id: "m", contextWindow: 0 }] })).join()).toContain("contextWindow");
@@ -228,6 +235,20 @@ describe("settings persistence (secret never on disk)", () => {
     expect(plain!).not.toHaveProperty("compat");
     // and it is really on disk, not just in the returned object
     expect(readFileSync(file, "utf8")).toContain("qwen-chat-template");
+  });
+
+  // CUI lockdown: the enclave attestation decides whether a provider's models are allowed under lockdown,
+  // so it must survive the clean copy, and a non-boolean must be REFUSED rather than coerced into a yes.
+  test("the DGX enclave attestation survives the clean copy; false is dropped; a non-boolean is refused", async () => {
+    dir = mkdtempSync(join(tmpdir(), "lp-"));
+    process.env.LUCID_GUI_SETTINGS_FILE = join(dir, "gui.json");
+    const store = await import("./settings_store.ts");
+    store.upsertLocalProvider(def({ enclave: true }));
+    expect(store.listLocalProviders()[0]!.enclave).toBe(true);
+    store.upsertLocalProvider(def({ enclave: false }));
+    expect(store.listLocalProviders()[0]!).not.toHaveProperty("enclave");
+    expect(() => store.upsertLocalProvider(def({ enclave: "yes" as never }))).toThrow(/enclave/);
+    expect(store.listLocalProviders()[0]!).not.toHaveProperty("enclave");
   });
 });
 

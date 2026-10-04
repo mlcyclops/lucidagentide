@@ -196,7 +196,9 @@ export function isPromptFinished(historyRaw: unknown, promptId: string): boolean
 
 // ── artifacts ────────────────────────────────────────────────────────────────
 
-export type ArtifactKind = "image" | "sheet" | "gif" | "meme" | "markup" | "video" | "model-3d";
+/** `vector` = a Design SVG export (stored only after svgSafetyCheck); `design` = a Design document (a validated
+ *  DesignDoc JSON without pixels). Layered PSD/PSB exports are `image`. */
+export type ArtifactKind = "image" | "sheet" | "gif" | "meme" | "markup" | "video" | "model-3d" | "drawing" | "vector" | "design";
 
 export interface CreatorArtifact {
   readonly id: string;
@@ -252,8 +254,17 @@ export function foldArtifacts(jsonl: string): CreatorArtifact[] {
 const EXT: Record<string, string> = {
   "image/png": "png", "image/gif": "gif", "image/jpeg": "jpg", "image/webp": "webp",
   "video/webm": "webm", "video/mp4": "mp4",
+  // HyperFrames MOV (ProRes 4444) renders.
+  "video/quicktime": "mov",
   "model/gltf-binary": "glb", "model/gltf+json": "gltf",
+  // DGX CAD service outputs: solids as STEP / STL (`model-3d`), 2D drawings as DXF (`drawing`).
+  "model/step": "step", "model/stl": "stl", "image/vnd.dxf": "dxf",
+  // Design suite exports (desktop/creator_design.ts checks magic bytes, svgSafetyCheck, and validateDoc first).
+  "image/apng": "png", "image/svg+xml": "svg", "image/vnd.adobe.photoshop": "psd",
+  "application/vnd.lucid.design+json": "design.json",
 };
+/** The only extension overrides a caller may ask for, per mime: a PSB shares the Photoshop mime type. */
+const ALT_EXT: Record<string, readonly string[]> = { "image/vnd.adobe.photoshop": ["psb"] };
 
 export interface StoreArtifactInput {
   readonly kind: ArtifactKind;
@@ -266,12 +277,15 @@ export interface StoreArtifactInput {
   readonly model?: string;
   /** Extra text files to write beside the image, keyed by extension (for example `json`, `css`). */
   readonly sidecars?: Readonly<Record<string, string>>;
+  /** An allowed alternate extension for this mime (ALT_EXT), e.g. `psb`. Anything else is refused. */
+  readonly ext?: string;
 }
 
 /** Write one artifact plus its sidecars, and append the ledger row. The path is derived from a generated
  *  id, so nothing a caller passes can steer the write out of the artifacts directory. */
 export function storeArtifact(io: ArtifactIo, base: string, input: StoreArtifactInput): { ok: boolean; error?: string; artifact?: CreatorArtifact; path?: string } {
-  const ext = EXT[input.mime];
+  if (input.ext !== undefined && !(ALT_EXT[input.mime] ?? []).includes(input.ext)) return { ok: false, error: `.${String(input.ext).slice(0, 20)} is not an extension LUCID stores for ${input.mime}.` };
+  const ext = input.ext ?? EXT[input.mime];
   if (!ext) return { ok: false, error: `${input.mime} is not a media type LUCID stores.` };
   if (!input.bytes.length) return { ok: false, error: "That artifact has no bytes." };
   const dir = artifactDir(base);

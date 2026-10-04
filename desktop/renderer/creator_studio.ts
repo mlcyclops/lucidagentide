@@ -21,6 +21,13 @@ import { icon } from "./icons.ts";
 // ── view types (mirror desktop/creator_registry.ts + creator_library.ts) ──
 
 export interface CapabilityView { id: string; status: string; surface: string; detail: string }
+/** CUI lockdown verdict for a provider or one endpoint (desktop/cui_policy.ts `cuiProviderVerdict`). */
+export interface CuiVerdictView { posture: string; allowed: boolean; reason: string }
+/** One declared endpoint as the registry reports it (declarations only, never a secret). */
+export interface CreatorEndpointView {
+  id: string; label: string; baseUrl?: string; command?: string; zone: string; enclave?: boolean; enabled: boolean;
+  cui?: CuiVerdictView;
+}
 export interface ProviderStatusView {
   id: string;
   name: string;
@@ -33,6 +40,9 @@ export interface ProviderStatusView {
   endpointCount: number;
   usable: readonly string[];
   capabilities: readonly CapabilityView[];
+  /** Absent from a backend older than the CUI policy; rendered as "posture unknown", never as allowed. */
+  cui?: CuiVerdictView;
+  endpoints?: readonly CreatorEndpointView[];
 }
 export interface TrackView {
   id: string; title: string; origin: string; mime: string; bytes: number;
@@ -61,6 +71,8 @@ export interface CreatorStudioView {
   probes?: readonly ProbeResultView[];
   jobs?: readonly JobView[];
   jobStats?: JobStatsView;
+  /** The CUI lockdown (asksageLocked) as the server enforces it. */
+  cui?: { lockdown: boolean };
 }
 
 export function isCreatorStudio(v: unknown): v is CreatorStudioView {
@@ -72,6 +84,7 @@ const GROUP_LABEL: Record<string, string> = {
   audio: "Audio and voice",
   video: "Image and video",
   "3d": "3D and scenes",
+  cad: "CAD and drawings",
   game: "Game engines",
   testing: "Testing",
 };
@@ -128,7 +141,7 @@ export function fmtAgo(at: number, now: number): string {
 }
 
 /** The probe line: what was proven, when, and how long it took. Never a claim the probe did not make. */
-function probeLineHtml(probe: ProbeResultView | undefined, now: number): string {
+export function probeLineHtml(probe: ProbeResultView | undefined, now: number): string {
   if (!probe) return `<p class="cst-probe cst-probe-none">Not probed yet. Probe to find out what this install can actually do.</p>`;
   const label = PROBE_LABEL[probe.state] ?? probe.state;
   return `<p class="cst-probe cst-probe-${esc(probe.state)}">
@@ -137,35 +150,65 @@ function probeLineHtml(probe: ProbeResultView | undefined, now: number): string 
     ${esc(probe.detail)}</p>`;
 }
 
-function providerRowHtml(p: ProviderStatusView, probe: ProbeResultView | undefined, now: number): string {
+// ── CUI lockdown: posture chip + banner ─────────────────────────────────────
+
+const POSTURE: Record<string, { label: string; tone: "local" | "enclave" | "cloud"; detail: string }> = {
+  "on-device": { label: "on-device", tone: "local", detail: "Runs on this workstation (in the renderer, a local process, or a loopback service you run)." },
+  enclave: { label: "DGX enclave", tone: "enclave", detail: "Runs on a DGX host attested as a CUI enclave (imported from the Loader or declared by you)." },
+  cloud: { label: "cloud", tone: "cloud", detail: "A vendor service off this workstation and outside the DGX enclave." },
+};
+
+/** The chip every provider row carries: where content goes, and what the lockdown decided about it. An
+ *  absent verdict (an older backend) is "posture unknown", never a silent allow. */
+export function postureChip(cui: CuiVerdictView | undefined, lockdown: boolean): { label: string; tone: "local" | "enclave" | "cloud" | "unknown"; tip: string } {
+  const p = cui ? POSTURE[cui.posture] : undefined;
+  if (!cui || !p) return { label: "posture unknown", tone: "unknown", tip: "Posture unknown|This engine did not report a CUI posture for the provider." };
+  const verdict = !lockdown ? "CUI lockdown is off." : cui.allowed ? `Allowed under CUI lockdown: ${cui.reason}` : `Refused under CUI lockdown: ${cui.reason}`;
+  return { label: p.label, tone: p.tone, tip: `${p.label}|${p.detail} ${verdict}` };
+}
+
+/** The Studio-wide lockdown banner. Null (an older backend) renders nothing rather than a guess. */
+export function cuiBannerHtml(lockdown: boolean | undefined): string {
+  if (lockdown === undefined) return "";
+  return lockdown
+    ? `<p class="cst-cui cst-cui-on">${icon("shield", 13)}CUI lockdown is on. Only on-device tools, DGX enclave hosts, and CUI-authorized services (AskSage) may receive prompts, media, drawings, or documents; every other provider is refused. Public package and model downloads through the supply-chain pipeline carry no user content and are not blocked.</p>`
+    : `<p class="cst-cui cst-cui-off">${icon("info", 13)}CUI lockdown is off. A provider marked cloud receives whatever you send it. Turn on CUI lockdown in Settings to restrict Creator to on-device and DGX enclave services.</p>`;
+}
+
+function providerRowHtml(p: ProviderStatusView, probe: ProbeResultView | undefined, now: number, lockdown: boolean): string {
   const state = STATE_LABEL[p.state] ?? p.state;
   const caps = p.capabilities.map((c) => capChipHtml(c, p.usable)).join("");
+  const chip = postureChip(p.cui, lockdown);
+  const refused = p.cui?.allowed === false;
+  // Declaring an endpoint stays possible while refused: an enclave declaration is exactly what clears it.
   const actions = p.state === "built-in"
     ? ""
     : `<button type="button" class="btn-mini" data-creator-endpoint="${esc(p.id)}">${p.endpointCount ? "Endpoints" : "Connect"}</button>`;
-  return `<div class="cst-row" data-creator-provider="${esc(p.id)}">
+  return `<div class="cst-row${refused ? " cst-row-refused" : ""}" data-creator-provider="${esc(p.id)}">
     <div class="cst-row-h">
       <span class="cst-name">${esc(p.name)}</span>
+      <span class="cst-posture cst-posture-${chip.tone}" data-tip="${esc(chip.tip)}">${esc(chip.label)}</span>
       <span class="cst-state cst-state-${esc(p.state)}">${esc(state)}</span>
       ${p.endpointCount ? `<span class="cst-count">${esc(String(p.endpointCount))} configured</span>` : ""}
       ${p.consentRequired ? `<span class="cst-consent" data-tip="Consent required|Voice cloning, voice conversion, and identity-preserving dubbing need recorded consent from the speaker before any reference audio is used.">consent</span>` : ""}
-      <button type="button" class="btn-mini" data-creator-probe="${esc(p.id)}" data-tip="Probe|Ask this provider what it can actually do. Only what the answer PROVES becomes usable.">Probe</button>
+      <button type="button" class="btn-mini" data-creator-probe="${esc(p.id)}"${refused ? " disabled" : ""} data-tip="${refused ? "Probe refused|CUI lockdown refuses contacting this provider." : "Probe|Ask this provider what it can actually do. Only what the answer PROVES becomes usable."}">Probe</button>
       ${actions}
     </div>
+    ${refused ? `<p class="cst-cui-refused">${icon("shield", 12)}${esc(`Refused under CUI lockdown: ${p.cui!.reason}`)}</p>` : ""}
     <p class="cst-note">${esc(p.note)}</p>
     ${probeLineHtml(probe, now)}
     <div class="cst-caps">${caps}</div>
   </div>`;
 }
 
-export function creatorIntegrationsHtml(providers: readonly ProviderStatusView[], probes: readonly ProbeResultView[] = [], now = Date.now()): string {
+export function creatorIntegrationsHtml(providers: readonly ProviderStatusView[], probes: readonly ProbeResultView[] = [], now = Date.now(), lockdown = false): string {
   if (!providers.length) return `<p class="cst-empty">The integration registry is empty in this build.</p>`;
   const byId = new Map(probes.map((p) => [p.providerId, p] as const));
-  const groups = ["audio", "video", "3d", "game", "testing"];
+  const groups = ["audio", "video", "3d", "cad", "game", "testing"];
   const sections = groups.map((g) => {
     const rows = providers.filter((p) => p.group === g);
     if (!rows.length) return "";
-    return `<section class="cst-group"><h4 class="cst-h4">${esc(GROUP_LABEL[g] ?? g)}</h4>${rows.map((r) => providerRowHtml(r, byId.get(r.id), now)).join("")}</section>`;
+    return `<section class="cst-group"><h4 class="cst-h4">${esc(GROUP_LABEL[g] ?? g)}</h4>${rows.map((r) => providerRowHtml(r, byId.get(r.id), now, lockdown)).join("")}</section>`;
   }).join("");
   return `<div class="cst-integrations">
     <div class="cst-probe-all"><button type="button" class="btn-mini ok" data-creator-probe-all>Probe everything</button>
@@ -272,7 +315,7 @@ export function creatorLibraryHtml(view: CreatorStudioView): string {
 export function creatorStudioHtml(view: CreatorStudioView | null, now = Date.now()): string {
   if (!view) return `<div class="cst-body"><p class="cst-empty">Creator Studio could not read its registry. Nothing is configured behind your back; try Refresh.</p></div>`;
   return `<div class="cst-body">
-    ${creatorIntegrationsHtml(view.providers, view.probes ?? [], now)}
+    ${creatorIntegrationsHtml(view.providers, view.probes ?? [], now, view.cui?.lockdown === true)}
     <section class="cst-group"><h4 class="cst-h4">Recent jobs</h4>${creatorJobsHtml(view.jobs ?? [], view.jobStats, now)}</section>
     ${creatorLibraryHtml(view)}
   </div>`;

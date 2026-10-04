@@ -38,6 +38,7 @@ Thumbs.db
 desktop/node_modules/
 desktop/dist/
 desktop/renderer/app.bundle.js
+desktop/renderer/design_worker.bundle.js
 
 # --- secrets / credentials (NEVER commit keys or tokens) ---
 lucid-gui.json

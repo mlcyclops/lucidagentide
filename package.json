@@ -75,9 +75,11 @@
     "@oh-my-pi/pi-tui": "18.4.4",
     "@oh-my-pi/pi-utils": "18.4.4",
     "arktype": "^2.2.1",
-    "dompurify": "^3.4.14",
+    "dompurify": "^3.4.16",
     "katex": "^0.18.7",
     "marked": "^18.0.5",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.4.299",
     "unpdf": "^1.6.2"
   },
   "devDependencies": {

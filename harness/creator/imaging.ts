@@ -21,65 +21,12 @@ import { deflateSync } from "node:zlib";
 // Meme geometry lives in its own node-free module so the RENDERER can import it without dragging
 // node:zlib into a browser bundle. Re-exported here so server-side callers have one import.
 export { memeLayout, wrapLines, type MeasureText, type MemeLayout, type MemeTextBlock } from "./meme_layout.ts";
-
-export interface RgbaFrame {
-  readonly width: number;
-  readonly height: number;
-  /** Row-major RGBA, 4 bytes per pixel. */
-  readonly rgba: Uint8Array;
-}
-
-/** Reject a malformed frame loudly: every encoder below assumes the invariant holds. */
-export function assertFrame(f: RgbaFrame, label = "frame"): void {
-  if (!Number.isInteger(f.width) || !Number.isInteger(f.height) || f.width <= 0 || f.height <= 0) {
-    throw new Error(`${label}: width and height must be positive integers`);
-  }
-  if (f.rgba.length !== f.width * f.height * 4) {
-    throw new Error(`${label}: expected ${f.width * f.height * 4} bytes of RGBA, got ${f.rgba.length}`);
-  }
-}
+// Pure byte primitives live in the node-free imaging_core.ts so the Design engine (renderer + workers)
+// shares them; re-exported here so server-side callers keep one import.
+import { assertFrame, concat, lzwEncode, PNG_SIGNATURE, pngChunk, pngIhdrRgba8, type RgbaFrame } from "./imaging_core.ts";
+export { assertFrame, crc32, lzwEncode, type RgbaFrame } from "./imaging_core.ts";
 
 // ── PNG ──────────────────────────────────────────────────────────────────────
-
-const CRC_TABLE = ((): Uint32Array => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-
-/** CRC-32 as PNG defines it (also used by the tests to verify every chunk). */
-export function crc32(bytes: Uint8Array): number {
-  let c = 0xFFFFFFFF;
-  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]!) & 0xFF]! ^ (c >>> 8);
-  return (c ^ 0xFFFFFFFF) >>> 0;
-}
-
-const be32 = (n: number): Uint8Array => new Uint8Array([(n >>> 24) & 0xFF, (n >>> 16) & 0xFF, (n >>> 8) & 0xFF, n & 0xFF]);
-
-function pngChunk(type: string, data: Uint8Array): Uint8Array {
-  const typeBytes = new Uint8Array([...type].map((c) => c.charCodeAt(0)));
-  const body = new Uint8Array(typeBytes.length + data.length);
-  body.set(typeBytes, 0);
-  body.set(data, typeBytes.length);
-  const out = new Uint8Array(4 + body.length + 4);
-  out.set(be32(data.length), 0);
-  out.set(body, 4);
-  out.set(be32(crc32(body)), 4 + body.length);
-  return out;
-}
-
-const concat = (parts: readonly Uint8Array[]): Uint8Array => {
-  let n = 0;
-  for (const p of parts) n += p.length;
-  const out = new Uint8Array(n);
-  let at = 0;
-  for (const p of parts) { out.set(p, at); at += p.length; }
-  return out;
-};
 
 /** A true-colour-with-alpha PNG (bit depth 8, colour type 6, filter 0 per scanline). */
 export function encodePng(frame: RgbaFrame): Uint8Array {
@@ -92,17 +39,9 @@ export function encodePng(frame: RgbaFrame): Uint8Array {
     raw[y * (stride + 1)] = 0;
     raw.set(rgba.subarray(y * stride, (y + 1) * stride), y * (stride + 1) + 1);
   }
-  const ihdr = new Uint8Array(13);
-  ihdr.set(be32(width), 0);
-  ihdr.set(be32(height), 4);
-  ihdr[8] = 8;  // bit depth
-  ihdr[9] = 6;  // colour type: truecolour with alpha
-  ihdr[10] = 0; // deflate
-  ihdr[11] = 0; // adaptive filtering
-  ihdr[12] = 0; // no interlace
   return concat([
-    new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
-    pngChunk("IHDR", ihdr),
+    PNG_SIGNATURE,
+    pngChunk("IHDR", pngIhdrRgba8(width, height)),
     pngChunk("IDAT", new Uint8Array(deflateSync(raw, { level: 9 }))),
     pngChunk("IEND", new Uint8Array(0)),
   ]);
@@ -198,53 +137,6 @@ export function quantize(frames: readonly RgbaFrame[], maxColors = 256, alphaCut
 }
 
 // ── GIF ──────────────────────────────────────────────────────────────────────
-
-/** Variable-width LZW as GIF defines it, emitted as GIF sub-blocks (255 bytes max each). */
-export function lzwEncode(indices: Uint8Array, minCodeSize: number): Uint8Array {
-  const clear = 1 << minCodeSize;
-  const eoi = clear + 1;
-  let codeSize = minCodeSize + 1;
-  let next = eoi + 1;
-  let dict = new Map<string, number>();
-  const bytes: number[] = [];
-  let bitBuf = 0, bitCount = 0;
-  const emit = (code: number) => {
-    bitBuf |= code << bitCount;
-    bitCount += codeSize;
-    while (bitCount >= 8) { bytes.push(bitBuf & 0xFF); bitBuf >>= 8; bitCount -= 8; }
-  };
-  emit(clear);
-  let prefix = "";
-  for (const idx of indices) {
-    const candidate = prefix === "" ? String(idx) : `${prefix},${idx}`;
-    if (prefix !== "" && !dict.has(candidate)) {
-      emit(dict.get(prefix) ?? Number(prefix));
-      if (next < 4096) {
-        dict.set(candidate, next++);
-        // The decoder always lags one entry behind, so the width grows once the next code would not fit.
-        if (next > (1 << codeSize) && codeSize < 12) codeSize++;
-      } else {
-        emit(clear);
-        codeSize = minCodeSize + 1;
-        next = eoi + 1;
-        dict = new Map();
-      }
-      prefix = String(idx);
-      continue;
-    }
-    prefix = candidate;
-  }
-  if (prefix !== "") emit(dict.get(prefix) ?? Number(prefix));
-  emit(eoi);
-  if (bitCount > 0) bytes.push(bitBuf & 0xFF);
-  const out: number[] = [];
-  for (let i = 0; i < bytes.length; i += 255) {
-    const chunk = bytes.slice(i, i + 255);
-    out.push(chunk.length, ...chunk);
-  }
-  out.push(0); // block terminator
-  return new Uint8Array(out);
-}
 
 export interface GifOptions {
   /** Per-frame delay in ms. A single value applies to every frame. Rounded to GIF's 10ms ticks. */
