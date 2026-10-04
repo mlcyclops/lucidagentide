@@ -373,8 +373,8 @@ jobs:
             [ -n "$d" ] || { echo "::error::no sha256 for release asset $1"; exit 1; }
             echo "$d"
           }
-          ARM=$(sha "LucidAgent-mac-arm64.pkg")
-          X64=$(sha "LucidAgent-mac-x64.pkg")
+          ARM=$(sha "LucidAgent-mac-arm64.zip")
+          X64=$(sha "LucidAgent-mac-x64.zip")
           sed -i -E \
             -e "s|^  version \".*\"$|  version \"${V}\"|" \
             -e "s|^  sha256 arm:   \".*\",$|  sha256 arm:   \"${ARM}\",|" \

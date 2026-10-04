@@ -2,10 +2,10 @@ cask "lucidagentide" do
   arch arm: "arm64", intel: "x64"
 
   version "2.3.1"
-  sha256 arm:   "523a5c2856c2b1af06c83c3d2e0991e120958449da144cc74a9a23baa35f598b",
-         intel: "0be62d15ebf72b6a8fe1b179141d3f328fbc6a5417b69153aa47b5517cf9933d"
+  sha256 arm:   "b4d1d99e6ae6ff738c107aa0e2bef81fd4b41516ed5f2db3d7867b0105939326",
+         intel: "756e520daf6e80a03e69b48cac7a309610c5be594d6955075847fec57801b7f3"
 
-  url "https://github.com/mlcyclops/lucidagentide/releases/download/v#{version}/LucidAgent-mac-#{arch}.pkg"
+  url "https://github.com/mlcyclops/lucidagentide/releases/download/v#{version}/LucidAgent-mac-#{arch}.zip"
   name "LucidAgentIDE"
   desc "Fail-closed security, provenance, and memory layer around oh-my-pi (omp)"
   homepage "https://github.com/mlcyclops/lucidagentide"
@@ -23,28 +23,29 @@ cask "lucidagentide" do
     strategy :github_latest
   end
 
-  depends_on macos: :big_sur
+  depends_on :macos
 
-  # The build is NOT notarized (that needs a paid Apple Developer account). The
-  # app IS ad-hoc-signed by electron-builder, so it runs on Apple Silicon, and
-  # `installer(8)` (which Homebrew uses for a pkg cask) places it in /Applications
-  # WITHOUT the quarantine flag, so it launches with no Gatekeeper prompt.
-  # `allow_untrusted` lets installer accept the unsigned package; it's permitted
-  # in third-party taps like this one (just not in homebrew/cask).
-  pkg "LucidAgent-mac-#{arch}.pkg", allow_untrusted: true
+  # The build is NOT notarized (that needs a paid Apple Developer account); the app
+  # IS ad-hoc-signed by electron-builder, so it runs on Apple Silicon. The cask
+  # consumes the .zip app bundle with an `app` stanza: Homebrew copies the bundle
+  # into /Applications itself, so `installer(8)` and package trust never enter the
+  # picture (the old pkg stanza needed `allow_untrusted`, deprecated in Homebrew 6).
+  # The .pkg release assets still exist for MDM fleets (Jamf/Munki/Intune), see
+  # docs/MACOS-ENTERPRISE-DEPLOYMENT.md; the cask just no longer uses them.
+  app "LucidAgentIDE.app"
 
-  # Belt-and-suspenders: strip quarantine if anything set it, so the very first
-  # launch never trips Gatekeeper.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "/Applications/LucidAgentIDE.app"],
-                   sudo: true
+  # Homebrew quarantines the downloaded zip and the copied app inherits the flag,
+  # which would make Gatekeeper refuse the unsigned build on first launch. Strip it
+  # here (no sudo: the app-stanza copy is user-owned, unlike the old root-owned
+  # pkg payload).
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "/Applications/LucidAgentIDE.app"]
   end
 
-  # `overwriteAction=upgrade` + `isRelocatable=false` (see desktop/package.json)
-  # mean `brew upgrade` replaces the app atomically in /Applications. User data
-  # under ~/Library is never touched on upgrade; only `zap` (i.e.
-  # `brew uninstall --zap`) removes it.
+  # `brew upgrade` trashes the old bundle and copies the new one; user data under
+  # ~/Library is never touched on upgrade, only `zap` (`brew uninstall --zap`)
+  # removes it. `pkgutil` stays so upgrades from a pkg-era install (<= 2.3.1)
+  # also forget the old installer receipt.
   uninstall quit:    "com.lucidagentide.desktop",
             pkgutil: "com.lucidagentide.desktop"
 
