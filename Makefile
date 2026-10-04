@@ -1275,6 +1275,11 @@ demo-P-JEV.6: ## P-JEV.6 (ADR-0421): a judge whose account says the model does n
 	$(BUN) run desktop/scripts/demo_p_jev_6.ts
 	$(BUN) test $(TEST_IGNORES) desktop/judgment_policy.test.ts harness/judgment/judge_bans.test.ts harness/omp/judgment_extension.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-CTRL.1
+demo-P-CTRL.1: ## P-CTRL.1 (ADR-0426; design ADR-0425, issue #449): the seven controller_* event names (controller_paired/_unpaired/_turn_started/_turn_blocked/_auto_consented/_auto_revoked/_ruling) are in the frozen EventName contract. Each one emits through the real Telemetry envelope with the stable run/session ids; a typo'd controller_* name still raises UnknownEventError and writes nothing (invariant #8); the ADR numbering stays unique.
+	$(BUN) run harness/scripts/demo_p_ctrl_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/telemetry/events.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-CREATOR-DRIFT
 demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFmpeg video editor) as a Creator provider over its OWN localhost agent protocol, never spawned or scripted. The session Drift writes when the user turns on Agent access is discovered and folded into an on-device declaration whose status never carries the token; the probe is honest (not-installed, installed-but-Agent-access-off with the enable steps, unauthorized without echoing the token, ready with the version and only the attested set); the egress hiding inside Drift (cloud voices, the marketplace, ElevenLabs transcription) is refused BY NAME under CUI lockdown, recursively inside apply({ops}); an apply batch is one undo step reported exactly as Drift reports it (done / stopped / failed); an export lands in the library by its MAGIC BYTES, never its extension. The agent gets drift_status / drift_read / drift_apply / drift_export (project text fenced as untrusted data); the Studio gets a Drift tab with a live collaboration feed and Undo. Proven against a fake Drift speaking the real wire format.
 	$(BUN) run desktop/scripts/demo_creator_drift.ts
