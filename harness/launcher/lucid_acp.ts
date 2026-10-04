@@ -451,7 +451,7 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
   }
   if (sub === "hub") {
     // P-TUI.1/P-TUI.3: bare `lucid hub` is the pane-multiplexer TUI; with args it is the hub's control
-    // CLI (ADR-0431). Lazy import: pi-tui and the discovery client stay out of every other subcommand.
+    // CLI (ADR-0436). Lazy import: pi-tui and the discovery client stay out of every other subcommand.
     const { runHub } = await import("./hub_cli.ts");
     return runHub(rest, env, repoRoot());
   }

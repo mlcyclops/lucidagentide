@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0431): control-plane auth is fail-closed. The token never leaves the client until the
+// P-TUI.3 (ADR-0436): control-plane auth is fail-closed. The token never leaves the client until the
 // server behind the discovery file echoes that file's nonce, and nothing executes without the token.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

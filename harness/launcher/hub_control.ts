@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0431): the hub CONTROL PLANE - what lets an agent drive `lucid hub` the way the herdr
+// P-TUI.3 (ADR-0436): the hub CONTROL PLANE - what lets an agent drive `lucid hub` the way the herdr
 // CLI drives herdr. A loopback HTTP server inside the hub process, found through the same discovery +
 // nonce handshake house pattern as the engine (ADR-0419, desktop/engine_discovery.ts):
 //

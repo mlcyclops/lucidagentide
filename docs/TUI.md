@@ -89,7 +89,7 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
 - **`$EDITOR` replaces Monaco.** Anywhere the GUI opens the embedded editor (design
   doc, agent specs, skill studio drafts), the TUI writes a temp file, opens
   `$EDITOR`, and posts the result back through the same save route.
-- **Spaces and the control plane (P-TUI.3, ADR-0431).** The hub holds named spaces (tmux
+- **Spaces and the control plane (P-TUI.3, ADR-0436).** The hub holds named spaces (tmux
   windows), each with its own split tree; panes have stable ids like `s1:p2` that are never
   reused. `:` opens a command prompt. The same commands drive a running hub from outside:
   `lucid hub split-window -h`, `lucid hub pane read -t s1:p2`, `lucid hub new-window -n work`,
@@ -189,7 +189,7 @@ One per session, each with its own ADR and `make demo-*`:
 - **P-TUI.2** Security deck + global approval modal + audit tail. Includes the
   sidecar-kill demo.
 - **P-TUI.3** Hub control plane: spaces, stable pane ids, the `lucid hub <cmd>` CLI with
-  tmux verbs, the `:` prompt, and the loopback control server (shipped, ADR-0431). The
+  tmux verbs, the `:` prompt, and the loopback control server (shipped, ADR-0436). The
   fleet-deck work first planned under this number (table, attach, spawn, pending approvals)
   shipped with the P-TUI.1 hub; queue reorder and stop are still open.
 - **P-TUI.4** Sessions, timeline, memory, usage decks.

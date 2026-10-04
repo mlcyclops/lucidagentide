@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-TUI.3 - the hub CONTROL PLANE (ADR-0431): an agent drives `lucid hub` the way the herdr
+// Increment P-TUI.3 - the hub CONTROL PLANE (ADR-0436): an agent drives `lucid hub` the way the herdr
 // CLI drives herdr.
 //
 // Drives the REAL hub (`lucid hub --headless`, the same HubComponent with no terminal) attached to the
@@ -30,7 +30,7 @@ function assert(cond: unknown, msg: string): void {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-console.log("== #ADR-0431 P-TUI.3: the lucid hub control plane ==\n");
+console.log("== #ADR-0436 P-TUI.3: the lucid hub control plane ==\n");
 
 const dataRoot = mkdtempSync(join(tmpdir(), "lucid-tui3-"));
 const home = mkdtempSync(join(tmpdir(), "lucid-tui3-home-"));

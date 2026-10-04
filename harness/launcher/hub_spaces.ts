@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0431): the hub's SPACES model. A space is a named root layout (tmux: a window; herdr: a
+// P-TUI.3 (ADR-0436): the hub's SPACES model. A space is a named root layout (tmux: a window; herdr: a
 // workspace) holding its own binary split tree of panes. Pure state, no I/O except the two persistence
 // helpers at the bottom, so the TUI keys, the `:` prompt and the control server all drive ONE model.
 //

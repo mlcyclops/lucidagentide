@@ -16,7 +16,7 @@
 // 1-6 rebind the focused pane, j/k select rows, a approve / i dismiss (Security), r refresh, q quit.
 // Chat deck, palette and directional focus/resize are the rest of P-TUI.1.
 //
-// P-TUI.3 (ADR-0431): the layout lives in SPACES (hub_spaces.ts: named root layouts, stable pane ids
+// P-TUI.3 (ADR-0436): the layout lives in SPACES (hub_spaces.ts: named root layouts, stable pane ids
 // s1:p2), `:` opens a command prompt running the same tmux/hub verbs as `lucid hub <cmd>`, and a
 // loopback control server (hub_control.ts) lets an agent drive this hub. `lucid hub --headless` is
 // this same hub with no terminal attached.

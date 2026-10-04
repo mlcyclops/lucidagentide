@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0431): `lucid hub <args>`. Bare `lucid hub` launches the TUI; `--headless` runs the same
+// P-TUI.3 (ADR-0436): `lucid hub <args>`. Bare `lucid hub` launches the TUI; `--headless` runs the same
 // hub with no terminal (an agent's or CI's hub); `--skill` prints the agent-facing skill doc; anything
 // else is a control command (hub_tmux_verbs.ts) sent to the RUNNING hub through its discovery file.
 // Contract for scripts: JSON on stdout + exit 0, or JSON {"error":code,"message"} on stderr + exit 1.
@@ -31,7 +31,7 @@ export async function runHub(argv: readonly string[], env: Env, repoRoot: string
     // Another increment authors skills/lucid-hub/SKILL.md; until it lands this is a one-line pointer.
     let doc: string;
     try { doc = readFileSync(join(repoRoot, "skills", "lucid-hub", "SKILL.md"), "utf8"); }
-    catch { doc = "lucid hub skill: not installed yet; run `lucid hub status` or see docs/TUI.md (control plane) and DECISIONS.md ADR-0431.\n"; }
+    catch { doc = "lucid hub skill: not installed yet; run `lucid hub status` or see docs/TUI.md (control plane) and DECISIONS.md ADR-0436.\n"; }
     process.stdout.write(doc.endsWith("\n") ? doc : `${doc}\n`);
     return 0;
   }
