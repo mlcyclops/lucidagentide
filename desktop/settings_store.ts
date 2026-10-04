@@ -519,6 +519,9 @@ export function upsertLocalProvider(def: LocalProviderDef): LocalProviderDef {
     id: def.id, name: def.name?.trim() ?? "", ompProvider: def.ompProvider, baseUrl: def.baseUrl?.trim() ?? "",
     api: def.api, authKind: def.authKind, vaultRef: def.vaultRef || undefined, headerName: def.headerName?.trim() || undefined,
     zone: def.zone, enabled: def.enabled !== false,
+    // CUI lockdown: the DGX enclave attestation is part of the declaration. Carried raw so a non-boolean is
+    // REJECTED by validateLocalProvider below (never coerced into an attestation); false is dropped after.
+    enclave: def.enclave,
     // P-LOCAL.5: `compat` is part of the DECLARATION (a preset's wire shape), so it has to survive the
     // clean copy or the runtime overlay reads a stored def that lost it and GLM's reasoning stream dies
     // silently. Re-sanitized HERE as well as at emission: this is the file a user hand-edits, and omp
@@ -536,6 +539,7 @@ export function upsertLocalProvider(def: LocalProviderDef): LocalProviderDef {
   };
   const errs = validateLocalProvider(clean);
   if (errs.length) throw new Error("invalid local provider: " + errs.join("; "));
+  if (clean.enclave !== true) delete clean.enclave;
   const s = load(); s.localProviders = s.localProviders ?? [];
   const i = s.localProviders.findIndex((x) => x.id === clean.id);
   if (i >= 0) s.localProviders[i] = clean; else s.localProviders.push(clean);

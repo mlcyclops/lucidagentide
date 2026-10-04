@@ -96,6 +96,9 @@ export interface LocalProviderDef {
   vaultRef?: string; // opaque reference into the OS-encrypted vault — NEVER the secret
   headerName?: string; // apikey header name (default "Authorization")
   zone: "internal" | "external"; // whitelist zone; VPN/LAN endpoints are "internal"
+  // CUI lockdown: the user (or a Loader import) attests this endpoint is a DGX enclave host, so its models
+  // are an allowed route under lockdown next to AskSage (desktop/lockdown_route.ts). Absent = not attested.
+  enclave?: boolean;
   models: LocalModelDef[];
   enabled: boolean;
   createdAt: number;
@@ -216,7 +219,11 @@ export function validateLocalProvider(def: LocalProviderDef): string[] {
   if (!def.name?.trim()) errs.push("name is required");
   if (!SLUG_RE.test(def.ompProvider ?? "")) errs.push("provider id must be a slug (lowercase letters, digits, - or _)");
   else if (RESERVED_PROVIDER_IDS.includes(def.ompProvider)) errs.push(`provider id "${def.ompProvider}" is reserved for a built-in provider`);
+  // CUI lockdown treats any `asksage*` provider as the gov gateway, so a self-hosted box may never claim it.
+  else if (def.ompProvider.startsWith("asksage")) errs.push(`provider id "${def.ompProvider}" is reserved: ids starting with "asksage" mean the AskSage gov gateway`);
   if (!hostFromBaseUrl(def.baseUrl)) errs.push("base URL must be a valid http(s):// URL");
+  if (def.enclave !== undefined && typeof def.enclave !== "boolean") errs.push("enclave must be true or false");
+  if (def.enclave === true && def.zone === "external") errs.push("a DGX enclave host is internal: a public-internet (external) endpoint cannot be marked as an enclave host");
   if (!LOCAL_PROVIDER_APIS.includes(def.api)) errs.push("api must be one of: " + LOCAL_PROVIDER_APIS.join(", "));
   if (!LOCAL_AUTH_KINDS.includes(def.authKind)) errs.push("authKind must be one of: " + LOCAL_AUTH_KINDS.join(", "));
   if (def.zone !== "internal" && def.zone !== "external") errs.push('zone must be "internal" or "external"');

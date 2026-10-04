@@ -9,7 +9,8 @@
 // excluded; and that resolveCheckerModel honors a valid override but fails safe past a stale one.
 
 import { describe, expect, test } from "bun:test";
-import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { isAsksageRouted } from "./lockdown_route.ts";
 
 const opt = (value: string): ModelOption => ({ value });
 // A realistic slice of the live picker (multiple providers, snapshots + aliases).
@@ -79,6 +80,9 @@ describe("isAsksageRouted", () => {
     expect(isAsksageRouted("anthropic/claude-opus-4-8")).toBe(false);
     expect(isAsksageRouted("openai-codex/gpt-5.5")).toBe(false);
   });
+  test("a self-hosted model whose id merely CONTAINS 'asksage' is not gov-routed (provider segment only)", () => {
+    expect(isAsksageRouted("dgx-spark/asksage-clone")).toBe(false);
+  });
 });
 
 describe("resolveLockdownModel", () => {
@@ -96,6 +100,24 @@ describe("resolveLockdownModel", () => {
     const r = resolveLockdownModel(true, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.5"]);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/AskSage API key|lockdown/i);
+  });
+  // CUI lockdown: an enabled DGX enclave Local Provider is an allowed route next to AskSage.
+  const ENCLAVE = new Set(["dgx-spark"]);
+  test("lock ON + already on an enclave local model ⇒ keep it (no forced hop to AskSage)", () => {
+    expect(resolveLockdownModel(true, "dgx-spark/glm-5.3-flash", [...values, "dgx-spark/glm-5.3-flash"], ENCLAVE)).toEqual({ ok: true, model: "dgx-spark/glm-5.3-flash" });
+  });
+  test("lock ON + no AskSage at all, but an enclave model exists ⇒ switch to it", () => {
+    const r = resolveLockdownModel(true, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8", "ollama-local/llama3.1:8b", "dgx-spark/glm-5.3-flash"], ENCLAVE);
+    expect(r).toEqual({ ok: true, model: "dgx-spark/glm-5.3-flash" });
+  });
+  test("lock ON + only a NON-enclave local provider ⇒ FAIL-CLOSED, and the refusal names both ways out", () => {
+    const r = resolveLockdownModel(true, "ollama-local/llama3.1:8b", ["ollama-local/llama3.1:8b", "anthropic/claude-opus-4-8"], ENCLAVE);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/AskSage/);
+    expect(r.error).toMatch(/DGX enclave/);
+  });
+  test("the enclave set defaults to empty: omitting it can only refuse, never widen", () => {
+    expect(resolveLockdownModel(true, "dgx-spark/glm-5.3-flash", ["dgx-spark/glm-5.3-flash"]).ok).toBe(false);
   });
 });
 
@@ -129,6 +151,10 @@ describe("resolveGovernedModel", () => {
   test("lockdown on + policy denies every gov model => blocks (never routes direct even if allowed)", () => {
     const r = resolveGovernedModel(true, { denied: ["asksage"] }, "anthropic/claude-opus-4-8", values);
     expect(r.ok).toBe(false);
+  });
+  test("lockdown + policy denying the gov model swaps to an allowed ENCLAVE model, never a direct one", () => {
+    const r = resolveGovernedModel(true, { denied: ["asksage"] }, "asksage-openai/gpt-5.6-luna", [...values, "dgx-spark/glm-5.3-flash"], new Set(["dgx-spark"]));
+    expect(r).toEqual({ ok: true, model: "dgx-spark/glm-5.3-flash" });
   });
   test("the lockdown failure surfaces first (no gov model available)", () => {
     const r = resolveGovernedModel(true, undefined, "openai/gpt-5.5", ["openai/gpt-5.5"]);
