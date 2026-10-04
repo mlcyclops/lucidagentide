@@ -650,7 +650,7 @@ While you are on that box, it can also feed the GPU odometer: run NVIDIA's DCGM 
 remote target (`dcgm-exporter` kind), and the Spark's GPU load, VRAM, temperature, and power appear in the
 Resources flyout beside this machine's.
 
-## DGX avatars, HyperFrames, CAD, and PDF markup (ADR-0422)
+## DGX avatars, HyperFrames, CAD, and PDF markup (ADR-0427)
 
 Everything in this section is free or self-hosted. The paid services (HeyGen, Autodesk APS, Bluebeam Studio,
 ClassCAD, ODA Drawings SDK) are in the registry as catalog entries you can declare, with honest statuses and
@@ -692,7 +692,7 @@ probes are skipped with the reason, and every refusal is audited. Each provider 
 (on-device, DGX enclave, cloud) and the reason when refused. An org-managed lock stays AskSage-only: a user's
 enclave attestation never widens it.
 
-## Design: layers, vector, motion (ADR-0424)
+## Design: layers, vector, motion (ADR-0429)
 
 Studio > **Design** is a native image, vector and motion editor on one document. Pixels stay in the window;
 only the DGX buttons send an image, to the `dgx-vision` service (Loader ADR-0020, port 8090), and only when
@@ -717,7 +717,7 @@ the CUI policy allows it.
   Undo; `design_request` asks for pixel work (decompose, upscale, ...) that waits for your **Allow**. Model
   labels and file-derived names reach agents as untrusted data, your hint labels as your words.
 
-## Drift: editing video together (ADR-0425)
+## Drift: editing video together (ADR-0430)
 
 Studio > **Drift** connects Creator to [CutWire Drift](https://github.com/CutWire-Studios/Drift), the free
 GPL-3.0 Qt + FFmpeg desktop editor the XDA review praised for Adobe-class keyframing. Drift ships its own
@@ -816,9 +816,9 @@ Built so far on this branch:
   never hang or corrupt a render, deterministic frame capture that reports which of the two ways a capture
   lied, a fixed-argv Blender runner with no shell, and a model manifest that stays a claim until the probe
   agrees. Proof: `make demo-CREATOR-3`.
-- **CREATOR-DGX** (ADR-0422) - the DGX avatar and CAD services through the Loader's endpoint mailbox, the
+- **CREATOR-DGX** (ADR-0427) - the DGX avatar and CAD services through the Loader's endpoint mailbox, the
   HyperFrames runner, the Video, CAD and Markup panes, nine new registry providers (four free, five paid
-  catalog entries), and CUI lockdown over every Creator provider. Proof: the bun tests named in ADR-0422 plus
+  catalog entries), and CUI lockdown over every Creator provider. Proof: the bun tests named in ADR-0427 plus
   the live smoke recorded there.
 
 ## Checking that the Creator engine actually works

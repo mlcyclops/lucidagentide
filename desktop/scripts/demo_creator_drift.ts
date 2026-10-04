@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// demo-CREATOR-DRIFT (ADR-0425): CutWire Drift as a Creator provider, proven against a FAKE Drift that speaks
+// demo-CREATOR-DRIFT (ADR-0430): CutWire Drift as a Creator provider, proven against a FAKE Drift that speaks
 // the real wire format (Drift's src/mcp/McpHttp.cpp + McpProtocol.cpp: `GET /health` without auth, bearer-token
 // JSON-RPC 2.0 on `POST /mcp`, tool results as `{content:[{type:"text",text:<json>}], isError}`), so the proof
 // needs no Drift install, no window, and no GPU.
