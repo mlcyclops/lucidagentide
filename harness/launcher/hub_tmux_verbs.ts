@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0436) + P-TUI.5 (ADR-0433): the ONE command parser for the hub control plane.
+// P-TUI.3 (ADR-0431) + P-TUI.5 (ADR-0433): the ONE command parser for the hub control plane.
 // `lucid hub <args>` on the CLI, the control server's /cmd body, and the TUI's `:` prompt all turn argv
 // into a HubOp here, so a verb cannot mean one thing typed and another thing scripted. Two
 // vocabularies map onto the same ops:

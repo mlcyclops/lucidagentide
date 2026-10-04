@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0436) + P-TUI.5 (ADR-0433): the spaces model is the control plane's addressing
+// P-TUI.3 (ADR-0431) + P-TUI.5 (ADR-0433): the spaces model is the control plane's addressing
 // contract. An id an agent holds must never silently point at a different pane or tab, the hub must
 // never reach zero spaces, a space zero tabs or a tab zero panes, and a saved layout must restore
 // exactly or not at all (a v1 file migrates one way; a v2 file never reads as v1).
