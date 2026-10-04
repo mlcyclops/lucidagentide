@@ -89,6 +89,17 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
 - **`$EDITOR` replaces Monaco.** Anywhere the GUI opens the embedded editor (design
   doc, agent specs, skill studio drafts), the TUI writes a temp file, opens
   `$EDITOR`, and posts the result back through the same save route.
+- **Spaces and the control plane (P-TUI.3, ADR-0431).** The hub holds named spaces (tmux
+  windows), each with its own split tree; panes have stable ids like `s1:p2` that are never
+  reused. `:` opens a command prompt. The same commands drive a running hub from outside:
+  `lucid hub split-window -h`, `lucid hub pane read -t s1:p2`, `lucid hub new-window -n work`,
+  `lucid hub agent prompt <lane> <text>`, and the rest of the grouped (`status`, `space`,
+  `pane`, `agent`) and tmux vocabularies. Output is JSON; errors are JSON on stderr with exit 1,
+  and `{"error":"no_hub"}` when nothing is running. The hub publishes `hub-discovery-<pid>.json`
+  (0600) and a client must win the same nonce handshake as P-TUI.0 before it sends the token.
+  `lucid hub --headless` runs the hub with no terminal for agents and CI. Agent commands call
+  a fixed set of engine fleet routes; nothing on the control plane approves, dismisses,
+  answers asks, or changes the whitelist, and `send-keys` only types into agent panes.
 
 ## Capability map
 
@@ -177,7 +188,10 @@ One per session, each with its own ADR and `make demo-*`:
   chat deck end to end (stream, cancel, permission modal, model picker).
 - **P-TUI.2** Security deck + global approval modal + audit tail. Includes the
   sidecar-kill demo.
-- **P-TUI.3** Fleet deck: table, attach, spawn/stop/queue, pending approvals.
+- **P-TUI.3** Hub control plane: spaces, stable pane ids, the `lucid hub <cmd>` CLI with
+  tmux verbs, the `:` prompt, and the loopback control server (shipped, ADR-0431). The
+  fleet-deck work first planned under this number (table, attach, spawn, pending approvals)
+  shipped with the P-TUI.1 hub; queue reorder and stop are still open.
 - **P-TUI.4** Sessions, timeline, memory, usage decks.
 - **P-TUI.5** Settings decks (providers, MCP, agents, whitelist, voice, whisper).
 - **P-TUI.6** Goal, reports, automations decks; POA&M/.ckl export to path.
