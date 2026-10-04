@@ -204,7 +204,8 @@ function psdBytes(scene: RenderScene, psb: boolean, progress: Progress): Uint8Ar
   const composite = renderer.frame(0);
   progress(0.3, "composite");
   const pixels = new Map<string, RasterData>();
-  const layers = Object.create(null) as DesignDoc["layers"];
+  // Collected in a Map (layer ids come from the document) and turned into a null-prototype record below.
+  const layers = new Map<string, DesignDoc["layers"][string]>();
   const order: string[] = [];
   for (const item of paintList(doc)) {
     const l = doc.layers[item.id];
@@ -213,18 +214,18 @@ function psdBytes(scene: RenderScene, psb: boolean, progress: Progress): Uint8Ar
     const direct = l.kind === "raster" ? integerTranslation(m) : null;
     const own = scene.rasters.get(l.id);
     if (direct && own) {
-      layers[l.id] = { ...l, x: direct.dx, y: direct.dy, scale: 1, rotation: 0, opacity, visible: item.visible, parentId: undefined };
+      layers.set(l.id, { ...l, x: direct.dx, y: direct.dy, scale: 1, rotation: 0, opacity, visible: item.visible, parentId: undefined });
       pixels.set(l.id, own);
     } else {
       const r = renderer.layerInDocSpace(l.id, m, 0, doc.height);
       if (!r) continue;
-      layers[l.id] = { ...bakedLayer(l, r), opacity, visible: item.visible };
+      layers.set(l.id, { ...bakedLayer(l, r), opacity, visible: item.visible });
       pixels.set(l.id, r);
     }
     order.push(l.id);
   }
   progress(0.6, "layers");
-  const flat: DesignDoc = { ...doc, layers, order };
+  const flat: DesignDoc = { ...doc, layers: Object.setPrototypeOf(Object.fromEntries(layers), null) as DesignDoc["layers"], order };
   return writePsd(flat, (id) => pixels.get(id) ?? null, { psb, composite });
 }
 

@@ -55,12 +55,14 @@ export function cubicBezierEase(x1: number, y1: number, x2: number, y2: number):
   return (t) => (t <= 0 ? 0 : t >= 1 ? 1 : sampleY(solve(t)));
 }
 
-const EASE_CURVES: Record<"ease" | "ease-in" | "ease-out" | "ease-in-out", EaseFn> = {
-  "ease": cubicBezierEase(0.25, 0.1, 0.25, 1),
-  "ease-in": cubicBezierEase(0.42, 0, 1, 1),
-  "ease-out": cubicBezierEase(0, 0, 0.58, 1),
-  "ease-in-out": cubicBezierEase(0.42, 0, 0.58, 1),
-};
+// A Map, not an object literal: a name read from a document can never resolve to an inherited member
+// (`constructor`, `toString`) and be called as a curve.
+const EASE_CURVES: ReadonlyMap<string, EaseFn> = new Map([
+  ["ease", cubicBezierEase(0.25, 0.1, 0.25, 1)],
+  ["ease-in", cubicBezierEase(0.42, 0, 1, 1)],
+  ["ease-out", cubicBezierEase(0, 0, 0.58, 1)],
+  ["ease-in-out", cubicBezierEase(0.42, 0, 0.58, 1)],
+]);
 
 /** True for a well-formed Ease value (named, or a cubic with four finite numbers and x1/x2 in 0..1). */
 export function isEase(e: unknown): e is Ease {
@@ -75,7 +77,7 @@ export function isEase(e: unknown): e is Ease {
 export function easeFn(e: Ease): EaseFn {
   if (e === "linear") return linear;
   if (e === "hold") return hold;
-  if (typeof e === "string") return EASE_CURVES[e] ?? linear;
+  if (typeof e === "string") return EASE_CURVES.get(e) ?? linear;
   if (!isEase(e)) return linear;
   const [x1, y1, x2, y2] = e.cubic;
   return cubicBezierEase(x1, y1, x2, y2);
@@ -118,7 +120,15 @@ export function layerStateAt(doc: DesignDoc, id: string, tMs: number): LayerStat
     if (track.layerId !== id) continue;
     const v = sampleTrack(track, t);
     if (v === undefined || !Number.isFinite(v)) continue;
-    state[track.prop] = v;
+    // Explicit cases, not state[track.prop]: the prop comes from the document, so an unknown name
+    // (validation skipped somewhere upstream) is ignored instead of written onto the state object.
+    switch (track.prop) {
+      case "x": state.x = v; break;
+      case "y": state.y = v; break;
+      case "scale": state.scale = v; break;
+      case "rotation": state.rotation = v; break;
+      case "opacity": state.opacity = v; break;
+    }
   }
   state.opacity = Math.min(1, Math.max(0, state.opacity));
   if (!(state.scale >= 0)) state.scale = 0;
