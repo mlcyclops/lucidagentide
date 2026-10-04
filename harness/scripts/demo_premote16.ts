@@ -160,7 +160,7 @@ await until(() => B.welcomes.length === 1, "phone B welcome");
   if (B.welcomes[1]!.since !== 4 || B.welcomes[1]!.transcript.length !== 0) fail("rotation welcome should replay nothing new");
   if (JSON.stringify(B.items) !== before) fail("rotation changed the rendered items");
   await until(() => relay.peerCount() === peersBefore, "old socket reaped");
-  if (B.controls.some((c) => "t" in c && c.t === "pong")) fail("pong leaked to onControl");
+  if (B.controls.some((c) => (c.t as string) === "pong")) fail("pong leaked to onControl"); // the union has no pong on purpose: it is consumed by the socket
   pass("planned rotation: new socket, re-hello with since=4, zero replay, items untouched, guest stays live");
 }
 {
