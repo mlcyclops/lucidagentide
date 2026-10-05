@@ -453,7 +453,9 @@ function markWorkspaceSetupAsked(path: string): void {
   s.workspaceSetupAsked = Object.fromEntries(keep);
   saveSettings(s);
 }
-import { recordSkillActivated } from "./skills_log.ts";
+import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
+import { CONTROLLER_ROUTES, handleController, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438)
+import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
@@ -1942,6 +1944,15 @@ function agentScanner(): ScannerClient {
   return _agentScanner;
 }
 
+// P-CTRL.2 (ADR-0438): the external-controller policy core. Pairings (hashed tokens, fixed workspace, owned
+// lanes) persist owner-only under the engine data root; the prompt scan reuses the fail-closed agent scanner.
+const controllerDeps: ControllerDeps = {
+  store: new PairingStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-pairings.json")),
+  fleet,
+  scan: (text) => scanAndDecide(agentScanner(), text),
+  sink: EVENTS_LOG_PATH,
+};
+
 // P-AGENT.9/.10/.17: the ONE gated import path — every external spec (share file, n8n workflow, template)
 // runs the P-AGENT.5 scanner gate and persists WITH its trust label; nothing external skips the gate.
 interface GatedImportReply {
@@ -2159,6 +2170,7 @@ return Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     const p = url.pathname;
+    let ctrlPairing: Pairing | null = null;
     // H2 (ADR-0022): reject anything a web page or DNS-rebind could forge against
     // the fixed local port (foreign Host/Origin, or a non-JSON state-changing body).
     if (!isAllowedRequest(reqShape(req), PORT)) return new Response("forbidden", { status: 403 });
@@ -2184,10 +2196,14 @@ return Bun.serve({
       // main-process endpoints (/commands, /result) and the status push stay header-only: main MINTED the
       // token (LUCID_MAIN_TOKEN) and sends it as x-lucid-token on every poll.
       // P-SANDBOX.15 (ADR-0396): the agent's token (AGENT_TOKEN) opens AGENT_ROUTES only; TOKEN opens all.
-      const authorized = apiAuthorized({ path: p, headerToken: req.headers.get("x-lucid-token"), queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES });
+      // P-CTRL.2 (ADR-0438): a paired controller's token (header only) opens CONTROLLER_ROUTES and nothing else.
+      const headerToken = req.headers.get("x-lucid-token");
+      ctrlPairing = CONTROLLER_ROUTES.has(p) && !tokenValid(headerToken, TOKEN) ? await controllerDeps.store.verify(headerToken) : null;
+      const authorized = apiAuthorized({ path: p, headerToken, queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES, controllerRoutes: CONTROLLER_ROUTES, controllerAuthorized: ctrlPairing !== null });
       if (!authorized) return new Response("forbidden", { status: 403 });
     }
     try {
+      if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
