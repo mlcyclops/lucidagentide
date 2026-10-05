@@ -1268,8 +1268,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   background:var(--bg-2);transition:border-color var(--t),background var(--t)}
 .mkt-row:hover{background:var(--bg-3);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
 .mkt-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px}
-.mkt-name{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;color:var(--txt)}
-.mkt-cat{font-size:10.5px;color:var(--txt-4);border:1px solid var(--line);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.mkt-name{display:flex;flex-direction:column;gap:5px;font-size:13.5px;font-weight:600;color:var(--txt)}
+.mkt-title{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mkt-badges{display:flex;flex-wrap:wrap;align-items:center;gap:7px;min-width:0}
+.mkt-cat{max-width:100%;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;color:var(--txt-4);border:1px solid var(--line);border-radius:999px;padding:1px 8px;white-space:nowrap}
 .mkt-dl{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-family:var(--mono);color:var(--txt-3);white-space:nowrap}
 .mkt-chip{font-size:10px;font-weight:650;letter-spacing:.03em;text-transform:uppercase;border-radius:999px;padding:1.5px 8px;white-space:nowrap}
 .mkt-featured{color:var(--accent-2);background:var(--accent-dim);border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}

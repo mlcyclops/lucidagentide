@@ -662,6 +662,10 @@ demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.m
 demo-P-MARKET.1: ## P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - Excalidraw pinned first, then Obsidian's top-ranked integrations by community downloads; searchable scrim-modal on the About//goal conventions; rows only open their GitHub repo (installs are P-MARKET.2)
 	$(BUN) run desktop/scripts/demo_p_market_1.ts
 
+.PHONY: demo-P-MARKET.1c
+demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0433): live catalog title layout at desktop and narrow widths; set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
+	$(BUN) run desktop/scripts/demo_p_market_1c.mjs
+
 .PHONY: demo-P-FIGMA.1
 demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → key, walk the doc → top frames (capped), build a design-board HTML with frames inlined as PNG data URLs (names escaped, only data:image src) for the sandboxed preview
 	$(BUN) run desktop/scripts/demo_p_figma_1.ts
