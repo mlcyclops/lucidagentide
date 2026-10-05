@@ -17,7 +17,7 @@ import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts";
 import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1: resource guard view (types owned there - layering rule)
 import { isCreatorResources, type CreatorResourcesView } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): odometer view types live there
 import { isCreatorStudio, type CreatorStudioView } from "./creator_studio.ts"; // CREATOR-0 (ADR-0282): Studio view types live there
-import { isEditorSession, type EditorSession } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): editor session view type lives there
+import { isEditorAlignData, isEditorSession, type EditorAlignData, type EditorSession } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): editor session view type lives there
 import { isPipelineRunView, type PipelineRunView } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the render run view + its fail-closed shape gate
 import { isMixerTracksPayload, isRenderMixReport, type MixerTracksPayload, type RenderMixResult } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): mixer view types live there
 import type { TimelineDoc } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline document, edited in the renderer
@@ -399,7 +399,7 @@ export interface JudgmentView {
 }
 // P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
 export interface VoiceSettingsView {
-  sttProvider: "elevenlabs" | "whisper";
+  sttProvider: "elevenlabs" | "whisper" | "whistle";
   sttUrl: string;
   /** P-VOICE.6: base URL of the self-hosted dots.tts service (SSH forward / proxy of the DGX's :8084). */
   dotsTtsUrl?: string;
@@ -1371,6 +1371,9 @@ export interface LucidBridge {
   // half-finished edit.
   creatorEditorOpen(opts: { trackId: string; text?: string; buckets?: number }): Promise<{ ok: boolean; error?: string; session?: EditorSession } | null>;
   creatorEditorSave(opts: { trackId: string; doc: TimelineDoc; title: string; prompt?: string }): Promise<{ ok: boolean; error?: string; trackId?: string } | null>;
+  // CREATOR-WHISTLE (ADR-0432): measure word timing in-process. The renderer posts a trackId only; the
+  // 17 MB model never crosses to the sandbox. A refusal is the route's own named reason.
+  creatorEditorAlign(opts: { trackId: string; text?: string; language?: string }): Promise<{ ok: boolean; error?: string; data?: EditorAlignData }>;
   // CREATOR-5 (ADR-0289): the mixer touches the server exactly twice - once to LIST which library tracks
   // can play together (plus the format the mix will run at, which the pane never guesses), once to
   // RENDER. Every level, pan, fade, and ramp in between is applied in the renderer against the same pure
@@ -2233,6 +2236,18 @@ export const bridge: LucidBridge = {
       const body = await res.json() as { ok?: boolean; error?: string; trackId?: string };
       return { ok: !!body.ok, error: body.error, trackId: body.trackId };
     } catch { return { ok: false, error: "The audio editor did not answer." }; }
+  },
+  // CREATOR-WHISTLE (ADR-0432): the measured alignment. Same fail-closed gate as open: a payload this
+  // build cannot read is a named refusal, and the pane keeps its derived document.
+  creatorEditorAlign: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/align", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: unknown };
+      if (!body.ok) return { ok: false, error: body.error ?? "Whistle refused without a reason." };
+      return isEditorAlignData(body.data)
+        ? { ok: true, data: body.data }
+        : { ok: false, error: "Whistle answered with an alignment this build cannot read." };
+    } catch { return { ok: false, error: "The alignment route did not answer." }; }
   },
   // CREATOR-5 (ADR-0289): both gates are fail-closed. A tracks payload this build cannot read paints
   // NOTHING (null), rather than a mixer sitting on a format nobody reported; a report missing its own

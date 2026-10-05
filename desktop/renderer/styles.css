@@ -5347,6 +5347,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .ced-chip:hover{border-color:var(--line-strong);color:var(--txt)}
 /* provenance is legible without a tooltip: a derived word is underlined with dots, a vendor word is not */
 .ced-chip.derived{text-decoration:underline dotted var(--txt-4);text-underline-offset:3px}
+/* CREATOR-WHISTLE (ADR-0432): a word Whistle measured in-process wears a solid accent underline; still one line */
+.ced-chip.measured{border-bottom:2px solid var(--accent, currentColor);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ced-chip.sel{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,var(--bg-2));color:var(--txt)}
 .ced-chip.sel[draggable="true"]{cursor:grab}
 .ced-chip.on{opacity:1;border-color:var(--amber);

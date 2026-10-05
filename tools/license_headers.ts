@@ -9,7 +9,7 @@
 //                                                       # pre-commit hook to header just-staged source)
 //
 // Excludes vendored / third-party / generated trees and generated bundles (vendor/, node_modules/,
-// desktop/release/, .venv, __pycache__, dist/, renderer/app.bundle.js, tools/remote-pwa/dist/) — those keep their OWN licenses and must NOT be relicensed. Explicitly-named files
+// desktop/release/, .venv, __pycache__, dist/, the renderer bundles, desktop/whistle/, tools/remote-pwa/dist/): those keep their OWN licenses and must NOT be relicensed. Explicitly-named files
 // are still filtered by the same comment-style + exclusion rules, so passing a vendored path is a no-op.
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -24,6 +24,8 @@ const EXCLUDE_SEGMENTS = new Set(["node_modules", "vendor", ".venv", "__pycache_
 const EXCLUDE_PREFIXES = [
   "desktop/release/",              // packaged build (bundles a copy of the repo + node_modules)
   "desktop/renderer/app.bundle.js", // build-renderer output (gitignored); its inputs carry the header
+  "desktop/renderer/design_worker.bundle.js", // build-renderer output (gitignored); its inputs carry the header
+  "desktop/whistle/",              // staged Whistle model + Needle glue (Apache-2.0, ADR-0432): own license, and a header would break the sha256 pin
   "tools/remote-pwa/dist/",        // PWA bundle output (gitignored)
 ];
 const HASH_EXT = new Set([".py"]);             // "#" comment style

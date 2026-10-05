@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   PROBE_STALE_MS, ProbeCache, attestComfyCapabilities, attestElevenCapabilities, probeBuiltIn, probeComfyui,
-  probeElevenlabs, probeExecutable, probeFreshness, probeHttpService, probeProvider,
+  probeElevenlabs, probeExecutable, probeFreshness, probeHttpService, probeProvider, probeWhistle,
   type ProbeDeps, type ProbeResult,
 } from "./creator_probe.ts";
 import { foldProviderStatus, CREATOR_INTEGRATIONS, type CreatorEndpointDef } from "./creator_registry.ts";
@@ -177,6 +177,38 @@ describe("a desktop app is attested by being on disk", () => {
     const r = probeBuiltIn(deps(), "threejs", ["scene-preview"]);
     expect(r.state).toBe("ready");
     expect(r.detail).toContain("no endpoint, no credential, no network");
+  });
+});
+
+// CREATOR-WHISTLE (ADR-0432 decision 6): the registry row never stands in for the engine's own check.
+describe("the Whistle probe", () => {
+  test("no checker at all is not-installed, never a pretended ready", async () => {
+    const r = await probeProvider(deps(), "whistle", []);
+    expect(r).toMatchObject({ providerId: "whistle", state: "not-installed", detail: "Whistle assets are not staged on this engine.", attested: [], version: "" });
+  });
+
+  test("ready attests stt and alignment with the version the engine reported", async () => {
+    const r = await probeWhistle(deps({ whistle: async () => ({ state: "ready", detail: "transcribed 1 s of silence to empty text", version: "whistle b6e02f048568" }) }));
+    expect(r.state).toBe("ready");
+    expect(r.attested).toEqual(["stt", "alignment"]);
+    expect(r.version).toBe("whistle b6e02f048568");
+    expect(r.latencyMs).toBeGreaterThanOrEqual(0);
+    // The fold trusts only what the probe attested.
+    const spec = CREATOR_INTEGRATIONS.find((s) => s.id === "whistle")!;
+    expect(foldProviderStatus(spec, { endpoints: [], secretPresent: false, discovered: r.attested }).usable).toEqual(["stt", "alignment"]);
+  });
+
+  test("a hash mismatch or a dead worker is unreachable with the reason verbatim, attesting nothing", async () => {
+    const reason = "whistle.cact: sha256 mismatch (got 000000000000, pinned b6e02f048568)";
+    const r = await probeWhistle(deps({ whistle: async () => ({ state: "unreachable", detail: reason, version: "" }) }));
+    expect(r).toMatchObject({ state: "unreachable", detail: reason, attested: [] });
+    const missing = await probeWhistle(deps({ whistle: async () => ({ state: "not-installed", detail: "needle.wasm: download failed (HTTP 503)", version: "" }) }));
+    expect(missing).toMatchObject({ state: "not-installed", detail: "needle.wasm: download failed (HTTP 503)", attested: [] });
+  });
+
+  test("a checker that throws is unreachable, not an exception out of the probe", async () => {
+    const r = await probeWhistle(deps({ whistle: async () => { throw new Error("Whistle worker exited (code 1)"); } }));
+    expect(r).toMatchObject({ state: "unreachable", detail: "Whistle worker exited (code 1)", attested: [] });
   });
 });
 

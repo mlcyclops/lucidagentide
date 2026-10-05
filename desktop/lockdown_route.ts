@@ -125,7 +125,10 @@ export function lockdownEgressExempt(target: string | null | undefined, enclaveH
 /** Speech engines as settings_store names them. STT "elevenlabs" is ElevenLabs Scribe. */
 export type VoiceKind = "tts" | "stt";
 const CLOUD_VOICE: Record<string, string> = { elevenlabs: "ElevenLabs", "openai-tts": "OpenAI TTS" };
-const LOCAL_VOICE: Record<string, string> = { "local-tts": "Kokoro", "dots-tts": "dots.tts", whisper: "offline Whisper" };
+const LOCAL_VOICE: Record<string, string> = { "local-tts": "Kokoro", "dots-tts": "dots.tts", whisper: "offline Whisper", whistle: "Whistle (in-process)" };
+/** CREATOR-WHISTLE (ADR-0432): engines that run inside the engine process. No URL exists to check, and
+ *  nothing is reached, so under lockdown they are allowed by construction (the wasm has no socket import). */
+const IN_PROCESS_VOICE: Record<string, true> = { whistle: true };
 
 /** May this speech engine run under lockdown? Lock off: always. Lock on: cloud engines (not CUI-authorized)
  *  are refused; a local engine is allowed only when its endpoint is loopback or an enclave host; an unknown
@@ -139,6 +142,7 @@ export function lockdownVoiceVerdict(locked: boolean, kind: VoiceKind, engine: s
   }
   const local = LOCAL_VOICE[engine];
   if (!local) return { allowed: false, reason: `CUI lockdown: the speech engine "${String(engine).slice(0, 40)}" is not recognized, so it is refused. ${fallback}` };
+  if (IN_PROCESS_VOICE[engine]) return { allowed: true, reason: "" };
   const h = httpHost(url);
   if (h && (isLoopbackHost(h) || enclaveHosts.has(h))) return { allowed: true, reason: "" };
   return { allowed: false, reason: `CUI lockdown: the ${local} endpoint ${h ?? "(invalid URL)"} is neither on this workstation nor a DGX enclave host, so it is refused. Point it at localhost or an SSH forward to the DGX.` };

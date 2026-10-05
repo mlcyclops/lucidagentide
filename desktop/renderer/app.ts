@@ -172,7 +172,7 @@ import { creatorDesignHtml, mountDesignPane } from "./design_pane.ts"; // Design
 import { sanitizedSvgDataUrl } from "./svg_sanitize.ts";
 import { creatorImagesHtml, type ArtifactView, type CreatorImagesView, type MixInputView } from "./creator_images.ts";
 import {
-  creatorEditorHtml, dropTargetMs, formatClock, isWavTrack, msAtX, playheadX, selectionRange, waveformBars,
+  chipStripHtml, creatorEditorHtml, dropTargetMs, formatClock, isWavTrack, msAtX, playheadX, selectionRange, waveformBars,
   type CreatorEditorView, type EditorSession,
 } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along editor pane + its gesture semantics
 import {
@@ -4558,7 +4558,9 @@ async function agentFlowStep(): Promise<void> {
   const ttsProvider = state.voice?.ttsProvider ?? "elevenlabs";
   const sttReady = state.voice?.sttProvider === "elevenlabs"
     ? !!(auth?.others ?? []).find((p) => p.id === "elevenlabs")?.keySet
-    : !!ws && (ws.running || (ws.capable && ws.binAvailable));
+    : state.voice?.sttProvider === "whistle" // CREATOR-WHISTLE (ADR-0432): ships with LUCID, no server to start
+      ? true
+      : !!ws && (ws.running || (ws.capable && ws.binAvailable));
   const items = readinessChecklist({
     providers: configuredProviderCount(auth),
     ttsReady: !!voicesData?.engines?.find((e) => e.id === ttsProvider)?.ready,
@@ -4842,6 +4844,7 @@ function secVoice(auth: import("./bridge.ts").AuthStatus | null, vset: import(".
     <div class="voice-row"><label class="voice-lbl" for="voiceStt">STT engine</label>
       <select id="voiceStt" class="prov-key" data-voice-set="sttProvider">
         <option value="whisper"${sel(stt === "whisper")}>Offline Whisper - air-gap / DoD</option>
+        <option value="whistle"${sel(stt === "whistle")}>Whistle (in-process)</option>
         <option value="elevenlabs"${sel(stt === "elevenlabs")}>ElevenLabs Scribe - cloud</option>
       </select></div>
     <div class="voice-row" id="voiceSttUrlRow"${stt === "whisper" ? "" : " hidden"}>
@@ -7222,14 +7225,53 @@ async function openCreatorEditorSession(): Promise<void> {
   editorAnchor = "";
   editorDrag = [];
   attachEditorAudio(session);
+  const derivedNote = session.note;
   state.creatorEditor = {
-    ...cur, busy: "", session, doc: session.doc, selected: [], playheadMs: 0, playing: false,
+    ...cur, busy: "", session: { ...session, note: EDITOR_MEASURING_NOTE }, doc: session.doc, selected: [], playheadMs: 0, playing: false,
     title: cur.title || `${session.title} (edit)`,
     canUndo: false, canRedo: false,
     status: `${session.doc.items.length} word${session.doc.items.length === 1 ? "" : "s"} over ${formatClock(session.durationMs)} of audio.`,
     statusTone: "ok",
   };
   void renderCreatorStudio();
+  await measureEditorAlignment(session, derivedNote, text.trim() || undefined);
+}
+
+const EDITOR_MEASURING_NOTE = "Measuring word timing with Whistle (in-process)...";
+
+/** CREATOR-WHISTLE (ADR-0432): ask the engine to MEASURE the words it just derived. Runs once per open.
+ *  A measured answer replaces the document's items and resets history to it (there is nothing to undo
+ *  back to: the derived guess was never an edit); a refusal keeps the derived document and appends the
+ *  route's own reason to the derived note. Only the note and the chips are repainted - the waveform, the
+ *  audio element, and the transport never flicker. A session opened meanwhile drops the answer. */
+async function measureEditorAlignment(opened: EditorSession, derivedNote: string, text: string | undefined): Promise<void> {
+  const r = await bridge.creatorEditorAlign({ trackId: opened.trackId, text });
+  const cur = state.creatorEditor;
+  if (!cur?.session || cur.session.trackId !== opened.trackId || cur.session.audioB64 !== opened.audioB64) return;
+  if (r.ok && r.data) {
+    const doc = { ...opened.doc, items: r.data.items, alignedBy: r.data.alignedBy };
+    editorHistory = newHistory(doc);
+    editorAnchor = "";
+    editorDrag = [];
+    state.creatorEditor = {
+      ...cur, session: { ...cur.session, doc, note: r.data.note }, doc, selected: [], canUndo: false, canRedo: false,
+    };
+  } else {
+    state.creatorEditor = { ...cur, session: { ...cur.session, note: `${derivedNote} Whistle: ${r.error ?? "no answer."}` } };
+  }
+  paintEditorWords();
+}
+
+/** Repaint the provenance note and the word strip in place. The full pane render would rebuild the
+ *  canvas; this touches the two nodes a measurement changes and nothing else. */
+function paintEditorWords(): void {
+  const v = state.creatorEditor;
+  if (!v?.doc || !v.session) return;
+  const note = $(".ced-note");
+  if (note) note.innerHTML = `${icon("info", 12)}${esc(v.session.note)}`;
+  const strip = $("[data-ced-chips]") ?? $(".ced-body .cst-empty");
+  if (strip) strip.outerHTML = chipStripHtml(v.doc, v.playheadMs, v.selected);
+  else void renderCreatorStudio();
 }
 
 /** Apply one pure operation. A refusal keeps the core's own sentence - it names the item, the lock, or
